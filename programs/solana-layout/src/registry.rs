@@ -233,7 +233,7 @@ pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
 /// Authoritative Dealer State V2 account version.
 pub const DEALER_STATE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer State V2 account bytes.
-pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 844;
+pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 972;
 /// Counted funded-dependencies account discriminator.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 /// Counted funded-dependencies account version.

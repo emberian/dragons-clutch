@@ -4,13 +4,16 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerFacilityReplayV1, DealerPhaseV2, DealerPolicyV1, DealerPositionObservationV3,
-    DealerReplayAccountBindingV1, DealerStateV2, DealerTransitionIntentV1, Error,
-    FacilityPositionBindingV2, FixedCodec, Id, PreparedDealerReplayTransitionV1, Result,
+    DealerActionLivenessAuthorizationV1, DealerEmptyAssetTransferBundleV1,
+    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV2,
+    DealerPolicyV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
+    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
+    DealerTransitionIntentV1, DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2,
+    FixedCodec, Id, PreparedDealerReplayTransitionV1, Result,
     DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2,
 };
-use clutch_retirement::PositionLifecycleV3;
-use clutch_retirement::PositionTombstoneV3;
+use clutch_retirement::{PositionLifecycleV3, PositionTombstoneV3, PositionV3Sha256Backend};
+use sha2::{Digest, Sha256};
 
 /// Exact local receipt magic.
 pub const DEALER_TERMINAL_STATE_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCTRCPV2";
@@ -127,6 +130,11 @@ pub struct DealerPreparedTerminalReplayV2 {
 }
 
 /// Mint the terminal State receipt and seal Replay only at the exact child cut.
+///
+/// The funded-dependency child deliberately remains live here. The atomic
+/// terminal Replay transition consumes the exact Retirement-compartment work
+/// receipt before Position and Replay close; only then may the external
+/// seven-account runtime terminalize and the dependency child release rent.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_dealer_terminal_replay_v2(
     policy: &DealerPolicyV1,
@@ -136,12 +144,22 @@ pub fn prepare_dealer_terminal_replay_v2(
     terminal_position: &DealerPositionObservationV3,
     replay: &DealerFacilityReplayV1,
     replay_account_binding: DealerReplayAccountBindingV1,
+    dependency_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
     intent: DealerTransitionIntentV1,
 ) -> Result<DealerPreparedTerminalReplayV2> {
     state.validate_against_policy(policy)?;
     let binding_id = binding.binding_id()?;
     terminal_position.validate_against(binding, binding_id, policy)?;
     replay.validate()?;
+    dependency.validate()?;
+    dependency_account_id.validate_live()?;
+    schedule.validate_for_facility_runtime()?;
+    runtime.validate()?;
+    authorization.validate_against(schedule, runtime)?;
     let position = terminal_position.projection.position();
     if state.phase != DealerPhaseV2::Retiring
         || state.children.facility_positions != 1
@@ -149,15 +167,42 @@ pub fn prepare_dealer_terminal_replay_v2(
         || state.children.lp_pages != 0
         || state.children.live_lp_positions != 0
         || state.children.unclaimed_lp_positions != 0
-        || state.children.funded_dependencies != 0
+        || state.children.exit_tickets != 0
+        || state.children.funded_dependencies != 1
         || state.children.epoch_bindings != 0
         || state.children.leases != 0
         || state.children.settlement_pots != 0
         || state.children.terminal_allocations != 0
         || state.children.claim_work != 0
-        || !state.funded_dependencies_account_id.is_zero()
+        || state.funded_dependencies_account_id != dependency_account_id
         || dealer_state_account_id != binding.dealer_state_account_id
         || state.facility_position_binding_id != binding_id
+        || state.funded_dependencies_id != dependency.dependency_id()?
+        || dependency.facility_position_binding_id != binding_id
+        || dependency.bindings.policy_id != state.policy_id
+        || dependency.bindings.facility_id != state.facility_id
+        || dependency.bindings.asset_vault_authority_account_id != dealer_state_account_id
+        || dependency.bindings.liveness_schedule_id != schedule.schedule_id()?.untyped()
+        || dependency.bindings.liveness_schedule_id != policy.liveness_policy_id
+        || dependency.bindings.runtime_liveness_policy_id != runtime.runtime_policy_id
+        || dependency.bindings.runtime_liveness_binding_digest != runtime.binding_digest()?
+        || dependency.bindings.fee_policy_id != policy.fee_policy_id
+        || dependency.bindings.collateral_mint != policy.collateral_mint
+        || dependency.bindings.token_program != policy.token_program
+        || dependency.bindings.neutral_sink != policy.neutral_sink
+        || dependency.bindings.dealer_liveness_work_principal_lamports
+            != schedule.dealer_runtime_work_principal_lamports()?
+        || dependency.rent.neutral_sink != policy.neutral_sink
+        || runtime.lifecycle_id != state.facility_id
+        || runtime.realm_id != policy.realm_id
+        || runtime.neutral_sink != policy.neutral_sink
+        || dependency_account_id == dealer_state_account_id
+        || dependency_account_id == state.facility_position_account_id
+        || dependency_account_id == state.facility_replay_account_id
+        || authorization.action != DealerRuntimeActionV1::Retire
+        || authorization.owner != dealer_state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
         || terminal_position.account_id != state.facility_position_account_id
         || terminal_position.semantic_id != state.facility_position_id
         || replay.replay_account_id() != state.facility_replay_account_id
@@ -194,7 +239,15 @@ pub fn prepare_dealer_terminal_replay_v2(
         || intent.position_post_semantic_id != terminal_position.semantic_id
         || intent.position_generation_before != state.generation
         || intent.position_generation_after != state.generation
-        || intent.action != crate::DealerRuntimeActionV1::Retire
+        || intent.action != DealerRuntimeActionV1::Retire
+        || intent.liveness_mode != DealerTransitionLivenessModeV1::ExternalReceipt
+        || intent.liveness_receipt_semantic_id != authorization.receipt_semantic_id
+        || !intent.fee_receipt_semantic_id.is_zero()
+        || intent.asset_transfer_bundle_id
+            != (DealerEmptyAssetTransferBundleV1 {
+                action: DealerRuntimeActionV1::Retire,
+            })
+            .bundle_id()?
     {
         return Err(Error::MismatchedBinding);
     }
@@ -213,11 +266,14 @@ pub fn prepare_dealer_terminal_replay_v2(
 ///
 /// The runtime adapter must first commit the Position V3 tombstone and execute
 /// the exact Replay close plan atomically. This transition owns only the
-/// Dealer State counters and refuses any other live child.
+/// Dealer State counters and refuses every live economic child. The funded
+/// dependency is the sole survivor because it owns the still-required
+/// external-runtime terminalization and rent-release join.
 pub fn close_dealer_position_replay_v2(
     policy: &DealerPolicyV1,
     state: &DealerStateV2,
     receipt: &DealerTerminalStateReceiptV2,
+    terminal_position: &DealerPositionObservationV3,
     position_tombstone: PositionTombstoneV3,
     replay_close: crate::DealerReplayClosePlanV1,
 ) -> Result<DealerStateV2> {
@@ -226,6 +282,15 @@ pub fn close_dealer_position_replay_v2(
     position_tombstone
         .validate()
         .map_err(|_| Error::MismatchedBinding)?;
+    let expected_tombstone = terminal_position
+        .projection
+        .position()
+        .terminal_projection()
+        .and_then(|projection| projection.tombstone())
+        .map_err(|_| Error::MismatchedBinding)?;
+    if position_tombstone != expected_tombstone {
+        return Err(Error::MismatchedBinding);
+    }
     let position = position_tombstone.fields();
     if state.phase != DealerPhaseV2::Retiring
         || state.children.facility_positions != 1
@@ -233,12 +298,14 @@ pub fn close_dealer_position_replay_v2(
         || state.children.lp_pages != 0
         || state.children.live_lp_positions != 0
         || state.children.unclaimed_lp_positions != 0
-        || state.children.funded_dependencies != 0
+        || state.children.exit_tickets != 0
+        || state.children.funded_dependencies != 1
         || state.children.epoch_bindings != 0
         || state.children.leases != 0
         || state.children.settlement_pots != 0
         || state.children.terminal_allocations != 0
         || state.children.claim_work != 0
+        || state.funded_dependencies_account_id.is_zero()
         || receipt.policy_id != state.policy_id
         || receipt.facility_id != state.facility_id
         || receipt.facility_position_binding_id != state.facility_position_binding_id
@@ -247,6 +314,8 @@ pub fn close_dealer_position_replay_v2(
         || receipt.replay_account_id != state.facility_replay_account_id
         || receipt.terminal_generation != state.generation
         || receipt.terminal_child_sequence != state.child_sequence
+        || terminal_position.account_id != state.facility_position_account_id
+        || terminal_position.semantic_id != state.facility_position_id
         || replay_close.replay_account_id() != state.facility_replay_account_id
         || replay_close.terminal_state_receipt_id() != receipt.receipt_id()?
         || Id::from_bytes(position.owner.bytes()) != state.facility_id
@@ -261,6 +330,15 @@ pub fn close_dealer_position_replay_v2(
     let mut next = *state;
     next.children.facility_positions = 0;
     next.children.facility_replays = 0;
+    next.terminal_position_tombstone_id = Id::from_bytes(
+        position_tombstone
+            .semantic_id(&DealerTerminalStateSha256V2)
+            .map_err(|_| Error::MismatchedBinding)?
+            .bytes(),
+    );
+    next.terminal_replay_semantic_id = replay_close.terminal_replay_semantic_id();
+    next.terminal_replay_intent_id = replay_close.last_transition_intent_id();
+    next.terminal_state_receipt_id = replay_close.terminal_state_receipt_id();
     next.child_sequence = next
         .child_sequence
         .checked_add(2)
@@ -271,3 +349,15 @@ pub fn close_dealer_position_replay_v2(
 
 const _: () = assert!(DEALER_TERMINAL_STATE_RECEIPT_BYTES_V2 == 252);
 const _: () = assert!(DEALER_TERMINAL_STATE_RECEIPT_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);
+
+#[derive(Clone, Copy, Debug)]
+struct DealerTerminalStateSha256V2;
+
+impl PositionV3Sha256Backend for DealerTerminalStateSha256V2 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        hasher.update(body);
+        hasher.finalize().into()
+    }
+}

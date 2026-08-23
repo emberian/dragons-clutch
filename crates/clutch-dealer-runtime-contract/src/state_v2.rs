@@ -58,7 +58,7 @@ pub const DEALER_STATE_MAGIC_V2: [u8; 8] = *b"DCDSTAT2";
 pub const DEALER_STATE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical `DealerStateV2` body.
 pub const DEALER_STATE_BYTES_V2: usize =
-    HEADER_BYTES + (16 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 48 + ROOT_RENT_OWNER_BYTES;
+    HEADER_BYTES + (20 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 48 + ROOT_RENT_OWNER_BYTES;
 
 /// Exhaustive disjoint children owned by the authoritative V2 root.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -328,6 +328,14 @@ pub struct DealerStateV2 {
     pub funded_dependencies_id: Id,
     /// Live dependency child account, or zero after its counted close.
     pub funded_dependencies_account_id: Id,
+    /// Permanent Position V3 tombstone identity after atomic Position/Replay close.
+    pub terminal_position_tombstone_id: Id,
+    /// Semantic identity of the deleted terminal Replay V3 body.
+    pub terminal_replay_semantic_id: Id,
+    /// Last Retire transition intent committed by terminal Replay.
+    pub terminal_replay_intent_id: Id,
+    /// State-owned terminal receipt committed by terminal Replay.
+    pub terminal_state_receipt_id: Id,
     /// Current lifecycle phase.
     pub phase: DealerPhaseV2,
     /// Sponsor-capital disposition.
@@ -403,6 +411,19 @@ impl DealerStateV2 {
         {
             return Err(Error::InvalidChildGraph);
         }
+        let terminal_evidence = [
+            self.terminal_position_tombstone_id,
+            self.terminal_replay_semantic_id,
+            self.terminal_replay_intent_id,
+            self.terminal_state_receipt_id,
+        ];
+        let terminal_evidence_zero = terminal_evidence.iter().all(|identity| identity.is_zero());
+        let terminal_evidence_live = terminal_evidence
+            .iter()
+            .all(|identity| identity.validate_live().is_ok());
+        if !terminal_evidence_zero && !terminal_evidence_live {
+            return Err(Error::InvalidChildGraph);
+        }
         if self.children.lp_pages == 0 {
             if !self.lp_page_head_id.is_zero()
                 || !self.lp_page_set_root.is_zero()
@@ -430,6 +451,7 @@ impl DealerStateV2 {
         match self.phase {
             DealerPhaseV2::Funding => {
                 if !inventory_zero
+                    || !terminal_evidence_zero
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
                     || self.sponsor_capital_disposition
@@ -449,6 +471,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly => {
                 if self.total_shares == 0
+                    || !terminal_evidence_zero
                     || self.terminal_claimed_shares != 0
                     || self.children.unclaimed_lp_positions != 0
                     || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
@@ -463,6 +486,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Resolving => {
                 if self.total_shares == 0
+                    || !terminal_evidence_zero
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
                     || self.children.unclaimed_lp_positions
@@ -483,6 +507,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Resolved => {
                 if self.total_shares == 0
+                    || !terminal_evidence_zero
                     || self.queued_shares != 0
                     || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
                     || self.children.funded_dependencies != 1
@@ -500,6 +525,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Cancelled => {
                 if !inventory_zero
+                    || !terminal_evidence_zero
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
                     || self.children.funded_dependencies != 1
@@ -530,12 +556,16 @@ impl DealerStateV2 {
                     || self.children.exit_tickets != 0
                     || self.sponsor_capital_disposition
                         == SponsorCapitalDispositionV1::Refundable
+                    || self.children.facility_positions != self.children.facility_replays
+                    || (self.children.facility_positions == 1 && !terminal_evidence_zero)
+                    || (self.children.facility_positions == 0 && !terminal_evidence_live)
                 {
                     return Err(Error::InvalidPhase);
                 }
             }
             DealerPhaseV2::Closed => {
                 if self.children != DealerChildCountsV2::default()
+                    || !terminal_evidence_live
                     || self.total_shares != 0
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
@@ -617,6 +647,10 @@ impl FixedCodec for DealerStateV2 {
             self.active_lease_id,
             self.funded_dependencies_id,
             self.funded_dependencies_account_id,
+            self.terminal_position_tombstone_id,
+            self.terminal_replay_semantic_id,
+            self.terminal_replay_intent_id,
+            self.terminal_state_receipt_id,
         ] {
             writer.id(identity);
         }
@@ -659,6 +693,10 @@ impl FixedCodec for DealerStateV2 {
         let active_lease_id = reader.id();
         let funded_dependencies_id = reader.id();
         let funded_dependencies_account_id = reader.id();
+        let terminal_position_tombstone_id = reader.id();
+        let terminal_replay_semantic_id = reader.id();
+        let terminal_replay_intent_id = reader.id();
+        let terminal_state_receipt_id = reader.id();
         let phase = DealerPhaseV2::decode(reader.u8())?;
         let sponsor_capital_disposition = SponsorCapitalDispositionV1::decode(reader.u8())?;
         let outcome_count = reader.u8();
@@ -692,6 +730,10 @@ impl FixedCodec for DealerStateV2 {
             active_lease_id,
             funded_dependencies_id,
             funded_dependencies_account_id,
+            terminal_position_tombstone_id,
+            terminal_replay_semantic_id,
+            terminal_replay_intent_id,
+            terminal_state_receipt_id,
             phase,
             sponsor_capital_disposition,
             outcome_count,
@@ -711,5 +753,5 @@ impl FixedCodec for DealerStateV2 {
     }
 }
 
-const _: () = assert!(DEALER_STATE_BYTES_V2 == 844);
+const _: () = assert!(DEALER_STATE_BYTES_V2 == 972);
 const _: () = assert!(DEALER_STATE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

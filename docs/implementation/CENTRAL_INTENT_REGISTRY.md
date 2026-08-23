@@ -183,7 +183,7 @@ or pure runtime elsewhere does not make a route executable.
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
 | `0x93/1` | Dealer | immutable liveness schedule (380 bytes) |
-| `0x94/1` | Dealer | authoritative State V2 (852 bytes) |
+| `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
 | `0x99/1` | Dealer | one-generation Lease V2 (1,044 bytes) |

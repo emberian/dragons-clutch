@@ -1353,7 +1353,8 @@ pub struct DealerFundedDependencyCloseV2 {
     pub sink_lamports: u64,
 }
 
-/// Close the V2 dependency only after the exhaustive external runtime is terminal.
+/// Close the V2 dependency only after Position/Replay are gone and the
+/// exhaustive external runtime is terminal.
 pub fn close_funded_dependencies_v2(
     state: &DealerStateV2,
     dealer_state_account_id: Id,
@@ -1370,7 +1371,18 @@ pub fn close_funded_dependencies_v2(
     dependency_account_id.validate_live()?;
     terminal.validate_against(runtime)?;
     if state.phase != DealerPhaseV2::Retiring
+        || state.children.facility_positions != 0
+        || state.children.facility_replays != 0
+        || state.children.lp_pages != 0
+        || state.children.live_lp_positions != 0
+        || state.children.exit_tickets != 0
+        || state.children.unclaimed_lp_positions != 0
         || state.children.funded_dependencies != 1
+        || state.children.epoch_bindings != 0
+        || state.children.leases != 0
+        || state.children.settlement_pots != 0
+        || state.children.terminal_allocations != 0
+        || state.children.claim_work != 0
         || state.funded_dependencies_account_id != dependency_account_id
         || state.funded_dependencies_id != dependency.dependency_id()?
         || state.facility_position_binding_id != dependency.facility_position_binding_id
