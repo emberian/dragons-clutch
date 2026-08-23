@@ -47,7 +47,6 @@ const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-reso
 const RUNTIME_STATE_COMMITMENT_DOMAIN: &[u8] =
     b"dragons-clutch/failure-runtime-state-commitment/v2";
 const RECOVERY_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-terminal/v2";
-const FULL_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-full-terminal/v2";
 const MAGIC: [u8; 8] = *b"DCFAILE2";
 const VERSION: u16 = 2;
 
@@ -90,10 +89,6 @@ typed_external_id!(
 typed_external_id!(
     FailureRuntimeStateCommitmentV2,
     "Typed commitment to the complete canonical failure-runtime bytes."
-);
-typed_external_id!(
-    FailureExternalTerminalJoinIdV2,
-    "Typed identity of the full retirement/source/replay terminal join."
 );
 
 /// Authenticated relation result over one source-owned success handoff.
@@ -622,12 +617,12 @@ impl FailureRuntimeExternalV2 {
     }
 
     /// Exact immutable Source release manifest admitted with this occurrence.
-    pub const fn source_release_manifest_id(self) -> SourceContentId {
+    pub(crate) const fn source_release_manifest_id(self) -> SourceContentId {
         self.source_release_manifest_id
     }
 
     /// Complete Source owner/PDA/body authentication admitted at activation.
-    pub const fn source_release_authentication_id(self) -> SourceContentId {
+    pub(crate) const fn source_release_authentication_id(self) -> SourceContentId {
         self.source_release_authentication_id
     }
 
@@ -1388,116 +1383,6 @@ pub struct FailureRecoveryTerminalReceiptV2 {
     transition_nonce: u64,
     runtime_state_commitment: FailureRuntimeStateCommitmentV2,
     disposition: FailureRecoveryTerminalDispositionV2,
-}
-
-/// Full terminal join owned separately from the Recovery funding close.
-///
-/// Dormancy cannot construct this join: the occurrence must first resolve,
-/// and the adapter must authenticate retirement, the pre-funded predictable
-/// replay account, and final Source release facts for the same generation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FailureExternalTerminalJoinV2 {
-    id: FailureExternalTerminalJoinIdV2,
-    binding_id: FailurePolicyBindingId,
-    market_instance_id: MarketInstanceV2Id,
-    generation: u64,
-    recovery_terminal_receipt_id: FailureRecoveryTerminalReceiptIdV2,
-    transition_nonce: u64,
-    retirement_root_id: [u8; 32],
-    replay_tombstone_id: [u8; 32],
-    source_release_receipt_id: [u8; 32],
-}
-
-impl FailureExternalTerminalJoinV2 {
-    /// Construct the terminal plan after the adapter authenticates retirement,
-    /// final Source release, and the pending immutable replay-account binding.
-    /// The SBF adapter seals this join into that account atomically with close.
-    pub fn from_adapter(
-        runtime: &FailureRuntimeExternalV2,
-        generation: u64,
-        retirement_root_id: [u8; 32],
-        replay_tombstone_id: [u8; 32],
-        source_release_receipt_id: [u8; 32],
-    ) -> Result<Self> {
-        runtime.check()?;
-        if runtime.phase() != RecoveryPhase::Resolved {
-            return Err(Error::WrongPhase);
-        }
-        if generation != runtime.binding.generation
-            || retirement_root_id.iter().all(|byte| *byte == 0)
-            || replay_tombstone_id.iter().all(|byte| *byte == 0)
-            || source_release_receipt_id.iter().all(|byte| *byte == 0)
-        {
-            return Err(Error::BindingMismatch);
-        }
-        let recovery_terminal = runtime.recovery_terminal_receipt()?;
-        let mut hasher = Sha256::new();
-        hasher.update(FULL_TERMINAL_DOMAIN);
-        hasher.update(runtime.binding_id.bytes());
-        hasher.update(runtime.binding.market_instance_id.bytes());
-        hasher.update(generation.to_le_bytes());
-        hasher.update(recovery_terminal.id().bytes());
-        hasher.update(runtime.transition_nonce().to_le_bytes());
-        hasher.update(retirement_root_id);
-        hasher.update(replay_tombstone_id);
-        hasher.update(source_release_receipt_id);
-        Ok(Self {
-            id: FailureExternalTerminalJoinIdV2::from_bytes(hasher.finalize().into()),
-            binding_id: runtime.binding_id,
-            market_instance_id: runtime.binding.market_instance_id,
-            generation,
-            recovery_terminal_receipt_id: recovery_terminal.id(),
-            transition_nonce: runtime.transition_nonce(),
-            retirement_root_id,
-            replay_tombstone_id,
-            source_release_receipt_id,
-        })
-    }
-
-    /// Complete typed join identity.
-    pub const fn id(self) -> FailureExternalTerminalJoinIdV2 {
-        self.id
-    }
-
-    /// Immutable failure-policy binding.
-    pub const fn binding_id(self) -> FailurePolicyBindingId {
-        self.binding_id
-    }
-
-    /// Exact full-width occurrence.
-    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
-        self.market_instance_id
-    }
-
-    /// Exact terminal generation.
-    pub const fn generation(self) -> u64 {
-        self.generation
-    }
-
-    /// Exact resolved Recovery terminal receipt for the current root state.
-    pub const fn recovery_terminal_receipt_id(self) -> FailureRecoveryTerminalReceiptIdV2 {
-        self.recovery_terminal_receipt_id
-    }
-
-    /// Exact resolved semantic transition nonce committed by this join.
-    pub const fn transition_nonce(self) -> u64 {
-        self.transition_nonce
-    }
-
-    /// Separately authenticated retirement root.
-    pub const fn retirement_root_id(self) -> [u8; 32] {
-        self.retirement_root_id
-    }
-
-    /// Permanent replay tombstone preserved after root closure.
-    pub const fn replay_tombstone_id(self) -> [u8; 32] {
-        self.replay_tombstone_id
-    }
-
-    /// Final Source release/lineage receipt.
-    pub const fn source_release_receipt_id(self) -> [u8; 32] {
-        self.source_release_receipt_id
-    }
 }
 
 impl FailureRecoveryTerminalReceiptV2 {

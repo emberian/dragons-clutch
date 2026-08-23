@@ -139,14 +139,16 @@ impl From<RuntimeLivenessErrorV1> for FailureRetirementErrorV1 {
 pub struct PrefundedFailureReplayExpectationV1 {
     id: PrefundedFailureReplayExpectationIdV1,
     account_id: [u8; 32],
+    stored_bump: u8,
+    binding_id: FailurePolicyBindingId,
     series_plan_id: SeriesPlanV5Id,
     ordinal: u32,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     market_core_funding_receipt_id: [u8; 32],
     permanent_rent_lamports: u64,
-    rent_refund_owner: [u8; 32],
-    neutral_sink: [u8; 32],
+    prior_donation_lamports: u64,
+    permanent_rent_funder: [u8; 32],
 }
 
 impl PrefundedFailureReplayExpectationV1 {
@@ -158,55 +160,56 @@ impl PrefundedFailureReplayExpectationV1 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_series_funding_adapter(
         account_id: [u8; 32],
+        stored_bump: u8,
+        binding_id: FailurePolicyBindingId,
         series_plan_id: SeriesPlanV5Id,
         ordinal: u32,
         market_instance_id: MarketInstanceV2Id,
         generation: u64,
         market_core_funding_receipt_id: [u8; 32],
         permanent_rent_lamports: u64,
-        rent_refund_owner: [u8; 32],
-        neutral_sink: [u8; 32],
+        prior_donation_lamports: u64,
+        permanent_rent_funder: [u8; 32],
     ) -> RetirementResultV1<Self> {
         if any_zero(&[
             account_id,
+            binding_id.bytes(),
             series_plan_id.bytes(),
             market_instance_id.bytes(),
             market_core_funding_receipt_id,
-            rent_refund_owner,
-            neutral_sink,
+            permanent_rent_funder,
         ]) {
             return Err(FailureRetirementErrorV1::ZeroIdentity);
         }
-        if generation == 0
-            || permanent_rent_lamports == 0
-            || account_id == rent_refund_owner
-            || account_id == neutral_sink
-            || rent_refund_owner == neutral_sink
-        {
+        if generation == 0 || permanent_rent_lamports == 0 || account_id == permanent_rent_funder {
             return Err(FailureRetirementErrorV1::BindingMismatch);
         }
         let mut hasher = Sha256::new();
         hasher.update(REPLAY_EXPECTATION_DOMAIN_V1);
         hasher.update(account_id);
+        hasher.update([stored_bump]);
+        hasher.update(binding_id.bytes());
         hasher.update(series_plan_id.bytes());
         hasher.update(ordinal.to_le_bytes());
         hasher.update(market_instance_id.bytes());
         hasher.update(generation.to_le_bytes());
         hasher.update(market_core_funding_receipt_id);
         hasher.update(permanent_rent_lamports.to_le_bytes());
-        hasher.update(rent_refund_owner);
-        hasher.update(neutral_sink);
+        hasher.update(prior_donation_lamports.to_le_bytes());
+        hasher.update(permanent_rent_funder);
         Ok(Self {
             id: PrefundedFailureReplayExpectationIdV1::from_bytes(hasher.finalize().into()),
             account_id,
+            stored_bump,
+            binding_id,
             series_plan_id,
             ordinal,
             market_instance_id,
             generation,
             market_core_funding_receipt_id,
             permanent_rent_lamports,
-            rent_refund_owner,
-            neutral_sink,
+            prior_donation_lamports,
+            permanent_rent_funder,
         })
     }
 
@@ -218,6 +221,16 @@ impl PrefundedFailureReplayExpectationV1 {
     /// Expected permanent replay account.
     pub const fn account_id(self) -> [u8; 32] {
         self.account_id
+    }
+
+    /// Canonical bump persisted in the permanent replay body.
+    pub const fn stored_bump(self) -> u8 {
+        self.stored_bump
+    }
+
+    /// Exact immutable Failure binding persisted in the replay body.
+    pub const fn binding_id(self) -> FailurePolicyBindingId {
+        self.binding_id
     }
 
     /// Exact SeriesPlanV5 identity.
@@ -250,14 +263,14 @@ impl PrefundedFailureReplayExpectationV1 {
         self.permanent_rent_lamports
     }
 
-    /// Immutable owner of the replay rent principal.
-    pub const fn rent_refund_owner(self) -> [u8; 32] {
-        self.rent_refund_owner
+    /// Lamports already present before the admitted rent debit.
+    pub const fn prior_donation_lamports(self) -> u64 {
+        self.prior_donation_lamports
     }
 
-    /// Immutable sink for unsolicited replay-account lamports.
-    pub const fn neutral_sink(self) -> [u8; 32] {
-        self.neutral_sink
+    /// Exact historical funder of permanent replay rent.
+    pub const fn permanent_rent_funder(self) -> [u8; 32] {
+        self.permanent_rent_funder
     }
 }
 
@@ -484,10 +497,13 @@ pub fn prepare_failure_retirement_prerequisite_v1(
         || replay.ordinal() != ordinal
         || replay.market_instance_id() != market_instance_id
         || replay.generation() != binding.generation()
+        || replay.binding_id() != runtime.binding_id()
+        || replay.permanent_rent_funder() != runtime.recovery_payer().bytes()
     {
         return Err(FailureRetirementErrorV1::BindingMismatch);
     }
 
+    runtime.authenticate_source_release(source_release)?;
     if source_release.manifest_id() != runtime.source_release_manifest_id()
         || source_release.id() != runtime.source_release_authentication_id()
     {
@@ -686,8 +702,10 @@ fn retirement_replay_join_id(
     hasher.update(generation.to_le_bytes());
     hasher.update(replay.id().bytes());
     hasher.update(replay.account_id());
+    hasher.update([replay.stored_bump()]);
     hasher.update(replay.market_core_funding_receipt_id());
     hasher.update(replay.permanent_rent_lamports().to_le_bytes());
+    hasher.update(replay.prior_donation_lamports().to_le_bytes());
     FailureRetirementReplayJoinIdV1::from_bytes(hasher.finalize().into())
 }
 

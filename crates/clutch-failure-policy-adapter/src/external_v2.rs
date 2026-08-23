@@ -6,8 +6,7 @@
 //! the separately persisted liveness Recovery compartment.
 
 use clutch_failure_policy_runtime::external_v2::{
-    FailureExternalAdmissionReceiptV2, FailureExternalTerminalJoinV2,
-    FailureExternalTransitionPlanV2, FailureRecoveryTerminalDispositionV2,
+    FailureExternalAdmissionReceiptV2, FailureExternalTransitionPlanV2,
     FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2, FAILURE_RUNTIME_EXTERNAL_V2_BYTES,
 };
 use clutch_liveness::runtime_adapter_v1::{
@@ -388,55 +387,6 @@ pub fn project_external_recovery_close_v2(
     Ok(ExternalRecoveryCloseV2 {
         preserved_root: root.root,
         liveness,
-    })
-}
-
-/// Exact root-rent/donation close plan after full resolved retirement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExternalRootCloseV2 {
-    /// Root account to close.
-    pub root: AccountId,
-    /// Root-rent payer.
-    pub root_rent_payer: AccountId,
-    /// Exact root rent refund.
-    pub root_rent_refund_lamports: u64,
-    /// Immutable neutral sink.
-    pub neutral_sink: AccountId,
-    /// Root-only unsolicited donations.
-    pub neutral_sink_lamports: u64,
-    /// Permanent tombstone to preserve.
-    pub replay_tombstone_id: [u8; 32],
-}
-
-/// Close the semantic root only after its resolved full terminal join. The
-/// liveness Recovery close is a separate atomic plan and never routes through
-/// this root.
-pub fn project_external_root_close_v2(
-    root: AuthenticatedExternalRootV2,
-    join: FailureExternalTerminalJoinV2,
-) -> ExternalResultV2<ExternalRootCloseV2> {
-    let runtime = root.runtime;
-    let recovery_terminal = runtime.recovery_terminal_receipt()?;
-    if join.binding_id() != runtime.binding_id()
-        || join.market_instance_id() != runtime.binding().market_instance_id()
-        || join.generation() != runtime.binding().generation()
-        || join.recovery_terminal_receipt_id() != recovery_terminal.id()
-        || join.transition_nonce() != runtime.transition_nonce()
-        || runtime.phase() != clutch_evidence_recovery::RecoveryPhase::Resolved
-    {
-        return Err(ExternalAdapterErrorV2::ReceiptMismatch);
-    }
-    let donation = root
-        .lamports
-        .checked_sub(root.root_rent_principal_lamports)
-        .ok_or(ExternalAdapterErrorV2::RootRentUnderfunded)?;
-    Ok(ExternalRootCloseV2 {
-        root: root.root,
-        root_rent_payer: root.root_rent_payer,
-        root_rent_refund_lamports: root.root_rent_principal_lamports,
-        neutral_sink: root.neutral_sink,
-        neutral_sink_lamports: donation,
-        replay_tombstone_id: join.replay_tombstone_id(),
     })
 }
 
