@@ -1657,6 +1657,7 @@ pub struct AccountReceiptEndTransitionPlanV3 {
     owner_settlement_account: Id32,
     owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
     reservation_account: Id32,
+    reservation_semantic_id: Id32,
     reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
     reservation_body_changed: bool,
     reserved_cash_handoff_atoms: u64,
@@ -1719,6 +1720,11 @@ impl AccountReceiptEndTransitionPlanV3 {
     /// Canonical Reservation account participating in the atomic comparison.
     pub const fn reservation_account(&self) -> Id32 {
         self.reservation_account
+    }
+
+    /// Canonical semantic Reservation identity decoded from the exact body.
+    pub const fn reservation_semantic_id(&self) -> Id32 {
+        self.reservation_semantic_id
     }
 
     /// Exact canonical Reservation successor body.
