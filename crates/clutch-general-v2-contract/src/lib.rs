@@ -120,6 +120,8 @@ pub const ECONOMIC_DOMAIN_SEED_DOMAIN_V1: &[u8] = b"economic-domain:v2";
 pub const SELECTED_CANDIDATE_SEED_DOMAIN_V1: &[u8] = b"selected-candidate:v1";
 /// Fresh disabled owner-settlement envelope PDA seed domain.
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
+/// Presence-explicit owner-settlement successor PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V2: &[u8] = b"owner-settlement:v2";
 /// Fresh selected composite-fee record PDA seed domain.
 pub const SELECTED_FEE_RECORD_SEED_DOMAIN_V1: &[u8] = b"selected-fee-record:v1";
 /// Fresh owner-scoped fee carry PDA seed domain.
@@ -219,6 +221,14 @@ pub struct OwnerSettlementSeedTupleV1 {
     owner: [u8; ID_BYTES],
 }
 
+/// Validated ordered seed tuple for the sole future V2 owner-settlement row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV2 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
 /// Validated ordered seed tuple for the one-to-one General V2 FinalPot PDA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalPotSeedTupleV1 {
@@ -295,6 +305,43 @@ impl OwnerSettlementSeedTupleV1 {
     }
 }
 
+impl OwnerSettlementSeedTupleV2 {
+    /// Construct the one-to-one tuple from Epoch, final candidate, and owner.
+    pub fn new(epoch: Id32, settlement_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: the non-aliasing presence-explicit V2 domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V2
+    }
+
+    /// Second seed: full authenticated parent Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final RelationV2 settlement candidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: full semantic Position-owner identity bytes.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
+
 /// Existing semantic account tag, fresh successor version: Window.
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
 /// Codec version matching the disabled central Window reservation.
@@ -309,8 +356,10 @@ pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// Fresh disabled General V2 owner-settlement envelope tag.
 pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// First exact owner-settlement envelope version.
-pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn non-aliasing first owner-settlement envelope version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Sole future presence-explicit owner-settlement version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 2;
 /// Exact outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
 /// Fresh disabled selected composite-fee record envelope tag.
@@ -410,7 +459,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 21] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -423,8 +472,13 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
     },
     AccountAllocationV1 {
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
-        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         owner: "clutch-general-v2-contract/OwnerSettlementV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerSettlementV2AccountV1",
     },
     AccountAllocationV1 {
         tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,

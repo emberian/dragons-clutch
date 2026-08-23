@@ -15,20 +15,19 @@ mod adapter;
 mod builder;
 mod direct;
 mod position;
+mod successor;
 mod virtual_claim;
 
 pub use adapter::{
     authenticate_owner_settlement_account_v1, bind_owner_cash_realization_id_v1,
-    prepare_account_receipt_end_v1,
-    prepare_create_owner_settlement_account_v1, prepare_realize_owner_cash_v1, AdapterDerivedPdaV1,
-    AuthenticatedOwnerFeeDebitV1, AuthenticatedOwnerFinalizationIdV1,
-    AuthenticatedOwnerSettlementAccountV1,
+    prepare_account_receipt_end_v1, prepare_create_owner_settlement_account_v1,
+    prepare_realize_owner_cash_v1, AdapterDerivedPdaV1, AuthenticatedOwnerFeeDebitV1,
+    AuthenticatedOwnerFinalizationIdV1, AuthenticatedOwnerSettlementAccountV1,
     AuthenticatedSettlementReceiptEndV1, BoundOwnerCashRealizationPlanV1,
-    OwnerCashRealizationPlanV1,
-    OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
-    OwnerSettlementReceiptAccountingPlanV1, SelectedOwnerRowAuthorityV1,
-    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
-    OWNER_SETTLEMENT_PDA_DOMAIN_V1, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+    OwnerCashRealizationPlanV1, OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1,
+    OwnerSettlementCreatePlanV1, OwnerSettlementReceiptAccountingPlanV1,
+    SelectedOwnerRowAuthorityV1, SettlementCashPotExpectationV1, SettlementCashPotV1,
+    VirtualCashDirectionV1, OWNER_SETTLEMENT_PDA_DOMAIN_V1, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 
 pub use builder::{
@@ -38,30 +37,43 @@ pub use builder::{
 
 pub use position::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
+pub use successor::{
+    authenticate_owner_settlement_account_v2, build_owner_settlement_book_v2,
+    derive_settlement_receipt_data_id_v2, prepare_create_owner_settlement_account_v2,
+    project_owner_receipt_end_v2, AdapterDerivedOwnerSettlementPdaV2,
+    AuthenticatedOrderMembershipV2, AuthenticatedOwnerFragmentV2,
+    AuthenticatedOwnerSettlementAccountV2, AuthenticatedSettlementReceiptEndV2,
+    AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2, OwnerSettlementAccountViewV2,
+    OwnerSettlementAccumulatorV2, OwnerSettlementBookV2, OwnerSettlementCreatePlanV2,
+    OwnerSettlementExpectationV2, OwnerSettlementReceiptAccountingProjectionV2,
+    PresentConsiderationV2, PresentPriceV2, SelectedOwnerRowAuthorityV2,
+    SettlementReceiptDataHashV2, SettlementReceiptRouteV2, VerifiedSettlementOrderV2,
+    OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V2, OWNER_SETTLEMENT_BODY_V2_BYTES,
+    OWNER_SETTLEMENT_PDA_DOMAIN_V2, SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V2,
+    SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V2_BYTES,
+};
+
 pub use direct::{
     prepare_direct_egg_settlement_v1, prepare_direct_receipt_end_accounting_v1,
     AuthenticatedDirectSettlementReceiptV1, AuthenticatedOrderMembershipV1,
-    AuthenticatedReservationV1, DirectEggSettlementInputV1,
-    DirectEggSettlementPlanV1, DirectEggTransferAuditV1, DirectReceiptEndAccountingInputV1,
-    DirectReceiptEndAccountingPlanV1, OrderKindV1, ReservationStateV1,
-    DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
+    AuthenticatedReservationV1, DirectEggSettlementInputV1, DirectEggSettlementPlanV1,
+    DirectEggTransferAuditV1, DirectReceiptEndAccountingInputV1, DirectReceiptEndAccountingPlanV1,
+    OrderKindV1, ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
 };
 
 pub use virtual_claim::{
     prepare_virtual_merge_composite_v1, prepare_virtual_merge_receipt_accounting_v1,
     prepare_virtual_split_composite_v1, prepare_virtual_split_receipt_accounting_v1,
-    AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
-    AuthenticatedVirtualMergeReceiptV1,
+    AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1, AuthenticatedVirtualMergeReceiptV1,
     AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
     FinalPotRetirementProjectionV1, VirtualInventoryBudgetV1, VirtualInventoryPlanV1,
-    VirtualInventoryStateV1,
-    VirtualMergeCashPotPostV1,
+    VirtualInventoryStateV1, VirtualMergeCashPotPostV1,
     VirtualMergeCompositeInputV1, VirtualMergeCompositePlanV1, VirtualMergeReceiptInputV1,
     VirtualMergeReceiptAccountingInputV1, VirtualMergeReceiptAccountingPlanV1,
-    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitCompositeInputV1,
-    VirtualSplitCompositePlanV1, VirtualSplitReceiptAccountingInputV1,
-    VirtualSplitReceiptAccountingPlanV1, VirtualSplitReceiptInputV1, VirtualSplitReceiptPlanV1,
-    FINAL_POT_BODY_V1_BYTES,
+    VirtualMergeReceiptInputV1, VirtualMergeReceiptPlanV1, VirtualReceiptKindV1,
+    VirtualSplitCompositeInputV1, VirtualSplitCompositePlanV1,
+    VirtualSplitReceiptAccountingInputV1, VirtualSplitReceiptAccountingPlanV1,
+    VirtualSplitReceiptInputV1, VirtualSplitReceiptPlanV1, FINAL_POT_BODY_V1_BYTES,
 };
 
 /// Maximum orders in one frozen General book.
@@ -75,8 +87,7 @@ pub const OWNER_SETTLEMENT_BODY_V1_BYTES: usize = 288;
 ///
 /// The canonical action-38 identity is
 /// `SHA-256(domain || owner_settlement_body_v1[288])`.
-pub const OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V1: &[u8] =
-    b"clutch:owner-finalized-row-data:v1";
+pub const OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V1: &[u8] = b"clutch:owner-finalized-row-data:v1";
 
 /// Exact atomic collateral quantity.
 pub type Amount = u64;

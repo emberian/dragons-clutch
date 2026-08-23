@@ -44,7 +44,8 @@ action plan from authenticated prestates before atomically writing both bodies.
 | purpose-owned Replay V3 with General `GEN1` extension | `0x7a/3` | 344 (`208 + 136`), common prefix owned by retirement |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
-| disabled `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
+| withdrawn `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
+| disabled presence-explicit `OwnerSettlementV2AccountV1` envelope | `0x81/2` | 292 |
 | disabled selected fee-record envelope | `0x82/1` | 340 |
 | disabled owner fee-carry envelope | `0x83/1` | 132 |
 | disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
@@ -59,8 +60,9 @@ tombstones at `0x75/1` and `0x76/1` plus its permanent Position tombstone at
 `0x75/2`, and proves its recorded rows internally
 disjoint. Dealer owns `0x7d/1` and `0x7e/1`; Source/Series owns `0x7f/1` and
 `0x80/1`. General does not reinterpret those coordinates. The `0x81/1`
-owner-settlement coordinate is a reservation, not an
-executable capability. A complete legacy-account inventory cross-check remains
+owner-settlement coordinate stays withdrawn; `0x81/2` is the sole future row
+and remains a reservation, not an executable capability. Their codecs and PDA
+domains never alias. A complete legacy-account inventory cross-check remains
 an activation gate.
 The same coordinated block reserves the StructuredClaim descriptor at
 `0x88/1` and a fresh General FinalPot at `0x89/1`. The latter now has a strict
@@ -94,7 +96,7 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
-| OwnerSettlement | `owner-settlement:v1`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
+| OwnerSettlement V2 | `owner-settlement:v2`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
 | temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner |
