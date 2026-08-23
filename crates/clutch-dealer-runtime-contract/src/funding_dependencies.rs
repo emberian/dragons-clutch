@@ -1271,26 +1271,135 @@ impl FixedCodec for DealerFundedDependenciesV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerRuntimeLivenessTerminalV1 {
     /// Original binding digest committed by the dependency child.
-    pub runtime_binding_digest: Id,
+    runtime_binding_digest: Id,
     /// Exact facility lifecycle identity.
-    pub lifecycle_id: Id,
+    lifecycle_id: Id,
     /// Exact State authority used by the six Dealer-owned compartments.
-    pub state_authority_account_id: Id,
+    state_authority_account_id: Id,
     /// Selected external terminal path, in the frozen four-path order.
-    pub terminal_path_index: u8,
+    terminal_path_index: u8,
     /// Exact final successful-call counters.
-    pub completed_calls: [u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    completed_calls: [u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Exact final consumed work lamports.
-    pub completed_work_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    completed_work_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Typed terminal receipt semantic identities, one per compartment.
-    pub terminal_receipt_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    terminal_receipt_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Lamports observed after the external atomic terminal transfer/close.
-    pub account_lamports_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    account_lamports_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
 }
 
 impl DealerRuntimeLivenessTerminalV1 {
+    /// Construct only from the complete canonical liveness bundle after all
+    /// seven physical accounts have executed their terminal movements.
+    ///
+    /// The concrete adapter must decode the policy and each compartment from
+    /// its owner- and address-authenticated account before calling this
+    /// constructor, then supply the exact post-close lamport observations.
+    /// Public caller-shaped receipt arrays cannot mint this capability.
+    pub fn from_canonical_closed_bundle(
+        runtime: &DealerRuntimeLivenessBindingV1,
+        policy: clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
+        bundle: clutch_liveness::runtime_v1::RuntimeLivenessBundleV1,
+        state_authority_account_id: Id,
+        terminal_path: clutch_liveness::runtime_v1::RuntimeTerminalPathKindV1,
+        account_lamports_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    ) -> Result<Self> {
+        runtime.validate()?;
+        policy.validate().map_err(|_| Error::MismatchedBinding)?;
+        bundle
+            .validate(policy)
+            .map_err(|_| Error::MismatchedBinding)?;
+        if !bundle.all_closed().map_err(|_| Error::MismatchedBinding)? {
+            return Err(Error::InvalidPhase);
+        }
+        state_authority_account_id.validate_live()?;
+        let reconstructed = Self::runtime_binding_from_bundle(policy, bundle)?;
+        if reconstructed != *runtime
+            || account_lamports_after != [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1]
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let terminal_path_index =
+            u8::try_from(terminal_path.index()).map_err(|_| Error::ArithmeticOverflow)?;
+        let path = policy.terminal_paths[terminal_path.index()];
+        if path.kind != terminal_path {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut completed_calls = [0u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+        let mut completed_work_lamports = [0u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+        let mut terminal_receipt_ids = [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+        let mut index = 0usize;
+        while index < DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1 {
+            let compartment = bundle.compartments[index];
+            let terminal_receipt_id = from_liveness_id(compartment.terminal_receipt_id);
+            terminal_receipt_id.validate_live()?;
+            if compartment.completed_calls != path.calls[index]
+                || compartment.completed_work_ceiling_lamports != path.work_lamports[index]
+                || (index != DealerLivenessCompartmentV1::Source.index()
+                    && from_liveness_id(compartment.identity.owner) != state_authority_account_id)
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            let mut prior = 0usize;
+            while prior < index {
+                if terminal_receipt_ids[prior] == terminal_receipt_id {
+                    return Err(Error::MismatchedBinding);
+                }
+                prior += 1;
+            }
+            completed_calls[index] = compartment.completed_calls;
+            completed_work_lamports[index] = compartment.completed_work_ceiling_lamports;
+            terminal_receipt_ids[index] = terminal_receipt_id;
+            index += 1;
+        }
+        let value = Self {
+            runtime_binding_digest: runtime.binding_digest()?,
+            lifecycle_id: from_liveness_id(bundle.lifecycle_id),
+            state_authority_account_id,
+            terminal_path_index,
+            completed_calls,
+            completed_work_lamports,
+            terminal_receipt_ids,
+            account_lamports_after,
+        };
+        value.validate_against(runtime)?;
+        Ok(value)
+    }
+
+    fn runtime_binding_from_bundle(
+        policy: clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
+        bundle: clutch_liveness::runtime_v1::RuntimeLivenessBundleV1,
+    ) -> Result<DealerRuntimeLivenessBindingV1> {
+        DealerRuntimeLivenessBindingV1::from_canonical(&policy, &bundle.compartments)
+    }
+
+    /// Original immutable runtime-binding digest.
+    pub const fn runtime_binding_digest(self) -> Id {
+        self.runtime_binding_digest
+    }
+
+    /// Facility lifecycle whose seven accounts closed.
+    pub const fn lifecycle_id(self) -> Id {
+        self.lifecycle_id
+    }
+
+    /// Exact Dealer State authority of the six Dealer-owned compartments.
+    pub const fn state_authority_account_id(self) -> Id {
+        self.state_authority_account_id
+    }
+
+    /// Selected terminal path in canonical policy order.
+    pub const fn terminal_path_index(self) -> u8 {
+        self.terminal_path_index
+    }
+
+    /// Exact terminal receipt identities in canonical compartment order.
+    pub const fn terminal_receipt_ids(self) -> [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1] {
+        self.terminal_receipt_ids
+    }
+
     /// Join all terminal receipts and exact counters to the admitted binding.
-    pub fn validate_against(&self, runtime: &DealerRuntimeLivenessBindingV1) -> Result<()> {
+    fn validate_against(&self, runtime: &DealerRuntimeLivenessBindingV1) -> Result<()> {
         runtime.validate()?;
         self.runtime_binding_digest.validate_live()?;
         self.lifecycle_id.validate_live()?;
@@ -1301,8 +1410,7 @@ impl DealerRuntimeLivenessTerminalV1 {
             || self.lifecycle_id != runtime.lifecycle_id
             || self.completed_calls != runtime.terminal_path_calls[path]
             || self.completed_work_lamports != runtime.terminal_path_work_lamports[path]
-            || self.account_lamports_after
-                != [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1]
+            || self.account_lamports_after != [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1]
         {
             return Err(Error::MismatchedBinding);
         }
