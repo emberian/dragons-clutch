@@ -214,6 +214,7 @@ impl IndexedProgramRelease {
                 .source_commit
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || self.source_commit.bytes().all(|byte| byte == b'0')
             || self.families.is_empty()
         {
             return Err(RpcIndexError::InvalidRelease);
@@ -1067,6 +1068,13 @@ mod tests {
         assert!(!first.redacted.contains("secret"));
         assert!(!first.redacted.contains("alpha"));
         assert_ne!(first.binding_sha256, second.binding_sha256);
+    }
+
+    #[test]
+    fn release_identity_refuses_a_zero_source_commit() {
+        let mut value = release();
+        value.source_commit = "0".repeat(40);
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 
     #[test]

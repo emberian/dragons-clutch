@@ -14,7 +14,7 @@ use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
@@ -155,15 +155,29 @@ impl ExactManifestCopy {
                 .open(&path)
             {
                 Ok(mut file) => {
+                    let exact_copy = Self { path };
                     file.write_all(bytes)?;
                     file.sync_all()?;
-                    return Ok(Self { path });
+                    file.set_permissions(std::fs::Permissions::from_mode(0o400))?;
+                    return Ok(exact_copy);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error.into()),
             }
         }
         Err("could not exclusively create exact capability-manifest handoff".into())
+    }
+
+    fn verify_unchanged(&self, expected: &[u8]) -> Result<()> {
+        if bounded_read(
+            &self.path,
+            MAX_CAPABILITY_MANIFEST_BYTES,
+            "capability manifest checker handoff",
+        )? != expected
+        {
+            return Err("capability-manifest checker handoff changed during validation".into());
+        }
+        Ok(())
     }
 }
 
@@ -192,6 +206,7 @@ fn checked_capability_summary(path: &Path) -> Result<(Value, [u8; 32])> {
             .collect::<String>();
         return Err(format!("capability-profile checker refused release: {detail}").into());
     }
+    exact_copy.verify_unchanged(&bytes)?;
     if output.stdout.is_empty() || output.stdout.len() > MAX_CAPABILITY_MANIFEST_BYTES {
         return Err("capability-profile checker output exceeds its bound".into());
     }

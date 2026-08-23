@@ -589,7 +589,7 @@ pub(crate) fn authenticate_general_position_replay_v1(
 /// runtime receives only `relation_projection()` after this adapter has
 /// authenticated the full V2 body and immutable batch-policy identity.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_position_replay_v2(
+fn authenticate_general_position_replay_with_access_v2(
     program_id: &Pubkey,
     bound: BoundCollateralProfileV2,
     market_binding_account: &AccountInfo<'_>,
@@ -598,11 +598,17 @@ pub(crate) fn authenticate_general_position_replay_v2(
     replay_account: &AccountInfo<'_>,
     expected_owner: [u8; 32],
     expected_sequence: u64,
+    position_writable: bool,
 ) -> Outcome<GeneralPositionReplayAuthorityV2> {
     let (market_binding, market_runtime) =
         authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
     let relation_market = market_binding.relation_projection();
-    require_program_account(program_id, position_account, true, POSITION_V3_BYTES)?;
+    require_program_account(
+        program_id,
+        position_account,
+        position_writable,
+        POSITION_V3_BYTES,
+    )?;
     require_program_account(
         program_id,
         replay_account,
@@ -692,7 +698,7 @@ pub(crate) fn authenticate_general_position_replay_v2(
         account_authenticated: true,
         semantic_id_authenticated: true,
         market_binding_authenticated: true,
-        writable: true,
+        writable: position_writable,
     };
     let replay = project_general_position_replay_prestate_v1(
         Id32::new(replay_account.key.to_bytes())
@@ -711,4 +717,58 @@ pub(crate) fn authenticate_general_position_replay_v2(
         market_binding,
         market_runtime,
     })
+}
+
+/// Authenticate one writable ordinary Position and writable GEN1 Replay.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_v2(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV2> {
+    authenticate_general_position_replay_with_access_v2(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        true,
+    )
+}
+
+/// Authenticate one read-only ordinary Position and writable GEN1 Replay.
+///
+/// Action 40 advances payment accounting and Replay without mutating the
+/// Position. Requiring a writable Position here would add an unnecessary lock
+/// and would contradict the pure transition's unchanged-Position obligation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_readonly_v2(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV2> {
+    authenticate_general_position_replay_with_access_v2(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        false,
+    )
 }

@@ -206,6 +206,15 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
+Actions 2, 3, and 9 have complete staged SBF handlers, but this does not alter
+their central status: all ten tuples remain `ReservedDisabled`. Action 3 binds
+the full authenticated outcome-mint vector, accepts the exact independent
+Token-2022 burn before exposing the Realm collateral request, and atomically
+writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger and `0xa5`
+after canonical supply is exactly zero. Product's exact action-1 family
+admission producer and an explicit deployable release profile remain required
+before any tuple can be enabled.
+
 The current account coordinates are `0xa4/2` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
 credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
@@ -402,10 +411,13 @@ pure runtime elsewhere does not make a route executable.
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
-| `0xab/1` | Failure | reusable exclusive interval-consensus session cell; retained until Market terminal |
-| `0xac/1` | Failure/history | append-only aggregate interval history; retained through family-terminal commitment |
+| `0xab/1` | Failure | withdrawn one-shot interval-session cell |
+| `0xab/2` | Failure | reusable exclusive interval-session cell retained through Market terminality |
+| `0xac/1` | Failure/history | withdrawn one-shot replay receipt |
+| `0xac/2` | Failure/history | append-only aggregate interval-session history |
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 | `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
+| `0xb0/1` | Product/replay | permanent compact MarketLifecycle replay receipt; replaces terminal `0xaa/1` |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

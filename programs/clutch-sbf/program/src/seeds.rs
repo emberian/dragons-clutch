@@ -291,10 +291,10 @@ pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-wo
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
 /// Shared Product Market lifecycle root, keyed by Market and generation.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
-/// Permanent compact replacement for one terminal Market lifecycle root.
-pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
 /// Zero-data Product foundation principal/donation vault.
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
+/// Permanent compact Product Market-lifecycle replay anchor.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
 
@@ -454,22 +454,6 @@ pub fn product_market_lifecycle_root_pda(
     )
 }
 
-/// Canonical permanent Product MarketLifecycleReplayReceipt PDA.
-pub fn product_market_lifecycle_replay_pda(
-    program_id: &Pubkey,
-    market_instance_v2_id: &[u8; 32],
-    generation: u64,
-) -> (Pubkey, u8) {
-    find(
-        program_id,
-        &[
-            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
-            market_instance_v2_id,
-            &generation.to_le_bytes(),
-        ],
-    )
-}
-
 /// Canonical zero-data Product FoundationVault PDA.
 pub fn product_market_foundation_vault_pda(
     program_id: &Pubkey,
@@ -480,6 +464,22 @@ pub fn product_market_foundation_vault_pda(
         program_id,
         &[
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive the permanent Product Market-lifecycle replay anchor.
+pub fn product_market_lifecycle_replay_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -1882,6 +1882,7 @@ mod tests {
         let prefixes = [
             SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,

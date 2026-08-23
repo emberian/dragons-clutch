@@ -1,10 +1,11 @@
 use clutch_collateral_adapter_v2::{
-    bind_claim_issuance_v1, bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2,
-    ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1, CollateralPolicyV2,
-    FractionalBindingStateV1, HoardV2, Id, MarketCollateralBindingV2, MarketLiabilityLifecycleV1,
-    ProfileCollateralBindingV2, RealmCollateralBindingV2, ResolutionFinalizationFactsV5,
-    ResolutionPayoutUnitBoundaryV5, ResolutionV5, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1,
-    TOKEN_2022_PROGRAM,
+    accept_fractional_bearer_claim_burn_v3, bind_claim_issuance_v1, bind_collateral_profile_v2,
+    prepare_fractional_bearer_claim_burn_v3, AdapterBearerClaimObservationV3, AdapterCatalogV2,
+    AdapterReleaseV2, ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1,
+    CollateralPolicyV2, FractionalBindingStateV1, HoardV2, Id, MarketCollateralBindingV2,
+    MarketLiabilityLifecycleV1, ProfileCollateralBindingV2, RealmCollateralBindingV2,
+    ResolutionFinalizationFactsV5, ResolutionPayoutUnitBoundaryV5, ResolutionV5,
+    RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
 };
 use clutch_fractional_redemption_runtime::*;
 use clutch_general_v2_contract::{
@@ -249,12 +250,31 @@ fn external_context(
         policy.market_instance
     );
     assert_eq!(founding.family_admission.policy_account(), policy_account);
+    assert_eq!(
+        founding.family_admission.claim_issuance_binding(),
+        policy.claim_issuance_binding
+    );
     assert_eq!(founding.family_admission.ledger_account(), ledger_account);
     assert_eq!(
         founding.family_admission.claim_ledger_account(),
         claim_ledger_account
     );
     assert_ne!(founding.family_admission.receipt_id().bytes(), [0; 32]);
+    let verified_admission = verify_fractional_family_admission_postwrite_v1(
+        founding,
+        policy_account,
+        policy,
+        ledger_account,
+        founding.ledger_after,
+        claim_ledger_account,
+        founding.claim_ledger.claim_ledger_after(),
+    )
+    .unwrap();
+    assert_eq!(
+        verified_admission.family_admission(),
+        founding.family_admission
+    );
+    assert_ne!(verified_admission.verification_id().bytes(), [0; 32]);
     let ledger = FractionalLedgerV1 {
         aggregate_credit_numerator: aggregate_credit,
         active_credit_accounts: active_credits,
@@ -275,6 +295,57 @@ fn external_context(
     )
     .unwrap();
     (context, policy, ledger)
+}
+
+#[test]
+fn fractional_family_admission_postwrite_refuses_substituted_physical_or_latch() {
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (context, policy, _ledger) =
+        external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
+    let open_claim_ledger = ClaimLedgerV3 {
+        fractional_policy_id: Id::ZERO,
+        fractional_ledger_account: Id::ZERO,
+        next_fractional_sequence: 0,
+        last_fractional_transition_id: Id::ZERO,
+        fractional_binding: FractionalBindingStateV1::OpenUnlatched,
+        ..context.claim_ledger()
+    };
+    let founding = initialize_fractional_ledger_v1(
+        rid(41),
+        policy,
+        rid(42),
+        rid(44),
+        open_claim_ledger,
+        5,
+        deletable_rent(43),
+    )
+    .unwrap();
+    assert_eq!(
+        verify_fractional_family_admission_postwrite_v1(
+            founding,
+            rid(43),
+            policy,
+            rid(42),
+            founding.ledger_after,
+            rid(44),
+            founding.claim_ledger.claim_ledger_after(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+    assert_eq!(
+        verify_fractional_family_admission_postwrite_v1(
+            founding,
+            rid(41),
+            policy,
+            rid(42),
+            founding.ledger_after,
+            rid(44),
+            open_claim_ledger,
+        ),
+        Err(Error::MismatchedBinding)
+    );
 }
 
 fn rid_from_collateral(value: Id) -> Identity32V1 {
@@ -544,6 +615,7 @@ fn exact_bearer_path_refuses_a_sub_lot_before_any_successor_exists() {
         collateral_destination: rid(53),
         claim_issuance_binding: context.policy().claim_issuance_binding,
         source_claim_atoms: 1,
+        observed_materialized_supply: materialized,
         accepted_collateral: None,
     };
     assert_eq!(
@@ -553,6 +625,101 @@ fn exact_bearer_path_refuses_a_sub_lot_before_any_successor_exists() {
     assert_eq!(context.ledger(), ledger);
     assert_eq!(context.claim_ledger().aggregate_materialized_supply[0], 1);
     assert_eq!(context.hoard().locked_claim_principal_atoms, 1);
+}
+
+#[test]
+fn exact_bearer_request_is_hidden_until_the_bound_claim_burn_is_accepted() {
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[1] = 1;
+    let mut stored_materialized = [0; MAX_OUTCOMES];
+    stored_materialized[0] = 8;
+    let (context, _policy, _ledger) = external_context(0, 0, internal, stored_materialized, 2);
+    let mut materialized = stored_materialized;
+    materialized[0] = 7;
+    let source = BearerClaimPrestateV1 {
+        claimant: rid(50),
+        claim_token_account: rid(51),
+        claim_mint: rid(52),
+        collateral_destination: rid(53),
+        claim_issuance_binding: context.policy().claim_issuance_binding,
+        source_claim_atoms: 7,
+        observed_materialized_supply: materialized,
+    };
+    let prepared = prepare_bearer_exact_v1(context, 1, source, 0, 7).unwrap();
+    assert_eq!(
+        prepared
+            .fractional_claim_ledger()
+            .claim_ledger_after()
+            .aggregate_materialized_supply[0],
+        0
+    );
+    let mut hostile_observed = materialized;
+    hostile_observed[0] = 9;
+    assert_eq!(
+        prepare_bearer_exact_v1(
+            context,
+            1,
+            BearerClaimPrestateV1 {
+                observed_materialized_supply: hostile_observed,
+                ..source
+            },
+            0,
+            7,
+        ),
+        Err(Error::CollateralRefused)
+    );
+    let token_before = AdapterBearerClaimObservationV3 {
+        mint: cid(52),
+        mint_authority: cid(60),
+        source_token_account: cid(51),
+        source_owner: cid(50),
+        mint_supply_atoms: 7,
+        source_atoms: 7,
+    };
+    let prepared_burn = prepare_fractional_bearer_claim_burn_v3(
+        context.claims().unwrap(),
+        cid(60),
+        cid(50),
+        0,
+        7,
+        materialized,
+        token_before,
+        prepared.fractional_claim_ledger(),
+    )
+    .unwrap();
+    let mut materialized_after = materialized;
+    materialized_after[0] = 0;
+    let mut wrong_outcome_after = materialized_after;
+    wrong_outcome_after[1] = 1;
+    assert!(accept_fractional_bearer_claim_burn_v3(
+        prepared_burn,
+        wrong_outcome_after,
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..token_before
+        },
+    )
+    .is_err());
+    let accepted_burn = accept_fractional_bearer_claim_burn_v3(
+        prepared_burn,
+        materialized_after,
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..token_before
+        },
+    )
+    .unwrap();
+    let burned = accept_bearer_exact_burn_v1(prepared, accepted_burn).unwrap();
+    let request = burned.collateral_request();
+    assert_eq!(
+        request.claim_redemption_id,
+        accepted_burn.fractional().transition_id()
+    );
+    assert_eq!(request.claim_semantic_owner, cid(50));
+    assert_eq!(request.destination_token_account, cid(53));
+    assert_eq!(request.payout_atoms, 1);
 }
 
 #[test]
@@ -570,6 +737,7 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
         collateral_destination: rid(53),
         claim_issuance_binding: context.policy().claim_issuance_binding,
         source_claim_atoms: 1,
+        observed_materialized_supply: materialized,
         accepted_collateral: None,
     };
     let plan = redeem_bearer_to_credit_v1(
@@ -831,6 +999,82 @@ fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
         close.claim_ledger_after().fractional_ledger_before_id(),
         close.claim_ledger_after().fractional_ledger_retirement_id()
     );
+    let terminal = project_fractional_family_terminal_receipt_v1(close, rid(70)).unwrap();
+    assert_eq!(terminal.market_instance_id(), rid(20));
+    assert_eq!(terminal.domain_generation(), 7);
+    assert_eq!(terminal.policy_account(), rid(41));
+    assert_eq!(terminal.ledger_account(), rid(42));
+    assert_eq!(terminal.claim_ledger_account(), rid(44));
+    assert_eq!(terminal.fractional_release_id(), rid(70));
+    assert_eq!(
+        terminal.policy_terminal_state_id(),
+        close.terminal_requirement().policy_terminal_state_id()
+    );
+    assert_eq!(
+        terminal.ledger_terminal_state_id(),
+        close.terminal_requirement().ledger_terminal_state_id()
+    );
+    assert_eq!(
+        terminal.claim_ledger_post_state_id(),
+        close.terminal_requirement().claim_ledger_post_state_id()
+    );
+    assert_eq!(
+        terminal.claim_ledger_transition_id(),
+        close.terminal_requirement().claim_ledger_transition_id()
+    );
+    assert_ne!(terminal.rent_disposition_id().bytes(), [0; 32]);
+    assert_ne!(terminal.receipt_id().bytes(), [0; 32]);
+    let verified_terminal = verify_fractional_family_terminal_postwrite_v1(
+        close,
+        terminal,
+        rid(41),
+        terminal_context.policy(),
+        rid(42),
+        terminal_context.ledger(),
+        rid(44),
+        close.claim_ledger_after().claim_ledger_after(),
+        103,
+        103,
+    )
+    .unwrap();
+    assert_eq!(verified_terminal.family_terminal(), terminal);
+    assert_ne!(verified_terminal.verification_id().bytes(), [0; 32]);
+    assert_eq!(
+        verify_fractional_family_terminal_postwrite_v1(
+            close,
+            terminal,
+            rid(41),
+            terminal_context.policy(),
+            rid(42),
+            terminal_context.ledger(),
+            rid(44),
+            close.claim_ledger_after().claim_ledger_after(),
+            104,
+            103,
+        ),
+        Err(Error::RentRefused)
+    );
+    assert_eq!(
+        verify_fractional_family_terminal_postwrite_v1(
+            close,
+            terminal,
+            rid(41),
+            terminal_context.policy(),
+            rid(42),
+            terminal_context.ledger(),
+            rid(44),
+            terminal_context.claim_ledger(),
+            103,
+            103,
+        ),
+        Err(Error::MismatchedBinding)
+    );
+    assert_ne!(
+        terminal.receipt_id(),
+        project_fractional_family_terminal_receipt_v1(close, rid(71))
+            .unwrap()
+            .receipt_id()
+    );
 }
 
 #[test]
@@ -970,4 +1214,19 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
         refuse_disabled_fractional_redemption_v1(&malformed, &hostile_accounts),
         Err(Error::CapabilityDisabled)
     );
+}
+
+#[test]
+fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
+    let bearer = fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerExact);
+    assert_eq!(bearer.account_count, 19);
+    assert_eq!(bearer.writable_mask, 0x55300);
+    assert_eq!(bearer.signer_mask, 1);
+    assert!(bearer.outcome_mint_suffix);
+
+    let seal = fractional_account_contract_v1(FractionalRedemptionActionV1::SealClaimsExhausted);
+    assert_eq!(seal.account_count, 12);
+    assert_eq!(seal.writable_mask, 0x900);
+    assert_eq!(seal.signer_mask, 0);
+    assert!(!seal.outcome_mint_suffix);
 }

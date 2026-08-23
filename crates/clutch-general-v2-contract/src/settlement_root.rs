@@ -10,15 +10,16 @@
 //! with the returned root successor.
 
 use clutch_owner_settlement::{
-    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
-    VirtualReceiptKindV1,
+    AuthenticatedFinalPotV1, SettlementCashPotExpectationV1, SettlementCashPotV1,
+    VirtualCashDirectionV1, VirtualInventoryStateV1, VirtualReceiptKindV1, MAX_OUTCOMES,
 };
 
 use crate::{
     AdmissionNodeStatusV1, AdmissionNodeV4AccountV1, CandidateFeedHeaderV2,
-    CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, FirstAdmittedTieV1, Id32,
-    MarketBindingV2, Reader, SettlementCandidateKindV1, Sha256BackendV1, Writer, ID_BYTES,
-    SCORE_V2_Q_RANK_CAPACITY,
+    CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, FirstAdmittedTieV1,
+    GeneralEpochPhaseV1, GeneralEpochV6AccountV1, Id32, MarketBindingV2, Reader,
+    SettlementCandidateKindV1, Sha256BackendV1, Writer, FINAL_POT_ACCOUNT_BYTES,
+    FINAL_POT_ACCOUNT_TAG, FINAL_POT_ACCOUNT_VERSION, ID_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 
 /// Fresh centrally reserved SettlementRoot account discriminator.
@@ -1016,6 +1017,63 @@ impl SettlementRootV1AccountV1 {
         Ok(next)
     }
 
+    /// Retire one exact coefficient-portfolio pair's complete archive set.
+    ///
+    /// This is the sole aggregate count transition for action 44. The caller
+    /// cannot choose a subset: `receipt_count` must equal the root's entire
+    /// admitted/live Receipt set, and the root must own exactly two filled,
+    /// live Reservations. The live composer must additionally authenticate
+    /// every committed Receipt V5 sibling, both consumed Reservation V9
+    /// accounts, both Position/GEN1 child decrements, and every exact rent
+    /// transfer before writing this successor.
+    ///
+    /// This transition deliberately leaves owner rows, the cash pot, and the
+    /// retained Feed live. Their separately typed retirement transitions must
+    /// close them before [`Self::terminal_projection`] can exist; the private
+    /// portfolio terminal receipt is never authority to skip that dependency
+    /// order or promote this successor directly to `Terminal`.
+    pub fn retire_portfolio_pair_archives(
+        &self,
+        receipt_count: u8,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        let receipts = u16::from(receipt_count);
+        if self.phase != SettlementRootPhaseV1::Settling
+            || receipt_count == 0
+            || self.virtual_cash_direction != VirtualCashDirectionV1::None
+            || self.counts.expected_receipts != receipts
+            || self.counts.admitted_receipts != receipts
+            || self.counts.live_receipts != receipts
+            || self.counts.expected_filled_reservations != 2
+            || self.counts.admitted_reservations != 2
+            || self.counts.live_reservations != 2
+            || self.counts.completed_owner_finalizations != self.counts.expected_owner_rows
+            || self.counts.live_fee_finalizations != 0
+            || self.counts.expected_dealer_children != 0
+            || self.counts.admitted_dealer_children != 0
+            || self.counts.live_dealer_children != 0
+            || self.counts.expected_merge_payments != 0
+            || self.counts.admitted_merge_payments != 0
+            || self.counts.completed_merge_payments != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_receipts = next
+            .counts
+            .live_receipts
+            .checked_sub(receipts)
+            .ok_or(CodecError::InvalidCount)?;
+        next.counts.live_reservations = next
+            .counts
+            .live_reservations
+            .checked_sub(2)
+            .ok_or(CodecError::InvalidCount)?;
+        next.phase = SettlementRootPhaseV1::Retiring;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Derive a structural full-account terminal receipt only after every
     /// expected child is observed and retired. This is not a capability: the
     /// retirement adapter must reauthenticate the exact root PDA, program
@@ -1091,6 +1149,8 @@ pub struct InitializeSettlementRootV1<'a> {
     pub epoch_generation: u64,
     /// Full Product MarketInstance V2 identity.
     pub market_instance_v2_id: Id32,
+    /// Exact frozen Epoch prestate whose unique selected child becomes this root.
+    pub epoch: &'a GeneralEpochV6AccountV1,
     /// Exact immutable MarketBinding V2 body.
     pub market: &'a MarketBindingV2,
     /// Exact pre-finalization Window V5 body.
@@ -1131,6 +1191,7 @@ pub struct InitializeSettlementRootV1<'a> {
 /// Exact action-39 poststate and singleton creation projections.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InitializeSettlementRootPlanV1 {
+    epoch: GeneralEpochV6AccountV1,
     root: SettlementRootV1AccountV1,
     window: CandidateWindowV5AccountV1,
     cash_pot: Option<SettlementCashPotV1>,
@@ -1138,6 +1199,11 @@ pub struct InitializeSettlementRootPlanV1 {
 }
 
 impl InitializeSettlementRootPlanV1 {
+    /// Finalized Epoch successor counting this unique SettlementRoot.
+    pub const fn epoch(&self) -> &GeneralEpochV6AccountV1 {
+        &self.epoch
+    }
+
     /// Newly counted SettlementRoot.
     pub const fn root(&self) -> &SettlementRootV1AccountV1 {
         &self.root
@@ -1221,6 +1287,41 @@ impl SettlementFinalPotInitializationV1 {
     pub const fn stored_bump(&self) -> u8 {
         self.stored_bump
     }
+
+    /// Encode the exact fresh FinalPot outer without consulting a historical
+    /// SelectedCandidate account. The action-39 root plan is the sole budget
+    /// authority and fixes every semantic field in this postimage.
+    pub fn encode(self, output: &mut [u8]) -> Result<(), CodecError> {
+        let semantic = AuthenticatedFinalPotV1 {
+            account: self.account.bytes(),
+            market: self.market.bytes(),
+            epoch: self.epoch.bytes(),
+            candidate: self.candidate.bytes(),
+            owner_order_set_digest: self.owner_order_set_digest.bytes(),
+            relation_witness_digest: self.settlement_witness_digest.bytes(),
+            cash_principal_atoms: 0,
+            internal_claims: [0; MAX_OUTCOMES],
+            inventory_kind: self.kind,
+            authorized_complete_set_atoms: self.authorized_complete_set_atoms,
+            processed_complete_set_atoms: 0,
+            inventory_transition_sequence: 0,
+            inventory_state: VirtualInventoryStateV1::Open,
+            outcome_count: self.outcome_count,
+            phase: 0,
+            writable: true,
+            selected_budget_authenticated: true,
+        };
+        let body = semantic
+            .encode_body()
+            .map_err(|_| CodecError::InvalidState)?;
+        let mut writer = Writer::exact(output, FINAL_POT_ACCOUNT_BYTES)?;
+        writer.u8(FINAL_POT_ACCOUNT_TAG)?;
+        writer.u8(FINAL_POT_ACCOUNT_VERSION)?;
+        writer.bytes(&body)?;
+        writer.u8(self.stored_bump)?;
+        writer.u8(0)?;
+        writer.finish()
+    }
 }
 
 /// Exact action-37 sole merge cash-pot creation poststate.
@@ -1279,6 +1380,7 @@ pub fn prepare_activate_merge_cash_pot_v1(
 pub fn initialize_settlement_root_v1(
     request: InitializeSettlementRootV1<'_>,
 ) -> Result<InitializeSettlementRootPlanV1, CodecError> {
+    request.epoch.validate()?;
     request.market.validate()?;
     request.window.validate()?;
     request.node.validate()?;
@@ -1306,6 +1408,14 @@ pub fn initialize_settlement_root_v1(
     let market = request.market.base();
     let direction = request.cash_expectation.virtual_cash_direction;
     if request.epoch_generation == 0
+        || request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.epoch.selected_candidate_count != 0
+        || request.epoch.generation != request.epoch_generation
+        || request.epoch.market_binding != request.market_binding_account
+        || request.epoch.market_runtime != market.market
+        || request.epoch.market_instance_v2_id != request.market_instance_v2_id
+        || request.epoch.window != request.window_account
+        || request.epoch.order_set != request.feed.order_set
         || request.current_slot < window.verification_closes_slot
         || request.current_slot == 0
         || request.feed.order_count == 0
@@ -1493,6 +1603,7 @@ pub fn initialize_settlement_root_v1(
         flags: 0,
     };
     root.validate()?;
+    let epoch = finalize_epoch_for_settlement_root(request.epoch)?;
     let mut window_after = *window;
     window_after.finalized_slot = request.current_slot;
     window_after.selected_candidate_artifact = request.root_account;
@@ -1529,11 +1640,28 @@ pub fn initialize_settlement_root_v1(
         }),
     };
     Ok(InitializeSettlementRootPlanV1 {
+        epoch,
         root,
         window,
         cash_pot,
         final_pot,
     })
+}
+
+fn finalize_epoch_for_settlement_root(
+    epoch: &GeneralEpochV6AccountV1,
+) -> Result<GeneralEpochV6AccountV1, CodecError> {
+    epoch.validate()?;
+    if epoch.phase != GeneralEpochPhaseV1::Frozen || epoch.selected_candidate_count != 0 {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let successor = GeneralEpochV6AccountV1 {
+        selected_candidate_count: 1,
+        phase: GeneralEpochPhaseV1::Finalized,
+        ..*epoch
+    };
+    successor.validate()?;
+    Ok(successor)
 }
 
 /// Structural zero-liability handoff for the Product occurrence adapter.
@@ -1726,3 +1854,198 @@ fn read_counts(reader: &mut Reader<'_>) -> Result<SettlementRootChildCountsV1, C
 
 const _: () = assert!(IDENTITY_COUNT == 19);
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id32 {
+        Id32::from_bytes([byte; ID_BYTES])
+    }
+
+    fn frozen_epoch() -> GeneralEpochV6AccountV1 {
+        GeneralEpochV6AccountV1 {
+            market_binding: id(1),
+            market_runtime: id(2),
+            market_instance_v2_id: id(3),
+            economic_domain: id(4),
+            window: id(5),
+            budget: id(6),
+            order_set: id(7),
+            epoch_index: 8,
+            generation: 9,
+            freeze_deadline_slot: 10,
+            frozen_slot: 10,
+            candidate_bundle_count: 1,
+            work_count: 0,
+            selected_candidate_count: 0,
+            rent: DeletableRentOwnerV1 {
+                payer: id(11),
+                refundable_principal: 12,
+                donation_floor: 0,
+            },
+            phase: GeneralEpochPhaseV1::Frozen,
+            stored_bump: 13,
+            flags: 0,
+        }
+    }
+
+    fn portfolio_settling_root() -> SettlementRootV1AccountV1 {
+        let candidate = id(9);
+        let ordinal = 1u64;
+        let mut rank_key = [0u8; SCORE_V2_Q_RANK_CAPACITY];
+        let candidate_bytes = candidate.bytes();
+        let ordinal_bytes = FirstAdmittedTieV1 { ordinal }.coordinate().unwrap();
+        let mut index = 0usize;
+        while index < ID_BYTES {
+            rank_key[32 + index] = !candidate_bytes[index];
+            rank_key[64 + index] = !ordinal_bytes[index];
+            index += 1;
+        }
+        SettlementRootV1AccountV1 {
+            epoch: id(1),
+            market: id(2),
+            market_instance_v2_id: id(3),
+            market_binding: id(4),
+            window: id(5),
+            source_admission_node: id(6),
+            retained_feed: id(7),
+            order_set: id(8),
+            settlement_candidate_id: candidate,
+            candidate_bundle_digest: id(10),
+            settlement_witness_digest: id(11),
+            owner_order_set_digest: id(12),
+            cost_certificate_id: id(13),
+            batch_policy_id: id(14),
+            score_policy_id: id(15),
+            fee_record: Id32::ZERO,
+            settlement_cash_pot: id(16),
+            final_pot: Id32::ZERO,
+            solver_reward_destination: id(17),
+            rank_key,
+            root_rent: DeletableRentOwnerV1 {
+                payer: id(18),
+                refundable_principal: 100,
+                donation_floor: 0,
+            },
+            cash_pot_rent: DeletableRentOwnerV1 {
+                payer: id(19),
+                refundable_principal: 100,
+                donation_floor: 0,
+            },
+            final_pot_rent: OptionalSettlementRentV1::ABSENT,
+            price_scale: 10_000,
+            consideration_debit_atoms: 10,
+            seller_credit_atoms: 10,
+            selected_fee_atoms: 0,
+            virtual_cash_atoms: 0,
+            rounding_pot_price_units: 0,
+            epoch_generation: 1,
+            selected_ordinal: ordinal,
+            selected_slot: 1,
+            counts: SettlementRootChildCountsV1 {
+                expected_receipts: 2,
+                admitted_receipts: 2,
+                live_receipts: 2,
+                expected_owner_rows: 2,
+                admitted_owner_rows: 2,
+                live_owner_rows: 2,
+                expected_reservations: 2,
+                expected_filled_reservations: 2,
+                admitted_reservations: 2,
+                live_reservations: 2,
+                released_unfilled_reservations: 0,
+                completed_owner_finalizations: 2,
+                live_fee_finalizations: 0,
+                expected_dealer_children: 0,
+                admitted_dealer_children: 0,
+                live_dealer_children: 0,
+                expected_merge_payments: 0,
+                admitted_merge_payments: 0,
+                completed_merge_payments: 0,
+            },
+            outcome_count: 2,
+            order_count: 2,
+            virtual_cash_direction: VirtualCashDirectionV1::None,
+            phase: SettlementRootPhaseV1::Settling,
+            cash_pot_state: SettlementRootChildStateV1::Live,
+            final_pot_state: SettlementRootChildStateV1::Absent,
+            retained_feed_state: SettlementRootChildStateV1::Live,
+            fee_record_state: SettlementRootChildStateV1::Absent,
+            stored_bump: 1,
+            cash_pot_bump: 2,
+            final_pot_bump: 0,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn root_creation_owns_the_only_frozen_to_finalized_epoch_transition() {
+        let epoch = frozen_epoch();
+        let successor = finalize_epoch_for_settlement_root(&epoch).unwrap();
+        assert_eq!(successor.phase, GeneralEpochPhaseV1::Finalized);
+        assert_eq!(successor.selected_candidate_count, 1);
+
+        let mut hostile = epoch;
+        hostile.phase = GeneralEpochPhaseV1::Finalized;
+        assert!(finalize_epoch_for_settlement_root(&hostile).is_err());
+    }
+
+    #[test]
+    fn fresh_final_pot_encoding_is_exact_and_root_owned() {
+        let initialization = SettlementFinalPotInitializationV1 {
+            account: id(1),
+            market: id(2),
+            epoch: id(3),
+            candidate: id(4),
+            owner_order_set_digest: id(5),
+            settlement_witness_digest: id(6),
+            kind: VirtualReceiptKindV1::Split,
+            authorized_complete_set_atoms: 7,
+            outcome_count: 2,
+            rent: DeletableRentOwnerV1 {
+                payer: id(8),
+                refundable_principal: 9,
+                donation_floor: 0,
+            },
+            stored_bump: 10,
+        };
+        let mut bytes = [0u8; FINAL_POT_ACCOUNT_BYTES];
+        initialization.encode(&mut bytes).unwrap();
+        assert_eq!(bytes[0], FINAL_POT_ACCOUNT_TAG);
+        assert_eq!(bytes[1], FINAL_POT_ACCOUNT_VERSION);
+        assert_eq!(bytes[FINAL_POT_ACCOUNT_BYTES - 2], 10);
+        assert_eq!(bytes[FINAL_POT_ACCOUNT_BYTES - 1], 0);
+        let body: [u8; 328] = bytes[2..330].try_into().unwrap();
+        let decoded = AuthenticatedFinalPotV1::decode_body(&body, id(1).bytes(), true, true).unwrap();
+        assert_eq!(decoded.candidate, id(4).bytes());
+        assert_eq!(decoded.inventory_kind, VirtualReceiptKindV1::Split);
+        assert_eq!(decoded.authorized_complete_set_atoms, 7);
+
+        let mut short = [0u8; FINAL_POT_ACCOUNT_BYTES - 1];
+        assert!(initialization.encode(&mut short).is_err());
+        let hostile = SettlementFinalPotInitializationV1 {
+            outcome_count: 1,
+            ..initialization
+        };
+        assert!(hostile.encode(&mut bytes).is_err());
+    }
+
+    #[test]
+    fn portfolio_archive_counts_retire_exhaustively_once() {
+        let root = portfolio_settling_root();
+        root.validate().unwrap();
+        assert_eq!(
+            root.retire_portfolio_pair_archives(1),
+            Err(CodecError::InvalidState)
+        );
+        let post = root.retire_portfolio_pair_archives(2).unwrap();
+        assert_eq!(post.phase(), SettlementRootPhaseV1::Retiring);
+        assert_eq!(post.counts().live_receipts, 0);
+        assert_eq!(post.counts().live_reservations, 0);
+        assert_eq!(
+            post.retire_portfolio_pair_archives(2),
+            Err(CodecError::InvalidState)
+        );
+    }
+}

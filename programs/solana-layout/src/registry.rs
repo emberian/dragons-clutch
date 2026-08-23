@@ -432,19 +432,19 @@ pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
-/// Withdrawn one-shot interval-consensus work account version.
+/// Withdrawn one-shot work-account version.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION: u8 = 1;
-/// Reusable Market-scoped interval-consensus cell account version.
+/// Reusable Market interval-cell version.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 2;
 /// Exact framed interval-consensus work account bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES: usize = 1_088;
-/// Permanent interval-consensus transition/replay receipt discriminator.
+/// Permanent Market interval-history discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
-/// Withdrawn one-shot interval-consensus replay account version.
+/// Withdrawn one-shot replay-account version.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION: u8 = 1;
-/// Append-only Market-scoped interval-consensus history account version.
+/// Append-only Market interval-history version.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
-/// Exact permanent interval-consensus replay account bytes.
+/// Exact permanent Market interval-history bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
@@ -1502,20 +1502,20 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
-            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
-            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION,
+            tag: DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+            version: DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::Withdrawn,
-        name: "failure-interval-consensus-work-v1-account",
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-covered-selection-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
-            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-work-v2-account",
+        status: AllocationStatus::Withdrawn,
+        name: "failure-interval-consensus-work-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1529,11 +1529,20 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-market-interval-work-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG,
             version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-replay-v2-account",
+        name: "failure-market-interval-history-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1543,15 +1552,6 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-series-market-link-v1-account",
-    },
-    CollisionLedgerEntry {
-        coordinates: AllocationCoordinates::Exact {
-            namespace: WireNamespace::MainAccount,
-            tag: DEALER_COVERED_SELECTION_ACCOUNT_TAG,
-            version: DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
-        },
-        status: AllocationStatus::ReservedDisabled,
-        name: "dealer-covered-selection-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1758,6 +1758,8 @@ pub enum GeneralV2Action {
     FinalizeMergeReceiptPayment = 40,
     /// Release and close one exact zero-fill Reservation.
     ReleaseUnfilledReservation = 41,
+    /// Atomically consume one exact full coefficient-portfolio pair.
+    ConsumePortfolioPairEggs = 42,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -1940,7 +1942,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 41;
+    pub const LAST_TAG: u8 = 42;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1986,6 +1988,7 @@ impl GeneralV2Action {
             Self::InitializeSettlementRoot => 39,
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
+            Self::ConsumePortfolioPairEggs => 42,
         }
     }
 
@@ -2033,6 +2036,7 @@ impl GeneralV2Action {
             39 => Some(Self::InitializeSettlementRoot),
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
+            42 => Some(Self::ConsumePortfolioPairEggs),
             _ => None,
         }
     }

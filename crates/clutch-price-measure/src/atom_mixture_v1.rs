@@ -72,7 +72,7 @@ pub struct BoundQuantizedSplineV1 {
 }
 
 impl BoundQuantizedSplineV1 {
-    fn validated(self) -> ResultV1<ValidatedBasisSpec> {
+    pub(crate) fn validated(self) -> ResultV1<ValidatedBasisSpec> {
         self.bindings.validate()?;
         if self.basis.degree != 2 && self.basis.degree != 3 {
             return Err(ErrorV1::InvalidDegree);

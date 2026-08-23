@@ -49,6 +49,20 @@ remaining state-contingent exposure. These bounds are exact over the full
 simplex. A smooth basis can have a smaller reachable payout set, so this crate
 does not claim tighter basis-specific bounds.
 
+The kernel also compares two already-admitted exact simplex vectors over one
+Market/Terms domain without appointing either as fair value. Different integer
+scales are cross-multiplied exactly. The certificate exposes exact
+total-variation and overlap numerators, the largest coordinate disagreement
+with a lowest-index tie rule, and masks for left-only, right-only, and shared
+positive support. Total variation is accumulated as one signed side of the
+simplex difference, not as a potentially overflowing full L1 sum; the equal
+simplex totals independently require both signed sides to agree. An adapter
+must authenticate and label both sources before presenting this as venue,
+benchmark, oracle, or market-quality telemetry. For downstream UX, the bound
+interface retains a nonzero adapter-authenticated source-authority ID and exact
+price-body ID for each side; there is no caller-supplied authentication flag
+and no later opportunity to relabel the comparison certificate.
+
 ## Trust boundary
 
 This crate is `no_std`, allocation-free, safe Rust, and independent of Solana.
@@ -62,4 +76,6 @@ There is exactly one rounding boundary: the final conversion from exact
 The certificate exposes both floor and ceiling plus the retained exact
 remainder. It does not silently choose which party receives a remainder.
 Portfolio compression introduces no rounding: Egg atoms, complete sets, and
-returned collateral atoms use one checked integer atom model.
+returned collateral atoms use one checked integer atom model. Simplex
+disagreement also introduces no rounding; all reported quantities retain the
+exact product-of-scales denominator.

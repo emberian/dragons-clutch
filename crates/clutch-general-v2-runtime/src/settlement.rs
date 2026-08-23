@@ -11,7 +11,10 @@
 
 use core::cmp::min;
 
-use clutch_batch::{Side, MAX_ORDERS};
+use clutch_batch::{
+    AuthenticatedPortfolioReceiptSiblingSetV2, Side, MAX_ORDERS,
+    PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
+};
 use clutch_collateral_adapter_v2::{BoundCollateralProfileV2, Error as CollateralError};
 use clutch_fee_runtime_contract::allocation::{FeeEnvelopeV1, PayerAllocationV1};
 use clutch_fee_runtime_contract::intent::OwnerFeeTransitionIntentV1;
@@ -1524,6 +1527,24 @@ impl SettlementTraversalProjectionV4 {
             None
         }
     }
+
+    /// Canonical retained-Feed settlement slice at one authenticated index.
+    pub fn settlement_slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
+        if slice_index < self.feed.slice_count {
+            Some(self.slices[usize::from(slice_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Canonical selected price at one active outcome.
+    pub fn outcome_price(&self, outcome: u8) -> Option<u64> {
+        if outcome < self.feed.outcome_count {
+            Some(self.prices[usize::from(outcome)])
+        } else {
+            None
+        }
+    }
 }
 
 /// Root-bound next-slice projection used only after action 39.
@@ -2249,6 +2270,24 @@ pub fn prepare_create_settlement_receipt_v5(
     semantic: SettlementReceiptAccountV4,
     funding: RentOwnedSettlementCreateFundingV5,
 ) -> Result<SettlementReceiptCreatePlanV5, SettlementAdapterErrorV1> {
+    prepare_create_settlement_receipt_with_transition_v5(
+        account,
+        seed,
+        bump,
+        semantic,
+        SettlementReceiptTransitionCommitmentV5::None,
+        funding,
+    )
+}
+
+fn prepare_create_settlement_receipt_with_transition_v5(
+    account: Id32,
+    seed: SettlementReceiptSeedTupleV5,
+    bump: u8,
+    semantic: SettlementReceiptAccountV4,
+    transition: SettlementReceiptTransitionCommitmentV5,
+    funding: RentOwnedSettlementCreateFundingV5,
+) -> Result<SettlementReceiptCreatePlanV5, SettlementAdapterErrorV1> {
     semantic.validate()?;
     if semantic.stored_bump != bump
         || seed.epoch() != &semantic.epoch.bytes()
@@ -2258,11 +2297,7 @@ pub fn prepare_create_settlement_receipt_v5(
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
     let creation = prepare_rent_owned_settlement_creation_v5(account, funding)?;
-    let receipt = SettlementReceiptAccountV5::new(
-        semantic,
-        SettlementReceiptTransitionCommitmentV5::None,
-        creation.layout_rent,
-    )?;
+    let receipt = SettlementReceiptAccountV5::new(semantic, transition, creation.layout_rent)?;
     let evidence = receipt.evidence(LayoutHash32(account.bytes()))?;
     Ok(SettlementReceiptCreatePlanV5 {
         account,
@@ -2461,6 +2496,20 @@ pub fn prepare_realize_owner_cash_v5(
         semantic,
         fee_finalization_required,
     })
+}
+
+/// Structurally compare one counted SettlementRoot to an exhaustive V4
+/// settlement traversal.
+///
+/// This authenticates no program owner, PDA, account body, meta privilege, or
+/// traversal provenance. A live adapter must establish all of those facts
+/// before promoting a successful equality bind into an execution seam.
+pub fn bind_settlement_root_traversal_v4(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+) -> Result<(), SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)
 }
 
 fn require_root_traversal_binding_v4(
@@ -2728,6 +2777,84 @@ impl MaterializeEntitlementSlicePlanV5 {
     }
 }
 
+/// One capability-selected portfolio sibling receipt allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioPairReceiptCreateInputV5 {
+    /// Canonical V5 receipt PDA authenticated by the outer adapter.
+    pub account: Id32,
+    /// Canonical fresh V5 bump.
+    pub bump: u8,
+    /// Exact disjoint full-rent creation facts.
+    pub funding: RentOwnedSettlementCreateFundingV5,
+}
+
+/// Complete input for the all-or-nothing portfolio action-24 successor.
+///
+/// `sibling_set` is the private exhaustive capability derived from the exact
+/// RelationV2 pair and retained Feed. Its active prefix, never a packet count,
+/// owns how many receipt creation rows are consumed.
+#[derive(Clone, Copy, Debug)]
+pub struct MaterializePortfolioPairInputV5<'a> {
+    pub entitlement: &'a CandidateEntitlementProjectionV4,
+    pub sibling_set: AuthenticatedPortfolioReceiptSiblingSetV2,
+    pub receipts: [Option<PortfolioPairReceiptCreateInputV5>;
+        PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+    pub endpoints: [EntitlementEndpointInputV5<'a>; 2],
+}
+
+/// Candidate-scoped count delta for one exhaustive portfolio pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioPairDependencyCreateDeltaV5 {
+    receipts_created: u8,
+    owner_rows_created: u8,
+    filled_reservations_admitted: u8,
+}
+
+impl PortfolioPairDependencyCreateDeltaV5 {
+    pub const fn receipts_created(&self) -> u8 { self.receipts_created }
+    pub const fn owner_rows_created(&self) -> u8 { self.owner_rows_created }
+    pub const fn filled_reservations_admitted(&self) -> u8 {
+        self.filled_reservations_admitted
+    }
+}
+
+/// Atomic poststate for every scalar sibling of one exclusive portfolio pair.
+///
+/// The fixed array is intentionally large. An SBF composer must place this
+/// plan in caller-provided heap/out-parameter storage rather than a program
+/// stack frame, and must create every active receipt and write the root and
+/// two endpoint successors in one rollback domain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaterializePortfolioPairPlanV5 {
+    settlement_root_account: Id32,
+    settlement_root_poststate: SettlementRootV1AccountV1,
+    receipts: [Option<SettlementReceiptCreatePlanV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+    receipt_count: u8,
+    endpoints: [EntitlementEndpointPlanV5; 2],
+    dependency_delta: PortfolioPairDependencyCreateDeltaV5,
+}
+
+impl MaterializePortfolioPairPlanV5 {
+    pub const fn settlement_root_account(&self) -> Id32 { self.settlement_root_account }
+    pub const fn settlement_root_poststate(&self) -> &SettlementRootV1AccountV1 {
+        &self.settlement_root_poststate
+    }
+    pub const fn receipt_count(&self) -> u8 { self.receipt_count }
+    pub fn receipt(&self, index: u8) -> Option<&SettlementReceiptCreatePlanV5> {
+        if index < self.receipt_count {
+            self.receipts[usize::from(index)].as_ref()
+        } else {
+            None
+        }
+    }
+    pub fn endpoint(&self, ordinal: u8) -> Option<&EntitlementEndpointPlanV5> {
+        self.endpoints.get(usize::from(ordinal))
+    }
+    pub const fn dependency_delta(&self) -> PortfolioPairDependencyCreateDeltaV5 {
+        self.dependency_delta
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparedEntitlementEndpointV5 {
     plan: EntitlementEndpointPlanV5,
@@ -2775,6 +2902,16 @@ pub fn prepare_materialize_entitlement_slice_v5(
     let mut ordinal = 0usize;
     while ordinal < input.endpoints.len() {
         if input.endpoints[ordinal].is_some() != (ordinal < usize::from(endpoint_count)) {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        ordinal += 1;
+    }
+    ordinal = 0;
+    while ordinal < usize::from(endpoint_count) {
+        let membership = entitlement
+            .settlement_membership(expected_orders[ordinal])
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        if membership.order_kind != OrderKindV1::Single {
             return Err(SettlementAdapterErrorV1::BindingMismatch);
         }
         ordinal += 1;
@@ -2896,6 +3033,380 @@ pub fn prepare_materialize_entitlement_slice_v5(
             merge_payment_admitted,
         },
     })
+}
+
+/// Materialize every scalar Receipt V5 sibling of one exclusive portfolio pair.
+///
+/// This is the only action-24 pure route that accepts portfolio orders. The
+/// root must still be at its initial receipt cursor, the private sibling
+/// capability must cover the complete retained-Feed slice set, and both
+/// endpoint rows and Reservations are created/adopted once. No anchor-only or
+/// page-selected subset can produce `PortfolioPairPending` receipts.
+pub fn prepare_materialize_portfolio_pair_v5(
+    input: MaterializePortfolioPairInputV5<'_>,
+) -> Result<MaterializePortfolioPairPlanV5, SettlementAdapterErrorV1> {
+    let entitlement = input.entitlement;
+    let root = entitlement.settlement_root;
+    let counts = root.counts();
+    let sibling_count = input.sibling_set.sibling_count();
+    let sibling_len = usize::from(sibling_count);
+    let pair = input.sibling_set.pair();
+    let buyer_record = *pair.buyer().record();
+    let seller_record = *pair.seller().record();
+    let slice = entitlement.current_slice;
+    let (buy_order_index, sell_order_index) = match (slice.buy, slice.sell, slice.route) {
+        (
+            SettlementLegV1::Order(buy),
+            SettlementLegV1::Order(sell),
+            SettlementRouteV1::Direct,
+        ) => (buy, sell),
+        _ => return Err(SettlementAdapterErrorV1::BindingMismatch),
+    };
+    if sibling_count == 0
+        || sibling_len > PORTFOLIO_PAIR_MAX_RECEIPTS_V2
+        || counts.admitted_receipts != 0
+        || counts.live_receipts != 0
+        || counts.expected_receipts != u16::from(sibling_count)
+        || counts.expected_owner_rows != 2
+        || counts.admitted_owner_rows != 0
+        || counts.live_owner_rows != 0
+        || counts.expected_filled_reservations != 2
+        || counts.admitted_reservations != 0
+        || counts.live_reservations != 0
+        || counts.expected_merge_payments != 0
+        || root.virtual_cash_direction() != VirtualCashDirectionV1::None
+        || !entitlement.current_buy_first_owner
+        || !entitlement.current_sell_first_owner
+        || buy_order_index != buyer_record.order_index
+        || sell_order_index != seller_record.order_index
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let root_data_id = root.data_id(&CanonicalSha256, entitlement.settlement_root_account)?;
+    bind_portfolio_pair_record_v5(
+        entitlement,
+        buyer_record,
+        buy_order_index,
+        SettlementSideV1::Buy,
+        root_data_id,
+    )?;
+    bind_portfolio_pair_record_v5(
+        entitlement,
+        seller_record,
+        sell_order_index,
+        SettlementSideV1::Sell,
+        root_data_id,
+    )?;
+    let first_receipt_input = input.receipts[0]
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let mut prepared_endpoints = [None; 2];
+    let mut rent_debits = [None; PORTFOLIO_PAIR_MAX_RECEIPTS_V2 + 2];
+    let mut endpoint_ordinal = 0usize;
+    while endpoint_ordinal < input.endpoints.len() {
+        let expected_order_index = if endpoint_ordinal == 0 {
+            buy_order_index
+        } else {
+            sell_order_index
+        };
+        let endpoint_input = input.endpoints[endpoint_ordinal];
+        if endpoint_input.order_index != expected_order_index {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        let prepared = prepare_entitlement_endpoint_v5(
+            entitlement,
+            endpoint_input,
+            true,
+            first_receipt_input.funding.program_id,
+        )?;
+        if !prepared.plan.reservation.first_occurrence()
+            || prepared.plan.membership.order_kind != OrderKindV1::Portfolio
+            || !matches!(
+                prepared.plan.owner_row,
+                OwnerRowMaterializationDispositionV5::Create { .. }
+            )
+        {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        let record = if endpoint_ordinal == 0 {
+            buyer_record
+        } else {
+            seller_record
+        };
+        if prepared.plan.position.account().bytes() != record.position_account_id
+            || prepared.plan.position.semantic_id().bytes() != record.position_pre_semantic_id
+        {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        if let Some(rent) = prepared.rent {
+            rent_debits[PORTFOLIO_PAIR_MAX_RECEIPTS_V2 + endpoint_ordinal] = Some(rent);
+        } else {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        prepared_endpoints[endpoint_ordinal] = Some(prepared.plan);
+        endpoint_ordinal += 1;
+    }
+    let endpoints = [
+        prepared_endpoints[0].ok_or(SettlementAdapterErrorV1::BindingMismatch)?,
+        prepared_endpoints[1].ok_or(SettlementAdapterErrorV1::BindingMismatch)?,
+    ];
+    let buy_membership = endpoints[0].membership;
+    let sell_membership = endpoints[1].membership;
+    let mut receipts = [None; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+    let mut receipt_index = 0usize;
+    while receipt_index < input.receipts.len() {
+        if input.receipts[receipt_index].is_some() != (receipt_index < sibling_len) {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        if receipt_index < sibling_len {
+            let sibling = input
+                .sibling_set
+                .sibling(
+                    u8::try_from(receipt_index)
+                        .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
+                )
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+            let canonical_index = u16::try_from(receipt_index)
+                .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            let canonical_slice = entitlement.traversal.slices[receipt_index];
+            let receipt_input = input.receipts[receipt_index]
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+            if sibling.outcome >= root.outcome_count()
+                || sibling.slice_index != canonical_index
+                || sibling.sequence
+                    != u64::from(canonical_index)
+                        .checked_add(1)
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?
+                || sibling.buy_order_index != buy_order_index
+                || sibling.sell_order_index != sell_order_index
+                || canonical_slice.buy != SettlementLegV1::Order(buy_order_index)
+                || canonical_slice.sell != SettlementLegV1::Order(sell_order_index)
+                || canonical_slice.route != SettlementRouteV1::Direct
+                || canonical_slice.outcome != sibling.outcome
+                || canonical_slice.quantity != sibling.quantity
+                || entitlement.traversal.prices[usize::from(sibling.outcome)] != sibling.price
+                || receipt_input.funding.program_id != first_receipt_input.funding.program_id
+            {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            let semantic = SettlementReceiptAccountV4 {
+                epoch: LayoutHash32(root.epoch().bytes()),
+                market: LayoutHash32(root.market().bytes()),
+                candidate: LayoutHash32(root.settlement_candidate_id().bytes()),
+                buy_order_id: LayoutHash32(buy_membership.order_id),
+                sell_order_id: LayoutHash32(sell_membership.order_id),
+                consideration_price_units: u128::from(sibling.quantity)
+                    .checked_mul(u128::from(sibling.price))
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?,
+                quantity: sibling.quantity,
+                settled_quantity: 0,
+                price: sibling.price,
+                sequence: sibling.sequence,
+                slice_index: sibling.slice_index,
+                outcome: sibling.outcome,
+                leg_kind: RECEIPT_LEG_DIRECT,
+                consumed_flags: 0,
+                stored_bump: receipt_input.bump,
+                accounted_end_mask: 0,
+            };
+            let seed = SettlementReceiptSeedTupleV5::new(
+                root.epoch(),
+                root.settlement_candidate_id(),
+                sibling.slice_index,
+            )?;
+            let plan = prepare_create_settlement_receipt_with_transition_v5(
+                receipt_input.account,
+                seed,
+                receipt_input.bump,
+                semantic,
+                SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+                receipt_input.funding,
+            )?;
+            rent_debits[receipt_index] = Some(RentDebitFactV5 {
+                payer: receipt_input.funding.payer,
+                balance_before: receipt_input.funding.payer_lamports,
+                debit: plan.payer_debit_lamports(),
+            });
+            receipts[receipt_index] = Some(plan);
+        }
+        receipt_index += 1;
+    }
+    validate_portfolio_pair_materialization_bundle_v5(
+        entitlement,
+        &receipts,
+        sibling_count,
+        &endpoints,
+        &rent_debits,
+    )?;
+    let mut settlement_root_poststate = root;
+    receipt_index = 0;
+    while receipt_index < sibling_len {
+        let first = receipt_index == 0;
+        settlement_root_poststate = settlement_root_poststate.admit_materialization_delta(
+            if first { 2 } else { 0 },
+            if first { 2 } else { 0 },
+            false,
+        )?;
+        receipt_index += 1;
+    }
+    Ok(MaterializePortfolioPairPlanV5 {
+        settlement_root_account: entitlement.settlement_root_account,
+        settlement_root_poststate,
+        receipts,
+        receipt_count: sibling_count,
+        endpoints,
+        dependency_delta: PortfolioPairDependencyCreateDeltaV5 {
+            receipts_created: sibling_count,
+            owner_rows_created: 2,
+            filled_reservations_admitted: 2,
+        },
+    })
+}
+
+fn bind_portfolio_pair_record_v5(
+    entitlement: &CandidateEntitlementProjectionV4,
+    record: clutch_batch::SelectedPortfolioOrderRecordV2,
+    order_index: u8,
+    side: SettlementSideV1,
+    root_data_id: Id32,
+) -> Result<(), SettlementAdapterErrorV1> {
+    let root = entitlement.settlement_root;
+    let membership = entitlement
+        .settlement_membership(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_page_account = entitlement
+        .order_projection()
+        .order_page_account(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_page_index = entitlement
+        .order_projection()
+        .order_page_index(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    if record.order_index != order_index
+        || record.side
+            != match side {
+                SettlementSideV1::Buy => Side::Buy,
+                SettlementSideV1::Sell => Side::Sell,
+            }
+        || record.outcome_count != root.outcome_count()
+        || record.traversal_index != 0
+        || record.page_index != expected_page_index
+        || record.settlement_root_epoch_generation != root.epoch_generation()
+        || record.position_generation != membership.position_generation
+        || record.economic_candidate_digest != entitlement.feed().base_relation_candidate_id.bytes()
+        || record.order_set_digest != root.order_set().bytes()
+        || record.settlement_root_account_id != entitlement.settlement_root_account.bytes()
+        || record.settlement_root_pre_semantic_id != root_data_id.bytes()
+        || record.settlement_candidate_id != root.settlement_candidate_id().bytes()
+        || record.retained_feed_account_id != entitlement.selected_feed_account().bytes()
+        || record.retained_feed_semantic_id
+            != entitlement.traversal.candidate_bundle_digest().bytes()
+        || record.settlement_witness_id != root.settlement_witness_digest().bytes()
+        || record.order_page_account_id != expected_page_account.bytes()
+        || record.order_id != membership.order_id
+        || record.owner_id != membership.owner
+        || membership.side != side
+        || membership.order_kind != OrderKindV1::Portfolio
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_portfolio_pair_materialization_bundle_v5(
+    entitlement: &CandidateEntitlementProjectionV4,
+    receipts: &[Option<SettlementReceiptCreatePlanV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+    receipt_count: u8,
+    endpoints: &[EntitlementEndpointPlanV5; 2],
+    rent_debits: &[Option<RentDebitFactV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2 + 2],
+) -> Result<(), SettlementAdapterErrorV1> {
+    let selected = settlement_coordinates_v4(&entitlement.settlement_root)?;
+    let mut accounts = [Id32::ZERO; 40];
+    let mut account_count = 0usize;
+    for account in [
+        entitlement.settlement_root_account,
+        entitlement.selected_feed_account(),
+        selected.market,
+        selected.epoch,
+        selected.market_binding,
+    ] {
+        insert_materialization_account_v5(&mut accounts, &mut account_count, account)?;
+    }
+    let mut page = 0u16;
+    while usize::from(page) < usize::from(entitlement.order_projection().page_count()) {
+        insert_materialization_account_v5(
+            &mut accounts,
+            &mut account_count,
+            entitlement
+                .order_projection()
+                .page_account(page)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?,
+        )?;
+        page = page
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let mut receipt_index = 0usize;
+    while receipt_index < usize::from(receipt_count) {
+        let receipt = receipts[receipt_index]
+            .as_ref()
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        insert_materialization_account_v5(
+            &mut accounts,
+            &mut account_count,
+            receipt.account(),
+        )?;
+        receipt_index += 1;
+    }
+    let expected_program_id = receipts[0]
+        .as_ref()
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+        .program_id();
+    for endpoint in endpoints {
+        for account in [
+            endpoint.reservation.account(),
+            endpoint.position.account(),
+            endpoint.owner_row.account(),
+        ] {
+            insert_materialization_account_v5(&mut accounts, &mut account_count, account)?;
+        }
+        let owner_row = match endpoint.owner_row {
+            OwnerRowMaterializationDispositionV5::Create { plan, .. } => plan,
+            OwnerRowMaterializationDispositionV5::Existing { .. } => {
+                return Err(SettlementAdapterErrorV1::BindingMismatch)
+            }
+        };
+        if owner_row.program_id() != expected_program_id {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+    }
+    receipt_index = 0;
+    while receipt_index < usize::from(receipt_count) {
+        let receipt = receipts[receipt_index]
+            .as_ref()
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        require_materialization_party_not_target_v5(
+            receipt.program_id(),
+            &accounts[..account_count],
+        )?;
+        require_materialization_party_not_target_v5(
+            receipt.payer(),
+            &accounts[..account_count],
+        )?;
+        receipt_index += 1;
+    }
+    for endpoint in endpoints {
+        let owner_row = match endpoint.owner_row {
+            OwnerRowMaterializationDispositionV5::Create { plan, .. } => plan,
+            OwnerRowMaterializationDispositionV5::Existing { .. } => {
+                return Err(SettlementAdapterErrorV1::BindingMismatch)
+            }
+        };
+        require_materialization_party_not_target_v5(
+            owner_row.payer(),
+            &accounts[..account_count],
+        )?;
+    }
+    validate_aggregate_rent_debits_v5(rent_debits)
 }
 
 fn prepare_entitlement_endpoint_v5(
@@ -3256,8 +3767,8 @@ fn expectation_matches_basis_v5(
         && expectation.expected_sell_price_units() == basis.expected_sell_price_units()
 }
 
-fn validate_aggregate_rent_debits_v5(
-    rent_debits: &[Option<RentDebitFactV5>; 3],
+fn validate_aggregate_rent_debits_v5<const N: usize>(
+    rent_debits: &[Option<RentDebitFactV5>; N],
 ) -> Result<(), SettlementAdapterErrorV1> {
     let mut fact = 0usize;
     while fact < rent_debits.len() {
@@ -5326,15 +5837,19 @@ pub fn prepare_release_unfilled_reservation_v1(
         reservation.order_generation,
         release_generation,
     )?;
-    let mut root_prestate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    let mut root_poststate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    input.settlement_root.encode(&mut root_prestate_body)?;
-    settlement_root_poststate.encode(&mut root_poststate_body)?;
+    let root_prestate_data_id = settlement_root_release_data_id_v1(
+        input.settlement_root,
+        input.settlement_root_account,
+    )?;
+    let root_poststate_data_id = settlement_root_release_data_id_v1(
+        &settlement_root_poststate,
+        input.settlement_root_account,
+    )?;
     let transition_evidence_id = derive_unfilled_reservation_release_evidence_id_v1(
         transition_id,
         input.settlement_root_account,
-        &root_prestate_body,
-        &root_poststate_body,
+        root_prestate_data_id,
+        root_poststate_data_id,
         input.traversal.selected_feed_account,
         input.order_page_account,
         input.reservation_account,
@@ -5419,6 +5934,17 @@ pub fn prepare_release_unfilled_reservation_v1(
     })
 }
 
+/// Derive one exact root data identity in an isolated frame so action 41 never
+/// keeps two 980-byte encoded roots live in its planner frame.
+#[inline(never)]
+fn settlement_root_release_data_id_v1(
+    root: &SettlementRootV1AccountV1,
+    settlement_root_account: Id32,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    root.data_id(&CanonicalSha256, settlement_root_account)
+        .map_err(SettlementAdapterErrorV1::Contract)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn derive_unfilled_reservation_release_transition_id_v1(
     settlement_root_account: Id32,
@@ -5462,8 +5988,8 @@ fn derive_unfilled_reservation_release_transition_id_v1(
 fn derive_unfilled_reservation_release_evidence_id_v1(
     transition_id: Id32,
     settlement_root_account: Id32,
-    root_prestate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
-    root_poststate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
+    root_prestate_data_id: Id32,
+    root_poststate_data_id: Id32,
     retained_feed_account: Id32,
     order_page_account: Id32,
     reservation_account: Id32,
@@ -5488,8 +6014,8 @@ fn derive_unfilled_reservation_release_evidence_id_v1(
     hash.update(UNFILLED_RESERVATION_RELEASE_EVIDENCE_DOMAIN_V1);
     hash.update(transition_id.bytes());
     hash.update(settlement_root_account.bytes());
-    hash.update(root_prestate_body);
-    hash.update(root_poststate_body);
+    hash.update(root_prestate_data_id.bytes());
+    hash.update(root_poststate_data_id.bytes());
     hash.update(retained_feed_account.bytes());
     hash.update(order_page_account.bytes());
     hash.update(reservation_account.bytes());
@@ -6830,6 +7356,50 @@ mod scalable_receipt_end_tests {
     }
 
     #[test]
+    fn portfolio_pending_receipt_requires_the_typed_direct_transition() {
+        let semantic = fresh_receipt_semantic_v5();
+        let seed = SettlementReceiptSeedTupleV5::new(id(1), id(3), 0).unwrap();
+        let funding = RentOwnedSettlementCreateFundingV5 {
+            program_id: id(7),
+            payer: id(8),
+            system_program_id: id(9),
+            payer_lamports: 1_000,
+            target_lamports_before: 0,
+            target_owner_before: id(9),
+            target_data_len_before: 0,
+            target_writable: true,
+            target_executable: false,
+            rent_minimum: 100,
+        };
+        let pending = prepare_create_settlement_receipt_with_transition_v5(
+            id(6),
+            seed,
+            9,
+            semantic,
+            SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+            funding,
+        )
+        .unwrap();
+        assert_eq!(
+            pending.receipt().transition(),
+            SettlementReceiptTransitionCommitmentV5::PortfolioPairPending
+        );
+        let mut merge = semantic;
+        merge.leg_kind = RECEIPT_LEG_MERGE;
+        assert_eq!(
+            prepare_create_settlement_receipt_with_transition_v5(
+                id(6),
+                seed,
+                9,
+                merge,
+                SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+                funding,
+            ),
+            Err(SettlementAdapterErrorV1::Layout(LayoutError::InvalidEnum))
+        );
+    }
+
+    #[test]
     fn v5_receipt_creation_refuses_short_payer_and_non_system_target() {
         let semantic = fresh_receipt_semantic_v5();
         let seed = SettlementReceiptSeedTupleV5::new(id(1), id(3), 0).unwrap();
@@ -6933,20 +7503,18 @@ mod scalable_receipt_end_tests {
 
     #[test]
     fn action41_evidence_commits_root_and_exact_rent_poststates() {
-        let mut root_pre = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        let mut root_post = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        root_pre[0] = 1;
-        root_post[0] = 2;
-        let derive = |post: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES], payer_after| {
+        let root_pre = id(21);
+        let root_post = id(22);
+        let derive = |post: Id32, payer_after| {
             derive_unfilled_reservation_release_evidence_id_v1(
-                id(1), id(2), &root_pre, post, id(3), id(4), id(5), id(6), id(7), id(8),
+                id(1), id(2), root_pre, post, id(3), id(4), id(5), id(6), id(7), id(8),
                 id(9), id(10), id(11), 12, id(13), 14, 15, payer_after, id(16), 17, 18,
                 35, 31,
             )
             .unwrap()
         };
-        let canonical = derive(&root_post, 29);
-        assert_ne!(canonical, derive(&root_pre, 29));
-        assert_ne!(canonical, derive(&root_post, 30));
+        let canonical = derive(root_post, 29);
+        assert_ne!(canonical, derive(root_pre, 29));
+        assert_ne!(canonical, derive(root_post, 30));
     }
 }

@@ -151,7 +151,7 @@ fundingTermsId
 ```
 
 Glass joins `nativeClaimBasisId` to the basis proposal and
-`capabilityProfileId` to the selected release. It does not recompute typed IDs
+`capabilityProfileId` to the daemon-projected checked release. It does not recompute typed IDs
 from bytes; doing so in JavaScript would create a second semantic owner. Onchain
 registration must reopen the registry, Source release, all canonical artifacts,
 and the bundle and recompute every ID and binding.

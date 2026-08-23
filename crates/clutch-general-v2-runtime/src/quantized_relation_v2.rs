@@ -87,6 +87,23 @@ pub struct QuantizedRelationPriceAdmissionV2 {
     authority: QuantizedRelationPriceAuthorityV2,
 }
 
+/// Private proof that exact price admission also joined the complete immutable
+/// Product and canonical PriceGrid tuple.
+///
+/// This is the capability required by resumed nonempty Work. A basic exact
+/// atom certificate is insufficient because it does not by itself authenticate
+/// the Product bodies or tick grid selected by the Market.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedRelationProductPriceAdmissionV2 {
+    price_admission: QuantizedRelationPriceAdmissionV2,
+    market_binding: Id32,
+    market_genesis_profile_v2_id: Id32,
+    market_instance_v2_id: Id32,
+    product_template_id: Id32,
+    price_grid_id: Id32,
+    price_grid_realm: Id32,
+}
+
 /// Private exact-price capability consumed by every successor RelationV2 call.
 ///
 /// The builder and sealed-feed adapter can mint this only from a certificate
@@ -129,6 +146,43 @@ impl QuantizedRelationPriceAdmissionV2 {
     /// Exact production atom-mixture fact retained behind the admission.
     pub const fn certificate(&self) -> VerifiedQuantizedAtomMixtureV1 {
         self.authority.certificate
+    }
+}
+
+impl QuantizedRelationProductPriceAdmissionV2 {
+    /// Exact feed-price admission nested inside the closed Product tuple.
+    pub const fn price_admission(&self) -> QuantizedRelationPriceAdmissionV2 {
+        self.price_admission
+    }
+
+    /// Canonical MarketBinding account identity selected by the Epoch.
+    pub const fn market_binding(&self) -> Id32 {
+        self.market_binding
+    }
+
+    /// Exact Genesis V2 body identity checked by this capability.
+    pub const fn market_genesis_profile_v2_id(&self) -> Id32 {
+        self.market_genesis_profile_v2_id
+    }
+
+    /// Exact MarketInstance V2 body identity checked by this capability.
+    pub const fn market_instance_v2_id(&self) -> Id32 {
+        self.market_instance_v2_id
+    }
+
+    /// Exact ProductTemplate V4 body identity checked by this capability.
+    pub const fn product_template_id(&self) -> Id32 {
+        self.product_template_id
+    }
+
+    /// Canonical PriceGrid body identity checked by this capability.
+    pub const fn price_grid_id(&self) -> Id32 {
+        self.price_grid_id
+    }
+
+    /// Canonical PriceGrid Realm identity checked by this capability.
+    pub const fn price_grid_realm(&self) -> Id32 {
+        self.price_grid_realm
     }
 }
 
@@ -372,6 +426,7 @@ pub fn verify_quantized_relation_product_price_admission_v2(
     candidate_feed_identity: Id32,
     sealed_candidate_feed: &[u8],
     economic_domain_account: &clutch_general_v2_contract::EconomicDomainV2AccountV1,
+    market_binding_identity: Id32,
     market_binding: &MarketBindingV1,
     price_grid: &PriceGridAccount,
     product_template: &ProductTemplateV4,
@@ -380,7 +435,10 @@ pub fn verify_quantized_relation_product_price_admission_v2(
     genesis: &MarketGenesisProfileV2,
     market_instance: &MarketInstancePreimageV2,
     authenticated_edge_policy: QuantizedEdgePolicyV1,
-) -> Result<QuantizedRelationPriceAdmissionV2, GeneralV2RuntimeError> {
+) -> Result<QuantizedRelationProductPriceAdmissionV2, GeneralV2RuntimeError> {
+    if market_binding_identity.is_zero() {
+        return Err(GeneralV2RuntimeError::BindingMismatch);
+    }
     market_instance.validate_bindings(
         product_template,
         native_basis,
@@ -429,7 +487,15 @@ pub fn verify_quantized_relation_product_price_admission_v2(
         authenticated_edge_policy,
     )?;
     verify_quantized_relation_price_grid_v2(price_grid, &admission.authority)?;
-    Ok(admission)
+    Ok(QuantizedRelationProductPriceAdmissionV2 {
+        price_admission: admission,
+        market_binding: market_binding_identity,
+        market_genesis_profile_v2_id: market_binding.market_genesis_profile_v2_id,
+        market_instance_v2_id: market_binding.market_instance_v2_id,
+        product_template_id: Id32::new(product_template.id()?.bytes())?,
+        price_grid_id: Id32::new(price_grid.grid.bytes())?,
+        price_grid_realm: Id32::new(price_grid.realm.bytes())?,
+    })
 }
 
 fn verify_quantized_relation_price_grid_v2(
@@ -534,7 +600,14 @@ mod tests {
         QuantizedPayoutPriceVectorV1,
     };
     use clutch_solana_layout::{Hash32, MAX_GRID_TICKS};
+    use clutch_general_v2_contract::{
+        ClearWorkV3AccountV1, ClearWorkVerificationStateV1, DeletableRentOwnerV1,
+        MarketBindingV1, SettlementCandidateKindV1, Sha256CheckpointV1,
+        PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
+        SHA256_INITIAL_STATE_V1,
+    };
     use crate::relation_v2_policy_id_v1;
+    use crate::{score_v2_q_policy_id_v1, verify_quantized_clear_work_authority_v2};
 
     fn exact_price_authority_fixture() -> (
         EconomicDomainV2,
@@ -607,6 +680,139 @@ mod tests {
         (domain, price, verified)
     }
 
+    fn live_id(byte: u8) -> Id32 {
+        Id32::new([byte; 32]).unwrap()
+    }
+
+    fn retained_work_authority_fixture() -> (
+        QuantizedRelationProductPriceAdmissionV2,
+        Id32,
+        Id32,
+        ClearWorkV3AccountV1,
+        MarketBindingV1,
+    ) {
+        let (domain, price, certificate) = exact_price_authority_fixture();
+        let candidate_feed = live_id(9);
+        let economic_domain_digest = live_id(7);
+        let price_body_digest = live_id(8);
+        let market_binding_identity = live_id(10);
+        let relation_policy_id = Id32::new(domain.relation_policy_digest).unwrap();
+        let score_policy_id = score_v2_q_policy_id_v1().unwrap();
+        let admission = QuantizedRelationPriceAdmissionV2 {
+            candidate_feed,
+            economic_domain_digest,
+            price_body_digest,
+            authority: bind_quantized_relation_price_certificate_v2(
+                domain,
+                price,
+                certificate,
+            )
+            .unwrap(),
+        };
+        let product_admission = QuantizedRelationProductPriceAdmissionV2 {
+            price_admission: admission,
+            market_binding: market_binding_identity,
+            market_genesis_profile_v2_id: live_id(5),
+            market_instance_v2_id: live_id(1),
+            product_template_id: live_id(11),
+            price_grid_id: live_id(12),
+            price_grid_realm: live_id(13),
+        };
+        let work = ClearWorkV3AccountV1 {
+            epoch: Id32::ZERO,
+            node: Id32::ZERO,
+            market: live_id(4),
+            order_set: Id32::ZERO,
+            feed: candidate_feed,
+            candidate_bundle_digest: Id32::ZERO,
+            settlement_candidate_id: Id32::ZERO,
+            base_relation_candidate_id: Id32::ZERO,
+            relation_policy_id,
+            economic_domain_digest,
+            native_claim_basis_id: live_id(6),
+            candidate_price_digest: Id32::new(price.semantic_price_digest).unwrap(),
+            price_measure_policy_v1_id: live_id(3),
+            score_policy_id,
+            price_body_digest,
+            previous_order_id: Id32::ZERO,
+            epoch_generation: 0,
+            rent: DeletableRentOwnerV1 {
+                payer: Id32::ZERO,
+                refundable_principal: 0,
+                donation_floor: 0,
+            },
+            reward_remaining: 0,
+            reward_earned: 0,
+            slice_count: 0,
+            slice_cursor: 0,
+            page_count: 0,
+            page_cursor: 0,
+            outcome_count: 4,
+            order_count: 0,
+            order_cursor: 0,
+            slot_cursor: 0,
+            phase: 0,
+            candidate_kind: SettlementCandidateKindV1::Direct,
+            price_witness_schema: PRICE_MEASURE_WITNESS_SCHEMA_V3,
+            quantized_semantics_version: QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
+            stored_bump: 0,
+            verification_state: ClearWorkVerificationStateV1::Pending,
+            flags: 0,
+            sha256: Sha256CheckpointV1 {
+                state: SHA256_INITIAL_STATE_V1,
+                block: [0; 64],
+                block_len: 0,
+                total_len: 0,
+            },
+        };
+        let binding = MarketBindingV1 {
+            market: live_id(4),
+            market_genesis_profile_v2_id: live_id(5),
+            market_instance_v2_id: live_id(1),
+            series_plan_v5_id: Id32::ZERO,
+            series_funding_terms_v2_id: Id32::ZERO,
+            relation_policy_id,
+            price_measure_policy_v1_id: live_id(3),
+            native_claim_basis_id: live_id(6),
+            admission_policy_id: Id32::ZERO,
+            score_policy_id,
+            settlement_policy_id: Id32::ZERO,
+            neutral_sink: Id32::ZERO,
+            price_scale: 12,
+            commit_span_slots: 0,
+            reveal_span_slots: 0,
+            verification_span_slots: 0,
+            bond_lamports: 0,
+            invalidity_penalty: 0,
+            abandonment_penalty: 0,
+            node_cleanup_reward: 0,
+            price_check_reward: 0,
+            order_reward: 0,
+            slice_reward: 0,
+            completion_reward: 0,
+            work_close_reward: 0,
+            feed_close_reward: 0,
+            freeze_reward: 0,
+            finalize_reward: 0,
+            solver_prize: 0,
+            root_close_reward: 0,
+            relation_version: 2,
+            outcome_count: 4,
+            basis_degree: 2,
+            rank_key_len: 88,
+            candidate_kind_mask: 1,
+            stored_bump: 0,
+            flags: 0,
+        };
+        (
+            product_admission,
+            candidate_feed,
+            market_binding_identity,
+            work,
+            binding,
+        )
+    }
+
     #[test]
     fn successor_policy_commits_exact_finite_profile_and_is_breaking() {
         assert_eq!(QUANTIZED_RELATION_V2_POLICY_BODY_V2[9], 1);
@@ -616,6 +822,87 @@ mod tests {
         assert_ne!(
             quantized_relation_v2_policy_id_v2().unwrap(),
             relation_v2_policy_id_v1().unwrap()
+        );
+    }
+
+    #[test]
+    fn resumed_work_rejects_every_call_local_authority_substitution() {
+        let (admission, feed, binding_id, work, binding) = retained_work_authority_fixture();
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                admission,
+                feed,
+                binding_id,
+                &work,
+                &binding,
+            ),
+            Ok(())
+        );
+
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                admission,
+                live_id(14),
+                binding_id,
+                &work,
+                &binding,
+            ),
+            Err(crate::GeneralV2WorkErrorV1::BindingMismatch)
+        );
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                admission,
+                feed,
+                live_id(14),
+                &work,
+                &binding,
+            ),
+            Err(crate::GeneralV2WorkErrorV1::BindingMismatch)
+        );
+
+        let wrong_body_work = ClearWorkV3AccountV1 {
+            price_body_digest: live_id(14),
+            ..work
+        };
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                admission,
+                feed,
+                binding_id,
+                &wrong_body_work,
+                &binding,
+            ),
+            Err(crate::GeneralV2WorkErrorV1::BindingMismatch)
+        );
+
+        let wrong_instance_admission = QuantizedRelationProductPriceAdmissionV2 {
+            market_instance_v2_id: live_id(14),
+            ..admission
+        };
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                wrong_instance_admission,
+                feed,
+                binding_id,
+                &work,
+                &binding,
+            ),
+            Err(crate::GeneralV2WorkErrorV1::BindingMismatch)
+        );
+
+        let wrong_scale_binding = MarketBindingV1 {
+            price_scale: 13,
+            ..binding
+        };
+        assert_eq!(
+            verify_quantized_clear_work_authority_v2(
+                admission,
+                feed,
+                binding_id,
+                &work,
+                &wrong_scale_binding,
+            ),
+            Err(crate::GeneralV2WorkErrorV1::BindingMismatch)
         );
     }
 

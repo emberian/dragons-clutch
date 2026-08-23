@@ -323,6 +323,9 @@ pub struct FailureMarketRecoveryQuoteAdmissionFactsV1 {
     pub quote_schedule_id: FailureMarketRecoveryQuoteScheduleIdV1,
     /// Finite global liveness call bound.
     pub maximum_calls: u32,
+    /// Exact schedule call-progress bound, which the Product authority must
+    /// refuse above the authenticated central capability-profile ceiling.
+    pub maximum_progress_units_per_call: u64,
     /// Exact maximum one-call reward/ceiling.
     pub maximum_lamports_per_call: u64,
     /// Exact present shared work principal.
@@ -384,6 +387,7 @@ pub fn admit_failure_market_recovery_quote_v1<
         failure_policy_binding_id: binding.id(),
         quote_schedule_id,
         maximum_calls: schedule.maximum_calls,
+        maximum_progress_units_per_call: schedule.maximum_progress_units_per_call,
         maximum_lamports_per_call,
         work_principal_lamports,
     };
@@ -403,6 +407,7 @@ pub fn admit_failure_market_recovery_quote_v1<
     hasher.update(facts.failure_policy_binding_id.bytes());
     hasher.update(facts.quote_schedule_id.bytes());
     hasher.update(facts.maximum_calls.to_le_bytes());
+    hasher.update(facts.maximum_progress_units_per_call.to_le_bytes());
     hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
     hasher.update(facts.work_principal_lamports.to_le_bytes());
     let id = FailureMarketRecoveryQuoteAdmissionReceiptIdV1::from_bytes(hasher.finalize().into());

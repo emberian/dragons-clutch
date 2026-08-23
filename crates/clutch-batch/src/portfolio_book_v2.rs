@@ -275,7 +275,21 @@ pub trait PortfolioBookAdapterV2 {
     fn project_complete_economic_book(
         &self,
         expected: &PortfolioCompleteBookProjectionExpectationV2,
-    ) -> Option<EconomicBookV2>;
+    ) -> Option<EconomicBookV2> {
+        let _ = expected;
+        None
+    }
+
+    /// Borrow the exact adapter-owned book without copying the 64-row value.
+    /// SBF adapters should implement this variant and keep the projection in
+    /// bounded heap storage so no 4-KiB call frame owns the full book.
+    fn project_complete_economic_book_ref<'a>(
+        &'a self,
+        expected: &PortfolioCompleteBookProjectionExpectationV2,
+    ) -> Option<&'a EconomicBookV2> {
+        let _ = expected;
+        None
+    }
 }
 
 /// Frame-bounded projection boundary for allocation-owning adapters.
@@ -341,14 +355,14 @@ impl AuthenticatedCompletePortfolioBookV2 {
 /// This is the SBF-safe equivalent of [`AuthenticatedCompletePortfolioBookV2`].
 /// Its fields remain private, so a caller cannot wrap an untrusted book after
 /// the account/page authentication constructor returns.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedCompletePortfolioBookRefV2<'a> {
     page_set: PortfolioBookPageSetRecordV2,
     economic_book: &'a EconomicBookV2,
 }
 
-impl AuthenticatedCompletePortfolioBookRefV2<'_> {
-    pub const fn economic_book(&self) -> &EconomicBookV2 {
+impl<'a> AuthenticatedCompletePortfolioBookRefV2<'a> {
+    pub const fn economic_book(&self) -> &'a EconomicBookV2 {
         self.economic_book
     }
 
@@ -375,7 +389,6 @@ impl AuthenticatedCompletePortfolioBookRefV2<'_> {
     pub const fn traversal_index(&self) -> u16 {
         self.page_set.traversal_index
     }
-
     pub const fn page_count(&self) -> u8 {
         self.page_set.page_count
     }
@@ -399,6 +412,40 @@ pub fn authenticate_complete_portfolio_book_v2<A: PortfolioBookAdapterV2>(
         page_set,
         false,
     )
+}
+
+/// Authenticate the read-only complete page set while borrowing the decoded
+/// RelationV2 book from adapter-owned storage.
+///
+/// This is semantically identical to [`authenticate_complete_portfolio_book_v2`]
+/// but does not copy the maximum-width book into either the capability or the
+/// caller's SBF frame.
+pub fn authenticate_complete_portfolio_book_ref_v2<'a, A: PortfolioBookAdapterV2>(
+    adapter: &'a A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+) -> Result<AuthenticatedCompletePortfolioBookRefV2<'a>, PortfolioBookAuthorityErrorV2> {
+    let projection = authenticate_complete_portfolio_book_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        false,
+    )?;
+    let economic_book = adapter
+        .project_complete_economic_book_ref(&projection)
+        .ok_or(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed)?;
+    economic_book
+        .validate(domain)
+        .map_err(PortfolioBookAuthorityErrorV2::Economic)?;
+    if economic_book.len != page_set.order_count {
+        return Err(PortfolioBookAuthorityErrorV2::ProjectedOrderCountMismatch);
+    }
+    Ok(AuthenticatedCompletePortfolioBookRefV2 {
+        page_set,
+        economic_book,
+    })
 }
 
 /// Authenticate the same complete owner-blind book while requiring the exact

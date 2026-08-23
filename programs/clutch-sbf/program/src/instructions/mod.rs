@@ -81,6 +81,24 @@ pub mod fractional_redemption;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_direct_v5;
+/// Staged-disabled exact merge-payment composer and atomic writer.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_merge_payment_v5;
+/// Staged-disabled selected zero-fill Reservation release and atomic close.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -101,8 +119,27 @@ pub(crate) mod general_v2_position_replay;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_receipt_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
 pub mod general_v2_settlement_root;
+/// Staged action-39 producer; the route remains capability-disabled until
+/// action-24 materialization is reachable under the same profile.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_producer_v5;
+/// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
