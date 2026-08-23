@@ -2452,7 +2452,7 @@ fn run(
                 bad_config_update.pubkey(),
                 &observations[0].post_data,
             ),
-            plane::append(&correct, bad_config_update.pubkey(), WRONG_CONFIG),
+            plane::append(&correct, 0, bad_config_update.pubkey(), WRONG_CONFIG),
         ],
     )?;
     require_source_admission_refused("wrong Config joined transaction", &status)?;
@@ -2490,6 +2490,7 @@ fn run(
             ),
             plane::append(
                 &correct,
+                0,
                 bad_feed_update.pubkey(),
                 address(real_pyth_lab::RECEIVER_CONFIG),
             ),
@@ -2533,6 +2534,7 @@ fn run(
                 ),
                 plane::append(
                     &correct,
+                    0,
                     skipped_update.pubkey(),
                     address(real_pyth_lab::RECEIVER_CONFIG),
                 ),
@@ -2595,6 +2597,7 @@ fn run(
                 ),
                 plane::append(
                     &correct,
+                    u64::try_from(index)?,
                     update.pubkey(),
                     address(real_pyth_lab::RECEIVER_CONFIG),
                 ),

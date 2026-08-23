@@ -1419,11 +1419,11 @@ pub fn split(actor: Address, lab: &LabPlane, sequence: u64, quantity: u64) -> In
     )
 }
 
-pub fn append(lab: &LabPlane, update: Address, config: Address) -> Instruction {
+pub fn append(lab: &LabPlane, sequence: u64, update: Address, config: Address) -> Instruction {
     Instruction::new_with_bytes(
         PROGRAM_ID,
         &layout_request(
-            0,
+            sequence,
             Intent::AppendSourceArchiveV2 {
                 terms: lab.plane.terms_id,
             },
@@ -1711,6 +1711,25 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(signers, [actor]);
         }
+    }
+
+    #[test]
+    fn source_append_carries_the_archive_record_sequence() {
+        let actor = Address::new_from_array([0xa2; 32]);
+        let lab = signed_plane(actor);
+        let instruction = append(
+            &lab,
+            1,
+            Address::new_from_array([0xb1; 32]),
+            Address::new_from_array([0xb2; 32]),
+        );
+        let request = clutch_solana_reference::Request::decode(&instruction.data)
+            .expect("append request decodes");
+        assert_eq!(request.sequence, 1);
+        assert!(matches!(
+            request.action,
+            clutch_solana_reference::Action::Layout(Intent::AppendSourceArchiveV2 { .. })
+        ));
     }
 
     #[test]
