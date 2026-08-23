@@ -548,10 +548,8 @@ pub const TRIGGER_RELATION_REFUSAL_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
     meta(RecoveryAccountRoleV1::ProductTemplateArtifact, false, false),
     meta(RecoveryAccountRoleV1::ClaimBasisArtifact, false, false),
-    meta(RecoveryAccountRoleV1::RecoveryPolicyArtifact, false, false),
     meta(RecoveryAccountRoleV1::PricePolicyArtifact, false, false),
     meta(RecoveryAccountRoleV1::GenesisArtifact, false, false),
-    meta(RecoveryAccountRoleV1::AttachmentArtifact, false, false),
     meta(RecoveryAccountRoleV1::SourceRelease, false, false),
     meta(RecoveryAccountRoleV1::SourceOccurrence, false, false),
     meta(RecoveryAccountRoleV1::SourceResult, false, false),
@@ -593,8 +591,6 @@ pub const RESOLVE_CALLER_FUNDED_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[11],
     TRIGGER_RELATION_REFUSAL_METAS_V1[12],
     TRIGGER_RELATION_REFUSAL_METAS_V1[13],
-    TRIGGER_RELATION_REFUSAL_METAS_V1[14],
-    TRIGGER_RELATION_REFUSAL_METAS_V1[15],
 ];
 /// Exact ordered account contract for paid resolution.
 pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
@@ -609,8 +605,6 @@ pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[6],
     TRIGGER_RELATION_REFUSAL_METAS_V1[7],
     TRIGGER_RELATION_REFUSAL_METAS_V1[8],
-    TRIGGER_RELATION_REFUSAL_METAS_V1[9],
-    TRIGGER_RELATION_REFUSAL_METAS_V1[10],
     ACCEPT_RECOVERY_WORK_METAS_V1[3],
     ACCEPT_RECOVERY_WORK_METAS_V1[4],
     ACCEPT_RECOVERY_WORK_METAS_V1[5],

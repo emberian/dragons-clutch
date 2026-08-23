@@ -17,9 +17,9 @@
 //! relation semantic version.
 
 use clutch_product_series::{
-    CompiledOrdinalV2, ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstanceV2Id,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
-    RegistryCapabilityProjectionV2,
+    ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
+    MarketInstanceV2Id, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    QuantizedEdgePolicyV1, RegistryCapabilityProjectionV2,
 };
 use clutch_source_plane_v3::{
     ContentId as SourceContentId, StatisticKeyV3, StatisticKindV3, StatisticResultStatusV3,
@@ -585,7 +585,7 @@ pub fn execute_failure_relation_v1(
     binding: FailurePolicyBindingV1,
     source_join: SourcePolicyHandoffJoinV1,
     success: SuccessfulEvaluationHandoffV1,
-    compiled: &CompiledOrdinalV2,
+    market: &MarketInstancePreimageV2,
     template: &ProductTemplateV4,
     basis: &NativeClaimBasisV1,
     price_policy: &PriceMeasurePolicyV1,
@@ -599,7 +599,7 @@ pub fn execute_failure_relation_v1(
         policy,
         policy_id,
         binding,
-        compiled,
+        market,
         template,
         basis,
         price_policy,
@@ -713,7 +713,7 @@ fn validate_product_join(
     policy: &FailureRelationPolicyV1,
     policy_id: FailureRelationPolicyIdV1,
     binding: FailurePolicyBindingV1,
-    compiled: &CompiledOrdinalV2,
+    market: &MarketInstancePreimageV2,
     template: &ProductTemplateV4,
     basis: &NativeClaimBasisV1,
     price_policy: &PriceMeasurePolicyV1,
@@ -721,7 +721,6 @@ fn validate_product_join(
     statistic_key: &StatisticKeyV3,
     registry: &RegistryCapabilityProjectionV2,
 ) -> FailureRelationResultV1<()> {
-    let market = &compiled.market;
     market.validate_bindings(template, basis, price_policy, genesis)?;
     genesis.validate_partition_bindings(basis, price_policy, policy.resolved_edge_policy)?;
     statistic_key
@@ -734,10 +733,7 @@ fn validate_product_join(
     let genesis_id = genesis.id()?;
     let relation_content_id = policy_id.content_id();
     let owners = registry.semantic_owners;
-    if compiled.series_plan_id != binding.series_plan_id()
-        || compiled.ordinal != binding.ordinal()
-        || compiled.market_instance_id != binding.market_instance_id()
-        || market_id != compiled.market_instance_id
+    if market_id != binding.market_instance_id()
         || template_id != binding.product_template_id()
         || market.product_template_id != template_id
         || market.market_genesis_profile_id != genesis_id
