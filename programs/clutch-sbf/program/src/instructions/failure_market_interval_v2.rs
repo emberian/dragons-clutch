@@ -18,8 +18,10 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_market::{
-    authenticate_market_instance_terminal_v1, AuthenticatedMarketFoundationPreallocationV2,
-    AuthenticatedMarketInstanceTerminalV1,
+    authenticate_market_instance_terminal_v1, release_series_market_link_failure_v1,
+    AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketInstanceTerminalV1,
+    AuthenticatedSeriesFailureArchivePostwriteV2, AuthenticatedSeriesFailureSessionReleaseV1,
+    AuthenticatedSeriesMarketLinkV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -50,6 +52,7 @@ use clutch_solana_layout::failure_market_interval_v2::{
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
+use clutch_solana_layout::product_series::SeriesMarketLinkAccountV1;
 use clutch_solana_layout::registry::{
     FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES, FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
 };
@@ -208,6 +211,69 @@ impl FailureMarketIntervalArchivePostwriteV2 {
     /// canonical Idle reset clears the reusable cell's session-local body.
     pub(crate) const fn source_occurrence_id(self) -> SourceOccurrenceV1Id {
         self.source_occurrence_id
+    }
+}
+
+impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchivePostwriteV2 {
+    fn archive_postwrite_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.id)
+    }
+
+    fn append_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.id().bytes()))
+    }
+
+    fn reset_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.reset.id().bytes()))
+    }
+
+    fn market_instance_id(&self) -> Outcome<clutch_product_series::MarketInstanceV2Id> {
+        Ok(self.append.market_instance_id())
+    }
+
+    fn generation(&self) -> Outcome<u64> {
+        Ok(self.append.generation())
+    }
+
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Ok(self.source_occurrence_id)
+    }
+
+    fn session_binding_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_binding_id().bytes(),
+        ))
+    }
+
+    fn session_terminal_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_terminal_receipt_id().bytes(),
+        ))
+    }
+
+    fn authenticate_series_failure_archive_postwrite_v2(
+        &self,
+        archive_postwrite_id: ProductContentId,
+        append_receipt_id: ProductContentId,
+        reset_receipt_id: ProductContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ProductContentId,
+        session_terminal_receipt_id: ProductContentId,
+    ) -> Outcome<()> {
+        require(
+            archive_postwrite_id == self.id
+                && append_receipt_id.bytes() == self.append.id().bytes()
+                && reset_receipt_id.bytes() == self.reset.id().bytes()
+                && market_instance_id == self.append.market_instance_id()
+                && generation == self.append.generation()
+                && source_occurrence_id == self.source_occurrence_id
+                && session_binding_id.bytes() == self.append.session_binding_id().bytes()
+                && session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes(),
+            ClutchError::MismatchedState,
+        )
     }
 }
 
@@ -985,6 +1051,56 @@ fn write_failure_market_interval_archive_v2<'a>(
         reset,
         source_occurrence_id,
     })
+}
+
+/// Atomically archive one exact terminal Failure session and release its
+/// initiating Product link pin.
+///
+/// This is the only crate-visible archive mutation entry point. The private
+/// paired `0xac` append/`0xab` Idle reset is the sole authority accepted by
+/// Product's narrow `0xad` release writer. A refusal while stale-reopening or
+/// writing the link therefore rolls the complete instruction back, including
+/// both Failure postwrites.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    link_rebound_output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV2,
+    AuthenticatedSeriesFailureSessionReleaseV1,
+)> {
+    require_distinct(&[
+        cell_account.clone(),
+        history_account.clone(),
+        series_link_account.clone(),
+    ])?;
+    let archive = write_failure_market_interval_archive_v2(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+    )?;
+    let release = release_series_market_link_failure_v1(
+        program_id,
+        series_link_account,
+        link_before,
+        &archive,
+        link_rebound_output,
+    )?;
+    Ok((archive, release))
 }
 
 /// Persist the exhaustive family seal. Session appends cannot use this
