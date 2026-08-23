@@ -38,9 +38,9 @@ pub mod collateral;
 pub mod collateral_v3_accounts;
 pub mod direct_selection;
 pub mod direct_selection_v3;
+pub mod failure_recovery;
 pub mod failure_interval_consensus;
 pub mod failure_market_interval_v2;
-pub mod failure_recovery;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod order_page_v5;
@@ -50,12 +50,12 @@ pub mod projection;
 pub mod registry;
 pub mod reservation;
 pub mod reservation_v9;
-pub mod resolution_work;
-pub mod revenue;
 pub mod settlement_receipt_v3;
+pub mod source_series;
 pub mod settlement_receipt_v4;
 pub mod settlement_receipt_v5;
-pub mod source_series;
+pub mod resolution_work;
+pub mod revenue;
 pub mod stream;
 
 /// Highest account schema version this build understands.
