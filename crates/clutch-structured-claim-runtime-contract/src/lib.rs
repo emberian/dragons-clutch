@@ -74,8 +74,11 @@ pub use recipe::{
 pub use replay_v3::{
     StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionStateV1,
     StructuredClaimReplayExtensionV1, StructuredClaimReplayTransitionV1,
+    StructuredClaimVaultReplayDeltaV1,
     STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1, STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
+    STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1,
+    STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
 pub use runtime::{
     prepare_compact_donation_v1, prepare_redeem_terminal_v1, prepare_retire_descriptor_v1,

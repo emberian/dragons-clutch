@@ -24,9 +24,12 @@ that private value-route receipt into every transition receipt before mutation.
 The withdrawn canonical action 2/4 execution route is not dispatched, and the
 wrapper explicitly refuses those historical wire variants.
 
-Full-vector wrap/unwind and exact terminal redemption are implemented behind
-the zero mask. Compaction and retirement remain incomplete. Descriptor v1 is
-decode-only; live state is descriptor v2.
+Full-vector wrap/unwind, beneficiary-free surplus compaction, and exact
+terminal redemption are implemented behind the zero mask. Compaction uses a
+27-account vault-only frame, performs no Token-2022 CPI, and reconciles the
+unchanged mint plus exact PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors.
+Descriptor retirement remains incomplete. Descriptor v1 is decode-only; live
+state is descriptor v2.
 
 This crate contains no fixtures, mock Source provider, wallet, deployment, or
 client signing path. Building it does not authorize deployment.
