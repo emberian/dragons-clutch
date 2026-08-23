@@ -12,21 +12,28 @@ use crate::accounts::{
 };
 use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::error::{ClutchError, Refusal};
-use crate::{seeds, token};
+use crate::{capabilities, seeds, token};
 use clutch_collateral_adapter_v2::{
     accept_fractional_bearer_claim_burn_v3, prepare_claim_redemption_collateral_v2,
     prepare_fractional_bearer_claim_burn_v3, prepare_zero_claim_redemption_collateral_v2,
-    AcceptedBearerRedemptionCollateralV3, Id as CollateralId, TransferAuthorityKindV2,
-    TransferAuthorityV2,
+    AcceptedBearerRedemptionCollateralV3, ClaimLedgerV3, Id as CollateralId,
+    TransferAuthorityKindV2, TransferAuthorityV2, CLAIM_LEDGER_V3_BYTES,
 };
 use clutch_fractional_redemption_runtime::{
     accept_bearer_exact_burn_v1, bind_fractional_context_v1, bind_fractional_internal_context_v1,
-    finish_bearer_exact_v1, prepare_bearer_exact_v1, redeem_internal_exact_v1,
-    seal_claims_exhausted_v1, BearerClaimPrestateV1, Error as FractionalError, FractionalLedgerV1,
+    finish_bearer_exact_v1, prepare_bearer_exact_v1,
+    project_fractional_family_terminal_receipt_v1, redeem_internal_exact_v1,
+    seal_claims_exhausted_v1, verify_fractional_family_admission_postwrite_v1,
+    verify_fractional_family_terminal_postwrite_v1, BearerClaimPrestateV1,
+    EmptyLedgerClosePlanV1, Error as FractionalError, FractionalFamilyAdmissionReceiptV1,
+    FractionalFamilyTerminalReceiptV1, FractionalInitializationPlanV1, FractionalLedgerV1,
     FractionalPolicyV2, FractionalRedeemIntentV1, FractionalRedemptionActionV1,
     FractionalTerminalIntentV1, InternalPositionV1, RedemptionSourcePoststateV1,
+    VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
+    FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
+use clutch_product_series::ContentId;
 use clutch_retirement::{Identity32V1, POSITION_V3_BYTES};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -39,6 +46,7 @@ use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
+use super::product_artifact::AuthenticatedRegistryCapabilityV2;
 
 /// Exact account count for action 2.
 pub const REDEEM_INTERNAL_EXACT_ACCOUNT_COUNT_V1: usize = 15;
@@ -46,6 +54,13 @@ pub const REDEEM_INTERNAL_EXACT_ACCOUNT_COUNT_V1: usize = 15;
 pub const REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1: usize = 19;
 /// Exact fixed account count for the supply-exhaustion seal.
 pub const SEAL_CLAIMS_EXHAUSTED_ACCOUNT_COUNT_V1: usize = 12;
+
+const FRACTIONAL_RUNTIME_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/fractional/runtime-release-authentication/v1\0";
+const FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/fractional/admission-postwrite-authentication/v1\0";
+const FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/fractional/terminal-postwrite-authentication/v1\0";
 
 const IX_ACTOR: usize = 0;
 const IX_REALM: usize = 1;
@@ -137,6 +152,381 @@ fn require_program_state(
         account.data_len() == exact_len,
         ClutchError::WrongDataLength,
     )
+}
+
+/// Private proof that the current loader-authenticated registry release admits
+/// one exact Fractional action in the compiled deployment profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFractionalRuntimeReleaseV1 {
+    release_id: Identity32V1,
+    capability_profile_id: ContentId,
+    action: FractionalRedemptionActionV1,
+    authentication_id: Identity32V1,
+}
+
+impl AuthenticatedFractionalRuntimeReleaseV1 {
+    pub(crate) const fn release_id(self) -> Identity32V1 {
+        self.release_id
+    }
+
+    pub(crate) const fn capability_profile_id(self) -> ContentId {
+        self.capability_profile_id
+    }
+
+    pub(crate) const fn action(self) -> FractionalRedemptionActionV1 {
+        self.action
+    }
+
+    pub(crate) const fn authentication_id(self) -> Identity32V1 {
+        self.authentication_id
+    }
+}
+
+/// Narrow a Series-bound loader/artifact capability into one Fractional action.
+///
+/// This function continues to refuse all Fractional actions while the central
+/// profile leaves their exact tuples disabled. Merely possessing allocated
+/// wire coordinates is never accepted as a runtime release.
+pub(crate) fn authenticate_fractional_runtime_release_v1(
+    program_id: &Pubkey,
+    capability: AuthenticatedRegistryCapabilityV2,
+    action: FractionalRedemptionActionV1,
+) -> Outcome<AuthenticatedFractionalRuntimeReleaseV1> {
+    require(
+        capability.program_account() == *program_id
+            && capabilities::extension_intent_action_enabled(
+                FRACTIONAL_REDEMPTION_FAMILY_TAG,
+                FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+                action.tag(),
+            ),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let release_id = Identity32V1::new(capability.registry_release_id().bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let capability_profile_id = capability.capability_profile_id();
+    let programdata_account = capability.programdata_account();
+    let release_artifact_account = capability.release_artifact_account();
+    let profile_artifact_account = capability.profile_artifact_account();
+    let authentication_id = Identity32V1::new(
+        solana_sha256_hasher::hashv(&[
+            FRACTIONAL_RUNTIME_RELEASE_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            programdata_account.as_ref(),
+            release_artifact_account.as_ref(),
+            profile_artifact_account.as_ref(),
+            &release_id.bytes(),
+            &capability_profile_id.bytes(),
+            &[action.tag()],
+        ])
+        .to_bytes(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedFractionalRuntimeReleaseV1 {
+        release_id,
+        capability_profile_id,
+        action,
+        authentication_id,
+    })
+}
+
+/// Adapter-authenticated exact Fractional founding postwrite.
+///
+/// Fields stay private so Product can consume only a value minted from the
+/// actual writable a4/a5/ClaimLedger accounts in the current instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
+    verified: VerifiedFractionalFamilyAdmissionPostwriteV1,
+    runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    authentication_id: Identity32V1,
+}
+
+impl AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
+    pub(crate) const fn family_admission(self) -> FractionalFamilyAdmissionReceiptV1 {
+        self.verified.family_admission()
+    }
+
+    pub(crate) const fn verification_id(self) -> Identity32V1 {
+        self.verified.verification_id()
+    }
+
+    pub(crate) const fn runtime_release(self) -> AuthenticatedFractionalRuntimeReleaseV1 {
+        self.runtime_release
+    }
+
+    pub(crate) const fn authentication_id(self) -> Identity32V1 {
+        self.authentication_id
+    }
+}
+
+/// Authenticate exact founding postimages after Fractional has allocated and
+/// written Product-prefunded System-owned a4/a5 prestates.
+///
+/// Product remains the sole owner of Foundation debit/preallocation evidence.
+/// This helper neither debits nor refunds those accounts and admits only the
+/// exact plan-derived bodies under canonical Fractional/ClaimLedger PDAs.
+pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
+    program_id: &Pubkey,
+    runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    plan: FractionalInitializationPlanV1,
+    policy_account: &AccountInfo<'_>,
+    ledger_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFractionalFamilyAdmissionPostwriteV1> {
+    require(
+        runtime_release.action == FractionalRedemptionActionV1::Initialize
+            && policy_account.key != ledger_account.key
+            && policy_account.key != claim_ledger_account.key
+            && ledger_account.key != claim_ledger_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    require_program_state(
+        program_id,
+        policy_account,
+        true,
+        FRACTIONAL_POLICY_ACCOUNT_BYTES,
+    )?;
+    require_program_state(
+        program_id,
+        ledger_account,
+        true,
+        FRACTIONAL_LEDGER_ACCOUNT_BYTES,
+    )?;
+    require_program_state(
+        program_id,
+        claim_ledger_account,
+        true,
+        CLAIM_LEDGER_V3_BYTES,
+    )?;
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let ledger_data = ledger_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let claim_ledger_data = claim_ledger_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
+    let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let receipt = plan.family_admission;
+    require(
+        policy_account.key.to_bytes() == receipt.policy_account().bytes()
+            && ledger_account.key.to_bytes() == receipt.ledger_account().bytes()
+            && claim_ledger_account.key.to_bytes() == receipt.claim_ledger_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let policy_seeds = policy.pda_seeds();
+    expect_pda(
+        policy_account.key,
+        seeds::fractional_policy_v2_pda(
+            program_id,
+            &policy_seeds.market_instance().bytes(),
+            &policy_seeds.resolution_account().bytes(),
+            &policy_seeds.resolution_data_id().bytes(),
+        ),
+        Some(policy_seeds.stored_bump()),
+    )?;
+    let ledger_seeds = ledger.pda_seeds();
+    expect_pda(
+        ledger_account.key,
+        seeds::fractional_ledger_v1_pda(program_id, &ledger_seeds.policy_account().bytes()),
+        Some(ledger_seeds.stored_bump()),
+    )?;
+    expect_pda(
+        claim_ledger_account.key,
+        seeds::claim_ledger_v3_pda(program_id, &claim_ledger.market_instance_id.bytes()),
+        Some(claim_ledger.stored_bump),
+    )?;
+    let verified = verify_fractional_family_admission_postwrite_v1(
+        plan,
+        Identity32V1::new(policy_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        policy,
+        Identity32V1::new(ledger_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ledger,
+        Identity32V1::new(claim_ledger_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        claim_ledger,
+    )
+    .map_err(map_fractional)?;
+    let policy_data_id = solana_sha256_hasher::hashv(&[&policy_data[..]]).to_bytes();
+    let ledger_data_id = solana_sha256_hasher::hashv(&[&ledger_data[..]]).to_bytes();
+    let claim_ledger_data_id =
+        solana_sha256_hasher::hashv(&[&claim_ledger_data[..]]).to_bytes();
+    let authentication_id = Identity32V1::new(
+        solana_sha256_hasher::hashv(&[
+            FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &runtime_release.authentication_id.bytes(),
+            &verified.verification_id().bytes(),
+            policy_account.key.as_ref(),
+            &policy_data_id,
+            ledger_account.key.as_ref(),
+            &ledger_data_id,
+            claim_ledger_account.key.as_ref(),
+            &claim_ledger_data_id,
+        ])
+        .to_bytes(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
+        verified,
+        runtime_release,
+        authentication_id,
+    })
+}
+
+/// Adapter-authenticated terminal postwrite before a4/a5 deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFractionalFamilyTerminalPostwriteV1 {
+    verified: VerifiedFractionalFamilyTerminalPostwriteV1,
+    runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    authentication_id: Identity32V1,
+}
+
+impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
+    pub(crate) const fn family_terminal(self) -> FractionalFamilyTerminalReceiptV1 {
+        self.verified.family_terminal()
+    }
+
+    pub(crate) const fn verification_id(self) -> Identity32V1 {
+        self.verified.verification_id()
+    }
+
+    pub(crate) const fn runtime_release(self) -> AuthenticatedFractionalRuntimeReleaseV1 {
+        self.runtime_release
+    }
+
+    pub(crate) const fn authentication_id(self) -> Identity32V1 {
+        self.authentication_id
+    }
+}
+
+/// Authenticate the exact terminal ClaimLedger postwrite and both live
+/// pre-deletion a4/a5 bodies under a separately authenticated action-10 release.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
+    program_id: &Pubkey,
+    runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    close: EmptyLedgerClosePlanV1,
+    policy_account: &AccountInfo<'_>,
+    ledger_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFractionalFamilyTerminalPostwriteV1> {
+    require(
+        runtime_release.action == FractionalRedemptionActionV1::CloseEmptyLedger
+            && policy_account.key != ledger_account.key
+            && policy_account.key != claim_ledger_account.key
+            && ledger_account.key != claim_ledger_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    require_program_state(
+        program_id,
+        policy_account,
+        true,
+        FRACTIONAL_POLICY_ACCOUNT_BYTES,
+    )?;
+    require_program_state(
+        program_id,
+        ledger_account,
+        true,
+        FRACTIONAL_LEDGER_ACCOUNT_BYTES,
+    )?;
+    require_program_state(
+        program_id,
+        claim_ledger_account,
+        true,
+        CLAIM_LEDGER_V3_BYTES,
+    )?;
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let ledger_data = ledger_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let claim_ledger_data = claim_ledger_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
+    let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal = project_fractional_family_terminal_receipt_v1(close, runtime_release.release_id)
+        .map_err(map_fractional)?;
+    require(
+        policy_account.key.to_bytes() == terminal.policy_account().bytes()
+            && ledger_account.key.to_bytes() == terminal.ledger_account().bytes()
+            && claim_ledger_account.key.to_bytes() == terminal.claim_ledger_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let policy_seeds = policy.pda_seeds();
+    expect_pda(
+        policy_account.key,
+        seeds::fractional_policy_v2_pda(
+            program_id,
+            &policy_seeds.market_instance().bytes(),
+            &policy_seeds.resolution_account().bytes(),
+            &policy_seeds.resolution_data_id().bytes(),
+        ),
+        Some(policy_seeds.stored_bump()),
+    )?;
+    let ledger_seeds = ledger.pda_seeds();
+    expect_pda(
+        ledger_account.key,
+        seeds::fractional_ledger_v1_pda(program_id, &ledger_seeds.policy_account().bytes()),
+        Some(ledger_seeds.stored_bump()),
+    )?;
+    expect_pda(
+        claim_ledger_account.key,
+        seeds::claim_ledger_v3_pda(program_id, &claim_ledger.market_instance_id.bytes()),
+        Some(claim_ledger.stored_bump),
+    )?;
+    let verified = verify_fractional_family_terminal_postwrite_v1(
+        close,
+        terminal,
+        Identity32V1::new(policy_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        policy,
+        Identity32V1::new(ledger_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ledger,
+        Identity32V1::new(claim_ledger_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        claim_ledger,
+        policy_account.lamports(),
+        ledger_account.lamports(),
+    )
+    .map_err(map_fractional)?;
+    let policy_data_id = solana_sha256_hasher::hashv(&[&policy_data[..]]).to_bytes();
+    let ledger_data_id = solana_sha256_hasher::hashv(&[&ledger_data[..]]).to_bytes();
+    let claim_ledger_data_id =
+        solana_sha256_hasher::hashv(&[&claim_ledger_data[..]]).to_bytes();
+    let authentication_id = Identity32V1::new(
+        solana_sha256_hasher::hashv(&[
+            FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &runtime_release.authentication_id.bytes(),
+            &verified.verification_id().bytes(),
+            policy_account.key.as_ref(),
+            &policy_data_id,
+            ledger_account.key.as_ref(),
+            &ledger_data_id,
+            claim_ledger_account.key.as_ref(),
+            &claim_ledger_data_id,
+            &policy_account.lamports().to_le_bytes(),
+            &ledger_account.lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedFractionalFamilyTerminalPostwriteV1 {
+        verified,
+        runtime_release,
+        authentication_id,
+    })
 }
 
 fn decode_fractional_accounts(

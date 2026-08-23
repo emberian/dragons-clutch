@@ -101,8 +101,16 @@ The Fractional-owned terminal receipt commits the full a4/a5 and ClaimLedger
 terminal tuple, both exact rent splits, and a separately adapter-authenticated
 Fractional runtime/capability release ID. Product consumes that receipt; it may
 not invent the release, substitute the Realm collateral release, or turn the
-pure close plan into authority. The shared action-10 SBF composer remains
-disabled until Product exposes its private atomic terminal-family consumer.
+pure close plan into authority. Fractional now exposes only crate-private SBF
+postwrite capabilities: the admission capability authenticates the exact
+writable a4/a5/ClaimLedger founding bodies and PDAs, while the terminal
+capability authenticates the exact Retiring ClaimLedger body, both live
+pre-deletion account bodies, both observed rent balances, and an action-10
+release narrowed from the loader-authenticated registry capability. Product's
+consumer can accept those private values but cannot construct them or replace
+their receipt. The shared actions 1 and 10 remain disabled until Product lands
+the atomic aggregator/root consumers and its private Foundation preallocation
+authority.
 
 ## Solana activation boundary
 
@@ -141,7 +149,13 @@ Disabled tuples refuse before parsing payloads or inspecting accounts. Actions
 2, 3, and 9 already perform their complete typed authentication, external-
 effect ordering where applicable, and atomic writeback. Action 2 remains
 independent of bearer claim-release availability. Enabling actions 1 and 2
-together still depends on
-Product exposing the canonical Foundation producers and persisted typed claim-
-issuance binding; the adapter will not invent a duplicate owner or provision
-mock state.
+together still depends on Product exposing its stable per-slot Foundation
+preallocation authority and atomic family-admission consumer. Slots 11 and 12
+are Product-prefunded, zero-data, System-owned writable PDAs before action 1;
+Fractional will allocate, assign, and write those exact prestates without
+debiting or refunding them again. Product remains the sole owner of the
+Foundation debit/donation evidence and persisted typed claim-issuance binding;
+the Fractional adapter will not invent a duplicate owner or provision mock
+state. Action 10 analogously waits only for Product's private terminal
+consumer; Fractional already owns the release authentication, terminal
+postwrite verification, account deletion, and the two exact rent splits.
