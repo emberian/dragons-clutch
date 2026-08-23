@@ -833,6 +833,46 @@ pub fn project_runtime_initialize_source_head(
     plan.finish()
 }
 
+/// Recompute the action-3 creation commitment from an authenticated SourceHead
+/// and the exact promoted OpenRawPage postimage.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_open_raw_page(
+    source_plane: &SourcePlaneProgramV3,
+    head: &SourceHeadV3,
+    open: &OpenRawPageV3,
+    semantic_binding_id: ContentId,
+    runtime_account_data_id: ContentId,
+    generation: u64,
+    payer: ContentId,
+    rent_principal_lamports: u64,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    head.validate()?;
+    open.validate_against_head(head)?;
+    if semantic_binding_id.is_zero()
+        || runtime_account_data_id.is_zero()
+        || generation == 0
+        || payer.is_zero() != (rent_principal_lamports == 0)
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let mut plan = TransitionPlanV3::new(TransitionActionV3::OpenRawPage, ContentId::ZERO);
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::OpenRawPage,
+            semantic_binding_id,
+            runtime_account_data_id,
+            generation,
+        )?,
+        payer,
+        rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
+    })?;
+    plan.finish()
+}
+
 /// Create page work at the exact state-owned head cursor.
 pub fn project_open_raw_page(
     source_plane: &SourcePlaneProgramV3,

@@ -8,9 +8,9 @@
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
 //! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
-//! seam and action 2 is its atomic SourceHead/lineage/receipt/liveness
-//! bootstrap in full profiles. Actions 3 through 12 remain separately disabled
-//! until their complete runtime joins enter dispatch.
+//! seam; actions 2 and 3 are its atomic SourceHead/OpenRawPage lineage,
+//! receipt, and liveness creation path in full profiles. Actions 4 through 12
+//! remain separately disabled until their complete runtime joins enter dispatch.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
