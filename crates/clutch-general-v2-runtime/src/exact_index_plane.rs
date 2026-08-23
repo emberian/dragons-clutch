@@ -817,11 +817,10 @@ pub struct ExactIndexCreateAccountInputV1 {
 
 /// Unforgeable placeholder for a future counted-root admission capability.
 ///
-/// There is intentionally no public or crate-private constructor.  Therefore
-/// the current source can review and test exact construction without any SBF
-/// route being able to allocate two uncounted persistent children.  A later
-/// SettlementRoot successor must own and mint this capability only while
-/// atomically advancing exact expected/admitted/live index-child counters.
+/// There is intentionally no public or crate-private constructor. The sole
+/// internal mint is the higher-level counted-root creation plan, which returns
+/// the exact indexed-root write atomically with both child writes. No SBF route
+/// currently consumes that plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CountedExactIndexAdmissionV1 {
     _private: (),
@@ -829,9 +828,10 @@ pub struct CountedExactIndexAdmissionV1 {
 
 /// Unforgeable placeholder for a future counted-root retirement capability.
 ///
-/// A later root successor may mint this only while atomically advancing both
-/// sibling children from live to retired.  Terminality of today's Root V1 is
-/// necessary closure evidence but is deliberately not sufficient authority.
+/// The sole internal mint is the higher-level counted-root retirement plan,
+/// which atomically advances both sibling children from live to retired.
+/// Terminality of the nested Root V1 is necessary but deliberately not
+/// sufficient authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CountedExactIndexRetirementV1 {
     _private: (),
