@@ -129,7 +129,7 @@ bytes instead of scanning positions, which is not an onchain option.
 | One candidate's free coordinates | `CandidateRecord` | `binds_epoch` |
 | Settlement pot | `FinalPotAccount` | `binds_candidate` |
 | One legacy settled slice | `SettlementReceiptAccount` (V2) | `binds_candidate` |
-| One General settled slice | `SettlementReceiptAccountV3` | hostile body/latch validation only; the General adapter joins exact authenticated `0x7c` SelectedCandidate plus retained CandidateFeedV2 and then projects deterministic action IDs |
+| One General settled slice | rent-owned `SettlementReceiptAccountV5` (`0x0f/5`, 298 bytes) | hostile semantic/transition/rent validation; the General adapter joins the counted `0xa9/1` SettlementRoot plus retained CandidateFeedV2 and rederives the V5 PDA/action IDs; V3/V4 are decode-only withdrawn history |
 | Resolution | `ResolutionAccount.payout_index` | `binds_terms` |
 
 `SupplyLedgerAccount` persists the aggregate as the **two terms whose sum it

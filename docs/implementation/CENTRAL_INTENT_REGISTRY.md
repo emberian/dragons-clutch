@@ -244,10 +244,10 @@ contract and activates none of those actions.
 
 ## General SettlementReceipt successor allocation
 
-The central collision ledger reserves main-account coordinate `0x0f/3` for the
-217-byte General SettlementReceipt successor. This is a fresh version of the
-existing receipt tag, not a reinterpretation of `0x0f/2`; the two hostile
-decoders refuse each other. Runtime capability remains disabled.
+The central collision ledger preserves main-account coordinate `0x0f/3` as the
+withdrawn 217-byte General SettlementReceipt history. It was a fresh version
+of the existing receipt tag, not a reinterpretation of `0x0f/2`; the hostile
+decoders still refuse each other, but no executable route may create V3.
 
 V3 uses the fresh PDA seed tuple
 `["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
@@ -273,11 +273,11 @@ kind/commitment states are refused.
 
 ## General OwnerSettlement successor allocation
 
-The central ledger reserves `0x81/3` as `ReservedDisabled` for the canonical
-General owner row. Its exact 292 bytes are tag `0x81`, version `3`, the
-authoritative 288-byte `clutch-owner-settlement` V3 semantic body, stored bump,
-and one reserved-zero flags byte. The strict outer decoder authenticates the
-V3 envelope before invoking the V3 body decoder.
+The central ledger preserves withdrawn `0x81/3` history for the former General
+owner row. Its exact 292 bytes are tag `0x81`, version `3`, the authoritative
+288-byte `clutch-owner-settlement` V3 semantic body, stored bump, and one
+reserved-zero flags byte. The strict outer decoder remains available only for
+historical decoding; no executable route may create or mutate it.
 
 Coordinates `0x81/1` and `0x81/2` remain separately reserved but withdrawn.
 Future routes recognize neither as V3 and perform no migration or
@@ -328,8 +328,8 @@ price artifacts, and present-funded liveness before capability admission.
 
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
-`NonProductionLab`; historical Reservation V5 is `Frozen`; current unactivated
-rows are `ReservedDisabled`; and rows named withdrawn remain occupied as
+`NonProductionLab`; current unactivated rows are `ReservedDisabled`; and
+historical Reservation/receipt/owner-row coordinates remain occupied as
 `Withdrawn`. An account codec or pure runtime elsewhere does not make a route
 executable.
 
@@ -338,7 +338,7 @@ executable.
 | `0x0f/3` | settlement history | historical General receipt V3 (217 bytes); withdrawn |
 | `0x0f/4` | settlement history | historical merge-payment receipt V4 (217 bytes); withdrawn |
 | `0x0f/5` | General V2 | sole future rent-owned typed receipt V5 (298 bytes) |
-| `0x13/5` | retirement history | frozen counted General Reservation V5 (627 bytes); withdrawn from future creation and never reinterpreted |
+| `0x13/5` | retirement history | withdrawn counted General Reservation V5 (627 bytes); never reinterpreted |
 | `0x13/7` | retirement history | withdrawn provisional deletable General Reservation V7 (675 bytes); no live route and never reinterpreted |
 | `0x13/9` | General V2 | sole future rent-owned Reservation V9 (666 bytes); V4 live creation withdrawn |
 | `0x7d/1` | Dealer | staged policy |

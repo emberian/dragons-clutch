@@ -229,9 +229,9 @@ pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4: u8 = 4;
 /// Sole future rent-owned General owner-settlement version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V5: u8 = 5;
-/// Historical compatibility alias for V4.
+/// Current sole-future rent-owned General owner-settlement version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 =
-    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4;
+    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V5;
 /// Exact rent-owned General owner-settlement V5 width.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_BYTES_V5: usize = 340;
 /// General V2 selected composite-fee record envelope discriminator.
@@ -615,7 +615,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_RESERVATION_V5_ACCOUNT_TAG,
             version: GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::Frozen,
+        status: AllocationStatus::Withdrawn,
         name: "withdrawn-counted-general-reservation-v5-account",
     },
     CollisionLedgerEntry {
@@ -624,7 +624,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_RESERVATION_V7_ACCOUNT_TAG,
             version: GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "withdrawn-deletable-general-reservation-v7-account",
     },
     CollisionLedgerEntry {
@@ -696,7 +696,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
             version: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "general-settlement-receipt-v3-account",
     },
     CollisionLedgerEntry {
@@ -705,7 +705,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
             version: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "historical-general-settlement-receipt-v4-account",
     },
     CollisionLedgerEntry {
@@ -1020,7 +1020,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "general-v2-owner-settlement-v1-account",
     },
     CollisionLedgerEntry {
@@ -1029,7 +1029,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "general-v2-owner-settlement-v2-account",
     },
     CollisionLedgerEntry {
@@ -1038,7 +1038,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "general-owner-settlement-v3-account",
     },
     CollisionLedgerEntry {
@@ -1047,7 +1047,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::Withdrawn,
         name: "historical-general-owner-settlement-v4-account",
     },
     CollisionLedgerEntry {
@@ -2516,14 +2516,6 @@ mod tests {
                 GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
             ),
             (
-                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
-                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
-            ),
-            (
-                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
-                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
-            ),
-            (
                 GENERAL_SETTLEMENT_RECEIPT_V5_ACCOUNT_TAG,
                 GENERAL_SETTLEMENT_RECEIPT_V5_ACCOUNT_VERSION,
             ),
@@ -2594,22 +2586,6 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
-            ),
-            (
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
-            ),
-            (
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
-            ),
-            (
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
-            ),
-            (
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V5,
             ),
             (
@@ -2670,12 +2646,12 @@ mod tests {
             (
                 GENERAL_RESERVATION_V5_ACCOUNT_TAG,
                 GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
-                AllocationStatus::Frozen,
+                AllocationStatus::Withdrawn,
             ),
             (
                 GENERAL_RESERVATION_V7_ACCOUNT_TAG,
                 GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
-                AllocationStatus::ReservedDisabled,
+                AllocationStatus::Withdrawn,
             ),
             (
                 GENERAL_RESERVATION_V9_ACCOUNT_TAG,
@@ -2696,20 +2672,15 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_post_selected_account_block_is_complete_and_disabled() {
-        let expected = [
+    fn settlement_history_is_withdrawn_before_rent_owned_successors() {
+        let withdrawn = [
             (
-                DEALER_POLICY_STAGE_ACCOUNT_TAG,
-                DEALER_POLICY_STAGE_ACCOUNT_VERSION,
-            ),
-            (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
-            (
-                SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
             ),
             (
-                SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -2726,6 +2697,54 @@ mod tests {
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
+            ),
+        ];
+        for (tag, version) in withdrawn {
+            let matching = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.map(|entry| entry.status),
+                Some(AllocationStatus::Withdrawn),
+                "historical settlement coordinate {tag}/{version}"
+            );
+        }
+        for (tag, version) in [
+            (
+                GENERAL_SETTLEMENT_RECEIPT_V5_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V5_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V5,
+            ),
+        ] {
+            let matching = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.map(|entry| entry.status),
+                Some(AllocationStatus::ReservedDisabled),
+                "rent-owned settlement coordinate {tag}/{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn coordinated_post_selected_account_block_is_complete_and_disabled() {
+        let expected = [
+            (
+                DEALER_POLICY_STAGE_ACCOUNT_TAG,
+                DEALER_POLICY_STAGE_ACCOUNT_VERSION,
+            ),
+            (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
+            (
+                SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
