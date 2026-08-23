@@ -8,10 +8,11 @@ use clutch_batch_policy_identity::revenue_policy_v1::{
 };
 use clutch_batch_policy_identity::{batch_policy_digest, Identity32V1};
 
-use crate::{add, live, Error, Id, Result};
+use crate::{add, independent, live, Error, Id, Result};
 
 /// The single named rounding event for one owner-fee transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum AssessmentBoundaryV1 {
     /// An intermediate fragment pays the exact floor and persists its carry.
     FragmentFloor,
@@ -184,6 +185,19 @@ impl SelectedCompositeFeeV1 {
         }
         let treasury_owner = Identity32V1(revenue.treasury);
         live(treasury_owner)?;
+        let batch_policy = batch_policy_digest(batch).map_err(|_| Error::InvalidPolicy)?;
+        let revenue_policy = revenue_policy_digest(revenue).map_err(|_| Error::InvalidPolicy)?;
+        independent(&[
+            fee_record,
+            realm,
+            market,
+            epoch,
+            selected_candidate,
+            batch_policy,
+            revenue_policy,
+            treasury_owner,
+            treasury_position,
+        ])?;
 
         // Ask the relation itself for its denominator.  The zero-payoff quote
         // is economically zero but still validates the exact simplex, rates,
@@ -209,8 +223,8 @@ impl SelectedCompositeFeeV1 {
             market,
             epoch,
             selected_candidate,
-            batch_policy: batch_policy_digest(batch).map_err(|_| Error::InvalidPolicy)?,
-            revenue_policy: revenue_policy_digest(revenue).map_err(|_| Error::InvalidPolicy)?,
+            batch_policy,
+            revenue_policy,
             treasury_owner,
             treasury_position,
             price_scale,

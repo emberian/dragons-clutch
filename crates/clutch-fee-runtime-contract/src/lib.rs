@@ -12,7 +12,10 @@
 #![forbid(unsafe_code)]
 
 pub mod allocation;
+pub mod codec;
 pub mod integration;
+pub mod intent;
+pub mod projection;
 pub mod selected;
 pub mod treasury;
 
@@ -25,6 +28,7 @@ pub const MAX_FEE_ROWS_V1: usize = 64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     ZeroIdentity,
+    IdentityAlias,
     InvalidWidth,
     InvalidPolicy,
     ZeroRate,
@@ -34,9 +38,19 @@ pub enum Error {
     NonCanonicalOrder,
     DuplicateIdentity,
     NonCanonicalCarry,
+    WrongAccountKind,
+    WrongVersion,
+    InvalidAccountData,
+    NonCanonicalPadding,
     ArithmeticOverflow,
     AmountOutOfRange,
     FeeEnvelopeExceeded,
+    SellerFeeForbidden,
+    TerminalStateRequired,
+    InsufficientBuyReservation,
+    MissingParticipant,
+    SelectedFeeTotalMismatch,
+    IncompleteAccountGraph,
     EmptyAllocation,
     ConservationFailure,
     UnauthorizedTreasury,
@@ -60,4 +74,20 @@ pub(crate) fn live(id: Id) -> Result<()> {
 
 pub(crate) fn add(left: u64, right: u64) -> Result<u64> {
     left.checked_add(right).ok_or(Error::ArithmeticOverflow)
+}
+
+pub(crate) fn independent(identities: &[Id]) -> Result<()> {
+    let mut left = 0usize;
+    while left < identities.len() {
+        live(identities[left])?;
+        let mut right = left + 1;
+        while right < identities.len() {
+            if identities[left] == identities[right] {
+                return Err(Error::IdentityAlias);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
 }

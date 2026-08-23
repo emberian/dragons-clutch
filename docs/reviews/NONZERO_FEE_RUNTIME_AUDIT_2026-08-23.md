@@ -41,8 +41,18 @@ The repository has substantially more exact fee arithmetic than the phrase
   validated-settlement-only treasury credit and close guard, fee-bearing
   settlement conservation, redemption no-rake, and explicit liveness-
   capitalization refusal. Private fields make these transition outputs
-  constructor-owned rather than caller-asserted. It has no account codec,
-  PDA, instruction, capability, rate, treasury key, or value-moving authority.
+  constructor-owned rather than caller-asserted. It now also has account-
+  neutral inner codecs and typed identity intents for the fee record, owner
+  carry, payer allocation, candidate-wide recipient allocation, treasury
+  ledger, and owner-settlement join. It has no outer SBF tag, PDA, action,
+  capability, rate, treasury key, or value-moving authority.
+- The bridge to `clutch-owner-settlement` projects exactly one authenticated
+  row per lexicographically ordered participating owner. It uses the closed
+  carry's cumulative paid atoms, recomputes the terminal payer allocation,
+  proves cumulative signed-envelope debits equal the carry, makes seller-only
+  rows explicitly zero, requires every positive fee to fit authenticated buy
+  cash reservation, and binds the exact selected-candidate fee total before
+  the one recipient split.
 - The Solana reservation already has `max_fee_atoms`,
   `fee_debited_atoms: u64`, and `fee_carry_numerator: u128`, but V3 validation
   requires both persisted fee-state fields to be zero. Candidate/feed state
@@ -183,20 +193,18 @@ strictly ordered signed intent envelopes.
 2. Bind a real treasury key in a new immutable `RevenuePolicyV1` sibling and a
    new Realm. Preserve 60/0/40 unless a separately reviewed sibling changes
    it.
-3. Give the pure `clutch-fee-runtime-contract` successor a reviewed versioned
-   account/PDA adapter. Specify one reservation/candidate successor that
-   persists or
-   canonically derive the exact denominator, carry, paid atoms, per-owner fee
-   and rebate allocation, treasury total, and terminal-ceil state. Old account
-   versions must refuse under the new profile.
-4. Review and bind the pure V1 attribution rule rather than re-invent it in an
-   adapter: Hamilton largest remainder over candidate-verified standing
-   weights, total ties by Position identity. The adapter must prove that the
-   presented weights and signed payer-envelope set are exhaustive projections
-   of the selected candidate.
-5. Implement atomic settlement with the treasury Position and service ledger,
-   proving payer debits equal seller credits plus maker rebates plus treasury
-   credit, with Hoard principal unchanged.
+3. Review the account-neutral codec sizes, then allocate outer SBF tags, PDA
+   seeds, rent funding, close paths, action numbers, and capability profile.
+   The current 2,680-byte payer and 2,640-byte recipient snapshots are exact,
+   temporary representations, not a rent/compute claim. Old account versions
+   must refuse under the new profile.
+4. Bind adapter-proved exhaustive selected-order ownership and standing-maker
+   weights into the pure projection. The pure core now requires exact owner
+   rows and uses Hamilton largest remainder, but an index or partial account
+   list is not evidence of exhaustiveness.
+5. Wire the pure candidate-wide settlement and treasury-ledger transition into
+   atomic Position updates, proving payer debits equal maker rebates plus
+   treasury credit and Hoard principal/custody remain unchanged.
 6. Carry the same identities through terminal close, withdrawal, rollback,
    SBF bank tests, and a local-validator campaign. Measure compute/rent before
    capability-profile admission.
