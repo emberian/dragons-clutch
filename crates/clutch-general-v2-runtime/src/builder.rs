@@ -1050,7 +1050,10 @@ pub fn project_owner_blind_book_v3(
             }
             if let Some((order, membership)) = project_owner_blind_slot(verified.slot, &domain)? {
                 let at = usize::from(book.len);
-                if at >= MAX_ORDERS || verified.position_generation == 0 {
+                if verified.position_generation == 0 {
+                    return Err(CandidateBuilderErrorV1::BindingMismatch);
+                }
+                if at >= MAX_ORDERS {
                     return Err(CandidateBuilderErrorV1::Relation(
                         EconomicErrorV2::TooManyOrders,
                     ));
