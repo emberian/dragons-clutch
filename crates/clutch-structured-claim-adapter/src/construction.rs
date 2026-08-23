@@ -1,8 +1,6 @@
 //! Pre-fund-safe construction plan for permanent descriptor and mint accounts.
 
-use crate::{
-    Error, Result, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_BYTES,
-};
+use crate::{Error, Result, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_BYTES};
 
 /// Exact extension-free Token-2022 Mint account width.
 pub const WRAPPER_MINT_ACCOUNT_BYTES: usize = 82;

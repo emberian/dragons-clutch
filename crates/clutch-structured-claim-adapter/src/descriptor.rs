@@ -12,7 +12,7 @@ use crate::{put, take, Error, Result, MAX_OUTCOMES};
 /// The central collision registry must adopt this coordinate atomically with
 /// the future SBF capability; this isolated pure contract does not allocate a
 /// live account by itself.
-pub const DESCRIPTOR_ACCOUNT_TAG: u8 = 0x7f;
+pub const DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
 /// Structured-claim descriptor account version.
 pub const DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
 /// Exact descriptor account width frozen by the adapter plan.
@@ -296,7 +296,10 @@ pub fn reconstruct_descriptor_identity_v1(
         },
     };
     claim.validate().map_err(|_| Error::InvalidClaim)?;
-    let backing = claim.vector.backing_plan().map_err(|_| Error::InvalidClaim)?;
+    let backing = claim
+        .vector
+        .backing_plan()
+        .map_err(|_| Error::InvalidClaim)?;
     let native_claim_preimage = claim.identity_preimage().map_err(|_| Error::InvalidClaim)?;
     Ok(DescriptorIdentityV1 {
         claim,

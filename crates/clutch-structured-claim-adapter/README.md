@@ -12,12 +12,19 @@ structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,
 transaction execution, post-delta checks, and rollback.
 
-The canonical wrap/unwind planners join the actual mint supply and holder
-balance to the pure economic machine, stage the exact base Position/Replay
-poststates, and return the precise `MintToChecked` or `BurnChecked` quantity.
-They admit resolved-market canonical unwind and never spend reserved Position
-cash. Full-vector compression, direct redemption, donation compaction, and live
-descriptor creation remain subsequent runtime slices.
+The canonical and full-vector wrap/unwind planners join actual mint supply and
+holder balance to the pure economic machine, stage exact Market and
+Position/Replay poststates, and return the precise `MintToChecked` or
+`BurnChecked` quantity. Full routes include the authoritative base complete-set
+Merge/Split poststate rather than simulating it as a transfer. The runtime also
+stages beneficiary-free surplus compaction and exact resolved terminal-lot
+redemption. These routes never spend reserved Position cash.
+
+Retirement now requires zero actual mint supply, empty canonical backing, and
+an authenticated successor base-Position close receipt. The descriptor and
+extension-free mint remain permanent identity tombstones; retirement revokes
+mint authority instead of pretending Token-2022 can close an extension-free
+mint or redirect its locked rent.
 
 The family-local wire allocates eight strict actions: descriptor creation,
 canonical/full wrap, canonical/full unwind, beneficiary-free donation
@@ -37,7 +44,9 @@ The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
 
-The crate currently proposes descriptor coordinate `0x7f/1`. It is not a live
-allocation until the central collision registry adopts that exact coordinate
+The crate currently proposes descriptor coordinate `0x88/1`; the earlier
+`0x7f/1` proposal was withdrawn after the global Dealer/Series/General block
+was allocated through `0x87`. This is not a live
+allocation until the central collision registry adopts the exact coordinate
 alongside the SBF capability that consumes it; allocation alone will not make
 the structured-claim family executable.

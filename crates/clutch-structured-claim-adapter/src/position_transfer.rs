@@ -42,7 +42,7 @@ pub struct PositionProjectionV1 {
 }
 
 impl PositionProjectionV1 {
-    fn validate(&self, outcome_count: u8) -> Result<()> {
+    pub(crate) fn validate(&self, outcome_count: u8) -> Result<()> {
         let width = usize::from(outcome_count);
         if !(2..=MAX_OUTCOMES).contains(&width) {
             return Err(Error::InvalidPosition);

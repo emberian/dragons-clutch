@@ -13,36 +13,40 @@
 //! memory, or Token-2022 parser. A small SBF adapter must authenticate those
 //! boundaries and execute the returned plans exactly.
 
-mod descriptor;
 mod construction;
+mod descriptor;
 mod position_transfer;
 mod runtime;
 mod wire;
 
-pub use descriptor::{
-    reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
-    DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
-    DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
-};
 pub use construction::{
     prepare_permanent_identity_funding_v1, PermanentIdentityFundingPlanV1,
     PermanentTargetProjectionV1, WRAPPER_MINT_ACCOUNT_BYTES,
 };
+pub use descriptor::{
+    reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1, DescriptorStateV1,
+    StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
+    DESCRIPTOR_ACCOUNT_VERSION,
+};
 pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
-    AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1, PositionProjectionV1,
+    AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1,
+    PositionProjectionV1,
 };
 pub use runtime::{
-    prepare_unwrap_canonical_v1, prepare_wrap_canonical_v1, CanonicalUnwrapRequestV1,
-    CanonicalWrapRequestV1, StructuredClaimRuntimeAddressesV1, WrapperMintProjectionV1,
+    prepare_compact_donation_v1, prepare_redeem_terminal_v1, prepare_retire_descriptor_v1,
+    prepare_unwrap_canonical_v1, prepare_unwrap_full_v1, prepare_wrap_canonical_v1,
+    prepare_wrap_full_v1, AuthenticatedVaultRetirementV1, CanonicalUnwrapRequestV1,
+    CanonicalWrapRequestV1, DescriptorRetirementPlanV1, DonationCompactionPlanV1,
+    MarketChangingWrapperTransitionPlanV1, StructuredClaimRuntimeAddressesV1,
+    TerminalRedemptionPlanV1, VaultMutationRequestV1, WrapperMintProjectionV1,
     WrapperTokenProjectionV1, WrapperTransitionPlanV1,
 };
 pub use wire::{
     decode_structured_claim_payload_v1, CreateDescriptorPayloadV1, StructuredClaimActionV1,
     StructuredClaimPayloadV1, VaultMutationPayloadV1, WrapperQuantityPayloadV1,
-    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
-    STRUCTURED_CLAIM_FAMILY_VERSION, VAULT_MUTATION_PAYLOAD_BYTES,
-    WRAPPER_QUANTITY_PAYLOAD_BYTES,
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
+    VAULT_MUTATION_PAYLOAD_BYTES, WRAPPER_QUANTITY_PAYLOAD_BYTES,
 };
 
 /// Maximum native outcome width shared with the structured-claim kernel.
@@ -90,6 +94,8 @@ pub enum Error {
     UnknownAction,
     /// A construction target has hostile data, owner, executable, or address state.
     InvalidAccount,
+    /// A required base retirement/custody capability is unavailable or mismatched.
+    AuthorityUnavailable,
 }
 
 /// Result alias for adapter contracts.
@@ -103,9 +109,7 @@ pub(crate) fn put<const N: usize>(
     let end = cursor
         .checked_add(bytes.len())
         .ok_or(Error::ArithmeticOverflow)?;
-    let destination = output
-        .get_mut(*cursor..end)
-        .ok_or(Error::InvalidLength)?;
+    let destination = output.get_mut(*cursor..end).ok_or(Error::InvalidLength)?;
     destination.copy_from_slice(bytes);
     *cursor = end;
     Ok(())

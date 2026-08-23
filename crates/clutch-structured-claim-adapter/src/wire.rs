@@ -153,13 +153,21 @@ impl WrapperQuantityPayloadV1 {
         let mut cursor = 0_usize;
         put(&mut output, &mut cursor, &self.wrapper_product_id)?;
         put(&mut output, &mut cursor, &self.quantity.to_le_bytes())?;
-        put(&mut output, &mut cursor, &self.user_generation.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut cursor,
+            &self.user_generation.to_le_bytes(),
+        )?;
         put(
             &mut output,
             &mut cursor,
             &self.user_replay_sequence.to_le_bytes(),
         )?;
-        put(&mut output, &mut cursor, &self.vault_generation.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut cursor,
+            &self.vault_generation.to_le_bytes(),
+        )?;
         put(
             &mut output,
             &mut cursor,
@@ -210,7 +218,11 @@ impl VaultMutationPayloadV1 {
         let mut output = [0_u8; VAULT_MUTATION_PAYLOAD_BYTES];
         let mut cursor = 0_usize;
         put(&mut output, &mut cursor, &self.wrapper_product_id)?;
-        put(&mut output, &mut cursor, &self.vault_generation.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut cursor,
+            &self.vault_generation.to_le_bytes(),
+        )?;
         put(
             &mut output,
             &mut cursor,
@@ -264,9 +276,9 @@ pub fn decode_structured_claim_payload_v1(
     input: &[u8],
 ) -> Result<StructuredClaimPayloadV1> {
     match StructuredClaimActionV1::from_tag(action_tag)? {
-        StructuredClaimActionV1::CreateDescriptor => Ok(StructuredClaimPayloadV1::CreateDescriptor(
-            CreateDescriptorPayloadV1::decode(input)?,
-        )),
+        StructuredClaimActionV1::CreateDescriptor => Ok(
+            StructuredClaimPayloadV1::CreateDescriptor(CreateDescriptorPayloadV1::decode(input)?),
+        ),
         StructuredClaimActionV1::WrapCanonical => Ok(StructuredClaimPayloadV1::WrapCanonical(
             WrapperQuantityPayloadV1::decode(input)?,
         )),
@@ -279,9 +291,9 @@ pub fn decode_structured_claim_payload_v1(
         StructuredClaimActionV1::UnwrapFull => Ok(StructuredClaimPayloadV1::UnwrapFull(
             WrapperQuantityPayloadV1::decode(input)?,
         )),
-        StructuredClaimActionV1::CompactDonation => Ok(
-            StructuredClaimPayloadV1::CompactDonation(VaultMutationPayloadV1::decode(input)?),
-        ),
+        StructuredClaimActionV1::CompactDonation => Ok(StructuredClaimPayloadV1::CompactDonation(
+            VaultMutationPayloadV1::decode(input)?,
+        )),
         StructuredClaimActionV1::RedeemTerminal => Ok(StructuredClaimPayloadV1::RedeemTerminal(
             WrapperQuantityPayloadV1::decode(input)?,
         )),
