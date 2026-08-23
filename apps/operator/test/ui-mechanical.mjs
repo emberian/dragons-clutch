@@ -6,7 +6,7 @@ import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
 import {
   createStore,
   eventHasSafeNumbers,
-  liveBuilderSigningIsPresentable,
+  liveBuilderConstructionIsPresentable,
   liveResultIsPresentable,
   liveRunIsPresentable,
 } from "../stream.js";
@@ -397,11 +397,11 @@ const liveResult = () => ({
   },
 });
 
-const liveBuilderSigning = () => ({
-  type: "live-local-builder-signing",
-  schema: "dragons-clutch/operator/local-real-builder-signing/v1",
+const liveBuilderConstruction = () => ({
+  type: "live-local-builder-construction",
+  schema: "dragons-clutch/operator/local-real-builder-construction/v2",
   session_id: "123-456",
-  boundary: "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL",
+  boundary: "CONSTRUCTION ONLY / NO BLOCKHASH / NOT SIGNED / NOT SUBMITTED",
   plan_schema: "dragons-clutch/operator/local-real-transaction-plan/v1",
   family: "freeze-epoch",
   source_archive: "3R9qSxN4uBLeubEyUvLGmTGkLQTPAXyP5Dk72H4Ybx9z",
@@ -409,15 +409,15 @@ const liveBuilderSigning = () => ({
   source_window: { start_bucket: "10", end_bucket_exclusive: "12" },
   required_signers: ["payer"],
   unsigned_transaction_sha256: "a".repeat(64),
-  signed_transaction_sha256: "b".repeat(64),
-  signed_transaction_bytes: "321",
-  blockhash_source: "confirmed loopback getLatestBlockhash",
+  unsigned_transaction_bytes: "321",
+  recent_blockhash_present: false,
+  signed: false,
   submitted: false,
   submission_signature: null,
-  signed_bytes_exported: false,
+  transaction_bytes_exported: false,
   private_key_material_exported: false,
   browser_signing: false,
-  transaction_admission: "not exposed; this terminal-state plan proves only builder and signer continuity",
+  transaction_admission: "not inferred; this terminal-state plan proves construction continuity only",
 });
 
 test("live Pyth projection admits only exact unretained terminal closure", () => {
@@ -454,21 +454,21 @@ test("live Pyth projection admits only exact unretained terminal closure", () =>
   assert.equal(liveResultIsPresentable(residue), false);
 });
 
-test("local real-Pyth builder proof is exact, linked, and unsubmitted", () => {
+test("local real-Pyth construction is exact, linked, unsigned, and unsubmitted", () => {
   const owner = { session_id: "123-456" };
-  const chain = { root_address: liveBuilderSigning().source_archive };
-  assert.equal(liveBuilderSigningIsPresentable(liveBuilderSigning(), owner, chain), true);
+  const chain = { root_address: liveBuilderConstruction().source_archive };
+  assert.equal(liveBuilderConstructionIsPresentable(liveBuilderConstruction(), owner, chain), true);
 
-  const submitted = liveBuilderSigning();
+  const submitted = liveBuilderConstruction();
   submitted.submitted = true;
-  assert.equal(liveBuilderSigningIsPresentable(submitted, owner, chain), false);
+  assert.equal(liveBuilderConstructionIsPresentable(submitted, owner, chain), false);
 
-  const exported = liveBuilderSigning();
-  exported.signed_bytes_exported = true;
-  assert.equal(liveBuilderSigningIsPresentable(exported, owner, chain), false);
+  const exported = liveBuilderConstruction();
+  exported.transaction_bytes_exported = true;
+  assert.equal(liveBuilderConstructionIsPresentable(exported, owner, chain), false);
 
   assert.equal(
-    liveBuilderSigningIsPresentable(liveBuilderSigning(), { session_id: "123-457" }, chain),
+    liveBuilderConstructionIsPresentable(liveBuilderConstruction(), { session_id: "123-457" }, chain),
     false,
   );
 });

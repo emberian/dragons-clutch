@@ -59,7 +59,7 @@ const LIVE_RUN_SCHEMA = "dragons-clutch/operator/live-real-pyth-run/v1";
 const LIVE_MANIFEST_SCHEMA = "dragons-clutch/operator/live-real-pyth-manifest/v1";
 const LIVE_RESULT_SCHEMA = "dragons-clutch/operator/live-real-pyth-result/v1";
 const LIVE_CHAIN_SCHEMA = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
-const LIVE_BUILDER_SIGNING_SCHEMA = "dragons-clutch/operator/local-real-builder-signing/v1";
+const LIVE_BUILDER_CONSTRUCTION_SCHEMA = "dragons-clutch/operator/local-real-builder-construction/v2";
 const LIVE_CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const LIVE_CAMPAIGN_MODE = "joined-multiboundary-v1";
 const LIVE_TRANSCRIPT_SCHEMA = "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";
@@ -121,25 +121,25 @@ const liveOwnerIsPresentable = (event) => Boolean(
   && event.private_paths_exported === false
   && event.private_key_material_exported === false
   && event.browser_signing === false
-  && event.daemon_signing_seam === "owner-scoped local signers; typed result-bound plan is signed only after the terminal chain check and is never submitted"
+  && event.daemon_signing_seam === "disabled; Operator reads only child-emitted public identities and constructs an unsigned blockhash-free plan"
 );
 
-export const liveBuilderSigningIsPresentable = (event, owner = null, chain = null) => {
+export const liveBuilderConstructionIsPresentable = (event, owner = null, chain = null) => {
   const sourceWindow = event?.source_window;
   return Boolean(
     eventUsesExactDecimalTransport(event)
     && hasExactKeys(event, [
       "type", "schema", "session_id", "boundary", "plan_schema", "family",
       "source_archive", "market", "source_window", "required_signers",
-      "unsigned_transaction_sha256", "signed_transaction_sha256",
-      "signed_transaction_bytes", "blockhash_source", "submitted",
-      "submission_signature", "signed_bytes_exported", "private_key_material_exported",
+      "unsigned_transaction_sha256", "unsigned_transaction_bytes",
+      "recent_blockhash_present", "signed", "submitted",
+      "submission_signature", "transaction_bytes_exported", "private_key_material_exported",
       "browser_signing", "transaction_admission",
     ])
-    && event.type === "live-local-builder-signing"
-    && event.schema === LIVE_BUILDER_SIGNING_SCHEMA
+    && event.type === "live-local-builder-construction"
+    && event.schema === LIVE_BUILDER_CONSTRUCTION_SCHEMA
     && /^[0-9]+-[0-9]+$/.test(event.session_id)
-    && event.boundary === "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL"
+    && event.boundary === "CONSTRUCTION ONLY / NO BLOCKHASH / NOT SIGNED / NOT SUBMITTED"
     && event.plan_schema === "dragons-clutch/operator/local-real-transaction-plan/v1"
     && event.family === "freeze-epoch"
     && SOLANA_ADDRESS.test(event.source_archive)
@@ -152,17 +152,16 @@ export const liveBuilderSigningIsPresentable = (event, owner = null, chain = nul
     && event.required_signers.length === 1
     && event.required_signers[0] === "payer"
     && LOWER_HEX_64.test(event.unsigned_transaction_sha256)
-    && LOWER_HEX_64.test(event.signed_transaction_sha256)
-    && event.unsigned_transaction_sha256 !== event.signed_transaction_sha256
-    && CANONICAL_INTEGER.test(event.signed_transaction_bytes)
-    && BigInt(event.signed_transaction_bytes) > 0n
-    && event.blockhash_source === "confirmed loopback getLatestBlockhash"
+    && CANONICAL_INTEGER.test(event.unsigned_transaction_bytes)
+    && BigInt(event.unsigned_transaction_bytes) > 0n
+    && event.recent_blockhash_present === false
+    && event.signed === false
     && event.submitted === false
     && event.submission_signature === null
-    && event.signed_bytes_exported === false
+    && event.transaction_bytes_exported === false
     && event.private_key_material_exported === false
     && event.browser_signing === false
-    && event.transaction_admission === "not exposed; this terminal-state plan proves only builder and signer continuity"
+    && event.transaction_admission === "not inferred; this terminal-state plan proves construction continuity only"
     && (!owner || event.session_id === owner.session_id)
     && (!chain || event.source_archive === chain.root_address)
   );
@@ -628,11 +627,11 @@ export const createStore = () => {
         }
         state.liveOwner = event;
         break;
-      case "live-local-builder-signing":
-        if (!state.liveOwner || !state.liveChain || !liveBuilderSigningIsPresentable(event, state.liveOwner, state.liveChain)) {
+      case "live-local-builder-construction":
+        if (!state.liveOwner || !state.liveChain || !liveBuilderConstructionIsPresentable(event, state.liveOwner, state.liveChain)) {
           state.fault = {
             type: "fault",
-            text: "UNTRUSTED PROJECTION REFUSED: malformed local builder/signing boundary"
+            text: "UNTRUSTED PROJECTION REFUSED: malformed local builder/construction boundary"
           };
           break;
         }

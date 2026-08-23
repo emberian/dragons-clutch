@@ -33,6 +33,25 @@ receipt-end count. Its 288-byte open owner bodies and prospective disposition
 fields are construction results: the current General V1 campaign neither
 creates those accounts nor claims their receipt authentication or execution.
 
+The builder feature now also exposes two reusable boundaries:
+
+- `session` creates a new explicitly named absolute session root, loopback
+  ledger, secret-free public manifest, and fresh role-named key files below an
+  `ephemeral-keys` directory. It never consults Solana CLI configuration or a
+  default wallet, has no key loader or signer method, refuses path reuse, and
+  removes a session only through an explicit marker-checked `destroy` call.
+  Real-source configuration is either one SHA-256-pinned local capture or a
+  credential-free HTTPS reader with an exact account-read ceiling.
+- `transaction_builder` accepts instruction bytes from their semantic owner,
+  binds them to package/schema/release identity, preserves exact integer
+  balance equations, and assembles unsigned blockhash-free Solana transactions.
+  Its flow inventory covers SourcePlane V3, General V2 candidate construction,
+  owner settlement, fees, direct Eggs, liveness, Product Series, and structured
+  claims. Main-program successor envelopes use the central family allocation;
+  SourcePlane and liveness keep their separately owned codecs. The resulting
+  object always reports `signed=false` and `submitted=false`, and reserved SBF
+  routes remain labeled `ReservedDisabled`.
+
 Run from the repository root:
 
 ```sh

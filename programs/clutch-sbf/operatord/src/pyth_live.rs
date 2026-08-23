@@ -5,14 +5,15 @@
 //! `joined-multiboundary-v1` producer as a child and admits only its opt-in,
 //! versioned JSON events. The daemon owns one private session directory and
 //! its child validator/key lifecycle. After terminal state is independently
-//! rediscovered, the daemon also rebuilds and signs one typed transaction to
-//! prove local signer continuity. It never submits or exports that wire.
+//! rediscovered, the daemon rebuilds one typed unsigned transaction from the
+//! child's public identities. It neither reads the ephemeral private files nor
+//! fetches a blockhash, signs, submits, or exports that wire.
 
 use crate::{http, integer, rpc, toolchain, Bus};
 use clutch_local_real_pyth::session_builder::{LocalTradingBuilder, SignerRole, PLAN_SCHEMA};
 use clutch_solana_layout::{account_len, registry, SupplyLedgerAccount};
 use serde_json::{json, Map, Value};
-use solana_keypair::{Keypair, Signer};
+use solana_address::Address;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -34,7 +35,8 @@ const MANIFEST_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-manifest/v
 const RESULT_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-result/v1";
 const RUN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-run/v1";
 const CHAIN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
-const BUILDER_SIGNING_SCHEMA: &str = "dragons-clutch/operator/local-real-builder-signing/v1";
+const BUILDER_CONSTRUCTION_SCHEMA: &str =
+    "dragons-clutch/operator/local-real-builder-construction/v2";
 const EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
 const MAX_OUTPUT_LINE_BYTES: usize = 16 * 1024;
@@ -58,11 +60,6 @@ struct LocalSessionOwner {
     campaign_work: PathBuf,
     control: PathBuf,
     session_id: String,
-}
-
-struct OwnedSigners {
-    payer: Keypair,
-    second_owner: Keypair,
 }
 
 impl LocalSessionOwner {
@@ -115,48 +112,36 @@ impl LocalSessionOwner {
         Ok(())
     }
 
-    fn load_signer(&self, role: &str, filename: &str) -> Result<Keypair> {
-        let secrets = self.campaign_work.join("lab-secrets");
-        let secrets_metadata = fs::symlink_metadata(&secrets)?;
-        if secrets_metadata.file_type().is_symlink()
-            || !secrets_metadata.is_dir()
-            || secrets_metadata.permissions().mode() & 0o077 != 0
-        {
-            return Err("owned local signer directory has unsafe metadata".into());
-        }
-        let path = secrets.join(filename);
+    fn load_public_identity(&self, role: &str, filename: &str) -> Result<Address> {
+        let path = self.campaign_work.join(filename);
         let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.permissions().mode() & 0o077 != 0
-        {
-            return Err(format!("owned local signer {role} has unsafe file metadata").into());
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("owned local public identity {role} has unsafe metadata").into());
         }
-        solana_keypair::read_keypair_file(&path)
-            .map_err(|error| format!("read owned local signer {role}: {error}").into())
-    }
-
-    fn load_signers(&self) -> Result<OwnedSigners> {
-        Ok(OwnedSigners {
-            payer: self.load_signer("payer", "payer.json")?,
-            second_owner: self.load_signer("second_owner", "second-owner.json")?,
-        })
+        let text = fs::read_to_string(&path)?;
+        let canonical = text.trim();
+        let bytes = rpc::base58_decode_32(canonical)?;
+        if clutch_sbf_harness::base58_of(&bytes) != canonical {
+            return Err(format!("owned local public identity {role} is not canonical").into());
+        }
+        Ok(Address::new_from_array(bytes))
     }
 
     fn signer_event(&self) -> Result<Value> {
-        let signers = self.load_signers()?;
-        let actors = [
-            ("payer", signers.payer.pubkey()),
-            ("second_owner", signers.second_owner.pubkey()),
-        ]
-        .into_iter()
-        .map(|(role, public_key)| {
-            json!({
-                "role": role,
-                "public_key": public_key.to_string(),
+        let payer = self.load_public_identity("payer", "payer.pubkey")?;
+        let second_owner = self.load_public_identity("second_owner", "second-owner.pubkey")?;
+        if payer == second_owner {
+            return Err("owned local public identities alias".into());
+        }
+        let actors = [("payer", payer), ("second_owner", second_owner)]
+            .into_iter()
+            .map(|(role, public_key)| {
+                json!({
+                    "role": role,
+                    "public_key": public_key.to_string(),
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         Ok(json!({
             "type": "live-local-session-owner",
             "schema": "dragons-clutch/operator/local-session-owner/v1",
@@ -166,12 +151,13 @@ impl LocalSessionOwner {
             "private_paths_exported": false,
             "private_key_material_exported": false,
             "browser_signing": false,
-            "daemon_signing_seam": "owner-scoped local signers; typed result-bound plan is signed only after the terminal chain check and is never submitted",
+            "daemon_signing_seam": "disabled; Operator reads only child-emitted public identities and constructs an unsigned blockhash-free plan",
         }))
     }
 
-    fn builder_signing_event(&self, result: &Value, options: &Options) -> Result<Value> {
-        let signers = self.load_signers()?;
+    fn builder_construction_event(&self, result: &Value) -> Result<Value> {
+        let payer = self.load_public_identity("payer", "payer.pubkey")?;
+        let second_owner = self.load_public_identity("second_owner", "second-owner.pubkey")?;
         let records = field_array(result, "archive_records", "live result")?;
         let first = records
             .first()
@@ -186,12 +172,8 @@ impl LocalSessionOwner {
                 .checked_add(1)
                 .ok_or("live source window end overflows")?,
         )?;
-        let builder = LocalTradingBuilder::campaign(
-            signers.payer.pubkey(),
-            signers.second_owner.pubkey(),
-            start_bucket,
-            end_bucket_exclusive,
-        )?;
+        let builder =
+            LocalTradingBuilder::campaign(payer, second_owner, start_bucket, end_bucket_exclusive)?;
         let admitted_archive = string(
             result
                 .get("source_archive")
@@ -204,19 +186,13 @@ impl LocalSessionOwner {
         }
         let plan = builder.freeze_epoch()?;
         if plan.schema != PLAN_SCHEMA || plan.required_signers != [SignerRole::Payer] {
-            return Err("typed local builder emitted an unexpected signing contract".into());
+            return Err("typed local builder emitted an unexpected construction contract".into());
         }
-        let url = format!("http://127.0.0.1:{}", options.rpc_port);
-        let signed = rpc::sign_transaction(
-            &plan.unsigned_transaction,
-            rpc::latest_blockhash(&url)?,
-            &[&signers.payer],
-        )?;
         Ok(json!({
-            "type": "live-local-builder-signing",
-            "schema": BUILDER_SIGNING_SCHEMA,
+            "type": "live-local-builder-construction",
+            "schema": BUILDER_CONSTRUCTION_SCHEMA,
             "session_id": self.session_id,
-            "boundary": "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL",
+            "boundary": "CONSTRUCTION ONLY / NO BLOCKHASH / NOT SIGNED / NOT SUBMITTED",
             "plan_schema": plan.schema,
             "family": plan.family,
             "source_archive": admitted_archive,
@@ -227,15 +203,15 @@ impl LocalSessionOwner {
             },
             "required_signers": ["payer"],
             "unsigned_transaction_sha256": body_sha256(&plan.unsigned_transaction),
-            "signed_transaction_sha256": body_sha256(&signed),
-            "signed_transaction_bytes": signed.len().to_string(),
-            "blockhash_source": "confirmed loopback getLatestBlockhash",
+            "unsigned_transaction_bytes": plan.unsigned_transaction.len().to_string(),
+            "recent_blockhash_present": false,
+            "signed": false,
             "submitted": false,
             "submission_signature": Value::Null,
-            "signed_bytes_exported": false,
+            "transaction_bytes_exported": false,
             "private_key_material_exported": false,
             "browser_signing": false,
-            "transaction_admission": "not exposed; this terminal-state plan proves only builder and signer continuity",
+            "transaction_admission": "not inferred; this terminal-state plan proves construction continuity only",
         }))
     }
 }
@@ -1289,7 +1265,7 @@ fn publish_line(
                                 options,
                                 owner,
                             )?;
-                            let builder_signing = owner.builder_signing_event(&event, options)?;
+                            let builder_construction = owner.builder_construction_event(&event)?;
                             if result.replace(event.clone()).is_some() {
                                 return Err("live child emitted a second result event".into());
                             }
@@ -1299,7 +1275,7 @@ fn publish_line(
                                     .ok_or("chain discovery has no restart descriptor")?,
                             )?;
                             bus.publish(&discovery);
-                            bus.publish(&builder_signing);
+                            bus.publish(&builder_construction);
                             bus.publish(&event);
                             bus.publish(&run_event(options, "session-ready"));
                             if options.exit_when_done {

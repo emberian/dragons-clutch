@@ -9,4 +9,7 @@ mod capture;
 pub mod plane;
 #[cfg(feature = "campaign")]
 pub mod provider;
+#[cfg(feature = "builder")]
+pub mod session;
 pub mod session_builder;
+pub mod transaction_builder;

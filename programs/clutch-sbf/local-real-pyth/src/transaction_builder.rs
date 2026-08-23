@@ -1,0 +1,688 @@
+//! Construction-only transactions for the current protocol workstreams.
+//!
+//! Semantic crates own payload bytes and account ordering. This module owns
+//! only the outer Solana instruction/transaction boundary, explicit release
+//! binding, signer declaration, exact-integer balance equations, and grouping
+//! of independently owned actions into an atomic unsigned transaction. It has
+//! no keypair, blockhash, RPC, signing, or submission dependency.
+
+use clutch_solana_layout::registry::{ExtensionFamily, MAX_EXTENSION_PAYLOAD_BYTES};
+use solana_address::Address;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_transaction::Transaction;
+use std::collections::BTreeSet;
+
+pub type Result<T> = std::result::Result<T, ConstructionError>;
+
+/// Construction artifact schema. This is not a release or execution receipt.
+pub const CONSTRUCTION_PLAN_SCHEMA: &str =
+    "dragons-clutch/operator/unsigned-protocol-transaction/v2";
+/// SourcePlane V3 adapter intent magic owned by that adapter's codec.
+pub const SOURCE_PLANE_V3_INTENT_MAGIC: [u8; 8] = *b"DCSP3INT";
+/// Runtime liveness intent magic owned by the liveness adapter codec.
+pub const LIVENESS_RUNTIME_V1_INTENT_MAGIC: [u8; 8] = *b"DCLINT01";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstructionError {
+    ZeroIdentity,
+    ZeroReleaseDigest,
+    EmptyActionName,
+    EmptyInstructionData,
+    DuplicateAccount,
+    DuplicateSigner,
+    MissingSignerMeta,
+    ForeignProgram,
+    WrongFlow,
+    WrongWirePrefix,
+    WrongWireLength,
+    PayloadTooLong,
+    MissingExactEquation,
+    UnbalancedExactEquation,
+    EmptyBundle,
+    PacketTooLarge,
+    Serialization,
+}
+
+impl core::fmt::Display for ConstructionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::ZeroIdentity => "construction plan contains a zero identity",
+            Self::ZeroReleaseDigest => "construction plan is not bound to a release digest",
+            Self::EmptyActionName => "construction action name is empty",
+            Self::EmptyInstructionData => "construction instruction data is empty",
+            Self::DuplicateAccount => "construction instruction aliases an account role",
+            Self::DuplicateSigner => "construction signer list contains a duplicate",
+            Self::MissingSignerMeta => "required signer is neither the payer nor a signer meta",
+            Self::ForeignProgram => "instruction program differs from the bound release",
+            Self::WrongFlow => "instruction belongs to the wrong protocol flow",
+            Self::WrongWirePrefix => "instruction bytes do not match their owned wire contract",
+            Self::WrongWireLength => "instruction bytes do not have the exact owned width",
+            Self::PayloadTooLong => "successor payload exceeds the central intent ceiling",
+            Self::MissingExactEquation => "instruction omits exact-integer accounting",
+            Self::UnbalancedExactEquation => "exact-integer accounting equation is unbalanced",
+            Self::EmptyBundle => "atomic transaction bundle is empty",
+            Self::PacketTooLarge => {
+                "serialized unsigned transaction exceeds its explicit packet limit"
+            }
+            Self::Serialization => "unsigned transaction serialization failed",
+        })
+    }
+}
+
+impl std::error::Error for ConstructionError {}
+
+/// Current implementation lanes. Classification does not imply that the SBF
+/// dispatcher has enabled a corresponding capability.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProtocolFlow {
+    SourcePlaneV3,
+    GeneralV2Candidate,
+    GeneralV2Settlement,
+    GeneralV2Fees,
+    DirectEggSettlement,
+    Liveness,
+    ProductSeries,
+    StructuredClaim,
+}
+
+/// Runtime status carried into every construction artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAdmission {
+    /// Dispatcher capability is known to be disabled. Bytes are useful only
+    /// for integration work and must not be represented as executable.
+    ReservedDisabled,
+    /// A caller supplied an independently checked release manifest that names
+    /// an enabled capability. This builder does not perform that check.
+    ExternallyManifested,
+}
+
+/// The semantic package and reviewed digest that owned instruction bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticOwner {
+    pub package: String,
+    pub schema: String,
+    pub release_sha256: [u8; 32],
+}
+
+impl SemanticOwner {
+    pub fn validate(&self) -> Result<()> {
+        if self.package.trim().is_empty() || self.schema.trim().is_empty() {
+            return Err(ConstructionError::EmptyActionName);
+        }
+        if self.release_sha256 == [0; 32] {
+            return Err(ConstructionError::ZeroReleaseDigest);
+        }
+        Ok(())
+    }
+}
+
+/// Exact integer units kept separate across cash, Eggs, fees, rent, liveness,
+/// Series funding, and structured-claim backing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerUnit {
+    Lamports,
+    CollateralAtoms { mint: Address },
+    PriceUnits { scale: u64 },
+    EggAtoms { market: [u8; 32], outcome: u8 },
+    FeeAtoms { mint: Address },
+    WrapperAtoms { mint: Address },
+}
+
+impl IntegerUnit {
+    fn validate(self) -> Result<()> {
+        match self {
+            Self::Lamports => Ok(()),
+            Self::CollateralAtoms { mint }
+            | Self::FeeAtoms { mint }
+            | Self::WrapperAtoms { mint } => {
+                if mint == Address::default() {
+                    Err(ConstructionError::ZeroIdentity)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::PriceUnits { scale } => {
+                if scale == 0 {
+                    Err(ConstructionError::ZeroIdentity)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::EggAtoms { market, .. } => {
+                if market == [0; 32] {
+                    Err(ConstructionError::ZeroIdentity)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+/// One named `left == right` equation over a single exact integer unit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExactEquation {
+    pub name: String,
+    pub unit: IntegerUnit,
+    pub left: u128,
+    pub right: u128,
+}
+
+impl ExactEquation {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(ConstructionError::EmptyActionName);
+        }
+        self.unit.validate()?;
+        if self.left != self.right {
+            return Err(ConstructionError::UnbalancedExactEquation);
+        }
+        Ok(())
+    }
+}
+
+/// How the semantic owner encoded the instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnedWireContract {
+    /// Exact SourcePlane V3 intent preimage, including `DCSP3INT`.
+    SourcePlaneV3 { exact_bytes: usize },
+    /// Exact liveness runtime intent, including `DCLINT01`.
+    LivenessRuntimeV1 { exact_bytes: usize },
+    /// Main-program successor envelope. The central registry owns family tag
+    /// and version; the named semantic package owns action and payload bytes.
+    MainSuccessor {
+        family: ExtensionFamily,
+        local_action: u8,
+    },
+}
+
+/// One semantic-owner-produced instruction ready for outer construction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnedInstructionDraft {
+    pub flow: ProtocolFlow,
+    pub action_name: String,
+    pub semantic_owner: SemanticOwner,
+    pub program_id: Address,
+    pub accounts: Vec<AccountMeta>,
+    pub required_signers: Vec<Address>,
+    pub equations: Vec<ExactEquation>,
+    pub runtime_admission: RuntimeAdmission,
+    wire: OwnedWireContract,
+    data: Vec<u8>,
+}
+
+impl OwnedInstructionDraft {
+    /// Wrap an exact SourcePlane V3 adapter preimage without re-encoding it.
+    pub fn source_plane_v3(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        exact_bytes: usize,
+        data: Vec<u8>,
+        runtime_admission: RuntimeAdmission,
+    ) -> Result<Self> {
+        Self::owned_bytes(
+            ProtocolFlow::SourcePlaneV3,
+            action_name,
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            OwnedWireContract::SourcePlaneV3 { exact_bytes },
+            data,
+            runtime_admission,
+        )
+    }
+
+    /// Wrap an exact liveness runtime intent without creating a parallel codec.
+    pub fn liveness(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        exact_bytes: usize,
+        data: Vec<u8>,
+        runtime_admission: RuntimeAdmission,
+    ) -> Result<Self> {
+        Self::owned_bytes(
+            ProtocolFlow::Liveness,
+            action_name,
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            OwnedWireContract::LivenessRuntimeV1 { exact_bytes },
+            data,
+            runtime_admission,
+        )
+    }
+
+    /// Assemble a central successor envelope around semantic-owner payload.
+    pub fn successor(
+        flow: ProtocolFlow,
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        family: ExtensionFamily,
+        local_action: u8,
+        payload: &[u8],
+        runtime_admission: RuntimeAdmission,
+    ) -> Result<Self> {
+        if payload.len() > MAX_EXTENSION_PAYLOAD_BYTES {
+            return Err(ConstructionError::PayloadTooLong);
+        }
+        let mut data = Vec::with_capacity(3 + payload.len());
+        data.push(family.tag());
+        data.push(family.version());
+        data.push(local_action);
+        data.extend_from_slice(payload);
+        Self::owned_bytes(
+            flow,
+            action_name,
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            OwnedWireContract::MainSuccessor {
+                family,
+                local_action,
+            },
+            data,
+            runtime_admission,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn owned_bytes(
+        flow: ProtocolFlow,
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        wire: OwnedWireContract,
+        data: Vec<u8>,
+        runtime_admission: RuntimeAdmission,
+    ) -> Result<Self> {
+        let value = Self {
+            flow,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            runtime_admission,
+            wire,
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.program_id == Address::default() {
+            return Err(ConstructionError::ZeroIdentity);
+        }
+        if self.action_name.trim().is_empty() {
+            return Err(ConstructionError::EmptyActionName);
+        }
+        self.semantic_owner.validate()?;
+        if self.data.is_empty() {
+            return Err(ConstructionError::EmptyInstructionData);
+        }
+        if self.equations.is_empty() {
+            return Err(ConstructionError::MissingExactEquation);
+        }
+        for equation in &self.equations {
+            equation.validate()?;
+        }
+        let mut accounts = BTreeSet::new();
+        for account in &self.accounts {
+            if !accounts.insert(account.pubkey) {
+                return Err(ConstructionError::DuplicateAccount);
+            }
+        }
+        let mut signers = BTreeSet::new();
+        for signer in &self.required_signers {
+            if *signer == Address::default() {
+                return Err(ConstructionError::ZeroIdentity);
+            }
+            if !signers.insert(*signer) {
+                return Err(ConstructionError::DuplicateSigner);
+            }
+        }
+        match self.wire {
+            OwnedWireContract::SourcePlaneV3 { exact_bytes } => {
+                if self.flow != ProtocolFlow::SourcePlaneV3 {
+                    return Err(ConstructionError::WrongFlow);
+                }
+                if self.data.len() != exact_bytes {
+                    return Err(ConstructionError::WrongWireLength);
+                }
+                if !self.data.starts_with(&SOURCE_PLANE_V3_INTENT_MAGIC) {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+            }
+            OwnedWireContract::LivenessRuntimeV1 { exact_bytes } => {
+                if self.flow != ProtocolFlow::Liveness {
+                    return Err(ConstructionError::WrongFlow);
+                }
+                if self.data.len() != exact_bytes {
+                    return Err(ConstructionError::WrongWireLength);
+                }
+                if !self.data.starts_with(&LIVENESS_RUNTIME_V1_INTENT_MAGIC) {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+            }
+            OwnedWireContract::MainSuccessor {
+                family,
+                local_action,
+            } => {
+                if local_action == 0
+                    || self.data.len() < 3
+                    || self.data[0] != family.tag()
+                    || self.data[1] != family.version()
+                    || self.data[2] != local_action
+                {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+                let family_matches = match self.flow {
+                    ProtocolFlow::GeneralV2Candidate
+                    | ProtocolFlow::GeneralV2Settlement
+                    | ProtocolFlow::GeneralV2Fees
+                    | ProtocolFlow::DirectEggSettlement => family == ExtensionFamily::GeneralV2,
+                    ProtocolFlow::ProductSeries => family == ExtensionFamily::SourceSeries,
+                    ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
+                    ProtocolFlow::SourcePlaneV3 | ProtocolFlow::Liveness => false,
+                };
+                if !family_matches {
+                    return Err(ConstructionError::WrongFlow);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    #[must_use]
+    pub fn wire_contract(&self) -> OwnedWireContract {
+        self.wire
+    }
+
+    fn instruction(&self) -> Instruction {
+        Instruction {
+            program_id: self.program_id,
+            accounts: self.accounts.clone(),
+            data: self.data.clone(),
+        }
+    }
+}
+
+/// Explicit transport bounds. They are deployment/session configuration, not
+/// protocol invariants, so alternate local infrastructure can raise them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransactionTransport {
+    pub packet_limit_bytes: usize,
+}
+
+impl Default for TransactionTransport {
+    fn default() -> Self {
+        Self {
+            packet_limit_bytes: 1_232,
+        }
+    }
+}
+
+/// Fully assembled but unsigned and blockhash-free transaction artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnsignedProtocolTransaction {
+    pub schema: &'static str,
+    pub flows: Vec<ProtocolFlow>,
+    pub actions: Vec<String>,
+    pub semantic_owners: Vec<SemanticOwner>,
+    pub runtime_admissions: Vec<RuntimeAdmission>,
+    pub required_signers: Vec<Address>,
+    pub exact_equations: Vec<ExactEquation>,
+    pub serialized_transaction: Vec<u8>,
+    pub has_recent_blockhash: bool,
+    pub signed: bool,
+    pub submitted: bool,
+}
+
+/// Release-bound outer builder. It never accepts or returns a keypair.
+pub struct ProtocolTransactionBuilder {
+    payer: Address,
+    clutch_program: Address,
+    clutch_release_sha256: [u8; 32],
+    transport: TransactionTransport,
+}
+
+impl ProtocolTransactionBuilder {
+    pub fn new(
+        payer: Address,
+        clutch_program: Address,
+        clutch_release_sha256: [u8; 32],
+        transport: TransactionTransport,
+    ) -> Result<Self> {
+        if payer == Address::default() || clutch_program == Address::default() {
+            return Err(ConstructionError::ZeroIdentity);
+        }
+        if clutch_release_sha256 == [0; 32] {
+            return Err(ConstructionError::ZeroReleaseDigest);
+        }
+        if transport.packet_limit_bytes == 0 {
+            return Err(ConstructionError::PacketTooLarge);
+        }
+        Ok(Self {
+            payer,
+            clutch_program,
+            clutch_release_sha256,
+            transport,
+        })
+    }
+
+    /// Build one or more current flows atomically. SourcePlane V3 and liveness
+    /// may target their separately released adapter programs; all successor
+    /// envelopes must target the release-bound Clutch program.
+    pub fn build_atomic(
+        &self,
+        drafts: &[OwnedInstructionDraft],
+    ) -> Result<UnsignedProtocolTransaction> {
+        if drafts.is_empty() {
+            return Err(ConstructionError::EmptyBundle);
+        }
+        let mut instructions = Vec::with_capacity(drafts.len());
+        let mut flows = Vec::new();
+        let mut actions = Vec::with_capacity(drafts.len());
+        let mut semantic_owners = Vec::with_capacity(drafts.len());
+        let mut runtime_admissions = Vec::with_capacity(drafts.len());
+        let mut required_signers = BTreeSet::from([self.payer]);
+        let mut exact_equations = Vec::new();
+
+        for draft in drafts {
+            draft.validate()?;
+            if matches!(draft.wire, OwnedWireContract::MainSuccessor { .. })
+                && draft.program_id != self.clutch_program
+            {
+                return Err(ConstructionError::ForeignProgram);
+            }
+            for signer in &draft.required_signers {
+                let represented = *signer == self.payer
+                    || draft
+                        .accounts
+                        .iter()
+                        .any(|meta| meta.pubkey == *signer && meta.is_signer);
+                if !represented {
+                    return Err(ConstructionError::MissingSignerMeta);
+                }
+                required_signers.insert(*signer);
+            }
+            if !flows.contains(&draft.flow) {
+                flows.push(draft.flow);
+            }
+            actions.push(draft.action_name.clone());
+            semantic_owners.push(draft.semantic_owner.clone());
+            runtime_admissions.push(draft.runtime_admission);
+            exact_equations.extend(draft.equations.iter().cloned());
+            instructions.push(draft.instruction());
+        }
+
+        let transaction = Transaction::new_with_payer(&instructions, Some(&self.payer));
+        let serialized_transaction =
+            bincode::serialize(&transaction).map_err(|_| ConstructionError::Serialization)?;
+        if serialized_transaction.len() > self.transport.packet_limit_bytes {
+            return Err(ConstructionError::PacketTooLarge);
+        }
+        Ok(UnsignedProtocolTransaction {
+            schema: CONSTRUCTION_PLAN_SCHEMA,
+            flows,
+            actions,
+            semantic_owners,
+            runtime_admissions,
+            required_signers: required_signers.into_iter().collect(),
+            exact_equations,
+            serialized_transaction,
+            has_recent_blockhash: false,
+            signed: false,
+            submitted: false,
+        })
+    }
+
+    /// Release digest carried by construction metadata. A transaction cannot
+    /// authenticate this digest by itself; a launcher must join it to the ELF
+    /// it explicitly loads into the local validator.
+    #[must_use]
+    pub const fn clutch_release_sha256(&self) -> [u8; 32] {
+        self.clutch_release_sha256
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owner() -> SemanticOwner {
+        SemanticOwner {
+            package: "clutch-structured-claim-runtime-contract".into(),
+            schema: "structured-claim/v1".into(),
+            release_sha256: [7; 32],
+        }
+    }
+
+    #[test]
+    fn structured_claim_envelope_is_built_without_signing_or_submission() {
+        let payer = Address::new_from_array([1; 32]);
+        let program = Address::new_from_array([2; 32]);
+        let draft = OwnedInstructionDraft::successor(
+            ProtocolFlow::StructuredClaim,
+            "wrap-full",
+            owner(),
+            program,
+            vec![AccountMeta::new_readonly(payer, true)],
+            vec![payer],
+            vec![ExactEquation {
+                name: "full-vector backing".into(),
+                unit: IntegerUnit::WrapperAtoms {
+                    mint: Address::new_from_array([3; 32]),
+                },
+                left: 9,
+                right: 9,
+            }],
+            ExtensionFamily::StructuredClaim,
+            3,
+            &[9; 72],
+            RuntimeAdmission::ReservedDisabled,
+        )
+        .unwrap();
+        assert_eq!(&draft.data()[..3], &[75, 1, 3]);
+        let builder = ProtocolTransactionBuilder::new(
+            payer,
+            program,
+            [4; 32],
+            TransactionTransport::default(),
+        )
+        .unwrap();
+        let plan = builder.build_atomic(&[draft]).unwrap();
+        assert!(!plan.has_recent_blockhash);
+        assert!(!plan.signed);
+        assert!(!plan.submitted);
+    }
+
+    #[test]
+    fn settlement_can_atomically_join_fees_direct_eggs_and_liveness() {
+        let payer = Address::new_from_array([1; 32]);
+        let program = Address::new_from_array([2; 32]);
+        let runtime = Address::new_from_array([3; 32]);
+        let equation = || ExactEquation {
+            name: "exact conservation".into(),
+            unit: IntegerUnit::Lamports,
+            left: 5,
+            right: 5,
+        };
+        let successor = |flow, action| {
+            OwnedInstructionDraft::successor(
+                flow,
+                "general-action",
+                owner(),
+                program,
+                vec![AccountMeta::new_readonly(payer, true)],
+                vec![payer],
+                vec![equation()],
+                ExtensionFamily::GeneralV2,
+                action,
+                &[8; 32],
+                RuntimeAdmission::ReservedDisabled,
+            )
+            .unwrap()
+        };
+        let mut liveness_data = vec![0; 272];
+        liveness_data[..8].copy_from_slice(&LIVENESS_RUNTIME_V1_INTENT_MAGIC);
+        let liveness = OwnedInstructionDraft::liveness(
+            "settlement-work",
+            owner(),
+            runtime,
+            vec![AccountMeta::new_readonly(payer, true)],
+            vec![payer],
+            vec![equation()],
+            liveness_data.len(),
+            liveness_data,
+            RuntimeAdmission::ReservedDisabled,
+        )
+        .unwrap();
+        let drafts = [
+            successor(ProtocolFlow::GeneralV2Settlement, 25),
+            successor(ProtocolFlow::GeneralV2Fees, 25),
+            successor(ProtocolFlow::DirectEggSettlement, 26),
+            liveness,
+        ];
+        let builder = ProtocolTransactionBuilder::new(
+            payer,
+            program,
+            [4; 32],
+            TransactionTransport {
+                packet_limit_bytes: 8_192,
+            },
+        )
+        .unwrap();
+        let plan = builder.build_atomic(&drafts).unwrap();
+        assert_eq!(plan.flows.len(), 4);
+        assert_eq!(plan.exact_equations.len(), 4);
+    }
+}

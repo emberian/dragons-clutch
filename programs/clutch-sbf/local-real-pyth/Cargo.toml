@@ -13,7 +13,7 @@ description = "NON-PRODUCTION synthetic local-only signed-RPC Pyth-to-Clutch cam
 
 [features]
 default = ["campaign"]
-builder = []
+builder = ["dep:solana-keypair"]
 campaign = [
   "dep:base64",
   "dep:borsh",

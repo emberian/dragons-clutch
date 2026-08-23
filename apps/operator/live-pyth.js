@@ -63,7 +63,7 @@ const identityCard = (state) => {
       ["Daemon-held ephemeral signers", owner ? numeric(String(owner.actors.length)) : "NOT YET OBSERVED"],
       ["Evidence scope", identity.evidence_scope]
     ]),
-    el("p", "muted", "The browser receives public identities only. The daemon-owned local session retains its ephemeral payer and owner keys in a private directory for the lifetime of the child, then removes that exact session directory. Paths and private bytes are never events.")
+    el("p", "muted", "The browser receives public identities only. The child owns ephemeral payer and owner keys in its private session directory, while this construction seam reads only the separate public-key files. Paths and private bytes are never events.")
   );
   return section;
 };
@@ -95,13 +95,13 @@ const chainCard = (chain) => {
 const builderCard = (builder) => {
   const section = el("section", "card");
   const heading = el("div", "card-heading");
-  heading.append(el("h2", null, "Owned local builder and signer seam"), chip("NOT SUBMITTED"));
+  heading.append(el("h2", null, "Owned local construction seam"), chip("UNSIGNED"));
   section.append(
     heading,
     row(
       "callout callout-warn",
-      el("strong", null, "SIGNED LOCALLY / NOT ADMITTED / NOT SUBMITTED"),
-      el("span", null, "The daemon rebuilt one typed transaction against the admitted source identity, fetched a loopback blockhash, and signed it with its owner-scoped payer. It did not expose the wire or signature and did not send the transaction.")
+      el("strong", null, "NO BLOCKHASH / NOT SIGNED / NOT SUBMITTED"),
+      el("span", null, "The daemon rebuilt one typed transaction against the admitted source identity using only public actor identities. It did not read a private key, fetch a blockhash, expose the wire, or send the transaction.")
     ),
     fields("", [
       ["Plan family", builder.family],
@@ -110,9 +110,9 @@ const builderCard = (builder) => {
       ["Source buckets", `${numeric(builder.source_window.start_bucket)}–${numeric(builder.source_window.end_bucket_exclusive)} (exclusive)`],
       ["Required signer role", builder.required_signers.join(" / ")],
       ["Unsigned wire sha256", digest(builder.unsigned_transaction_sha256)],
-      ["Signed wire sha256", digest(builder.signed_transaction_sha256)],
-      ["Signed bytes", numeric(builder.signed_transaction_bytes)],
-      ["Blockhash source", builder.blockhash_source],
+      ["Unsigned bytes", numeric(builder.unsigned_transaction_bytes)],
+      ["Recent blockhash", builder.recent_blockhash_present ? "present" : "ABSENT"],
+      ["Signed", builder.signed ? "signed" : "NO"],
       ["Submission", builder.submitted ? "submitted" : "NOT SUBMITTED"]
     ]),
     el("p", "muted", builder.transaction_admission)

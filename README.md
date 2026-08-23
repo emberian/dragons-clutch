@@ -348,8 +348,9 @@ wallet architecture.
 The separate `pyth-live` mode uses the real captured local receiver/router
 plane. Its daemon owns a private reusable session root and keeps the loopback
 validator and signer roster alive after the fixed campaign reaches terminal
-state. It also rebuilds and locally signs one result-bound typed plan without
-submitting or exporting it. That proves builder/signer continuity only; the
+state. It also rebuilds one result-bound typed plan from public actor identities
+without reading a private key, fetching a blockhash, signing, submitting, or
+exporting the wire. That proves construction continuity only; the
 browser remains read-only and there is not yet an admitted interactive trading
 endpoint.
 
