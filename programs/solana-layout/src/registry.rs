@@ -78,6 +78,12 @@ pub const COLLATERAL_HOARD_V2_ACCOUNT_VERSION: u8 = 2;
 pub const CLAIM_LEDGER_V3_ACCOUNT_TAG: u8 = 0x41;
 /// Full-width native ClaimLedger successor version.
 pub const CLAIM_LEDGER_V3_ACCOUNT_VERSION: u8 = 3;
+/// Full-width central Resolution successor discriminator.
+pub const RESOLUTION_V5_ACCOUNT_TAG: u8 = 16;
+/// Full-width central Resolution successor version.
+pub const RESOLUTION_V5_ACCOUNT_VERSION: u8 = 5;
+const _: () = assert!(RESOLUTION_V5_ACCOUNT_TAG == 16);
+const _: () = assert!(RESOLUTION_V5_ACCOUNT_VERSION == 5);
 /// Full-width global Position successor discriminator.
 pub const RETIREMENT_V3_POSITION_ACCOUNT_TAG: u8 = 6;
 /// Full-width global Position successor version.
@@ -618,6 +624,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "native-claim-ledger-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RESOLUTION_V5_ACCOUNT_TAG,
+            version: RESOLUTION_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "full-width-resolution-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

@@ -55,8 +55,8 @@ use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_exit, genesis,
-    market_init, observe_resolve, orders_batch, source_ingest_v2,
+    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
+    genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -681,7 +681,7 @@ fn process_external_exit(
     let request = Request::decode(instruction_data)?;
     match request.action {
         Action::Layout(Intent::RedeemExternal { .. }) => {
-            external_exit::process(program_id, accounts, &request)
+            external_redemption_v3::process_external_redemption_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }

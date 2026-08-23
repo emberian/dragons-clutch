@@ -74,6 +74,8 @@ pub const SEED_TERMS: &[u8] = b"dragons-clutch:terms:v1";
 pub const SEED_GRID: &[u8] = b"dragons-clutch:grid:v1";
 /// Resolution record account seed prefix.
 pub const SEED_RESOLUTION: &[u8] = b"dragons-clutch:resolution:v1";
+/// Full-width MarketInstance Resolution V5 account seed prefix.
+pub const SEED_RESOLUTION_V5: &[u8] = b"dc:resolution:v5";
 /// Epoch/book-domain account seed prefix.
 pub const SEED_EPOCH: &[u8] = b"dragons-clutch:epoch:v1";
 /// Order-page account seed prefix.
@@ -294,6 +296,11 @@ pub fn kernel_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
 /// Canonical full-width ClaimLedger V3 address.
 pub fn claim_ledger_v3_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_CLAIM_LEDGER_V3, market_instance_v2_id])
+}
+
+/// Canonical full-width Resolution V5 address.
+pub fn resolution_v5_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESOLUTION_V5, market_instance_v2_id])
 }
 
 /// Canonical reference-only external-shadow address and bump.
