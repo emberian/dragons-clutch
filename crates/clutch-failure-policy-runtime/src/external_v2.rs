@@ -753,6 +753,31 @@ impl FailureRuntimeExternalV2 {
         self.wrap_plan(recovery, None, None)
     }
 
+    /// Authenticate the exact immutable Source release frozen at admission.
+    ///
+    /// This narrow boundary lets an account adapter prove that its physical
+    /// release account is the semantic runtime's release without projecting
+    /// the runtime's private release identities into a second DTO.
+    pub fn authenticate_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Result<()> {
+        self.check()?;
+        self.validate_source_release(source_release)
+    }
+
+    /// Advance the immutable recovery schedule from the admitted Source
+    /// release's embedded Clock policy and one authenticated Clock snapshot.
+    pub fn plan_advance_schedule_from_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+        clock: ClockSnapshotV1,
+    ) -> Result<FailureExternalTransitionPlanV2> {
+        self.authenticate_source_release(source_release)?;
+        let recovery_clock = recovery_clock_from_snapshot(&source_release.clock_policy(), clock)?;
+        self.plan_advance_schedule(recovery_clock)
+    }
+
     /// Accept one exact successful repair evaluation as one progress unit and
     /// emit the only receipt liveness may use to pay its named keeper.
     pub fn plan_accept_repair_work(

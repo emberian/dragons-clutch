@@ -19,7 +19,7 @@ use crate::instructions::series_failure_funding::{
 use crate::instructions_sysvar::SYSVAR_OWNER_ID;
 use crate::seeds;
 use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
-use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock};
+use clutch_evidence_recovery::Identity as RecoveryIdentity;
 use clutch_failure_policy_adapter::external_v2::{
     authenticate_external_root_v2, initialize_external_root_v2, project_external_recovery_close_v2,
     project_external_semantic_transition_v2, project_external_work_transition_v2,
@@ -104,8 +104,6 @@ impl AuthenticatedSourceFailureJoinV1 {
     pub fn from_source_adapter(
         release: AuthenticatedSourceReleaseV1,
         handoff: FailurePolicySourceHandoffV1,
-        expected_handoff_id: [u8; 32],
-        expected_common: RecoveryCommonV1,
         source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
         let occurrence = handoff.occurrence();
@@ -114,8 +112,7 @@ impl AuthenticatedSourceFailureJoinV1 {
             .id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            handoff.id().bytes() == expected_handoff_id
-                && source.handoff_id() == handoff.id()
+            source.handoff_id() == handoff.id()
                 && source.release_authentication_id() == release.id()
                 && source.route_id() == occurrence.route_id()
                 && source.occurrence_account() == occurrence.occurrence_account()
@@ -123,10 +120,7 @@ impl AuthenticatedSourceFailureJoinV1 {
                 && source.clock_policy_id() == clock_policy_id
                 && source.clock_policy_id() == occurrence.clock_policy_id()
                 && source.clock() == handoff.clock()
-                && source.generation() == expected_common.generation
                 && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
-                && source.failure_policy_binding_id().bytes() == expected_common.binding_id
-                && occurrence.market_instance_id().bytes() == expected_common.market_instance_v2_id
                 && source.source_spec_id() == occurrence.source_spec_id()
                 && source.window_id() == occurrence.window_id()
                 && source.statistic_key_id() == occurrence.statistic_key_id(),
@@ -154,8 +148,6 @@ impl AuthenticatedSourceSuccessJoinV1 {
     pub fn from_source_adapter(
         release: AuthenticatedSourceReleaseV1,
         handoff: SuccessfulEvaluationHandoffV1,
-        expected_handoff_id: [u8; 32],
-        expected_common: RecoveryCommonV1,
         source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
         let occurrence = handoff.occurrence();
@@ -164,8 +156,7 @@ impl AuthenticatedSourceSuccessJoinV1 {
             .id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            handoff.id().bytes() == expected_handoff_id
-                && source.handoff_id() == handoff.id()
+            source.handoff_id() == handoff.id()
                 && source.release_authentication_id() == release.id()
                 && source.route_id() == occurrence.route_id()
                 && source.occurrence_account() == occurrence.occurrence_account()
@@ -174,10 +165,7 @@ impl AuthenticatedSourceSuccessJoinV1 {
                 && source.clock_policy_id() == clock_policy_id
                 && source.clock_policy_id() == occurrence.clock_policy_id()
                 && source.clock() == handoff.clock()
-                && source.generation() == expected_common.generation
                 && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
-                && source.failure_policy_binding_id().bytes() == expected_common.binding_id
-                && occurrence.market_instance_id().bytes() == expected_common.market_instance_v2_id
                 && source.source_spec_id() == occurrence.source_spec_id()
                 && source.window_id() == occurrence.window_id()
                 && source.statistic_key_id() == occurrence.statistic_key_id(),
@@ -412,6 +400,9 @@ pub fn handle_initialize_failure_root_v1<'a>(
 ) -> Outcome<FailureRootActivationV1> {
     authenticate_ordered_metas_v1(RecoveryAction::InitializeFailureRoot, accounts)?;
     require_source_release_account(source_release, &accounts[18])?;
+    runtime
+        .authenticate_source_release(source_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     authenticate_present_recovery_admission(
         program_id,
         &accounts[2],
@@ -692,17 +683,8 @@ pub fn plan_schedule_advance_v1(
         ClutchError::Replay,
     )?;
     let snapshot = authenticate_clock_snapshot_v1(clock_account)?;
-    let policy = source_release.clock_policy();
-    let clock = RecoveryClock {
-        slot: snapshot.slot,
-        unix_timestamp: i64::try_from(snapshot.unix_timestamp)
-            .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?,
-        current_bucket: policy
-            .bucket_at_timestamp(snapshot.unix_timestamp)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-    };
     root.runtime()
-        .plan_advance_schedule(clock)
+        .plan_advance_schedule_from_source_release(source_release, snapshot)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
@@ -731,6 +713,12 @@ pub fn handle_source_failure_v1<'a>(
     source: AuthenticatedSourceFailureJoinV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::TriggerSourceFailure, accounts)?;
+    require_source_action(
+        source.source,
+        payload.common,
+        payload.source_failure_handoff_id,
+        source.handoff.occurrence().market_instance_id().bytes(),
+    )?;
     require_failure_source_accounts(source, &accounts[1..])?;
     require_current_after(accounts, 5, source.handoff.clock())?;
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
@@ -765,6 +753,12 @@ pub fn handle_accept_recovery_work_v1<'a>(
     source: AuthenticatedSourceSuccessJoinV1,
 ) -> Outcome<ExternalWorkMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::AcceptRecoveryWork, accounts)?;
+    require_source_action(
+        source.source,
+        payload.common,
+        payload.source_success_handoff_id,
+        source.handoff.occurrence().market_instance_id().bytes(),
+    )?;
     require_success_source_accounts(source, &accounts[3..])?;
     require_current_after(accounts, 9, source.handoff.clock())?;
     require(
@@ -1276,6 +1270,21 @@ fn require_failure_source_accounts(
         accounts[1].key.to_bytes() == source.source.occurrence_account().bytes()
             && accounts[2].key.to_bytes() == source.source.result_or_absence_account().bytes()
             && accounts[3].key.to_bytes() == source.source.work_receipt_account().bytes(),
+        ClutchError::MismatchedState,
+    )
+}
+
+fn require_source_action(
+    source: SourcePolicyHandoffJoinV1,
+    common: RecoveryCommonV1,
+    expected_handoff_id: [u8; 32],
+    source_market_instance_v2_id: [u8; 32],
+) -> Outcome<()> {
+    require(
+        source.handoff_id().bytes() == expected_handoff_id
+            && source.failure_policy_binding_id().bytes() == common.binding_id
+            && source.generation() == common.generation
+            && source_market_instance_v2_id == common.market_instance_v2_id,
         ClutchError::MismatchedState,
     )
 }
