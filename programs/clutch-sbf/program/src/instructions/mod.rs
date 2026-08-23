@@ -19,7 +19,7 @@
 //! | [`external_redemption_v3`] | `Intent::RedeemExternal` over ResolutionV5/HoardV2/ClaimLedgerV3 and bearer Token-2022 claims |
 //! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
-//! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
+//! | [`merge_materialize`] | withdrawn lowered-ledger migration implementation; no live dispatch |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
@@ -30,7 +30,7 @@
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers), full-width
-//! collateral_cash_v3 (Endow/WithdrawCash), merge_materialize
+//! collateral_cash_v3 (Endow/WithdrawCash), claim_representation_v3
 //! (Materialize/Dematerialize), complete_set_v3 (Split/Merge), market_init,
 //! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
 //! general clearing lifecycle in orders_batch: funded placement and

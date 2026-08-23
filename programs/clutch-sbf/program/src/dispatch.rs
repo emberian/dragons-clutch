@@ -648,7 +648,7 @@ fn process_merge_materialize(
         ),
         Action::Layout(Intent::Materialize { .. })
         | Action::Layout(Intent::Dematerialize { .. }) => {
-            merge_materialize::process(program_id, accounts, &request)
+            claim_representation_v3::process_claim_representation_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
