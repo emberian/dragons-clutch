@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
+clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
 clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 clutch-product-series = { path = "../clutch-product-series" }
 clutch-retirement = { path = "../clutch-retirement" }

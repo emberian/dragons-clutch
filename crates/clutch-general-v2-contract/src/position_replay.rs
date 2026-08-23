@@ -786,6 +786,11 @@ impl GeneralPositionReplayFoundingPlanV1 {
         self.replay_semantic_id
     }
 
+    /// Canonical Replay V3 PDA bump retained by the hostile prestate.
+    pub const fn replay_bump(self) -> u8 {
+        self.replay_header.stored_bump()
+    }
+
     /// Exact canonical 344-byte founding Replay body.
     pub const fn replay_body(&self) -> &[u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES] {
         &self.replay_body

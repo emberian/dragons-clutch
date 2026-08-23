@@ -171,6 +171,26 @@ impl DirectReservationV1 {
         Ok(())
     }
 
+    /// Validate immutable Market/Realm-owned binding against the exact root.
+    pub fn validate_against_root(
+        self,
+        root: DirectMarketRootV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        self.validate()?;
+        root.validate()?;
+        let binding = root.binding();
+        if self.market_instance_id != binding.market_instance_id
+            || self.generation != binding.generation
+            || self.direct_root_account != binding.direct_root_account
+            || self.general_market_runtime != binding.general_market_runtime
+            || self.outcome_count != binding.outcome_count
+            || self.price_scale != binding.price_scale
+        {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        Ok(())
+    }
+
     /// Reconstruct the sole owner-blind RelationV2 order without an owner DTO.
     pub fn economic_order(self) -> Result<EconomicOrderV2, DirectMarketErrorV1> {
         self.validate()?;

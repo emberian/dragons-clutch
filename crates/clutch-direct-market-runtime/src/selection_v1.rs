@@ -400,6 +400,9 @@ pub fn prepare_direct_selection_freeze_v1<
     let mut index = 0usize;
     while index < usize::from(reservation_count) {
         let reservation = ordered[index].ok_or(DirectMarketErrorV1::InvalidCount)?;
+        if reservation.account() == selection_account {
+            return Err(DirectMarketErrorV1::IdentityAlias);
+        }
         reservation_accounts[index] = reservation.account();
         reservation_semantic_ids[index] = reservation.semantic_id(backend)?;
         book.orders[index] = reservation.economic_order()?;
