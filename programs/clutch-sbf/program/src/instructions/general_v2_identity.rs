@@ -23,8 +23,9 @@ use clutch_general_v2_contract::{
 };
 use clutch_general_v2_runtime::{
     advance_clear_order_v1, quantized_relation_v2_policy_id_v2, score_v2_q_policy_id_v1,
-    verify_quantized_relation_candidate_v2, verify_quantized_relation_price_admission_v2,
-    GeneralV2RuntimeError, GeneralV2WorkErrorV1,
+    verify_quantized_relation_candidate_v2,
+    verify_quantized_relation_product_price_admission_v2, GeneralV2RuntimeError,
+    GeneralV2WorkErrorV1,
 };
 use clutch_product_series::{
     FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
@@ -39,6 +40,9 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::product_artifact::authenticate_product_artifact_v1;
+
+/// Closed successor account width for exact-price nonempty Work creation.
+pub(super) const INIT_CLEAR_WORK_QUANTIZED_ACCOUNT_COUNT_V2: usize = 17;
 
 /// Native Solana SHA-256 adapter for the pure contract's byte-exact backend seam.
 #[derive(Clone, Copy, Debug)]
@@ -1412,7 +1416,11 @@ fn init_clear_work(
     accounts: &[AccountInfo],
     request: contract::EpochNodePayloadV1,
 ) -> Outcome<()> {
-    require_count(accounts, 12)?;
+    // Successor closed tuple, in order: keeper destination; Epoch; Window;
+    // MarketBinding; EconomicDomain; AdmissionNode; sealed Feed; Basis; new
+    // Work; System; Rent; Clock; PriceGrid; ProductTemplate; Genesis V2;
+    // PriceMeasurePolicy; content-addressed MarketInstance V2.
+    require_count(accounts, INIT_CLEAR_WORK_QUANTIZED_ACCOUNT_COUNT_V2)?;
     require_writable_destination(&accounts[0])?;
     require_role(
         program_id,
@@ -1454,6 +1462,10 @@ fn init_clear_work(
     require_system_program(&accounts[9])?;
     let rent = read_rent(&accounts[10])?;
     let slot = read_clock_slot(&accounts[11])?;
+    require_readonly_artifact(program_id, &accounts[12], account_len::PRICE_GRID)?;
+    require_readonly_artifact(program_id, &accounts[13], PRODUCT_TEMPLATE_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[14], MARKET_GENESIS_PROFILE_V2_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[15], PRICE_MEASURE_POLICY_BYTES)?;
     require_distinct_pairs(
         accounts,
         &[
@@ -1480,6 +1492,10 @@ fn init_clear_work(
             (6, 8),
             (0, 8),
         ],
+    )?;
+    require_all_distinct(
+        accounts,
+        &[1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14, 15, 16],
     )?;
     let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[1])?)?;
     let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[2])?)?;
@@ -1515,6 +1531,13 @@ fn init_clear_work(
         *accounts[5].key == node_pda.0 && node.stored_bump == node_pda.1,
         ClutchError::WrongPda,
     )?;
+    let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[5].key.to_bytes());
+    require(
+        *accounts[6].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[5].key.to_bytes());
+    require(*accounts[8].key == work_pda.0, ClutchError::WrongPda)?;
     require_compartment_balance(
         &accounts[5],
         node.rent,
@@ -1527,6 +1550,29 @@ fn init_clear_work(
     require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
     let basis = NativeClaimBasisV1::decode(&borrow_data(&accounts[7])?)
         .map_err(|_| ClutchError::NonCanonical)?;
+    let price_grid = PriceGridAccount::decode(&borrow_data(&accounts[12])?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let price_grid_pda = seeds::grid_pda(
+        program_id,
+        &price_grid.realm.bytes(),
+        &price_grid.grid.bytes(),
+    );
+    require(
+        *accounts[12].key == price_grid_pda.0 && price_grid.stored_bump == price_grid_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let template = ProductTemplateV4::decode(&borrow_data(&accounts[13])?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let genesis = MarketGenesisProfileV2::decode(&borrow_data(&accounts[14])?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let policy = PriceMeasurePolicyV1::decode(&borrow_data(&accounts[15])?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        &accounts[16],
+        binding.market_instance_v2_id.content_id(),
+    )?;
+    let market_instance = *market_instance_artifact.value();
     require(
         request.epoch == id(accounts[1].key)
             && request.node == id(accounts[5].key)
@@ -1545,29 +1591,28 @@ fn init_clear_work(
             && basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
                 == binding.native_claim_basis_id.bytes()
             && basis.edge_policy_registry_value == 1
+            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
             && slot >= window.submission_closes_slot
             && slot < window.verification_closes_slot,
         ClutchError::MismatchedState,
     )?;
     {
         let feed_data = borrow_data(&accounts[6])?;
-        verify_quantized_relation_price_admission_v2(
+        verify_quantized_relation_product_price_admission_v2(
             id(accounts[6].key),
             &feed_data,
             &domain,
             &binding,
+            &price_grid,
+            &template,
             &basis,
+            &policy,
+            &genesis,
+            &market_instance,
             QuantizedEdgePolicyV1::Clamp,
         )
         .map_err(|_| ClutchError::MismatchedState)?;
     }
-    let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[5].key.to_bytes());
-    require(
-        *accounts[6].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
-        ClutchError::WrongPda,
-    )?;
-    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[5].key.to_bytes());
-    require(*accounts[8].key == work_pda.0, ClutchError::WrongPda)?;
     let work_len = contract::clear_work_v3_account_len(feed.outcome_count, feed.order_count)?;
     let work_rent = DeletableRentOwnerV1 {
         payer: node.payer,
@@ -1957,22 +2002,17 @@ fn checked_empty_book_verdict(
             && basis.edge_policy_registry_value == 1,
         ClutchError::MismatchedState,
     )?;
-    market_instance
-        .validate_bindings(&template, &basis, &policy, &genesis)
-        .map_err(|_| ClutchError::MismatchedState)?;
-    require(
-        genesis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
-            == binding.market_genesis_profile_v2_id.bytes()
-            && genesis.coordinate_domain_min == domain.transcript.coordinate_domain_min
-            && genesis.coordinate_domain_max == domain.transcript.coordinate_domain_max,
-        ClutchError::MismatchedState,
-    )?;
-    let admission = match verify_quantized_relation_price_admission_v2(
+    let admission = match verify_quantized_relation_product_price_admission_v2(
         id(feed_key),
         feed_data,
         &domain,
         &binding,
+        &price_grid,
+        &template,
         &basis,
+        &policy,
+        &genesis,
+        &market_instance,
         QuantizedEdgePolicyV1::Clamp,
     ) {
         Ok(value) => value,
@@ -1982,16 +2022,6 @@ fn checked_empty_book_verdict(
         Err(_) => return Err(ClutchError::MismatchedState.into()),
     };
     let header = contract::CandidateFeedHeaderV2::decode_account(feed_data, true)?;
-    let mut outcome = 0usize;
-    while outcome < usize::from(header.outcome_count) {
-        if price_grid
-            .tick_of(admission.price().prices[outcome])
-            .is_err()
-        {
-            return Ok(CheckedVerdict::Refused);
-        }
-        outcome += 1;
-    }
     let verified = match verify_quantized_relation_candidate_v2(
         admission,
         &EconomicBookV2::empty(),

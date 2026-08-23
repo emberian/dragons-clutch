@@ -261,8 +261,9 @@ settlement, or vice versa.
 
 Before a production SBF profile selects the finite checker:
 
-1. add the PriceGrid account to nonempty work admission or completion so exact
-   tick membership cannot rely only on the offchain builder;
+1. atomically adopt the staged 17-account nonempty Work tuple in shared
+   account-meta/capability ownership and retain its checked identities through
+   completion;
 2. independently generate the transfer templates and derivation manifest;
 3. add a solver that emits exact continuous moments or quantized atoms without
    treating floating residuals as consensus evidence;

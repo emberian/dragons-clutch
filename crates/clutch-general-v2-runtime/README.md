@@ -69,10 +69,13 @@ assertion of optimal clearing.
 
 The isolated General SBF source now checks this exact admission before creating
 even a resumable nonempty ClearWork account, and repeats it on the empty-book
-completion path before projecting ScoreV2-Q. ClearWork binds the authenticated
-feed and successor policy thereafter. This is source composition only: the
-non-production profile remains disabled by default and no build, local-bank,
-compute, or deployment claim follows from it.
+completion path before projecting ScoreV2-Q. Work creation's successor tuple
+also authenticates the canonical PriceGrid PDA and every active tick plus full
+Template/Basis/Policy/Genesis/MarketInstance coordinate ownership. ClearWork
+binds the authenticated feed and successor policy thereafter. The 17-account
+handler is staged pending the shared account-meta/capability join. This is
+source composition only: the non-production profile remains disabled by
+default and no build, local-bank, compute, or deployment claim follows from it.
 
 The page projection validates frozen page commitments, exact market/epoch/
 order-set bindings, grid membership, widths, expiry, and RelationV2 admission.

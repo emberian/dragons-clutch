@@ -23,7 +23,11 @@ use clutch_price_measure::{
     QUANTIZED_ATOM_MIXTURE_CERTIFICATE_VERSION_V1,
     QUANTIZED_ATOM_MIXTURE_SEMANTICS_VERSION_V1,
 };
-use clutch_product_series::{NativeClaimBasisV1, QuantizedBasisSpecV1, QuantizedEdgePolicyV1};
+use clutch_product_series::{
+    MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, QuantizedBasisSpecV1, QuantizedEdgePolicyV1,
+};
+use clutch_solana_layout::PriceGridAccount;
 
 use crate::{
     decode_sealed_candidate_feed_v1, hash_parts, score_v2_q_policy_id_v1,
@@ -354,6 +358,96 @@ pub fn verify_quantized_relation_price_admission_v2(
     })
 }
 
+/// Authenticate the complete Product/Grid tuple and exact finite feed price.
+///
+/// This is the successor nonempty-Work semantic seam. The SBF adapter remains
+/// responsible for program ownership, content-addressed artifact accounts,
+/// PriceGrid PDA derivation, and the lifecycle accounts that name these bodies.
+/// Once those account facts hold, this function prevents Work creation unless
+/// one immutable MarketInstance, Genesis coordinate domain, Product basis,
+/// price policy, PriceGrid, Relation policy, and exact atom certificate all
+/// describe the same price. Success is not settlement or execution authority.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_quantized_relation_product_price_admission_v2(
+    candidate_feed_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    economic_domain_account: &clutch_general_v2_contract::EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+    product_template: &ProductTemplateV4,
+    native_basis: &NativeClaimBasisV1,
+    price_measure_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    market_instance: &MarketInstancePreimageV2,
+    authenticated_edge_policy: QuantizedEdgePolicyV1,
+) -> Result<QuantizedRelationPriceAdmissionV2, GeneralV2RuntimeError> {
+    market_instance.validate_bindings(
+        product_template,
+        native_basis,
+        price_measure_policy,
+        genesis,
+    )?;
+    genesis.validate_partition_bindings(
+        native_basis,
+        price_measure_policy,
+        authenticated_edge_policy,
+    )?;
+
+    let transcript = economic_domain_account.transcript;
+    let relation_policy_id = quantized_relation_v2_policy_id_v2()?;
+    let score_policy_id = score_v2_q_policy_id_v1()?;
+    if market_binding.market_genesis_profile_v2_id.bytes() != genesis.id()?.bytes()
+        || market_binding.market_instance_v2_id.bytes() != market_instance.id()?.bytes()
+        || market_binding.native_claim_basis_id.bytes() != native_basis.id()?.bytes()
+        || market_binding.price_measure_policy_v1_id.bytes()
+            != price_measure_policy.id()?.bytes()
+        || market_binding.relation_policy_id != relation_policy_id
+        || market_binding.score_policy_id != score_policy_id
+        || genesis.relation_policy_id.bytes() != relation_policy_id.bytes()
+        || genesis.score_policy_id.bytes() != score_policy_id.bytes()
+        || price_grid.grid.bytes() != genesis.price_grid_id.bytes()
+        || price_grid.realm.bytes() != genesis.realm_id.bytes()
+        || price_grid.price_scale != market_binding.price_scale
+        || transcript.market_instance_v2_id != market_binding.market_instance_v2_id
+        || transcript.native_claim_basis_id != market_binding.native_claim_basis_id
+        || transcript.price_measure_policy_v1_id != market_binding.price_measure_policy_v1_id
+        || transcript.relation_policy_id != relation_policy_id
+        || transcript.outcome_count != native_basis.outcome_count
+        || transcript.price_scale != native_basis.denominator
+        || transcript.coordinate_domain_min != genesis.coordinate_domain_min
+        || transcript.coordinate_domain_max != genesis.coordinate_domain_max
+    {
+        return Err(GeneralV2RuntimeError::BindingMismatch);
+    }
+
+    let admission = verify_quantized_relation_price_admission_v2(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        economic_domain_account,
+        market_binding,
+        native_basis,
+        authenticated_edge_policy,
+    )?;
+    verify_quantized_relation_price_grid_v2(price_grid, &admission.authority)?;
+    Ok(admission)
+}
+
+fn verify_quantized_relation_price_grid_v2(
+    price_grid: &PriceGridAccount,
+    authority: &QuantizedRelationPriceAuthorityV2,
+) -> Result<(), GeneralV2RuntimeError> {
+    price_grid.validate()?;
+    if price_grid.price_scale != authority.domain().price_scale {
+        return Err(GeneralV2RuntimeError::BindingMismatch);
+    }
+    let mut outcome = 0usize;
+    while outcome < usize::from(authority.domain().outcome_count) {
+        price_grid.tick_of(authority.price().prices[outcome])?;
+        outcome += 1;
+    }
+    Ok(())
+}
+
 /// Bind a finite verifier result to the exact RelationV2 price transcript.
 ///
 /// This crate-private constructor is the only path used by the builder before
@@ -439,6 +533,7 @@ mod tests {
         QuantizedAtomMixtureBindingsV1, QuantizedAtomMixtureCertificateV1,
         QuantizedPayoutPriceVectorV1,
     };
+    use clutch_solana_layout::{Hash32, MAX_GRID_TICKS};
     use crate::relation_v2_policy_id_v1;
 
     fn exact_price_authority_fixture() -> (
@@ -574,6 +669,53 @@ mod tests {
                 forged_price_identity,
                 certificate,
             ),
+            Err(GeneralV2RuntimeError::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn every_active_exact_price_must_be_a_grid_tick() {
+        let (domain, price, certificate) = exact_price_authority_fixture();
+        let authority =
+            bind_quantized_relation_price_certificate_v2(domain, price, certificate).unwrap();
+        let mut dense_ticks = [0u64; MAX_GRID_TICKS];
+        let mut tick = 0usize;
+        while tick <= 12 {
+            dense_ticks[tick] = u64::try_from(tick).unwrap();
+            tick += 1;
+        }
+        let mut admitted_grid = PriceGridAccount {
+            grid: Hash32::ZERO,
+            realm: Hash32::from_bytes([7; 32]),
+            price_scale: 12,
+            tick_count: 13,
+            ticks: dense_ticks,
+            stored_bump: 1,
+            flags: 0,
+        };
+        admitted_grid.grid = admitted_grid.recomputed_grid_id().unwrap();
+        assert_eq!(
+            verify_quantized_relation_price_grid_v2(&admitted_grid, &authority),
+            Ok(())
+        );
+
+        let mut endpoint_only = PriceGridAccount {
+            tick_count: 2,
+            ticks: [0; MAX_GRID_TICKS],
+            ..admitted_grid
+        };
+        endpoint_only.ticks[1] = 12;
+        endpoint_only.grid = endpoint_only.recomputed_grid_id().unwrap();
+        assert!(matches!(
+            verify_quantized_relation_price_grid_v2(&endpoint_only, &authority),
+            Err(GeneralV2RuntimeError::PriceGrid(_))
+        ));
+
+        let mut wrong_scale = admitted_grid;
+        wrong_scale.price_scale = 13;
+        wrong_scale.grid = wrong_scale.recomputed_grid_id().unwrap();
+        assert_eq!(
+            verify_quantized_relation_price_grid_v2(&wrong_scale, &authority),
             Err(GeneralV2RuntimeError::BindingMismatch)
         );
     }
