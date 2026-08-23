@@ -22,9 +22,14 @@
 //! preserved for source compatibility; it is also a forgeable projection and
 //! does not contradict that rule.
 
+mod budget;
 mod codec;
 mod transition;
 
+pub use budget::{
+    plan_epoch_budget_retirement, AuthenticatedEpochBudgetDispositionV1,
+    EpochBudgetRetirementPlanV1, EpochBudgetRetirementRequestV1,
+};
 pub use codec::{
     ChildGenerationV1, DeletableRentOwnerV1, EpochChildCountsV1, EpochRetirementTailV1,
     GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
@@ -37,8 +42,10 @@ pub use transition::{
     create_epoch_child_v2, create_registered_candidate_after_validation,
     create_registered_candidate_after_validation_v2, entitle_reservation, entitle_reservation_v2,
     open_general_epoch, open_general_epoch_root, plan_direct_reservation_close,
-    plan_epoch_retirement, plan_epoch_root_retirement, plan_general_reservation_close,
-    plan_position_replay_retirement, plan_position_retirement, register_direct_reservation,
+    plan_epoch_retirement, plan_epoch_root_retirement, plan_epoch_root_retirement_v2,
+    plan_general_reservation_close,
+    plan_position_replay_retirement, plan_position_replay_retirement_v2,
+    plan_position_retirement, register_direct_reservation,
     register_direct_reservation_v2, register_general_reservation, register_general_reservation_v2,
     reopen_position, reopen_position_with_replay, terminate_reservation, terminate_reservation_v2,
     update_registered_candidate_status_after_validation,
@@ -52,17 +59,20 @@ pub use transition::{
     DeletableRentDispositionV1, DirectEpochLifecyclePhaseV1, DirectReservationClosePlanV1,
     DirectReservationCloseRequestV1, DirectReservationRegistrationAccountsV1,
     EpochBudgetRootSiblingV1, EpochChildProjectionV1, EpochLifecycleStateV5, EpochRootAccountsV1,
-    EpochRootRetirementPlanV1, EpochRootRetirementRequestV1, EpochWindowRootSiblingV1,
+    EpochRootRecipientBalanceBookV2, EpochRootRecipientCreditsV2, EpochRootRetirementPlanV1,
+    EpochRootRetirementPlanV2, EpochRootRetirementRequestV1, EpochRootRetirementRequestV2,
+    EpochWindowRootSiblingV1,
     GeneralEpochLifecycleProjectionV2, GeneralReservationClosePlanV1,
     GeneralReservationCloseRequestV1, GeneralReservationRegistrationAccountsV1, LiveEpochV5,
     LiveGeneralEpochProjectionV2, LivePositionV2, LiveReplaySuccessorV1,
     OpenGeneralEpochRootPlanV1, OpenGeneralEpochRootRequestV1, PayerDebitV1,
     PositionEconomicStateV1, PositionLifecycleStateV2, PositionReplayAccountsV1,
     PositionReplayReopenAccountsV1, PositionReplayReopenPlanV1, PositionReplayReopenRequestV1,
-    PositionReplayRetirementPlanV1, PositionReplayRetirementRequestV1, RecipientBalanceBookV1,
-    RecipientBalanceV1, RecipientCreditV1, RentDispositionV2, RentSplitAdmissionPlanV2,
+    PositionReplayRetirementPlanV1, PositionReplayRetirementRequestV1,
+    PositionReplayRetirementRequestV2, RecipientBalanceBookV1, RecipientBalanceV1,
+    RecipientCreditV1, RentDispositionV2, RentSplitAdmissionPlanV2,
     ReplayLifecycleStateV1, RetirementCommitPlanV2, ValidatedAdmissionLedgerRetiredV1,
-    MAX_RETIREMENT_RECIPIENTS,
+    MAX_EPOCH_ROOT_RECIPIENTS_V2, MAX_RETIREMENT_RECIPIENTS,
 };
 
 /// Number of bytes in every persisted identity.

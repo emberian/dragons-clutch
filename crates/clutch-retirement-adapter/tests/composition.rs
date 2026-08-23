@@ -6,15 +6,16 @@ use clutch_retirement::{
     DIRECT_RESERVATION_V2_BYTES, DIRECT_RESERVATION_V6_BYTES, DIRECT_RESERVATION_V8_BYTES,
     EPOCH_ACCOUNT_VERSION_V5, EPOCH_V2_BYTES, EPOCH_V5_BYTES, MARKET_ACCOUNT_VERSION_V2,
     MARKET_V2_BYTES, POSITION_ACCOUNT_VERSION_V2, POSITION_V2_BYTES,
-    RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V4_BYTES,
-    RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
+    PROJECTED_REPLAY_SUCCESSOR_BYTES, RESERVATION_ACCOUNT_VERSION_V5,
+    RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V4_BYTES, RESERVATION_V5_BYTES,
+    RESERVATION_V7_BYTES,
 };
 use clutch_retirement_adapter::{
     decode_counted_child, encode_counted_child_after_base_validation,
     project_general_epoch_phase_v2, project_live_general_epoch_retirement_v2, CountedChildSchemaV1,
     DirectReservationAccountV6, DirectReservationAccountV8, GeneralEpochAccountV5,
     GeneralReservationAccountV5, GeneralReservationAccountV7, MarketAccountV2, PositionAccountV2,
-    RetirementAdapterErrorV1, RetirementAdapterErrorV2,
+    ReplaySuccessorAccountV1, RetirementAdapterErrorV1, RetirementAdapterErrorV2,
 };
 use clutch_solana_layout::{
     CodecError, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN, EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN,
@@ -59,6 +60,19 @@ fn all_authoritative_base_plus_tail_compositions_round_trip_exactly() {
     assert_eq!(position_bytes.len(), POSITION_V2_BYTES);
     assert_eq!(position_bytes[1], POSITION_ACCOUNT_VERSION_V2);
     assert_eq!(PositionAccountV2::decode(&position_bytes), Ok(position));
+
+    let replay = common::replay_successor_v1();
+    let replay_bytes = replay.encode().unwrap();
+    assert_eq!(replay_bytes.len(), PROJECTED_REPLAY_SUCCESSOR_BYTES);
+    assert_eq!(
+        replay_bytes[0],
+        clutch_solana_layout::registry::REPLAY_SUCCESSOR_ACCOUNT_TAG
+    );
+    assert_eq!(
+        replay_bytes[1],
+        clutch_solana_layout::registry::REPLAY_SUCCESSOR_ACCOUNT_VERSION
+    );
+    assert_eq!(ReplaySuccessorAccountV1::decode(&replay_bytes), Ok(replay));
 
     let market = common::market_v2();
     let market_bytes = market.encode().unwrap();
@@ -474,6 +488,9 @@ fn every_full_composition_decoder_is_total_for_hostile_lengths_and_bytes() {
 
     for len in 0..=POSITION_V2_BYTES + 1 {
         let _ = PositionAccountV2::decode(&hostile[..len]);
+    }
+    for len in 0..=PROJECTED_REPLAY_SUCCESSOR_BYTES + 1 {
+        let _ = ReplaySuccessorAccountV1::decode(&hostile[..len]);
     }
     for len in 0..=MARKET_V2_BYTES + 1 {
         let _ = MarketAccountV2::decode(&hostile[..len]);

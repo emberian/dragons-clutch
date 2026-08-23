@@ -2,17 +2,23 @@
 
 use clutch_retirement::{
     canonical_epoch_generation, AdapterDirectEpochProjectionV1,
-    AdapterNeutralSinkBindingProjectionV1, ChildGenerationV1, DirectEpochLifecyclePhaseV1,
-    EpochRetirementTailV1, GeneralEpochPhaseV2, Identity32V1, LiveGeneralEpochProjectionV2,
-    MarketEpochCursorV1, PositionRetirementTailV1, ReservationCountTailV1,
-    ReservationRetirementTailV2, RetirementErrorV1, RetirementErrorV2,
-    DIRECT_RESERVATION_ACCOUNT_VERSION_V6, DIRECT_RESERVATION_ACCOUNT_VERSION_V8,
-    DIRECT_RESERVATION_V2_BYTES, DIRECT_RESERVATION_V6_BYTES, DIRECT_RESERVATION_V8_BYTES,
-    EPOCH_ACCOUNT_TAG, EPOCH_ACCOUNT_VERSION_V5, EPOCH_V2_BYTES, EPOCH_V5_BYTES,
-    MARKET_ACCOUNT_TAG, MARKET_ACCOUNT_VERSION_V2, MARKET_V1_BYTES, MARKET_V2_BYTES,
-    POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2, POSITION_V1_BYTES, POSITION_V2_BYTES,
-    RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7,
-    RESERVATION_V4_BYTES, RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
+    AdapterNeutralSinkBindingProjectionV1, ChildGenerationV1, DeletableRentOwnerV1,
+    DirectEpochLifecyclePhaseV1, EpochRetirementTailV1, GeneralEpochPhaseV2, Identity32V1,
+    LiveGeneralEpochProjectionV2, LivePositionV2, LiveReplaySuccessorV1, MarketEpochCursorV1,
+    PositionEconomicStateV1, PositionLifecycleStateV2, PositionRetirementTailV1,
+    ReplayLifecycleStateV1, ReservationCountTailV1, ReservationRetirementTailV2, RetirementErrorV1,
+    RetirementErrorV2, DIRECT_RESERVATION_ACCOUNT_VERSION_V6,
+    DIRECT_RESERVATION_ACCOUNT_VERSION_V8, DIRECT_RESERVATION_V2_BYTES,
+    DIRECT_RESERVATION_V6_BYTES, DIRECT_RESERVATION_V8_BYTES, EPOCH_ACCOUNT_TAG,
+    EPOCH_ACCOUNT_VERSION_V5, EPOCH_V2_BYTES, EPOCH_V5_BYTES, MARKET_ACCOUNT_TAG,
+    MARKET_ACCOUNT_VERSION_V2, MARKET_V1_BYTES, MARKET_V2_BYTES, POSITION_ACCOUNT_TAG,
+    POSITION_ACCOUNT_VERSION_V2, POSITION_V1_BYTES, POSITION_V2_BYTES,
+    PROJECTED_REPLAY_SUCCESSOR_BYTES, REFERENCE_REPLAY_V1_BYTES, RESERVATION_ACCOUNT_TAG,
+    RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V4_BYTES,
+    RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
+};
+use clutch_solana_layout::registry::{
+    REPLAY_SUCCESSOR_ACCOUNT_TAG, REPLAY_SUCCESSOR_ACCOUNT_VERSION,
 };
 use clutch_solana_layout::{
     account_len, account_version,
@@ -26,9 +32,12 @@ use clutch_solana_layout::{
     EpochAccount, MarketAccount, PositionAccount, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
     EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN, EPOCH_PHASE_SETTLED,
 };
+use clutch_solana_reference::{
+    ReplayAccount, REPLAY_ACCOUNT_LEN, REPLAY_ACCOUNT_TAG, REPLAY_ACCOUNT_VERSION,
+};
 
 use crate::{
-    AuthenticatedAccountV1, CountedChildSchemaV1, RetirementAdapterErrorV1,
+    AuthenticatedAccountV1, AuthenticatedAccountV2, CountedChildSchemaV1, RetirementAdapterErrorV1,
     RetirementAdapterErrorV2,
 };
 
@@ -172,6 +181,159 @@ impl PositionAccountV2 {
         })
     }
 }
+
+/// Project one authenticated Position V2 into the pure retirement seam.
+///
+/// The economic fields and retirement identity are returned together so a
+/// live caller cannot decode one byte image for identity and another for the
+/// zero-balance proof.
+pub fn project_authenticated_position_v2(
+    account: AuthenticatedAccountV2<'_>,
+) -> Result<(PositionLifecycleStateV2, PositionEconomicStateV1), RetirementAdapterErrorV2> {
+    let value = PositionAccountV2::decode(account.data())?;
+    Ok((
+        PositionLifecycleStateV2::Live(LivePositionV2 {
+            market: identity(value.base.market)?,
+            owner: identity(value.base.owner)?,
+            generation: value.base.generation,
+            stored_bump: value.base.stored_bump,
+            retirement: value.retirement,
+        }),
+        PositionEconomicStateV1 {
+            cash_atoms: value.base.cash_atoms,
+            reserved_cash_atoms: value.base.reserved_cash_atoms,
+            internal_atoms: value.base.internal,
+        },
+    ))
+}
+
+/// Exact Replay-successor composition: the authoritative 84-byte reference
+/// Replay body plus its independently funded 48-byte deletion owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplaySuccessorAccountV1 {
+    /// Replay sequence and generation body owned by `clutch-solana-reference`.
+    pub base: ReplayAccount,
+    /// Exact payer, principal, and hostile-prefund floor for Replay deletion.
+    pub rent: DeletableRentOwnerV1,
+}
+
+impl ReplaySuccessorAccountV1 {
+    /// Encode exactly 132 bytes under the centrally reserved Replay-successor
+    /// account coordinate.
+    pub fn encode(
+        self,
+    ) -> Result<[u8; PROJECTED_REPLAY_SUCCESSOR_BYTES], RetirementAdapterErrorV2> {
+        let mut output = [0u8; PROJECTED_REPLAY_SUCCESSOR_BYTES];
+        let written = self.base.encode(&mut output[..REFERENCE_REPLAY_V1_BYTES])?;
+        if written != REFERENCE_REPLAY_V1_BYTES {
+            return Err(RetirementAdapterErrorV2::BaseLengthMismatch);
+        }
+        output[0] = REPLAY_SUCCESSOR_ACCOUNT_TAG;
+        output[1] = REPLAY_SUCCESSOR_ACCOUNT_VERSION;
+        output[REFERENCE_REPLAY_V1_BYTES..].copy_from_slice(&self.rent.encode()?);
+        Ok(output)
+    }
+
+    /// Decode exact successor bytes by restoring the frozen reference Replay
+    /// header before invoking its semantic owner.
+    pub fn decode(input: &[u8]) -> Result<Self, RetirementAdapterErrorV2> {
+        if input.len() < PROJECTED_REPLAY_SUCCESSOR_BYTES {
+            return Err(RetirementErrorV2::Truncated.into());
+        }
+        if input.len() > PROJECTED_REPLAY_SUCCESSOR_BYTES {
+            return Err(RetirementErrorV2::TrailingBytes.into());
+        }
+        if input[0] != REPLAY_SUCCESSOR_ACCOUNT_TAG {
+            return Err(RetirementErrorV2::WrongTag.into());
+        }
+        if input[1] != REPLAY_SUCCESSOR_ACCOUNT_VERSION {
+            return Err(RetirementErrorV2::WrongVersion.into());
+        }
+        let mut base_bytes = [0u8; REFERENCE_REPLAY_V1_BYTES];
+        base_bytes.copy_from_slice(&input[..REFERENCE_REPLAY_V1_BYTES]);
+        base_bytes[0] = REPLAY_ACCOUNT_TAG;
+        base_bytes[1] = REPLAY_ACCOUNT_VERSION;
+        Ok(Self {
+            base: ReplayAccount::decode(&base_bytes)?,
+            rent: DeletableRentOwnerV1::decode(&input[REFERENCE_REPLAY_V1_BYTES..])?,
+        })
+    }
+}
+
+/// Decode one authenticated Replay successor into the exact pure lifecycle
+/// projection consumed by atomic Position+Replay retirement planning.
+pub fn project_authenticated_replay_successor_v1(
+    account: AuthenticatedAccountV2<'_>,
+) -> Result<ReplayLifecycleStateV1, RetirementAdapterErrorV2> {
+    let value = ReplaySuccessorAccountV1::decode(account.data())?;
+    Ok(ReplayLifecycleStateV1::Live(LiveReplaySuccessorV1 {
+        market: identity(value.base.market)?,
+        owner: identity(value.base.owner)?,
+        position_generation: value.base.position_generation,
+        sequence: value.base.sequence,
+        stored_bump: value.base.stored_bump,
+        rent: value.rent,
+    }))
+}
+
+/// Decode one exact authenticated Budget and ask its semantic owner for the
+/// terminal disposition consumed by atomic Epoch-root retirement.
+pub fn project_authenticated_epoch_budget_semantic_disposition_v1(
+    account: AuthenticatedAccountV2<'_>,
+) -> Result<clutch_general_v2_contract::EpochBudgetRetirementDispositionV1, RetirementAdapterErrorV2>
+{
+    Ok(
+        clutch_general_v2_contract::EpochBudgetV2AccountV1::decode(account.data())?
+            .retirement_disposition()?,
+    )
+}
+
+/// Join an exact authenticated Budget account, its semantic owner's terminal
+/// disposition, and the Market/Realm-authenticated neutral sink into the
+/// retirement capability used by the atomic Budget deletion planner.
+pub fn project_authenticated_epoch_budget_retirement_v1(
+    account: AuthenticatedAccountV2<'_>,
+    neutral_sink: Identity32V1,
+) -> Result<clutch_retirement::AuthenticatedEpochBudgetDispositionV1, RetirementAdapterErrorV2> {
+    let budget_account = account.address();
+    let disposition = project_authenticated_epoch_budget_semantic_disposition_v1(account)?;
+    let rent = disposition.rent();
+    let retirement_rent = DeletableRentOwnerV1::from_persisted(
+        Identity32V1::new(rent.payer.bytes())?,
+        rent.refundable_principal,
+        rent.donation_floor,
+    )?;
+    Ok(
+        clutch_retirement::AuthenticatedEpochBudgetDispositionV1::after_semantic_owner_validation(
+            budget_account,
+            Identity32V1::new(disposition.market().bytes())?,
+            Identity32V1::new(disposition.epoch().bytes())?,
+            disposition.epoch_generation(),
+            neutral_sink,
+            Identity32V1::new(disposition.funding_payer().bytes())?,
+            retirement_rent,
+            disposition.root_close_reward(),
+        )?,
+    )
+}
+
+const _: () = assert!(REFERENCE_REPLAY_V1_BYTES == REPLAY_ACCOUNT_LEN);
+const _: () = assert!(POSITION_ACCOUNT_TAG
+    == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_TAG);
+const _: () = assert!(POSITION_ACCOUNT_VERSION_V2
+    == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_VERSION);
+const _: () = assert!(MARKET_ACCOUNT_TAG
+    == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_TAG);
+const _: () = assert!(MARKET_ACCOUNT_VERSION_V2
+    == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_VERSION);
+const _: () = assert!(EPOCH_ACCOUNT_TAG
+    == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_TAG);
+const _: () = assert!(EPOCH_ACCOUNT_VERSION_V5
+    == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_VERSION);
+const _: () = assert!(
+    PROJECTED_REPLAY_SUCCESSOR_BYTES
+        == REPLAY_ACCOUNT_LEN + clutch_retirement::DELETABLE_RENT_OWNER_V1_BYTES
+);
 
 /// Exact Market V2 composition: authoritative Market V1 body plus cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
