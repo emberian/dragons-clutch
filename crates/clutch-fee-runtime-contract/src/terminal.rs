@@ -914,6 +914,24 @@ impl FeeClosureManifestReceiptV1 {
     pub const fn receipt(&self) -> Id {
         self.receipt
     }
+    pub const fn runtime_program(&self) -> Id {
+        self.runtime_program
+    }
+    pub const fn runtime_release(&self) -> Id {
+        self.runtime_release
+    }
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+    pub const fn outcome(&self) -> FeeTerminalOutcomeV1 {
+        self.outcome
+    }
+    pub const fn owner_count(&self) -> u8 {
+        self.owner_count
+    }
     pub const fn account_count(&self) -> u16 {
         self.account_count
     }
@@ -1024,6 +1042,24 @@ pub struct FeeRecordTerminalReceiptV1 {
 impl FeeRecordTerminalReceiptV1 {
     pub const fn terminal_receipt(&self) -> Id {
         self.terminal_receipt
+    }
+    pub const fn closure_manifest(&self) -> Id {
+        self.closure_manifest
+    }
+    pub const fn runtime_program(&self) -> Id {
+        self.runtime_program
+    }
+    pub const fn runtime_release(&self) -> Id {
+        self.runtime_release
+    }
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+    pub const fn owner_count(&self) -> u8 {
+        self.owner_count
     }
     pub const fn outcome(&self) -> FeeTerminalOutcomeV1 {
         self.outcome

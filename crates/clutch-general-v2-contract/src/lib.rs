@@ -325,6 +325,10 @@ pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 pub const OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner fee-carry outer bytes.
 pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 132;
+/// In-place terminal successor version at the same owner fee-carry PDA.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
+/// Exact terminal fee-finalization outer bytes.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_BYTES: usize = 500;
 /// Fresh disabled owner payer-allocation envelope tag.
 pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// First owner payer-allocation envelope version.
@@ -410,7 +414,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 21] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -435,6 +439,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
         tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
         version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/OwnerFeeCarryV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+        version: OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerFeeFinalizationV2AccountV1",
     },
     AccountAllocationV1 {
         tag: PAYER_ALLOCATION_ACCOUNT_TAG,

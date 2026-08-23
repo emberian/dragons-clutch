@@ -25,20 +25,33 @@ use clutch_fee_runtime_contract::codec::{
 use clutch_fee_runtime_contract::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
 };
+pub use clutch_fee_runtime_contract::terminal::{
+    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1, FeeRecordTerminalReceiptV1,
+    FeeTerminalOutcomeV1, GeneralFeeTerminalProjectionV1, GeneralOwnerFeeFinalizationProjectionV2,
+    OwnerFeeFinalizationOutcomeV2, OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    FEE_TERMINAL_RECEIPT_V1_BYTES, OWNER_FEE_FINALIZATION_BODY_V2_BYTES,
+};
 use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;
+pub use clutch_fee_runtime_contract::Id as FeeRuntimeId;
 use clutch_fee_runtime_contract::MAX_FEE_ROWS_V1;
 
 use crate::{
     CodecError, Reader, Writer, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
-    OWNER_FEE_CARRY_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_TAG,
-    PAYER_ALLOCATION_ACCOUNT_VERSION, RECIPIENT_ALLOCATION_ACCOUNT_BYTES,
-    RECIPIENT_ALLOCATION_ACCOUNT_TAG, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES, SELECTED_FEE_RECORD_ACCOUNT_TAG,
-    SELECTED_FEE_RECORD_ACCOUNT_VERSION, TREASURY_LEDGER_ACCOUNT_BYTES,
-    TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
+    OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+    OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_BYTES,
+    PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+    TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
 };
 
 const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 2;
+
+/// Convert exact persisted bytes into the fee semantic owner's identity type.
+pub const fn fee_runtime_id_from_bytes(bytes: [u8; 32]) -> FeeRuntimeId {
+    clutch_batch_policy_identity::Identity32V1(bytes)
+}
 
 fn map_fee_error<T>(result: clutch_fee_runtime_contract::Result<T>) -> Result<T, CodecError> {
     result.map_err(|_| CodecError::InvalidState)
@@ -154,6 +167,61 @@ impl OwnerFeeCarryV1AccountV1 {
             semantic: map_fee_error(decode_owner_fee_carry_v1(&body, selected))?,
             stored_bump,
         })
+    }
+}
+
+/// In-place terminal successor at the existing owner fee-carry PDA.
+///
+/// The exact 496-byte semantic body remains owned and validated by
+/// `clutch-fee-runtime-contract`. This outer adds only the unchanged 0x83 tag,
+/// version 2 coordinate, stored PDA bump, and reserved-zero flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerFeeFinalizationV2AccountV1 {
+    /// Canonical fee-runtime terminal receipt.
+    pub semantic: OwnerFeeFinalizationReceiptV1,
+    /// Stored PDA bump retained across the in-place version transition.
+    pub stored_bump: u8,
+}
+
+impl OwnerFeeFinalizationV2AccountV1 {
+    /// Encode the exact canonical terminal successor outer account.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(self.semantic.encode())?;
+        encode_outer(
+            OWNER_FEE_CARRY_ACCOUNT_TAG,
+            OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+            &body,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Decode hostile outer bytes through the semantic owner's total decoder.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, stored_bump) = decode_outer(
+            OWNER_FEE_CARRY_ACCOUNT_TAG,
+            OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+            input,
+        )?;
+        Ok(Self {
+            semantic: map_fee_error(OwnerFeeFinalizationReceiptV1::decode(&body))?,
+            stored_bump,
+        })
+    }
+
+    /// Project the exact terminal receipt after the outer adapter has
+    /// authenticated this unchanged carry PDA.
+    pub fn terminal_projection(
+        self,
+        carry_account: clutch_fee_runtime_contract::Id,
+    ) -> Result<GeneralOwnerFeeFinalizationProjectionV2, CodecError> {
+        map_fee_error(
+            AuthenticatedOwnerFeeFinalizationV1 {
+                carry_account,
+                receipt: self.semantic,
+            }
+            .project_general(),
+        )
     }
 }
 
@@ -281,6 +349,10 @@ const _: () = assert!(
 );
 const _: () = assert!(
     OWNER_FEE_CARRY_ACCOUNT_BYTES == OWNER_FEE_CARRY_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES
+        == OWNER_FEE_FINALIZATION_BODY_V2_BYTES + OUTER_FEE_ACCOUNT_BYTES
 );
 const _: () = assert!(
     PAYER_ALLOCATION_ACCOUNT_BYTES == PAYER_ALLOCATION_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
