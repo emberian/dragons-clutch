@@ -1,6 +1,7 @@
 use clutch_source_plane_v3::{
     ContentId, RawRecordV3, SourcePlaneProgramV3, MAX_SOURCE_VALUE, SOURCE_PLANE_PROGRAM_BYTES,
 };
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
@@ -9,6 +10,8 @@ const ACCOUNT_DATA_DOMAIN: &[u8] = b"dragons-clutch/runtime-account-data/v1";
 const DEPLOYMENT_DOMAIN: &[u8] = b"dragons-clutch/runtime-deployment-binding/v1";
 const CLOCK_POLICY_DOMAIN: &[u8] = b"dragons-clutch/source-clock-policy/v1";
 const SOURCE_RELEASE_DOMAIN: &[u8] = b"dragons-clutch/source-release-manifest/v1";
+const SOURCE_RELEASE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-release/v1";
+const SOURCE_ROUTE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-route/v1";
 const PARSER_OUTPUT_DOMAIN: &[u8] = b"dragons-clutch/source-parser-output/v1";
 const INVOCATION_DOMAIN: &[u8] = b"dragons-clutch/runtime-invocation/v1";
 const BOUNDARY_DOMAIN: &[u8] = b"dragons-clutch/source-boundary-receipt/v1";
@@ -23,7 +26,7 @@ pub const CLOCK_POLICY_BYTES: usize = 64;
 /// Exact canonical bytes in one reviewed parser return payload.
 pub const PARSER_OUTPUT_BYTES: usize = 120;
 /// Exact canonical bytes in [`SourceReleaseManifestV1`].
-pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 944;
+pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 976;
 
 /// A runtime account/program address, kept distinct from a content digest.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -414,8 +417,8 @@ pub struct SourceReleaseManifestV1 {
     pub generation_authority_program: RuntimeKey,
     /// Exact System Program used to recognize an unallocated absent PDA.
     pub system_program: RuntimeKey,
-    /// Immutable Clock/bucket policy content identity.
-    pub clock_policy_id: ContentId,
+    /// Sole immutable Clock/bucket policy body; its identity is derived.
+    pub clock_policy: ClockPolicyV1,
     /// Immutable heterogeneous Source work schedule identity.
     pub source_work_schedule_id: ContentId,
     /// Runtime liveness policy funding Source calls.
@@ -445,7 +448,7 @@ impl SourceReleaseManifestV1 {
         self.feed_owner.validate()?;
         self.generation_authority_program.validate()?;
         self.system_program.validate()?;
-        live_id(self.clock_policy_id)?;
+        self.clock_policy.validate()?;
         live_id(self.source_work_schedule_id)?;
         live_id(self.liveness_policy_id)?;
         self.source_compartment_account.validate()?;
@@ -493,12 +496,20 @@ impl SourceReleaseManifestV1 {
         for id in [
             self.parser_config_data_id,
             self.source_spec_account_data_id,
-            self.clock_policy_id,
             self.source_work_schedule_id,
             self.liveness_policy_id,
         ] {
             put_id(&mut out, &mut at, id);
         }
+        let clock_policy_bytes = self.clock_policy.encode()?;
+        let end = at
+            .checked_add(CLOCK_POLICY_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if end > out.len() {
+            return Err(Error::InvalidCodec);
+        }
+        out[at..end].copy_from_slice(&clock_policy_bytes);
+        at = end;
         if at > out.len() {
             return Err(Error::InvalidCodec);
         }
@@ -532,9 +543,16 @@ impl SourceReleaseManifestV1 {
         let neutral_sink = take_key(input, &mut at);
         let parser_config_data_id = take_id(input, &mut at);
         let source_spec_account_data_id = take_id(input, &mut at);
-        let clock_policy_id = take_id(input, &mut at);
         let source_work_schedule_id = take_id(input, &mut at);
         let liveness_policy_id = take_id(input, &mut at);
+        let clock_policy_end = at
+            .checked_add(CLOCK_POLICY_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if clock_policy_end > input.len() {
+            return Err(Error::InvalidCodec);
+        }
+        let clock_policy = ClockPolicyV1::decode(&input[at..clock_policy_end])?;
+        at = clock_policy_end;
         if at != input.len() {
             return Err(Error::InvalidCodec);
         }
@@ -553,7 +571,7 @@ impl SourceReleaseManifestV1 {
             feed_owner,
             generation_authority_program,
             system_program,
-            clock_policy_id,
+            clock_policy,
             source_work_schedule_id,
             liveness_policy_id,
             source_compartment_account,
@@ -570,19 +588,120 @@ impl SourceReleaseManifestV1 {
     }
 }
 
+/// Exact immutable release account authenticated under the executing adapter program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceReleaseV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    manifest: SourceReleaseManifestV1,
+    manifest_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSourceReleaseV1 {
+    /// Physical immutable release account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of complete release-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Canonical release body.
+    pub const fn manifest(self) -> SourceReleaseManifestV1 {
+        self.manifest
+    }
+
+    /// Content identity of the canonical release body.
+    pub const fn manifest_id(self) -> ContentId {
+        self.manifest_id
+    }
+
+    /// Sole Clock policy embedded in the canonical release.
+    pub const fn clock_policy(self) -> ClockPolicyV1 {
+        self.manifest.clock_policy
+    }
+
+    /// Complete owner/PDA/body authentication receipt.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+/// Authenticate one immutable content-addressed Source release account.
+pub fn authenticate_source_release_account(
+    expected_adapter_program: RuntimeKey,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+) -> Result<AuthenticatedSourceReleaseV1> {
+    expected_adapter_program.validate()?;
+    if account.owner != expected_adapter_program {
+        return Err(Error::WrongOwner);
+    }
+    if account.executable || account.signer || account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    let manifest = SourceReleaseManifestV1::decode(account.data)?;
+    if manifest.adapter.program != expected_adapter_program {
+        return Err(Error::MismatchedBinding);
+    }
+    let manifest_id = manifest.id()?;
+    let recipe = PdaRecipeV3::source_release(manifest_id)?;
+    derived_pda.validate_for(
+        expected_adapter_program,
+        recipe.id()?,
+        account.key,
+        derived_pda.bump,
+    )?;
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let mut bytes = [0; 104];
+    bytes[..32].copy_from_slice(&expected_adapter_program.bytes());
+    bytes[32..64].copy_from_slice(&account.key.bytes());
+    bytes[64..96].copy_from_slice(&account_data_id.bytes());
+    bytes[96] = derived_pda.bump;
+    Ok(AuthenticatedSourceReleaseV1 {
+        account: account.key,
+        account_data_id,
+        manifest,
+        manifest_id,
+        authentication_id: domain_id(SOURCE_RELEASE_AUTH_DOMAIN, &bytes),
+    })
+}
+
 /// Authenticated immutable source route; fields are private to prevent partial joins.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceRouteV1 {
     manifest: SourceReleaseManifestV1,
+    release_account: RuntimeKey,
+    release_manifest_id: ContentId,
+    release_authentication_id: ContentId,
     route_id: ContentId,
     adapter_deployment_id: ContentId,
     parser_deployment_id: ContentId,
+    clock_policy_id: ContentId,
 }
 
 impl AuthenticatedSourceRouteV1 {
-    /// Complete route-manifest identity.
+    /// Complete release/deployment/config authentication identity.
     pub const fn route_id(self) -> ContentId {
         self.route_id
+    }
+
+    /// Physical immutable release account.
+    pub const fn release_account(self) -> RuntimeKey {
+        self.release_account
+    }
+
+    /// Semantic identity of its exact canonical release body.
+    pub const fn release_manifest_id(self) -> ContentId {
+        self.release_manifest_id
+    }
+
+    /// Exact release-account owner/PDA/body receipt.
+    pub const fn release_authentication_id(self) -> ContentId {
+        self.release_authentication_id
     }
 
     /// Exact semantic SourcePlane contract identity.
@@ -662,15 +781,21 @@ impl AuthenticatedSourceRouteV1 {
         self.manifest.system_program
     }
 
-    pub(crate) const fn clock_policy_id(self) -> ContentId {
-        self.manifest.clock_policy_id
+    /// Sole Clock policy embedded in the authenticated release account.
+    pub const fn clock_policy(self) -> ClockPolicyV1 {
+        self.manifest.clock_policy
+    }
+
+    /// Derived identity of the sole Clock policy embedded in the release.
+    pub const fn clock_policy_id(self) -> ContentId {
+        self.clock_policy_id
     }
 }
 
 /// Authenticate complete release, ProgramData, config, and core contract bytes.
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_source_route(
-    manifest: SourceReleaseManifestV1,
+    release: AuthenticatedSourceReleaseV1,
     source_plane: &SourcePlaneProgramV3,
     adapter_program: RuntimeAccountViewV1<'_>,
     adapter_programdata: RuntimeAccountViewV1<'_>,
@@ -679,6 +804,7 @@ pub fn authenticate_source_route(
     parser_config: RuntimeAccountViewV1<'_>,
     source_spec_account: RuntimeAccountViewV1<'_>,
 ) -> Result<AuthenticatedSourceRouteV1> {
+    let manifest = release.manifest();
     manifest.validate()?;
     source_plane.validate()?;
     if source_plane.id()? != manifest.source_plane_contract_id {
@@ -720,8 +846,16 @@ pub fn authenticate_source_route(
     {
         return Err(Error::WrongAccountData);
     }
+    let mut route_bytes = [0; 96];
+    route_bytes[..32].copy_from_slice(&release.id().bytes());
+    route_bytes[32..64].copy_from_slice(&adapter_deployment_id.bytes());
+    route_bytes[64..96].copy_from_slice(&parser_deployment_id.bytes());
     Ok(AuthenticatedSourceRouteV1 {
-        route_id: manifest.id()?,
+        release_account: release.account(),
+        release_manifest_id: release.manifest_id(),
+        release_authentication_id: release.id(),
+        route_id: domain_id(SOURCE_ROUTE_AUTH_DOMAIN, &route_bytes),
+        clock_policy_id: manifest.clock_policy.id()?,
         manifest,
         adapter_deployment_id,
         parser_deployment_id,
