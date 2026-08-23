@@ -8,11 +8,11 @@
 //! select a payout vector, or reinterpret claim quantity as collateral atoms.
 
 use crate::{
-    accept_collateral_transfer_v2, admit_collateral_account_v2, prepare_collateral_transfer_v2,
-    AcceptedCollateralTransferV2, BoundCollateralProfileV2, CheckedTransferCpiV2,
-    CollateralBackingV2, CustodyTransferKindV2, Error, Id, PreparedCollateralTransferV2, Result,
-    RuntimeAccountViewV2, TokenAccountRoleV2, TransferAuthorityV2, TransferEndpointV2,
-    TransferRequestV2,
+    accept_collateral_transfer_v2, admit_collateral_account_v2, admit_collateral_mint_v2,
+    prepare_collateral_transfer_v2, AcceptedCollateralTransferV2, BoundCollateralProfileV2,
+    CheckedTransferCpiV2, CollateralBackingV2, CustodyTransferKindV2, Error, Id, MintObservationV2,
+    PreparedCollateralTransferV2, Result, RuntimeAccountViewV2, TokenAccountObservationV2,
+    TokenAccountRoleV2, TransferAuthorityV2, TransferEndpointV2, TransferRequestV2,
 };
 
 /// Content domain for one accepted claim-plane collateral payout.
@@ -70,10 +70,29 @@ pub struct AcceptedClaimRedemptionCollateralV2 {
     pub receipt_id: Id,
 }
 
+/// Prepared zero-payout claim proof with no collateral invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedZeroClaimRedemptionCollateralV2 {
+    bound: BoundCollateralProfileV2,
+    request: ClaimRedemptionCollateralRequestV2,
+    mint_before: MintObservationV2,
+    hoard_before: TokenAccountObservationV2,
+    destination_before: TokenAccountObservationV2,
+}
+
+/// Accepted zero-payout proof retaining a claim-bound receipt identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedZeroClaimRedemptionCollateralV2 {
+    /// Unchanged locked-principal state.
+    pub backing_after: CollateralBackingV2,
+    /// Receipt binding the zero payout to unchanged admitted collateral state.
+    pub receipt_id: Id,
+}
+
 /// Prepare one nonzero claim payout without touching Token-2022 claim state.
 ///
-/// Zero-payout claims deliberately have no collateral CPI and must be handled
-/// as a claim-plane-only transition. For a nonzero payout, this requires the
+/// Zero-payout claims deliberately have no collateral CPI and use
+/// [`prepare_zero_claim_redemption_collateral_v2`]. For a nonzero payout, this requires the
 /// Hoard to cover the complete prestate liability, derives the only permitted
 /// backing decrease, and prepares a release-selected checked transfer to the
 /// exact receive-only destination account.
@@ -139,6 +158,101 @@ pub fn prepare_claim_redemption_collateral_v2(
     })
 }
 
+/// Prepare the exact zero-payout branch without authorizing a collateral CPI.
+///
+/// The fixed outer account list may still mark the Hoard and destination
+/// writable. This path authenticates their release-selected bytes and the full
+/// backing prestate, but deliberately emits no instruction data or authority.
+pub fn prepare_zero_claim_redemption_collateral_v2(
+    bound: BoundCollateralProfileV2,
+    request: ClaimRedemptionCollateralRequestV2,
+    mint: RuntimeAccountViewV2<'_>,
+    hoard: RuntimeAccountViewV2<'_>,
+    destination: RuntimeAccountViewV2<'_>,
+) -> Result<PreparedZeroClaimRedemptionCollateralV2> {
+    request.claim_redemption_id.require_live()?;
+    request.destination_token_account.require_live()?;
+    request.claim_semantic_owner.require_live()?;
+    let market = bound.market();
+    if request.payout_atoms != 0
+        || hoard.key != market.hoard_token_account
+        || destination.key != request.destination_token_account
+        || !hoard.is_writable
+        || !destination.is_writable
+        || mint.is_writable
+        || mint.key == hoard.key
+        || mint.key == destination.key
+        || hoard.key == destination.key
+    {
+        return Err(Error::WrongAccountRole);
+    }
+    let mint_before = admit_collateral_mint_v2(bound, mint)?;
+    let hoard_before = admit_collateral_account_v2(bound, hoard, TokenAccountRoleV2::Hoard)?;
+    let destination_before = admit_collateral_account_v2(
+        bound,
+        destination,
+        TokenAccountRoleV2::ReceiveOnly {
+            account: request.destination_token_account,
+        },
+    )?;
+    request
+        .backing_before
+        .validate(bound, hoard_before.amount_atoms)?;
+    Ok(PreparedZeroClaimRedemptionCollateralV2 {
+        bound,
+        request,
+        mint_before,
+        hoard_before,
+        destination_before,
+    })
+}
+
+/// Reparse the zero-payout collateral roles and require complete nonmutation.
+pub fn accept_zero_claim_redemption_collateral_v2(
+    prepared: PreparedZeroClaimRedemptionCollateralV2,
+    mint_after: RuntimeAccountViewV2<'_>,
+    hoard_after: RuntimeAccountViewV2<'_>,
+    destination_after: RuntimeAccountViewV2<'_>,
+) -> Result<AcceptedZeroClaimRedemptionCollateralV2> {
+    if mint_after.is_writable || !hoard_after.is_writable || !destination_after.is_writable {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let mint = admit_collateral_mint_v2(prepared.bound, mint_after)
+        .map_err(|_| Error::PostAdmissionFailed)?;
+    let hoard = admit_collateral_account_v2(prepared.bound, hoard_after, TokenAccountRoleV2::Hoard)
+        .map_err(|_| Error::PostAdmissionFailed)?;
+    let destination = admit_collateral_account_v2(
+        prepared.bound,
+        destination_after,
+        TokenAccountRoleV2::ReceiveOnly {
+            account: prepared.request.destination_token_account,
+        },
+    )
+    .map_err(|_| Error::PostAdmissionFailed)?;
+    if mint != prepared.mint_before
+        || hoard != prepared.hoard_before
+        || destination != prepared.destination_before
+    {
+        return Err(Error::TransferDeltaMismatch);
+    }
+    prepared
+        .request
+        .backing_before
+        .validate(prepared.bound, hoard.amount_atoms)?;
+    let receipt_id = claim_redemption_receipt_id(
+        prepared.bound,
+        prepared.request,
+        prepared.request.backing_before,
+        hoard.amount_atoms,
+        destination.amount_atoms,
+        mint.supply_atoms,
+    )?;
+    Ok(AcceptedZeroClaimRedemptionCollateralV2 {
+        backing_after: prepared.request.backing_before,
+        receipt_id,
+    })
+}
+
 /// Reparse exact post-CPI bytes and bind the custody result to claim retirement.
 pub fn accept_claim_redemption_collateral_v2(
     prepared: PreparedClaimRedemptionCollateralV2,
@@ -155,25 +269,46 @@ pub fn accept_claim_redemption_collateral_v2(
         .backing_after
         .validate(prepared.bound, visible_hoard_after)?;
     let request = prepared.request;
-    let receipt_id = crate::digest(
-        CLAIM_REDEMPTION_COLLATERAL_RECEIPT_DOMAIN_V2,
-        &[
-            &request.claim_redemption_id.bytes(),
-            &prepared.bound.market().market.bytes(),
-            &request.destination_token_account.bytes(),
-            &request.claim_semantic_owner.bytes(),
-            &request.payout_atoms.to_le_bytes(),
-            &request.backing_before.locked_atoms.to_le_bytes(),
-            &prepared.backing_after.locked_atoms.to_le_bytes(),
-            &custody.source_atoms_after.to_le_bytes(),
-            &custody.destination_atoms_after.to_le_bytes(),
-            &custody.mint_supply_after.to_le_bytes(),
-        ],
-    );
-    receipt_id.require_live()?;
+    let receipt_id = claim_redemption_receipt_id(
+        prepared.bound,
+        request,
+        prepared.backing_after,
+        custody.source_atoms_after,
+        custody.destination_atoms_after,
+        custody.mint_supply_after,
+    )?;
     Ok(AcceptedClaimRedemptionCollateralV2 {
         custody,
         backing_after: prepared.backing_after,
         receipt_id,
     })
+}
+
+fn claim_redemption_receipt_id(
+    bound: BoundCollateralProfileV2,
+    request: ClaimRedemptionCollateralRequestV2,
+    backing_after: CollateralBackingV2,
+    hoard_atoms_after: u64,
+    destination_atoms_after: u64,
+    mint_supply_after: u64,
+) -> Result<Id> {
+    let receipt_id = crate::digest(
+        CLAIM_REDEMPTION_COLLATERAL_RECEIPT_DOMAIN_V2,
+        &[
+            &request.claim_redemption_id.bytes(),
+            &bound.market().market.bytes(),
+            &request.destination_token_account.bytes(),
+            &request.claim_semantic_owner.bytes(),
+            &request.payout_atoms.to_le_bytes(),
+            &request.backing_before.locked_atoms.to_le_bytes(),
+            &request.backing_before.cap_atoms.to_le_bytes(),
+            &backing_after.locked_atoms.to_le_bytes(),
+            &backing_after.cap_atoms.to_le_bytes(),
+            &hoard_atoms_after.to_le_bytes(),
+            &destination_atoms_after.to_le_bytes(),
+            &mint_supply_after.to_le_bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(receipt_id)
 }
