@@ -28,7 +28,7 @@ use clutch_source_plane_v3::{
 use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
     account_data_id, authenticate_boundary, authenticate_evaluation_authority,
-    authenticate_persisted_window_evidence,
+    authenticate_persisted_statistic_result_account, authenticate_persisted_window_evidence,
     authenticate_open_raw_page_account, authenticate_raw_page_account,
     authenticate_receiver_route_v2, authenticate_reopen_lineage_account,
     authenticate_source_generation_request, authenticate_source_head_account,
@@ -649,6 +649,51 @@ pub fn authenticate_statistic_key_input(
     })
 }
 
+/// Authenticate action 10's StatisticKey against the WindowSpec and the exact
+/// SummaryProgram identity supplied by the already-authenticated immutable
+/// Failure/Product policy. No caller SummaryProgram body is accepted here.
+pub fn authenticate_statistic_key_policy_input(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    account: &AccountInfo<'_>,
+    window: AuthenticatedWindowSpecInputV1,
+    authenticated_summary_program_id: ContentId,
+) -> SourceV3SbfResult<AuthenticatedStatisticKeyInputV1> {
+    require_immutable_source_input(program_id, account)?;
+    if authenticated_summary_program_id.is_zero() {
+        return Err(clutch_source_plane_v3_runtime::Error::ZeroIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let key = StatisticKeyV3::decode(&data)?;
+    let key_id = key.id()?;
+    if key.window_id != window.window().id()?
+        || key.summary_program_id != authenticated_summary_program_id
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let recipe = PdaRecipeV3::statistic_key(key_id)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    if derived.address != runtime_key(account.key) {
+        return Err(clutch_source_plane_v3_runtime::Error::WrongPda.into());
+    }
+    let account_key = runtime_key(account.key);
+    let data_id = account_data_id(account_key, &data)?;
+    Ok(AuthenticatedStatisticKeyInputV1 {
+        account: account_key,
+        account_data_id: data_id,
+        key,
+        authentication_id: immutable_source_input_id(
+            b"dragons-clutch/authenticated-statistic-key-policy-input/v1",
+            route,
+            account_key,
+            data_id,
+            key_id,
+        ),
+    })
+}
+
 /// Authenticate one globally tagged mutable WindowWork PDA and lineage.
 pub fn authenticate_window_work(
     program_id: &Pubkey,
@@ -806,6 +851,38 @@ pub fn authenticate_result_account(
         window,
         key,
         summary,
+        evidence,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate action 10's persisted result using the immutable
+/// Failure/Product policy's SummaryProgram identity rather than accepting a
+/// caller-provided SummaryProgram body.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_persisted_result_account(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    result_account: &AccountInfo<'_>,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    authenticated_summary_program_id: ContentId,
+    evidence: AuthenticatedWindowEvidenceV1,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedStatisticResultAccountV1> {
+    let data = result_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::statistic_result(key.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_persisted_statistic_result_account(
+        route,
+        runtime_account_view(result_account, &data),
+        derived,
+        window,
+        key,
+        authenticated_summary_program_id,
         evidence,
         lineage,
     )

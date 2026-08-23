@@ -315,8 +315,19 @@ fn pda_registry_preserves_v2_seed_and_binds_v3_pages_to_exact_release() {
         PdaRecipeV3::summary_program(id(31)).unwrap().id().unwrap(),
         PdaRecipeV3::statistic_key(id(31)).unwrap().id().unwrap()
     );
+    assert_ne!(
+        PdaRecipeV3::source_policy_handoff(id(31))
+            .unwrap()
+            .id()
+            .unwrap(),
+        PdaRecipeV3::statistic_key(id(31)).unwrap().id().unwrap()
+    );
     assert_eq!(
         PdaRecipeV3::window_spec(ContentId::ZERO),
+        Err(AdapterError::ZeroIdentity)
+    );
+    assert_eq!(
+        PdaRecipeV3::source_policy_handoff(ContentId::ZERO),
         Err(AdapterError::ZeroIdentity)
     );
 }

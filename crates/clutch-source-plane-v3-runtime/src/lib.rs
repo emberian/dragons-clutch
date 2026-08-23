@@ -69,21 +69,22 @@ pub use lineage::{
     REOPEN_LINEAGE_V2_BYTES,
 };
 pub use window::{
-    authenticate_evaluation_authority, authenticate_persisted_window_evidence,
-    authenticate_raw_page_account,
-    authenticate_statistic_result, authenticate_statistic_result_absence,
+    authenticate_evaluation_authority, authenticate_persisted_source_policy_handoff,
+    authenticate_persisted_window_evidence, authenticate_raw_page_account,
+    authenticate_persisted_statistic_result_account, authenticate_statistic_result,
+    authenticate_statistic_result_absence,
     authenticate_statistic_result_account, authenticate_window_seal_account,
     authenticate_window_work_account, fold_authenticated_pages, join_source_occurrence,
     join_source_occurrence_window, seal_authenticated_window, source_occurrence_record_id,
-    AuthenticatedEvaluationV1,
+    AuthenticatedEvaluationV1, AuthenticatedPersistedSourcePolicyHandoffV1,
     AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1,
     AuthenticatedStatisticResultAccountV1, AuthenticatedWindowEvidenceV1,
     AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
-    SourceFailureKindV1,
+    SourceFailureKindV1, SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1,
     SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD,
-    SOURCE_OCCURRENCE_RECORD_BYTES,
+    SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_POLICY_HANDOFF_ACCOUNT_BYTES,
 };
 
 use clutch_source_plane_v3::Error as CoreError;

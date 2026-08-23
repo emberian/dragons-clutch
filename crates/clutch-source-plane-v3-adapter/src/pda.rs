@@ -90,6 +90,8 @@ pub enum PdaFamilyV3 {
     SummaryProgram = 17,
     /// Immutable predictable StatisticKey content input.
     StatisticKey = 18,
+    /// Immutable persisted Source policy handoff authentication.
+    SourcePolicyHandoff = 19,
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -217,6 +219,16 @@ impl PdaRecipeV3 {
             PdaFamilyV3::StatisticKey,
             b"dc-sp3-stat-key",
             &statistic_key_id.bytes(),
+        )
+    }
+
+    /// Persisted Source policy handoff addressed by its exact private join.
+    pub fn source_policy_handoff(handoff_join_id: ContentId) -> Result<Self> {
+        live(handoff_join_id)?;
+        Self::two(
+            PdaFamilyV3::SourcePolicyHandoff,
+            b"dc-sp3-policy-handoff",
+            &handoff_join_id.bytes(),
         )
     }
 

@@ -25,20 +25,23 @@ use clutch_source_plane_v3::{
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 pub use clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1;
 use clutch_source_plane_v3_runtime::{
-    account_data_id, advance_lineage_state, authenticate_source_work_receipt_account,
-    authorize_reopen, close_lineage_generation, decode_runtime_account, encode_runtime_account,
-    initialize_source_head, open_lineage_generation, plan_runtime_account_close_from_header,
+    account_data_id, advance_lineage_state, authenticate_persisted_source_policy_handoff,
+    authenticate_source_work_receipt_account, authorize_reopen, close_lineage_generation,
+    decode_runtime_account, encode_runtime_account, initialize_source_head,
+    open_lineage_generation, plan_runtime_account_close_from_header,
     plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
     AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedEvaluationV1,
     AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2,
-    AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
-    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
+    AuthenticatedPersistedSourcePolicyHandoffV1, AuthenticatedReopenLineageV1,
+    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceRouteV1,
+    AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
     ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1,
     LineageFamilyV1, RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1,
     RuntimeAccountHeaderV1, RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1,
-    SourceReleaseManifestV2, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
+    SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1, SourceReleaseManifestV2,
+    SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
     SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
     REOPEN_LINEAGE_BYTES, RUNTIME_ACCOUNT_HEADER_BYTES,
@@ -166,6 +169,25 @@ pub struct PublishedSourceSemanticInputsV1 {
     statistic_key: ImmutableSourceInputFundingV1,
     /// Identity of the exact three-account postwrite join.
     receipt_id: ContentId,
+}
+
+/// Exact durable action-10 postwrite and its permanent rent observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedSourcePolicyHandoffV1 {
+    funding: ImmutableSourceInputFundingV1,
+    authenticated: AuthenticatedPersistedSourcePolicyHandoffV1,
+}
+
+impl PersistedSourcePolicyHandoffV1 {
+    /// Permanent content-addressed handoff-account funding.
+    pub const fn funding(self) -> ImmutableSourceInputFundingV1 {
+        self.funding
+    }
+
+    /// Exact owner/PDA/body postwrite receipt for Product consumption.
+    pub const fn authenticated(self) -> AuthenticatedPersistedSourcePolicyHandoffV1 {
+        self.authenticated
+    }
 }
 
 impl PublishedSourceSemanticInputsV1 {
@@ -818,7 +840,7 @@ pub fn register_release_from_artifact(
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<ImmutableAccountFundingV1> {
-    expected_manifest_id.validate().map_err(source_core)?;
+    require(!expected_manifest_id.is_zero(), ClutchError::MismatchedState)?;
     require(
         artifact_account.owner == program_id
             && !artifact_account.is_signer
@@ -1275,7 +1297,7 @@ fn publish_immutable_source_input<T: FixedCodec>(
     system_program: &AccountInfo<'_>,
     rent: &RentParameters,
 ) -> Outcome<ImmutableSourceInputFundingV1> {
-    semantic_id.validate().map_err(source_core)?;
+    require(!semantic_id.is_zero(), ClutchError::MismatchedState)?;
     require_system_program(system_program)?;
     require(
         payer.is_signer
@@ -1363,9 +1385,10 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<PublishedSourceSemanticInputsV1> {
-    publication_authorization_id
-        .validate()
-        .map_err(source_core)?;
+    require(
+        !publication_authorization_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
     window.validate().map_err(source_core)?;
     summary.validate().map_err(source_core)?;
     statistic_key.validate().map_err(source_core)?;
@@ -1437,6 +1460,94 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
         statistic_key: statistic_key_funding,
         receipt_id,
     })
+}
+
+/// Persist action 10's exact Source-only policy handoff as an immutable
+/// content-addressed account and re-authenticate its postimage before return.
+#[allow(clippy::too_many_arguments)]
+pub fn persist_source_policy_handoff(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    join: SourcePolicyHandoffJoinV1,
+    payer: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<PersistedSourcePolicyHandoffV1> {
+    let body = SourcePolicyHandoffAccountV1::from_join(join).map_err(source_runtime)?;
+    let recipe = PdaRecipeV3::source_policy_handoff(join.id()).map_err(source_pda)?;
+    let rent = read_rent(rent_sysvar)?;
+    let funding = publish_immutable_source_input(
+        program_id,
+        &body,
+        join.id(),
+        &recipe,
+        payer,
+        handoff_account,
+        system_program,
+        &rent,
+    )?;
+    let data = handoff_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+    let authenticated = authenticate_persisted_source_policy_handoff(
+        route,
+        join,
+        RuntimeAccountViewV1 {
+            key: runtime_key(handoff_account.key),
+            owner: runtime_key(handoff_account.owner),
+            lamports: handoff_account.lamports(),
+            executable: handoff_account.executable,
+            writable: handoff_account.is_writable,
+            signer: handoff_account.is_signer,
+            data: &data,
+        },
+        derived,
+        SourcePolicyHandoffAccessV1::CreatedMutable,
+    )
+    .map_err(source_runtime)?;
+    require(
+        authenticated.account_data_id() == funding.account_data_id
+            && authenticated.account() == funding.account
+            && authenticated.source_policy_handoff_join_id() == join.id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(PersistedSourcePolicyHandoffV1 {
+        funding,
+        authenticated,
+    })
+}
+
+/// Re-authenticate a previously persisted action-10 handoff for the future
+/// shared Product ResolutionV5 writer.
+pub fn authenticate_persisted_source_policy_handoff_account(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    join: SourcePolicyHandoffJoinV1,
+    handoff_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedPersistedSourcePolicyHandoffV1> {
+    let recipe = PdaRecipeV3::source_policy_handoff(join.id()).map_err(source_pda)?;
+    let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+    let data = handoff_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    authenticate_persisted_source_policy_handoff(
+        route,
+        join,
+        RuntimeAccountViewV1 {
+            key: runtime_key(handoff_account.key),
+            owner: runtime_key(handoff_account.owner),
+            lamports: handoff_account.lamports(),
+            executable: handoff_account.executable,
+            writable: handoff_account.is_writable,
+            signer: handoff_account.is_signer,
+            data: &data,
+        },
+        derived,
+        SourcePolicyHandoffAccessV1::ExistingReadOnly,
+    )
+    .map_err(source_runtime)
 }
 
 /// Persist one immutable RawPage or WindowSeal account with its exact header

@@ -75,9 +75,10 @@ use clutch_source_plane_v3::{
     SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3, SummaryProgramV3, WindowSpecV3,
 };
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1,
-    AuthenticatedSourceRouteV1, ClockSnapshotV1, OccurrenceSourceReceiptV1,
-    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
+    AuthenticatedClockBucketV1, AuthenticatedPersistedSourcePolicyHandoffV1,
+    AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
+    ClockSnapshotV1, OccurrenceSourceReceiptV1, SourcePolicyHandoffJoinV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -978,6 +979,8 @@ pub struct AuthenticatedSourceResolutionInputV3 {
     id: ContentId,
     route: AuthenticatedSourceProductRouteV3,
     source_handoff_authentication_id: ContentId,
+    persisted_handoff_authentication_id: ContentId,
+    persisted_handoff_account: clutch_source_plane_v3_runtime::RuntimeKey,
     successful_evaluation_handoff_id: ContentId,
     occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
     result_account_authentication_id: ContentId,
@@ -1004,6 +1007,18 @@ impl AuthenticatedSourceResolutionInputV3 {
     /// Exact Source-owned physical handoff authentication.
     pub const fn source_handoff_authentication_id(self) -> ContentId {
         self.source_handoff_authentication_id
+    }
+
+    /// Exact owner/PDA/body authentication of the durable action-10 record.
+    pub const fn persisted_handoff_authentication_id(self) -> ContentId {
+        self.persisted_handoff_authentication_id
+    }
+
+    /// Physical immutable action-10 handoff account.
+    pub const fn persisted_handoff_account(
+        self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.persisted_handoff_account
     }
 
     /// Exact Product/Series occurrence account selected before evaluation.
@@ -1033,6 +1048,7 @@ pub fn authenticate_source_resolution_input_v3(
     route: AuthenticatedSourceProductRouteV3,
     handoff: SuccessfulEvaluationHandoffV1,
     source: SourcePolicyHandoffJoinV1,
+    persisted: AuthenticatedPersistedSourcePolicyHandoffV1,
 ) -> Outcome<AuthenticatedSourceResolutionInputV3> {
     let occurrence = handoff.occurrence();
     require(
@@ -1050,7 +1066,8 @@ pub fn authenticate_source_resolution_input_v3(
             && source.window_id() == occurrence.window_id()
             && source.statistic_key_id() == occurrence.statistic_key_id()
             && source.clock_policy_id() == handoff.clock_policy_id()
-            && source.clock() == handoff.clock(),
+            && source.clock() == handoff.clock()
+            && persisted.source_policy_handoff_join_id() == source.id(),
         ClutchError::MismatchedState,
     )?;
     let id = ContentId::from_bytes(
@@ -1058,6 +1075,8 @@ pub fn authenticate_source_resolution_input_v3(
             b"dragons-clutch/source-resolution-input/v3",
             &route.id.bytes(),
             &source.id().bytes(),
+            &persisted.id().bytes(),
+            &persisted.account().bytes(),
             &handoff.id().bytes(),
             &occurrence.id().bytes(),
             &source.occurrence_account().bytes(),
@@ -1072,6 +1091,8 @@ pub fn authenticate_source_resolution_input_v3(
         id,
         route,
         source_handoff_authentication_id: source.id(),
+        persisted_handoff_authentication_id: persisted.id(),
+        persisted_handoff_account: persisted.account(),
         successful_evaluation_handoff_id: handoff.id(),
         occurrence_account: source.occurrence_account(),
         result_account_authentication_id: handoff.result_account_authentication_id(),

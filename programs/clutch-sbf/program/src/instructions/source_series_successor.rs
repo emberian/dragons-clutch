@@ -12,15 +12,18 @@ use crate::source_plane_v3::{
     authenticate_evaluation_release_binding, authenticate_head, authenticate_lineage,
     authenticate_occurrence, authenticate_occurrence_window, authenticate_open_page,
     authenticate_persisted_window_evidence_account, authenticate_raw_page, authenticate_route,
-    authenticate_route_clock_bucket, authenticate_statistic_key_input,
+    authenticate_persisted_result_account, authenticate_route_clock_bucket,
+    authenticate_statistic_key_input, authenticate_statistic_key_policy_input,
     authenticate_summary_program_input, authenticate_window_spec_input, authenticate_window_work,
-    invoke_statistic_evaluator, runtime_key,
+    authenticate_work_receipt, invoke_statistic_evaluator, runtime_key,
+    successful_evaluation_handoff,
 };
 use crate::source_plane_v3_actions::{
     apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
-    fold_window_pages, initialize_window_work, persist_evaluation_result, seal_raw_page,
-    seal_window,
+    fold_window_pages, initialize_window_work, join_successful_evaluation_handoff,
+    persist_evaluation_result, persist_source_policy_handoff, seal_raw_page, seal_window,
 };
+use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
 use clutch_source_plane_v3::ContentId;
 use clutch_source_plane_v3_adapter::{
     project_runtime_evaluate_statistic, project_runtime_fold_window_page,
@@ -31,6 +34,8 @@ use clutch_source_plane_v3_adapter::{
 use clutch_source_plane_v3_runtime::{
     LineageAccessV1, OccurrenceDispositionV1, SourceWorkKindV1,
 };
+use clutch_solana_layout::source_series::{EmitFailureHandoffIntentV2, SourceHandoffKindV2};
+use clutch_source_plane_v3::StatisticResultStatusV3;
 use solana_account_info::AccountInfo;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
@@ -748,9 +753,6 @@ pub(super) fn process_evaluate_statistic(
     intent
         .validate_for_program(ContentId::from_bytes(program_id.to_bytes()), plan)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let semantic_receipt_id = plan
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let kind = SourceWorkKindV1::EvaluateStatistic;
     let ceiling = schedule.ceiling_for(kind);
     let work = bind_work_execution(
@@ -758,7 +760,7 @@ pub(super) fn process_evaluate_statistic(
         route,
         schedule,
         kind,
-        semantic_receipt_id,
+        result.account_data_id,
         &accounts[18],
         call_ordinal,
         ceiling,
@@ -776,6 +778,165 @@ pub(super) fn process_evaluate_statistic(
         &accounts[20],
         &accounts[21],
         &accounts[22],
+    )?;
+    Ok(())
+}
+
+/// Persist the successful action-10 Source handoff after joining the exact
+/// shared-Market Failure policy, action-9 result/work receipt, Product
+/// occurrence, immutable Window/StatisticKey, and mature action-8 seal.
+///
+/// This instruction does not classify a relation or write ResolutionV5. The
+/// durable private postwrite is consumed later together with the full current
+/// ProfileV4/BundleV5 Product route.
+pub(super) fn process_emit_successful_handoff(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    intent: EmitFailureHandoffIntentV2,
+) -> Outcome<()> {
+    require(
+        intent.kind == SourceHandoffKindV2::SuccessfulEvaluation,
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let route = authenticate_route(
+        program_id,
+        &accounts[0],
+        &accounts[1],
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &accounts[5],
+        &accounts[6],
+    )
+    .map_err(Refusal::from)?;
+    let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
+    require(
+        runtime_key(accounts[18].key) == schedule.payer(),
+        ClutchError::MismatchedState,
+    )?;
+    let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
+    require(
+        clock.snapshot().slot < intent.valid_before_slot,
+        ClutchError::Replay,
+    )?;
+    let failure = authenticate_failure_market_root_v2(program_id, &accounts[16], false)?;
+    let failure_binding = failure.state().binding();
+    let failure_facts = failure_binding.facts();
+    let failure_policy_binding_id = ContentId::from_bytes(failure_binding.id().bytes());
+    let summary_program_id = ContentId::from_bytes(failure_facts.summary_program_id.bytes());
+    require(
+        failure_facts.source_release_manifest_id.bytes() == route.release_manifest_id().bytes()
+            && failure_facts.source_release_authentication_id.bytes()
+                == route.release_authentication_id().bytes()
+            && failure_facts.source_release_account_id.bytes() == route.release_account().bytes()
+            && failure_facts.source_plane_contract_id.bytes()
+                == route.source_plane_contract_id().bytes()
+            && failure_facts.source_spec_id.bytes() == route.source_spec_id().bytes()
+            && failure_facts.clock_policy_id.bytes() == route.clock_policy_id().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let window_input = authenticate_window_spec_input(program_id, route, &accounts[10])
+        .map_err(Refusal::from)?;
+    let window = window_input.window();
+    let statistic_key_input = authenticate_statistic_key_policy_input(
+        program_id,
+        route,
+        &accounts[11],
+        window_input,
+        summary_program_id,
+    )
+    .map_err(Refusal::from)?;
+    let key = statistic_key_input.key();
+    require(
+        failure_facts.primary_window_id.bytes() == window.id().map_err(|_| {
+            Refusal::Adapter(ClutchError::SourceAdmissionFailed)
+        })?.bytes()
+            && failure_facts.statistic_key_id.bytes()
+                == key
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?
+                    .bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let occurrence = authenticate_occurrence(
+        program_id,
+        route,
+        &accounts[9],
+        OccurrenceDispositionV1::ExactExisting,
+        &window,
+        &key,
+    )
+    .map_err(Refusal::from)?;
+    require(
+        occurrence.market_instance_id().bytes() == failure_facts.market_instance_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let evidence = authenticate_persisted_window_evidence_account(
+        program_id,
+        route,
+        &accounts[12],
+        clock,
+        &window,
+    )
+    .map_err(Refusal::from)?;
+    let result_lineage =
+        crate::source_plane_v3::authenticate_lineage(
+            program_id,
+            route,
+            &accounts[14],
+            LineageAccessV1::ReadOnly,
+        )
+        .map_err(Refusal::from)?;
+    let result = authenticate_persisted_result_account(
+        program_id,
+        route,
+        &accounts[13],
+        &window,
+        &key,
+        summary_program_id,
+        evidence,
+        result_lineage,
+    )
+    .map_err(Refusal::from)?;
+    require(
+        result.result().status() == StatisticResultStatusV3::Success,
+        ClutchError::MismatchedState,
+    )?;
+    let work = authenticate_work_receipt(program_id, route, schedule, &accounts[15])
+        .map_err(Refusal::from)?;
+    require(
+        sequence == u64::from(work.receipt().call_ordinal())
+            && work.id().bytes() == intent.source_work_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let handoff = successful_evaluation_handoff(
+        route,
+        failure_policy_binding_id,
+        occurrence,
+        clock,
+        &window,
+        evidence,
+        result,
+    )
+    .map_err(Refusal::from)?;
+    require(
+        handoff.id().bytes() == intent.handoff_id,
+        ClutchError::MismatchedState,
+    )?;
+    let joined = join_successful_evaluation_handoff(route, handoff, result, work)?;
+    let persisted = persist_source_policy_handoff(
+        program_id,
+        route,
+        joined,
+        &accounts[18],
+        &accounts[17],
+        &accounts[19],
+        &accounts[20],
+    )?;
+    require(
+        persisted.authenticated().source_policy_handoff_join_id() == joined.id(),
+        ClutchError::MismatchedState,
     )?;
     Ok(())
 }

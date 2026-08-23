@@ -1704,6 +1704,37 @@ impl StatisticResultV3 {
         Ok(())
     }
 
+    /// Revalidate a persisted result when the immutable Failure/Product
+    /// policy supplies the already-authenticated SummaryProgram identity.
+    ///
+    /// The action-9 write path authenticates the full SummaryProgram body and
+    /// evaluator release. Later handoff instructions need not accept that body
+    /// again: they bind its exact content identity from policy, the original
+    /// StatisticKey, and the immutable WindowSeal/result references.
+    pub fn validate_persisted_against(
+        &self,
+        key: &StatisticKeyV3,
+        authenticated_summary_program_id: ContentId,
+        seal: &WindowSealV3,
+        window: &WindowSpecV3,
+    ) -> Result<()> {
+        self.validate_shape()?;
+        key.validate()?;
+        authenticated_summary_program_id.validate()?;
+        window.validate()?;
+        seal.validate_against(window)?;
+        if key.summary_program_id != authenticated_summary_program_id
+            || key.window_id != window.id()?
+            || seal.window_id != window.id()?
+            || self.statistic_key_id != key.id()?
+            || self.window_seal_id != seal.id()?
+            || self.statistic != key.statistic
+        {
+            return Err(Error::MismatchedArtifact);
+        }
+        Ok(())
+    }
+
     /// Construct a successful terminal interval result.
     pub fn terminal(
         key: &StatisticKeyV3,

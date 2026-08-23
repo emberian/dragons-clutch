@@ -104,6 +104,12 @@ pub fn process(
                 program_id, accounts, sequence, intent,
             )
         }
+        (
+            SourceSeriesAction::EmitFailureHandoff,
+            SourceSeriesPayloadV2::EmitFailureHandoff(intent),
+        ) => super::source_series_successor::process_emit_successful_handoff(
+            program_id, accounts, sequence, intent,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
