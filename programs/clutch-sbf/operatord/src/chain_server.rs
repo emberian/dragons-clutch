@@ -186,6 +186,7 @@ fn family(text: &str) -> Result<CanonicalFamily> {
         "structured-claim" => CanonicalFamily::StructuredClaim,
         "dealer" => CanonicalFamily::Dealer,
         "failure" => CanonicalFamily::Failure,
+        "direct" => CanonicalFamily::Direct,
         _ => return Err(format!("unknown canonical decoder family {text}").into()),
     })
 }

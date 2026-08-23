@@ -150,6 +150,7 @@ use clutch_batch_policy_identity::revenue_policy_v1::{
 };
 use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
 use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
+#[cfg(any())]
 use clutch_solana_layout::direct_selection_v3::{
     DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
 };
@@ -166,10 +167,14 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::construction::{self, OwnerStateBumps, OwnerStateTargets};
-use super::direct_selection_v3::{
-    create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
-    DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
+use super::full_principal_funding_v1::{
+    create_pda_account_full_principal, full_principal_creation_funding,
+    FULL_PRINCIPAL_NEUTRAL_SINK_V1,
 };
+#[cfg(any())]
+use super::full_principal_funding_v1::observe_full_principal_funding;
+#[cfg(any())]
+use super::direct_selection_v3::DIRECT_VERIFIER_RELEASE_ID_V3;
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -495,8 +500,8 @@ pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
 /// Accounts in a general-plane `InitOrderPage` that also registers the
 /// page's funding: one optional trailing `GeneralFundingLedgerV1` PDA,
 /// written in the same transition that debits the payer (TerminalClosure's
-/// exact-principal-to-payer input).  The Direct V4 branch keeps the exact
-/// six-account list — its plane records funding in its own account bytes.
+/// exact-principal-to-payer input). Retired Direct V4 account shapes are not
+/// admitted by this current constructor.
 pub const INIT_PAGE_LEDGERED_ACCOUNT_COUNT: usize = INIT_PAGE_ACCOUNT_COUNT + 1;
 /// The optional funding-ledger PDA.  General `InitOrderPage` only.
 pub const IX_PAGE_LEDGER: usize = 6;
@@ -859,12 +864,12 @@ fn init_revenue_policy_record(
 
     let digest = revenue_policy_digest(&REVENUE_POLICY_V1)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let funding = direct_creation_funding(
+    let funding = full_principal_creation_funding(
         &accounts[IX_PAYER],
         record_account,
         rent,
         REVENUE_POLICY_RECORD_BYTES,
-        DIRECT_NEUTRAL_SINK_V3,
+        FULL_PRINCIPAL_NEUTRAL_SINK_V1,
     )?;
     let record = RevenuePolicyRecordV1 {
         realm,
@@ -1117,22 +1122,8 @@ fn init_order_page(
     }
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     {
-        require(
-            accounts
-                .get(IX_PAGE_EPOCH)
-                .map(|account| account.data_len())
-                == Some(DIRECT_EPOCH_V4_BYTES),
-            ClutchError::UnsupportedInstruction,
-        )?;
-        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
-    }
-    #[cfg(feature = "profile-full")]
-    if accounts
-        .get(IX_PAGE_EPOCH)
-        .map(|account| account.data_len())
-        == Some(DIRECT_EPOCH_V4_BYTES)
-    {
-        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
+        let _ = (program_id, accounts, sequence, intent);
+        return Err(ClutchError::UnsupportedInstruction.into());
     }
     #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     return init_legacy_order_page(program_id, accounts, sequence, intent);
@@ -1154,12 +1145,6 @@ fn init_legacy_order_page(
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
     let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
@@ -1251,6 +1236,7 @@ fn init_legacy_order_page(
 /// This branch is selected only by the 672-byte V4 Epoch schema, which can
 /// exist only through the routed `InitDirectEpochV4`; the legacy page path
 /// below it is byte- and behavior-stable.
+#[cfg(any())]
 #[inline(never)]
 fn init_direct_v4_order_page(
     program_id: &Pubkey,
@@ -1286,7 +1272,8 @@ fn init_direct_v4_order_page(
         ClutchError::NotActive,
     )?;
     require(
-        epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes())
+        epoch.neutral_lamport_sink
+            == Hash32::from_bytes(FULL_PRINCIPAL_NEUTRAL_SINK_V1.to_bytes())
             && market.market == intent.market
             && epoch.direct.common.epoch == intent.epoch
             && epoch.direct.common.market == market.market
@@ -1315,17 +1302,17 @@ fn init_direct_v4_order_page(
     let page_index_bytes = 0u16.to_le_bytes();
     let (page_address, page_bump) = seeds::page_pda(program_id, &epoch_bytes, 0);
     expect_pda(accounts[IX_TARGET].key, (page_address, page_bump), None)?;
-    let funding = direct_creation_funding(
+    let funding = full_principal_creation_funding(
         &accounts[IX_PAYER],
         &accounts[IX_TARGET],
         &rent,
         account_len::ORDER_PAGE,
-        DIRECT_NEUTRAL_SINK_V3,
+        FULL_PRINCIPAL_NEUTRAL_SINK_V1,
     )?;
-    epoch.epoch_funding = observe_direct_funding(
+    epoch.epoch_funding = observe_full_principal_funding(
         epoch.epoch_funding,
         accounts[IX_PAGE_EPOCH].lamports(),
-        DIRECT_NEUTRAL_SINK_V3,
+        FULL_PRINCIPAL_NEUTRAL_SINK_V1,
     )?;
     epoch.direct.common.page_count = 1;
     epoch.page_funding = funding;

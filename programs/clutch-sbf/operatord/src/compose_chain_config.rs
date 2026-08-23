@@ -416,6 +416,11 @@ fn selected_families(summary: &Value) -> Result<Vec<CanonicalFamily>> {
             clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG => {
                 families.insert(CanonicalFamily::Fractional);
             }
+            clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG => {
+                families.insert(CanonicalFamily::Direct);
+                families.insert(CanonicalFamily::PositionV3);
+                families.insert(CanonicalFamily::ReplayV3);
+            }
             _ => {
                 return Err(
                     "checked profile enables a family unknown to the current decoder set".into(),
@@ -629,7 +634,7 @@ mod tests {
     #[test]
     fn canonical_hash_and_intent_selection_do_not_depend_on_browser_input() {
         let summary = json!({
-            "central_registry": {"enabled_intent_triples": [[74, 1, 26], [76, 1, 1], [78, 1, 1], [79, 1, 1]]},
+            "central_registry": {"enabled_intent_triples": [[74, 1, 26], [76, 1, 1], [78, 1, 1], [79, 1, 1], [80, 1, 1]]},
             "capabilities": [
                 {"slot": "source-plane", "linkage": "linked"},
                 {"slot": "liquidity-dealer", "linkage": "linked"},
@@ -642,6 +647,9 @@ mod tests {
         assert!(families.contains(&CanonicalFamily::Dealer));
         assert!(families.contains(&CanonicalFamily::Failure));
         assert!(families.contains(&CanonicalFamily::Fractional));
+        assert!(families.contains(&CanonicalFamily::Direct));
+        assert!(families.contains(&CanonicalFamily::PositionV3));
+        assert!(families.contains(&CanonicalFamily::ReplayV3));
     }
 
     #[test]

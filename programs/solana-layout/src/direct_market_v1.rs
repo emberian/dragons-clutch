@@ -34,6 +34,18 @@ pub struct DirectInitializeMarketPayloadV1 {
 }
 
 impl DirectInitializeMarketPayloadV1 {
+    /// Encode the exact forty-byte schedule without restating Clock evidence.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1],
+    ) {
+        output[0..8].copy_from_slice(&self.admission_opens_slot.to_le_bytes());
+        output[8..16].copy_from_slice(&self.admission_closes_slot.to_le_bytes());
+        output[16..24].copy_from_slice(&self.submission_closes_slot.to_le_bytes());
+        output[24..32].copy_from_slice(&self.selection_deadline_slot.to_le_bytes());
+        output[32..40].copy_from_slice(&self.settlement_deadline_slot.to_le_bytes());
+    }
+
     /// Decode exactly forty schedule bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
         require_len(input, DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1)?;
@@ -71,6 +83,32 @@ pub struct DirectAdmitOrderPayloadV1 {
 }
 
 impl DirectAdmitOrderPayloadV1 {
+    /// Encode the exact canonical owner-blind order payload.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1],
+    ) -> Result<()> {
+        if self.order_id == [0; 32] {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[..32].copy_from_slice(&self.order_id);
+        output[32] = match self.side {
+            Side::Buy => 1,
+            Side::Sell => 2,
+        };
+        output[33] = self.outcome;
+        output[34] = match self.partial_policy {
+            PartialPolicy::Allow => 1,
+            PartialPolicy::AllOrNone => 2,
+        };
+        output[40..48].copy_from_slice(&self.quantity.to_le_bytes());
+        output[48..56].copy_from_slice(&self.minimum_fill.to_le_bytes());
+        output[56..64].copy_from_slice(&self.expiry_epoch.to_le_bytes());
+        output[64..80].copy_from_slice(&self.limit_price_units_per_egg.to_le_bytes());
+        Ok(())
+    }
+
     /// Decode the exact canonical 80-byte order payload.
     pub fn decode(input: &[u8]) -> Result<Self> {
         require_len(input, DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1)?;
@@ -115,6 +153,21 @@ pub struct DirectFreezeBookPayloadV1 {
 }
 
 impl DirectFreezeBookPayloadV1 {
+    /// Encode all sixteen simplex coordinates in canonical outcome order.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1],
+    ) -> Result<()> {
+        let mut index = 0usize;
+        while index < self.prices.len() {
+            let start = index.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?;
+            let end = start.checked_add(8).ok_or(CodecError::ArithmeticOverflow)?;
+            output[start..end].copy_from_slice(&self.prices[index].to_le_bytes());
+            index += 1;
+        }
+        Ok(())
+    }
+
     /// Decode exactly sixteen little-endian components.
     pub fn decode(input: &[u8]) -> Result<Self> {
         require_len(input, DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1)?;
@@ -137,6 +190,17 @@ pub struct DirectSubmitCandidatePayloadV1 {
 }
 
 impl DirectSubmitCandidatePayloadV1 {
+    /// Encode the exact two-row candidate with canonical zero padding.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1],
+    ) {
+        output.fill(0);
+        output[0..8].copy_from_slice(&self.candidate.fills[0].to_le_bytes());
+        output[8..16].copy_from_slice(&self.candidate.fills[1].to_le_bytes());
+        output[16] = self.candidate.honored_aon_mask;
+    }
+
     /// Decode two fills, one AON mask, and seven canonical zero bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
         require_len(input, DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1)?;
@@ -472,5 +536,37 @@ mod tests {
             Err(CodecError::NonCanonicalPadding)
         );
         assert_eq!(decode_direct_empty_payload_v1(&[0]), Err(CodecError::WrongLength));
+    }
+
+    #[test]
+    fn client_encoders_round_trip_zero_price_and_canonical_padding() {
+        let order = DirectAdmitOrderPayloadV1 {
+            order_id: [7; 32],
+            side: Side::Buy,
+            outcome: 0,
+            partial_policy: PartialPolicy::Allow,
+            quantity: 9,
+            minimum_fill: 1,
+            expiry_epoch: 4,
+            limit_price_units_per_egg: 0,
+        };
+        let mut encoded = [0xff; DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1];
+        order.encode_into(&mut encoded).unwrap();
+        assert_eq!(DirectAdmitOrderPayloadV1::decode(&encoded), Ok(order));
+        assert_eq!(&encoded[35..40], &[0; 5]);
+
+        let candidate = DirectSubmitCandidatePayloadV1 {
+            candidate: DirectEconomicCandidateV1 {
+                fills: [9, 9],
+                honored_aon_mask: 0,
+            },
+        };
+        let mut candidate_bytes = [0xff; DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1];
+        candidate.encode_into(&mut candidate_bytes);
+        assert_eq!(
+            DirectSubmitCandidatePayloadV1::decode(&candidate_bytes),
+            Ok(candidate)
+        );
+        assert_eq!(&candidate_bytes[17..], &[0; 7]);
     }
 }

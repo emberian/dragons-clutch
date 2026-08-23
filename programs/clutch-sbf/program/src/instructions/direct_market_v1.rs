@@ -105,12 +105,25 @@ const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/price-authentication/v1\0";
 const DIRECT_MARKET_V1_MAX_ACCOUNTS: usize = 26;
 const DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES: usize = 128;
-const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 15;
+const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 16;
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == RUNTIME_SELECTION_BODY_BYTES);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == RUNTIME_REPLAY_BODY_BYTES);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == RUNTIME_RESERVATION_BODY_BYTES);
+const _: () = assert!(core::mem::size_of::<AuthenticatedDirectMarketRootV1>() <= 160);
+const _: () = assert!(core::mem::size_of::<AuthenticatedDirectActionReplayV1>() <= 160);
+const _: () = assert!(core::mem::size_of::<AuthenticatedDirectSelectionV1>() <= 160);
+// Hostile Product/Direct semantic owners are retained in their boxed decode
+// buffers or authenticated prestates. Private adapter capabilities borrow
+// them, so no capability can silently cross the 4 KiB SBF frame boundary.
+const _: () = assert!(core::mem::size_of::<DirectFoundationAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectReservationAdmissionAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectReservationCancelAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectSelectionFreezeAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectEconomicTerminalAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectMissedFreezeTerminalAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalAuthoritySbfV1<'static>>() <= 512);
 
 /// Runtime SHA-256 implementation for all current Direct semantic identities.
 #[derive(Clone, Copy, Debug, Default)]
@@ -192,10 +205,10 @@ pub(crate) fn process(
 }
 
 /// Exact authenticated `0xb1/1` Direct root prestate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedDirectMarketRootV1 {
     account: Pubkey,
-    value: DirectMarketRootV1,
+    value: Box<DirectMarketRootV1>,
     bump: u8,
     data_id: [u8; 32],
     semantic_id: [u8; 32],
@@ -203,19 +216,20 @@ pub(crate) struct AuthenticatedDirectMarketRootV1 {
 }
 
 impl AuthenticatedDirectMarketRootV1 {
-    pub(crate) const fn account(self) -> Pubkey { self.account }
-    pub(crate) const fn value(self) -> DirectMarketRootV1 { self.value }
-    pub(crate) const fn bump(self) -> u8 { self.bump }
-    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
-    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
-    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+    pub(crate) fn account(&self) -> Pubkey { self.account }
+    pub(crate) fn value(&self) -> DirectMarketRootV1 { *self.value }
+    pub(crate) fn bump(&self) -> u8 { self.bump }
+    pub(crate) fn data_id(&self) -> [u8; 32] { self.data_id }
+    pub(crate) fn semantic_id(&self) -> [u8; 32] { self.semantic_id }
+    pub(crate) fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) fn value_ref(&self) -> &DirectMarketRootV1 { &self.value }
 }
 
 /// Exact authenticated permanent `0xb3/1` Direct replay/receipt prestate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedDirectActionReplayV1 {
     account: Pubkey,
-    value: DirectActionReplayV1,
+    value: Box<DirectActionReplayV1>,
     bump: u8,
     data_id: [u8; 32],
     semantic_id: [u8; 32],
@@ -223,19 +237,20 @@ pub(crate) struct AuthenticatedDirectActionReplayV1 {
 }
 
 impl AuthenticatedDirectActionReplayV1 {
-    pub(crate) const fn account(self) -> Pubkey { self.account }
-    pub(crate) const fn value(self) -> DirectActionReplayV1 { self.value }
-    pub(crate) const fn bump(self) -> u8 { self.bump }
-    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
-    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
-    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+    pub(crate) fn account(&self) -> Pubkey { self.account }
+    pub(crate) fn value(&self) -> DirectActionReplayV1 { *self.value }
+    pub(crate) fn bump(&self) -> u8 { self.bump }
+    pub(crate) fn data_id(&self) -> [u8; 32] { self.data_id }
+    pub(crate) fn semantic_id(&self) -> [u8; 32] { self.semantic_id }
+    pub(crate) fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) fn value_ref(&self) -> &DirectActionReplayV1 { &self.value }
 }
 
 /// Exact authenticated `0xb2/1` Selection prestate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedDirectSelectionV1 {
     account: Pubkey,
-    value: DirectSelectionV1,
+    value: Box<DirectSelectionV1>,
     bump: u8,
     data_id: [u8; 32],
     semantic_id: [u8; 32],
@@ -243,12 +258,13 @@ pub(crate) struct AuthenticatedDirectSelectionV1 {
 }
 
 impl AuthenticatedDirectSelectionV1 {
-    pub(crate) const fn account(self) -> Pubkey { self.account }
-    pub(crate) const fn value(self) -> DirectSelectionV1 { self.value }
-    pub(crate) const fn bump(self) -> u8 { self.bump }
-    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
-    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
-    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+    pub(crate) fn account(&self) -> Pubkey { self.account }
+    pub(crate) fn value(&self) -> DirectSelectionV1 { *self.value }
+    pub(crate) fn bump(&self) -> u8 { self.bump }
+    pub(crate) fn data_id(&self) -> [u8; 32] { self.data_id }
+    pub(crate) fn semantic_id(&self) -> [u8; 32] { self.semantic_id }
+    pub(crate) fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) fn value_ref(&self) -> &DirectSelectionV1 { &self.value }
 }
 
 /// Exact authenticated `0xb4/1` funded Reservation prestate.
@@ -269,6 +285,7 @@ impl AuthenticatedDirectReservationV1 {
     pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
     pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
     pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+    pub(crate) const fn value_ref(&self) -> &DirectReservationV1 { &self.value }
 }
 
 /// Private Product/PriceGrid-authenticated action-4 input. Construction owns
@@ -295,7 +312,7 @@ impl AuthenticatedDirectPricePreconditionV1 {
 #[inline(never)]
 pub(crate) fn authenticate_direct_price_precondition_v1(
     program_id: &Pubkey,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     bundle_account: &AccountInfo<'_>,
     basis_account: &AccountInfo<'_>,
     price_policy_account: &AccountInfo<'_>,
@@ -464,12 +481,12 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
     let replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     let selection = authenticate_direct_selection_writable_v1(
         program_id,
         &accounts[2],
-        root,
+        &root,
     )?;
     let observed_slot = read_clock_slot(&accounts[3])?;
     let state = DirectRootReplayPostV1 {
@@ -540,17 +557,17 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectSelectionFreezeAuthoritySbfV1 {
-    root: DirectMarketRootV1,
+struct DirectSelectionFreezeAuthoritySbfV1<'a> {
+    root: &'a DirectMarketRootV1,
     selection_account: [u8; 32],
-    rent: DirectRentOwnerV1,
-    reservation_accounts: [[u8; 32]; 2],
-    reservation_semantic_ids: [[u8; 32]; 2],
+    rent: &'a DirectRentOwnerV1,
+    reservation_accounts: &'a [[u8; 32]; 2],
+    reservation_semantic_ids: &'a [[u8; 32]; 2],
     reservation_count: u8,
-    price: AuthenticatedDirectPricePreconditionV1,
+    price: &'a AuthenticatedDirectPricePreconditionV1,
 }
 
-impl AuthenticatedDirectSelectionFreezeV1 for DirectSelectionFreezeAuthoritySbfV1 {
+impl AuthenticatedDirectSelectionFreezeV1 for DirectSelectionFreezeAuthoritySbfV1<'_> {
     fn authenticate_freeze(
         &self,
         root: DirectMarketRootV1,
@@ -561,13 +578,13 @@ impl AuthenticatedDirectSelectionFreezeV1 for DirectSelectionFreezeAuthoritySbfV
         domain: &EconomicDomainV2,
         price: &PricePreconditionV2,
     ) -> Result<(), DirectMarketErrorV1> {
-        if root != self.root
+        if root != *self.root
             || selection_account != self.selection_account
-            || rent != self.rent
+            || rent != *self.rent
             || *domain != self.price.domain()
             || *price != self.price.price()
             || self.price.authentication_id() == [0; 32]
-            || *reservation_semantic_ids != self.reservation_semantic_ids
+            || reservation_semantic_ids != self.reservation_semantic_ids
         {
             return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
         }
@@ -614,7 +631,7 @@ pub(crate) fn process_direct_freeze_book_v1(
     let replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     require_signer(&accounts[3])?;
     require(accounts[3].is_writable, ClutchError::NotWritable)?;
@@ -642,7 +659,7 @@ pub(crate) fn process_direct_freeze_book_v1(
         authenticated[index] = Some(authenticate_direct_reservation_readonly_v1(
             program_id,
             &accounts[12 + index],
-            root,
+            &root,
         )?);
         index += 1;
     }
@@ -665,7 +682,7 @@ pub(crate) fn process_direct_freeze_book_v1(
     }
     let price = authenticate_direct_price_precondition_v1(
         program_id,
-        root,
+        &root,
         &accounts[7],
         &accounts[8],
         &accounts[9],
@@ -689,13 +706,13 @@ pub(crate) fn process_direct_freeze_book_v1(
     let reservation_count_u8 = u8::try_from(reservation_count)
         .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
     let authority = DirectSelectionFreezeAuthoritySbfV1 {
-        root: root.value(),
+        root: root.value_ref(),
         selection_account: accounts[2].key.to_bytes(),
-        rent: selection_rent,
-        reservation_accounts,
-        reservation_semantic_ids,
+        rent: &selection_rent,
+        reservation_accounts: &reservation_accounts,
+        reservation_semantic_ids: &reservation_semantic_ids,
         reservation_count: reservation_count_u8,
-        price,
+        price: &price,
     };
     let plan = prepare_direct_selection_freeze_v1(
         &authority,
@@ -748,10 +765,10 @@ pub(crate) fn process_direct_freeze_book_v1(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectReservationAdmissionAuthoritySbfV1 {
-    root: DirectMarketRootV1,
-    position: AuthenticatedPositionV3,
-    existing_peer: Option<DirectReservationV1>,
+struct DirectReservationAdmissionAuthoritySbfV1<'a> {
+    root: &'a DirectMarketRootV1,
+    position: &'a AuthenticatedPositionV3,
+    existing_peer: &'a Option<DirectReservationV1>,
     reservation_account: [u8; 32],
     order_id: [u8; 32],
     side: clutch_batch::Side,
@@ -761,23 +778,23 @@ struct DirectReservationAdmissionAuthoritySbfV1 {
     partial_policy: clutch_batch::PartialPolicy,
     expiry_epoch: u64,
     limit_price_units_per_egg: u128,
-    rent: DirectRentOwnerV1,
+    rent: &'a DirectRentOwnerV1,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectFoundationAuthoritySbfV1 {
-    product_root: clutch_product_series::MarketLifecycleRootV1,
-    founder_link: clutch_product_series::SeriesMarketLinkV1,
-    bundle: CompiledProductSeriesBundleV5,
-    binding: DirectMarketBindingV1,
-    schedule: DirectScheduleV1,
-    root_rent: DirectRentOwnerV1,
-    replay_rent: DirectRentOwnerV1,
+struct DirectFoundationAuthoritySbfV1<'a> {
+    product_root: &'a clutch_product_series::MarketLifecycleRootV1,
+    founder_link: &'a clutch_product_series::SeriesMarketLinkV1,
+    bundle: &'a CompiledProductSeriesBundleV5,
+    binding: &'a DirectMarketBindingV1,
+    schedule: &'a DirectScheduleV1,
+    root_rent: &'a DirectRentOwnerV1,
+    replay_rent: &'a DirectRentOwnerV1,
     family_sequence: u32,
     observed_slot: u64,
 }
 
-impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1 {
+impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1<'_> {
     fn authenticate_foundation(
         &self,
         product_root: &clutch_product_series::MarketLifecycleRootV1,
@@ -789,13 +806,13 @@ impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1 {
         action_replay_rent: DirectRentOwnerV1,
         family_admission_sequence: u32,
     ) -> Result<(), DirectMarketErrorV1> {
-        if *product_root == self.product_root
-            && *founder_link == self.founder_link
-            && *compiler_bundle == self.bundle
-            && binding == self.binding
-            && schedule == self.schedule
-            && root_rent == self.root_rent
-            && action_replay_rent == self.replay_rent
+        if product_root == self.product_root
+            && founder_link == self.founder_link
+            && compiler_bundle == self.bundle
+            && binding == *self.binding
+            && schedule == *self.schedule
+            && root_rent == *self.root_rent
+            && action_replay_rent == *self.replay_rent
             && family_admission_sequence == self.family_sequence
             && self.observed_slot <= schedule.admission_opens_slot
         {
@@ -1007,20 +1024,20 @@ pub(crate) fn process_direct_initialize_market_v1(
         .counts()
         .admitted;
     let authority = DirectFoundationAuthoritySbfV1 {
-        product_root: *product_root.state(),
-        founder_link: *founder_link.state(),
-        bundle: *bundle.value(),
-        binding: direct_binding,
-        schedule,
-        root_rent,
-        replay_rent,
+        product_root: product_root.state(),
+        founder_link: founder_link.state(),
+        bundle: bundle.value(),
+        binding: &direct_binding,
+        schedule: &schedule,
+        root_rent: &root_rent,
+        replay_rent: &replay_rent,
         family_sequence,
         observed_slot,
     };
     let plan = prepare_direct_foundation_v1(
         &authority,
-        *product_root.state(),
-        *founder_link.state(),
+        product_root.state(),
+        founder_link.state(),
         bundle.value(),
         direct_binding,
         schedule,
@@ -1073,7 +1090,7 @@ pub(crate) fn process_direct_initialize_market_v1(
     write_product_root_post_v1(&accounts[0], product_root, &product_post)
 }
 
-impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAuthoritySbfV1 {
+impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAuthoritySbfV1<'_> {
     fn authenticate_admission(
         &self,
         root: DirectMarketRootV1,
@@ -1090,9 +1107,9 @@ impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAut
         limit_price_units_per_egg: u128,
         rent: DirectRentOwnerV1,
     ) -> Result<(), DirectMarketErrorV1> {
-        if root == self.root
-            && position == self.position
-            && existing_peer == self.existing_peer
+        if root == *self.root
+            && position == *self.position
+            && existing_peer == *self.existing_peer
             && reservation_account == self.reservation_account
             && order_id == self.order_id
             && side == self.side
@@ -1102,7 +1119,7 @@ impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAut
             && partial_policy == self.partial_policy
             && expiry_epoch == self.expiry_epoch
             && limit_price_units_per_egg == self.limit_price_units_per_egg
-            && rent == self.rent
+            && rent == *self.rent
         {
             Ok(())
         } else {
@@ -1139,7 +1156,7 @@ pub(crate) fn process_direct_admit_order_v1(
     let direct_replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     require_signer(&accounts[3])?;
     require(accounts[3].is_writable, ClutchError::NotWritable)?;
@@ -1148,7 +1165,7 @@ pub(crate) fn process_direct_admit_order_v1(
     let observed_slot = read_clock_slot(&accounts[15])?;
     authenticate_direct_order_limit_v1(
         program_id,
-        root,
+        &root,
         &accounts[16],
         &accounts[17],
         &accounts[18],
@@ -1157,7 +1174,7 @@ pub(crate) fn process_direct_admit_order_v1(
 
     let bound = authenticate_direct_general_market_v1(
         program_id,
-        root,
+        &root,
         &accounts[6],
         &accounts[7],
         &accounts[8],
@@ -1182,7 +1199,7 @@ pub(crate) fn process_direct_admit_order_v1(
         let peer = authenticate_direct_reservation_readonly_v1(
             program_id,
             &accounts[19],
-            root,
+            &root,
         )?;
         require(
             peer.account().to_bytes()
@@ -1209,9 +1226,9 @@ pub(crate) fn process_direct_admit_order_v1(
         donation_floor_lamports,
     };
     let authority = DirectReservationAdmissionAuthoritySbfV1 {
-        root: root.value(),
-        position: position_replay.position,
-        existing_peer,
+        root: root.value_ref(),
+        position: &position_replay.position,
+        existing_peer: &existing_peer,
         reservation_account: accounts[2].key.to_bytes(),
         order_id: request.order_id,
         side: request.side,
@@ -1221,7 +1238,7 @@ pub(crate) fn process_direct_admit_order_v1(
         partial_policy: request.partial_policy,
         expiry_epoch: request.expiry_epoch,
         limit_price_units_per_egg: request.limit_price_units_per_egg,
-        rent: reservation_rent,
+        rent: &reservation_rent,
     };
     let plan = prepare_direct_reservation_admission_with_replay_v1(
         &authority,
@@ -1286,16 +1303,16 @@ pub(crate) fn process_direct_admit_order_v1(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectReservationCancelAuthoritySbfV1 {
-    state: DirectRootReplayPostV1,
-    reservation: DirectReservationV1,
-    position_replay: clutch_general_v2_contract::GeneralPositionReplayPrestateV1,
+struct DirectReservationCancelAuthoritySbfV1<'a> {
+    state: &'a DirectRootReplayPostV1,
+    reservation: &'a DirectReservationV1,
+    position_replay: &'a clutch_general_v2_contract::GeneralPositionReplayPrestateV1,
     observed_lamports: u64,
     sequence: u64,
     slot: u64,
 }
 
-impl AuthenticatedDirectReservationCancelV1 for DirectReservationCancelAuthoritySbfV1 {
+impl AuthenticatedDirectReservationCancelV1 for DirectReservationCancelAuthoritySbfV1<'_> {
     fn authenticate_cancel(
         &self,
         state: DirectRootReplayPostV1,
@@ -1305,9 +1322,9 @@ impl AuthenticatedDirectReservationCancelV1 for DirectReservationCancelAuthority
         consumed_sequence: u64,
         observed_slot: u64,
     ) -> Result<(), DirectMarketErrorV1> {
-        if state == self.state
-            && reservation == self.reservation
-            && position_replay == self.position_replay
+        if state == *self.state
+            && reservation == *self.reservation
+            && position_replay == *self.position_replay
             && observed_reservation_lamports == self.observed_lamports
             && consumed_sequence == self.sequence
             && observed_slot == self.slot
@@ -1339,12 +1356,12 @@ pub(crate) fn process_direct_cancel_order_v1(
     let direct_replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     let reservation = authenticate_direct_reservation_writable_v1(
         program_id,
         &accounts[2],
-        root,
+        &root,
     )?;
     require_signer(&accounts[3])?;
     require(accounts[3].is_writable, ClutchError::NotWritable)?;
@@ -1359,7 +1376,7 @@ pub(crate) fn process_direct_cancel_order_v1(
     let observed_slot = read_clock_slot(&accounts[15])?;
     let bound = authenticate_direct_general_market_v1(
         program_id,
-        root,
+        &root,
         &accounts[6],
         &accounts[7],
         &accounts[8],
@@ -1383,9 +1400,9 @@ pub(crate) fn process_direct_cancel_order_v1(
         replay: direct_replay.value(),
     };
     let authority = DirectReservationCancelAuthoritySbfV1 {
-        state,
-        reservation: reservation.value(),
-        position_replay: position_replay.replay,
+        state: &state,
+        reservation: reservation.value_ref(),
+        position_replay: &position_replay.replay,
         observed_lamports: reservation.observed_lamports(),
         sequence,
         slot: observed_slot,
@@ -1433,16 +1450,16 @@ pub(crate) fn process_direct_cancel_order_v1(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectEconomicTerminalAuthoritySbfV1 {
-    state: DirectRootReplayPostV1,
-    selection: DirectSelectionV1,
-    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+struct DirectEconomicTerminalAuthoritySbfV1<'a> {
+    state: &'a DirectRootReplayPostV1,
+    selection: &'a DirectSelectionV1,
+    endpoints: &'a [Option<DirectEndpointPrestateV1>; 2],
     reason: DirectTerminalReasonV1,
     sequence: u64,
     slot: u64,
 }
 
-impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySbfV1 {
+impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySbfV1<'_> {
     fn authenticate_terminal(
         &self,
         state: DirectRootReplayPostV1,
@@ -1452,9 +1469,9 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySb
         consumed_sequence: u64,
         observed_slot: u64,
     ) -> Result<(), DirectMarketErrorV1> {
-        if state == self.state
-            && selection == self.selection
-            && *ordered_endpoints == self.endpoints
+        if state == *self.state
+            && selection == *self.selection
+            && ordered_endpoints == self.endpoints
             && reason == self.reason
             && consumed_sequence == self.sequence
             && observed_slot == self.slot
@@ -1467,20 +1484,20 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySb
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectMissedFreezeTerminalAuthoritySbfV1 {
-    state: DirectRootReplayPostV1,
+struct DirectMissedFreezeTerminalAuthoritySbfV1<'a> {
+    state: &'a DirectRootReplayPostV1,
     selection_account: [u8; 32],
     selection_rent: DirectRentOwnerV1,
     reservation_accounts: [[u8; 32]; 2],
     reservation_semantic_ids: [[u8; 32]; 2],
     reservation_count: u8,
-    price: AuthenticatedDirectPricePreconditionV1,
-    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    price: &'a AuthenticatedDirectPricePreconditionV1,
+    endpoints: &'a [Option<DirectEndpointPrestateV1>; 2],
     sequence: u64,
     slot: u64,
 }
 
-impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthoritySbfV1 {
+impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthoritySbfV1<'_> {
     fn authenticate_terminal(
         &self,
         state: DirectRootReplayPostV1,
@@ -1490,7 +1507,7 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthori
         consumed_sequence: u64,
         observed_slot: u64,
     ) -> Result<(), DirectMarketErrorV1> {
-        if state != self.state
+        if state != *self.state
             || selection.account() != self.selection_account
             || selection.rent() != self.selection_rent
             || selection.reservation_count() != self.reservation_count
@@ -1500,7 +1517,7 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthori
             || selection.verification_cursor() != 0
             || selection.selected_pair().is_some()
             || selection.terminal_receipt_id() != [0; 32]
-            || *ordered_endpoints != self.endpoints
+            || ordered_endpoints != self.endpoints
             || reason != DirectTerminalReasonV1::MissedFreezeLapse
             || consumed_sequence != self.sequence
             || observed_slot != self.slot
@@ -1569,14 +1586,14 @@ fn process_direct_missed_freeze_lapse_v1(
     let replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     require_signer(&accounts[3])?;
     require(accounts[3].is_writable, ClutchError::NotWritable)?;
     require_system_program(&accounts[4])?;
     let rent_parameters = read_rent(&accounts[5])?;
     let observed_slot = read_clock_slot(&accounts[6])?;
-    authenticate_direct_resolution_v5(program_id, root, &accounts[19])?;
+    authenticate_direct_resolution_v5(program_id, &root, &accounts[19])?;
     let (selection_pda, selection_bump) =
         seeds::direct_selection_v1_pda(program_id, &root.account());
     let (_, donation_floor_lamports) = authenticate_fresh_direct_pda_v1(
@@ -1593,7 +1610,7 @@ fn process_direct_missed_freeze_lapse_v1(
 
     let bound = authenticate_direct_general_market_v1(
         program_id,
-        root,
+        &root,
         &accounts[12],
         &accounts[13],
         &accounts[14],
@@ -1614,7 +1631,7 @@ fn process_direct_missed_freeze_lapse_v1(
         let reservation = authenticate_direct_reservation_writable_v1(
             program_id,
             &accounts[first],
-            root,
+            &root,
         )?;
         if index != 0 {
             let previous = authenticated[index - 1]
@@ -1645,7 +1662,7 @@ fn process_direct_missed_freeze_lapse_v1(
     }
     let price = authenticate_direct_price_precondition_v1(
         program_id,
-        root,
+        &root,
         &accounts[7],
         &accounts[8],
         &accounts[9],
@@ -1657,27 +1674,27 @@ fn process_direct_missed_freeze_lapse_v1(
     let reservation_count = u8::try_from(endpoint_count)
         .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
     let freeze_authority = DirectSelectionFreezeAuthoritySbfV1 {
-        root: root.value(),
+        root: root.value_ref(),
         selection_account: accounts[2].key.to_bytes(),
-        rent: selection_rent,
-        reservation_accounts,
-        reservation_semantic_ids,
+        rent: &selection_rent,
+        reservation_accounts: &reservation_accounts,
+        reservation_semantic_ids: &reservation_semantic_ids,
         reservation_count,
-        price,
+        price: &price,
     };
     let state = DirectRootReplayPostV1 {
         root: root.value(),
         replay: replay.value(),
     };
     let terminal_authority = DirectMissedFreezeTerminalAuthoritySbfV1 {
-        state,
+        state: &state,
         selection_account: accounts[2].key.to_bytes(),
         selection_rent,
         reservation_accounts,
         reservation_semantic_ids,
         reservation_count,
-        price,
-        endpoints,
+        price: &price,
+        endpoints: &endpoints,
         sequence,
         slot: observed_slot,
     };
@@ -1758,50 +1775,50 @@ fn process_direct_missed_freeze_lapse_v1(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DirectFamilyTerminalAuthoritySbfV1 {
-    product_root: clutch_product_series::MarketLifecycleRootV1,
-    founder_link: clutch_product_series::SeriesMarketLinkV1,
-    bundle: CompiledProductSeriesBundleV5,
-    root: DirectMarketRootV1,
+struct DirectFamilyTerminalAuthoritySbfV1<'a> {
+    product_root: &'a clutch_product_series::MarketLifecycleRootV1,
+    founder_link: &'a clutch_product_series::SeriesMarketLinkV1,
+    bundle: &'a CompiledProductSeriesBundleV5,
+    root: &'a DirectMarketRootV1,
     root_semantic_id: [u8; 32],
-    replay: DirectActionReplayV1,
+    replay: &'a DirectActionReplayV1,
     replay_semantic_id: [u8; 32],
-    selection: DirectSelectionV1,
-    reservations: [Option<DirectReservationV1>; 2],
-    retirement: DirectRetirementTransferV1,
+    selection: &'a DirectSelectionV1,
+    reservations: &'a [Option<DirectReservationV1>; 2],
+    retirement: &'a DirectRetirementTransferV1,
     retirement_transfer_id: [u8; 32],
     sequence: u64,
     slot: u64,
     family_sequence: u32,
 }
 
-impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1 {
+impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1<'_> {
     fn authenticate_terminal(
         &self,
         product_root: &clutch_product_series::MarketLifecycleRootV1,
         founder_link: &clutch_product_series::SeriesMarketLinkV1,
         compiler_bundle: &CompiledProductSeriesBundleV5,
-        root: DirectMarketRootV1,
+        root: &DirectMarketRootV1,
         root_semantic_id: [u8; 32],
-        replay: DirectActionReplayV1,
+        replay: &DirectActionReplayV1,
         replay_semantic_id: [u8; 32],
-        selection: DirectSelectionV1,
+        selection: &DirectSelectionV1,
         reservations: &[Option<DirectReservationV1>; 2],
-        retirement: DirectRetirementTransferV1,
+        retirement: &DirectRetirementTransferV1,
         retirement_transfer_id: [u8; 32],
         consumed_sequence: u64,
         observed_slot: u64,
         family_terminal_sequence: u32,
     ) -> Result<(), DirectMarketErrorV1> {
-        if *product_root == self.product_root
-            && *founder_link == self.founder_link
-            && *compiler_bundle == self.bundle
+        if product_root == self.product_root
+            && founder_link == self.founder_link
+            && compiler_bundle == self.bundle
             && root == self.root
             && root_semantic_id == self.root_semantic_id
             && replay == self.replay
             && replay_semantic_id == self.replay_semantic_id
             && selection == self.selection
-            && *reservations == self.reservations
+            && reservations == self.reservations
             && retirement == self.retirement
             && retirement_transfer_id == self.retirement_transfer_id
             && consumed_sequence == self.sequence
@@ -1815,9 +1832,9 @@ impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1 {
     }
 }
 
-/// Execute action 13, retain the permanent b3 receipt, terminalize Product,
-/// refund exact persisted principal, sink every surplus lamport, and delete
-/// b1, b2, and the complete still-live b4 archive set.
+/// Execute action 13, derive the terminal receipt from the exact b3 successor,
+/// commit it into Product, refund exact persisted principal, sink every
+/// surplus lamport, and delete b1, b2, b3, and the complete live b4 archive.
 ///
 /// Fixed accounts 0..=8 are Product root, founder link, BundleV5, b1, b3,
 /// b2, ResolutionV5, Clock, and the Realm neutral sink. The exact b2-order
@@ -1840,14 +1857,14 @@ pub(crate) fn process_direct_retire_terminal_v1(
     let replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[4],
-        root,
+        &root,
     )?;
     let selection = authenticate_direct_selection_writable_v1(
         program_id,
         &accounts[5],
-        root,
+        &root,
     )?;
-    authenticate_direct_resolution_v5(program_id, root, &accounts[6])?;
+    authenticate_direct_resolution_v5(program_id, &root, &accounts[6])?;
     let observed_slot = read_clock_slot(&accounts[7])?;
     require(
         accounts[8].is_writable
@@ -1910,13 +1927,18 @@ pub(crate) fn process_direct_retire_terminal_v1(
 
     let mut authenticated: [Option<AuthenticatedDirectReservationV1>; 2] = [None; 2];
     let mut reservations = [None; 2];
-    let mut sources: [Option<DirectRetirementSourceV1>; 4] = [None; 4];
+    let mut sources: [Option<DirectRetirementSourceV1>; 5] = [None; 5];
     sources[0] = Some(DirectRetirementSourceV1 {
         account: accounts[3].key.to_bytes(),
         rent: root.value().root_rent(),
         observed_lamports: root.observed_lamports(),
     });
     sources[1] = Some(DirectRetirementSourceV1 {
+        account: accounts[4].key.to_bytes(),
+        rent: replay.value().rent(),
+        observed_lamports: replay.observed_lamports(),
+    });
+    sources[2] = Some(DirectRetirementSourceV1 {
         account: accounts[5].key.to_bytes(),
         rent: selection.value().rent(),
         observed_lamports: selection.observed_lamports(),
@@ -1926,7 +1948,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
         let reservation = authenticate_direct_reservation_writable_v1(
             program_id,
             &accounts[9 + index],
-            root,
+            &root,
         )?;
         let bounded = u8::try_from(index)
             .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -1942,7 +1964,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
         )?;
         authenticated[index] = Some(reservation);
         reservations[index] = Some(reservation.value());
-        sources[2 + index] = Some(DirectRetirementSourceV1 {
+        sources[3 + index] = Some(DirectRetirementSourceV1 {
             account: reservation.account().to_bytes(),
             rent: reservation.value().rent(),
             observed_lamports: reservation.observed_lamports(),
@@ -2002,16 +2024,16 @@ pub(crate) fn process_direct_retire_terminal_v1(
         replay: replay.value(),
     };
     let authority = DirectFamilyTerminalAuthoritySbfV1 {
-        product_root: *product_root.state(),
-        founder_link: *founder_link.state(),
-        bundle: *bundle.value(),
-        root: root.value(),
+        product_root: product_root.state(),
+        founder_link: founder_link.state(),
+        bundle: bundle.value(),
+        root: root.value_ref(),
         root_semantic_id: root.semantic_id(),
-        replay: replay.value(),
+        replay: replay.value_ref(),
         replay_semantic_id: replay.semantic_id(),
-        selection: selection.value(),
-        reservations,
-        retirement,
+        selection: selection.value_ref(),
+        reservations: &reservations,
+        retirement: &retirement,
         retirement_transfer_id,
         sequence,
         slot: observed_slot,
@@ -2019,13 +2041,13 @@ pub(crate) fn process_direct_retire_terminal_v1(
     };
     let plan = prepare_direct_family_terminal_v1(
         &authority,
-        *product_root.state(),
-        *founder_link.state(),
+        product_root.state(),
+        founder_link.state(),
         bundle.value(),
-        state,
-        selection.value(),
-        reservations,
-        retirement,
+        &state,
+        selection.value_ref(),
+        &reservations,
+        &retirement,
         sequence,
         observed_slot,
         family_sequence,
@@ -2050,12 +2072,6 @@ pub(crate) fn process_direct_retire_terminal_v1(
         index += 1;
     }
     credit_lamports_v1(&accounts[8], plan.retirement.surplus_lamports)?;
-    write_direct_action_replay_v1(
-        &accounts[4],
-        replay.bump(),
-        plan.replay_post,
-        root.value(),
-    )?;
     write_product_root_post_v1(&accounts[0], product_root, &product_post)?;
     index = 0;
     while index < reservation_count {
@@ -2068,6 +2084,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
         index += 1;
     }
     close_direct_program_account_v1(&accounts[5], selection.observed_lamports())?;
+    close_direct_program_account_v1(&accounts[4], replay.observed_lamports())?;
     close_direct_program_account_v1(&accounts[3], root.observed_lamports())
 }
 
@@ -2110,12 +2127,12 @@ pub(crate) fn process_direct_economic_terminal_v1(
     let direct_replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
-        root,
+        &root,
     )?;
     let selection = authenticate_direct_selection_writable_v1(
         program_id,
         &accounts[2],
-        root,
+        &root,
     )?;
     if let Some(prices) = lapse_prices {
         require(selection.value().price().prices == prices, ClutchError::MismatchedState)?;
@@ -2129,10 +2146,10 @@ pub(crate) fn process_direct_economic_terminal_v1(
     require_distinct(&accounts[..13])?;
     require_direct_endpoint_alias_contract_v1(accounts, 13, endpoint_count)?;
     let observed_slot = read_clock_slot(&accounts[12])?;
-    authenticate_direct_resolution_v5(program_id, root, &accounts[11])?;
+    authenticate_direct_resolution_v5(program_id, &root, &accounts[11])?;
     let bound = authenticate_direct_general_market_v1(
         program_id,
-        root,
+        &root,
         &accounts[3],
         &accounts[4],
         &accounts[5],
@@ -2149,7 +2166,7 @@ pub(crate) fn process_direct_economic_terminal_v1(
         let reservation = authenticate_direct_reservation_writable_v1(
             program_id,
             &accounts[first],
-            root,
+            &root,
         )?;
         let selection_index = u8::try_from(index)
             .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -2188,9 +2205,9 @@ pub(crate) fn process_direct_economic_terminal_v1(
         replay: direct_replay.value(),
     };
     let authority = DirectEconomicTerminalAuthoritySbfV1 {
-        state,
-        selection: selection.value(),
-        endpoints,
+        state: &state,
+        selection: selection.value_ref(),
+        endpoints: &endpoints,
         reason,
         sequence,
         slot: observed_slot,
@@ -2217,7 +2234,7 @@ pub(crate) fn process_direct_economic_terminal_v1(
         let reservation_data = authenticate_direct_reservation_writable_v1(
             program_id,
             &accounts[first],
-            root,
+            &root,
         )?;
         write_direct_reservation_v1(
             &accounts[first],
@@ -2303,7 +2320,7 @@ fn direct_endpoint_first_from_v1(base: usize, index: usize) -> Outcome<usize> {
 
 fn authenticate_direct_resolution_v5(
     program_id: &Pubkey,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     account: &AccountInfo<'_>,
 ) -> Outcome<()> {
     use clutch_collateral_adapter_v2::{ResolutionStateV5, ResolutionV5, RESOLUTION_V5_BYTES};
@@ -2350,7 +2367,7 @@ fn authenticate_direct_resolution_v5(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_direct_general_market_v1(
     program_id: &Pubkey,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     realm_account: &AccountInfo<'_>,
     profile_account: &AccountInfo<'_>,
     policy_account: &AccountInfo<'_>,
@@ -2431,7 +2448,7 @@ fn authenticate_direct_general_market_v1(
 
 fn authenticate_direct_order_limit_v1(
     program_id: &Pubkey,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     bundle_account: &AccountInfo<'_>,
     genesis_account: &AccountInfo<'_>,
     price_grid_account: &AccountInfo<'_>,
@@ -2621,7 +2638,8 @@ fn authenticate_root_with_access_v1(
     require_live_id_v1(data_id)?;
     require_live_id_v1(semantic_id)?;
     Ok(AuthenticatedDirectMarketRootV1 {
-        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+        account: *account.key, value: Box::new(value), bump, data_id, semantic_id,
+        observed_lamports,
     })
 }
 
@@ -2643,7 +2661,7 @@ pub(crate) fn authenticate_direct_market_root_writable_v1(
 pub(crate) fn authenticate_direct_action_replay_writable_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
 ) -> Outcome<AuthenticatedDirectActionReplayV1> {
     require_program_state_v1(
         program_id,
@@ -2678,7 +2696,8 @@ pub(crate) fn authenticate_direct_action_replay_writable_v1(
         .semantic_id(root.value(), &DirectRuntimeSha256V1)
         .map_err(map_direct_error_v1)?;
     Ok(AuthenticatedDirectActionReplayV1 {
-        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+        account: *account.key, value: Box::new(value), bump, data_id, semantic_id,
+        observed_lamports,
     })
 }
 
@@ -2686,7 +2705,7 @@ pub(crate) fn authenticate_direct_action_replay_writable_v1(
 fn authenticate_selection_with_access_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     access: DirectAccountAccessV1,
 ) -> Outcome<AuthenticatedDirectSelectionV1> {
     require_program_state_v1(program_id, account, access, DIRECT_SELECTION_ACCOUNT_BYTES)?;
@@ -2716,14 +2735,15 @@ fn authenticate_selection_with_access_v1(
         .semantic_id(root.value(), &DirectRuntimeSha256V1)
         .map_err(map_direct_error_v1)?;
     Ok(AuthenticatedDirectSelectionV1 {
-        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+        account: *account.key, value: Box::new(value), bump, data_id, semantic_id,
+        observed_lamports,
     })
 }
 
 pub(crate) fn authenticate_direct_selection_readonly_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
 ) -> Outcome<AuthenticatedDirectSelectionV1> {
     authenticate_selection_with_access_v1(
         program_id, account, root, DirectAccountAccessV1::ReadOnly,
@@ -2733,7 +2753,7 @@ pub(crate) fn authenticate_direct_selection_readonly_v1(
 pub(crate) fn authenticate_direct_selection_writable_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
 ) -> Outcome<AuthenticatedDirectSelectionV1> {
     authenticate_selection_with_access_v1(
         program_id, account, root, DirectAccountAccessV1::Writable,
@@ -2744,7 +2764,7 @@ pub(crate) fn authenticate_direct_selection_writable_v1(
 fn authenticate_reservation_with_access_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
     access: DirectAccountAccessV1,
 ) -> Outcome<AuthenticatedDirectReservationV1> {
     require_program_state_v1(program_id, account, access, DIRECT_RESERVATION_ACCOUNT_BYTES)?;
@@ -2784,7 +2804,7 @@ fn authenticate_reservation_with_access_v1(
 pub(crate) fn authenticate_direct_reservation_readonly_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
 ) -> Outcome<AuthenticatedDirectReservationV1> {
     authenticate_reservation_with_access_v1(
         program_id, account, root, DirectAccountAccessV1::ReadOnly,
@@ -2794,7 +2814,7 @@ pub(crate) fn authenticate_direct_reservation_readonly_v1(
 pub(crate) fn authenticate_direct_reservation_writable_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: AuthenticatedDirectMarketRootV1,
+    root: &AuthenticatedDirectMarketRootV1,
 ) -> Outcome<AuthenticatedDirectReservationV1> {
     authenticate_reservation_with_access_v1(
         program_id, account, root, DirectAccountAccessV1::Writable,
@@ -3120,7 +3140,7 @@ mod tests {
         assert_eq!(direct_endpoint_first_from_v1(20, 0).unwrap(), 20);
         assert_eq!(direct_endpoint_first_from_v1(20, 1).unwrap(), 23);
         assert_eq!(20 + 2 * 3, DIRECT_MARKET_V1_MAX_ACCOUNTS);
-        assert_eq!(9 + 2 + 4, DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS);
+        assert_eq!(9 + 2 + 5, DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS);
         assert_eq!(
             DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1,
             DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES,

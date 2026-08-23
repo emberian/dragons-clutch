@@ -59,8 +59,9 @@ pub mod dealer_facility;
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
-pub mod direct_selection;
-pub mod direct_selection_v3;
+// Legacy Direct V2/V3 source remains in-tree for historical review, but is
+// deliberately absent from this executable module graph. Their allocated
+// wire coordinates are decode-only and refuse at the capability boundary.
 /// Capability-disabled current Direct `80/1` account/authentication plane.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
@@ -79,6 +80,7 @@ pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
+pub(crate) mod full_principal_funding_v1;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(

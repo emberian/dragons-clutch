@@ -513,6 +513,7 @@ fn retirement() -> DirectRetirementTransferV1 {
             }),
             None,
             None,
+            None,
         ],
         source_count: 2,
         refunds: [
@@ -520,6 +521,7 @@ fn retirement() -> DirectRetirementTransferV1 {
                 recipient: id(30),
                 lamports: 300,
             }),
+            None,
             None,
             None,
             None,
@@ -560,6 +562,7 @@ fn retirement_builder_derives_sorted_sources_and_coalesced_refunds() {
                 observed_lamports: 110,
             }),
             None,
+            None,
         ],
         id(31),
     )
@@ -567,7 +570,7 @@ fn retirement_builder_derives_sorted_sources_and_coalesced_refunds() {
     assert_eq!(transfer, retirement());
     assert_eq!(
         build_direct_retirement_transfer_v1(
-            [transfer.sources[0], transfer.sources[0], None, None],
+            [transfer.sources[0], transfer.sources[0], None, None, None],
             id(31),
         ),
         Err(DirectMarketErrorV1::IdentityAlias)
@@ -583,6 +586,51 @@ fn retirement_refuses_duplicate_sources_and_nonzero_tail() {
     let mut tail = retirement();
     tail.sources[2] = tail.sources[1];
     assert_eq!(tail.validate(), Err(DirectMarketErrorV1::InvalidCount));
+}
+
+#[test]
+fn terminal_retirement_requires_the_exact_action_replay_archive() {
+    let transfer = retirement();
+    assert_eq!(
+        require_terminal_retirement_source_v1(&transfer, id(20), rent(30, 100, 5)),
+        Ok(())
+    );
+    assert_eq!(
+        require_terminal_retirement_source_v1(&transfer, id(22), rent(32, 80, 2)),
+        Err(DirectMarketErrorV1::MismatchedBinding)
+    );
+    assert_eq!(
+        require_terminal_retirement_source_v1(&transfer, id(20), rent(30, 99, 5)),
+        Err(DirectMarketErrorV1::MismatchedBinding)
+    );
+}
+
+#[test]
+fn retirement_builder_accepts_the_complete_five_archive_family() {
+    let transfer = build_direct_retirement_transfer_v1(
+        [
+            Some(DirectRetirementSourceV1 {
+                account: id(20), rent: rent(40, 100, 1), observed_lamports: 105,
+            }),
+            Some(DirectRetirementSourceV1 {
+                account: id(21), rent: rent(41, 101, 2), observed_lamports: 107,
+            }),
+            Some(DirectRetirementSourceV1 {
+                account: id(22), rent: rent(42, 102, 3), observed_lamports: 109,
+            }),
+            Some(DirectRetirementSourceV1 {
+                account: id(23), rent: rent(43, 103, 4), observed_lamports: 111,
+            }),
+            Some(DirectRetirementSourceV1 {
+                account: id(24), rent: rent(44, 104, 5), observed_lamports: 113,
+            }),
+        ],
+        id(31),
+    )
+    .unwrap();
+    assert_eq!(transfer.source_count, 5);
+    assert_eq!(transfer.refund_count, 5);
+    assert_eq!(transfer.surplus_lamports, 35);
 }
 
 #[test]

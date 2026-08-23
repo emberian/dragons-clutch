@@ -5,10 +5,11 @@
 
 //! Current Direct-market root and permanent replay semantics.
 //!
-//! The deletable Direct root owns phases and archive counts. The permanent
-//! action account is the sole owner of action ordinals, rolling receipts, and
-//! Product terminal evidence. Solana ownership, PDA derivation, account bytes,
-//! funding, and transfers remain in default-deny adapter boundaries.
+//! The deletable Direct root owns phases and archive counts. The action account
+//! is the sole owner of action ordinals and rolling receipts until atomic
+//! family retirement commits its last receipt into Product and closes it.
+//! Solana ownership, PDA derivation, account bytes, funding, and transfers
+//! remain in default-deny adapter boundaries.
 
 use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, CompiledProductSeriesBundleV5, ContentId,
@@ -25,10 +26,10 @@ pub mod codec_v1;
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
 /// Maximum retained submitted candidates owned by one Direct Selection.
 pub const MAX_DIRECT_CANDIDATES_V1: u8 = 3;
-/// Root, Selection, and at most two still-live Reservations close together.
-pub const MAX_DIRECT_RETIREMENT_SOURCES_V1: usize = 4;
-/// At most four distinct persisted principal payers receive refunds.
-pub const MAX_DIRECT_REFUND_RECIPIENTS_V1: usize = 4;
+/// Root, replay, Selection, and at most two live Reservations close together.
+pub const MAX_DIRECT_RETIREMENT_SOURCES_V1: usize = 5;
+/// At most five distinct persisted principal payers receive refunds.
+pub const MAX_DIRECT_REFUND_RECIPIENTS_V1: usize = 5;
 
 const FOUNDATION_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/foundation-receipt/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
@@ -281,16 +282,21 @@ impl DirectRetirementTransferV1 {
             RETIREMENT_TRANSFER_DOMAIN_V1,
             &[self.source_count],
             &source_accounts[0], &source_accounts[1], &source_accounts[2], &source_accounts[3],
+            &source_accounts[4],
             &source_payers[0], &source_payers[1], &source_payers[2], &source_payers[3],
+            &source_payers[4],
             &source_principals[0].to_le_bytes(), &source_principals[1].to_le_bytes(),
             &source_principals[2].to_le_bytes(), &source_principals[3].to_le_bytes(),
+            &source_principals[4].to_le_bytes(),
             &source_balances[0].to_le_bytes(), &source_balances[1].to_le_bytes(),
             &source_balances[2].to_le_bytes(), &source_balances[3].to_le_bytes(),
+            &source_balances[4].to_le_bytes(),
             &[self.refund_count],
             &refund_recipients[0], &refund_recipients[1], &refund_recipients[2],
-            &refund_recipients[3],
+            &refund_recipients[3], &refund_recipients[4],
             &refund_amounts[0].to_le_bytes(), &refund_amounts[1].to_le_bytes(),
             &refund_amounts[2].to_le_bytes(), &refund_amounts[3].to_le_bytes(),
+            &refund_amounts[4].to_le_bytes(),
             &self.neutral_lamport_sink,
             &self.surplus_lamports.to_le_bytes(),
         ]);
@@ -479,8 +485,8 @@ impl DirectMarketBindingV1 {
 }
 
 fn validate_product_join_v1(
-    product_root: MarketLifecycleRootV1,
-    founder_link: SeriesMarketLinkV1,
+    product_root: &MarketLifecycleRootV1,
+    founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
     direct: DirectMarketBindingV1,
     terminal_join: bool,
@@ -1377,8 +1383,8 @@ pub fn prepare_direct_foundation_v1<
     A: AuthenticatedDirectFoundationV1 + ?Sized,
     B: DirectHashBackendV1,
 >(
-    authority: &A, product_root: MarketLifecycleRootV1,
-    founder_link: SeriesMarketLinkV1,
+    authority: &A, product_root: &MarketLifecycleRootV1,
+    founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
     binding: DirectMarketBindingV1,
     schedule: DirectScheduleV1, root_rent: DirectRentOwnerV1,
@@ -1418,8 +1424,8 @@ pub fn prepare_direct_foundation_v1<
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
     authority.authenticate_foundation(
-        &product_root,
-        &founder_link,
+        product_root,
+        founder_link,
         compiler_bundle,
         binding,
         schedule,
@@ -1494,12 +1500,12 @@ pub trait AuthenticatedDirectTerminalV1 {
         &self, _product_root: &MarketLifecycleRootV1,
         _founder_link: &SeriesMarketLinkV1,
         _compiler_bundle: &CompiledProductSeriesBundleV5,
-        _root: DirectMarketRootV1,
-        _root_semantic_id: [u8; 32], _replay: DirectActionReplayV1,
+        _root: &DirectMarketRootV1,
+        _root_semantic_id: [u8; 32], _replay: &DirectActionReplayV1,
         _replay_semantic_id: [u8; 32],
-        _selection: crate::selection_v1::DirectSelectionV1,
+        _selection: &crate::selection_v1::DirectSelectionV1,
         _reservations: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
-        _retirement: DirectRetirementTransferV1,
+        _retirement: &DirectRetirementTransferV1,
         _retirement_transfer_id: [u8; 32], _consumed_sequence: u64,
         _observed_slot: u64, _family_terminal_sequence: u32,
     ) -> Result<(), DirectMarketErrorV1> {
@@ -1549,7 +1555,8 @@ pub struct DirectFamilyTerminalPlanV1 {
     pub retirement: DirectRetirementTransferV1,
     /// Identity of the complete transfer vector.
     pub retirement_transfer_id: [u8; 32],
-    /// Permanent terminal replay/receipt poststate.
+    /// Terminal replay/receipt successor used to derive the Product receipt
+    /// before the owning replay account is closed in the same transition.
     pub replay_post: DirectActionReplayV1,
     /// Direct-owned terminal receipt consumed by Product.
     pub terminal_receipt_id: ContentId,
@@ -1559,20 +1566,20 @@ pub struct DirectFamilyTerminalPlanV1 {
 
 /// Prepare atomic action 13 after economic terminality.
 ///
-/// The vector must contain root, Selection, and every still-live Reservation.
+/// The vector must contain root, action replay, Selection, and every still-live Reservation.
 /// Reservations retired by action 3 remain committed by replay and cannot
-/// reappear. The permanent action receipt itself is never deleted.
+/// reappear. The action replay closes only after Product commits its terminal receipt.
 pub fn prepare_direct_family_terminal_v1<
     A: AuthenticatedDirectTerminalV1 + ?Sized,
     B: DirectHashBackendV1,
 >(
-    authority: &A, product_root: MarketLifecycleRootV1,
-    founder_link: SeriesMarketLinkV1,
+    authority: &A, product_root: &MarketLifecycleRootV1,
+    founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
-    state: DirectRootReplayPostV1,
-    selection: crate::selection_v1::DirectSelectionV1,
-    reservations: [Option<crate::reservation_v1::DirectReservationV1>; 2],
-    retirement: DirectRetirementTransferV1, consumed_sequence: u64,
+    state: &DirectRootReplayPostV1,
+    selection: &crate::selection_v1::DirectSelectionV1,
+    reservations: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
+    retirement: &DirectRetirementTransferV1, consumed_sequence: u64,
     observed_slot: u64, family_terminal_sequence: u32, backend: &B,
 ) -> Result<DirectFamilyTerminalPlanV1, DirectMarketErrorV1> {
     state.replay.require_action(state.root, consumed_sequence)?;
@@ -1603,51 +1610,44 @@ pub fn prepare_direct_family_terminal_v1<
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    let expected_sources = usize::from(state.root.live_reservations).checked_add(2)
+    let expected_sources = usize::from(state.root.live_reservations).checked_add(3)
         .ok_or(DirectMarketErrorV1::Arithmetic)?;
     let ordered_reservations = canonical_terminal_reservation_archives(
-        state.root,
+        &state.root,
         selection,
         reservations,
         backend,
     )?;
-    let mut root_source = None;
-    let mut selection_source = None;
-    let mut reservation_sources = [None; 2];
-    let mut index = 0usize;
-    while index < usize::from(retirement.source_count) {
-        let source = retirement.sources[index].ok_or(DirectMarketErrorV1::InvalidCount)?;
-        if source.account == binding.direct_root_account { root_source = Some(source); }
-        if source.account == state.root.selection_account { selection_source = Some(source); }
-        let mut reservation_index = 0usize;
-        while reservation_index < usize::from(state.root.live_reservations) {
-            let reservation = ordered_reservations[reservation_index]
-                .ok_or(DirectMarketErrorV1::InvalidCount)?;
-            if source.account == reservation.account() {
-                reservation_sources[reservation_index] = Some(source);
-            }
-            reservation_index += 1;
-        }
-        if source.account == binding.action_replay_account {
-            return Err(DirectMarketErrorV1::IdentityAlias);
-        }
-        index += 1;
-    }
     if retirement.neutral_lamport_sink != binding.neutral_lamport_sink
         || usize::from(retirement.source_count) != expected_sources
-        || root_source.map(|source| source.rent) != Some(state.root.root_rent)
-        || selection_source.map(|source| source.rent) != Some(selection.rent())
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
+    require_terminal_retirement_source_v1(
+        retirement,
+        binding.direct_root_account,
+        state.root.root_rent,
+    )?;
+    require_terminal_retirement_source_v1(
+        retirement,
+        binding.action_replay_account,
+        state.replay.rent,
+    )?;
+    require_terminal_retirement_source_v1(
+        retirement,
+        state.root.selection_account,
+        selection.rent(),
+    )?;
     let mut reservation_ids = [[0u8; 32]; 2];
-    index = 0;
+    let mut index = 0usize;
     while index < usize::from(state.root.live_reservations) {
         let reservation = ordered_reservations[index]
             .ok_or(DirectMarketErrorV1::InvalidCount)?;
-        if reservation_sources[index].map(|source| source.rent) != Some(reservation.rent()) {
-            return Err(DirectMarketErrorV1::MismatchedBinding);
-        }
+        require_terminal_retirement_source_v1(
+            retirement,
+            reservation.account(),
+            reservation.rent(),
+        )?;
         reservation_ids[index] = reservation.semantic_id(backend)?;
         index += 1;
     }
@@ -1656,12 +1656,12 @@ pub fn prepare_direct_family_terminal_v1<
     let selection_semantic_id = selection.semantic_id(state.root, backend)?;
     let retirement_transfer_id = retirement.semantic_id(backend)?;
     authority.authenticate_terminal(
-        &product_root,
-        &founder_link,
+        product_root,
+        founder_link,
         compiler_bundle,
-        state.root,
+        &state.root,
         root_semantic_id,
-        state.replay,
+        &state.replay,
         replay_pre_semantic_id,
         selection,
         &ordered_reservations,
@@ -1694,7 +1694,8 @@ pub fn prepare_direct_family_terminal_v1<
     replay_post.validate_against(state.root)?;
     let terminal_receipt_id = ContentId::from_bytes(terminal_bytes);
     Ok(DirectFamilyTerminalPlanV1 {
-        root_semantic_id, replay_pre_semantic_id, retirement, retirement_transfer_id,
+        root_semantic_id, replay_pre_semantic_id, retirement: *retirement,
+        retirement_transfer_id,
         replay_post, terminal_receipt_id,
         product_authority: DirectProductTerminalAuthorityV1 {
             aggregator_prestate_id,
@@ -1704,10 +1705,30 @@ pub fn prepare_direct_family_terminal_v1<
     })
 }
 
+fn require_terminal_retirement_source_v1(
+    retirement: &DirectRetirementTransferV1,
+    required_account: [u8; 32],
+    required_rent: DirectRentOwnerV1,
+) -> Result<(), DirectMarketErrorV1> {
+    let mut index = 0usize;
+    while index < usize::from(retirement.source_count) {
+        let source = retirement.sources[index].ok_or(DirectMarketErrorV1::InvalidCount)?;
+        if source.account == required_account {
+            return if source.rent == required_rent {
+                Ok(())
+            } else {
+                Err(DirectMarketErrorV1::MismatchedBinding)
+            };
+        }
+        index += 1;
+    }
+    Err(DirectMarketErrorV1::MismatchedBinding)
+}
+
 fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
-    root: DirectMarketRootV1,
-    selection: crate::selection_v1::DirectSelectionV1,
-    supplied: [Option<crate::reservation_v1::DirectReservationV1>; 2],
+    root: &DirectMarketRootV1,
+    selection: &crate::selection_v1::DirectSelectionV1,
+    supplied: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
     backend: &B,
 ) -> Result<[Option<crate::reservation_v1::DirectReservationV1>; 2], DirectMarketErrorV1> {
     if selection.phase() != crate::selection_v1::DirectSelectionPhaseV1::Terminal
@@ -1715,7 +1736,7 @@ fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
     {
         return Err(DirectMarketErrorV1::WrongPhase);
     }
-    let supplied_count = match supplied {
+    let supplied_count = match *supplied {
         [None, None] => 0,
         [Some(_), None] | [None, Some(_)] => 1,
         [Some(_), Some(_)] => 2,
@@ -1744,7 +1765,7 @@ fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
     let mut supplied_index = 0usize;
     while supplied_index < 2 {
         if let Some(reservation) = supplied[supplied_index] {
-            reservation.validate_against_root(root)?;
+            reservation.validate_against_root(*root)?;
             if reservation.phase() != expected_phase
                 || reservation.terminal_receipt_id() != transition_id
             {

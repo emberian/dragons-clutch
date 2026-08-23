@@ -14,7 +14,7 @@
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/full/v6-source-ingest-general-v5-staged-disabled";
+    "dragons-clutch/capability-profile/full/v7-direct-80-staged-disabled-legacy-direct-retired";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -22,10 +22,12 @@ pub const PROFILE_LABEL: &str =
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v6-source-ingest-general-v5-staged-disabled";
-/// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v7-direct-80-staged-disabled-legacy-direct-retired";
+/// Source V2 and archive exact-point d1-d3 resolution product. The retained
+/// feature spelling is build-input compatibility only; Direct V3 is retired.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/source-v2-point-legacy-direct-retired/v2";
 /// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
@@ -51,8 +53,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x05, 0x1c, 0x8a, 0xde, 0xc7, 0x94, 0x74, 0x2b, 0x76, 0x9f, 0x0f, 0x5a, 0x19, 0xfd, 0xeb, 0x3c,
-    0x16, 0x4e, 0xef, 0xf6, 0x66, 0xcf, 0x43, 0x1e, 0x65, 0x4d, 0x3f, 0x9e, 0x4b, 0xc2, 0x93, 0xb0,
+    0xc6, 0x7c, 0x3e, 0xa7, 0xce, 0x1b, 0x39, 0xf6, 0xb8, 0x6b, 0xed, 0x6f, 0x67, 0xf9, 0xd1, 0xe8,
+    0xf9, 0x98, 0xb6, 0x77, 0x52, 0x50, 0xe5, 0x66, 0xc3, 0xbf, 0xec, 0x58, 0x7b, 0xb0, 0x88, 0xbd,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -61,14 +63,14 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x20, 0x5b, 0x64, 0x10, 0x78, 0xec, 0x45, 0x1b, 0x39, 0x2f, 0x6b, 0xd2, 0x85, 0x72, 0x15, 0xe5,
-    0x7d, 0xfc, 0xb3, 0xf3, 0x74, 0x96, 0x09, 0xac, 0xc6, 0x4d, 0x08, 0xda, 0x87, 0x63, 0x6f, 0x61,
+    0x31, 0xeb, 0xe9, 0x31, 0x46, 0xb8, 0x88, 0xa5, 0x6f, 0x04, 0xf9, 0x19, 0x81, 0x2f, 0x2e, 0x2a,
+    0x6c, 0xc0, 0x89, 0xd3, 0x4d, 0x9c, 0xc5, 0x64, 0xe2, 0xd2, 0x68, 0x66, 0x17, 0x91, 0x73, 0xe8,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb7, 0x35, 0x87, 0x22, 0x84, 0x69, 0x1c, 0xed, 0x6a, 0x71, 0x29, 0xe4, 0x58, 0x83, 0x3e, 0x21,
-    0x21, 0x79, 0x30, 0x09, 0xba, 0xd1, 0x2c, 0x45, 0xe6, 0xcb, 0xaa, 0x3c, 0x88, 0x6e, 0x78, 0x97,
+    0xe8, 0x95, 0x10, 0x78, 0xc1, 0x4c, 0x37, 0x57, 0xd6, 0x92, 0x54, 0x82, 0xda, 0xa0, 0xfd, 0xb0,
+    0x34, 0xf1, 0xf7, 0x71, 0xdf, 0x2b, 0xa5, 0x09, 0x08, 0xb0, 0x44, 0xea, 0xbc, 0x66, 0x4c, 0xa7,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-general-source-v2-point")]
@@ -104,13 +106,10 @@ pub const DEALER_POLICY_CATALOG_LAB: bool =
 pub const SOURCE_V1: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Source V2 ingestion and resolution.
 pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
-/// Whether the profile contains legacy Direct V2 clearing.
-pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the profile contains Direct V3 clearing.
-pub const DIRECT_V3: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
-)) && !DEALER_POLICY_CATALOG_LAB;
+/// Legacy Direct V2 is decode-only in every current artifact.
+pub const DIRECT_V2: bool = false;
+/// Legacy Direct V3 is decode-only in every current artifact.
+pub const DIRECT_V3: bool = false;
 /// Whether the profile contains general clearing.
 pub const GENERAL_CLEARING: bool = cfg!(any(
     feature = "profile-full",
@@ -131,8 +130,10 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
     match tag {
         // Common construction, custody, trading, exit and artifact plane.
         1..=5 | 7 | 10..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
-        // The old feed buffer, direct-page settlement and Source V1 families.
-        6 | 22..=31 => cfg!(feature = "profile-full"),
+        // The old feed buffer and Source V1 family. SubmitDirectPage (22) and
+        // Direct V2 actions (27..=31) remain allocated for hostile decoding,
+        // but no current artifact can execute them.
+        6 | 23..=26 => cfg!(feature = "profile-full"),
         // Resumable occupation work.
         32..=35 => cfg!(feature = "profile-full"),
         // General clearing and its terminal routes. ClosePosition remains
@@ -158,7 +159,8 @@ pub const fn legacy_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether one dedicated Direct V3 tag belongs to this product.
 pub const fn direct_v3_tag_enabled(tag: u8) -> bool {
-    (tag >= 36 && tag <= 46) && DIRECT_V3
+    let _ = tag;
+    false
 }
 
 /// Return whether an exact dedicated Direct V3 tag/version pair belongs to this product.
@@ -284,10 +286,13 @@ mod tests {
         );
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
-        assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
+        assert!(!direct_v3_tag_enabled(36));
         assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
-        assert_eq!(legacy_intent_tag_enabled(27), DIRECT_V2);
+        assert!(!legacy_intent_tag_enabled(22));
+        assert!(!legacy_intent_tag_enabled(27));
+        assert!(!legacy_intent_tag_enabled(31));
+        assert!(!direct_v3_tag_enabled(46));
     }
 
     #[test]
@@ -361,12 +366,20 @@ mod tests {
                         && (clutch_solana_layout::registry::FractionalRedemptionAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::FractionalRedemptionAction::LAST_TAG)
                             .contains(&local_action);
+                    let direct = family_tag
+                        == clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DirectMarketAction::LAST_TAG)
+                            .contains(&local_action);
                     let expected_allocated = general
                         || dealer
                         || structured
                         || source_or_series
                         || recovery
-                        || fractional;
+                        || fractional
+                        || direct;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
@@ -415,6 +428,24 @@ mod tests {
     fn general_active_width_clearing_is_one_coherent_capability_unit() {
         for action in [10, 12, 13, 14] {
             assert!(extension_intent_action_enabled(74, 1, action));
+        }
+    }
+
+    #[test]
+    fn direct_successor_is_allocated_but_independently_disabled() {
+        let mut action = clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG;
+        while action <= clutch_solana_layout::registry::DirectMarketAction::LAST_TAG {
+            assert!(extension_intent_action_allocated(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                action,
+            ));
+            assert!(!extension_intent_action_enabled(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                action,
+            ));
+            action += 1;
         }
     }
 }
