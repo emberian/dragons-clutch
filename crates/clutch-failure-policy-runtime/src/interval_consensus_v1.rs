@@ -1174,9 +1174,6 @@ fn replay_from_state(state: FailureIntervalConsensusStateV1) -> FailureIntervalC
     hasher.update(state.transition_nonce.to_le_bytes());
     hasher.update(state.last_transition_receipt_id.bytes());
     hasher.update(state.last_liveness_receipt_id.bytes());
-    hasher.update(replay_from_state(*state).id().bytes());
-    hasher.update(state.last_transition_receipt_id.bytes());
-    hasher.update(state.last_liveness_receipt_id.bytes());
     hasher.update(state.certificate_id.bytes());
     hasher.update(state.resolution_receipt_id.bytes());
     hasher.update(state.close_authorization_id.bytes());
@@ -1284,4 +1281,68 @@ fn require_live(bytes: [u8; 32]) -> Result<()> {
 
 fn live(bytes: [u8; 32]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_facts() -> FailureIntervalConsensusPersistedFactsV1 {
+        FailureIntervalConsensusPersistedFactsV1 {
+            phase: FailureIntervalConsensusPhaseV1::Active,
+            binding_id: FailureIntervalConsensusBindingIdV1::from_bytes([1; 32]),
+            failure_policy_binding_id: FailurePolicyBindingId::from_bytes([2; 32]),
+            market_instance_id: MarketInstanceV2Id::from_bytes([3; 32]),
+            generation: 1,
+            source_success_handoff_id: SourceContentId::from_bytes([4; 32]),
+            source_interval_id: SourceContentId::from_bytes([5; 32]),
+            interval_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes([6; 32]),
+            funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1::from_bytes([7; 32]),
+            work_account: FailureIntervalConsensusAccountIdV1::from_bytes([8; 32]),
+            replay_account: FailureIntervalConsensusAccountIdV1::from_bytes([9; 32]),
+            rent_payer: FailureIntervalConsensusAccountIdV1::from_bytes([10; 32]),
+            neutral_sink: FailureIntervalConsensusAccountIdV1::from_bytes([11; 32]),
+            work_rent_principal_lamports: 100,
+            replay_rent_principal_lamports: 200,
+            replay_preserved_lamports: 203,
+            initial_work_id: QuantizedIntervalConsensusWorkV1Id::from_bytes([12; 32]),
+            current_work_id: QuantizedIntervalConsensusWorkV1Id::from_bytes([13; 32]),
+            current_transcript: SourceContentId::from_bytes([14; 32]),
+            checked_coordinates: 1,
+            total_coordinates: 2,
+            accepted_recovery_progress_total: 1,
+            transition_nonce: 1,
+            last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1::from_bytes(
+                [15; 32],
+            ),
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([16; 32]),
+            certificate_id: QuantizedIntervalConsensusCertificateV1Id::from_bytes([0; 32]),
+            resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(
+                [0; 32],
+            ),
+            close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1::from_bytes(
+                [0; 32],
+            ),
+        }
+    }
+
+    #[test]
+    fn replay_derivation_is_finite_deterministic_and_transition_sensitive() {
+        let facts = active_facts();
+        let first = project_failure_interval_consensus_replay_id_v1(facts).unwrap();
+        let second = project_failure_interval_consensus_replay_id_v1(facts).unwrap();
+        assert_eq!(first, second);
+        assert!(first.bytes().iter().any(|byte| *byte != 0));
+
+        let sibling = FailureIntervalConsensusPersistedFactsV1 {
+            last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1::from_bytes(
+                [17; 32],
+            ),
+            ..facts
+        };
+        assert_ne!(
+            first,
+            project_failure_interval_consensus_replay_id_v1(sibling).unwrap()
+        );
+    }
 }
