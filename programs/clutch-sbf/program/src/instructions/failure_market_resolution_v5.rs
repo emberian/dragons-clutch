@@ -1058,6 +1058,8 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
             *source_terminal_receipt_account.key,
             *source_liveness_policy_account.key,
             *source_liveness_compartment_account.key,
+            Pubkey::new_from_array(source_lineage.lineage().lineage_account.bytes()),
+            Pubkey::new_from_array(source_input.result_account().bytes()),
             *rent_sysvar.key,
             *system_program.key,
         ],
@@ -1511,7 +1513,7 @@ fn require_distinct_resolution_role_keys_v5<const N: usize>(keys: [Pubkey; N]) -
 }
 
 fn require_source_resolution_outer_aliases_v5(
-    protocol_roles: [Pubkey; 15],
+    protocol_roles: [Pubkey; 17],
     external_roles: [Pubkey; 3],
 ) -> Outcome<()> {
     require_distinct_resolution_role_keys_v5(protocol_roles)?;
@@ -1880,8 +1882,10 @@ mod adversarial_tests {
             key(13),
             key(14),
             key(15),
+            key(16),
+            key(17),
         ];
-        let external = [key(16), key(17), key(18)];
+        let external = [key(18), key(19), key(20)];
         assert!(require_source_resolution_outer_aliases_v5(protocol, external).is_ok());
         let mut protocol_index = 0usize;
         while protocol_index < protocol.len() {
