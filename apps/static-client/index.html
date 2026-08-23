@@ -62,8 +62,8 @@
               <label class="field"><span>operatord base URL</span><input id="operator-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:PORT" required><small>GET-only <code>/v1/*</code> endpoint. Plain HTTP is accepted only on loopback.</small></label>
               <label class="field"><span>Cluster name</span><input id="cluster-name" autocomplete="off" placeholder="localnet, devnet, or explicit private name" required></label>
               <label class="field wide"><span>Genesis hash</span><input id="genesis-hash" class="mono" autocomplete="off" placeholder="Exact cluster genesis identity" required></label>
-              <label class="field"><span>Validator RPC HTTP URL</span><input id="rpc-http-url" type="url" autocomplete="off" placeholder="Explicit acquisition target" required><small>Configuration binding only; the browser does not contact it.</small></label>
-              <label class="field"><span>Validator RPC WebSocket URL</span><input id="rpc-websocket-url" type="url" autocomplete="off" placeholder="Explicit subscription target" required><small>Configuration binding only; the browser does not open it.</small></label>
+              <label class="field"><span>Validator RPC HTTP URL</span><input id="rpc-http-url" type="url" autocomplete="off" placeholder="Explicit acquisition target" required><small>Configuration binding only; the browser does not contact it or copy its path/query credentials.</small></label>
+              <label class="field"><span>Validator RPC WebSocket URL</span><input id="rpc-websocket-url" type="url" autocomplete="off" placeholder="Explicit subscription target" required><small>Configuration binding only; the browser does not open it or copy its path/query credentials.</small></label>
               <label class="field"><span>Projection commitment</span><select id="commitment"><option value="finalized">finalized</option><option value="processed">processed</option></select><small>Processed state remains fork-sensitive even when its slot is frozen.</small></label>
             </div>
           </fieldset>
@@ -94,7 +94,7 @@
           <div class="form-actions">
             <button class="primary-button" type="submit">Apply explicit target</button>
             <button id="read-chain" class="secondary-button" type="button" disabled>Read bounded operatord state</button>
-            <button id="export-configuration" class="quiet-button" type="button" disabled>Copy configuration</button>
+            <button id="export-configuration" class="quiet-button" type="button" disabled>Copy redacted configuration</button>
           </div>
           <p id="configuration-error" class="form-error" role="alert" hidden></p>
         </form>
@@ -102,7 +102,7 @@
         <div class="configuration-output">
           <p id="configuration-status" class="status-panel incomplete">No explicit chain target has been applied.</p>
           <details>
-            <summary>Exact ephemeral configuration</summary>
+            <summary>Credential-redacted ephemeral configuration</summary>
             <pre id="configuration-json" class="code-block">No configuration.</pre>
           </details>
         </div>

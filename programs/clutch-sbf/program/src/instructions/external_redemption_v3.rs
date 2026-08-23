@@ -7,7 +7,7 @@
 //! by the separately owned Fractional route through Resolution's quotient and
 //! remainder projection.
 
-use crate::accounts::{expect_pda, require, require_signer, Outcome};
+use crate::accounts::{expect_pda, require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
@@ -21,6 +21,8 @@ use clutch_collateral_adapter_v2::{
     PreparedClaimRedemptionCollateralV2, PreparedZeroClaimRedemptionCollateralV2,
     RuntimeAccountViewV2, TransferAuthorityKindV2, TransferAuthorityV2,
 };
+use clutch_solana_layout::collateral_v3_accounts::external_redemption_indices_v3 as ix;
+use clutch_solana_layout::collateral_v3_accounts::CollateralActionV3;
 use clutch_solana_layout::{Hash32, Intent};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -29,30 +31,13 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_resolution_v5, RuntimeSha256,
+    authenticate_general_market_liabilities_v1, authenticate_resolution_v5,
+    validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 
 /// Fixed account prefix before one mint per active native outcome.
-pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize = 17;
-
-const IX_CLAIMANT: usize = 0;
-const IX_REALM: usize = 1;
-const IX_PROFILE: usize = 2;
-const IX_POLICY: usize = 3;
-const IX_COLLATERAL_TOKEN_PROGRAM: usize = 4;
-const IX_MARKET_BINDING: usize = 5;
-const IX_MARKET_RUNTIME: usize = 6;
-const IX_MARKET_INSTANCE: usize = 7;
-const IX_HOARD: usize = 8;
-const IX_CLAIM_LEDGER: usize = 9;
-const IX_RESOLUTION: usize = 10;
-const IX_COLLATERAL_MINT: usize = 11;
-const IX_DESTINATION: usize = 12;
-const IX_HOARD_AUTHORITY: usize = 13;
-const IX_HOARD_TOKEN: usize = 14;
-const IX_OUTCOME_TOKEN_PROGRAM: usize = 15;
-const IX_SOURCE: usize = 16;
-const IX_OUTCOME_MINTS: usize = EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3;
+pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExternalRedemptionRequestV3 {
@@ -86,25 +71,6 @@ fn decode_request(request: &Request) -> Outcome<ExternalRedemptionRequestV3> {
     }
 }
 
-fn require_distinct_roles(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            let allowed_program_alias = left == IX_COLLATERAL_TOKEN_PROGRAM
-                && right == IX_OUTCOME_TOKEN_PROGRAM
-                && accounts[left].key == accounts[right].key;
-            require(
-                accounts[left].key != accounts[right].key || allowed_program_alias,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
-        }
-        left += 1;
-    }
-    Ok(())
-}
-
 fn observe_mints(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -115,8 +81,8 @@ fn observe_mints(
     claim_truth::observe_outcome_mints_v2(
         program_id,
         accounts,
-        IX_OUTCOME_MINTS,
-        *accounts[IX_MARKET_RUNTIME].key,
+        ix::OUTCOME_MINTS,
+        *accounts[ix::MARKET_RUNTIME].key,
         market_instance_id,
         outcome_count,
         Some(selected_outcome),
@@ -127,15 +93,15 @@ fn bearer_observation(
     accounts: &[AccountInfo],
     outcome: u8,
 ) -> Outcome<AdapterBearerClaimObservationV3> {
-    let mint = &accounts[IX_OUTCOME_MINTS + usize::from(outcome)];
-    let source = &accounts[IX_SOURCE];
+    let mint = &accounts[ix::OUTCOME_MINTS + usize::from(outcome)];
+    let source = &accounts[ix::SOURCE];
     let mint_observation = token::admit_mint(
         mint,
-        &token::MintPolicy::outcome(*mint.key, *accounts[IX_MARKET_RUNTIME].key),
+        &token::MintPolicy::outcome(*mint.key, *accounts[ix::MARKET_RUNTIME].key),
     )?;
     let source_observation = token::admit_token_account(
         source,
-        &token::TokenAccountPolicy::holder(*mint.key, *accounts[IX_CLAIMANT].key),
+        &token::TokenAccountPolicy::holder(*mint.key, *accounts[ix::CLAIMANT].key),
     )?;
     let mint_authority = mint_observation
         .mint_authority
@@ -253,64 +219,59 @@ pub fn process_external_redemption_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_request(request)?;
-    require(
-        accounts.len() >= EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3,
-        ClutchError::AccountCount,
+    let observed_outcome_count = validate_full_width_collateral_accounts_v3(
+        accounts,
+        CollateralActionV3::RedeemExternal,
+        Some(request.outcome),
     )?;
-    require_signer(&accounts[IX_CLAIMANT])?;
     require(
-        !accounts[IX_CLAIMANT].is_writable
-            && request.claimant.bytes() == accounts[IX_CLAIMANT].key.to_bytes()
-            && request.source.bytes() == accounts[IX_SOURCE].key.to_bytes()
-            && request.destination.bytes() == accounts[IX_DESTINATION].key.to_bytes(),
+        request.claimant.bytes() == accounts[ix::CLAIMANT].key.to_bytes()
+            && request.source.bytes() == accounts[ix::SOURCE].key.to_bytes()
+            && request.destination.bytes() == accounts[ix::DESTINATION].key.to_bytes(),
         ClutchError::UnauthorizedActor,
     )?;
 
     let liabilities = authenticate_general_market_liabilities_v1(
         program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_POLICY],
-        &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_MARKET_INSTANCE],
-        &accounts[IX_HOARD],
-        &accounts[IX_CLAIM_LEDGER],
+        &accounts[ix::REALM],
+        &accounts[ix::PROFILE],
+        &accounts[ix::POLICY],
+        &accounts[ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::MARKET_INSTANCE],
+        &accounts[ix::HOARD],
+        &accounts[ix::CLAIM_LEDGER],
         true,
         true,
     )?;
-    let expected_count = EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3
-        .checked_add(usize::from(liabilities.market_binding.outcome_count))
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(accounts.len() == expected_count, ClutchError::AccountCount)?;
-    require_distinct_roles(accounts)?;
     require(
         request.market_instance_id.bytes()
             == liabilities.market_binding.market_instance_v2_id.bytes()
+            && liabilities.market_binding.outcome_count == observed_outcome_count
             && request.outcome < liabilities.market_binding.outcome_count
-            && accounts[IX_COLLATERAL_MINT].key.to_bytes()
+            && accounts[ix::COLLATERAL_MINT].key.to_bytes()
                 == liabilities.bound.policy().mint.bytes()
-            && accounts[IX_HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes()
-            && accounts[IX_HOARD_AUTHORITY].key.to_bytes() == liabilities.hoard.authority.bytes()
-            && !accounts[IX_HOARD_AUTHORITY].is_writable
-            && !accounts[IX_HOARD_AUTHORITY].executable
-            && accounts[IX_HOARD_AUTHORITY].data_is_empty(),
+            && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes()
+            && accounts[ix::HOARD_AUTHORITY].key.to_bytes() == liabilities.hoard.authority.bytes()
+            && !accounts[ix::HOARD_AUTHORITY].executable
+            && accounts[ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,
     )?;
     expect_pda(
-        accounts[IX_HOARD_AUTHORITY].key,
+        accounts[ix::HOARD_AUTHORITY].key,
         seeds::hoard_authority_v2_pda(program_id, &request.market_instance_id.bytes()),
         None,
     )?;
     expect_pda(
-        accounts[IX_HOARD_TOKEN].key,
+        accounts[ix::HOARD_TOKEN].key,
         seeds::hoard_token_v2_pda(program_id, &request.market_instance_id.bytes()),
         None,
     )?;
-    let resolution = authenticate_resolution_v5(program_id, &accounts[IX_RESOLUTION], liabilities)?;
+    let resolution =
+        authenticate_resolution_v5(program_id, &accounts[ix::RESOLUTION], liabilities)?;
     let claim =
-        authenticate_claim_issuance_v1(liabilities.bound, &accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
+        authenticate_claim_issuance_v1(liabilities.bound, &accounts[ix::OUTCOME_TOKEN_PROGRAM])?;
     let observed_before = observe_mints(
         program_id,
         accounts,
@@ -323,11 +284,11 @@ pub fn process_external_redemption_v3(
         claim,
         resolution.account_id,
         resolution.resolution,
-        CollateralId::from_bytes(accounts[IX_MARKET_RUNTIME].key.to_bytes()),
+        CollateralId::from_bytes(accounts[ix::MARKET_RUNTIME].key.to_bytes()),
         liabilities.hoard,
         liabilities.claim_ledger,
-        CollateralId::from_bytes(accounts[IX_CLAIMANT].key.to_bytes()),
-        CollateralId::from_bytes(accounts[IX_DESTINATION].key.to_bytes()),
+        CollateralId::from_bytes(accounts[ix::CLAIMANT].key.to_bytes()),
+        CollateralId::from_bytes(accounts[ix::DESTINATION].key.to_bytes()),
         request.outcome,
         request.quantity,
         observed_before.values,
@@ -336,20 +297,20 @@ pub fn process_external_redemption_v3(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     let burn = prepared.burn_intent();
-    let selected_mint = &accounts[IX_OUTCOME_MINTS + usize::from(request.outcome)];
+    let selected_mint = &accounts[ix::OUTCOME_MINTS + usize::from(request.outcome)];
     require(
         burn.mint == CollateralId::from_bytes(selected_mint.key.to_bytes())
             && burn.source_token_account
-                == CollateralId::from_bytes(accounts[IX_SOURCE].key.to_bytes())
-            && burn.claimant == CollateralId::from_bytes(accounts[IX_CLAIMANT].key.to_bytes())
+                == CollateralId::from_bytes(accounts[ix::SOURCE].key.to_bytes())
+            && burn.claimant == CollateralId::from_bytes(accounts[ix::CLAIMANT].key.to_bytes())
             && burn.quantity == request.quantity,
         ClutchError::MismatchedState,
     )?;
     token::burn(
-        &accounts[IX_OUTCOME_TOKEN_PROGRAM],
-        &accounts[IX_SOURCE],
+        &accounts[ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[ix::SOURCE],
         selected_mint,
-        &accounts[IX_CLAIMANT],
+        &accounts[ix::CLAIMANT],
         request.quantity,
     )?;
     let observed_after = observe_mints(
@@ -364,47 +325,47 @@ pub fn process_external_redemption_v3(
         .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
     let collateral_request = accepted_burn.collateral_request();
     let collateral = {
-        let mint_data = accounts[IX_COLLATERAL_MINT]
+        let mint_data = accounts[ix::COLLATERAL_MINT]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let hoard_data = accounts[IX_HOARD_TOKEN]
+        let hoard_data = accounts[ix::HOARD_TOKEN]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let destination_data = accounts[IX_DESTINATION]
+        let destination_data = accounts[ix::DESTINATION]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         if collateral_request.payout_atoms == 0 {
             let prepared = prepare_zero_claim_redemption_collateral_v2(
                 liabilities.bound,
                 collateral_request,
-                runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint_data),
-                runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_data),
-                runtime_account_view(&accounts[IX_DESTINATION], &destination_data),
+                runtime_account_view(&accounts[ix::COLLATERAL_MINT], &mint_data),
+                runtime_account_view(&accounts[ix::HOARD_TOKEN], &hoard_data),
+                runtime_account_view(&accounts[ix::DESTINATION], &destination_data),
             )
             .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
             drop((mint_data, hoard_data, destination_data));
             AcceptedBearerRedemptionCollateralV3::Zero(accept_zero_claim_collateral_payout(
                 prepared,
-                &accounts[IX_COLLATERAL_MINT],
-                &accounts[IX_HOARD_TOKEN],
-                &accounts[IX_DESTINATION],
+                &accounts[ix::COLLATERAL_MINT],
+                &accounts[ix::HOARD_TOKEN],
+                &accounts[ix::DESTINATION],
             )?)
         } else {
             let prepared = prepare_claim_redemption_collateral_v2(
                 liabilities.bound,
                 collateral_request,
                 TransferAuthorityV2 {
-                    address: CollateralId::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes()),
+                    address: CollateralId::from_bytes(accounts[ix::HOARD_AUTHORITY].key.to_bytes()),
                     kind: TransferAuthorityKindV2::ProgramDerived,
                     is_transaction_signer: false,
                     program_address_authenticated: true,
-                    is_writable: accounts[IX_HOARD_AUTHORITY].is_writable,
-                    executable: accounts[IX_HOARD_AUTHORITY].executable,
-                    data_is_empty: accounts[IX_HOARD_AUTHORITY].data_is_empty(),
+                    is_writable: accounts[ix::HOARD_AUTHORITY].is_writable,
+                    executable: accounts[ix::HOARD_AUTHORITY].executable,
+                    data_is_empty: accounts[ix::HOARD_AUTHORITY].data_is_empty(),
                 },
-                runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint_data),
-                runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_data),
-                runtime_account_view(&accounts[IX_DESTINATION], &destination_data),
+                runtime_account_view(&accounts[ix::COLLATERAL_MINT], &mint_data),
+                runtime_account_view(&accounts[ix::HOARD_TOKEN], &hoard_data),
+                runtime_account_view(&accounts[ix::DESTINATION], &destination_data),
             )
             .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
             drop((mint_data, hoard_data, destination_data));
@@ -413,11 +374,11 @@ pub fn process_external_redemption_v3(
             let signer: [&[u8]; 3] = [seeds::SEED_HOARD_AUTHORITY_V2, &market_bytes, &bump];
             AcceptedBearerRedemptionCollateralV3::Nonzero(invoke_claim_collateral_payout(
                 prepared,
-                &accounts[IX_COLLATERAL_MINT],
-                &accounts[IX_HOARD_TOKEN],
-                &accounts[IX_DESTINATION],
-                &accounts[IX_HOARD_AUTHORITY],
-                &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
+                &accounts[ix::COLLATERAL_MINT],
+                &accounts[ix::HOARD_TOKEN],
+                &accounts[ix::DESTINATION],
+                &accounts[ix::HOARD_AUTHORITY],
+                &accounts[ix::COLLATERAL_TOKEN_PROGRAM],
                 &signer,
             )?)
         }
@@ -427,7 +388,7 @@ pub fn process_external_redemption_v3(
     accepted
         .claim_ledger_after()
         .encode(
-            &mut accounts[IX_CLAIM_LEDGER]
+            &mut accounts[ix::CLAIM_LEDGER]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
@@ -435,7 +396,7 @@ pub fn process_external_redemption_v3(
     accepted
         .hoard_after()
         .encode(
-            &mut accounts[IX_HOARD]
+            &mut accounts[ix::HOARD]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )

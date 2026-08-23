@@ -4,10 +4,16 @@
 //! operator choose work, but never replace onchain account authentication.
 
 use crate::rpc_index::{
-    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedSlot, ObservedSlotUpdate,
-    ObservedSlotUpdateKind, RpcCommitment, RpcIndexPlan,
+    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedRpcAccountRemoval,
+    ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind, RpcAccountRemovalKind, RpcCommitment,
+    RpcIndexPlan,
 };
 use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
+use clutch_collateral_adapter_v2::{
+    ClaimLedgerV3, HoardV2, ResolutionV5, CLAIM_LEDGER_V3_BYTES, CLAIM_LEDGER_V3_TAG,
+    CLAIM_LEDGER_V3_VERSION, HOARD_V2_BYTES, HOARD_V2_TAG, HOARD_V2_VERSION, RESOLUTION_V5_BYTES,
+    RESOLUTION_V5_TAG, RESOLUTION_V5_VERSION,
+};
 use clutch_dealer_runtime_contract::{
     DealerFacilityReplayV1, DealerLeaseV1, DealerPolicyV1, DealerStateV1, FeeBudgetV1,
     FixedCodec as DealerFixedCodec, LivenessBudgetV1, LpPageV1, SettlementPotV1,
@@ -121,6 +127,9 @@ impl std::error::Error for AccountIndexError {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CanonicalAccountKind {
+    CollateralHoardV2,
+    CollateralClaimLedgerV3,
+    CollateralResolutionV5,
     GeneralMarketRuntime,
     GeneralEpoch,
     GeneralEconomicDomain,
@@ -174,6 +183,9 @@ impl CanonicalAccountKind {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::CollateralHoardV2 => "collateral-hoard-v2",
+            Self::CollateralClaimLedgerV3 => "collateral-claim-ledger-v3",
+            Self::CollateralResolutionV5 => "collateral-resolution-v5",
             Self::GeneralMarketRuntime => "general-market-runtime",
             Self::GeneralEpoch => "general-epoch",
             Self::GeneralEconomicDomain => "general-economic-domain",
@@ -324,6 +336,7 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
         account: &ObservedRpcAccount,
     ) -> Result<Option<CanonicalAccountProjection>> {
         match family {
+            CanonicalFamily::Collateral => decode_collateral(&account.data),
             CanonicalFamily::General => decode_general(&account.data),
             CanonicalFamily::Source => decode_source(&account.data, self.context),
             CanonicalFamily::Series => decode_series(&account.data),
@@ -336,6 +349,49 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::Failure => decode_failure(&account.data),
         }
     }
+}
+
+fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    let projection = if tag_version(data, HOARD_V2_TAG, HOARD_V2_VERSION)
+        && data.len() == HOARD_V2_BYTES
+    {
+        let value = HoardV2::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralHoardV2,
+        );
+        projection.primary_binding = Some(value.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.realm_id.bytes());
+        projection
+    } else if tag_version(data, CLAIM_LEDGER_V3_TAG, CLAIM_LEDGER_V3_VERSION)
+        && data.len() == CLAIM_LEDGER_V3_BYTES
+    {
+        let value =
+            ClaimLedgerV3::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralClaimLedgerV3,
+        );
+        projection.primary_binding = Some(value.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.native_claim_basis_id.bytes());
+        projection
+    } else if tag_version(data, RESOLUTION_V5_TAG, RESOLUTION_V5_VERSION)
+        && data.len() == RESOLUTION_V5_BYTES
+    {
+        let value =
+            ResolutionV5::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralResolutionV5,
+        );
+        projection.generation = Some(value.facts.generation);
+        projection.primary_binding = Some(value.facts.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.facts.native_claim_basis_id.bytes());
+        projection
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(projection))
 }
 
 fn tag_version(data: &[u8], tag: u8, version: u8) -> bool {
@@ -1419,6 +1475,19 @@ pub struct FinalizedAccountAbsence {
     pub receive_sequence: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessedAccountRemoval {
+    pub address: Address,
+    pub release_key: String,
+    pub observed_owner: Address,
+    pub observed_lamports: u64,
+    pub observed_data_bytes: usize,
+    pub kind: RpcAccountRemovalKind,
+    pub slot: u64,
+    pub receive_sequence: u64,
+    pub blockhash: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexCapacity {
     pub maximum_addresses: usize,
@@ -1433,6 +1502,7 @@ pub struct CanonicalAccountIndex {
     capacity: IndexCapacity,
     forks: ForkLedger,
     versions: BTreeMap<Address, Vec<IndexedAccountVersion>>,
+    processed_removals: BTreeMap<Address, Vec<ProcessedAccountRemoval>>,
     finalized_absences: BTreeMap<Address, FinalizedAccountAbsence>,
 }
 
@@ -1456,6 +1526,7 @@ impl CanonicalAccountIndex {
             capacity,
             forks: ForkLedger::default(),
             versions: BTreeMap::new(),
+            processed_removals: BTreeMap::new(),
             finalized_absences: BTreeMap::new(),
         })
     }
@@ -1499,6 +1570,13 @@ impl CanonicalAccountIndex {
             removed = removed.saturating_add(before.saturating_sub(versions.len()));
             !versions.is_empty()
         });
+        removed = removed.saturating_add(
+            self.processed_removals
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+        );
+        self.processed_removals.clear();
         self.forks = ForkLedger::default();
         removed
     }
@@ -1520,7 +1598,139 @@ impl CanonicalAccountIndex {
             removed = removed.saturating_add(before.saturating_sub(versions.len()));
             !versions.is_empty()
         });
+        self.processed_removals.retain(|_, removals| {
+            let before = removals.len();
+            removals.retain(|removal| !forks.branch_contains_dead_slot(&removal.blockhash));
+            removed = removed.saturating_add(before.saturating_sub(removals.len()));
+            !removals.is_empty()
+        });
         removed
+    }
+
+    fn reserve_observation_slot(&mut self, address: Address, finalized: bool) -> Result<()> {
+        let account_count = self.versions.get(&address).map_or(0, Vec::len);
+        let removal_count = self.processed_removals.get(&address).map_or(0, Vec::len);
+        if account_count.saturating_add(removal_count) < self.capacity.maximum_versions_per_address
+        {
+            return Ok(());
+        }
+        let oldest_account = self.versions.get(&address).and_then(|versions| {
+            versions
+                .iter()
+                .enumerate()
+                .filter(|(_, version)| matches!(&version.branch, IndexedBranch::Processed { .. }))
+                .min_by_key(|(_, version)| {
+                    (
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                })
+                .map(|(index, version)| {
+                    (
+                        index,
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                })
+        });
+        let oldest_removal = self.processed_removals.get(&address).and_then(|removals| {
+            removals
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, removal)| (removal.slot, removal.receive_sequence))
+                .map(|(index, removal)| (index, removal.slot, removal.receive_sequence))
+        });
+        match (oldest_account, oldest_removal) {
+            (Some((index, account_slot, account_sequence)), Some((_, slot, sequence)))
+                if (account_slot, account_sequence) <= (slot, sequence) =>
+            {
+                self.versions
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?
+                    .remove(index);
+            }
+            (_, Some((index, _, _))) => {
+                let removals = self
+                    .processed_removals
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?;
+                removals.remove(index);
+                let empty = removals.is_empty();
+                if empty {
+                    self.processed_removals.remove(&address);
+                }
+            }
+            (Some((index, _, _)), None) => {
+                self.versions
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?
+                    .remove(index);
+            }
+            (None, None) if finalized => {
+                self.versions
+                    .get_mut(&address)
+                    .and_then(|versions| (!versions.is_empty()).then(|| versions.remove(0)))
+                    .ok_or(AccountIndexError::CapacityExceeded)?;
+            }
+            (None, None) => return Err(AccountIndexError::CapacityExceeded),
+        }
+        Ok(())
+    }
+
+    pub fn record_processed_removal(&mut self, removal: ObservedRpcAccountRemoval) -> Result<bool> {
+        if removal.provenance.cluster_key != self.plan.cluster.key() {
+            return Err(AccountIndexError::WrongCluster);
+        }
+        if removal.provenance.commitment != RpcCommitment::Processed
+            || !matches!(
+                &removal.provenance.source,
+                crate::rpc_index::RpcObservationSource::ProcessedSubscription { .. }
+            )
+        {
+            return Err(AccountIndexError::InvalidFork);
+        }
+        let release = self
+            .release(&removal.provenance.release_key)
+            .ok_or(AccountIndexError::UnknownRelease)?;
+        if removal.address == Address::default()
+            || removal.observed_executable
+            || match removal.kind {
+                RpcAccountRemovalKind::Closed => {
+                    removal.observed_lamports != 0 || removal.observed_data_bytes != 0
+                }
+                RpcAccountRemovalKind::OwnerChanged => removal.observed_owner == release.program_id,
+            }
+        {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        let known_release_address = self.versions.get(&removal.address).is_some_and(|versions| {
+            versions.iter().any(|version| {
+                version.account.provenance.release_key == removal.provenance.release_key
+            })
+        });
+        if !known_release_address {
+            return Ok(false);
+        }
+        let blockhash = self
+            .forks
+            .unique_hash_at(removal.provenance.slot)?
+            .to_string();
+        self.reserve_observation_slot(removal.address, false)?;
+        self.processed_removals
+            .entry(removal.address)
+            .or_default()
+            .push(ProcessedAccountRemoval {
+                address: removal.address,
+                release_key: removal.provenance.release_key,
+                observed_owner: removal.observed_owner,
+                observed_lamports: removal.observed_lamports,
+                observed_data_bytes: removal.observed_data_bytes,
+                kind: removal.kind,
+                slot: removal.provenance.slot,
+                receive_sequence: removal.provenance.receive_sequence,
+                blockhash,
+            });
+        Ok(true)
     }
 
     pub fn ingest(&mut self, account: ObservedRpcAccount) -> Result<()> {
@@ -1541,16 +1751,31 @@ impl CanonicalAccountIndex {
         {
             return Err(AccountIndexError::CapacityExceeded);
         }
-        let versions = self.versions.entry(account.address).or_default();
-        if versions.last().is_some_and(|previous| {
-            previous.account.provenance.receive_sequence >= account.provenance.receive_sequence
-                && previous.account.provenance.slot >= account.provenance.slot
-        }) {
+        if self
+            .versions
+            .get(&account.address)
+            .and_then(|versions| versions.last())
+            .is_some_and(|previous| {
+                previous.account.provenance.receive_sequence >= account.provenance.receive_sequence
+                    && previous.account.provenance.slot >= account.provenance.slot
+            })
+        {
             return Err(AccountIndexError::StaleObservation);
         }
-        if versions.len() >= self.capacity.maximum_versions_per_address {
-            versions.remove(0);
+        if account.provenance.commitment == RpcCommitment::Finalized {
+            let release_key = account.provenance.release_key.as_str();
+            if let Some(versions) = self.versions.get_mut(&account.address) {
+                versions.retain(|version| {
+                    !matches!(&version.branch, IndexedBranch::FinalizedScan)
+                        || version.account.provenance.release_key != release_key
+                });
+            }
         }
+        self.reserve_observation_slot(
+            account.address,
+            account.provenance.commitment == RpcCommitment::Finalized,
+        )?;
+        let versions = self.versions.entry(account.address).or_default();
         versions.push(IndexedAccountVersion {
             account,
             projection,
@@ -1608,6 +1833,29 @@ impl CanonicalAccountIndex {
                             self.forks.is_ancestor(blockhash, tip)
                         }
                         _ => false,
+                    })
+                    .filter(|version| {
+                        let version_key = (
+                            version.account.provenance.slot,
+                            version.account.provenance.receive_sequence,
+                        );
+                        self.processed_removals
+                            .get(&address)
+                            .and_then(|removals| {
+                                removals
+                                    .iter()
+                                    .filter(|removal| {
+                                        removal.release_key
+                                            == version.account.provenance.release_key
+                                            && tip.is_some_and(|tip| {
+                                                self.forks.is_ancestor(&removal.blockhash, tip)
+                                            })
+                                    })
+                                    .max_by_key(|removal| (removal.slot, removal.receive_sequence))
+                            })
+                            .is_none_or(|removal| {
+                                (removal.slot, removal.receive_sequence) < version_key
+                            })
                     })
                     .max_by_key(|version| {
                         (
@@ -1676,10 +1924,126 @@ impl CanonicalAccountIndex {
 }
 
 #[cfg(test)]
+mod collateral_decoder_tests {
+    use super::*;
+    use clutch_collateral_adapter_v2::{
+        Id as CollateralId, MarketLiabilityLifecycleV1, ResolutionFinalizationFactsV5,
+        ResolutionPayoutUnitBoundaryV5,
+    };
+    use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, MAX_OUTCOMES};
+
+    fn id(value: u8) -> CollateralId {
+        CollateralId::from_bytes([value; 32])
+    }
+
+    fn rent() -> DeletableRentOwnerV1 {
+        DeletableRentOwnerV1::from_persisted(Identity32V1::new([90; 32]).unwrap(), 1, 0).unwrap()
+    }
+
+    fn hoard() -> HoardV2 {
+        HoardV2 {
+            market_instance_id: id(1),
+            realm_id: id(2),
+            profile_id: id(3),
+            collateral_policy_id: id(4),
+            collateral_release_id: id(5),
+            authority: id(6),
+            token_account: id(7),
+            collateral_cap_atoms: 100,
+            cash_liability_atoms: 8,
+            locked_claim_principal_atoms: 9,
+            lifecycle: MarketLiabilityLifecycleV1::Open,
+            outcome_count: 2,
+            stored_bump: 1,
+            rent: rent(),
+        }
+    }
+
+    #[test]
+    fn canonical_collateral_bodies_index_by_full_market_identity() {
+        let mut hoard_bytes = [0; HOARD_V2_BYTES];
+        hoard().encode(&mut hoard_bytes).unwrap();
+        let projection = decode_collateral(&hoard_bytes).unwrap().unwrap();
+        assert_eq!(projection.kind, CanonicalAccountKind::CollateralHoardV2);
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([2; 32]));
+
+        let claim_ledger = ClaimLedgerV3 {
+            market_instance_id: id(1),
+            realm_id: id(2),
+            native_claim_basis_id: id(8),
+            fractional_policy_id: id(9),
+            fractional_ledger_account: id(10),
+            resolution_account: CollateralId::ZERO,
+            aggregate_internal_supply: [0; MAX_OUTCOMES],
+            aggregate_materialized_supply: [0; MAX_OUTCOMES],
+            next_fractional_sequence: 0,
+            last_fractional_transition_id: CollateralId::ZERO,
+            lifecycle: MarketLiabilityLifecycleV1::Open,
+            outcome_count: 2,
+            stored_bump: 2,
+            rent: rent(),
+        };
+        let mut claim_bytes = [0; CLAIM_LEDGER_V3_BYTES];
+        claim_ledger.encode(&mut claim_bytes).unwrap();
+        let projection = decode_collateral(&claim_bytes).unwrap().unwrap();
+        assert_eq!(
+            projection.kind,
+            CanonicalAccountKind::CollateralClaimLedgerV3
+        );
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([8; 32]));
+
+        let mut weights = [0; MAX_OUTCOMES];
+        weights[0] = 3;
+        weights[1] = 2;
+        let resolution = ResolutionV5::finalized(
+            ResolutionFinalizationFactsV5 {
+                market_instance_id: id(1),
+                native_claim_basis_id: id(8),
+                finalization_evidence_id: id(11),
+                outcome_count: 2,
+                payout_denominator: 5,
+                payout_weights: weights,
+                generation: 4,
+                payout_unit_boundary: ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms,
+            },
+            3,
+            rent(),
+        )
+        .unwrap();
+        let mut resolution_bytes = [0; RESOLUTION_V5_BYTES];
+        resolution.encode(&mut resolution_bytes).unwrap();
+        let projection = decode_collateral(&resolution_bytes).unwrap().unwrap();
+        assert_eq!(
+            projection.kind,
+            CanonicalAccountKind::CollateralResolutionV5
+        );
+        assert_eq!(projection.generation, Some(4));
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([8; 32]));
+    }
+
+    #[test]
+    fn malformed_canonical_tag_is_not_downgraded_to_unknown() {
+        let mut bytes = [0; HOARD_V2_BYTES];
+        hoard().encode(&mut bytes).unwrap();
+        bytes[5] = 1;
+        assert_eq!(
+            decode_collateral(&bytes),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+    }
+}
+
+#[cfg(test)]
 mod processed_fork_tests {
     use super::*;
+    use crate::rpc_index::{
+        RpcAcquisitionBounds, RpcClusterBinding, RpcObservationProvenance, RpcObservationSource,
+    };
 
-    const CLUSTER: &str = "test:genesis";
+    const CLUSTER: &str = "test:11111111111111111111111111111111";
 
     fn slot(slot: u64, parent_slot: u64, blockhash: &str, previous: &str) -> ObservedSlot {
         ObservedSlot {
@@ -1744,5 +2108,115 @@ mod processed_fork_tests {
             .unwrap();
         assert!(ledger.slot_is_on_dead_branch(20));
         assert!(ledger.slot_is_on_dead_branch(21));
+    }
+
+    #[test]
+    fn fork_bound_removal_masks_only_processed_and_reverts_with_dead_branch() {
+        let release = IndexedProgramRelease {
+            program_id: Address::new_from_array([0x31; 32]),
+            program_data: Address::new_from_array([0x32; 32]),
+            elf_sha256: [0x33; 32],
+            deployment_slot: 1,
+            families: vec![CanonicalFamily::General],
+        };
+        let release_key = release.key();
+        let plan = RpcIndexPlan {
+            cluster: RpcClusterBinding {
+                cluster_name: "test".to_string(),
+                genesis_hash: "11111111111111111111111111111111".to_string(),
+                rpc_http_url: "http://127.0.0.1:8899".to_string(),
+                rpc_websocket_url: "ws://127.0.0.1:8900".to_string(),
+            },
+            releases: vec![release.clone()],
+            bounds: RpcAcquisitionBounds {
+                maximum_accounts_per_scan: 8,
+                maximum_account_data_bytes: 1024,
+                maximum_total_response_bytes: 8192,
+                maximum_subscriptions: 8,
+            },
+        };
+        let mut index = CanonicalAccountIndex::new(
+            plan,
+            CanonicalDecoderContext {
+                source_neutral_sink: RuntimeKey::from_bytes([0x55; 32]),
+            },
+            IndexCapacity {
+                maximum_addresses: 8,
+                maximum_versions_per_address: 4,
+                maximum_fork_nodes: 8,
+            },
+        )
+        .unwrap();
+        let address = Address::new_from_array([0x41; 32]);
+        index.versions.insert(
+            address,
+            vec![IndexedAccountVersion {
+                account: ObservedRpcAccount {
+                    address,
+                    owner: release.program_id,
+                    lamports: 1,
+                    executable: false,
+                    rent_epoch: 0,
+                    data: vec![1],
+                    provenance: RpcObservationProvenance {
+                        cluster_key: CLUSTER.to_string(),
+                        release_key: release_key.clone(),
+                        slot: 10,
+                        commitment: RpcCommitment::Finalized,
+                        source: RpcObservationSource::FinalizedScan,
+                        receive_sequence: 1,
+                    },
+                },
+                projection: CanonicalAccountProjection::canonical(
+                    CanonicalFamily::General,
+                    CanonicalAccountKind::GeneralMarketRuntime,
+                ),
+                data_sha256: [0; 32],
+                branch: IndexedBranch::FinalizedScan,
+            }],
+        );
+        index
+            .observe_slot(slot(11, 10, "branch-11", "unknown-10"))
+            .unwrap();
+        index
+            .observe_slot_update(ObservedSlotUpdate {
+                cluster_key: CLUSTER.to_string(),
+                slot: 11,
+                parent_slot: Some(10),
+                kind: ObservedSlotUpdateKind::Frozen,
+                receive_sequence: 2,
+            })
+            .unwrap();
+        assert!(index
+            .record_processed_removal(ObservedRpcAccountRemoval {
+                address,
+                observed_owner: Address::default(),
+                observed_lamports: 0,
+                observed_executable: false,
+                observed_data_bytes: 0,
+                kind: RpcAccountRemovalKind::Closed,
+                provenance: RpcObservationProvenance {
+                    cluster_key: CLUSTER.to_string(),
+                    release_key,
+                    slot: 11,
+                    commitment: RpcCommitment::Processed,
+                    source: RpcObservationSource::ProcessedSubscription { subscription_id: 7 },
+                    receive_sequence: 3,
+                },
+            })
+            .unwrap());
+        assert!(index.current(address, RpcCommitment::Processed).is_none());
+        assert!(index.current(address, RpcCommitment::Finalized).is_some());
+        index
+            .observe_slot_update(ObservedSlotUpdate {
+                cluster_key: CLUSTER.to_string(),
+                slot: 11,
+                parent_slot: Some(10),
+                kind: ObservedSlotUpdateKind::Dead,
+                receive_sequence: 4,
+            })
+            .unwrap();
+        assert_eq!(index.rollback_dead_processed_versions(), 1);
+        assert!(index.current(address, RpcCommitment::Processed).is_some());
     }
 }

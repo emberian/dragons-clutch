@@ -1,7 +1,8 @@
 # Dealer catalog and facility-foundation SBF vertical slice
 
 Status: **EXPLICITLY NON-PRODUCTION / SELF-HOSTED LIVENESS, BOUNDED LP FUNDING,
-ACTIVATION/CANCELLED REFUND, AND BIND-EPOCH / NO ORDER OR SETTLEMENT CAPABILITY**.
+ACTIVATION/CANCELLED REFUND, AND BOUNDED EPOCH BIND/LAPSE / NO ORDER OR
+SETTLEMENT CAPABILITY**.
 
 The signed resumable catalog persists exactly one typed `DealerPolicyV1`,
 `DealerLivenessScheduleV1`, or generic `RuntimeLivenessPolicyV1` body. The
@@ -9,17 +10,19 @@ separate facility adapter owns exact Initialize, bounded LP-page creation,
 contribution, pre-activation withdrawal, activation, stale-funding cancellation,
 exhaustive cancelled-sponsor refund, and BindEpoch transitions. It does not
 enable order admission, selection, settlement, claims, or ordinary retirement.
+An unused bound epoch may be lapsed after its frozen deadline with exhaustive
+zero Lease/Pot counts.
 
 The separate profile identity is:
 
 ```text
-dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lab/v6
-2c780c81718949b65cdc54822a9e3039a13d664d5709faa9495593d4546ae442
+dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7
+15be8b991535102480a341eddf86350db0ffcc675ac8888b4cf29bed215b7ebb
 ```
 
 Every production profile rejects these Dealer coordinates before account
 inspection. The laboratory profile rejects every legacy intent and enables
-only Dealer family 76, version 1, local actions `1..=12`.
+only Dealer family 76, version 1, local actions `1..=13`.
 
 ## Wire and account contract
 
@@ -104,8 +107,8 @@ No mock-source account, feature, parser, fixture, or dependency participates
 in this route.
 
 The laboratory now has exact Initialize, `CreateLpPage`, `Contribute`,
-`WithdrawFunding`, `Activate`, `CancelFunding`, `RefundCancelledSponsor`, and
-BindEpoch handlers over canonical PositionV3, ReplayV3, Dealer StateV2,
+`WithdrawFunding`, `Activate`, `CancelFunding`, `RefundCancelledSponsor`,
+`BindEpoch`, and `LapseEpoch` handlers over canonical PositionV3, ReplayV3,
 funded-dependency, action-receipt, LP-page, General Epoch, and runtime-liveness
 owners. The immutable schedule and generic runtime policy can be published
 through this same catalog rather than injected as fixture DTOs.
@@ -160,6 +163,17 @@ shares, zero live LP owners/pages, zero Eggs/reserved cash, and a zero facility
 Position post-balance before State can become Retiring. Recovery keeper payment,
 receipt/page rent, hostile donations, Hoard principal, and fees are disjoint
 from this collateral-atom transfer.
+
+Epoch lapse is a separately funded Candidate action and is permissionless only
+after the retained binding's exact lapse slot. The adapter authenticates the
+full seven-compartment runtime bundle, the original Bind receipt, the counted
+Epoch PDA, State, PositionV3, and ReplayV3. The pure owner requires the Epoch to
+remain Bound with zero Lease/Pot children. Lapse advances the Position and
+State generation without changing any collateral or reservation field, clears
+the sole active Epoch child, and advances Replay atomically. The Epoch's and
+Bind receipt's recorded principals return only to their recorded payers; their
+creation prefunds and every later donation go only to the immutable neutral
+sink. The fresh lapse receipt remains as replay-referenced evidence.
 
 Every other Dealer facility action remains capability-disabled, including
 selection, collection, delivery, resolution, claims, and retirement.

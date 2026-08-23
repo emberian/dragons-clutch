@@ -112,8 +112,7 @@ pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POL
 pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
     clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
 /// Immutable generic runtime-liveness policy selected by one Dealer facility.
-pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] =
-    b"dc-dealer-runtime-liveness-policy-v1";
+pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] = b"dc-dealer-runtime-liveness-policy-v1";
 /// One facility- and compartment-scoped generic runtime-liveness account.
 pub const SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT: &[u8] = b"dc-dealer-live-account-v1";
 /// Authoritative Dealer StateV2.
@@ -241,9 +240,14 @@ pub const SEED_GENERAL_V2_RESERVATION_V9: &[u8] =
     clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V9;
 /// Disabled General SettlementReceipt V3 seed prefix.
 pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
+/// Disabled sole-future rent-owned General SettlementReceipt V5 seed prefix.
+pub const SEED_GENERAL_V2_RECEIPT_V5: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V5;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
+/// Disabled sole-future rent-owned General owner-settlement V5 seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT_V5: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V5;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -268,6 +272,8 @@ pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Shared-Market Failure admission root successor, disjoint from legacy V1.
+pub const SEED_FAILURE_MARKET_ROOT_V2: &[u8] = b"dc:failure-market-root:v2";
 /// Immutable runtime-liveness policy account.
 pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 /// Sole external Recovery work/rent custody account.
@@ -360,6 +366,22 @@ pub fn failure_external_root_pda(
         program_id,
         &[
             SEED_FAILURE_EXTERNAL_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical shared-Market Failure admission root successor.
+pub fn failure_market_root_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_ROOT_V2,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -627,6 +649,25 @@ pub fn general_v2_receipt_pda(
     )
 }
 
+/// Canonical disabled rent-owned General SettlementReceipt V5 PDA.
+pub fn general_v2_receipt_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    slice_index: u16,
+) -> (Pubkey, u8) {
+    let slice_index_le = slice_index.to_le_bytes();
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_RECEIPT_V5,
+            epoch,
+            settlement_candidate,
+            &slice_index_le,
+        ],
+    )
+}
+
 /// Canonical disabled presence-explicit owner-settlement address for one
 /// selected owner row.
 ///
@@ -643,6 +684,24 @@ pub fn general_v2_owner_settlement_pda(
         program_id,
         &[
             SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical disabled rent-owned OwnerSettlement V5 PDA.
+pub fn general_v2_owner_settlement_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT_V5,
             epoch,
             settlement_candidate,
             owner,
@@ -805,7 +864,12 @@ pub fn dealer_policy_stage_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_POLICY_STAGE, &[artifact_kind], funder, policy_id],
+        &[
+            SEED_DEALER_POLICY_STAGE,
+            &[artifact_kind],
+            funder,
+            policy_id,
+        ],
     )
 }
 
@@ -824,7 +888,10 @@ pub fn dealer_runtime_liveness_policy_pda(
     program_id: &Pubkey,
     policy_id: &[u8; 32],
 ) -> (Pubkey, u8) {
-    find(program_id, &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id])
+    find(
+        program_id,
+        &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id],
+    )
 }
 
 /// Canonical facility-scoped runtime-liveness compartment address.
@@ -835,7 +902,11 @@ pub fn dealer_runtime_liveness_account_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT, facility_id, &[compartment]],
+        &[
+            SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT,
+            facility_id,
+            &[compartment],
+        ],
     )
 }
 
@@ -1698,5 +1769,16 @@ mod tests {
         for old in REGISTRY {
             assert_ne!(SEED_EPOCH_WINDOW, old);
         }
+    }
+
+    #[test]
+    fn failure_market_root_successor_cannot_alias_the_legacy_root() {
+        assert_ne!(SEED_FAILURE_MARKET_ROOT_V2, SEED_FAILURE_EXTERNAL_ROOT);
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let market = [2; 32];
+        assert_ne!(
+            failure_market_root_v2_pda(&program_id, &market, 3).0,
+            failure_external_root_pda(&program_id, &market, 3).0,
+        );
     }
 }

@@ -26,7 +26,7 @@
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
 //! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
-//! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
+//! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers), full-width
@@ -64,15 +64,17 @@ pub mod direct_selection_v3;
 pub mod external_exit;
 pub mod external_redemption_v3;
 #[cfg(feature = "non-production-failure-recovery-lab")]
-pub mod failure_recovery;
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_interval_consensus;
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub mod failure_market_admission;
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub mod failure_recovery;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_terminal;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-pub mod general_v2_receipt_v3;
+pub mod general_v2_receipt_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_root;
 pub mod genesis;

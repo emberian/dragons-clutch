@@ -52,8 +52,11 @@ the observed ProgramData ELF. It then repeatedly admits bounded finalized
 WebSocket owner admits the complete program, block, slot-update, and root
 subscription set. It keeps processed reads withdrawn across registration,
 release-bracketed scan, replay, disconnect, rollback, and capped reconnect
-backoff. The acquisition response echoes the exact daemon HTTP+WebSocket and
-release coordinates; the browser refuses any mismatch. See
+backoff. Before subscribing, the exact WebSocket connection must answer
+`getGenesisHash` with the selected genesis. The acquisition response publishes
+credential-safe redacted/SHA-256 bindings for the exact daemon HTTP+WebSocket
+coordinates plus the release coordinates; the browser hashes its selections
+and refuses any mismatch. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
 ## Projection semantics
@@ -77,7 +80,10 @@ authenticate complete accounts.
 Processed views are additionally non-final and rollbackable. Dead branches and
 transport reconnects are explicit withdrawal events, processed keeper actions
 are empty, and the page refuses to construct workflows from processed state.
-No processed projection is authority-eligible.
+Well-formed closures and non-executable owner changes become release-specific,
+fork-bound removals instead of forcing a reconnect; malformed or ambiguous
+changes still fail closed. No processed projection or removal is
+authority-eligible.
 
 Successor coordinates are mirrored from the central registry only to label and
 frame construction material. Every family remains `reserved-disabled` in this
