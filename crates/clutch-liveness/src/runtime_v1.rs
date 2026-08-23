@@ -169,6 +169,15 @@ pub enum RuntimeTerminalPathKindV1 {
 }
 
 impl RuntimeTerminalPathKindV1 {
+    pub const fn index(self) -> usize {
+        match self {
+            Self::TradingSuccess => 0,
+            Self::ZeroFutureVolume => 1,
+            Self::SourceFailure => 2,
+            Self::ResolutionFailure => 3,
+        }
+    }
+
     const fn byte(self) -> u8 {
         match self {
             Self::TradingSuccess => 0,
@@ -231,6 +240,34 @@ impl RuntimeCompartmentPolicyV1 {
 pub struct RuntimeTerminalPathV1 {
     pub kind: RuntimeTerminalPathKindV1,
     pub calls: [u32; RUNTIME_COMPARTMENT_COUNT_V1],
+}
+
+/// Exact present-funding quote for one physical compartment account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCompartmentQuoteV1 {
+    pub kind: RuntimeCompartmentKindV1,
+    pub maximum_calls: u32,
+    pub maximum_lamports_per_call: u64,
+    pub work_capital_lamports: u64,
+    pub rent_principal_lamports: u64,
+    pub payer_debit_lamports: u64,
+}
+
+/// Exhaustive admission quote for all seven physical accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeAdmissionQuoteV1 {
+    pub compartments: [RuntimeCompartmentQuoteV1; RUNTIME_COMPARTMENT_COUNT_V1],
+    pub total_work_capital_lamports: u64,
+    pub total_rent_principal_lamports: u64,
+    pub total_payer_debit_lamports: u64,
+}
+
+/// Work ceiling of one complete named lifecycle path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeTerminalPathQuoteV1 {
+    pub kind: RuntimeTerminalPathKindV1,
+    pub call_lamports: [u64; RUNTIME_COMPARTMENT_COUNT_V1],
+    pub total_call_lamports: u64,
 }
 
 impl RuntimeTerminalPathV1 {
@@ -357,17 +394,81 @@ impl RuntimeLivenessPolicyV1 {
 
     /// Exact admission debit across all seven payer-funded accounts.
     pub fn total_payer_debit_lamports(self) -> RuntimeLivenessResultV1<u64> {
+        Ok(self.admission_quote()?.total_payer_debit_lamports)
+    }
+
+    /// Exact component-wise debit. No component can borrow another's excess.
+    pub fn admission_quote(self) -> RuntimeLivenessResultV1<RuntimeAdmissionQuoteV1> {
         self.validate()?;
-        let mut total = 0u64;
+        let empty = RuntimeCompartmentQuoteV1 {
+            kind: RuntimeCompartmentKindV1::Source,
+            maximum_calls: 0,
+            maximum_lamports_per_call: 0,
+            work_capital_lamports: 0,
+            rent_principal_lamports: 0,
+            payer_debit_lamports: 0,
+        };
+        let mut compartments = [empty; RUNTIME_COMPARTMENT_COUNT_V1];
+        let mut total_work_capital_lamports = 0u64;
+        let mut total_rent_principal_lamports = 0u64;
+        let mut total_payer_debit_lamports = 0u64;
         let mut index = 0usize;
         while index < RUNTIME_COMPARTMENT_COUNT_V1 {
-            total = add(
-                total,
-                self.compartments[index].total_payer_debit_lamports()?,
+            let policy = self.compartments[index];
+            let work_capital_lamports = policy.work_capital_lamports()?;
+            let payer_debit_lamports = policy.total_payer_debit_lamports()?;
+            compartments[index] = RuntimeCompartmentQuoteV1 {
+                kind: policy.kind,
+                maximum_calls: policy.maximum_calls,
+                maximum_lamports_per_call: policy.maximum_lamports_per_call,
+                work_capital_lamports,
+                rent_principal_lamports: policy.account_rent_principal_lamports,
+                payer_debit_lamports,
+            };
+            total_work_capital_lamports =
+                add(total_work_capital_lamports, work_capital_lamports)?;
+            total_rent_principal_lamports = add(
+                total_rent_principal_lamports,
+                policy.account_rent_principal_lamports,
             )?;
+            total_payer_debit_lamports =
+                add(total_payer_debit_lamports, payer_debit_lamports)?;
             index += 1;
         }
-        Ok(total)
+        Ok(RuntimeAdmissionQuoteV1 {
+            compartments,
+            total_work_capital_lamports,
+            total_rent_principal_lamports,
+            total_payer_debit_lamports,
+        })
+    }
+
+    /// Price every call on one complete frozen path at its compartment max.
+    pub fn terminal_path_quote(
+        self,
+        kind: RuntimeTerminalPathKindV1,
+    ) -> RuntimeLivenessResultV1<RuntimeTerminalPathQuoteV1> {
+        self.validate()?;
+        let path = self.terminal_paths[kind.index()];
+        if path.kind != kind {
+            return Err(RuntimeLivenessErrorV1::NoncanonicalTerminalPathOrder);
+        }
+        let mut call_lamports = [0u64; RUNTIME_COMPARTMENT_COUNT_V1];
+        let mut total_call_lamports = 0u64;
+        let mut index = 0usize;
+        while index < RUNTIME_COMPARTMENT_COUNT_V1 {
+            call_lamports[index] = multiply_u32_u64(
+                path.calls[index],
+                self.compartments[index].maximum_lamports_per_call,
+            )?;
+            total_call_lamports = add(total_call_lamports, call_lamports[index])?;
+            index += 1;
+        }
+        Ok(RuntimeTerminalPathQuoteV1 {
+            kind,
+            call_lamports,
+            total_call_lamports,
+        })
     }
 
     pub fn encode(self, output: &mut [u8]) -> RuntimeLivenessResultV1<()> {
