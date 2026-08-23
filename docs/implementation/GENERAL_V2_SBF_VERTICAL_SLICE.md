@@ -1,7 +1,7 @@
 # General V2 SBF vertical slice
 
 Status: source implementation in the isolated non-production profile. Actions
-2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 have strict payload decoders, pure
+2, 6, 7, 8, 9, 10, 14, 15, 16, 20, 21, and 32 have strict payload decoders, pure
 poststate owners, SBF dispatch/account handlers, and fresh PDA helpers. Current
 production profiles still disable every General V2 action. A real SBF build
 and committing local-bank campaign have not yet been run for this source
@@ -49,8 +49,8 @@ The current pure contract is `no_std`, allocator-free, safe Rust, and contains
 no Solana SDK, account memory, CPI, clock, rent, signature, or PDA code. Its
 account bytes are contracts for a future adapter, not live routes.
 
-`programs/solana-layout` remains the global wire-allocation owner. The
-dependency-free General crate's tag/version constants mirror its reserved
+`programs/solana-layout` remains the global wire-allocation owner. The General
+contract's tag/version constants mirror its reserved
 coordinates; `solana-layout` must not gain a dependency on the General crate
 merely to compare those constants. Actual activation instead requires explicit
 adapter parity assertions and frozen cross-crate vectors without perturbing
@@ -70,6 +70,7 @@ the pinned layout dependency graph.
 | counted-retirement Replay successor | `0x7a/1` | 132 |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x7d/1` | 340 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -217,6 +218,7 @@ never authority.
 | Account | Canonical seeds |
 |---|---|
 | MarketBinding | `["general-market-binding:v1", MarketInstanceV2Id]` |
+| MarketRuntime | `["general-market-runtime:v1", MarketBinding_PDA]` |
 | Epoch | `["general-epoch:v2", MarketBinding_PDA, epoch_index_le]` |
 | EconomicDomain | `["economic-domain:v2", Epoch_PDA]` |
 | Window | `["general-window:v4", Epoch_PDA]` |
@@ -225,13 +227,13 @@ never authority.
 | Feed or FeedStage | `["candidate-feed:v2", AdmissionNode_PDA]` |
 | ClearWork | `["clear-work:v2", AdmissionNode_PDA]` |
 | SelectedCandidate | `["selected-candidate:v1", Epoch_PDA, settlement_candidate_id]` |
+| OwnerSettlement | `["owner-settlement:v1", SelectedCandidate_PDA, semantic_owner]` |
 
-The missing Market `3/3` runtime/cursor still has no frozen pure-contract seed
-tuple. Its eventual codec and seed must land together; an adapter must not
-invent `general-market-runtime:v1` as if it were already frozen. Likewise, the
-exported order-page, reservation, receipt, and final-pot prefixes do not freeze
-their suffix tuples. Those remain unallocated until their complete successor
-handler contracts exist.
+The exported order-page, reservation, receipt, and final-pot prefixes do not
+freeze their suffix tuples. Those remain unallocated until their complete
+successor handler contracts exist. The OwnerSettlement tuple and account bytes
+are centrally reserved but runtime-disabled pending the complete authenticated
+order/fee projection described below.
 
 Window assigns the next one-based ordinal atomically before deriving the node.
 Feed and Work then inherit the node identity. This permits economically funded
@@ -279,9 +281,9 @@ The maximum action payload is 399 bytes. Every decoder rejects truncated
 input, trailing bytes, unknown variants, noncanonical padding, cursor mismatch,
 count/record-width mismatch, and arithmetic overflow.
 
-These payloads are the proposed adapter freeze target. No current SBF handler
-implements them. They become runtime contracts only after exact codecs, golden
-vectors, and capability-bound profile identity land together.
+These are frozen codec contracts. The live source handlers are exactly the
+capability set in section 7; payload facts for disabled actions 24 and 25 do
+not create a success route.
 
 | Local action | Exact payload |
 |---:|---|
@@ -292,6 +294,12 @@ vectors, and capability-bound profile identity land together.
 | 10 `InitClearWork` | `epoch[32] || node[32]` |
 | 14 `CompleteCandidateVerification` | `epoch[32] || node[32]` |
 | 15 `FinalizeSelection` | `epoch[32]` |
+| 16 `ExpireCommittedCandidate` | `epoch[32] || node[32]` |
+| 20 `CleanupCandidate` | `epoch[32] || node[32] || selected_candidate[32]` |
+| 21 `ClaimSolver` | `selected_candidate[32]` |
+| 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
+| 25 `EntitleSlice` (disabled claim) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || slice_index u16_le || order_index u8 || side u8 || consideration_price_units u128_le || completes_order u8` (149 bytes) |
+| 32 `CloseClearWork` | `epoch[32] || node[32]` |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -519,7 +527,24 @@ updates Window counts and best node, and pays only present-funded checked-work
 rewards. The adapter never trusts a candidate-supplied score, rank, ordinal, or
 final identity.
 
-### 6.8 `FinalizeSelection`
+### 6.8 `ExpireCommittedCandidate`
+
+0. Epoch, read-only
+1. Window, writable
+2. unrevealed committed AdmissionNode, writable
+3. Clock sysvar, read-only
+
+Expiry is permissionless and moves no lamports. At or after submission close,
+the adapter authenticates the exact Epoch, Window, and ordinal-derived Node
+PDAs, codecs, owners, generations, policy IDs, frozen and committed slots,
+count parity, and each account's complete present-funded balance. The pure
+owner accepts only a `Committed` node admitted before reveal-open, records the
+current slot as its terminal slot, changes its state to `ExpiredCommitment`,
+and increments only Window's checked expired-commitment count. Epoch candidate
+count and Window live-node count remain unchanged until action 20 unlinks the
+terminal reverse-list head.
+
+### 6.9 `FinalizeSelection`
 
 0. Epoch, writable
 1. Window, writable
@@ -551,7 +576,7 @@ Finalization copies the authenticated solver reward destination from the node
 but does not pay it. The unique solver prize remains present-funded in Budget
 until local action 21 consumes it.
 
-### 6.9 `ClaimSolver`
+### 6.10 `ClaimSolver`
 
 0. Epoch, read-only
 1. Window, read-only
@@ -565,7 +590,7 @@ immutable destination copied into SelectedCandidate. It consumes only the
 Budget's present-funded solver compartment and marks its one-way state paid.
 No caller signature can redirect the prize.
 
-### 6.10 `CloseClearWork`
+### 6.11 `CloseClearWork`
 
 0. Epoch, writable
 1. MarketBinding, read-only
@@ -581,7 +606,7 @@ generation, policy, reward, and active-width join, decrements Epoch's counted
 Work, and returns destination-coalesced rent-principal, donation, and close-
 reward credits before the adapter releases the account.
 
-### 6.11 `CleanupCandidate`
+### 6.12 `CleanupCandidate`
 
 0. Epoch, writable
 1. Window, writable
@@ -627,6 +652,7 @@ The lab enables exactly these local actions:
 10 InitClearWork
 14 CompleteCandidateVerification
 15 FinalizeSelection
+16 ExpireCommittedCandidate
 20 CleanupCandidate
 21 ClaimSolver
 32 CloseClearWork
@@ -642,9 +668,17 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 16-19, 22-31, and 33-35 remain disabled, including expiry,
-  entitlements, settlement, selected-artifact retirement, root retirement, and
-  the reserved Position asset-transfer primitive.
+- actions 17-19, 22-31, and 33-35 remain disabled, including the remaining
+  candidate terminal paths, entitlements, settlement, selected-artifact
+  retirement, root retirement, and the reserved Position asset-transfer
+  primitive.
+
+Actions 24 and 25 have strict capability-disabled payload and account-envelope
+codecs, including a centrally reserved `0x7d/1` OwnerSettlement envelope, but
+no successful SBF transition. They cannot activate until an authenticated,
+complete filled-order projection, exactly one selected fee row per canonical
+owner, checked candidate totals, a canonically derived owner-order-set digest,
+and exact receipt, reservation, and SelectedCandidate joins exist.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,
@@ -654,7 +688,7 @@ after every selected slice has materialized into counted settlement state and
 settlement retirement authenticates the terminal. Those cleanup and settlement
 actions remain disabled in this lab.
 
-Before action 20 cleanup can activate, it must call the pure cleanup classifier
+Action 20 cleanup calls the pure cleanup classifier
 over an exhaustive authenticated partition. Cleanup is admitted only at or
 after submission close and at or after the node's terminal slot; Work must be
 canonically absent. Epoch generation/count must equal Window generation/live

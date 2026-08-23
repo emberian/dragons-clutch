@@ -19,7 +19,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v4";
+    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v5";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-full")]
@@ -42,8 +42,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x6b, 0x03, 0x9f, 0x08, 0xcc, 0x74, 0xf9, 0x4a, 0x73, 0xb9, 0xa8, 0xb3, 0x06, 0x43, 0x1a, 0xb3,
-    0x2b, 0x40, 0xc1, 0x88, 0x03, 0xdc, 0x1d, 0x07, 0x3a, 0xb4, 0xe6, 0x53, 0x3c, 0x87, 0x89, 0xd5,
+    0x6e, 0x0e, 0xb3, 0x55, 0xbd, 0x8b, 0xf2, 0x0b, 0xd6, 0x72, 0x2c, 0xfd, 0x32, 0x5c, 0x73, 0x08,
+    0x92, 0xb0, 0x23, 0x41, 0x0d, 0xc2, 0x88, 0x52, 0x05, 0xaf, 0x0f, 0xbe, 0x68, 0xb7, 0x0e, 0xda,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.
@@ -115,7 +115,7 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 /// Return whether a family-local action has an allocation in the central registry.
 ///
 /// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 34 are allocated; the other family action spaces
+/// local actions 1 through 35 are allocated; the other family action spaces
 /// remain intentionally empty until their payload contracts are fixed.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
@@ -142,7 +142,7 @@ pub const fn extension_intent_action_allocated(
 #[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// Exact identity-and-solver-claim action set; allocation is not enough to enter it.
+/// Exact identity, unrevealed-expiry, and solver-claim action set.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 2),
@@ -153,6 +153,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 10),
     (74, 1, 14),
     (74, 1, 15),
+    (74, 1, 16),
     (74, 1, 20),
     (74, 1, 21),
     (74, 1, 32),

@@ -11,12 +11,14 @@
 //! lamport movement remain adapter obligations.
 
 mod codec;
+mod owner_settlement;
 mod payload;
 mod rank;
 mod state;
 mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
+pub use owner_settlement::*;
 pub use payload::*;
 pub use rank::{
     encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
@@ -110,6 +112,8 @@ pub const MARKET_RUNTIME_SEED_DOMAIN_V1: &[u8] = b"general-market-runtime:v1";
 pub const ECONOMIC_DOMAIN_SEED_DOMAIN_V1: &[u8] = b"economic-domain:v2";
 /// Fresh selected-candidate settlement-authority PDA seed domain.
 pub const SELECTED_CANDIDATE_SEED_DOMAIN_V1: &[u8] = b"selected-candidate:v1";
+/// Fresh disabled owner-settlement envelope PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
 /// Fresh counted General V2 Epoch PDA seed domain.
 pub const EPOCH_SEED_DOMAIN_V1: &[u8] = b"general-epoch:v2";
 /// Fresh counted General V2 order-page PDA seed domain.
@@ -189,6 +193,44 @@ impl EpochSeedTupleV1 {
     }
 }
 
+/// Validated ordered seed tuple for one owner-settlement envelope PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV1 {
+    selected_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
+impl OwnerSettlementSeedTupleV1 {
+    /// Construct the canonical tuple from a SelectedCandidate PDA and semantic owner.
+    pub fn new(selected_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
+        if selected_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if selected_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            selected_candidate: selected_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: the fresh owner-settlement domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: full authenticated SelectedCandidate PDA bytes.
+    pub const fn selected_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.selected_candidate
+    }
+
+    /// Third seed: full semantic Position-owner identity bytes.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
+
 /// Existing semantic account tag, fresh successor version: Window.
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
 /// Codec version matching the disabled central Window reservation.
@@ -201,6 +243,12 @@ pub const MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// First RelationV2-native counted General Epoch schema.
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
+/// Fresh disabled General V2 owner-settlement envelope tag.
+pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7d;
+/// First exact owner-settlement envelope version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Exact outer owner-settlement account bytes.
+pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 340;
 /// Existing semantic account tag, fresh successor version: sealed feed.
 pub const CANDIDATE_FEED_ACCOUNT_TAG: u8 = 18;
 /// Active-width General V2 feed version.
@@ -256,7 +304,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this dependency-free crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 12] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 13] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -266,6 +314,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 12] = [
         tag: GENERAL_EPOCH_ACCOUNT_TAG,
         version: GENERAL_EPOCH_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/GeneralEpochV6AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerSettlementV1AccountV1",
     },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,

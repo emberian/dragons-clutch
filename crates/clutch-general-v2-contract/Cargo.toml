@@ -12,6 +12,9 @@ path = "src/lib.rs"
 [features]
 default = []
 
+[dependencies]
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }
+
 [dev-dependencies]
 clutch-batch = { path = "../clutch-batch" }
 sha2 = "=0.10.9"

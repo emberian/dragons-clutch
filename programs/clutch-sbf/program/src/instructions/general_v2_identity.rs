@@ -1,6 +1,6 @@
 //! Non-production General V2 empty-book candidate-identity laboratory.
 //!
-//! This module deliberately exposes only the eleven extension actions admitted
+//! This module deliberately exposes only the twelve extension actions admitted
 //! by its mutually exclusive capability profile. It proves a signed,
 //! committing local-SBF identity lifecycle over one genesis-assisted Product
 //! market and an empty RelationV2 book. It creates no orders, positions,
@@ -86,6 +86,9 @@ pub fn process(
         }
         IdentityLabPayloadV1::FinalizeSelection(request) => {
             finalize_selection(program_id, accounts, request)
+        }
+        IdentityLabPayloadV1::ExpireCommittedCandidate(request) => {
+            expire_committed_candidate(program_id, accounts, request)
         }
         IdentityLabPayloadV1::CleanupCandidate(request) => {
             cleanup_candidate(program_id, accounts, request)
@@ -2103,6 +2106,78 @@ fn close_clear_work(
     release_closed_account(&accounts[3])?;
     apply_work_close_credits(&accounts[4..=6], &post.credits)?;
     encode_account(&accounts[0], |out| post.epoch.encode(out))
+}
+
+/// Permissionlessly terminalize an unrevealed commitment after submission close.
+#[inline(never)]
+fn expire_committed_candidate(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    request: contract::EpochNodePayloadV1,
+) -> Outcome<()> {
+    require_count(accounts, 4)?;
+    require_role(
+        program_id,
+        &accounts[0],
+        false,
+        contract::GENERAL_EPOCH_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[1],
+        true,
+        contract::WINDOW_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[2],
+        true,
+        contract::ADMISSION_NODE_ACCOUNT_BYTES,
+    )?;
+    let slot = read_clock_slot(&accounts[3])?;
+    require_all_distinct(accounts, &[0, 1, 2, 3])?;
+
+    let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[0])?)?;
+    let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[1])?)?;
+    let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[2])?)?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &epoch.market_binding.bytes(), epoch.epoch_index);
+    require(
+        *accounts[0].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[0].key.to_bytes());
+    require(
+        *accounts[1].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[0].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[2].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    require_compartment_balance(&accounts[0], epoch.rent, &[])?;
+    require_compartment_balance(&accounts[1], window.rent, &[])?;
+    require_compartment_balance(
+        &accounts[2],
+        node.rent,
+        &[node.bond_lamports, node.cleanup_reward],
+    )?;
+
+    let post = contract::expire_committed_candidate_poststate_v1(
+        contract::ExpireCommittedCandidateTransitionV1 {
+            epoch_id: id(accounts[0].key),
+            window_id: id(accounts[1].key),
+            current_slot: slot,
+            payload: request,
+            epoch: &epoch,
+            window: &window,
+            node: &node,
+        },
+    )?;
+    encode_account(&accounts[2], |out| post.node.encode(out))?;
+    encode_account(&accounts[1], |out| post.window.encode(out))
 }
 
 /// Unlink and close one terminal reverse-list head after every dependent Work

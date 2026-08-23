@@ -3,8 +3,9 @@
 //! Strict, allocation-free payload decoders for the empty-book identity lab.
 
 use crate::{
-    CodecError, Id32, Reader, SettlementCandidateKindV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8,
-    MAX_QUANTIZED_ATOMS_U8, MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
+    AuthenticatedOwnerFragmentV1, CodecError, Id32, Reader, SettlementCandidateKindV1,
+    SettlementSideV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8, MAX_QUANTIZED_ATOMS_U8,
+    MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
 };
 
 /// Largest General V2 action payload under the frozen 402-byte intent ceiling.
@@ -27,6 +28,10 @@ pub const FINALIZE_SELECTION_PAYLOAD_BYTES: usize = 32;
 pub const CLEANUP_CANDIDATE_PAYLOAD_BYTES: usize = 96;
 /// Exact action-21 payload bytes.
 pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
+/// Exact action-24 selector payload bytes.
+pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 96;
+/// Exact action-25 claimed-fragment payload bytes.
+pub const ENTITLE_SLICE_PAYLOAD_BYTES: usize = 149;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -383,7 +388,7 @@ impl<'a> WriteCandidateFeedPayloadV1<'a> {
     }
 }
 
-/// Shared exact payload of actions 9, 10, and 14.
+/// Shared exact payload of actions 9, 10, 14, 16, and 32.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochNodePayloadV1 {
     /// Parent Epoch PDA.
@@ -477,6 +482,133 @@ impl ClaimSolverPayloadV1 {
     }
 }
 
+/// Action-24 `FreezeEntitlement` identity selector.
+///
+/// This payload selects one owner row but does not supply its expectation. A
+/// future adapter must obtain that expectation only from the complete,
+/// authenticated filled-order and selected-fee projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezeEntitlementPayloadV1 {
+    /// Finalized parent Epoch PDA.
+    pub epoch: Id32,
+    /// Counted SelectedCandidate PDA.
+    pub selected_candidate: Id32,
+    /// Semantic Position owner identity.
+    pub owner: Id32,
+}
+
+impl FreezeEntitlementPayloadV1 {
+    /// Decode exactly 96 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FREEZE_ENTITLEMENT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            selected_candidate: live_id(&mut reader)?,
+            owner: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.selected_candidate
+            || value.epoch == value.owner
+            || value.selected_candidate == value.owner
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+/// Action-25 `EntitleSlice` claimed receipt-fragment fields.
+///
+/// Every field after the four identities is only an equality assertion against
+/// a future authenticated receipt and order-membership projection. Decoding
+/// this payload never turns caller bytes into settlement semantic truth.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EntitleSlicePayloadV1 {
+    /// Finalized parent Epoch PDA.
+    pub epoch: Id32,
+    /// Counted SelectedCandidate PDA.
+    pub selected_candidate: Id32,
+    /// OwnerSettlement envelope PDA.
+    pub owner_settlement: Id32,
+    /// Receipt PDA whose authenticated body must reproduce every claim below.
+    pub receipt: Id32,
+    /// SelectedCandidate's exact next global slice index.
+    pub slice_index: u16,
+    /// Canonical selected order-set index, strictly below 64.
+    pub order_index: u8,
+    /// Claimed payer/payee side.
+    pub side: SettlementSideV1,
+    /// Claimed nonzero exact consideration in price units.
+    pub consideration_price_units: u128,
+    /// Claimed unique order-exhaustion bit.
+    pub completes_order: bool,
+}
+
+impl EntitleSlicePayloadV1 {
+    /// Decode exactly 149 hostile claimed-fragment bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, ENTITLE_SLICE_PAYLOAD_BYTES)?;
+        let epoch = live_id(&mut reader)?;
+        let selected_candidate = live_id(&mut reader)?;
+        let owner_settlement = live_id(&mut reader)?;
+        let receipt = live_id(&mut reader)?;
+        let slice_index = reader.u16()?;
+        let order_index = reader.u8()?;
+        let side = match reader.u8()? {
+            0 => SettlementSideV1::Buy,
+            1 => SettlementSideV1::Sell,
+            _ => return Err(CodecError::InvalidState),
+        };
+        let consideration_price_units = reader.u128()?;
+        let completes_order = match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(CodecError::InvalidState),
+        };
+        reader.finish()?;
+        let value = Self {
+            epoch,
+            selected_candidate,
+            owner_settlement,
+            receipt,
+            slice_index,
+            order_index,
+            side,
+            consideration_price_units,
+            completes_order,
+        };
+        let identities = [epoch, selected_candidate, owner_settlement, receipt];
+        let mut left = 0usize;
+        while left < identities.len() {
+            let mut right = left + 1;
+            while right < identities.len() {
+                if identities[left] == identities[right] {
+                    return Err(CodecError::MismatchedBinding);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        if order_index >= MAX_ORDERS_U8 || consideration_price_units == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(value)
+    }
+
+    /// Project the claimed upstream fragment after receipt equality checks.
+    ///
+    /// The return value remains caller-claimed until an adapter proves every
+    /// field equal to an authenticated receipt and selected-order membership.
+    pub const fn claimed_fragment(self) -> AuthenticatedOwnerFragmentV1 {
+        AuthenticatedOwnerFragmentV1 {
+            order_index: self.order_index,
+            side: self.side,
+            consideration_price_units: self.consideration_price_units,
+            completes_order: self.completes_order,
+        }
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -489,7 +621,32 @@ impl FinalizeSelectionPayloadV1 {
     }
 }
 
-/// Decoded payload for one of the eight identity-lab actions.
+/// Strict payload facts for disabled owner-settlement actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerSettlementPayloadV1 {
+    /// Action 24 selector only; creation remains disabled.
+    FreezeEntitlement(FreezeEntitlementPayloadV1),
+    /// Action 25 claimed receipt fragment only; mutation remains disabled.
+    EntitleSlice(EntitleSlicePayloadV1),
+}
+
+/// Decode only actions 24 and 25 without adding them to the live-lab union.
+pub fn decode_owner_settlement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<OwnerSettlementPayloadV1, CodecError> {
+    match local_action {
+        24 => Ok(OwnerSettlementPayloadV1::FreezeEntitlement(
+            FreezeEntitlementPayloadV1::decode(payload)?,
+        )),
+        25 => Ok(OwnerSettlementPayloadV1::EntitleSlice(
+            EntitleSlicePayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decoded payload for one frozen pure General V2 action contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(clippy::large_enum_variant)] // no_alloc contract: boxing is forbidden
 pub enum IdentityLabPayloadV1<'a> {
@@ -509,6 +666,8 @@ pub enum IdentityLabPayloadV1<'a> {
     CompleteCandidateVerification(EpochNodePayloadV1),
     /// Action 15.
     FinalizeSelection(FinalizeSelectionPayloadV1),
+    /// Action 16, bounded to an unrevealed committed candidate.
+    ExpireCommittedCandidate(EpochNodePayloadV1),
     /// Action 20.
     CleanupCandidate(CleanupCandidatePayloadV1),
     /// Action 21.
@@ -517,7 +676,7 @@ pub enum IdentityLabPayloadV1<'a> {
     CloseClearWork(EpochNodePayloadV1),
 }
 
-/// Decode only an enabled empty-book identity-lab action payload.
+/// Decode only a frozen pure General V2 action payload contract.
 pub fn decode_identity_lab_payload_v1(
     local_action: u8,
     payload: &[u8],
@@ -549,6 +708,9 @@ pub fn decode_identity_lab_payload_v1(
         )),
         15 => Ok(IdentityLabPayloadV1::FinalizeSelection(
             FinalizeSelectionPayloadV1::decode(payload)?,
+        )),
+        16 => Ok(IdentityLabPayloadV1::ExpireCommittedCandidate(
+            EpochNodePayloadV1::decode(payload)?,
         )),
         20 => Ok(IdentityLabPayloadV1::CleanupCandidate(
             CleanupCandidatePayloadV1::decode(payload)?,

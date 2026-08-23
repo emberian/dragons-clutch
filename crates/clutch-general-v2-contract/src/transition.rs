@@ -1429,6 +1429,90 @@ pub fn finalize_selection_poststate_v1(
     })
 }
 
+/// Authenticated action-16 inputs for the bounded unrevealed expiry path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExpireCommittedCandidateTransitionV1<'a> {
+    /// Actual parent Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual authoritative Window PDA.
+    pub window_id: Id32,
+    /// Current Clock slot.
+    pub current_slot: u64,
+    /// Strict shared Epoch/node payload.
+    pub payload: EpochNodePayloadV1,
+    /// Frozen Epoch prestate.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Authoritative Window prestate.
+    pub window: &'a CandidateWindowV4AccountV1,
+    /// Unrevealed committed node prestate.
+    pub node: &'a AdmissionNodeV3AccountV1,
+}
+
+/// Exact action-16 node and Window poststates with no lamport movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExpireCommittedCandidatePoststateV1 {
+    /// Node terminalized as ExpiredCommitment.
+    pub node: AdmissionNodeV3AccountV1,
+    /// Window after one additional unrevealed expiry.
+    pub window: CandidateWindowV4AccountV1,
+}
+
+/// Terminalize only an unrevealed commitment at or after submission close.
+pub fn expire_committed_candidate_poststate_v1(
+    request: ExpireCommittedCandidateTransitionV1<'_>,
+) -> Result<ExpireCommittedCandidatePoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.window.validate()?;
+    request.node.validate()?;
+    for id in [
+        request.epoch_id,
+        request.window_id,
+        request.payload.epoch,
+        request.payload.node,
+    ] {
+        require_live(id)?;
+    }
+    if request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.epoch.window != request.window_id
+        || request.payload.epoch != request.epoch_id
+        || request.payload.node != request.node.node
+        || request.window.epoch != request.epoch_id
+        || request.node.epoch != request.epoch_id
+        || request.window.market != request.epoch.market_runtime
+        || request.node.market != request.epoch.market_runtime
+        || request.window.epoch_generation != request.epoch.generation
+        || request.node.epoch_generation != request.epoch.generation
+        || u64::from(request.epoch.candidate_bundle_count) != request.window.live_node_count
+        || request.node.relation_policy_id != request.window.relation_policy_id
+        || request.node.admission_policy_id != request.window.admission_policy_id
+        || request.node.score_policy_id != request.window.score_policy_id
+        || request.node.window_frozen_slot != request.window.frozen_slot
+        || request.node.committed_slot < request.window.frozen_slot
+        || request.node.committed_slot >= request.window.reveal_opens_slot
+        || request.node.ordinal > request.window.admitted_count
+        || request.node.status != AdmissionNodeStatusV1::Committed
+        || request.current_slot < request.window.submission_closes_slot
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let node = AdmissionNodeV3AccountV1 {
+        terminal_slot: request.current_slot,
+        status: AdmissionNodeStatusV1::ExpiredCommitment,
+        ..*request.node
+    };
+    let window = CandidateWindowV4AccountV1 {
+        expired_commitment_count: request
+            .window
+            .expired_commitment_count
+            .checked_add(1)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+        ..*request.window
+    };
+    node.validate()?;
+    window.validate()?;
+    Ok(ExpireCommittedCandidatePoststateV1 { node, window })
+}
+
 /// Maximum number of distinct CleanupCandidate credit destinations.
 pub const MAX_CLEANUP_CREDITS_V1: usize = 5;
 

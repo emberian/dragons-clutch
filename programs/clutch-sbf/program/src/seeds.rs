@@ -158,6 +158,9 @@ pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_S
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 owner-aggregated settlement seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -334,6 +337,18 @@ pub fn general_v2_selected_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_SELECTED, epoch, settlement_candidate_id],
+    )
+}
+
+/// Canonical disabled owner-settlement address for one selected owner row.
+pub fn general_v2_owner_settlement_pda(
+    program_id: &Pubkey,
+    selected_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_OWNER_SETTLEMENT, selected_candidate, owner],
     )
 }
 

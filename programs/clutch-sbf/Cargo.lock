@@ -67,6 +67,9 @@ dependencies = [
 [[package]]
 name = "clutch-general-v2-contract"
 version = "0.1.0"
+dependencies = [
+ "clutch-owner-settlement",
+]
 
 [[package]]
 name = "clutch-general-v2-runtime"
@@ -101,6 +104,10 @@ version = "0.1.0"
 
 [[package]]
 name = "clutch-liveness"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-owner-settlement"
 version = "0.1.0"
 
 [[package]]

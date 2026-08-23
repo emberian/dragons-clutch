@@ -25,11 +25,14 @@ counted Epoch codecs must not be described as General V2-compatible.
 | counted-retirement Replay successor | `0x7a/1` | 132, owned by retirement/reference |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x7d/1` | 340 |
 
 The successor `solana-layout` collision ledger reserves every coordinate above
-as `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
-and `0x76/1`, and proves its recorded rows internally disjoint. A complete
-legacy-account inventory cross-check remains an activation gate.
+as `ReservedDisabled`, records retirement's provisional
+tombstones at `0x75/1` and `0x76/1`, and proves its recorded rows internally
+disjoint. The `0x7d/1` owner-settlement coordinate is a reservation, not an
+executable capability. A complete legacy-account inventory cross-check remains
+an activation gate.
 The numeric constants in this standalone crate describe matching codec bytes,
 not a second allocation authority; the eventual adapter must add a parity gate
 against the central registry when both crates are dependencies.
@@ -56,6 +59,7 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
+| OwnerSettlement | `owner-settlement:v1`, SelectedCandidate PDA, semantic owner |
 
 The Window assigns the ordinal atomically before deriving a node; no
 submitter-selected commitment or address controls the final rank tie. Remaining
@@ -164,6 +168,23 @@ action 21. Action 32 owns bounded terminal ClearWork closure and its paired
 Epoch Work-count decrement. This pure crate does not provide an account-meta
 handler or itself activate a runtime route; those remain separate adapter and
 release obligations.
+
+Action 16 also has one deliberately narrow pure transition: at or after
+submission close it may terminalize only an unrevealed `Committed` node as
+`ExpiredCommitment` and increment the Window's matching count. It performs no
+lamport movement and does not infer revealed/Work expiry semantics.
+
+Actions 24 and 25 have strict disabled payload facts only. Action 24 is the
+96-byte selector `epoch || selected_candidate || owner`. Action 25 is the
+149-byte claimed fragment
+`epoch || selected_candidate || owner_settlement || receipt || slice_index ||
+order_index || side || consideration_price_units || completes_order`. Every
+fragment field is only an equality assertion against a future authenticated
+receipt and order-membership projection, never caller-created semantic truth.
+No success transition exists: creating the 288-byte semantic body requires the
+complete authenticated filled-order set, exactly one selected-fee row per
+participating owner, checked candidate totals, and a canonically derived owner
+order-set digest. General V2 does not yet expose that complete projection.
 
 Action 20's strict 96-byte payload is `epoch || node || selected_candidate`.
 The selected field is all zero exactly when the Epoch and Window authenticate
