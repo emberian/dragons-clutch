@@ -9,9 +9,10 @@
 
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock, TransferPlan};
 use clutch_failure_policy_runtime::{
-    AcceptedResolutionV1, AdapterAuthenticatedRelationRefusalV1, FailurePolicyBindingId,
-    FailureRecoveryTerminalReceiptV1, FailureRuntimeV1, FailureTerminalJoinV1,
-    FailureTransitionPlanV1, LivenessWorkReceiptJoinV1, FAILURE_RUNTIME_V1_BYTES,
+    AcceptedResolutionV1, AdapterAuthenticatedRelationRefusalV1, FailureAdmissionReceiptId,
+    FailureAdmissionReceiptV1, FailurePolicyBindingId, FailureRecoveryTerminalReceiptV1,
+    FailureRuntimeV1, FailureTerminalJoinV1, FailureTransitionPlanV1, LivenessWorkReceiptJoinV1,
+    FAILURE_RUNTIME_V1_BYTES,
 };
 use clutch_product_series::MarketInstanceV2Id;
 use clutch_source_plane_v3::{
@@ -65,6 +66,12 @@ pub enum Error {
     AccountAlias,
     /// The reserve carried data even though its sole role is lamport custody.
     ReserveDataNotEmpty,
+    /// A newly allocated durable root contained nonzero prestate.
+    RootDataNotZero,
+    /// Durable root lamports did not equal the adapter-authenticated rent amount.
+    RootRentMismatch,
+    /// The admission receipt did not describe the complete runtime and reserve.
+    AdmissionMismatch,
     /// The stored root digest did not match canonical runtime bytes.
     DigestMismatch,
     /// The intent replay nonce did not equal the decoded runtime nonce.
@@ -188,6 +195,128 @@ impl FailureRootAccountV1 {
         }
         Ok(value)
     }
+}
+
+/// One-shot projection for initializing a durable failure root over an already
+/// admitted and presently funded recovery reserve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureAccountInitializationV1 {
+    root_key: AccountId,
+    reserve_key: AccountId,
+    root: FailureRootAccountV1,
+    root_lamports: u64,
+    reserve_lamports: u64,
+    admission_receipt_id: FailureAdmissionReceiptId,
+}
+
+impl FailureAccountInitializationV1 {
+    /// Exact durable root key.
+    pub const fn root_key(&self) -> AccountId {
+        self.root_key
+    }
+
+    /// Exact expendable recovery reserve key.
+    pub const fn reserve_key(&self) -> AccountId {
+        self.reserve_key
+    }
+
+    /// Complete canonical root poststate.
+    pub const fn root(&self) -> FailureRootAccountV1 {
+        self.root
+    }
+
+    /// Independently supplied durable-root rent balance.
+    pub const fn root_lamports(&self) -> u64 {
+        self.root_lamports
+    }
+
+    /// Exact presently admitted reserve balance.
+    pub const fn reserve_lamports(&self) -> u64 {
+        self.reserve_lamports
+    }
+
+    /// Typed admission receipt consumed by this initialization.
+    pub const fn admission_receipt_id(&self) -> FailureAdmissionReceiptId {
+        self.admission_receipt_id
+    }
+}
+
+/// Authenticate freshly allocated root/reserve accounts and bind them to one
+/// complete successor admission receipt.
+///
+/// Funding transfers must already be reflected in `reserve.lamports` and in the
+/// runtime's admission observation. Root lamports are independently supplied
+/// durable rent; this function never reclassifies them as recovery work/rent.
+#[allow(clippy::too_many_arguments)]
+pub fn project_failure_initialization<'a>(
+    root: AccountView<'a>,
+    reserve: AccountView<'a>,
+    expected_root_key: AccountId,
+    program_id: AccountId,
+    bump: u8,
+    required_root_rent_lamports: u64,
+    runtime: FailureRuntimeV1,
+    receipt: FailureAdmissionReceiptV1,
+) -> Result<FailureAccountInitializationV1> {
+    if expected_root_key.is_zero() || program_id.is_zero() {
+        return Err(Error::ZeroIdentity);
+    }
+    if required_root_rent_lamports == 0 {
+        return Err(Error::RootRentMismatch);
+    }
+    if root.key != expected_root_key {
+        return Err(Error::WrongKey);
+    }
+    if root.owner != program_id || reserve.owner != program_id {
+        return Err(Error::WrongOwner);
+    }
+    if !root.is_writable || !reserve.is_writable {
+        return Err(Error::NotWritable);
+    }
+    if root.key == reserve.key {
+        return Err(Error::AccountAlias);
+    }
+    if root.data.len() != FAILURE_ROOT_ACCOUNT_V1_BYTES {
+        return Err(Error::WrongLength);
+    }
+    if root.data.iter().any(|byte| *byte != 0) {
+        return Err(Error::RootDataNotZero);
+    }
+    if root.lamports != required_root_rent_lamports {
+        return Err(Error::RootRentMismatch);
+    }
+    if !reserve.data.is_empty() {
+        return Err(Error::ReserveDataNotEmpty);
+    }
+    runtime.check()?;
+    let binding = runtime.binding();
+    let expected_reserve = AccountId::from_bytes(binding.recovery_state_id().bytes());
+    if reserve.key != expected_reserve {
+        return Err(Error::WrongKey);
+    }
+    let ledger = runtime.ledger();
+    if receipt.binding_id() != runtime.binding_id()
+        || receipt.series_plan_id() != binding.series_plan_id()
+        || receipt.ordinal() != binding.ordinal()
+        || receipt.market_instance_id() != binding.market_instance_id()
+        || receipt.funding_quote_id() != binding.funding_quote_id()
+        || receipt.recovery_state_id() != binding.recovery_state_id()
+        || receipt.generation() != binding.generation()
+        || receipt.work_principal_lamports() != ledger.work_initial
+        || receipt.rent_principal_lamports() != ledger.rent_initial
+        || receipt.admitted_reserve_balance() != reserve.lamports
+    {
+        return Err(Error::AdmissionMismatch);
+    }
+    let root_body = FailureRootAccountV1::new(bump, runtime)?;
+    Ok(FailureAccountInitializationV1 {
+        root_key: root.key,
+        reserve_key: reserve.key,
+        root: root_body,
+        root_lamports: root.lamports,
+        reserve_lamports: reserve.lamports,
+        admission_receipt_id: receipt.id(),
+    })
 }
 
 /// Read-only adapter view over one runtime account.

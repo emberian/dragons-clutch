@@ -23,6 +23,14 @@ the plan against the decoded prestate, exposes exact pre/post reserve balances
 and four transfer compartments, and requires the external adapter to perform
 and verify those movements atomically before storing the new bytes.
 
+Initialization is a separate one-shot projection. It accepts only an exact-size
+all-zero durable root and zero-data reserve owned by the live program, then
+matches the full private admission receipt to the runtime binding, V5 Series,
+ordinal, V2 occurrence, FundingQuote, recovery state/generation, both initial
+principal compartments, and the observed reserve balance. Durable root rent is
+required to equal the adapter-authenticated rent amount, is preserved as an
+independent balance, and is never counted as recovery capital.
+
 The fixed intent preimage binds action, immutable failure-policy binding,
 full-width V2 market identity, generation, expected replay nonce, Clock,
 Window/evidence/work/terminal receipt identities, the authenticated recovery
