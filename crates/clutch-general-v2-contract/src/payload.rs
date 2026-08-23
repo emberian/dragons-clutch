@@ -580,7 +580,7 @@ impl AccountReceiptEndPayloadV1 {
 
 /// Action-26 `ConsumeDirectReceiptEggs` immutable selector.
 ///
-/// The transition ID is equality-bound to the authenticated direct receipt
+/// The delivery ID is equality-bound to the authenticated direct receipt
 /// and its complete pure poststate plan. No economic field is caller-owned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumeDirectReceiptEggsPayloadV1 {
@@ -588,8 +588,8 @@ pub struct ConsumeDirectReceiptEggsPayloadV1 {
     pub epoch: Id32,
     /// Canonical selected direct-receipt account PDA.
     pub receipt: Id32,
-    /// Opaque identity of the complete atomic Egg/reservation/row transition.
-    pub settlement_transition_id: Id32,
+    /// Opaque identity of the complete atomic Egg/reservation delivery.
+    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeDirectReceiptEggsPayloadV1 {
@@ -599,12 +599,12 @@ impl ConsumeDirectReceiptEggsPayloadV1 {
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            settlement_transition_id: live_id(&mut reader)?,
+            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         if value.epoch == value.receipt
-            || value.epoch == value.settlement_transition_id
-            || value.receipt == value.settlement_transition_id
+            || value.epoch == value.delivery_transition_id
+            || value.receipt == value.delivery_transition_id
         {
             return Err(CodecError::MismatchedBinding);
         }
@@ -614,7 +614,7 @@ impl ConsumeDirectReceiptEggsPayloadV1 {
 
 /// Action-36 `ConsumeVirtualSplitReceiptEggs` immutable selector.
 ///
-/// The transition ID must authenticate one indivisible plan containing both
+/// The delivery ID must authenticate one indivisible plan containing both
 /// the checked complete-set split and the associated real buy receipt end.
 /// No inventory-only successor action is allocated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -624,7 +624,7 @@ pub struct ConsumeVirtualSplitReceiptEggsPayloadV1 {
     /// Canonical selected virtual-split receipt account PDA.
     pub receipt: Id32,
     /// Opaque identity of the complete inventory-and-real-end transition.
-    pub settlement_transition_id: Id32,
+    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
@@ -634,12 +634,12 @@ impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            settlement_transition_id: live_id(&mut reader)?,
+            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         if value.epoch == value.receipt
-            || value.epoch == value.settlement_transition_id
-            || value.receipt == value.settlement_transition_id
+            || value.epoch == value.delivery_transition_id
+            || value.receipt == value.delivery_transition_id
         {
             return Err(CodecError::MismatchedBinding);
         }
@@ -649,7 +649,7 @@ impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
 
 /// Action-37 `ConsumeVirtualMergeReceiptEggs` immutable selector.
 ///
-/// The transition ID must authenticate one indivisible plan containing both
+/// The delivery ID must authenticate one indivisible plan containing both
 /// the associated real sell receipt end and the checked complete-set merge.
 /// No inventory-only successor action is allocated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -659,7 +659,7 @@ pub struct ConsumeVirtualMergeReceiptEggsPayloadV1 {
     /// Canonical selected virtual-merge receipt account PDA.
     pub receipt: Id32,
     /// Opaque identity of the complete real-end-and-inventory transition.
-    pub settlement_transition_id: Id32,
+    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
@@ -669,12 +669,12 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            settlement_transition_id: live_id(&mut reader)?,
+            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         if value.epoch == value.receipt
-            || value.epoch == value.settlement_transition_id
-            || value.receipt == value.settlement_transition_id
+            || value.epoch == value.delivery_transition_id
+            || value.receipt == value.delivery_transition_id
         {
             return Err(CodecError::MismatchedBinding);
         }

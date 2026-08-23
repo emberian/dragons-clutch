@@ -12,6 +12,7 @@
 
 mod codec;
 mod fee_accounts;
+mod final_pot;
 mod owner_settlement;
 mod payload;
 mod rank;
@@ -20,6 +21,7 @@ mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
 pub use fee_accounts::*;
+pub use final_pot::*;
 pub use owner_settlement::*;
 pub use payload::*;
 pub use rank::{
@@ -215,6 +217,45 @@ pub struct OwnerSettlementSeedTupleV1 {
     owner: [u8; ID_BYTES],
 }
 
+/// Validated ordered seed tuple for the one-to-one General V2 FinalPot PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalPotSeedTupleV1 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+}
+
+impl FinalPotSeedTupleV1 {
+    /// Construct the canonical tuple from the counted Epoch and stable final
+    /// settlement-candidate identity stored by SelectedCandidate.
+    pub fn new(epoch: Id32, settlement_candidate: Id32) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+        })
+    }
+
+    /// First seed: the fresh General V2 FinalPot domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        FINAL_POT_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: full authenticated Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final RelationV2 settlement-candidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+}
+
 impl OwnerSettlementSeedTupleV1 {
     /// Construct the canonical tuple from Epoch, final candidate, and owner.
     pub fn new(epoch: Id32, settlement_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
@@ -306,6 +347,12 @@ pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 pub const SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 /// Exact buyer-first settlement cash-pot outer bytes.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_BYTES: usize = 260;
+/// Fresh disabled General V2 FinalPot envelope tag.
+pub const FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
+/// First combined FinalPot and virtual-inventory-budget envelope version.
+pub const FINAL_POT_ACCOUNT_VERSION: u8 = 1;
+/// Exact combined FinalPot outer bytes.
+pub const FINAL_POT_ACCOUNT_BYTES: usize = 332;
 /// Existing semantic account tag, fresh successor version: sealed feed.
 pub const CANDIDATE_FEED_ACCOUNT_TAG: u8 = 18;
 /// Active-width General V2 feed version.
@@ -361,7 +408,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 19] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -406,6 +453,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 19] = [
         tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,
         version: SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/SettlementCashPotV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: FINAL_POT_ACCOUNT_TAG,
+        version: FINAL_POT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/FinalPotV1AccountV1",
     },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,
@@ -486,6 +538,10 @@ mod seed_tests {
         assert_eq!(epoch.domain(), b"general-epoch:v2");
         assert_eq!(epoch.market_binding(), &[7; ID_BYTES]);
         assert_eq!(epoch.epoch_index_le(), &[8, 7, 6, 5, 4, 3, 2, 1]);
+        let final_pot = FinalPotSeedTupleV1::new(id(8), id(9)).unwrap();
+        assert_eq!(final_pot.domain(), b"general-final-pot:v2");
+        assert_eq!(final_pot.epoch(), &[8; ID_BYTES]);
+        assert_eq!(final_pot.settlement_candidate(), &[9; ID_BYTES]);
         assert_ne!(
             epoch,
             EpochSeedTupleV1::new(binding, 0x0102_0304_0506_0709).unwrap()
