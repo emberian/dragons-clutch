@@ -82,7 +82,8 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Price grid | 12 | 589 | grid identity, realm, price scale, 64 `u64` ticks |
 | Candidate record | 13 | 305 | candidate digest, epoch/market, 16 prices, sigma/mu, AON mask, score, status |
 | Final pot | 14 | 262 | epoch/market/candidate, 16 pot balances, pot cash, rounding pot, phase |
-| Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
+| Settlement receipt V2 | `15/v2` | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
+| General settlement receipt V3 | `15/v3` | 217 | same economic body; independent accounted-end mask replaces the former reserved byte while consumed flags remain delivery/exhaustion latches |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
 | Clearing checkpoint | 17 | 48004 | 158-byte header (market/epoch/candidate, order-set binding, consumed fold, walk cursor) + 47,846-byte codec body |
 | Candidate feed | 18 | 6266 | 346-byte header (candidate/epoch/market/order-set, prices, sigma/mu, mask, claimed score) + 64 fills + 416 slices |
@@ -125,7 +126,8 @@ bytes instead of scanning positions, which is not an onchain option.
 | One portfolio order's coefficient vector and cash bound | `PortfolioRecord` inside an `OrderSlot` | `validate`, `validate_on_scale`, `binds_page_set` |
 | One candidate's free coordinates | `CandidateRecord` | `binds_epoch` |
 | Settlement pot | `FinalPotAccount` | `binds_candidate` |
-| One settled slice | `SettlementReceiptAccount` | `binds_candidate` |
+| One legacy settled slice | `SettlementReceiptAccount` (V2) | `binds_candidate` |
+| One General settled slice | `SettlementReceiptAccountV3` | `binds_candidate`; exact-body evidence and deterministic action IDs are projected only after PDA authentication |
 | Resolution | `ResolutionAccount.payout_index` | `binds_terms` |
 
 `SupplyLedgerAccount` persists the aggregate as the **two terms whose sum it
@@ -882,7 +884,7 @@ decoder.
 
 Named here so they are debt rather than oversight:
 
-* `SettlementReceiptAccount.buy_order_id` / `.sell_order_id` are still opaque
+* V2 `SettlementReceiptAccount.buy_order_id` / `.sell_order_id` are still opaque
   32-byte identities that may also be zero (the virtual split/merge legs). Under
   v4 they should be canonical ranks. That is a receipt-side tightening on an
   account this revision does not otherwise touch, and it was left out to keep
