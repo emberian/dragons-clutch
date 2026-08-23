@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use crate::{DealerFacilityIdV1, Error, Id, Result, MAX_LP_PAGES};
+use crate::{DealerFacilityIdV1, DealerLivenessScheduleIdV1, Error, Id, Result, MAX_LP_PAGES};
 
 /// Canonical PDA seed prefix for immutable DealerPolicy artifacts.
 pub const DEALER_POLICY_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-policy-v1";
@@ -12,6 +12,10 @@ pub const FACILITY_POSITION_BINDING_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-pos-bind-
 pub const DEALER_FACILITY_POSITION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-position-v1";
 /// Canonical PDA seed prefix for the singleton Facility Replay account.
 pub const DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-replay-v1";
+/// Canonical PDA seed prefix for immutable liveness schedules.
+pub const DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-live-sched-v1";
+/// Canonical PDA seed prefix for immutable funded-dependency artifacts.
+pub const DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-funded-v1";
 /// Canonical PDA seed prefix for mutable DealerState roots.
 pub const DEALER_STATE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-state-v1";
 /// Canonical PDA seed prefix for counted LP pages.
@@ -42,6 +46,10 @@ pub enum DealerPdaFamilyV1 {
     FacilityPosition = 9,
     /// Singleton Facility Position Replay companion.
     FacilityReplay = 10,
+    /// Immutable policy-selected liveness schedule.
+    LivenessSchedule = 11,
+    /// Immutable external-liveness and fee-policy dependency artifact.
+    FundedDependencies = 12,
     /// Mutable state root addressed by immutable facility identity.
     State = 1,
     /// LP page addressed by facility and page ordinal.
@@ -160,6 +168,24 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// Liveness schedule: `[b"dc-dealer-live-sched-v1", schedule_id]`.
+    pub fn liveness_schedule(schedule_id: DealerLivenessScheduleIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::LivenessSchedule,
+            DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1,
+            &schedule_id.bytes(),
+        )
+    }
+
+    /// Funded dependencies: `[b"dc-dealer-funded-v1", facility_id]`.
+    pub fn funded_dependencies(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FundedDependencies,
+            DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
     /// Mutable state: `[b"dc-dealer-state-v1", facility_id]`.
     pub fn state(facility_id: Id) -> Result<Self> {
         facility_id.validate_live()?;
@@ -271,6 +297,12 @@ impl DealerPdaPreimageV1 {
             DealerPdaFamilyV1::FacilityReplay => {
                 (DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1, 2usize, 0usize)
             }
+            DealerPdaFamilyV1::LivenessSchedule => {
+                (DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
+            DealerPdaFamilyV1::FundedDependencies => {
+                (DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
             DealerPdaFamilyV1::State => (DEALER_STATE_PDA_DOMAIN_V1, 2usize, 0usize),
             DealerPdaFamilyV1::LpPage => (LP_PAGE_PDA_DOMAIN_V1, 3usize, 4usize),
             DealerPdaFamilyV1::Lease => (DEALER_LEASE_PDA_DOMAIN_V1, 3usize, 8usize),
@@ -330,6 +362,8 @@ const _: () = assert!(DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(FACILITY_POSITION_BINDING_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_FACILITY_POSITION_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_STATE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(LP_PAGE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_LEASE_PDA_DOMAIN_V1.len() <= 32);

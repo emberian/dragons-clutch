@@ -489,6 +489,20 @@ impl DealerStateV1 {
 
     /// Join local state to the exact immutable policy content identity.
     pub fn validate_against_policy(&self, policy: &DealerPolicyV1) -> Result<()> {
+        self.validate_policy_bindings(policy)?;
+        if self.phase == DealerPhaseV1::Trading
+            && policy
+                .shutdown_queue_threshold_met_validated(self.queued_shares, self.total_shares)?
+        {
+            return Err(Error::InvalidPhase);
+        }
+        Ok(())
+    }
+
+    /// Validate every immutable and numeric policy binding while allowing the
+    /// one-call transient in which a Trading root has just reached queue
+    /// quorum and must atomically become UnwindOnly.
+    pub(crate) fn validate_policy_bindings(&self, policy: &DealerPolicyV1) -> Result<()> {
         self.validate()?;
         policy.validate()?;
         if self.policy_id != policy.policy_id()?
@@ -503,12 +517,6 @@ impl DealerStateV1 {
             return Err(Error::MismatchedBinding);
         }
         policy.validate_net_sold(&self.net_sold)?;
-        if self.phase == DealerPhaseV1::Trading
-            && policy
-                .shutdown_queue_threshold_met_validated(self.queued_shares, self.total_shares)?
-        {
-            return Err(Error::InvalidPhase);
-        }
         if matches!(
             self.phase,
             DealerPhaseV1::Trading | DealerPhaseV1::UnwindOnly | DealerPhaseV1::Resolved

@@ -64,6 +64,8 @@ fn initial_state(
     state.total_shares = 0;
     state.children.lp_pages = 0;
     state.children.live_lp_positions = 0;
+    state.children.fee_budgets = 0;
+    state.children.liveness_budgets = 0;
     state
 }
 

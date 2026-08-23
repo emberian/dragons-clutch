@@ -378,11 +378,27 @@ impl DealerFacilityPositionV1 {
         binding: &FacilityPositionBindingV1,
         policy: &DealerPolicyV1,
     ) -> Result<()> {
+        self.validate_live_against(binding, policy)?;
+        if self.position_id()? != binding.facility_position_semantic_id {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Join a current mutable Position body to its immutable authority binding.
+    ///
+    /// Unlike `validate_against`, this does not require the current content ID
+    /// to equal the binding's exact generation-zero content ID. Callers must
+    /// instead join `position_id()` to the current DealerState owner field.
+    pub fn validate_live_against(
+        &self,
+        binding: &FacilityPositionBindingV1,
+        policy: &DealerPolicyV1,
+    ) -> Result<()> {
         self.validate()?;
         binding.validate()?;
         policy.validate()?;
-        if self.position_id()? != binding.facility_position_semantic_id
-            || self.policy_id != binding.policy_id
+        if self.policy_id != binding.policy_id
             || self.facility_id != binding.facility_id
             || self.market_instance_v2_id != binding.market_instance_v2_id
             || self.market_instance_v2_id != policy.market_instance_v2_id
@@ -495,8 +511,8 @@ pub fn validate_facility_initialization_v1(
         epoch_bindings: 0,
         leases: 0,
         settlement_pots: 0,
-        fee_budgets: 1,
-        liveness_budgets: 1,
+        fee_budgets: 0,
+        liveness_budgets: 0,
         resolution_claim_work: 0,
     };
     if state.policy_id != genesis.policy_id

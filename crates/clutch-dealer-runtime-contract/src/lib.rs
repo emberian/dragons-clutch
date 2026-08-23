@@ -20,7 +20,9 @@
 mod budget;
 mod codec;
 mod facility;
+mod funding_dependencies;
 mod lease;
+mod lp_funding;
 mod lp_page;
 mod pda;
 mod policy;
@@ -28,10 +30,13 @@ mod pot;
 mod rent;
 mod root_tombstone;
 mod state;
+mod transitions;
 
 pub use budget::*;
 pub use facility::*;
+pub use funding_dependencies::*;
 pub use lease::*;
+pub use lp_funding::*;
 pub use lp_page::*;
 pub use pda::*;
 pub use policy::*;
@@ -39,6 +44,7 @@ pub use pot::*;
 pub use rent::*;
 pub use root_tombstone::*;
 pub use state::*;
+pub use transitions::*;
 
 use sha2::{Digest, Sha256};
 
@@ -73,6 +79,27 @@ pub const DEALER_FACILITY_POSITION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for `DealerRootTombstoneV1`.
 pub const DEALER_ROOT_TOMBSTONE_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/root-tombstone/v1\0";
+/// Exact content domain for `DealerLivenessScheduleV1`.
+pub const DEALER_LIVENESS_SCHEDULE_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/liveness-schedule/v1\0";
+/// Exact content domain for `DealerFundedBudgetDependenciesV1`.
+pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/funded-dependencies/v1\0";
+/// Transcript domain for an authenticated external liveness bundle projection.
+pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0";
+/// Content domain for one typed successful Dealer-action liveness receipt.
+pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0";
+/// Initial domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/init/v1\0";
+/// Per-page domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_STEP_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/step/v1\0";
+/// Final domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/final/v1\0";
 /// Exact content domain for `DealerStateV1`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
 /// Exact content domain for `LpPageV1`.
@@ -248,6 +275,37 @@ pub enum DealerRuntimeActionV1 {
     Claim = 20,
     /// Retire one counted child or root.
     Retire = 21,
+}
+
+impl DealerRuntimeActionV1 {
+    /// Recover the frozen action coordinate from its exact vector index.
+    pub fn from_index(index: usize) -> Result<Self> {
+        match index {
+            0 => Ok(Self::CreatePolicy),
+            1 => Ok(Self::Initialize),
+            2 => Ok(Self::CreateLpPage),
+            3 => Ok(Self::Contribute),
+            4 => Ok(Self::WithdrawFunding),
+            5 => Ok(Self::Activate),
+            6 => Ok(Self::CancelFunding),
+            7 => Ok(Self::RefundCancelledSponsor),
+            8 => Ok(Self::BindEpoch),
+            9 => Ok(Self::LapseEpoch),
+            10 => Ok(Self::SelectLeaseAndBegin),
+            11 => Ok(Self::Collect),
+            12 => Ok(Self::Deliver),
+            13 => Ok(Self::FinalizeSettlement),
+            14 => Ok(Self::AbortBeforeCollection),
+            15 => Ok(Self::QueueExit),
+            16 => Ok(Self::SponsorHalt),
+            17 => Ok(Self::EnterUnwind),
+            18 => Ok(Self::TimedClose),
+            19 => Ok(Self::Resolve),
+            20 => Ok(Self::Claim),
+            21 => Ok(Self::Retire),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
 }
 
 /// Fail closed until a separately reviewed adapter allocates and enables an action.

@@ -57,6 +57,12 @@ fixed-width padding.
 | Pure V1 body | Magic | Exact bytes | Frozen principal geometry |
 | --- | --- | ---: | --- |
 | `DealerPolicyV1` | `DCDPOLV1` | 1,148 | sixteen 32-byte identities, including the one neutral sink; outcome width and policy arrays/rules; no mutable rent tail |
+| `DealerFacilityGenesisV1` | `DCDFGNV1` | 116 | policy, sponsor, refund recipient, and content-derived facility nonce |
+| `FacilityPositionBindingV1` | `DCFPBND1` | 244 | full facility/policy/Market and Position/Replay/State authority join |
+| `DealerFacilityPositionV1` | `DCFPOSV1` | 388 | sole live cash/Egg owner with full Market and authority identities |
+| `DealerRootTombstoneV1` | `DCRTMBV1` | 276 | permanent terminal root evidence and exact rent disposition |
+| `DealerLivenessScheduleV1` | `DCLSCHV1` | 372 | exact 22-action maximum-call and successful-call lamport vectors |
+| `DealerFundedBudgetDependenciesV1` | `DCFDDEP1` | 348 | Dealer/external liveness policy and projection digests, fee/collateral/token bindings, State authority, generation, and exact Dealer work principal |
 | `DealerStateV1` | `DCDSTAT1` | 680 | eleven identities, phase/sponsor facts, generation and child sequence, share facts, signed `q[16]`, eleven child counts, 88-byte root-rent tail |
 | `LpPageV1` | `DCLPPGV1` | 1,208 | policy/facility, counted generation, chain/flags/revision, sixteen 64-byte entries, 80-byte child-rent tail |
 | `DealerLeaseV1` | `DCLSEV01` | 652 | sixteen identities, `g -> g+1`, three slots/deadlines, outcome/row counts, 80-byte child-rent tail |
@@ -78,6 +84,12 @@ bump remain adapter-owned:
 | Family | Exact ordered seed preimage |
 | --- | --- |
 | Policy | `b"dc-dealer-policy-v1"`, `policy_id[32]` |
+| Facility genesis | `b"dc-dealer-facility-v1"`, `facility_id[32]` |
+| Facility Position binding | `b"dc-dealer-pos-bind-v1"`, `facility_id[32]` |
+| Facility Position | `b"dc-dealer-position-v1"`, `facility_id[32]` |
+| Facility Replay | `b"dc-dealer-replay-v1"`, `facility_id[32]` |
+| Liveness schedule | `b"dc-dealer-live-sched-v1"`, `schedule_id[32]` |
+| Funded dependencies | `b"dc-dealer-funded-v1"`, `facility_id[32]` |
 | State | `b"dc-dealer-state-v1"`, `facility_id[32]` |
 | LP page | `b"dc-dealer-lp-page-v1"`, `facility_id[32]`, `page_ordinal_le[4]` |
 | Lease | `b"dc-dealer-lease-v1"`, `facility_id[32]`, `pre_generation_le[8]` |
@@ -98,7 +110,10 @@ future SBF wrappers and must not be confused with the local body magic above.
 | phase, dealer generation, child sequence, signed `q`, total/queued shares, sponsor refund state, active epoch binding, child counts | frozen `DealerStateV1` inside a future `DealerStateAccountV1` | References the policy digest and facility semantic identity; stores no asset balance. |
 | live pool collateral and existing native Eggs | one existing `PositionAccount` in the facility-authority role | The Position is the sole asset balance owner; state may cache no second pool balance. |
 | Facility Position replay/deposit sequence | its existing `ReplayAccount` companion | It is not an asset balance and must retire with the Position owner plane. |
-| LP owner, shares, queued shares, terminal claim, claim state | frozen `LpPageV1` bodies inside future canonical page accounts | Each page has strict owner order and canonical padding; a scalable authenticated cross-page set remains an activation blocker. |
+| LP owner, shares, queued shares, terminal claim, claim state | frozen `LpPageV1` bodies inside future canonical page accounts | Each page has strict owner order and canonical padding; `DealerLpFundingFoldV1` streams the complete sealed ordered set and binds its root/totals to State after the adapter authenticates every page PDA/owner. |
+| maximum paid calls and reward lamports per frozen Dealer action | immutable `DealerLivenessScheduleV1` | The liveness-policy owner selects and measures values; the Dealer groups exact dot products into six non-Source external compartments. |
+| external liveness custody, principals, payers, owners, funding classes, quote/receipt programs, and terminal-path bounds | external seven-account runtime plus ephemeral `DealerRuntimeLivenessBindingV1` projection | The external runtime is sole mutable owner. Dealer persists only the authenticated projection digest and exact grouped work principal; rent remains separate. |
+| nonzero fee assessment, owner carry, Position debit, recipient allocation, and treasury credit | separately authenticated owner-netted fee runtime | Dealer binds the immutable fee-policy ID and owns no fee vault or caller-asserted revenue balance. |
 | one selected candidate's exclusive generation lock | frozen `DealerLeaseV1` inside a future lease account | Exactly zero or one live lease per facility. |
 | one selected leg's transient dealer cash/Egg assets and cursors | frozen `SettlementPotV1` inside a future pot account | The pot is the sole transient asset owner until atomic completion; it does not mirror Facility Position balances. |
 | charged fees, rebates, recipients, and distribution state | a separately versioned fee pot/budget owner | Never a field or balance in dealer pool cash. |
@@ -513,7 +528,9 @@ may not describe them as implemented economics.
 
 Close, resolution, claim, and retirement do not require the sponsor. The
 facility may enter `UnwindOnly` through sponsor halt, share-weighted queue
-quorum, or timed close only when no lease exists. At maturity an authenticated
+quorum, or timed close. A live generation lease does not block this safety
+phase change: it must finish under exposure-reducing rules and cannot open a
+new Trading lease afterward. At maturity an authenticated
 payout may resolve `Trading` or `UnwindOnly` directly after any active lease
 finishes.
 
@@ -551,8 +568,11 @@ facility, no child may name a future generation, and Epoch/Lease/Pot children
 must name the exact current generation. An observation is transactional: a
 rejected duplicate or cap overflow leaves the fold unchanged. Completion
 requires exact equality with the State generation and all eleven counts.
-Adapter account uniqueness, ownership, PDA authentication, nested LP-entry
-edges, and the scalable page-set root/cross-page fold remain separate checks.
+Adapter account uniqueness, ownership, PDA authentication, and nested LP-entry
+edges remain separate checks. The pure `DealerLpFundingFoldV1` now owns the
+ordinal chain, cross-page owner order, page-content transcript, and exact
+entry/share/queue totals, but the adapter must authenticate the accounts fed to
+it and persist every page/root mutation atomically.
 
 `Cancelled -> Retiring` requires sponsor refund complete, every LP basket
 refunded, Facility Position zero, and no lease/pot/fee work. `Resolved ->
@@ -627,10 +647,17 @@ The bound derives from canonical row/page counts and measured CU/account/rent
 rows. It cannot rely on expected volume, future fees, `K`, LP assets, or Hoard
 principal. Failure to attract an external keeper may delay progress, but must
 not make any caller signature other than the authenticated input owner a
-consensus prerequisite. `LivenessBudgetV1` already enforces an exact prepaid
-principal partition and joins its policy/sink/rent identities, but no current
-schedule derives the required principal and liability count from measured
-maximum row/page/CU/account/rent work.
+consensus prerequisite. Legacy `LivenessBudgetV1` remains decodable but is not
+an activation authority. `DealerLivenessScheduleV1` fixes one exact
+maximum-call and successful-call lamport vector over all 22 frozen actions,
+then groups exact dot products into Candidate, Clearing, Settlement,
+Resolution, Retirement, and Recovery. The external liveness runtime solely
+owns those physical accounts plus a separately quoted Source account, work,
+rent, donations, receipts, refunds, and terminal transitions.
+`DealerFundedBudgetDependenciesV1` binds the authenticated seven-account
+projection digest and exact six-compartment Dealer work principal. It selects
+no vector values; the liveness-policy owner must derive and measure them from
+maximum row/page/CU/account/rent work before any adapter can activate.
 
 ## Remaining activation blockers
 
@@ -638,18 +665,23 @@ The pure crate closes the local fixed-body, hostile-codec, content-ID, PDA
 preimage, rent-tail, local conservation, and counted-fold layer only. Dealer
 family 76 remains disabled until these open blockers close together:
 
-1. **Scalable authenticated LP page-set root and cross-page fold.** Define the
-   canonical root construction and an SBF-scalable proof/fold for consecutive
-   pages, globally strict owner order, exhaustive entries, shares, queued
-   shares, terminal allocations/claims, child counts, revisions, and the Policy
-   page cap. A nonzero `lp_page_set_root` and individually valid pages are not
-   this evidence.
+1. **SBF-authenticated LP page streaming and mutation.** The pure canonical
+   root and activation fold now cover consecutive sealed pages, global owner
+   order, exact entries/shares/queue totals, revisions, and the Policy cap. A
+   future adapter must authenticate every page PDA/program owner, stream within
+   measured account/compute limits, and atomically update the State root for
+   contributions, withdrawals, queue changes, terminal allocations, claims,
+   and page retirement.
 2. **Live Facility Position asset codec/reload join.** Authenticate the real
    Position and Replay codecs, account ownership and facility authority, claim
    basis, mint/token profile and Hoard semantics; prove the idle and leased
    Position/Pot asset equations; and reload exact pre/post balances after every
    funding, Begin, Collect, Deliver, Finalize, abort, redemption, refund, and
    close operation. The pure semantic Position IDs are not asset evidence.
+   Fresh Lease/Pot successors must also replace V1's legacy FeeBudget and
+   LivenessBudget account bindings with exact selected fee-runtime artifacts
+   and typed external liveness receipt/program/quote joins; V1 fields cannot be
+   reinterpreted.
 3. **Resolved payout and claim projection.** Join an authenticated canonical
    payout vector to native Egg redemption, exact resulting cash, one terminal
    Hamilton allocation over the authenticated page set, immutable page claims,
@@ -658,11 +690,12 @@ family 76 remains disabled until these open blockers close together:
    canonical bytes, implement the checked certificate, and bind the Policy
    checker ID and generation-specific Lease/Pot certificate ID to the exact
    RelationV2 price scale, limits, dealer quote, and endpoint receipt.
-5. **Presently funded liveness schedule.** Derive and measure the exact budget
-   for maximum-width construction, collect/deliver/finalize/abort, retries,
-   queue/close, resolution, redemption, every claim page, and counted retirement;
-   join those liabilities to `LivenessBudgetV1` without future fees, `K`, LP
-   assets, rent principal, or Hoard principal.
+5. **Measure and instantiate the presently funded liveness schedule.** Derive
+   and measure exact Dealer action quotes plus the independent Source quote for
+   maximum-width construction, collect/deliver/finalize/abort, retries,
+   queue/close, resolution, redemption, every claim page, and counted
+   retirement; admit the exact grouped work and separate rent into the external
+   seven-account runtime without future fees, `K`, LP assets, or Hoard principal.
 6. **SBF, rollback, and frozen-maxima evidence.** Allocate reviewed outer account
    and instruction tags, exact metas and PDA ownership checks, and a
    disabled-by-default capability/profile admission; authenticate/recompute
@@ -672,7 +705,9 @@ family 76 remains disabled until these open blockers close together:
    transfer, reload, cursor, count, and close; and run signed blank-validator
    scenarios at every frozen CU, stack, account-count, serialized-width, rent,
    retry, portfolio, virtual-leg, and page/row maximum with current-source
-   reproducibility.
+   reproducibility. A fresh State/root successor must also own the exact
+   funded-dependency identity and count/retire its per-facility account; V1 has
+   no such child class, and a permanent rent leak is not an acceptable default.
 
 An initial adapter must remain explicitly zero-external-fee-only. Enabling
 nonzero fees still requires the separate funding/custody/cursor/recipient/rebate
