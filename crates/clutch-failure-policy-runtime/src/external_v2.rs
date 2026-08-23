@@ -1358,8 +1358,8 @@ pub struct FailureRecoveryTerminalReceiptV2 {
 /// Full terminal join owned separately from the Recovery funding close.
 ///
 /// Dormancy cannot construct this join: the occurrence must first resolve,
-/// and the adapter must authenticate retirement, permanent replay tombstone,
-/// and final Source release facts for the same generation.
+/// and the adapter must authenticate retirement, the pre-funded predictable
+/// replay account, and final Source release facts for the same generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureExternalTerminalJoinV2 {
     id: FailureExternalTerminalJoinIdV2,
@@ -1374,7 +1374,9 @@ pub struct FailureExternalTerminalJoinV2 {
 }
 
 impl FailureExternalTerminalJoinV2 {
-    /// Construct only after the adapter authenticates all three external facts.
+    /// Construct the terminal plan after the adapter authenticates retirement,
+    /// final Source release, and the pending immutable replay-account binding.
+    /// The SBF adapter seals this join into that account atomically with close.
     pub fn from_adapter(
         runtime: &FailureRuntimeExternalV2,
         generation: u64,

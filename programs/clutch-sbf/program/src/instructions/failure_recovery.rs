@@ -13,6 +13,9 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::series_failure_funding::{
+    fund_series_failure_accounts_v1, SeriesMarketCoreFundingReceiptV1,
+};
 use crate::instructions_sysvar::SYSVAR_OWNER_ID;
 use crate::seeds;
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock};
@@ -39,10 +42,11 @@ use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::failure_recovery::{
     account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
-    CloseFailureRootV1, CloseRecoveryFundingV1, FailureRecoveryPayloadV1, FailureReplayTombstoneV1,
-    RecoveryAccountRoleV1, RecoveryCommonV1, ResolveCallerFundedV1, ResolvePaidRecoveryV1,
-    TriggerRelationRefusalV1, TriggerSourceFailureV1, ACCEPT_RECOVERY_WORK_METAS_V1,
-    CLOSE_FAILURE_ROOT_METAS_V1, CLOSE_RECOVERY_FUNDING_METAS_V1, FAILURE_ACCOUNT_HEADER_BYTES_V1,
+    CloseFailureRootV1, CloseRecoveryFundingV1, FailureRecoveryPayloadV1,
+    FailureReplayTombstonePhaseV1, FailureReplayTombstoneV1, RecoveryAccountRoleV1,
+    RecoveryCommonV1, ResolveCallerFundedV1, ResolvePaidRecoveryV1, TriggerRelationRefusalV1,
+    TriggerSourceFailureV1, ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_FAILURE_ROOT_METAS_V1,
+    CLOSE_RECOVERY_FUNDING_METAS_V1, FAILURE_ACCOUNT_HEADER_BYTES_V1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
     FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2,
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
@@ -289,38 +293,6 @@ impl AuthenticatedRetirementRootJoinV1 {
     }
 }
 
-/// Terminal-owner admission of present, non-recovery principal for one
-/// permanent replay tombstone. The upstream owner must exclude Recovery work,
-/// Hoard, collateral, future fees, and any other encumbered principal before
-/// constructing this private-field join.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedReplayFundingJoinV1 {
-    funder: Pubkey,
-    funding_admission_receipt_id: [u8; 32],
-    exact_permanent_rent_lamports: u64,
-}
-
-impl AuthenticatedReplayFundingJoinV1 {
-    /// Construct from the terminal-funding owner's authenticated receipt.
-    pub fn from_terminal_funding_adapter(
-        funder: Pubkey,
-        funding_admission_receipt_id: [u8; 32],
-        exact_permanent_rent_lamports: u64,
-    ) -> Outcome<Self> {
-        require(
-            !is_zero_pubkey(&funder)
-                && !is_zero_id(funding_admission_receipt_id)
-                && exact_permanent_rent_lamports != 0,
-            ClutchError::MismatchedState,
-        )?;
-        Ok(Self {
-            funder,
-            funding_admission_receipt_id,
-            exact_permanent_rent_lamports,
-        })
-    }
-}
-
 /// Decode the hostile payload and enforce the exact account count/privileges.
 pub fn authenticate_action_envelope_v1<'a>(
     action: RecoveryAction,
@@ -519,122 +491,18 @@ pub fn persist_recovery_admission_v1(
     Ok(())
 }
 
-/// Fund, allocate, assign, and persist the permanent replay tombstone from
-/// typed terminal, retirement, Source, and funding joins.
-///
-/// The funder supplies exactly the current rent minimum. Lamports already at
-/// the predictable PDA are recorded separately as an irrevocable donation, so
-/// a third-party transfer cannot squat the generation or become rent
-/// principal. This helper never reads or debits the liveness Recovery account.
-#[allow(clippy::too_many_arguments)]
-pub fn create_failure_replay_tombstone_v1<'a>(
-    program_id: &Pubkey,
-    funder: &AccountInfo<'a>,
-    tombstone_account: &AccountInfo<'a>,
-    retirement_account: &AccountInfo<'a>,
-    source_release_account: &AccountInfo<'a>,
-    rent_sysvar: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
-    funding: AuthenticatedReplayFundingJoinV1,
-    root: AuthenticatedExternalRootV2,
-    terminal: FailureExternalTerminalJoinV2,
-    retirement: AuthenticatedRetirementRootJoinV1,
-    source_release: AuthenticatedSourceReleaseV1,
-) -> Outcome<FailureReplayTombstoneV1> {
-    require(funder.is_signer, ClutchError::MissingSignature)?;
-    require(funder.is_writable, ClutchError::NotWritable)?;
-    require(funding.funder == *funder.key, ClutchError::MismatchedState)?;
-    require_creatable(tombstone_account)?;
-    require_system_program(system_program)?;
-    require(
-        !retirement_account.is_writable
-            && !retirement_account.is_signer
-            && !retirement_account.executable
-            && !source_release_account.is_writable
-            && !source_release_account.is_signer
-            && !source_release_account.executable,
-        ClutchError::UnexpectedWritable,
-    )?;
-
-    let runtime = root.runtime();
-    runtime
-        .check()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let binding = runtime.binding();
-    let binding_id = runtime.binding_id().bytes();
-    let market_instance_v2_id = binding.market_instance_id().bytes();
-    let generation = binding.generation();
-    require(
-        terminal.binding_id().bytes() == binding_id
-            && terminal.market_instance_id().bytes() == market_instance_v2_id
-            && terminal.generation() == generation
-            && terminal.replay_tombstone_id() == tombstone_account.key.to_bytes()
-            && retirement.account == *retirement_account.key
-            && retirement.retirement_root_id == terminal.retirement_root_id()
-            && retirement.binding_id == binding_id
-            && retirement.market_instance_v2_id == market_instance_v2_id
-            && retirement.generation == generation
-            && source_release.account().bytes() == source_release_account.key.to_bytes()
-            && source_release.id().bytes() == terminal.source_release_receipt_id(),
-        ClutchError::MismatchedState,
-    )?;
-
-    let (expected_tombstone, bump) =
-        seeds::failure_replay_tombstone_pda(program_id, &market_instance_v2_id, generation);
-    expect_pda(tombstone_account.key, (expected_tombstone, bump), None)?;
-    let rent = read_rent(rent_sysvar)?;
-    let minimum = rent.minimum_balance(FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1)?;
-    require(
-        minimum == funding.exact_permanent_rent_lamports,
-        ClutchError::MismatchedState,
-    )?;
-    let prior_donation_lamports = tombstone_account.lamports();
-    let balance_after = prior_donation_lamports
-        .checked_add(minimum)
-        .ok_or(ClutchError::Arithmetic)?;
-    transfer_from_signer(
-        funder,
-        tombstone_account,
-        system_program,
-        minimum,
-        balance_after,
-    )?;
-    allocate_assign_failure_tombstone(
-        program_id,
-        tombstone_account,
-        system_program,
-        &market_instance_v2_id,
-        generation,
-        bump,
-    )?;
-
-    let tombstone = FailureReplayTombstoneV1 {
-        stored_bump: bump,
-        permanent_rent_lamports: minimum,
-        prior_donation_lamports,
-        permanent_rent_funder: funder.key.to_bytes(),
-        funding_admission_receipt_id: funding.funding_admission_receipt_id,
-        binding_id,
-        market_instance_v2_id,
-        generation,
-        failure_terminal_join_id: terminal.id().bytes(),
-        retirement_root_id: terminal.retirement_root_id(),
-        source_release_receipt_id: terminal.source_release_receipt_id(),
-    };
-    let mut data = tombstone_account
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    require(
-        data.len() == FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1
-            && data.iter().all(|byte| *byte == 0),
-        ClutchError::AlreadyInitialized,
-    )?;
-    tombstone.encode(&mut data)?;
-    Ok(tombstone)
+/// Atomic postimages created by one Series-funded Failure activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureRootActivationV1 {
+    /// Initialized semantic root and immutable rent ownership.
+    pub root: ExternalRootInitializationV2,
+    /// Pre-funded permanent replay record in its pending phase.
+    pub replay: FailureReplayTombstoneV1,
 }
 
-/// Execute root initialization after the caller has constructed the typed
-/// successor runtime from the exact accounts in the frozen 32-role list.
+/// Execute root and replay initialization after the caller has constructed
+/// the typed successor runtime and Series funding receipt from the exact
+/// accounts in the frozen 32-role list.
 pub fn handle_initialize_failure_root_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
@@ -642,10 +510,10 @@ pub fn handle_initialize_failure_root_v1<'a>(
     source_release: AuthenticatedSourceReleaseV1,
     runtime: FailureRuntimeExternalV2,
     receipt: FailureExternalAdmissionReceiptV2,
-) -> Outcome<ExternalRootInitializationV2> {
+    market_core_funding: SeriesMarketCoreFundingReceiptV1,
+) -> Outcome<FailureRootActivationV1> {
     authenticate_ordered_metas_v1(RecoveryAction::InitializeFailureRoot, accounts)?;
     require_source_release_account(source_release, &accounts[18])?;
-    authenticate_clock_snapshot_v1(&accounts[29])?;
     authenticate_present_recovery_admission(
         program_id,
         &accounts[2],
@@ -657,66 +525,139 @@ pub fn handle_initialize_failure_root_v1<'a>(
         program_id,
         &accounts[0],
         &accounts[1],
+        &accounts[6],
         &accounts[4],
+        &accounts[29],
         &accounts[31],
         &accounts[30],
         payload,
         runtime,
         receipt,
+        market_core_funding,
     )
 }
 
-/// Create and initialize the semantic root from a preconstructed typed
-/// successor runtime. The caller must have obtained `runtime` and `receipt`
-/// from `FailureRuntimeExternalV2::admit_successor` over authenticated accounts.
+/// Create the semantic root and pending permanent replay record from the sole
+/// typed Series MarketCore receipt. The caller must have obtained `runtime`
+/// and `receipt` from `FailureRuntimeExternalV2::admit_successor` over
+/// authenticated accounts.
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_failure_root_v1<'a>(
     program_id: &Pubkey,
-    payer: &AccountInfo<'a>,
+    market_core_vault: &AccountInfo<'a>,
     root: &AccountInfo<'a>,
+    funding_state: &AccountInfo<'a>,
     neutral_sink: &AccountInfo<'a>,
+    replay_tombstone: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     payload: &clutch_solana_layout::failure_recovery::InitializeFailureRootV1,
     runtime: FailureRuntimeExternalV2,
     receipt: FailureExternalAdmissionReceiptV2,
-) -> Outcome<ExternalRootInitializationV2> {
+    market_core_funding: SeriesMarketCoreFundingReceiptV1,
+) -> Outcome<FailureRootActivationV1> {
     payload.common.validate_for_runtime(runtime)?;
     require(
         payload.common.expected_transition_nonce == 0,
         ClutchError::Replay,
     )?;
     require(
-        receipt.series_plan_id() == payload.series_plan_v5_id
+        receipt.binding_id().bytes() == payload.common.binding_id
+            && receipt.market_instance_id().bytes() == payload.common.market_instance_v2_id
+            && receipt.generation() == payload.common.generation
+            && receipt.series_plan_id() == payload.series_plan_v5_id
             && receipt.ordinal() == payload.ordinal
             && receipt.funding_quote_id().bytes() == payload.series_funding_quote_id,
         ClutchError::MismatchedState,
     )?;
-    require(payer.is_signer, ClutchError::MissingSignature)?;
-    require(payer.is_writable, ClutchError::NotWritable)?;
-    require(!neutral_sink.is_writable, ClutchError::UnexpectedWritable)?;
-    require_creatable(root)?;
-    require_system_program(system_program)?;
-    let rent = read_rent(rent_sysvar)?;
-    let minimum = rent.minimum_balance(FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1)?;
+    let admitted_rent = market_core_funding
+        .failure_root_rent_principal_lamports()
+        .checked_add(market_core_funding.replay_tombstone_rent_principal_lamports())
+        .ok_or(ClutchError::Arithmetic)?;
+    let expected_intermediate = market_core_funding
+        .vault_balance_before()
+        .checked_sub(admitted_rent)
+        .ok_or(ClutchError::Arithmetic)?;
+    let expected_final = market_core_funding
+        .vault_balance_before()
+        .checked_sub(market_core_funding.market_core_debit_lamports())
+        .ok_or(ClutchError::Arithmetic)?;
     require(
-        minimum == payload.root_rent_principal_lamports,
+        market_core_funding.id().bytes() == payload.market_core_funding_receipt_id
+            && market_core_funding.series_plan_id().bytes() == payload.series_plan_v5_id
+            && market_core_funding.ordinal() == payload.ordinal
+            && market_core_funding.market_instance_id().bytes()
+                == payload.common.market_instance_v2_id
+            && market_core_funding.funding_quote_id().bytes() == payload.series_funding_quote_id
+            && market_core_funding.generation() == payload.common.generation
+            && market_core_funding.funding_state_account() == *funding_state.key
+            && market_core_funding.market_core_lamport_vault() == *market_core_vault.key
+            && market_core_funding.neutral_lamport_sink().bytes() == neutral_sink.key.to_bytes()
+            && market_core_funding.failure_root_rent_principal_lamports()
+                == payload.root_rent_principal_lamports
+            && market_core_funding.replay_tombstone_rent_principal_lamports()
+                == payload.replay_rent_principal_lamports
+            && market_core_funding.vault_balance_after_failure_accounts() == expected_intermediate
+            && market_core_funding.vault_balance_after() == expected_final
+            && market_core_funding.market_core_debit_lamports() >= admitted_rent,
         ClutchError::MismatchedState,
     )?;
-    let (expected_root, bump) = seeds::failure_external_root_pda(
+    require(!neutral_sink.is_writable, ClutchError::UnexpectedWritable)?;
+    require_creatable(root)?;
+    require_creatable(replay_tombstone)?;
+    require_system_program(system_program)?;
+    let rent = read_rent(rent_sysvar)?;
+    let root_minimum = rent.minimum_balance(FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1)?;
+    let replay_minimum = rent.minimum_balance(FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1)?;
+    require(
+        root_minimum == payload.root_rent_principal_lamports
+            && replay_minimum == payload.replay_rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let (expected_root, root_bump) = seeds::failure_external_root_pda(
         program_id,
         &payload.common.market_instance_v2_id,
         payload.common.generation,
     );
-    expect_pda(root.key, (expected_root, bump), None)?;
-    let balance_before = root.lamports();
-    let balance_after = balance_before
-        .checked_add(minimum)
+    let (expected_replay, replay_bump) = seeds::failure_replay_tombstone_pda(
+        program_id,
+        &payload.common.market_instance_v2_id,
+        payload.common.generation,
+    );
+    expect_pda(root.key, (expected_root, root_bump), None)?;
+    expect_pda(replay_tombstone.key, (expected_replay, replay_bump), None)?;
+    let root_balance_before = root.lamports();
+    let replay_balance_before = replay_tombstone.lamports();
+    let root_balance_after = root_balance_before
+        .checked_add(root_minimum)
         .ok_or(ClutchError::Arithmetic)?;
-    transfer_from_signer(payer, root, system_program, minimum, balance_after)?;
-    allocate_assign_failure_root(program_id, root, system_program, &payload.common, bump)?;
+    let replay_balance_after = replay_balance_before
+        .checked_add(replay_minimum)
+        .ok_or(ClutchError::Arithmetic)?;
+    fund_series_failure_accounts_v1(
+        program_id,
+        market_core_funding,
+        market_core_vault,
+        root,
+        replay_tombstone,
+        system_program,
+    )?;
+    require(
+        root.lamports() == root_balance_after
+            && replay_tombstone.lamports() == replay_balance_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    allocate_assign_failure_root(program_id, root, system_program, &payload.common, root_bump)?;
+    allocate_assign_failure_tombstone(
+        program_id,
+        replay_tombstone,
+        system_program,
+        &payload.common.market_instance_v2_id,
+        payload.common.generation,
+        replay_bump,
+    )?;
 
-    let plan = {
+    let root_plan = {
         let data = root
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
@@ -734,21 +675,21 @@ pub fn initialize_failure_root_v1<'a>(
                 data: &data[FAILURE_ACCOUNT_HEADER_BYTES_V1..],
                 is_writable: root.is_writable,
             },
-            bump,
-            id(payer.key),
-            minimum,
+            root_bump,
+            AccountId::from_bytes(market_core_funding.lamport_principal_refund().bytes()),
+            root_minimum,
             id(neutral_sink.key),
             ExternalRootFundingObservationV2 {
-                balance_before,
-                balance_after,
-                payer_debit_lamports: minimum,
+                balance_before: root_balance_before,
+                balance_after: root_balance_after,
+                payer_debit_lamports: root_minimum,
             },
             runtime,
             receipt,
         )
         .map_err(map_external_error)?
     };
-    require(plan.root == id(root.key), ClutchError::MismatchedState)?;
+    require(root_plan.root == id(root.key), ClutchError::MismatchedState)?;
     let mut data = root
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
@@ -756,11 +697,39 @@ pub fn initialize_failure_root_v1<'a>(
         &mut data,
         registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
         registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION,
-        bump,
+        root_bump,
         FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2,
     )?;
-    data[FAILURE_ACCOUNT_HEADER_BYTES_V1..].copy_from_slice(&plan.post_root_data);
-    Ok(plan)
+    data[FAILURE_ACCOUNT_HEADER_BYTES_V1..].copy_from_slice(&root_plan.post_root_data);
+    drop(data);
+
+    let replay = FailureReplayTombstoneV1 {
+        stored_bump: replay_bump,
+        phase: FailureReplayTombstonePhaseV1::Pending,
+        permanent_rent_lamports: replay_minimum,
+        prior_donation_lamports: replay_balance_before,
+        permanent_rent_funder: market_core_funding.lamport_principal_refund().bytes(),
+        funding_admission_receipt_id: market_core_funding.id().bytes(),
+        binding_id: payload.common.binding_id,
+        market_instance_v2_id: payload.common.market_instance_v2_id,
+        generation: payload.common.generation,
+        failure_terminal_join_id: [0; 32],
+        retirement_root_id: [0; 32],
+        source_release_receipt_id: [0; 32],
+    };
+    let mut replay_data = replay_tombstone
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(
+        replay_data.len() == FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1
+            && replay_data.iter().all(|byte| *byte == 0),
+        ClutchError::AlreadyInitialized,
+    )?;
+    replay.encode(&mut replay_data)?;
+    Ok(FailureRootActivationV1 {
+        root: root_plan,
+        replay,
+    })
 }
 
 /// Authenticate the root frame, PDA, complete owner body, and common replay
@@ -1196,7 +1165,7 @@ pub fn apply_recovery_close_v1<'a>(
 }
 
 /// Close only the resolved semantic root after Recovery-close, retirement,
-/// permanent replay, and final Source joins have all been authenticated.
+/// pre-funded replay, and final Source joins have all been authenticated.
 pub fn apply_failure_root_close_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
@@ -1239,7 +1208,7 @@ pub fn apply_failure_root_close_v1<'a>(
         ClutchError::MismatchedState,
     )?;
     require_closed_recovery(root.runtime(), closed_recovery)?;
-    authenticate_tombstone(program_id, tombstone_account, payload, join)?;
+    terminalize_tombstone(program_id, tombstone_account, payload, join)?;
     let close = project_external_root_close_v2(root, join).map_err(map_external_error)?;
     require(
         close.root == id(root_account.key)
@@ -1610,23 +1579,22 @@ fn write_root_poststate(
     Ok(())
 }
 
-fn authenticate_tombstone(
+fn terminalize_tombstone(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     payload: CloseFailureRootV1,
     join: FailureExternalTerminalJoinV2,
 ) -> Outcome<()> {
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(account.is_writable, ClutchError::NotWritable)?;
     require(
         account.data_len() == FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1,
         ClutchError::WrongDataLength,
     )?;
-    let data = account
-        .try_borrow_data()
+    let mut data = account
+        .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let tombstone =
-        clutch_solana_layout::failure_recovery::FailureReplayTombstoneV1::decode(&data)?;
+    let tombstone = FailureReplayTombstoneV1::decode(&data)?;
     expect_pda(
         account.key,
         seeds::failure_replay_tombstone_pda(
@@ -1643,14 +1611,21 @@ fn authenticate_tombstone(
     require(
         account.lamports() >= persisted_balance
             && account.key.to_bytes() == payload.replay_tombstone_id
+            && tombstone.phase == FailureReplayTombstonePhaseV1::Pending
             && tombstone.binding_id == payload.common.binding_id
             && tombstone.market_instance_v2_id == payload.common.market_instance_v2_id
-            && tombstone.generation == payload.common.generation
-            && tombstone.failure_terminal_join_id == join.id().bytes()
-            && tombstone.retirement_root_id == join.retirement_root_id()
-            && tombstone.source_release_receipt_id == join.source_release_receipt_id(),
+            && tombstone.generation == payload.common.generation,
         ClutchError::MismatchedState,
-    )
+    )?;
+    let terminal = tombstone
+        .terminalized(
+            join.id().bytes(),
+            join.retirement_root_id(),
+            join.source_release_receipt_id(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    terminal.encode(&mut data)?;
+    Ok(())
 }
 
 fn require_closed_recovery(

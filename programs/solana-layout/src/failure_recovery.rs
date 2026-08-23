@@ -63,8 +63,12 @@ pub struct InitializeFailureRootV1 {
     pub ordinal: u32,
     /// Exact presently funded Series quote.
     pub series_funding_quote_id: [u8; HASH_BYTES],
+    /// Exact Series-owned MarketCore subcomponent-debit receipt.
+    pub market_core_funding_receipt_id: [u8; HASH_BYTES],
     /// Root-account rent principal supplied now by its immutable payer.
     pub root_rent_principal_lamports: u64,
+    /// Permanent replay-account rent principal supplied in the same debit.
+    pub replay_rent_principal_lamports: u64,
 }
 
 /// Strict `TriggerSourceFailure` payload.
@@ -155,7 +159,8 @@ pub struct CloseFailureRootV1 {
     pub failure_terminal_join_id: [u8; HASH_BYTES],
     /// Separately authenticated retirement root.
     pub retirement_root_id: [u8; HASH_BYTES],
-    /// Permanent replay tombstone preserved after close.
+    /// Predictable replay tombstone allocated before terminal work and
+    /// preserved after close.
     pub replay_tombstone_id: [u8; HASH_BYTES],
     /// Final Source release/lineage receipt.
     pub source_release_receipt_id: [u8; HASH_BYTES],
@@ -185,7 +190,7 @@ pub enum FailureRecoveryPayloadV1 {
 }
 
 /// Exact payload widths, indexed by allocated Recovery action.
-pub const INITIALIZE_FAILURE_ROOT_PAYLOAD_BYTES_V1: usize = 160;
+pub const INITIALIZE_FAILURE_ROOT_PAYLOAD_BYTES_V1: usize = 200;
 /// Exact Source-trigger payload width.
 pub const TRIGGER_SOURCE_FAILURE_PAYLOAD_BYTES_V1: usize = 112;
 /// Exact relation-refusal trigger payload width.
@@ -248,11 +253,33 @@ pub fn encode_failure_account_header_v1(
     Ok(())
 }
 
-/// Permanent resolved-generation replay tombstone.
+/// Lifecycle of the permanent generation record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FailureReplayTombstonePhaseV1 {
+    /// Rent and immutable generation facts are present before terminal work.
+    Pending = 1,
+    /// Exact retirement, Source release, and full terminal join are sealed.
+    Terminal = 2,
+}
+
+impl FailureReplayTombstonePhaseV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Pending),
+            2 => Ok(Self::Terminal),
+            _ => Err(CodecError::InvalidEnum),
+        }
+    }
+}
+
+/// Permanent funded generation record, terminalized exactly once.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureReplayTombstoneV1 {
     /// Canonical account PDA bump.
     pub stored_bump: u8,
+    /// Pending before closure; terminal after all external joins exist.
+    pub phase: FailureReplayTombstonePhaseV1,
     /// Exact nonrefundable present rent used to create the permanent record.
     pub permanent_rent_lamports: u64,
     /// Lamports already present before the admitted rent debit. They remain a
@@ -278,23 +305,59 @@ pub struct FailureReplayTombstoneV1 {
 }
 
 impl FailureReplayTombstoneV1 {
-    /// Validate nonzero terminal identities and present permanent rent.
+    /// Validate present permanent funding and phase-canonical terminal fields.
     pub fn validate(&self) -> Result<()> {
         for id in [
             self.permanent_rent_funder,
             self.funding_admission_receipt_id,
             self.binding_id,
             self.market_instance_v2_id,
-            self.failure_terminal_join_id,
-            self.retirement_root_id,
-            self.source_release_receipt_id,
         ] {
             require_live(id)?;
         }
         if self.generation == 0 || self.permanent_rent_lamports == 0 {
             return Err(CodecError::ZeroValue);
         }
+        let terminal = [
+            self.failure_terminal_join_id,
+            self.retirement_root_id,
+            self.source_release_receipt_id,
+        ];
+        match self.phase {
+            FailureReplayTombstonePhaseV1::Pending => {
+                if terminal.iter().any(|id| !is_zero(id)) {
+                    return Err(CodecError::NonCanonicalPadding);
+                }
+            }
+            FailureReplayTombstonePhaseV1::Terminal => {
+                for id in terminal {
+                    require_live(id)?;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Seal exact terminal joins without changing funding or generation facts.
+    pub fn terminalized(
+        self,
+        failure_terminal_join_id: [u8; HASH_BYTES],
+        retirement_root_id: [u8; HASH_BYTES],
+        source_release_receipt_id: [u8; HASH_BYTES],
+    ) -> Result<Self> {
+        self.validate()?;
+        if self.phase != FailureReplayTombstonePhaseV1::Pending {
+            return Err(CodecError::InvalidEnum);
+        }
+        let next = Self {
+            phase: FailureReplayTombstonePhaseV1::Terminal,
+            failure_terminal_join_id,
+            retirement_root_id,
+            source_release_receipt_id,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
     }
 
     /// Encode the exact permanent tombstone body.
@@ -305,6 +368,7 @@ impl FailureReplayTombstoneV1 {
         output[0] = registry::FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG;
         output[1] = registry::FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION;
         output[2] = self.stored_bump;
+        output[3] = self.phase as u8;
         output[4..12].copy_from_slice(&self.permanent_rent_lamports.to_le_bytes());
         output[12..20].copy_from_slice(&self.prior_donation_lamports.to_le_bytes());
         output[20..52].copy_from_slice(&self.permanent_rent_funder);
@@ -327,10 +391,10 @@ impl FailureReplayTombstoneV1 {
         if input[1] != registry::FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
-        require_reserved(&input[3..4])?;
         require_reserved(&input[252..])?;
         let value = Self {
             stored_bump: input[2],
+            phase: FailureReplayTombstonePhaseV1::decode(input[3])?,
             permanent_rent_lamports: u64_at(input, 4),
             prior_donation_lamports: u64_at(input, 12),
             permanent_rent_funder: id_at(input, 20),
@@ -361,6 +425,7 @@ pub struct RecoveryAccountMetaV1 {
 /// Closed account-role vocabulary for the Recovery SBF seam.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveryAccountRoleV1 {
+    MarketCoreLamportVault,
     RootRentPayer,
     FailureRoot,
     LivenessPolicy,
@@ -412,7 +477,7 @@ const fn meta(role: RecoveryAccountRoleV1, writable: bool, signer: bool) -> Reco
 
 /// Exact ordered account contract for `InitializeFailureRoot`.
 pub const INITIALIZE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
-    meta(RecoveryAccountRoleV1::RootRentPayer, true, true),
+    meta(RecoveryAccountRoleV1::MarketCoreLamportVault, true, false),
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, false, false),
@@ -445,7 +510,7 @@ pub const INITIALIZE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SourceWindow, false, false),
     meta(RecoveryAccountRoleV1::StatisticKey, false, false),
     meta(RecoveryAccountRoleV1::SummaryProgramArtifact, false, false),
-    meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
+    meta(RecoveryAccountRoleV1::ReplayTombstone, true, false),
     meta(RecoveryAccountRoleV1::RentSysvar, false, false),
     meta(RecoveryAccountRoleV1::SystemProgram, false, false),
 ];
@@ -529,7 +594,7 @@ pub const CLOSE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::NeutralSink, true, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, false, false),
     meta(RecoveryAccountRoleV1::RetirementRoot, false, false),
-    meta(RecoveryAccountRoleV1::ReplayTombstone, false, false),
+    meta(RecoveryAccountRoleV1::ReplayTombstone, true, false),
     meta(RecoveryAccountRoleV1::SourceRelease, false, false),
 ];
 
@@ -566,11 +631,15 @@ pub fn decode_payload_v1(
                 series_plan_v5_id: id_at(input, 80),
                 ordinal: u32_at(input, 112),
                 series_funding_quote_id: id_at(input, 120),
-                root_rent_principal_lamports: u64_at(input, 152),
+                market_core_funding_receipt_id: id_at(input, 152),
+                root_rent_principal_lamports: u64_at(input, 184),
+                replay_rent_principal_lamports: u64_at(input, 192),
             };
             require_live(value.series_plan_v5_id)?;
             require_live(value.series_funding_quote_id)?;
-            if value.root_rent_principal_lamports == 0 {
+            require_live(value.market_core_funding_receipt_id)?;
+            if value.root_rent_principal_lamports == 0 || value.replay_rent_principal_lamports == 0
+            {
                 return Err(CodecError::ZeroValue);
             }
             Ok(FailureRecoveryPayloadV1::InitializeFailureRoot(value))
@@ -720,7 +789,9 @@ pub fn encode_payload_v1(value: &FailureRecoveryPayloadV1, output: &mut [u8]) ->
             output[80..112].copy_from_slice(&v.series_plan_v5_id);
             output[112..116].copy_from_slice(&v.ordinal.to_le_bytes());
             output[120..152].copy_from_slice(&v.series_funding_quote_id);
-            output[152..160].copy_from_slice(&v.root_rent_principal_lamports.to_le_bytes());
+            output[152..184].copy_from_slice(&v.market_core_funding_receipt_id);
+            output[184..192].copy_from_slice(&v.root_rent_principal_lamports.to_le_bytes());
+            output[192..200].copy_from_slice(&v.replay_rent_principal_lamports.to_le_bytes());
         }
         FailureRecoveryPayloadV1::TriggerSourceFailure(v) => {
             output[80..112].copy_from_slice(&v.source_failure_handoff_id)
@@ -887,7 +958,9 @@ mod tests {
                 series_plan_v5_id: [5; 32],
                 ordinal: 6,
                 series_funding_quote_id: [7; 32],
-                root_rent_principal_lamports: 8,
+                market_core_funding_receipt_id: [8; 32],
+                root_rent_principal_lamports: 9,
+                replay_rent_principal_lamports: 10,
             }),
             FailureRecoveryPayloadV1::TriggerSourceFailure(TriggerSourceFailureV1 {
                 common: common(),
