@@ -1,5 +1,7 @@
 //! NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY campaign.
 
+#![recursion_limit = "256"]
+
 mod plane;
 mod provider;
 mod rpc;
@@ -8,7 +10,9 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clutch_sbf::{
     loader_state::UPGRADEABLE_LOADER_ID,
     pyth_receiver::{parse_full_price_update_v2, PriceUpdateAccountViewV1},
+    source_archive_v2::{self, AccountViewV2 as ArchiveAccountViewV2},
     source_identity::{real_pyth_lab, CLOCK_SYSVAR_ID},
+    source_v2::crossing::ArchiveRecordV2,
     source_v2::fixtures::{programdata_body, receiver_program_body},
 };
 use clutch_solana_layout::clearing::{EpochWindowAccount, CANDIDATE_WINDOW_SLOTS};
@@ -48,9 +52,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const SOURCE_ONLY_MODE: &str = "source-only-v1";
 const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
+const MULTIBOUNDARY_JOINED_MODE: &str = "joined-multiboundary-v1";
 const SOURCE_TRANSCRIPT_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v2";
 const JOINED_TRANSCRIPT_SCHEMA: &str =
     "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4";
+const MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA: &str =
+    "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";
 const UPSTREAM_COMMIT: &str = "f50a3faf9fc5a223a22889799b2f778900f186b3";
 const WARP_SLOT: u64 = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT + 1;
 const CLOCK_SETTLED_SLOT: u64 = WARP_SLOT + 16;
@@ -66,6 +73,7 @@ const SOURCE_PROFILE_SNAPSHOT: &str =
 const VALIDATOR_PROVENANCE: &str = "../../../tools/agave-loopback-validator/PROVENANCE.md";
 const VALIDATOR_PINS: &str = "../../../tools/agave-loopback-validator/pins.env";
 const VALIDATOR_PATCH: &str = "../../../tools/agave-loopback-validator/agave-4.0.2-loopback.patch";
+const ROLLBACK_SNAPSHOT_DOMAIN: &[u8] = b"dragons-clutch/local-real-pyth/rollback-snapshot/v1";
 
 struct Args {
     command: String,
@@ -120,7 +128,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Arg
     if command != "prepare" && command != "run" && command != "clock" {
         return Err(format!("unknown command {command}"));
     }
-    if campaign_mode != SOURCE_ONLY_MODE && campaign_mode != JOINED_LIFECYCLE_MODE {
+    if campaign_mode != SOURCE_ONLY_MODE
+        && campaign_mode != JOINED_LIFECYCLE_MODE
+        && campaign_mode != MULTIBOUNDARY_JOINED_MODE
+    {
         return Err(format!("unknown campaign mode {campaign_mode}"));
     }
     Ok(Args {
@@ -139,8 +150,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Arg
 fn usage() -> ! {
     eprintln!(
         "usage:\n  clutch-local-real-pyth clock --work DIR --url http://127.0.0.1:PORT\n  \
-         clutch-local-real-pyth prepare --work DIR --repository-head COMMIT --clock-probe-time UNIX --publish-time UNIX --clutch-elf FILE --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1]\n  \
-         clutch-local-real-pyth run --work DIR --repository-head COMMIT --url http://127.0.0.1:PORT --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1]"
+         clutch-local-real-pyth prepare --work DIR --repository-head COMMIT --clock-probe-time UNIX --publish-time UNIX --clutch-elf FILE --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1|joined-multiboundary-v1]\n  \
+         clutch-local-real-pyth run --work DIR --repository-head COMMIT --url http://127.0.0.1:PORT --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1|joined-multiboundary-v1]"
     );
     process::exit(2)
 }
@@ -154,11 +165,50 @@ fn require(condition: bool, message: impl Into<String>) -> Result<()> {
 }
 
 fn transcript_schema(campaign_mode: &str) -> &'static str {
-    if campaign_mode == JOINED_LIFECYCLE_MODE {
-        JOINED_TRANSCRIPT_SCHEMA
-    } else {
-        SOURCE_TRANSCRIPT_SCHEMA
+    match campaign_mode {
+        JOINED_LIFECYCLE_MODE => JOINED_TRANSCRIPT_SCHEMA,
+        MULTIBOUNDARY_JOINED_MODE => MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+        _ => SOURCE_TRANSCRIPT_SCHEMA,
     }
+}
+
+fn is_joined_mode(campaign_mode: &str) -> bool {
+    campaign_mode == JOINED_LIFECYCLE_MODE || campaign_mode == MULTIBOUNDARY_JOINED_MODE
+}
+
+fn boundary_count(campaign_mode: &str) -> u64 {
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        2
+    } else {
+        1
+    }
+}
+
+fn publish_lag_seconds(campaign_mode: &str) -> i64 {
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        120
+    } else {
+        180
+    }
+}
+
+fn window_publish_times(campaign_mode: &str, publish_time: i64) -> Result<Vec<i64>> {
+    let count = i64::try_from(boundary_count(campaign_mode))?;
+    let first = publish_time
+        .checked_sub(
+            count
+                .checked_sub(1)
+                .and_then(|value| value.checked_mul(60))
+                .ok_or("window publish-time delta overflow")?,
+        )
+        .ok_or("window publish-time underflow")?;
+    (0..count)
+        .map(|index| {
+            first
+                .checked_add(index.checked_mul(60).ok_or("publish-time step overflow")?)
+                .ok_or_else(|| "publish-time overflow".into())
+        })
+        .collect()
 }
 
 fn require_repository_head(repository_head: &str) -> Result<()> {
@@ -662,18 +712,23 @@ fn prepare(
     fs::write(work.join("program.pubkey"), format!("{PROGRAM_ID}\n"))?;
 
     require(publish_time > 0, "publish time must be positive")?;
+    let publish_lag = publish_lag_seconds(campaign_mode);
     let expected_publish_time = clock_probe_time
-        .checked_sub(180)
+        .checked_sub(publish_lag)
         .ok_or("clock-probe time underflow")?
         .div_euclid(60)
         * 60;
     require(
         publish_time == expected_publish_time,
-        "publish time is not the named three-minute boundary behind the probe Clock",
+        format!(
+            "publish time is not the named {publish_lag}-second boundary behind the probe Clock"
+        ),
     )?;
     let end_bucket = u64::try_from(publish_time)?.div_euclid(60);
-    let start_bucket = end_bucket.checked_sub(1).ok_or("bucket underflow")?;
-    let market_prestate = if campaign_mode == JOINED_LIFECYCLE_MODE {
+    let start_bucket = end_bucket
+        .checked_sub(boundary_count(campaign_mode))
+        .ok_or("bucket underflow")?;
+    let market_prestate = if is_joined_mode(campaign_mode) {
         plane::MarketPrestate::SignedCreate
     } else {
         plane::MarketPrestate::GenesisFunded
@@ -690,11 +745,31 @@ fn prepare(
         correct.start_bucket == start_bucket && correct.end_bucket_exclusive == end_bucket,
         "rebuilt plane window differs from manifest",
     )?;
-    let observation = provider::observation(publish_time)?;
+    let publish_times = window_publish_times(campaign_mode, publish_time)?;
+    let observations = publish_times
+        .iter()
+        .map(|publish_time| provider::observation(*publish_time))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let observation = observations
+        .last()
+        .ok_or("campaign generated no source observations")?;
     let wrong_feed_observation = provider::observation_for_feed(publish_time, WRONG_FEED_ID)?;
     let merkle_update_hash = provider::sha256(&borsh::to_vec(&observation.update)?);
     let wrong_feed_merkle_update_hash =
         provider::sha256(&borsh::to_vec(&wrong_feed_observation.update)?);
+    let window_observation_manifest = observations
+        .iter()
+        .enumerate()
+        .map(|(index, observation)| {
+            json!({
+                "bucket": start_bucket + u64::try_from(index).expect("observation index fits u64"),
+                "publish_time": publish_times[index],
+                "vaa_sha256": provider::sha256(&observation.vaa),
+                "post_update_data_sha256": provider::sha256(&observation.post_data),
+                "merkle_price_update_sha256": provider::sha256(&borsh::to_vec(&observation.update).expect("observation encodes")),
+            })
+        })
+        .collect::<Vec<_>>();
 
     let rows = expected_genesis_rows(&correct, &elf_bytes, second_owner.pubkey())?;
 
@@ -706,7 +781,7 @@ fn prepare(
     }
     fs::write(work.join("genesis.tsv"), index)?;
 
-    let manifest = json!({
+    let mut manifest = json!({
         "claim": CLAIM,
         "transcript_schema": transcript_schema(campaign_mode),
         "campaign_mode": campaign_mode,
@@ -733,7 +808,7 @@ fn prepare(
         },
         "publish_time": publish_time,
         "clock_probe_unix_timestamp": clock_probe_time,
-        "publish_time_derivation": "floor((same-validator warped Clock - 180 seconds) / 60) * 60",
+        "publish_time_derivation": format!("floor((same-validator warped Clock - {publish_lag} seconds) / 60) * 60"),
         "start_bucket": start_bucket,
         "end_bucket_exclusive": end_bucket,
         "warp_slot": WARP_SLOT,
@@ -813,6 +888,19 @@ fn prepare(
             "merkle_price_update_sha256": wrong_feed_merkle_update_hash,
         }
     });
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        let fields = manifest
+            .as_object_mut()
+            .ok_or("campaign manifest is not a JSON object")?;
+        fields.insert(
+            "boundary_count".to_string(),
+            json!(boundary_count(campaign_mode)),
+        );
+        fields.insert(
+            "window_observations".to_string(),
+            json!(window_observation_manifest),
+        );
+    }
     fs::write(
         work.join("campaign.json"),
         serde_json::to_vec_pretty(&manifest)?,
@@ -1276,6 +1364,105 @@ fn snapshot(rpc: &Rpc, keys: &[Address]) -> Result<Vec<Option<AccountView>>> {
         .collect()
 }
 
+/// Hash one ordered set of complete RPC account observations.
+///
+/// The encoding is domain || target-count(u64 LE), followed for every target
+/// by key(32) || presence(u8) and, when present, lamports(u64 LE) || owner(32)
+/// || executable(u8) || data-length(u64 LE) || complete data. The target keys
+/// are therefore committed even when an account is absent.
+fn rollback_snapshot_sha256(keys: &[Address], accounts: &[Option<AccountView>]) -> Result<String> {
+    require(
+        keys.len() == accounts.len(),
+        "rollback snapshot key/account lengths differ",
+    )?;
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(ROLLBACK_SNAPSHOT_DOMAIN);
+    canonical.extend_from_slice(&u64::try_from(keys.len())?.to_le_bytes());
+    for (key, account) in keys.iter().zip(accounts) {
+        canonical.extend_from_slice(key.as_ref());
+        if let Some(account) = account {
+            canonical.push(1);
+            canonical.extend_from_slice(&account.lamports.to_le_bytes());
+            canonical.extend_from_slice(Address::from_str(&account.owner)?.as_ref());
+            canonical.push(u8::from(account.executable));
+            canonical.extend_from_slice(&u64::try_from(account.data.len())?.to_le_bytes());
+            canonical.extend_from_slice(&account.data);
+        } else {
+            canonical.push(0);
+        }
+    }
+    Ok(provider::sha256(&canonical))
+}
+
+fn hex32(bytes: [u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn archive_record_evidence(index: usize, record: ArchiveRecordV2) -> Value {
+    json!({
+        "index": index,
+        "bucket": record.bucket.to_string(),
+        "lower": record.low.to_string(),
+        "upper": record.high.to_string(),
+        "sequence": record.sequence.to_string(),
+        "write_slot": record.publish_slot.to_string(),
+        "publish_time": record.publish_time.to_string(),
+    })
+}
+
+fn source_archive_evidence(
+    key: Address,
+    account: &AccountView,
+    page_commitment: [u8; 32],
+    feed: [u8; 32],
+    window: [u8; 32],
+    record_count: u8,
+) -> Value {
+    json!({
+        "key": key.to_string(),
+        "owner": account.owner,
+        "executable": account.executable,
+        "data_len": account.data.len(),
+        "body_sha256": provider::sha256(&account.data),
+        "page_commitment": hex32(page_commitment),
+        "feed_id": hex32(feed),
+        "window_id": hex32(window),
+        "record_count": record_count,
+    })
+}
+
+fn out_of_order_rollback_evidence(
+    skipped_boundary_index: usize,
+    skipped_update_account: Address,
+    refusal_signature: &str,
+    before_snapshot_sha256: &str,
+    after_snapshot_sha256: &str,
+    archive: Address,
+    treasury: Address,
+) -> Value {
+    json!({
+        "ok": before_snapshot_sha256 == after_snapshot_sha256,
+        "skipped_boundary_index": skipped_boundary_index,
+        "skipped_update_account": skipped_update_account.to_string(),
+        "skipped_update_absent_after_refusal": true,
+        "refusal_signature": refusal_signature,
+        "instruction_error": {
+            "instruction_index": 2,
+            "custom_code": 122,
+            "custom_code_hex": "0x7a",
+        },
+        "snapshot_encoding": "domain || target_count:u64-le || repeated(key:32 || present:u8 || if-present(lamports:u64-le || owner:32 || executable:u8 || data_len:u64-le || data))",
+        "snapshot_domain": String::from_utf8_lossy(ROLLBACK_SNAPSHOT_DOMAIN),
+        "watched_accounts": [
+            {"role": "source_archive", "address": archive.to_string()},
+            {"role": "receiver_treasury", "address": treasury.to_string()},
+        ],
+        "before_snapshot_sha256": before_snapshot_sha256,
+        "after_snapshot_sha256": after_snapshot_sha256,
+        "snapshots_equal": before_snapshot_sha256 == after_snapshot_sha256,
+    })
+}
+
 fn upload_artifact(
     rpc: &Rpc,
     payer: &Keypair,
@@ -1462,6 +1649,17 @@ fn run(
     let publish_time = manifest_i64(&public, "publish_time")?;
     let start_bucket = u64::try_from(manifest_i64(&public, "start_bucket")?)?;
     let end_bucket = u64::try_from(manifest_i64(&public, "end_bucket_exclusive")?)?;
+    require(
+        end_bucket.checked_sub(start_bucket) == Some(boundary_count(campaign_mode)),
+        "prepared source window width differs from the requested campaign mode",
+    )?;
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        require(
+            public.get("boundary_count").and_then(Value::as_u64)
+                == Some(boundary_count(campaign_mode)),
+            "prepared boundary count differs from the multi-boundary schema",
+        )?;
+    }
     let clutch_elf = fs::read(work.join("elf/clutch_sbf.so"))?;
     require(
         public.get("clutch_elf_sha256").and_then(Value::as_str)
@@ -1481,7 +1679,7 @@ fn run(
             == Some(second_owner.pubkey().to_string().as_str()),
         "explicit second owner differs from prepared manifest",
     )?;
-    let market_prestate = if campaign_mode == JOINED_LIFECYCLE_MODE {
+    let market_prestate = if is_joined_mode(campaign_mode) {
         plane::MarketPrestate::SignedCreate
     } else {
         plane::MarketPrestate::GenesisFunded
@@ -1494,7 +1692,14 @@ fn run(
         clutch_svm_fixture::MARKET_NONCE,
         market_prestate,
     );
-    let observation = provider::observation(publish_time)?;
+    let publish_times = window_publish_times(campaign_mode, publish_time)?;
+    let observations = publish_times
+        .iter()
+        .map(|publish_time| provider::observation(*publish_time))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let observation = observations
+        .last()
+        .ok_or("campaign regenerated no source observations")?;
     let wrong_feed_observation = provider::observation_for_feed(publish_time, WRONG_FEED_ID)?;
     require(
         public.get("vaa_sha256").and_then(Value::as_str)
@@ -1515,6 +1720,23 @@ fn run(
             == Some(&provider::sha256(&borsh::to_vec(&observation.update)?)),
         "regenerated MerklePriceUpdate differs from public manifest",
     )?;
+    let expected_window_observations = observations
+        .iter()
+        .enumerate()
+        .map(|(index, observation)| json!({
+            "bucket": start_bucket + u64::try_from(index).expect("observation index fits u64"),
+            "publish_time": publish_times[index],
+            "vaa_sha256": provider::sha256(&observation.vaa),
+            "post_update_data_sha256": provider::sha256(&observation.post_data),
+            "merkle_price_update_sha256": provider::sha256(&borsh::to_vec(&observation.update).expect("observation encodes")),
+        }))
+        .collect::<Vec<_>>();
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        require(
+            public.get("window_observations") == Some(&json!(expected_window_observations)),
+            "regenerated boundary observations differ from public manifest",
+        )?;
+    }
     let wrong_feed_manifest = public
         .get("wrong_feed")
         .ok_or("campaign manifest has no wrong_feed observation")?;
@@ -1573,15 +1795,31 @@ fn run(
     )?;
     require_accepted("router initialize", &status)?;
     record_step(&rpc, &mut steps, "router-initialize", signature, &status)?;
-    let encoded = upload_and_verify_vaa(
-        &rpc,
-        &payer,
-        &mut steps,
-        &observation,
-        "correct-feed",
-        "router-init-and-write-encoded-vaa",
-        "router-write-and-verify-encoded-vaa",
-    )?;
+    let mut encoded_observations = Vec::with_capacity(observations.len());
+    for (index, observation) in observations.iter().enumerate() {
+        let (role, allocate_step, verify_step) = if observations.len() == 1 {
+            (
+                "correct-feed".to_string(),
+                "router-init-and-write-encoded-vaa".to_string(),
+                "router-write-and-verify-encoded-vaa".to_string(),
+            )
+        } else {
+            (
+                format!("correct-feed-boundary-{index}"),
+                format!("boundary-{index}-router-init-and-write-encoded-vaa"),
+                format!("boundary-{index}-router-write-and-verify-encoded-vaa"),
+            )
+        };
+        encoded_observations.push(upload_and_verify_vaa(
+            &rpc,
+            &payer,
+            &mut steps,
+            observation,
+            &role,
+            &allocate_step,
+            &verify_step,
+        )?);
+    }
 
     let (signature, status) = sign_submit(
         &rpc,
@@ -1647,7 +1885,7 @@ fn run(
     let run_joined_trade = |steps: &mut Vec<Value>,
                             lifecycle_signatures: &mut BTreeMap<&'static str, String>|
      -> Result<Value> {
-        if campaign_mode != JOINED_LIFECYCLE_MODE {
+        if !is_joined_mode(campaign_mode) {
             return Ok(Value::Null);
         }
         let seller_position_rent = rpc.minimum_rent(account_len::POSITION)?;
@@ -2201,7 +2439,7 @@ fn run(
     let bad_config_update = Keypair::new();
     let watched = [correct.plane.source_archive.address, treasury];
     let before = snapshot(&rpc, &watched)?;
-    assert_clock(&rpc, publish_time)?;
+    assert_clock(&rpc, publish_times[0])?;
     let (signature, status) = sign_submit(
         &rpc,
         &payer,
@@ -2210,9 +2448,9 @@ fn run(
             compute_budget(),
             receiver_post(
                 payer.pubkey(),
-                encoded.pubkey(),
+                encoded_observations[0].pubkey(),
                 bad_config_update.pubkey(),
-                &observation.post_data,
+                &observations[0].post_data,
             ),
             plane::append(&correct, bad_config_update.pubkey(), WRONG_CONFIG),
         ],
@@ -2275,102 +2513,191 @@ fn run(
         "wrong feed changed registered archive or treasury",
     )?;
 
-    assert_clock(&rpc, publish_time)?;
-    let update = Keypair::new();
-    let (joined_signature, status) = sign_submit(
-        &rpc,
-        &payer,
-        &[&update],
-        &[
-            compute_budget(),
-            receiver_post(
-                payer.pubkey(),
-                encoded.pubkey(),
-                update.pubkey(),
-                &observation.post_data,
-            ),
-            plane::append(
-                &correct,
-                update.pubkey(),
-                address(real_pyth_lab::RECEIVER_CONFIG),
-            ),
-        ],
-    )?;
-    require_accepted(
-        "atomic adjacent PostUpdate + AppendSourceArchiveV2",
-        &status,
-    )?;
-    record_step(
-        &rpc,
-        &mut steps,
-        "real-post-update-plus-clutch-append-atomic",
-        joined_signature.clone(),
-        &status,
-    )?;
-    let update_view = account(&rpc, "receiver price update", update.pubkey())?;
-    let parsed = parse_full_price_update_v2(
-        PriceUpdateAccountViewV1::new(
-            update.pubkey().to_bytes(),
-            Address::from_str(&update_view.owner)?.to_bytes(),
-            update_view.executable,
-            &update_view.data,
-        ),
-        real_pyth_lab::RECEIVER_PROGRAM,
-        provider::FEED_ID,
-    )
-    .map_err(|error| format!("receiver update parse: {error:?}"))?;
-    require(parsed.price == provider::PRICE, "receiver price differs")?;
-    require(
-        parsed.confidence == provider::CONFIDENCE,
-        "receiver confidence differs",
-    )?;
-    require(
-        parsed.exponent == provider::EXPONENT,
-        "receiver exponent differs",
-    )?;
-    require(
-        parsed.publish_time == publish_time,
-        "receiver publish time differs",
-    )?;
+    let out_of_order_rollback = if observations.len() > 1 {
+        let index = observations.len() - 1;
+        let skipped_update = Keypair::new();
+        let before = snapshot(&rpc, &watched)?;
+        let before_snapshot_sha256 = rollback_snapshot_sha256(&watched, &before)?;
+        assert_clock(&rpc, publish_times[index])?;
+        let (signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[&skipped_update],
+            &[
+                compute_budget(),
+                receiver_post(
+                    payer.pubkey(),
+                    encoded_observations[index].pubkey(),
+                    skipped_update.pubkey(),
+                    &observations[index].post_data,
+                ),
+                plane::append(
+                    &correct,
+                    skipped_update.pubkey(),
+                    address(real_pyth_lab::RECEIVER_CONFIG),
+                ),
+            ],
+        )?;
+        require_source_admission_refused("out-of-order boundary joined transaction", &status)?;
+        record_step(
+            &rpc,
+            &mut steps,
+            "out-of-order-boundary-post-update-plus-append-rollback",
+            signature.clone(),
+            &status,
+        )?;
+        let skipped_update_absent = rpc.account(&skipped_update.pubkey().to_string())?.is_none();
+        require(
+            skipped_update_absent,
+            "out-of-order boundary did not roll back receiver update",
+        )?;
+        let after = snapshot(&rpc, &watched)?;
+        require(
+            after == before,
+            "out-of-order boundary changed archive or treasury",
+        )?;
+        let after_snapshot_sha256 = rollback_snapshot_sha256(&watched, &after)?;
+        require(
+            after_snapshot_sha256 == before_snapshot_sha256,
+            "equal rollback account snapshots produced different canonical digests",
+        )?;
+        Some(out_of_order_rollback_evidence(
+            index,
+            skipped_update.pubkey(),
+            &signature,
+            &before_snapshot_sha256,
+            &after_snapshot_sha256,
+            correct.plane.source_archive.address,
+            treasury,
+        ))
+    } else {
+        None
+    };
 
+    let mut update_accounts = Vec::with_capacity(observations.len());
+    let mut append_signatures = Vec::with_capacity(observations.len());
+    let mut parsed_updates = Vec::with_capacity(observations.len());
+    let mut append_clocks = Vec::with_capacity(observations.len());
+    for (index, observation) in observations.iter().enumerate() {
+        assert_clock(&rpc, publish_times[index])?;
+        let update = Keypair::new();
+        let (signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[&update],
+            &[
+                compute_budget(),
+                receiver_post(
+                    payer.pubkey(),
+                    encoded_observations[index].pubkey(),
+                    update.pubkey(),
+                    &observation.post_data,
+                ),
+                plane::append(
+                    &correct,
+                    update.pubkey(),
+                    address(real_pyth_lab::RECEIVER_CONFIG),
+                ),
+            ],
+        )?;
+        require_accepted(
+            &format!("boundary {index} atomic adjacent PostUpdate + AppendSourceArchiveV2"),
+            &status,
+        )?;
+        let step_label = if observations.len() == 1 {
+            "real-post-update-plus-clutch-append-atomic".to_string()
+        } else {
+            format!("boundary-{index}-real-post-update-plus-clutch-append-atomic")
+        };
+        record_step(&rpc, &mut steps, &step_label, signature.clone(), &status)?;
+        let update_view = account(
+            &rpc,
+            &format!("boundary {index} receiver price update"),
+            update.pubkey(),
+        )?;
+        let parsed = parse_full_price_update_v2(
+            PriceUpdateAccountViewV1::new(
+                update.pubkey().to_bytes(),
+                Address::from_str(&update_view.owner)?.to_bytes(),
+                update_view.executable,
+                &update_view.data,
+            ),
+            real_pyth_lab::RECEIVER_PROGRAM,
+            provider::FEED_ID,
+        )
+        .map_err(|error| format!("boundary {index} receiver update parse: {error:?}"))?;
+        require(parsed.price == provider::PRICE, "receiver price differs")?;
+        require(
+            parsed.confidence == provider::CONFIDENCE,
+            "receiver confidence differs",
+        )?;
+        require(
+            parsed.exponent == provider::EXPONENT,
+            "receiver exponent differs",
+        )?;
+        require(
+            parsed.publish_time == publish_times[index],
+            format!("boundary {index} receiver publish time differs"),
+        )?;
+        append_clocks.push(assert_clock(&rpc, publish_times[index])?);
+        update_accounts.push(update.pubkey());
+        append_signatures.push(signature);
+        parsed_updates.push(parsed);
+    }
+
+    let source_spec_account = account(
+        &rpc,
+        "correct SourceSpec v2",
+        correct.plane.source_spec.address,
+    )?;
+    let verified_spec = source_archive_v2::verify_source_spec_v2_account(
+        PROGRAM_ID.to_bytes(),
+        correct.plane.source_spec.address.to_bytes(),
+        ArchiveAccountViewV2::new(
+            correct.plane.source_spec.address.to_bytes(),
+            Address::from_str(&source_spec_account.owner)?.to_bytes(),
+            source_spec_account.executable,
+            &source_spec_account.data,
+        ),
+    )
+    .map_err(|error| format!("canonical SourceSpec v2 verification failed: {error:?}"))?;
     let archive = account(
         &rpc,
-        "correct source archive",
+        "open correct source archive",
         correct.plane.source_archive.address,
     )?;
+    let expected_record_count = u8::try_from(observations.len())?;
     require(
-        archive.data.get(3) == Some(&1),
-        "archive does not contain exactly one record",
+        archive.owner == PROGRAM_ID.to_string(),
+        "open source archive is not Clutch-owned",
     )?;
+    require(!archive.executable, "open source archive is executable")?;
     require(
-        archive.data.len() >= 576,
-        "archive is too short for record zero",
+        archive.data.len() == source_archive_v2::SOURCE_ARCHIVE_ACCOUNT_V2_BYTES,
+        "open source archive does not have the exact SourceArchiveV2 account length",
     )?;
-    let record = &archive.data[512..576];
-    let u64_at =
-        |offset: usize| u64::from_le_bytes(record[offset..offset + 8].try_into().expect("slice"));
-    let u128_at =
-        |offset: usize| u128::from_le_bytes(record[offset..offset + 16].try_into().expect("slice"));
-    let lower = u128_at(8);
-    let upper = u128_at(24);
-    require(u64_at(0) == start_bucket, "archive bucket differs")?;
+    let open_record_count = source_archive_v2::open_archive_v2_sequence(
+        &archive.data,
+        verified_spec,
+        real_pyth_lab::RELEASE,
+        correct.window,
+    )
+    .map_err(|error| format!("canonical open SourceArchiveV2 verification failed: {error:?}"))?;
     require(
-        lower == 99_980_929 && upper == 100_019_071,
-        "archive interval differs",
+        open_record_count == u64::from(expected_record_count),
+        format!("archive does not contain exactly {expected_record_count} records"),
     )?;
-    require(
-        u64_at(40) == u64::try_from(publish_time)?,
-        "archive publish time differs",
-    )?;
-    require(
-        u64_at(48) == parsed.posted_slot,
-        "archive posted slot differs",
-    )?;
-    require(
-        99_000_000 < lower && upper < 101_000_000,
-        "interval does not uniquely select cell 1",
-    )?;
-    let append_clock = assert_clock(&rpc, publish_time)?;
+    if observations.len() > 1 {
+        require(
+            publish_times
+                .windows(2)
+                .all(|times| times[1] == times[0] + 60),
+            "multi-boundary publish times are not exactly consecutive",
+        )?;
+    }
+    let append_clock = append_clocks
+        .last()
+        .ok_or("campaign retained no append-time Clock")?;
 
     let (seal_signature, status) = sign_submit(
         &rpc,
@@ -2386,6 +2713,73 @@ fn run(
         seal_signature.clone(),
         &status,
     )?;
+    let sealed_archive = account(
+        &rpc,
+        "sealed correct source archive",
+        correct.plane.source_archive.address,
+    )?;
+    let sealed_view = source_archive_v2::verify_recorded_sealed_archive_v2_view(
+        PROGRAM_ID.to_bytes(),
+        correct.plane.source_archive.address.to_bytes(),
+        ArchiveAccountViewV2::new(
+            correct.plane.source_archive.address.to_bytes(),
+            Address::from_str(&sealed_archive.owner)?.to_bytes(),
+            sealed_archive.executable,
+            &sealed_archive.data,
+        ),
+        verified_spec,
+        real_pyth_lab::RELEASE,
+        correct.window,
+    )
+    .map_err(|error| format!("canonical sealed SourceArchiveV2 verification failed: {error:?}"))?;
+    let receipt = sealed_view.receipt();
+    require(
+        receipt.record_count() == expected_record_count
+            && receipt.start_bucket() == start_bucket
+            && receipt.end_bucket_exclusive() == end_bucket
+            && receipt.sealed_feed_cursor() == end_bucket,
+        "canonical sealed archive receipt differs from the prepared complete window",
+    )?;
+    let lower = 99_980_929_u128;
+    let upper = 100_019_071_u128;
+    let mut archive_records = Vec::with_capacity(observations.len());
+    for (index, parsed) in parsed_updates.iter().enumerate() {
+        let record = sealed_view
+            .archived_record(index)
+            .map_err(|error| format!("canonical archive record {index} read failed: {error:?}"))?;
+        let expected_bucket = start_bucket + u64::try_from(index)?;
+        let expected_publish_time = u64::try_from(publish_times[index])?;
+        require(
+            record.bucket == expected_bucket,
+            format!("archive record {index} bucket differs"),
+        )?;
+        require(
+            record.low == lower && record.high == upper,
+            format!("archive record {index} interval differs"),
+        )?;
+        require(
+            record.sequence == expected_publish_time
+                && record.publish_time == expected_publish_time,
+            format!("archive record {index} sequence/publish time differs"),
+        )?;
+        require(
+            record.publish_slot == parsed.posted_slot,
+            format!("archive record {index} receiver-write slot differs"),
+        )?;
+        require(
+            99_000_000 < record.low && record.high < 101_000_000,
+            format!("archive record {index} interval does not uniquely select cell 1"),
+        )?;
+        archive_records.push(archive_record_evidence(index, record));
+    }
+    let source_archive = source_archive_evidence(
+        correct.plane.source_archive.address,
+        &sealed_archive,
+        receipt.page_commitment().bytes(),
+        receipt.feed().bytes(),
+        receipt.window().bytes(),
+        receipt.record_count(),
+    );
     let feed = plane::decode_feed(&account(&rpc, "feed", correct.plane.feed.address)?.data)?;
     require(
         feed.cursor == end_bucket && feed.archive_pages == 1,
@@ -2427,7 +2821,7 @@ fn run(
     )?;
     require(market.lifecycle == 1, "market is not resolved")?;
 
-    let lifecycle = if campaign_mode == JOINED_LIFECYCLE_MODE {
+    let lifecycle = if is_joined_mode(campaign_mode) {
         let mut redeem_signatures = Vec::new();
         let buyer_redeem = accepted_step(
             &rpc,
@@ -2626,10 +3020,10 @@ fn run(
         Value::Null
     };
 
-    let expected_step_count = if campaign_mode == JOINED_LIFECYCLE_MODE {
-        52
-    } else {
-        13
+    let expected_step_count = match campaign_mode {
+        JOINED_LIFECYCLE_MODE => 52,
+        MULTIBOUNDARY_JOINED_MODE => 56,
+        _ => 13,
     };
     require(
         steps.len() == expected_step_count,
@@ -2639,8 +3033,30 @@ fn run(
         ),
     )?;
     let final_clock = read_clock(&rpc)?;
-    let source_freshness = source_freshness_evidence(&append_clock, &final_clock, publish_time)?;
-    let result = json!({
+    let source_freshness = source_freshness_evidence(append_clock, &final_clock, publish_time)?;
+    require(
+        append_clocks.windows(2).all(|clocks| {
+            clocks[1].slot >= clocks[0].slot && clocks[1].unix_timestamp >= clocks[0].unix_timestamp
+        }),
+        "append-time Clocks are not monotone across the source window",
+    )?;
+    let observation_freshness = append_clocks
+        .iter()
+        .zip(publish_times.iter())
+        .enumerate()
+        .map(|(index, (clock, publish_time))| {
+            Ok(json!({
+                "bucket": start_bucket + u64::try_from(index)?,
+                "publish_time": publish_time,
+                "append_clock": clock,
+                "append_age_seconds": require_append_freshness(clock, *publish_time)?,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let joined_signature = append_signatures
+        .last()
+        .ok_or("campaign retained no append signature")?;
+    let mut result = json!({
         "claim": CLAIM,
         "transcript_schema": transcript_schema(campaign_mode),
         "campaign_mode": campaign_mode,
@@ -2654,9 +3070,9 @@ fn run(
         "confidence": provider::CONFIDENCE,
         "exponent": provider::EXPONENT,
         "interval": {"lower": lower.to_string(), "upper": upper.to_string()},
-        "verified_vaa_account": encoded.pubkey().to_string(),
+        "verified_vaa_account": encoded_observations.last().ok_or("campaign retained no verified VAA")?.pubkey().to_string(),
         "wrong_feed_verified_vaa_account": wrong_feed_encoded.pubkey().to_string(),
-        "update_account": update.pubkey().to_string(),
+        "update_account": update_accounts.last().ok_or("campaign retained no receiver update")?.to_string(),
         "joined_post_append_signature": joined_signature,
         "seal_signature": seal_signature,
         "resolve_signature": resolve_signature,
@@ -2667,11 +3083,48 @@ fn run(
         "lifecycle": lifecycle,
         "steps": steps,
     });
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        let fields = result
+            .as_object_mut()
+            .ok_or("campaign result is not a JSON object")?;
+        fields.insert("boundary_count".to_string(), json!(observations.len()));
+        fields.insert(
+            "observation_freshness".to_string(),
+            json!(observation_freshness),
+        );
+        fields.insert(
+            "verified_vaa_accounts".to_string(),
+            json!(encoded_observations
+                .iter()
+                .map(|account| account.pubkey().to_string())
+                .collect::<Vec<_>>()),
+        );
+        fields.insert(
+            "update_accounts".to_string(),
+            json!(update_accounts
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()),
+        );
+        fields.insert(
+            "post_append_signatures".to_string(),
+            json!(append_signatures),
+        );
+        fields.insert("archive_records".to_string(), json!(archive_records));
+        fields.insert("source_archive".to_string(), source_archive);
+        fields.insert(
+            "out_of_order_boundary_rollback".to_string(),
+            out_of_order_rollback
+                .ok_or("multi-boundary campaign retained no out-of-order rollback evidence")?,
+        );
+    }
     fs::write(
         work.join("result.json"),
         serde_json::to_vec_pretty(&result)?,
     )?;
-    if campaign_mode == JOINED_LIFECYCLE_MODE {
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        println!("PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source window -> Resolve(1) -> two-owner redemption/withdrawal");
+    } else if campaign_mode == JOINED_LIFECYCLE_MODE {
         println!("PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source -> Resolve(1) -> two-owner redemption/withdrawal");
     } else {
         println!("PASS: real router verify -> persisted VAA -> atomic PostUpdate+Append -> Seal -> Resolve(1)");
@@ -2781,6 +3234,34 @@ mod argument_tests {
     }
 
     #[test]
+    fn multiboundary_campaign_freezes_two_consecutive_closing_boundaries() {
+        let args = parse_args(
+            [
+                "prepare",
+                "--work",
+                "/tmp/unused-local-real-pyth-test",
+                "--campaign-mode",
+                MULTIBOUNDARY_JOINED_MODE,
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(args.campaign_mode, MULTIBOUNDARY_JOINED_MODE);
+        assert_eq!(
+            transcript_schema(&args.campaign_mode),
+            MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA
+        );
+        assert!(is_joined_mode(&args.campaign_mode));
+        assert_eq!(boundary_count(&args.campaign_mode), 2);
+        assert_eq!(publish_lag_seconds(&args.campaign_mode), 120);
+        assert_eq!(
+            window_publish_times(&args.campaign_mode, 1_800_000_000).unwrap(),
+            [1_799_999_940, 1_800_000_000]
+        );
+    }
+
+    #[test]
     fn unknown_campaign_mode_is_refused_before_any_io() {
         let error = parse_args(
             [
@@ -2822,5 +3303,127 @@ mod argument_tests {
             ..append_clock
         };
         assert!(source_freshness_evidence(&stale_append, &final_clock, publish_time).is_err());
+    }
+
+    #[test]
+    fn rollback_snapshot_digest_binds_every_watched_account_fact() {
+        let keys = [address([1; 32]), address([2; 32])];
+        let owner = address([3; 32]);
+        let baseline = vec![
+            Some(AccountView {
+                lamports: 41,
+                owner: owner.to_string(),
+                executable: false,
+                data: vec![5, 6, 7],
+            }),
+            Some(AccountView {
+                lamports: 42,
+                owner: owner.to_string(),
+                executable: false,
+                data: vec![8, 9],
+            }),
+        ];
+        let digest = rollback_snapshot_sha256(&keys, &baseline).unwrap();
+        assert_eq!(rollback_snapshot_sha256(&keys, &baseline).unwrap(), digest);
+
+        let mut changed = baseline.clone();
+        changed[0].as_mut().unwrap().lamports += 1;
+        assert_ne!(rollback_snapshot_sha256(&keys, &changed).unwrap(), digest);
+        let mut changed = baseline.clone();
+        changed[0].as_mut().unwrap().owner = address([4; 32]).to_string();
+        assert_ne!(rollback_snapshot_sha256(&keys, &changed).unwrap(), digest);
+        let mut changed = baseline.clone();
+        changed[0].as_mut().unwrap().executable = true;
+        assert_ne!(rollback_snapshot_sha256(&keys, &changed).unwrap(), digest);
+        let mut changed = baseline.clone();
+        changed[0].as_mut().unwrap().data.push(10);
+        assert_ne!(rollback_snapshot_sha256(&keys, &changed).unwrap(), digest);
+        let mut changed = baseline.clone();
+        changed[0] = None;
+        assert_ne!(rollback_snapshot_sha256(&keys, &changed).unwrap(), digest);
+        assert_ne!(
+            rollback_snapshot_sha256(&[keys[1], keys[0]], &baseline).unwrap(),
+            digest
+        );
+        assert!(rollback_snapshot_sha256(&keys[..1], &baseline).is_err());
+    }
+
+    #[test]
+    fn multiboundary_public_schema_retains_exact_archive_and_rollback_facts() {
+        let archive = address([11; 32]);
+        let treasury = address([12; 32]);
+        let skipped = address([13; 32]);
+        let record = archive_record_evidence(
+            1,
+            ArchiveRecordV2 {
+                bucket: 29_792_341,
+                low: 99_980_929,
+                high: 100_019_071,
+                sequence: 1_787_540_460,
+                publish_slot: 460_336_349,
+                publish_time: 1_787_540_460,
+            },
+        );
+        assert_eq!(
+            record,
+            json!({
+                "index": 1,
+                "bucket": "29792341",
+                "lower": "99980929",
+                "upper": "100019071",
+                "sequence": "1787540460",
+                "write_slot": "460336349",
+                "publish_time": "1787540460",
+            })
+        );
+
+        let account = AccountView {
+            lamports: 99,
+            owner: PROGRAM_ID.to_string(),
+            executable: false,
+            data: vec![7; source_archive_v2::SOURCE_ARCHIVE_ACCOUNT_V2_BYTES],
+        };
+        let archive_json =
+            source_archive_evidence(archive, &account, [14; 32], [15; 32], [16; 32], 2);
+        assert_eq!(archive_json["key"], archive.to_string());
+        assert_eq!(archive_json["owner"], PROGRAM_ID.to_string());
+        assert_eq!(archive_json["executable"], false);
+        assert_eq!(archive_json["data_len"], 2_560);
+        assert_eq!(archive_json["body_sha256"], provider::sha256(&account.data));
+        assert_eq!(archive_json["record_count"], 2);
+        for field in ["page_commitment", "feed_id", "window_id"] {
+            assert_eq!(archive_json[field].as_str().unwrap().len(), 64);
+        }
+
+        let snapshot_digest = "ab".repeat(32);
+        let rollback = out_of_order_rollback_evidence(
+            1,
+            skipped,
+            "local-signature",
+            &snapshot_digest,
+            &snapshot_digest,
+            archive,
+            treasury,
+        );
+        assert_eq!(rollback["ok"], true);
+        assert_eq!(rollback["skipped_update_account"], skipped.to_string());
+        assert_eq!(rollback["skipped_update_absent_after_refusal"], true);
+        assert_eq!(rollback["instruction_error"]["instruction_index"], 2);
+        assert_eq!(rollback["instruction_error"]["custom_code"], 122);
+        assert_eq!(rollback["before_snapshot_sha256"], snapshot_digest);
+        assert_eq!(rollback["after_snapshot_sha256"], snapshot_digest);
+        assert_eq!(
+            rollback["before_snapshot_sha256"].as_str().unwrap().len(),
+            64
+        );
+        assert_eq!(rollback["snapshots_equal"], true);
+        assert_eq!(
+            rollback["watched_accounts"][0]["address"],
+            archive.to_string()
+        );
+        assert_eq!(
+            rollback["watched_accounts"][1]["address"],
+            treasury.to_string()
+        );
     }
 }

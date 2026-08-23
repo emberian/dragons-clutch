@@ -4,12 +4,12 @@ This is an opt-in **NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR
 ONLY / NO VALUE** campaign. Its shell runner starts one explicitly selected
 validator and the client admits only an explicit loopback HTTP RPC URL.
 
-The campaign loads the reconstructed exact complete SHA-pinned Pyth
-receiver/router Program and ProgramData bodies from the captured ELFs plus the decoded
-ProgramData keys, deployment slots, and upgrade authority in
-`svm-tests/tests/fixtures/real-pyth-local`. These are reproducible complete
-loader-account bodies, not retained raw `solana account` JSON responses; that
-provenance limitation is explicit in the fixture manifest. It initializes the
+The campaign reconstructs complete Pyth receiver/router Program and ProgramData
+loader bodies from the SHA-pinned captured ELFs plus decoded ProgramData keys,
+deployment slots, and upgrade authority in
+`svm-tests/tests/fixtures/real-pyth-local`. Raw `solana account` JSON responses
+were not retained; that provenance limitation is explicit in the fixture
+manifest. It initializes the
 real ABIs with deterministic laboratory guardians and independently signs and
 verifies two newly generated VAAs whose Wormhole-body timestamps and embedded
 observations use the selected fresh boundary. The registered-feed update drives
@@ -46,6 +46,31 @@ lifecycle is:
 CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/new/empty/retained-directory \
   programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
 ```
+
+The next, separately versioned two-boundary campaign is:
+
+```sh
+CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/new/empty/retained-directory \
+  programs/clutch-sbf/scripts/run_local_multiboundary_pyth_lifecycle.sh
+```
+
+`joined-multiboundary-v1` does not reinterpret either retained one-boundary
+schema. It signs two distinct registered-feed VAAs for consecutive 60-second
+closing boundaries, executes both through the captured router and receiver,
+and appends the resulting receiver-owned accounts in canonical order to one
+two-record Source V2 page. Before the first valid append it attempts the later
+boundary out of order and requires the receiver-created update, archive, and
+treasury effects to roll back atomically. It then seals the complete page and
+uses the same joined trade, categorical resolution, two-owner redemption, and
+exact 128-atom withdrawal path. The transcript schema is
+`dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1`.
+Until a clean-HEAD run is retained, this is an implemented campaign, not SBF
+execution evidence; see
+`docs/implementation/LOCAL_REAL_PYTH_MULTIBOUNDARY_V1.md`.
+The v1 result retains both canonical archive records as exact decimal strings,
+the sealed archive account key/owner/length/body SHA-256 and commitment, and
+the refused later-boundary update address plus explicit absence and equal
+domain-separated before/after hashes over the archive and receiver treasury.
 
 `joined-user-lifecycle-v1` keeps Realm, Profile, policy, immutable Terms, one
 collateral mint, and two ephemeral users' ordinary collateral token accounts as
@@ -130,6 +155,10 @@ validator and temporary secrets are removed on normal exit and signals unless
 `CLUTCH_LOCAL_REAL_PYTH_KEEP_WORK=1` is explicitly set. Public, truth-labeled
 `campaign.json` and `result.json` transcripts can instead be retained outside
 the temporary tree with `CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/chosen/path`.
+That directory may already exist, but the runner refuses it if any of the five
+targets `campaign.json`, `result.json`, `probe-evidence.json`,
+`probe-before.txt`, or `probe-after.txt` already exists; unrelated files are
+left untouched.
 
 The VAA generator is derived from `pythnet/pythnet_sdk/src/test_utils/mod.rs`
 at `pyth-network/pyth-crosschain` commit

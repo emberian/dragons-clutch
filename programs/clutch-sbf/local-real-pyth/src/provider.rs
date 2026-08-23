@@ -295,6 +295,33 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_boundaries_produce_distinct_authenticated_provider_payloads() {
+        use byteorder::BE;
+
+        let first = observation(1_799_999_940).unwrap();
+        let second = observation(1_800_000_000).unwrap();
+        assert_ne!(first.vaa, second.vaa);
+        assert_ne!(first.update.message, second.update.message);
+        assert_ne!(first.post_data, second.post_data);
+        let first_message: Message =
+            pythnet_sdk::wire::from_slice::<BE, _>(first.update.message.as_ref()).unwrap();
+        let second_message: Message =
+            pythnet_sdk::wire::from_slice::<BE, _>(second.update.message.as_ref()).unwrap();
+        let Message::PriceFeedMessage(first_price) = first_message else {
+            panic!("first boundary payload is not a price-feed message")
+        };
+        let Message::PriceFeedMessage(second_price) = second_message else {
+            panic!("second boundary payload is not a price-feed message")
+        };
+        assert_eq!(first_price.publish_time, 1_799_999_940);
+        assert_eq!(first_price.prev_publish_time, 1_799_999_939);
+        assert_eq!(second_price.publish_time, 1_800_000_000);
+        assert_eq!(second_price.prev_publish_time, 1_799_999_999);
+        assert_eq!(first_price.feed_id, FEED_ID);
+        assert_eq!(second_price.feed_id, FEED_ID);
+    }
+
+    #[test]
     fn fixed_capture_time_reproduces_the_post_update_abi_bytes() {
         let generated = observation(1_787_431_680).unwrap();
         assert_eq!(

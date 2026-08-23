@@ -29,6 +29,7 @@ done
 source_paths=(
   programs/clutch-sbf/local-real-pyth
   programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
+  programs/clutch-sbf/scripts/run_local_multiboundary_pyth_lifecycle.sh
   programs/clutch-sbf/scripts/run_local_real_pyth.sh
   programs/clutch-sbf/program
   programs/clutch-sbf/svm-tests
@@ -111,7 +112,7 @@ gossip_port="${CLUTCH_LOCAL_REAL_PYTH_GOSSIP_PORT:-18540}"
 dynamic_port_range="${CLUTCH_LOCAL_REAL_PYTH_DYNAMIC_PORT_RANGE:-18541-18640}"
 campaign_mode="${CLUTCH_LOCAL_REAL_PYTH_CAMPAIGN_MODE:-source-only-v1}"
 case "$campaign_mode" in
-  source-only-v1|joined-user-lifecycle-v1) ;;
+  source-only-v1|joined-user-lifecycle-v1|joined-multiboundary-v1) ;;
   *) echo "FAIL: unknown CLUTCH_LOCAL_REAL_PYTH_CAMPAIGN_MODE=$campaign_mode" >&2; exit 1 ;;
 esac
 for named in "$rpc_port" "$faucet_port" "$gossip_port"; do
@@ -291,7 +292,11 @@ fi
 "$loopback_tools/probe-listeners.sh" \
   "$validator_pid" "$rpc_port" "$faucet_port" "$validator" \
   >"$work/clock-probe-listeners-after.txt"
-publish_time=$(( ((clock_probe_time - 180) / 60) * 60 ))
+case "$campaign_mode" in
+  joined-multiboundary-v1) publish_lag_seconds=120 ;;
+  *) publish_lag_seconds=180 ;;
+esac
+publish_time=$(( ((clock_probe_time - publish_lag_seconds) / 60) * 60 ))
 stop_validator
 
 "$driver" prepare --work "$work" --repository-head "$repository_head" \

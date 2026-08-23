@@ -1,4 +1,4 @@
-//! Test-only one-bucket categorical market/source planes and instructions.
+//! Test-only categorical market/source planes and instructions.
 
 use crate::provider;
 use clutch_batch::relation_v1::{
@@ -9,6 +9,7 @@ use clutch_batch_policy_identity::{
     general_clearing_v1::GENERAL_CLEARING_POLICY_V1,
 };
 use clutch_kernel::{PayoutSet, PayoutVector};
+use clutch_sbf::source_archive::WindowDomain;
 use clutch_sbf::{
     instructions::{cash_exit, genesis, market_init, observe_resolve, split as seam},
     seeds, source_archive_v2,
@@ -62,6 +63,8 @@ pub struct LabPlane {
     pub grid_value: PriceGridAccount,
     pub grid_bytes: Vec<u8>,
     pub spec: SourceSpecV2,
+    /// Exact canonical source window authenticated by the archive codec.
+    pub window: WindowDomain,
     pub start_bucket: u64,
     pub end_bucket_exclusive: u64,
     pub market_prestate: MarketPrestate,
@@ -123,7 +126,7 @@ pub fn real_spec() -> Result<SourceSpecV2, Box<dyn std::error::Error>> {
         .map_err(|error| format!("local-real SourceSpec is invalid: {error:?}").into())
 }
 
-fn window_identity(terms: &TermsAccount, feed: Hash32) -> Hash32 {
+fn source_window(terms: &TermsAccount, feed: Hash32) -> WindowDomain {
     let identity = clutch_sbf::source_archive::FeedIdentity::new(
         terms.source_adapter_id.bytes(),
         feed.bytes(),
@@ -137,7 +140,7 @@ fn window_identity(terms: &TermsAccount, feed: Hash32) -> Hash32 {
         terms.bucket_seconds,
     )
     .expect("laboratory grid");
-    let window = clutch_sbf::source_archive::WindowDomain::new(
+    clutch_sbf::source_archive::WindowDomain::new(
         identity,
         grid,
         terms.expected_start_bucket,
@@ -146,8 +149,7 @@ fn window_identity(terms: &TermsAccount, feed: Hash32) -> Hash32 {
         terms.repair_generation,
         clutch_sbf::source_archive::CoveragePolicy::COMPLETE_REQUIRED,
     )
-    .expect("laboratory window");
-    source_archive_v2::canonical_window_id(window)
+    .expect("laboratory window")
 }
 
 pub fn build(
@@ -158,7 +160,11 @@ pub fn build(
     market_nonce: u64,
     market_prestate: MarketPrestate,
 ) -> LabPlane {
-    assert_eq!(end_bucket_exclusive, start_bucket + 1);
+    let bucket_count = end_bucket_exclusive
+        .checked_sub(start_bucket)
+        .expect("laboratory window is ordered");
+    assert!(bucket_count > 0);
+    assert!(bucket_count <= source_archive_v2::SOURCE_ARCHIVE_MAX_RECORDS_V2 as u64);
     let feed_id = Hash32::from_bytes(spec.feed_id());
     let mode = match market_prestate {
         MarketPrestate::GenesisFunded => Mode::Funded,
@@ -310,7 +316,8 @@ pub fn build(
 
     let spec_pda = pda(&[seeds::SEED_SOURCE_SPEC, &feed_id.bytes()]);
     let feed_pda = pda(&[seeds::SEED_FEED, &feed_id.bytes()]);
-    let window_id = window_identity(&terms, feed_id);
+    let window = source_window(&terms, feed_id);
+    let window_id = source_archive_v2::canonical_window_id(window);
     let archive_pda = pda(&[
         seeds::SEED_SOURCE_ARCHIVE,
         &feed_id.bytes(),
@@ -336,6 +343,7 @@ pub fn build(
         grid_value,
         grid_bytes,
         spec,
+        window,
         start_bucket,
         end_bucket_exclusive,
         market_prestate,
@@ -1607,6 +1615,32 @@ mod tests {
             MARKET_NONCE,
             MarketPrestate::SignedCreate,
         )
+    }
+
+    #[test]
+    fn joined_plane_accepts_a_two_boundary_source_window() {
+        let actor = Address::new_from_array([0xa0; 32]);
+        let lab = build(
+            actor,
+            real_spec().unwrap(),
+            29_790_526,
+            29_790_528,
+            MARKET_NONCE,
+            MarketPrestate::SignedCreate,
+        );
+        let terms = TermsAccount::decode(
+            &lab.plane
+                .accounts
+                .iter()
+                .find(|account| account.address == lab.plane.terms.address)
+                .expect("Terms fixture exists")
+                .data,
+        )
+        .expect("Terms fixture decodes");
+        assert_eq!(terms.expected_start_bucket, 29_790_526);
+        assert_eq!(terms.expected_end_bucket_exclusive, 29_790_528);
+        assert_eq!(lab.start_bucket, 29_790_526);
+        assert_eq!(lab.end_bucket_exclusive, 29_790_528);
     }
 
     #[test]
