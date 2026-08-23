@@ -154,9 +154,9 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
-/// Non-production Dealer staged-policy account discriminator.
+/// Non-production Dealer staged-catalog account discriminator.
 pub const DEALER_POLICY_STAGE_ACCOUNT_TAG: u8 = 0x7d;
-/// Dealer staged-policy account version.
+/// Dealer staged-catalog account version.
 pub const DEALER_POLICY_STAGE_ACCOUNT_VERSION: u8 = 1;
 /// Immutable Dealer policy catalog account discriminator.
 pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
@@ -164,9 +164,9 @@ pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
 pub const DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
 /// Frozen canonical `DealerPolicyV1` semantic-body length.
 pub const DEALER_POLICY_BODY_BYTES: usize = 1_148;
-/// Exact adapter-owned upload-stage header length.
+/// Exact adapter-owned typed upload-stage header length.
 pub const DEALER_POLICY_STAGE_HEADER_BYTES: usize = 140;
-/// Exact upload-stage account length.
+/// Exact maximum-width upload-stage account length.
 pub const DEALER_POLICY_STAGE_ACCOUNT_BYTES: usize =
     DEALER_POLICY_STAGE_HEADER_BYTES + DEALER_POLICY_BODY_BYTES;
 /// Exact adapter-owned immutable catalog header length.
@@ -1412,7 +1412,38 @@ pub enum GeneralV2Action {
     FinalizeMergeReceiptPayment = 40,
 }
 
-/// Dealer family-local policy-catalog transport actions.
+/// Exact immutable artifact carried by the Dealer catalog transport.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerCatalogArtifactKindV1 {
+    /// Covered-dealer economic policy body.
+    Policy = 1,
+    /// Fine-grained Dealer action quote schedule.
+    LivenessSchedule = 2,
+    /// Generic seven-compartment runtime-liveness policy.
+    RuntimeLivenessPolicy = 3,
+}
+
+impl DealerCatalogArtifactKindV1 {
+    pub const fn from_byte(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Policy),
+            2 => Some(Self::LivenessSchedule),
+            3 => Some(Self::RuntimeLivenessPolicy),
+            _ => None,
+        }
+    }
+
+    pub const fn body_bytes(self) -> usize {
+        match self {
+            Self::Policy => DEALER_POLICY_BODY_BYTES,
+            Self::LivenessSchedule => 372,
+            Self::RuntimeLivenessPolicy => 1_132,
+        }
+    }
+}
+
+/// Dealer family-local immutable-catalog transport actions.
 ///
 /// These nonzero wire values deliberately do not reuse the pure Dealer
 /// runtime enum's `0..=21` representation. Only `SealPolicy` completes the
@@ -1425,7 +1456,7 @@ pub enum DealerPolicyAction {
     BeginPolicy = 1,
     /// Append the next strict fixed-width chunk.
     WritePolicy = 2,
-    /// Validate and materialize the immutable content-addressed policy.
+    /// Validate and materialize the selected immutable catalog artifact.
     SealPolicy = 3,
     /// Close an incomplete stage under its stored rent split.
     AbortPolicy = 4,
@@ -1546,14 +1577,14 @@ impl DealerFacilityAction {
     }
 }
 
-/// Exact body bytes accepted in each staged Dealer-policy write.
+/// Exact body bytes accepted in each staged Dealer-catalog write.
 pub const DEALER_POLICY_CHUNK_BYTES: usize = 192;
-/// Exact Begin payload bytes: policy ID, neutral sink, expiry slot.
-pub const DEALER_BEGIN_POLICY_PAYLOAD_BYTES: usize = 32 + 32 + 8;
-/// Exact Write payload bytes: policy ID, cursor, active length, padded chunk.
-pub const DEALER_WRITE_POLICY_PAYLOAD_BYTES: usize = 32 + 2 + 2 + DEALER_POLICY_CHUNK_BYTES;
-/// Exact Seal/Abort payload bytes: policy ID.
-pub const DEALER_POLICY_ID_PAYLOAD_BYTES: usize = 32;
+/// Exact Begin payload bytes: kind/padding, identity, neutral sink, expiry.
+pub const DEALER_BEGIN_POLICY_PAYLOAD_BYTES: usize = 8 + 32 + 32 + 8;
+/// Exact Write payload bytes: kind/padding, identity, cursor, active length, chunk.
+pub const DEALER_WRITE_POLICY_PAYLOAD_BYTES: usize = 8 + 32 + 2 + 2 + DEALER_POLICY_CHUNK_BYTES;
+/// Exact typed-identity payload bytes for Seal and Abort.
+pub const DEALER_POLICY_ID_PAYLOAD_BYTES: usize = 8 + 32;
 
 const _: () = assert!(DEALER_WRITE_POLICY_PAYLOAD_BYTES <= MAX_EXTENSION_PAYLOAD_BYTES);
 
@@ -2533,9 +2564,9 @@ mod tests {
             );
         }
         assert_eq!(DEALER_POLICY_CHUNK_BYTES, 192);
-        assert_eq!(DEALER_BEGIN_POLICY_PAYLOAD_BYTES, 72);
-        assert_eq!(DEALER_WRITE_POLICY_PAYLOAD_BYTES, 228);
-        assert_eq!(DEALER_POLICY_ID_PAYLOAD_BYTES, 32);
+        assert_eq!(DEALER_BEGIN_POLICY_PAYLOAD_BYTES, 80);
+        assert_eq!(DEALER_WRITE_POLICY_PAYLOAD_BYTES, 236);
+        assert_eq!(DEALER_POLICY_ID_PAYLOAD_BYTES, 40);
 
         for action in [
             DealerPolicyAction::BeginPolicy,

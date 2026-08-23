@@ -1,7 +1,8 @@
 # Central intent registry
 
-Status: General V2 remains registry-only. Dealer policy-catalog actions are
-executable only in one explicitly non-production laboratory profile.
+Status: General V2 remains profile-gated. Dealer immutable-catalog actions and
+the exact Initialize/BindEpoch slice are executable only in one explicitly
+non-production laboratory profile.
 
 ## Frozen legacy space
 
@@ -83,8 +84,9 @@ General V2 reserves local actions 1 through 38, in order:
 
 These names allocate local tags only. They do not freeze payload bytes, account
 lists, account codecs, or transition semantics. Dealer now allocates the
-following bounded policy transport without enabling any facility/economic
-action:
+following bounded immutable-catalog transport. The same strict transport
+admits exactly one typed body kind per stage: Dealer policy, Dealer action
+liveness schedule, or generic seven-compartment runtime-liveness policy.
 
 The collision ledger also reserves three same-tag General successors for the
 still-disabled cost-aware action 14/15 path: Window `24/5` (565 bytes),
@@ -100,12 +102,16 @@ separately reviewed counted settlement root.
 3. `SealPolicy`
 4. `AbortPolicy`
 
-The exact payload widths are 72, 228, 32, and 32 bytes. `WritePolicy` carries a
-192-byte padded chunk and a strict cursor. The account coordinates `0x7d/1`
-(1,288-byte stage) and `0x7e/1` (1,204-byte immutable catalog) are part of the
-same atomic allocation. The local action values do not reuse the pure Dealer
-runtime enum's zero-based representation. `SealPolicy` persists an unadmitted
-catalog artifact; it does not initialize liquidity.
+The exact payload widths are 80, 236, 40, and 40 bytes. Every payload begins
+with a one-byte artifact kind and seven zero padding bytes, followed by the
+full artifact identity. `WritePolicy` carries a 192-byte padded chunk and a
+strict cursor. The `0x7d/1` stage remains 1,288 bytes and persists the selected
+kind and its exact active body length. Policy seals to `0x7e/1`; schedule seals
+to `0x93/1`; runtime policy seals as its exact raw 1,132-byte canonical codec
+under a disjoint content-addressed Dealer PDA because the generic liveness
+adapter consumes that exact codec. The local action values do not reuse the
+pure Dealer runtime enum's zero-based representation. Catalog publication
+does not by itself initialize liquidity.
 
 StructuredClaim `75/1` reserves actions 1 through 8:
 

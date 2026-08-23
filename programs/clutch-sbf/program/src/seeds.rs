@@ -109,6 +109,9 @@ pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POL
 /// Immutable Dealer liveness schedule.
 pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
     clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
+/// Immutable generic runtime-liveness policy selected by one Dealer facility.
+pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] =
+    b"dc-dealer-runtime-liveness-policy-v1";
 /// Authoritative Dealer StateV2.
 pub const SEED_DEALER_STATE_V2: &[u8] = clutch_dealer_runtime_contract::DEALER_STATE_PDA_DOMAIN_V2;
 /// Counted Dealer funded-dependency child.
@@ -765,10 +768,14 @@ pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) ->
 /// Canonical uploader-keyed stage for one exact Dealer policy identity.
 pub fn dealer_policy_stage_pda(
     program_id: &Pubkey,
+    artifact_kind: u8,
     funder: &[u8; 32],
     policy_id: &[u8; 32],
 ) -> (Pubkey, u8) {
-    find(program_id, &[SEED_DEALER_POLICY_STAGE, funder, policy_id])
+    find(
+        program_id,
+        &[SEED_DEALER_POLICY_STAGE, &[artifact_kind], funder, policy_id],
+    )
 }
 
 /// Canonical immutable Dealer policy address from the pure-contract recipe.
@@ -779,6 +786,14 @@ pub fn dealer_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, 
 /// Canonical immutable Dealer liveness-schedule address.
 pub fn dealer_liveness_schedule_pda(program_id: &Pubkey, schedule_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_LIVENESS_SCHEDULE, schedule_id])
+}
+
+/// Canonical immutable generic runtime-liveness policy address.
+pub fn dealer_runtime_liveness_policy_pda(
+    program_id: &Pubkey,
+    policy_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id])
 }
 
 /// Canonical authoritative Dealer StateV2 address.

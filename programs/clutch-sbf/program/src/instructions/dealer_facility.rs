@@ -12,6 +12,7 @@ use crate::accounts::{expect_pda, require, require_count, require_signer, Outcom
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_dealer_runtime_contract::{
+    dealer_runtime_liveness_policy_id_v1,
     prepare_bind_epoch_v3, prepare_dealer_sponsor_funding_transfer_v1,
     prepare_facility_initialization_v3, DealerActionReceiptV1, DealerChildCountsV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
@@ -342,6 +343,13 @@ fn authenticate_runtime_bundle(
     )?;
     let runtime_policy = RuntimeLivenessPolicyV1::decode(&policy_account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(runtime_policy)
+        .map_err(dealer_fault)?;
+    expect_pda(
+        policy_account.key,
+        seeds::dealer_runtime_liveness_policy_pda(program_id, &runtime_policy_id.bytes()),
+        None,
+    )?;
     require(
         runtime_policy.policy_id.bytes() == dependency.bindings.runtime_liveness_policy_id.bytes(),
         ClutchError::MismatchedState,
@@ -730,6 +738,13 @@ fn initialize_facility(
     )?;
     let preliminary_runtime_policy = RuntimeLivenessPolicyV1::decode(&accounts[9].data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(preliminary_runtime_policy)
+        .map_err(dealer_fault)?;
+    expect_pda(
+        accounts[9].key,
+        seeds::dealer_runtime_liveness_policy_pda(program_id, &runtime_policy_id.bytes()),
+        None,
+    )?;
     let provisional_dependency = DealerFundedDependenciesV2 {
         bindings: DealerFundedBudgetDependenciesV1 {
             policy_id: Id::from_bytes(policy_id),

@@ -35,7 +35,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-facility-init-bind-lab/v1";
+    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liveness-init-bind-lab/v1";
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
@@ -79,8 +79,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x5a, 0xbd, 0xf5, 0x65, 0xa7, 0x09, 0x52, 0xe1, 0x15, 0xb5, 0x20, 0xa1, 0xe1, 0xd1, 0x9c, 0x50,
-    0xbd, 0xd3, 0x81, 0x43, 0x1b, 0x67, 0x63, 0xd2, 0x70, 0xe2, 0x13, 0x3b, 0x86, 0xa3, 0x11, 0x4e,
+    0xc1, 0xc0, 0x34, 0xab, 0xfb, 0x45, 0xf1, 0x11, 0x06, 0xf5, 0xef, 0x22, 0x0d, 0xd1, 0x0a, 0x94,
+    0xf7, 0x8c, 0xb8, 0xd0, 0x1c, 0x6c, 0x00, 0xd1, 0x88, 0xa4, 0x5b, 0x2d, 0xf7, 0xe4, 0xcc, 0x9b,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -207,7 +207,8 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2),
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// The laboratory enables policy publication plus exact facility initialization and Epoch binding.
+/// The laboratory enables typed Dealer catalog publication plus exact facility initialization
+/// and Epoch binding.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (76, 1, 1),
