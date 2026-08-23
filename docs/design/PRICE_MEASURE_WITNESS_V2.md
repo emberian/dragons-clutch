@@ -1,70 +1,87 @@
 # Price-measure witness V2
 
-Status: **DESIGN / NOT A RUNTIME CLAIM**.
+Status: **ISOLATED SAFE-RUST CHECKERS / NOT SELECTED BY SBF**.
 
-The first executable exact-arithmetic model is now under
-`research/price-measure-witness`. It generates every degree-two/three transfer
-table it exercises from the canonical open-clamped recurrence and validates
-point measures, cross-span mixtures, quadrics, canonical denominators, and
-mutations. It remains an offline model, not adapter or SBF evidence.
+`crates/clutch-price-measure` implements two deliberately separate exact
+certificate interfaces. The continuous per-span Bernstein witness reproduces
+`research/price-measure-witness`. The finite atom witness targets the actual
+integer-coordinate, largest-remainder-quantized `clutch-bspline` payout map.
+Both are safe, `no_std`, allocation-free, fixed-capacity Rust. No SBF
+dispatcher, account layout, candidate checkpoint, or Realm profile selects
+either checker.
 
-This design turns the exact degree-two/three membership theorem already proved
-in `docs/research/DUAL_IS_THE_MEASURE.md` section 7.6 into a bounded candidate
-witness. It is the path to keeping smooth coupled markets without pretending
-that the current finite `V1b` inequalities are a complete no-arbitrage test.
+## 1. Critical semantic split
 
-The existing `V1b` gate remains useful: each refusal names an executable
-arbitrage, it is exact for degree zero/one and single-span degree two/three,
-and it cheaply removes obvious bad prices. For a multi-span degree-two/three
-public profile, however, acceptance should additionally require the witness
-below.
+The continuous exact B-spline curve and today's settlement payout map do not
+have the same moment body.
 
-There is now a small exact falsifier for the residual. On the degree-two,
-five-claim open-clamped uniform grid with breakpoints `[0, 1, 2, 3]`, take the
-simplex price
+The research theorem uses exact rational basis values `N(x)` over a continuous
+coordinate. Production settlement instead:
 
-```text
-p / S = (1/3, 2/3, 0, 0, 0).
-```
+1. admits integer `u128` resolved coordinates;
+2. evaluates an exact `BasisSpec`;
+3. scales to its configured payout denominator `D`; and
+4. applies largest remainder, with exact ties to the lowest outcome index.
 
-It passes every V1b ceiling and butterfly inequality: the second claim is
-exactly on both its `2/3` ceiling and `p_1 <= 2(p_0 + p_2)` butterfly. But the
-portfolio coefficient vector
+The production price body is therefore the finite polytope
 
 ```text
-c = (1, -2, 10, 40, 64)
+conv { evaluate_and_quantize(x) : x is an integer in the stored knot interval }.
 ```
 
-has basis payoff `sum_i c_i N_i(x) = (3x - 1)^2 >= 0` throughout the domain,
-while its price is `dot(c, p) = -S`. The venue therefore prices a nonnegative
-payoff at a strictly negative amount. This vector is the first required
-runtime/model regression for the witness checker.
+It depends on the exact knots, spacing, integer domain, payout denominator,
+edge policy, evaluator version, and rounding version—not only on
+`(degree,outcome_count)`. The continuous theorem that no finite linear family
+decides membership does not describe this finite runtime polytope.
 
-## 1. Claim boundary
+Two executable regressions pin both directions.
 
-For the market's immutable open-clamped uniform basis, let
-
-- `d` be the degree, in `{2, 3}`;
-- `n` be the outcome count, at most 16;
-- `K = n + 1 - d` be the stored-breakpoint count;
-- `S` be the exact integer price scale;
-- `p_i` be the candidate's exact integer simplex prices; and
-- `T_k` be the canonical rational matrix expressing the `d + 1` B-splines
-  active on span `k` in that span's Bernstein basis.
-
-The candidate supplies nonnegative Bernstein moment rows `w[k][r]` over one
-positive common denominator `W`. They represent
+First, this is an exact coherent production point price:
 
 ```text
-w[k][r] / W = integral over span k of BernsteinBasis[r] dQ.
+degree = 2
+knots = [0,128,256,384]
+D = S = 10,000
+x = 85
+evaluate(x) = (1128,6667,2205,0,0)
 ```
 
-The verifier accepts only if all of the following hold exactly:
+V1b refuses it because `3*6667 = 20001 > 2*10000`. Thus a V1b refusal does
+not universally exhibit a runtime arbitrage under quantized settlement.
+
+Second, single-span degree two on integer knots `[0,1]` has only its two
+endpoint runtime vertices. The continuous Hankel vector `(1,2,1)/4` is in the
+continuous moment body, but it is outside the runtime hull, whose middle
+coordinate is always zero. Thus continuous exact admission is not a sufficient
+runtime certificate either.
+
+The continuous checker consequently accepts only
+`ExactUnquantizedV1`. The runtime checker accepts only
+`LargestRemainderLowestIndexV1` and recomputes every payout atom through the
+production evaluator.
+
+## 2. Continuous exact Bernstein witness
+
+For the market's immutable open-clamped uniform basis, let:
+
+- `d` be degree two or three;
+- `n <= 16` be the outcome count;
+- `K = n + 1 - d` be the distinct-breakpoint count;
+- `S` be the exact integer candidate-price scale;
+- `p_i` be exact integer simplex prices; and
+- `T_k` express the B-splines active on span `k` in that span's Bernstein basis.
+
+The candidate supplies nonnegative moment rows over a common denominator `W`:
+
+```text
+w[k][r] / W = integral_span_k BernsteinBasis[r] dQ.
+```
+
+The verifier requires:
 
 ```text
 sum(k,r) w[k][r] = W
-
-p_i / S = sum(k,r) T_k[i,r] * w[k][r] / W    for every i
+p_i / S = sum(k,r) T_k[i,r] * w[k][r] / W
 
 degree 2: w[k][1]^2 <= 4*w[k][0]*w[k][2]
 
@@ -72,195 +89,182 @@ degree 3: w[k][1]^2 <= 3*w[k][0]*w[k][2]
           w[k][2]^2 <= 3*w[k][1]*w[k][3]
 ```
 
-The inequalities are the exact truncated Hausdorff moment conditions in
-Bernstein coordinates. The linear equations join the per-span measures into
-the candidate price vector. Therefore every accepted witness constructs a
-representing nonnegative measure and proves that the price vector lies in the
-true basis-moment body.
+These are the exact truncated Hausdorff constraints in Bernstein coordinates.
+For exact continuous payout semantics, every accepted witness constructs a
+representing nonnegative measure. This is a price-coherence certificate, never
+an optimality, candidate-ranking, identity, or solver-compensation certificate.
 
-This is an acceptance certificate, not an optimality certificate. It proves
-price coherence; it says nothing about whether the candidate maximizes the
-venue's score or fills the largest possible volume.
+### Generated transfer tables
 
-## 2. Exact integer form
-
-The transfer matrices are program-derived facts, never caller-supplied facts.
-For each admitted `(d, n)`, generation produces one positive denominator `D`
-and signed integer numerators `A[k][i][r]` such that
+The program supplies every transfer coefficient. Callers never do. The frozen
+universal denominator is 2 for degree two and 12 for degree three. These scales
+are exact and all numerators are nonnegative; they are intentionally not
+lowest-term on every short grid:
 
 ```text
-T_k[i,r] = A[k][i][r] / D.
+degree 2 minimal scale: n=3 -> 1; n>=4 -> 2
+degree 3 minimal scale: n=4 -> 1; n=5 -> 4; n>=6 -> 12
 ```
 
-The verifier checks, with pre-proved arithmetic bounds:
+The versioned universal scale avoids shape-dependent arithmetic. Executable
+tests compare every table against `clutch-bspline` at five exact polynomial
+nodes on every span for every admitted degree/outcome width. Column sums equal
+the table denominator, adjacent endpoints agree, and inactive rows/columns are
+zero.
+
+### Exact integer boundary
+
+For transfer numerators `A` and denominator `tau`, the checker compares:
 
 ```text
-D * W * p_i == S * sum(k,r) A[k][i][r] * w[k][r]
+p_i / S == sum(k,r) A[k][i,r]*w[k][r] / (tau*W).
 ```
 
-for every outcome. Negative transfer coefficients, if any appear in a chosen
-canonical expansion, require a checked signed accumulator; the preferred
-generated representation is a nonnegative refinement table so the runtime can
-remain in `u128`. The generator must prove which representation it emitted.
+It independently reduces both rational pairs by gcd rather than forming the
+three-factor cross-product. With `sum w=W`, every accumulator is bounded by
+`12*W`; the full `u64` range of `W` remains inside `u128`. A rational witness
+could still require a denominator larger than `u64`, so the implementation is
+a sufficient inner certificate until a constructive lattice bound is proved.
 
-`W` and every `w[k][r]` are bounded unsigned integers. The bound is not chosen
-by this document. It must be derived jointly from:
+The encoding requires zero inactive padding and
+`gcd(W, all active moments)=1`. This canonicalizes the integer scale of one
+moment witness. It does not select a unique witness for one price: boundary
+mass and other decompositions can remain nonunique. Witness-body bytes must not
+affect candidate identity, scoring, or digest tie-breaking.
 
-- the maximum generated `D` and transfer numerator;
-- `S`, `n <= 16`, and at most 15 spans;
-- the largest quadratic product; and
-- the SBF implementation's checked `u128` envelope.
+### Named continuous V1b false acceptance
 
-A finite `W` bound may reject a coherent price vector whose only available
-witness exceeds that bound. It cannot admit an incoherent vector. Promotion
-must therefore call the bounded form a **sufficient inner certificate** until
-one of these is proved:
-
-1. every admitted integer price vector has a rational witness within the
-   selected bound; or
-2. candidate construction restricts the price lattice to one for which the
-   bound is constructive.
-
-The common representation should be canonical: require
-`gcd(W, all w[k][r]) == 1`. Canonical reduction prevents multiple byte
-identities for the same witness and makes candidate digests stable. It is not
-part of the mathematical soundness argument.
-
-## 3. Candidate-side account
-
-A successor sidecar should have one semantic owner and contain no duplicate
-copy of Market or Candidate facts:
+On the degree-two, five-claim continuous grid with breakpoints `[0,1,2,3]`:
 
 ```text
-PriceMeasureWitnessV2 {
-    schema_version
-    candidate_feed
-    relation_domain_digest
-    candidate_price_digest
-    basis_degree
-    outcome_count
-    span_count
-    common_denominator W
-    moments[(K - 1) * (d + 1)]
-    body_digest
-    lifecycle_state
-}
+p/S = (1/3,2/3,0,0,0)
+c   = (1,-2,10,40,64)
 ```
 
-The canonical PDA is derived from the candidate feed, not merely the submitter
-or epoch. The relation-domain digest binds Market, Terms, price scale, epoch,
-and score-policy generation through the existing candidate identity. The
-price digest binds the exact vector being certified. The verifier reloads and
-checks those owners rather than trusting the sidecar's descriptive fields.
+V1b accepts at its claim-one ceiling and butterfly boundaries, while
 
-At the current maximum, the body carries at most `15 * 4 = 60` moments, or 480
-raw bytes at `u64`, plus a small fixed header. That is materially smaller than
-`CandidateFeed` and `ClearWork`; exact account size and rent still require a
-layout implementation and measurement.
+```text
+sum_i c_i N_i(x) = (3x-1)^2 >= 0
+dot(c,p) = -S.
+```
 
-Lifecycle follows candidate lifecycle V2:
+The Rust continuous checker refuses the forced moment row `(1,2,0)/3` at its
+quadratic constraint. This is a continuous-exact separating portfolio, not an
+unconditional production-settlement claim after payout quantization.
 
-1. initialize only during candidate submission;
-2. append or write each canonical row once;
-3. seal before submission close;
-4. verify during the separately funded verification interval;
-5. retain with the candidate through selection and challenge/finalization;
-6. close only after the authenticated candidate/ClearWork child count permits
-   closure.
+## 3. Current-runtime quantized atom witness
 
-No witness may be replaced after its candidate price digest is sealed.
+Let `v(x)` be the exact integer vector returned by the owner-checked immutable
+`BasisSpec` at integer coordinate `x`, with `sum_i v_i(x)=D`. The certificate
+supplies sorted atoms `(x_a,m_a)` and positive denominator `W`:
 
-## 4. Streaming verification
+```text
+sum_a m_a = W
+R_i = sum_a m_a * v_i(x_a)
+p_i / S = R_i / (D*W).
+```
 
-The verifier can check all spans in one linear pass:
+All runtime vertices lie in the affine hyperplane `sum v=D`, whose dimension
+is at most `n-1`. Caratheodory therefore bounds support by
+`n=outcome_count`. Because the vertex set is finite and integral, a rational
+price in its hull has a rational basic feasible representation with at most
+`n` atoms. The fixed `u64` mass denominator remains an inner-certificate bound;
+support-boundedness alone does not prove that every lattice price has such a
+small denominator.
 
-1. validate the fixed header and exact body length;
-2. recompute the reduced common denominator;
-3. for each span, check nonnegativity and the one or two Hausdorff quadrics;
-4. add the row sum into `total_mass`;
-5. multiply the row by the generated transfer numerators and add into at most
-   `d + 1` of 16 outcome accumulators;
-6. require `total_mass == W`;
-7. compare all 16 accumulated equations to `D * W * p_i` exactly; and
-8. bind the successful digest into the candidate's verified checkpoint.
+### Runtime canonicality and arithmetic
 
-If a one-transaction implementation lacks CU or stack headroom, a small
-`MeasureWorkV2` checkpoint stores only:
+The checker requires:
 
-- candidate and witness digests;
-- the next span index;
-- total mass;
-- 16 checked accumulators; and
-- a rolling canonical-body digest.
+- `1 <= atom_count <= outcome_count`;
+- coordinates inside the closed stored-knot interval, even for `Clamp`;
+- strictly increasing coordinates and positive masses;
+- `sum masses=W` and `gcd(W,masses)=1`;
+- zero inactive coordinate/mass slots;
+- an exact integer simplex price vector with zero padding; and
+- adapter-authenticated basis, price, relation-domain, candidate, and body
+  digests.
 
-Resume reauthenticates the immutable candidate/witness bodies and advances a
-monotone span cursor. No proof-only precondition or unchecked partial decode is
-permitted. Failure leaves the candidate unverified and must not mutate the
-retained-best registry.
+Every payout vector is recomputed through `BasisSpec::evaluate`; it is never
+caller supplied. After validating total mass, `R_i <= D*W` and `D*W` fits
+`u128` for any two `u64` operands. Reduced rational-pair comparison avoids any
+triple product with `S`.
 
-## 5. Candidate construction
+These rules canonicalize one submitted quadrature, not one price. For degree
+two, knots `[0,4,8,12]`, and `D=8`:
 
-The offchain solver may use floating-point conic optimization only to search.
-Before submission it must rationally reconstruct `W, w`, reduce the witness,
-and run the same exact integer verifier locally. The chain trusts none of the
-search method, solver software, or claimed objective value.
+```text
+v(5)=(0,2,6,0,0)
+v(6)=(0,1,6,1,0)
+v(7)=(0,0,6,2,0)
+```
 
-An exact constructive path is preferable:
+Both the one-atom witness at 6 and the equal two-atom mixture at 5 and 7 are
+primitive certificates for the same price. The body digest authenticates the
+chosen sidecar but cannot enter the candidate's economic or tie-breaking key.
 
-1. solve the per-span second-order-cone feasibility problem;
-2. rationally reconstruct a point inside the feasible face;
-3. project the linear equalities exactly over rationals;
-4. if reconstruction approaches a curved boundary, derive the boundary atom
-   or deliberately move to an interior lattice price; and
-5. serialize only after the exact verifier accepts.
+## 4. Adapter certificate interface
 
-The reference solver should emit a derivation manifest naming its algorithm,
-input candidate digest, unreduced and reduced denominator, maximum residual
-before rational reconstruction, and final exact verifier result. The residual
-is diagnostic only and never enters consensus.
+`AdapterBindingsV2` is a typed trust-boundary input, not an account layout. The
+adapter must derive from owner-checked immutable state:
 
-## 6. Profiles and compatibility
+- the candidate-feed identity;
+- the relation-domain digest;
+- the exact basis digest, covering knots, spacing, domain, edge policy, payout
+  denominator, evaluator version, and rounding version;
+- the exact candidate-price digest; and
+- the observed digest of the canonical witness body excluding its digest field.
 
-- Degree zero/one: simplex membership remains exact; no sidecar is accepted or
-  required.
-- Single-span degree two/three: the existing quantifier-free Hankel checks are
-  exact; a profile may omit the sidecar.
-- Multi-span degree two/three, `certified-refusal-v1b`: retains today's wider
-  acceptance boundary and must be labeled as necessary-not-sufficient.
-- Multi-span degree two/three, `measure-witness-v2`: requires the sidecar and
-  admits only prices with a checked representing-measure witness.
+The crate compares those bytes and validates the supplied `BasisSpec`, but does
+not implement a hash, parser, PDA rule, lifecycle, or account mutation. An SBF
+adapter must compute the digests itself, refuse trailing bytes and unknown enum
+values, and persist success only to a separately versioned candidate
+checkpoint. A witness may authenticate a candidate but must not redefine it.
 
-This is why capability profiles are not a reduction in the protocol's vision.
-They allow the sophisticated surface to carry its real certificate and cost
-without forcing categorical markets to pay for or misdescribe it.
+At maximum width the continuous body has 14 stride-four rows, or 56 `u64`
+cells. The quantized body has 16 `(u128 coordinate,u64 mass)` slots. Exact
+account size, rent, CU, streaming layout, and close obligations remain
+unmeasured.
 
-## 7. Promotion gates
+## 5. Profiles and compatibility
 
-Before this becomes an SBF claim:
+- Degree zero/one requires a separately analyzed simplex or finite-atom rule;
+  this crate's V2 interfaces deliberately accept only degrees two and three.
+- `continuous-exact-v2` may use the Bernstein witness only if settlement also
+  uses the same exact unquantized payout semantics.
+- `quantized-integer-grid-v2` uses the finite atom witness bound to the exact
+  production `BasisSpec` and largest-remainder version.
+- Existing `certified-refusal-v1b` is neither exact nor one-sided for general
+  quantized runtime profiles. Its old “every refusal is an arbitrage” and
+  “single-span exact” descriptions apply only to the continuous model.
 
-1. Generate every `(d, n)` transfer table from the canonical B-spline
-   evaluator and commit its source/derivation manifest.
-2. Differentially check the table at every polynomial coefficient, not only at
-   sampled points.
-3. Prove or explicitly bound signedness and every `u128` product/sum.
-4. Add exact accepted point masses, mixtures across every span boundary, and
-   single-span corpus vectors.
-5. Add mutations for one moment, denominator, span order, price, candidate
-   binding, transfer-table identity, quadratic boundary, and body padding.
-6. Generate coherent vectors that V1b accepts and rejects; require the witness
-   checker to agree with independent high-precision/conic search followed by
-   exact reconstruction.
-7. Require the five-claim `(1/3, 2/3, 0, 0, 0)` V1b false acceptance above to
-   be refused for absence of a valid witness, and independently regenerate
-   additional wide-support examples.
-8. Measure host, SBF, streamed-resume, account-rent, and candidate-close costs.
-9. Join selection so an unverified sidecar can never exclude or evict a fully
-   verified candidate.
-10. Extend the named Lean theorem only for the transfer-table/checker
-    correspondence actually proved; do not call the SBF adapter formally
-    verified.
+Capability profiles must name which of these payout bodies they trade. A
+continuous witness cannot be silently interpreted as evidence about quantized
+settlement, or vice versa.
 
-The next executable milestone is an isolated safe-Rust, fixed-capacity checker
-and generated-table corpus equivalent to the exact Python model. Runtime wiring
-follows only after independent table generation agrees and the integer bounds
-above are proved.
+## 6. Remaining promotion gates
+
+Before an SBF profile selects either checker:
+
+1. freeze the canonical basis/price/body digest preimages and account parser;
+2. independently generate the transfer templates and derivation manifest;
+3. add a solver that emits exact continuous moments or quantized atoms without
+   treating floating residuals as consensus evidence;
+4. decide whether the `u64` denominator lattice is a deliberate sufficient
+   inner profile or prove a constructive completeness bound;
+5. measure host, SBF, streamed-resume, stack, account-rent, and close costs;
+6. bind successful verification to candidate lifecycle without letting an
+   incomplete sidecar evict a verified candidate;
+7. keep witness bytes outside score and digest tie-breaking despite
+   representation nonuniqueness;
+8. update or retire V1b claims and profiles against the actual payout map; and
+9. extend Lean only for the exact checker correspondence proved—never for an
+   unverified adapter/runtime boundary.
+
+Reproduce the isolated implementation:
+
+```sh
+cargo +1.93.1 test --manifest-path crates/clutch-price-measure/Cargo.toml --locked
+cargo +1.93.1 clippy --manifest-path crates/clutch-price-measure/Cargo.toml \
+  --locked --all-targets -- -D warnings
+```

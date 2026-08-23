@@ -80,6 +80,18 @@ Notation: `n` = active outcome count, `S` = `PRICE_SCALE` (implemented value
 the scaled integer simplex `{p ∈ Z^n : 0 ≤ p_i ≤ S, Σ p_i = S}` that V1
 enforces.
 
+**2026-08-23 semantic correction.** The moment-cone theorems below concern the
+exact continuous rational B-spline map. Current settlement evaluates only
+integer coordinates and quantizes each payout vector to denominator `D` by
+largest remainder. Its attainable price set is a finite polytope depending on
+knots, spacing, domain, `D`, and the rounding version. Therefore statements
+below that `M_d` depends only on `(degree,outcome_count)`, that single-span
+Hankel membership is runtime-exact, or that every V1b refusal is an executable
+arbitrage apply to the continuous model and must not be projected onto current
+runtime settlement. Executable counterexamples and the separate finite-atom
+runtime certificate are in `docs/design/PRICE_MEASURE_WITNESS_V2.md` and
+`crates/clutch-price-measure`.
+
 ---
 
 ## 1. What the implemented relation is, and what LP question we may ask of it

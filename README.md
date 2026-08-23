@@ -149,10 +149,14 @@ test-only signers.
   It is not person-neutral or wash-proof: public keys do not establish
   independent controllers. It is not selected by an SBF profile while
   normalization, price-quality, and fee/reward integration gates remain open.
-- For multi-span degree 2/3, the finite moment-cone checks are necessary rather
-  than a complete no-arbitrage membership decision. The first public coupled
-  profile should remain degree 0/1 until a full witness or safe inner
-  representation exists.
+- Degree-2/3 V1b checks describe the continuous exact B-spline cone, not the
+  integer-coordinate, largest-remainder-quantized settlement body. Under live
+  payout semantics they can both refuse a coherent runtime point price and
+  accept a price outside the finite runtime hull. The isolated exact checker
+  now keeps continuous Bernstein witnesses separate from support-bounded
+  quantized-atom witnesses; neither is selected by SBF. The first public
+  coupled profile should remain degree 0/1 until one matching certificate is
+  integrated and measured.
 - The current 2,082,320-byte audited ELF costs 14.49529272 SOL in persistent
   loader rent. Ten SOL is insufficient by 4.49529272 SOL before fees. The
   static-deduplication wave removed 54,344 bytes; eliminating the redundant

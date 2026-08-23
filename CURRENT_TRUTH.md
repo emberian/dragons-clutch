@@ -344,38 +344,34 @@ remains. The exact sealed ELF closes its first-party final-LTO stack diagnostic
 gate, but that does not close these semantic, source, or terminal gates. No path
 may lower a smooth market to categorical portfolios.
 
-One consequence of the smooth rungs having landed is now live rather than
-design-ahead, and is recorded here because the research note that raised it
-assumed the opposite. `DUAL_IS_THE_MEASURE.md` §7.4 proves that at degree ≥ 2
-the exact simplex gate is **strictly weaker** than no-arbitrage on the tradable
-span — interior quadratic basis functions peak at `3/4` (cubics at `2/3`), so
-`e_j` is a V1-valid price vector that is no measure's moment vector, and the
-split-and-sell position against it is executable in the admitted order
-language. That note called it "a design-ahead warning, not a live defect"
-because degrees 2–3 could not be created; they now can. The one enforced
-degree-≥2 restriction elsewhere is on evidence rather than price:
+The smooth rungs make price coherence a live concern, but the original warning
+used continuous exact basis values. `DUAL_IS_THE_MEASURE.md` §7.4 correctly
+shows that a simplex price can lie outside that continuous moment body and
+constructs a continuous nonnegative separating portfolio. It does not by
+itself establish the same defect for integer-coordinate, quantized settlement:
+largest-remainder rounding can make an interior coordinate vector such as
+`e_j` genuinely attainable. The runtime price body must be analyzed against
+the payout vectors it actually transfers. The one enforced degree-≥2
+restriction elsewhere remains on evidence rather than price:
 `ResolutionRefusal::NonPointEvidence` refuses a conservative interval that is
 not a point.
 
-That hole is now **gated in the relation and bound on chain**
-(2026-08-21). `DUAL_IS_THE_MEASURE.md` §7.6 derives the exact membership
-condition for the moment cone of the admitted open-clamped uniform basis — a
-per-span Hausdorff system in exact integers (Theorem 7.6.5), which reduces
-*exactly* to the existing simplex gate at degrees 0–1 (Corollary 7.6.7) and is
-quantifier-free and exact on the single-span grids (Corollary 7.6.6) — and
-proves that no finite family of *linear* price inequalities can decide it
-(Theorem 7.6.8, the cone has a strictly convex boundary arc). The relation
-carries the finite certified family that follows: `relation_v1.rs`'s **V1b**
-stage `validate_price_moment_cone`, mirrored latch-for-latch in the streaming
-twin, refusing `PriceOutsideMomentCone { outcome }` when a claim is priced
-above its ceiling (`a` complete sets short `b` units of that claim), when a
-neighbour butterfly is priced negative, or when a single-span Hankel quadric
-fails. **Every refusal exhibits an executable arbitrage**; the stage is the
-constant true at degrees 0–1, so every landed verdict is unchanged, and it is
-reached only through the new `verify_with_basis` / `begin_with_basis` entry
-points — `verify` and `begin` pass `BasisDescriptorV1::UNGATED`. Lemma 7.6.1
-is why one byte suffices: on admitted grids the cone depends only on
-`(degree, outcome_count)`.
+That continuous-model hole is **gated in the relation and bound on chain**, but
+its interpretation was corrected on 2026-08-23. `DUAL_IS_THE_MEASURE.md` §7.6
+derives the exact moment cone of the continuous rational open-clamped basis.
+Production settlement instead evaluates integer coordinates and applies
+largest-remainder payout quantization. Its finite convex hull depends on the
+exact knots, spacing, payout denominator, domain, and rounding version—not only
+`(degree,outcome_count)`. V1b is mirrored latch-for-latch in batch and stream
+and is genuinely executed on chain, but under current payout semantics it is
+neither an exact decision nor a one-sided arbitrage certificate. A coherent
+runtime point at degree two, knots `[0,128,256,384]`, denominator 10,000, and
+coordinate 85 evaluates to `(1128,6667,2205,0,0)` yet V1b refuses its middle
+price by one atom. Conversely the continuous single-span Hankel vector
+`(1,2,1)/4` is outside the runtime hull when the integer knot interval is
+`[0,1]`. `crates/clutch-price-measure` freezes both counterexamples and keeps
+the continuous Bernstein witness separate from the correct finite
+quantized-atom certificate. Neither checker is wired into SBF.
 
 The **program seam is closed** (2026-08-21): `EpochAccount` gained
 `basis_degree: u8` (the account grew 328 → 329 bytes), `general_epoch.rs`
@@ -388,11 +384,12 @@ evidence is `svm-tests/tests/cone_gate.rs`: a three-outcome degree-2 market
 whose walk refuses `PriceOutsideMomentCone { outcome: 1 }` at `[2000, 6000,
 2000]` and clears to `VERIFIED` at `[2500, 5000, 2500]` on the same book.
 
-What is **not** closed is the **wide-support residual** (§7.6.7): the landed
-family is a sound outer approximation, not a decision procedure, so a price
-vector can be outside the cone and still pass — and with it the exact
-window-three tightening (Theorem 7.6.10), which is implementable and
-unimplemented. Both are named in `DUAL_IS_THE_MEASURE.md` §11.4. The model
+For the **continuous model**, the wide-support residual (§7.6.7) remains: the
+landed family is an outer approximation rather than a decision procedure. For
+the actual quantized runtime, the larger issue is semantic mismatch in both
+directions, so the continuous window-three tightening does not repair runtime
+membership. Both boundaries are named in `DUAL_IS_THE_MEASURE.md` and
+`docs/design/PRICE_MEASURE_WITNESS_V2.md`. The model
 plane states the same
 condition in `lean/DragonsClutch/MomentCone.lean` with `decide`-checked
 witnesses against the exact model basis — the certificates never pay negative

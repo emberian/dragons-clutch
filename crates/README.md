@@ -1,6 +1,6 @@
 # Rust crates
 
-This directory contains seven offline `no_std` crates
+This directory contains offline `no_std` crates
 (updated 2026-08-22; none is a deployment or release claim —
 `CURRENT_TRUTH.md` supersedes status language here):
 
@@ -16,6 +16,9 @@ This directory contains seven offline `no_std` crates
   authentication and account/runtime binding remain adapter obligations.
 - `clutch-bspline-accumulator` — joins the basis evaluator to the interval
   accumulator for windowed smooth-claim evidence.
+- `clutch-price-measure` — exact continuous Bernstein witnesses and a separate
+  support-bounded certificate for the integer-coordinate, largest-remainder
+  quantized payout body. Neither checker is wired into SBF.
 - `clutch-liveness` — the host-side liveness/fee-carry kernels
   (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
   profile and the revenue seams.
