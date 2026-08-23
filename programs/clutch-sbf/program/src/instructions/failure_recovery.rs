@@ -270,44 +270,48 @@ pub fn authenticate_failure_relation_execution_v1(
     source: AuthenticatedSourceSuccessJoinV1,
     accounts: &[AccountInfo<'_>],
 ) -> Outcome<AuthenticatedFailureRelationExecutionV1> {
-    require_count(accounts, 10)?;
+    let [series_registry, registry_program, registry_programdata, registry_release, capability_profile, series_artifact, product_template, claim_basis, price_policy, genesis] =
+        accounts
+    else {
+        return Err(ClutchError::AccountCount.into());
+    };
     let binding = root.runtime().binding();
     let registry_refs = authenticate_series_registry_capability_refs_v1(
         program_id,
-        &accounts[0],
+        series_registry,
         binding.series_plan_id(),
     )?;
     let registry = authenticate_registry_capability_v2(
         program_id,
         registry_refs,
-        &accounts[1],
-        &accounts[2],
-        &accounts[3],
-        &accounts[4],
+        registry_program,
+        registry_programdata,
+        registry_release,
+        capability_profile,
     )?;
     let series = authenticate_product_artifact_v1::<SeriesPlanV5>(
         program_id,
-        &accounts[5],
+        series_artifact,
         binding.series_plan_id().content_id(),
     )?;
     let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
         program_id,
-        &accounts[6],
+        product_template,
         binding.product_template_id().content_id(),
     )?;
     let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
         program_id,
-        &accounts[7],
+        claim_basis,
         template.value().native_claim_basis_id.content_id(),
     )?;
     let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
         program_id,
-        &accounts[9],
+        genesis,
         series.value().market_genesis_profile_id.content_id(),
     )?;
     let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
         program_id,
-        &accounts[8],
+        price_policy,
         genesis.value().price_measure_policy_id.content_id(),
     )?;
 
@@ -421,6 +425,37 @@ pub fn authenticate_ordered_metas_v1(
         index += 1;
     }
     Ok(())
+}
+
+/// Resolve one account from the frozen action contract by its semantic role.
+///
+/// Callers must authenticate the complete ordered envelope first. Centralizing
+/// this projection prevents handlers from silently drifting when an account is
+/// added to an earlier position in one action's contract.
+fn account_for_action<'accounts, 'info>(
+    action: RecoveryAction,
+    accounts: &'accounts [AccountInfo<'info>],
+    role: RecoveryAccountRoleV1,
+) -> Outcome<&'accounts AccountInfo<'info>> {
+    account_index_v1(action, role)
+        .and_then(|index| accounts.get(index))
+        .ok_or(Refusal::Adapter(ClutchError::AccountCount))
+}
+
+/// Resolve one inclusive, ordered role span from the frozen action contract.
+fn account_span_for_action<'accounts, 'info>(
+    action: RecoveryAction,
+    accounts: &'accounts [AccountInfo<'info>],
+    first: RecoveryAccountRoleV1,
+    last: RecoveryAccountRoleV1,
+) -> Outcome<&'accounts [AccountInfo<'info>]> {
+    let first =
+        account_index_v1(action, first).ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
+    let last = account_index_v1(action, last).ok_or(Refusal::Adapter(ClutchError::AccountCount))?;
+    require(first <= last, ClutchError::NonCanonical)?;
+    accounts
+        .get(first..=last)
+        .ok_or(Refusal::Adapter(ClutchError::AccountCount))
 }
 
 /// Read the exact canonical Clock sysvar and refuse negative Unix time.
@@ -589,36 +624,59 @@ pub fn handle_initialize_failure_root_v1<'a>(
     receipt: FailureExternalAdmissionReceiptV2,
     market_core_funding: SeriesMarketCoreFundingReceiptV1,
 ) -> Outcome<FailureRootActivationV1> {
-    authenticate_ordered_metas_v1(RecoveryAction::InitializeFailureRoot, accounts)?;
+    let action = RecoveryAction::InitializeFailureRoot;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let market_core_vault = account_for_action(
+        action,
+        accounts,
+        RecoveryAccountRoleV1::MarketCoreLamportVault,
+    )?;
+    let root = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let policy = account_for_action(action, accounts, RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let sink = account_for_action(action, accounts, RecoveryAccountRoleV1::NeutralSink)?;
+    let series_registry =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SeriesRegistry)?;
+    let series_funding =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SeriesFunding)?;
+    let registry_program =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RegistryProgram)?;
+    let registry_programdata =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RegistryProgramData)?;
+    let registry_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RegistryRelease)?;
+    let capability_profile =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::CapabilityProfile)?;
+    let source_release_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let replay = account_for_action(action, accounts, RecoveryAccountRoleV1::ReplayTombstone)?;
+    let rent = account_for_action(action, accounts, RecoveryAccountRoleV1::RentSysvar)?;
+    let system_program =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SystemProgram)?;
     require(
-        registry_capability.series_registry_account() == *accounts[5].key
+        registry_capability.series_registry_account() == *series_registry.key
             && registry_capability.series_plan_id() == runtime.binding().series_plan_id()
-            && registry_capability.program_account() == *accounts[7].key
-            && registry_capability.programdata_account() == *accounts[8].key
-            && registry_capability.release_artifact_account() == *accounts[9].key
-            && registry_capability.profile_artifact_account() == *accounts[10].key,
+            && registry_capability.program_account() == *registry_program.key
+            && registry_capability.programdata_account() == *registry_programdata.key
+            && registry_capability.release_artifact_account() == *registry_release.key
+            && registry_capability.profile_artifact_account() == *capability_profile.key,
         ClutchError::MismatchedState,
     )?;
-    require_source_release_account(source_release, &accounts[20])?;
+    require_source_release_account(source_release, source_release_account)?;
     runtime
         .authenticate_source_release(source_release)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    authenticate_present_recovery_admission(
-        program_id,
-        &accounts[2],
-        &accounts[3],
-        runtime,
-        receipt,
-    )?;
+    authenticate_present_recovery_admission(program_id, policy, recovery, runtime, receipt)?;
     initialize_failure_root_v1(
         program_id,
-        &accounts[0],
-        &accounts[1],
-        &accounts[6],
-        &accounts[4],
-        &accounts[31],
-        &accounts[33],
-        &accounts[32],
+        market_core_vault,
+        root,
+        series_funding,
+        sink,
+        replay,
+        system_program,
+        rent,
         payload,
         runtime,
         receipt,
@@ -991,18 +1049,34 @@ pub fn handle_source_failure_v1<'a>(
     payload: TriggerSourceFailureV1,
     source: AuthenticatedSourceFailureJoinV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::TriggerSourceFailure, accounts)?;
+    let action = RecoveryAction::TriggerSourceFailure;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let source_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let source_occurrence =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceOccurrence)?;
+    let source_result = account_for_action(action, accounts, RecoveryAccountRoleV1::SourceResult)?;
+    let source_work_receipt =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceWorkReceipt)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_failure_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_failure_source_accounts(source, &accounts[1..])?;
-    require_current_after(accounts, 5, source.handoff.clock())?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    require_failure_source_accounts(
+        source,
+        source_release,
+        source_occurrence,
+        source_result,
+        source_work_receipt,
+    )?;
+    require_current_after(clock, source.handoff.clock())?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let plan = plan_source_failure_v1(root, source)?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+    apply_semantic_transition_v1(program_id, root_account, payload.common, plan)
 }
 
 /// Execute one deterministic relation-refusal trigger without persisting a
@@ -1013,10 +1087,26 @@ pub fn handle_relation_refusal_v1<'a>(
     payload: TriggerRelationRefusalV1,
     source: AuthenticatedSourceSuccessJoinV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::TriggerRelationRefusal, accounts)?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let action = RecoveryAction::TriggerRelationRefusal;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let relation_accounts = account_span_for_action(
+        action,
+        accounts,
+        RecoveryAccountRoleV1::SeriesRegistry,
+        RecoveryAccountRoleV1::GenesisArtifact,
+    )?;
+    let source_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let source_occurrence =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceOccurrence)?;
+    let source_result = account_for_action(action, accounts, RecoveryAccountRoleV1::SourceResult)?;
+    let source_work_receipt =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceWorkReceipt)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let execution =
-        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[1..11])?;
+        authenticate_failure_relation_execution_v1(program_id, root, source, relation_accounts)?;
     require_relation_commitments(
         source,
         execution,
@@ -1026,17 +1116,23 @@ pub fn handle_relation_refusal_v1<'a>(
         payload.relation_execution_id,
         Some(payload.refusal_code),
     )?;
-    execution.require_accounts(&accounts[1..11])?;
+    execution.require_accounts(relation_accounts)?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[11..15])?;
-    require_current_after(accounts, 15, source.handoff.clock())?;
+    require_success_source_accounts(
+        source,
+        source_release,
+        source_occurrence,
+        source_result,
+        source_work_receipt,
+    )?;
+    require_current_after(clock, source.handoff.clock())?;
     let plan = plan_relation_refusal_v1(root, source, execution)?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+    apply_semantic_transition_v1(program_id, root_account, payload.common, plan)
 }
 
 /// Execute accepted caller-funded resolution with no Recovery custody debit.
@@ -1046,10 +1142,26 @@ pub fn handle_caller_funded_resolution_v1<'a>(
     payload: ResolveCallerFundedV1,
     source: AuthenticatedSourceSuccessJoinV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::ResolveCallerFunded, accounts)?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let action = RecoveryAction::ResolveCallerFunded;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let relation_accounts = account_span_for_action(
+        action,
+        accounts,
+        RecoveryAccountRoleV1::SeriesRegistry,
+        RecoveryAccountRoleV1::GenesisArtifact,
+    )?;
+    let source_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let source_occurrence =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceOccurrence)?;
+    let source_result = account_for_action(action, accounts, RecoveryAccountRoleV1::SourceResult)?;
+    let source_work_receipt =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceWorkReceipt)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let execution =
-        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[1..11])?;
+        authenticate_failure_relation_execution_v1(program_id, root, source, relation_accounts)?;
     require_relation_commitments(
         source,
         execution,
@@ -1059,17 +1171,23 @@ pub fn handle_caller_funded_resolution_v1<'a>(
         payload.relation_execution_id,
         None,
     )?;
-    execution.require_accounts(&accounts[1..11])?;
+    execution.require_accounts(relation_accounts)?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[11..15])?;
-    require_current_after(accounts, 15, source.handoff.clock())?;
+    require_success_source_accounts(
+        source,
+        source_release,
+        source_occurrence,
+        source_result,
+        source_work_receipt,
+    )?;
+    require_current_after(clock, source.handoff.clock())?;
     let plan = plan_caller_funded_resolution_v1(root, source, execution)?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+    apply_semantic_transition_v1(program_id, root_account, payload.common, plan)
 }
 
 /// Execute accepted final repair and the one joined liveness-funded payment.
@@ -1079,10 +1197,27 @@ pub fn handle_paid_resolution_v1<'a>(
     payload: ResolvePaidRecoveryV1,
     source: AuthenticatedSourceSuccessJoinV1,
 ) -> Outcome<ExternalWorkMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::ResolvePaidRecovery, accounts)?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let action = RecoveryAction::ResolvePaidRecovery;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let relation_accounts = account_span_for_action(
+        action,
+        accounts,
+        RecoveryAccountRoleV1::SeriesRegistry,
+        RecoveryAccountRoleV1::GenesisArtifact,
+    )?;
+    let source_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let source_occurrence =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceOccurrence)?;
+    let source_result = account_for_action(action, accounts, RecoveryAccountRoleV1::SourceResult)?;
+    let source_work_receipt =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceWorkReceipt)?;
+    let keeper = account_for_action(action, accounts, RecoveryAccountRoleV1::Keeper)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let execution =
-        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[3..13])?;
+        authenticate_failure_relation_execution_v1(program_id, root, source, relation_accounts)?;
     require_relation_commitments(
         source,
         execution,
@@ -1092,24 +1227,30 @@ pub fn handle_paid_resolution_v1<'a>(
         payload.relation_execution_id,
         None,
     )?;
-    execution.require_accounts(&accounts[3..13])?;
+    execution.require_accounts(relation_accounts)?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[13..17])?;
-    require_current_after(accounts, 19, source.handoff.clock())?;
+    require_success_source_accounts(
+        source,
+        source_release,
+        source_occurrence,
+        source_result,
+        source_work_receipt,
+    )?;
+    require_current_after(clock, source.handoff.clock())?;
     require(
-        accounts[17].key.to_bytes() == payload.reward_recipient,
+        keeper.key.to_bytes() == payload.reward_recipient,
         ClutchError::MismatchedState,
     )?;
     let plan = plan_paid_resolution_v1(
         root,
         source,
         execution,
-        accounts[17].key,
+        keeper.key,
         payload.scheduled_ceiling_lamports,
     )?;
     apply_work_transition_v1(
@@ -1128,16 +1269,17 @@ pub fn handle_schedule_advance_v1<'a>(
     payload: AdvanceRecoveryScheduleV1,
     source_release: AuthenticatedSourceReleaseV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::AdvanceRecoverySchedule, accounts)?;
-    require_source_release_account(source_release, &accounts[1])?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
-    let plan = plan_schedule_advance_v1(
-        root,
-        source_release,
-        &accounts[2],
-        payload.expected_attempt_index,
-    )?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+    let action = RecoveryAction::AdvanceRecoverySchedule;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let source_release_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
+    require_source_release_account(source_release, source_release_account)?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let plan =
+        plan_schedule_advance_v1(root, source_release, clock, payload.expected_attempt_index)?;
+    apply_semantic_transition_v1(program_id, root_account, payload.common, plan)
 }
 
 /// Execute one Source-authenticated repair unit and its sole liveness debit.
@@ -1147,26 +1289,39 @@ pub fn handle_accept_recovery_work_v1<'a>(
     payload: AcceptRecoveryWorkV1,
     source: AuthenticatedSourceSuccessJoinV1,
 ) -> Outcome<ExternalWorkMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::AcceptRecoveryWork, accounts)?;
+    let action = RecoveryAction::AcceptRecoveryWork;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let source_release =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
+    let source_occurrence =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceOccurrence)?;
+    let source_result = account_for_action(action, accounts, RecoveryAccountRoleV1::SourceResult)?;
+    let source_work_receipt =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceWorkReceipt)?;
+    let keeper = account_for_action(action, accounts, RecoveryAccountRoleV1::Keeper)?;
+    let clock = account_for_action(action, accounts, RecoveryAccountRoleV1::ClockSysvar)?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[3..])?;
-    require_current_after(accounts, 9, source.handoff.clock())?;
+    require_success_source_accounts(
+        source,
+        source_release,
+        source_occurrence,
+        source_result,
+        source_work_receipt,
+    )?;
+    require_current_after(clock, source.handoff.clock())?;
     require(
-        accounts[7].key.to_bytes() == payload.reward_recipient,
+        keeper.key.to_bytes() == payload.reward_recipient,
         ClutchError::MismatchedState,
     )?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
-    let plan = plan_accept_recovery_work_v1(
-        root,
-        source,
-        accounts[7].key,
-        payload.scheduled_ceiling_lamports,
-    )?;
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let plan =
+        plan_accept_recovery_work_v1(root, source, keeper.key, payload.scheduled_ceiling_lamports)?;
     apply_work_transition_v1(
         program_id,
         RecoveryAction::AcceptRecoveryWork,
@@ -1203,41 +1358,38 @@ fn apply_work_transition_v1<'a>(
     payload: &FailureRecoveryPayloadV1,
     plan: FailureExternalTransitionPlanV2,
 ) -> Outcome<ExternalWorkMutationV2> {
-    let (metas, keeper_index, payer_index, common, source_id, recipient, ceiling) =
-        match (action, payload) {
-            (
-                RecoveryAction::AcceptRecoveryWork,
-                FailureRecoveryPayloadV1::AcceptRecoveryWork(value),
-            ) => (
-                ACCEPT_RECOVERY_WORK_METAS_V1,
-                7usize,
-                8usize,
-                value.common,
-                value.source_success_handoff_id,
-                value.reward_recipient,
-                value.scheduled_ceiling_lamports,
-            ),
-            (
-                RecoveryAction::ResolvePaidRecovery,
-                FailureRecoveryPayloadV1::ResolvePaidRecovery(value),
-            ) => (
-                RESOLVE_PAID_RECOVERY_METAS_V1,
-                17usize,
-                18usize,
-                value.common,
-                value.source_success_handoff_id,
-                value.reward_recipient,
-                value.scheduled_ceiling_lamports,
-            ),
-            _ => return Err(ClutchError::UnsupportedInstruction.into()),
-        };
+    let (metas, common, source_id, recipient, ceiling) = match (action, payload) {
+        (
+            RecoveryAction::AcceptRecoveryWork,
+            FailureRecoveryPayloadV1::AcceptRecoveryWork(value),
+        ) => (
+            ACCEPT_RECOVERY_WORK_METAS_V1,
+            value.common,
+            value.source_success_handoff_id,
+            value.reward_recipient,
+            value.scheduled_ceiling_lamports,
+        ),
+        (
+            RecoveryAction::ResolvePaidRecovery,
+            FailureRecoveryPayloadV1::ResolvePaidRecovery(value),
+        ) => (
+            RESOLVE_PAID_RECOVERY_METAS_V1,
+            value.common,
+            value.source_success_handoff_id,
+            value.reward_recipient,
+            value.scheduled_ceiling_lamports,
+        ),
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
     require_count(accounts, metas.len())?;
     authenticate_ordered_metas_v1(action, accounts)?;
-    let root_account = &accounts[0];
-    let policy_account = &accounts[1];
-    let recovery_account = &accounts[2];
-    let keeper = &accounts[keeper_index];
-    let payer = &accounts[payer_index];
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let policy_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let keeper = account_for_action(action, accounts, RecoveryAccountRoleV1::Keeper)?;
+    let payer = account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryRefundOwner)?;
     let root = authenticate_failure_root_v1(program_id, root_account, common)?;
     let work = plan
         .work()
@@ -1283,17 +1435,15 @@ pub fn apply_interval_consensus_work_transition_v1<'a>(
     payload: clutch_solana_layout::failure_recovery::AdvanceIntervalConsensusV1,
     plan: FailureIntervalConsensusAdvancePlanV1,
 ) -> Outcome<ExternalWorkMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::AdvanceIntervalConsensus, accounts)?;
-    let account = |role| {
-        account_index_v1(RecoveryAction::AdvanceIntervalConsensus, role)
-            .and_then(|index| accounts.get(index))
-            .ok_or(Refusal::Adapter(ClutchError::AccountCount))
-    };
-    let root_account = account(RecoveryAccountRoleV1::FailureRoot)?;
-    let policy_account = account(RecoveryAccountRoleV1::LivenessPolicy)?;
-    let recovery_account = account(RecoveryAccountRoleV1::RecoveryCompartment)?;
-    let keeper = account(RecoveryAccountRoleV1::Keeper)?;
-    let payer = account(RecoveryAccountRoleV1::RecoveryRefundOwner)?;
+    let action = RecoveryAction::AdvanceIntervalConsensus;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let policy_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let keeper = account_for_action(action, accounts, RecoveryAccountRoleV1::Keeper)?;
+    let payer = account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryRefundOwner)?;
     let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let failure_plan = plan.failure_plan();
     let work = failure_plan
@@ -1342,12 +1492,15 @@ pub fn apply_recovery_close_v1<'a>(
     receipt: FailureRecoveryTerminalReceiptV2,
 ) -> Outcome<ExternalRecoveryCloseV2> {
     require_count(accounts, CLOSE_RECOVERY_FUNDING_METAS_V1.len())?;
-    authenticate_ordered_metas_v1(RecoveryAction::CloseRecoveryFunding, accounts)?;
-    let root_account = &accounts[0];
-    let policy_account = &accounts[1];
-    let recovery_account = &accounts[2];
-    let payer = &accounts[3];
-    let sink = &accounts[4];
+    let action = RecoveryAction::CloseRecoveryFunding;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let policy_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let payer = account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryRefundOwner)?;
+    let sink = account_for_action(action, accounts, RecoveryAccountRoleV1::NeutralSink)?;
     require(
         receipt.id().bytes() == payload.recovery_terminal_receipt_id
             && receipt.transition_nonce() == payload.common.expected_transition_nonce,
@@ -1386,15 +1539,22 @@ pub fn apply_failure_root_close_v1<'a>(
     prerequisite: FailureRetirementPrerequisiteV1,
     authorization: FailureRootCloseAuthorizationV1,
 ) -> Outcome<ExternalRootCloseV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::CloseFailureRoot, accounts)?;
-    let root_account = &accounts[0];
-    let root_rent_payer = &accounts[1];
-    let neutral_sink = &accounts[2];
-    let policy_account = &accounts[3];
-    let recovery_account = &accounts[4];
-    let retirement_root = &accounts[5];
-    let replay_account = &accounts[6];
-    let source_release_account = &accounts[7];
+    let action = RecoveryAction::CloseFailureRoot;
+    authenticate_ordered_metas_v1(action, accounts)?;
+    let root_account = account_for_action(action, accounts, RecoveryAccountRoleV1::FailureRoot)?;
+    let root_rent_payer =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RootRentRefundOwner)?;
+    let neutral_sink = account_for_action(action, accounts, RecoveryAccountRoleV1::NeutralSink)?;
+    let policy_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let retirement_root =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::RetirementRoot)?;
+    let replay_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::ReplayTombstone)?;
+    let source_release_account =
+        account_for_action(action, accounts, RecoveryAccountRoleV1::SourceRelease)?;
 
     let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let receipt = root
@@ -1929,14 +2089,16 @@ fn write_root_poststate(
 
 fn require_failure_source_accounts(
     source: AuthenticatedSourceFailureJoinV1,
-    accounts: &[AccountInfo<'_>],
+    release: &AccountInfo<'_>,
+    occurrence: &AccountInfo<'_>,
+    result: &AccountInfo<'_>,
+    work_receipt: &AccountInfo<'_>,
 ) -> Outcome<()> {
-    require(accounts.len() >= 4, ClutchError::AccountCount)?;
-    require_source_release_account(source.release, &accounts[0])?;
+    require_source_release_account(source.release, release)?;
     require(
-        accounts[1].key.to_bytes() == source.source.occurrence_account().bytes()
-            && accounts[2].key.to_bytes() == source.source.result_or_absence_account().bytes()
-            && accounts[3].key.to_bytes() == source.source.work_receipt_account().bytes(),
+        occurrence.key.to_bytes() == source.source.occurrence_account().bytes()
+            && result.key.to_bytes() == source.source.result_or_absence_account().bytes()
+            && work_receipt.key.to_bytes() == source.source.work_receipt_account().bytes(),
         ClutchError::MismatchedState,
     )
 }
@@ -1983,14 +2145,16 @@ fn require_relation_commitments(
 
 fn require_success_source_accounts(
     source: AuthenticatedSourceSuccessJoinV1,
-    accounts: &[AccountInfo<'_>],
+    release: &AccountInfo<'_>,
+    occurrence: &AccountInfo<'_>,
+    result: &AccountInfo<'_>,
+    work_receipt: &AccountInfo<'_>,
 ) -> Outcome<()> {
-    require(accounts.len() >= 4, ClutchError::AccountCount)?;
-    require_source_release_account(source.release, &accounts[0])?;
+    require_source_release_account(source.release, release)?;
     require(
-        accounts[1].key.to_bytes() == source.source.occurrence_account().bytes()
-            && accounts[2].key.to_bytes() == source.source.result_or_absence_account().bytes()
-            && accounts[3].key.to_bytes() == source.source.work_receipt_account().bytes(),
+        occurrence.key.to_bytes() == source.source.occurrence_account().bytes()
+            && result.key.to_bytes() == source.source.result_or_absence_account().bytes()
+            && work_receipt.key.to_bytes() == source.source.work_receipt_account().bytes(),
         ClutchError::MismatchedState,
     )
 }
@@ -2005,16 +2169,8 @@ fn require_source_release_account(
     )
 }
 
-fn require_current_after(
-    accounts: &[AccountInfo<'_>],
-    clock_index: usize,
-    source_clock: ClockSnapshotV1,
-) -> Outcome<()> {
-    let current = authenticate_clock_snapshot_v1(
-        accounts
-            .get(clock_index)
-            .ok_or(Refusal::Adapter(ClutchError::AccountCount))?,
-    )?;
+fn require_current_after(clock: &AccountInfo<'_>, source_clock: ClockSnapshotV1) -> Outcome<()> {
+    let current = authenticate_clock_snapshot_v1(clock)?;
     require(
         current.slot >= source_clock.slot && current.unix_timestamp >= source_clock.unix_timestamp,
         ClutchError::MismatchedState,
