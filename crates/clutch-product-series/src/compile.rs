@@ -75,7 +75,7 @@ fn compile_schedule(
         recovery_attempts[index] = AbsoluteRecoveryAttemptV1 {
             repair_generation: template
                 .base_repair_generation
-                .checked_add(u64::from(relative.repair_generation_delta))
+                .checked_add(relative.repair_generation_delta)
                 .ok_or(crate::Error::ArithmeticOverflow)?,
             opens_at_bucket: primary_maturity_bucket_exclusive
                 .checked_add(relative.opens_after_primary_maturity_buckets)

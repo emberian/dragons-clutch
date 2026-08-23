@@ -45,11 +45,6 @@ pub const UNIFORM_SPACING_NONE: u8 = u8::MAX;
 pub const PAYOUT_MAP_UNUSED: u8 = u8::MAX;
 /// Maximum finite recovery attempts.
 pub const MAX_RECOVERY_ATTEMPTS: usize = 8;
-/// Maximum number of instances in one finite Series.
-pub const MAX_SERIES_INSTANCES: u32 = 65_536;
-/// Maximum primary source window span in buckets.
-pub const MAX_SERIES_WINDOW_BUCKETS: u64 = 1_000_000;
-
 /// Exact canonical byte length of [`NativeClaimBasisV1`].
 pub const BASIS_BYTES: usize = 2_352;
 /// Exact canonical byte length of [`EvidenceOnlyRecoveryPolicyV1`].
@@ -77,7 +72,7 @@ pub struct NativeClaimBasisV1 {
     pub basis_degree: u8,
     /// Active liability count, in `2..=16`.
     pub outcome_count: u8,
-    /// Active evidence-selected payout-vector count, in `1..=16`.
+    /// Degree-zero finite payout count; zero for degrees one through three.
     pub payout_count: u8,
     /// Active knot prefix length.
     pub knot_count: u8,
@@ -89,7 +84,7 @@ pub struct NativeClaimBasisV1 {
     pub edge_policy_registry_value: u8,
     /// Common positive payout denominator.
     pub denominator: u64,
-    /// Active payout rows and outcome columns followed by zero padding.
+    /// Degree-zero payout rows; entirely zero for degrees one through three.
     pub payout_weights: [[u64; MAX_OUTCOMES]; MAX_PAYOUTS],
     /// Degree-zero cell mapping; unused entries are [`PAYOUT_MAP_UNUSED`].
     pub payout_map: [u8; MAX_OUTCOMES],
@@ -103,11 +98,16 @@ impl NativeClaimBasisV1 {
         let max_outcomes = u8::try_from(MAX_OUTCOMES).map_err(|_| Error::InvalidParameter)?;
         if self.basis_degree > MAX_BASIS_DEGREE
             || !(2..=max_outcomes).contains(&self.outcome_count)
-            || self.payout_count == 0
             || usize::from(self.payout_count) > MAX_PAYOUTS
             || self.ambiguity_policy_registry_value == 0
             || self.edge_policy_registry_value == 0
             || self.denominator == 0
+        {
+            return Err(Error::InvalidParameter);
+        }
+        if (self.basis_degree == 0
+            && (self.payout_count == 0 || self.uniform_log2_spacing != UNIFORM_SPACING_NONE))
+            || (self.basis_degree >= 1 && self.payout_count != 0)
         {
             return Err(Error::InvalidParameter);
         }
@@ -176,35 +176,77 @@ impl NativeClaimBasisV1 {
             index += 1;
         }
 
-        if self.uniform_log2_spacing == UNIFORM_SPACING_NONE {
-            if self.basis_degree >= 2 {
-                return Err(Error::InvalidParameter);
-            }
-        } else {
-            if self.uniform_log2_spacing >= 128 {
-                return Err(Error::InvalidParameter);
-            }
-            let gap = 1_u128 << self.uniform_log2_spacing;
-            let mut knot = 1_usize;
-            while knot < knot_count {
-                if self.knots[knot] - self.knots[knot - 1] != gap {
+        match self.basis_degree {
+            0 => {}
+            1 => {
+                let first_gap = self.knots[1] - self.knots[0];
+                let mut uniform = true;
+                let mut knot = 2_usize;
+                while knot < knot_count {
+                    uniform &= self.knots[knot] - self.knots[knot - 1] == first_gap;
+                    knot += 1;
+                }
+                let canonical_spacing = if uniform && first_gap.is_power_of_two() {
+                    u8::try_from(first_gap.trailing_zeros()).map_err(|_| Error::InvalidParameter)?
+                } else {
+                    UNIFORM_SPACING_NONE
+                };
+                if self.uniform_log2_spacing != canonical_spacing {
                     return Err(Error::InvalidParameter);
                 }
-                knot += 1;
             }
+            2 | 3 => {
+                if self.uniform_log2_spacing == UNIFORM_SPACING_NONE
+                    || self.uniform_log2_spacing >= 128
+                {
+                    return Err(Error::InvalidParameter);
+                }
+                let gap = 1_u128 << self.uniform_log2_spacing;
+                let mut knot = 1_usize;
+                while knot < knot_count {
+                    if self.knots[knot] - self.knots[knot - 1] != gap {
+                        return Err(Error::InvalidParameter);
+                    }
+                    knot += 1;
+                }
+            }
+            _ => return Err(Error::InvalidParameter),
         }
 
+        let mut next_new_row = 0_u8;
         let mut map_index = 0_usize;
         while map_index < MAX_OUTCOMES {
             let value = self.payout_map[map_index];
             if self.basis_degree == 0 && map_index < outcomes {
-                if value >= self.payout_count {
+                if value >= self.payout_count || value > next_new_row {
                     return Err(Error::InvalidParameter);
+                }
+                if value == next_new_row {
+                    next_new_row = next_new_row
+                        .checked_add(1)
+                        .ok_or(Error::ArithmeticOverflow)?;
                 }
             } else if value != PAYOUT_MAP_UNUSED {
                 return Err(Error::NonCanonicalPadding);
             }
             map_index += 1;
+        }
+        if self.basis_degree == 0 && next_new_row != self.payout_count {
+            return Err(Error::InvalidParameter);
+        }
+
+        if self.basis_degree == 0 {
+            let mut left = 0_usize;
+            while left < payouts {
+                let mut right = left + 1;
+                while right < payouts {
+                    if self.payout_weights[left] == self.payout_weights[right] {
+                        return Err(Error::InvalidParameter);
+                    }
+                    right += 1;
+                }
+                left += 1;
+            }
         }
 
         if self.basis_degree >= 1 {
@@ -334,7 +376,7 @@ impl FixedCodec for NativeClaimBasisV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoveryAttemptV1 {
     /// Source repair-generation increment relative to the Template base.
-    pub repair_generation_delta: u32,
+    pub repair_generation_delta: u64,
     /// First eligible bucket after primary maturity.
     pub opens_after_primary_maturity_buckets: u64,
     /// Exclusive close bucket after primary maturity.
@@ -367,7 +409,7 @@ impl EvidenceOnlyRecoveryPolicyV1 {
             return Err(Error::InvalidSchedule);
         }
         let mut previous_close = 0_u64;
-        let mut previous_generation = 0_u32;
+        let mut previous_generation = 0_u64;
         let mut index = 0_usize;
         while index < MAX_RECOVERY_ATTEMPTS {
             let attempt = self.attempts[index];
@@ -376,7 +418,7 @@ impl EvidenceOnlyRecoveryPolicyV1 {
                     >= attempt.closes_after_primary_maturity_buckets
                     || (index > 0
                         && (attempt.opens_after_primary_maturity_buckets < previous_close
-                            || attempt.repair_generation_delta < previous_generation))
+                            || attempt.repair_generation_delta <= previous_generation))
                 {
                     return Err(Error::InvalidSchedule);
                 }
@@ -412,8 +454,7 @@ impl FixedCodec for EvidenceOnlyRecoveryPolicyV1 {
         writer.u8(0);
         writer.reserved(4);
         for attempt in self.attempts {
-            writer.u32(attempt.repair_generation_delta);
-            writer.reserved(4);
+            writer.u64(attempt.repair_generation_delta);
             writer.u64(attempt.opens_after_primary_maturity_buckets);
             writer.u64(attempt.closes_after_primary_maturity_buckets);
         }
@@ -434,8 +475,7 @@ impl FixedCodec for EvidenceOnlyRecoveryPolicyV1 {
         let mut attempts = [RecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
         let mut index = 0_usize;
         while index < MAX_RECOVERY_ATTEMPTS {
-            let repair_generation_delta = reader.u32();
-            reader.reserved(4)?;
+            let repair_generation_delta = reader.u64();
             attempts[index] = RecoveryAttemptV1 {
                 repair_generation_delta,
                 opens_after_primary_maturity_buckets: reader.u64(),
@@ -494,7 +534,6 @@ impl ProductTemplateV4 {
         if self.statistic_registry_value == 0
             || self.coverage_policy_registry_value == 0
             || self.window_span_buckets == 0
-            || self.window_span_buckets > MAX_SERIES_WINDOW_BUCKETS
         {
             return Err(Error::InvalidParameter);
         }
@@ -520,7 +559,7 @@ impl ProductTemplateV4 {
         }
         let last = recovery.attempts[usize::from(recovery.attempt_count) - 1];
         self.base_repair_generation
-            .checked_add(u64::from(last.repair_generation_delta))
+            .checked_add(last.repair_generation_delta)
             .ok_or(Error::ArithmeticOverflow)?;
         Ok(())
     }
@@ -890,7 +929,7 @@ pub struct SeriesPlanV4 {
     pub attachment_plan_id: SeriesAttachmentPlanId,
     /// First absolute observation bucket.
     pub first_start_bucket: u64,
-    /// Positive bucket stride between consecutive ordinals.
+    /// Zero for a singleton Series; positive between multiple ordinals.
     pub stride_buckets: u64,
     /// Finite nonzero occurrence count.
     pub instance_count: u32,
@@ -906,9 +945,9 @@ impl SeriesPlanV4 {
         self.product_template_id.validate()?;
         self.market_genesis_profile_id.validate()?;
         self.attachment_plan_id.validate()?;
-        if self.stride_buckets == 0
-            || self.instance_count == 0
-            || self.instance_count > MAX_SERIES_INSTANCES
+        if self.instance_count == 0
+            || (self.instance_count == 1 && self.stride_buckets != 0)
+            || (self.instance_count > 1 && self.stride_buckets == 0)
             || self.creation_lead_buckets == 0
             || self.first_start_bucket < self.creation_lead_buckets
             || self.market_collateral_cap == 0

@@ -54,6 +54,14 @@ Domain: `dragons-clutch/native-claim-basis/v1`
 This artifact is the sole partition/basis/payout owner. It contains no failure
 policy, failure payout index, or privileged payout vector. Every active payout
 row is merely one vector the authenticated evidence relation may select.
+Degree zero requires the spacing sentinel, assigns distinct finite payout rows
+by first use while scanning ordered cells, references every active row, and
+refuses duplicate rows. Degrees one through three derive their resolution
+vector from the smooth basis and therefore require `payout_count = 0`, zero
+payout rows, and an entirely unused payout map. A legacy kernel anchor row is
+adapter baggage and does not enter this economic identity. Degree one's spacing
+field is the exact log2 gap only for uniformly power-of-two-spaced knots and the
+sentinel otherwise; degrees two and three require their exact uniform exponent.
 
 ### `EvidenceOnlyRecoveryPolicyV1` — 208 bytes
 
@@ -67,12 +75,11 @@ Domain: `dragons-clutch/evidence-only-recovery-policy/v1`
 | `11..16` | zero flags/reserved |
 | `16..208` | eight 24-byte attempts |
 
-Each attempt is generation delta `u32`, reserved `u32`, open offset `u64`, and
-exclusive close offset `u64`, all relative to primary maturity. Active attempts
-are finite, generation-nondecreasing, ordered, and non-overlapping. The raw
-economic window never shifts; later attempts change authenticated repair
-generation and deadline only. Exhaustion can lead to dormant recovery, never a
-numeric payout.
+Each attempt is generation delta `u64`, open offset `u64`, and exclusive close
+offset `u64`, all relative to primary maturity. Active attempts are finite,
+strictly generation-increasing, ordered, and non-overlapping. The raw economic
+window never shifts; later attempts change authenticated repair generation and
+deadline only. Exhaustion can lead to dormant recovery, never a numeric payout.
 
 ### `ProductTemplateV4` — 256 bytes
 
@@ -129,6 +136,13 @@ multiple of that lot, checks the final finite recovery deadline, and derives an
 absolute schedule and full-width MarketInstanceId. Series provenance and
 attachments remain next to the market result rather than entering its economic
 preimage.
+
+A singleton Series has the sole canonical `stride = 0`; a multi-instance
+Series requires a positive stride. This pure representation imposes no
+otherwise-unexplained product-policy maximum on window span or occurrence
+count: checked final-range arithmetic remains the exact admission bound, while
+a live capability profile may impose and identity-bind stricter operational
+limits.
 
 `SeriesFundingTermsV1::validate_bindings` additionally requires the exact
 GenesisProfile and the collateral mint/token-program projection returned by an

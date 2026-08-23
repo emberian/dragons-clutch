@@ -32,6 +32,34 @@ fn basis() -> NativeClaimBasisV1 {
     }
 }
 
+fn smooth_basis(degree: u8) -> NativeClaimBasisV1 {
+    let mut knots = [0; MAX_OUTCOMES];
+    let knot_count = match degree {
+        1 => 4,
+        2 => 3,
+        3 => 2,
+        _ => panic!("test fixture degree"),
+    };
+    let mut index = 0_usize;
+    while index < usize::from(knot_count) {
+        knots[index] = u128::from(u64::try_from(index).unwrap()) * 8;
+        index += 1;
+    }
+    NativeClaimBasisV1 {
+        basis_degree: degree,
+        outcome_count: 4,
+        payout_count: 0,
+        knot_count,
+        uniform_log2_spacing: 3,
+        ambiguity_policy_registry_value: 1,
+        edge_policy_registry_value: 1,
+        denominator: 1_000,
+        payout_weights: [[0; MAX_OUTCOMES]; MAX_PAYOUTS],
+        payout_map: [PAYOUT_MAP_UNUSED; MAX_OUTCOMES],
+        knots,
+    }
+}
+
 fn recovery() -> EvidenceOnlyRecoveryPolicyV1 {
     let mut attempts = [RecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
     attempts[0] = RecoveryAttemptV1 {
@@ -443,7 +471,7 @@ fn padding_order_and_arithmetic_refuse() {
     let mut final_deadline_overflow = series();
     final_deadline_overflow.first_start_bucket = u64::MAX - 5;
     final_deadline_overflow.instance_count = 1;
-    final_deadline_overflow.stride_buckets = 1;
+    final_deadline_overflow.stride_buckets = 0;
     assert_eq!(
         final_deadline_overflow.validate_bindings(
             &template(),
@@ -455,6 +483,93 @@ fn padding_order_and_arithmetic_refuse() {
         ),
         Err(Error::ArithmeticOverflow)
     );
+}
+
+#[test]
+fn native_basis_union_has_one_canonical_representation() {
+    let mut degree_zero_spacing = basis();
+    degree_zero_spacing.uniform_log2_spacing = 0;
+    assert_eq!(degree_zero_spacing.validate(), Err(Error::InvalidParameter));
+
+    let mut unreachable_row = basis();
+    unreachable_row.payout_map[3] = 2;
+    assert_eq!(unreachable_row.validate(), Err(Error::InvalidParameter));
+
+    let mut skipped_first_use = basis();
+    skipped_first_use.payout_map[..4].copy_from_slice(&[0, 2, 1, 3]);
+    assert_eq!(skipped_first_use.validate(), Err(Error::InvalidParameter));
+
+    let mut duplicate_row = basis();
+    duplicate_row.payout_weights[1] = duplicate_row.payout_weights[0];
+    assert_eq!(duplicate_row.validate(), Err(Error::InvalidParameter));
+
+    let mut permuted_rows = basis();
+    permuted_rows.payout_weights.swap(0, 1);
+    permuted_rows.payout_map[..4].copy_from_slice(&[1, 0, 2, 3]);
+    assert_eq!(permuted_rows.validate(), Err(Error::InvalidParameter));
+
+    for degree in [1, 2, 3] {
+        smooth_basis(degree).validate().unwrap();
+    }
+
+    let mut smooth_preset = smooth_basis(1);
+    smooth_preset.payout_count = 1;
+    smooth_preset.payout_weights[0][0] = smooth_preset.denominator;
+    assert_eq!(smooth_preset.validate(), Err(Error::InvalidParameter));
+
+    let mut smooth_baggage = smooth_basis(2);
+    smooth_baggage.payout_weights[0][0] = 1;
+    assert_eq!(smooth_baggage.validate(), Err(Error::NonCanonicalPadding));
+
+    let mut smooth_map = smooth_basis(3);
+    smooth_map.payout_map[0] = 0;
+    assert_eq!(smooth_map.validate(), Err(Error::NonCanonicalPadding));
+
+    let mut degree_one_alias = smooth_basis(1);
+    degree_one_alias.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+    assert_eq!(degree_one_alias.validate(), Err(Error::InvalidParameter));
+
+    let mut nonuniform_degree_one = smooth_basis(1);
+    nonuniform_degree_one.knots[..4].copy_from_slice(&[0, 8, 20, 32]);
+    nonuniform_degree_one.uniform_log2_spacing = UNIFORM_SPACING_NONE;
+    nonuniform_degree_one.validate().unwrap();
+    nonuniform_degree_one.uniform_log2_spacing = 3;
+    assert_eq!(
+        nonuniform_degree_one.validate(),
+        Err(Error::InvalidParameter)
+    );
+}
+
+#[test]
+fn recurrence_has_no_dead_stride_generation_or_policy_caps() {
+    let mut equal_generation = recovery();
+    equal_generation.attempts[1].repair_generation_delta =
+        equal_generation.attempts[0].repair_generation_delta;
+    assert_eq!(equal_generation.validate(), Err(Error::InvalidSchedule));
+
+    let mut wide_generation = recovery();
+    wide_generation.attempts[1].repair_generation_delta = u64::from(u32::MAX) + 1;
+    assert_codec(&wide_generation);
+
+    let mut singleton = series();
+    singleton.instance_count = 1;
+    singleton.stride_buckets = 0;
+    singleton.validate_shape().unwrap();
+    singleton.stride_buckets = 1;
+    assert_eq!(singleton.validate_shape(), Err(Error::InvalidParameter));
+
+    let mut multiple = series();
+    multiple.stride_buckets = 0;
+    assert_eq!(multiple.validate_shape(), Err(Error::InvalidParameter));
+
+    let mut formerly_capped_window = template();
+    formerly_capped_window.window_span_buckets = 1_000_001;
+    formerly_capped_window.validate_shape().unwrap();
+
+    let mut formerly_capped_count = series();
+    formerly_capped_count.instance_count = u32::MAX;
+    formerly_capped_count.stride_buckets = 1;
+    formerly_capped_count.validate_shape().unwrap();
 }
 
 #[test]
