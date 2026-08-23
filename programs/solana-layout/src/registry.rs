@@ -470,11 +470,11 @@ pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent Market interval-history bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
 /// Series-link-scoped mutable Structured descriptor-family root.
-pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xaf;
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb7;
 /// First Structured root account version.
 pub const STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact Structured root account width.
-pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 624;
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 656;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
@@ -617,7 +617,8 @@ const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 const _: () = assert!(PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
-const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_TAG == 0xaf);
+const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_TAG == 0xb7);
+const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES == 656);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1314,7 +1315,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
             version: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::NonProductionLab,
+        status: AllocationStatus::ReservedDisabled,
         name: "structured-claim-descriptor-v2-account",
     },
     CollisionLedgerEntry {
@@ -1737,7 +1738,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
             version: STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::NonProductionLab,
+        status: AllocationStatus::ReservedDisabled,
         name: "structured-market-root-v1-account",
     },
     CollisionLedgerEntry {
@@ -3204,7 +3205,7 @@ mod tests {
         });
         assert_eq!(
             live_descriptor.map(|entry| entry.status),
-            Some(AllocationStatus::NonProductionLab)
+            Some(AllocationStatus::ReservedDisabled)
         );
     }
 

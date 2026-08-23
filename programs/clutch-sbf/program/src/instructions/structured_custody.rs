@@ -130,6 +130,14 @@ pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 
 /// Exact account count for beneficiary-free single-vault compaction.
 pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize = 27;
+const _: () = assert!(
+    clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
+        == clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+        == STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+);
 const CX_VAULT_AUTHORITY: usize = 0;
 const CX_REALM: usize = 1;
 const CX_PROFILE: usize = 2;
@@ -2649,6 +2657,19 @@ mod tests {
                 action == 1,
             );
         }
+    }
+
+    #[test]
+    fn structured_root_registry_and_owner_codec_are_exactly_identical() {
+        assert_eq!(
+            clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+            clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+        );
+        assert_eq!(
+            clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
+            STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
+        );
+        assert_eq!(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES, 656);
     }
 
     #[test]
