@@ -12,6 +12,7 @@
   const INT = /^(0|-?[1-9][0-9]*)$/;
   const HASH32 = /^[0-9a-f]{64}$/;
   const HEX = /^(?:[0-9a-f]{2})*$/;
+  const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   const U64_MAX = (1n << 64n) - 1n;
   const U128_MAX = (1n << 128n) - 1n;
   const STATUSES = new Set(["exact-in-span", "certified-approximation"]);
@@ -30,13 +31,14 @@
     "seriesPlanId", "fundingTermsId"
   ]);
   const BUNDLE_INPUT_BYTES = Object.freeze({
-    registryCapabilityProfileV2BytesHex: 800,
+    registryProgramReleaseV2BytesHex: 160,
+    registryCapabilityProfileV4BytesHex: 816,
     evidenceOnlyRecoveryPolicyV1BytesHex: 208,
     productTemplateV4BytesHex: 256,
     priceMeasurePolicyV1BytesHex: 96,
     marketGenesisProfileV2BytesHex: 416,
-    seriesFundingQuoteV1BytesHex: 280,
-    seriesAttachmentPlanV1BytesHex: 112,
+    seriesFundingQuoteV4BytesHex: 592,
+    seriesAttachmentPlanV4BytesHex: 112,
     seriesPlanV5BytesHex: 152,
     seriesFundingTermsV2BytesHex: 240
   });
@@ -44,6 +46,10 @@
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
   const hash = (value, name) => {
     if (typeof value !== "string" || !HASH32.test(value) || /^0+$/.test(value)) throw new Error(`${name} must be a nonzero lowercase 32-byte hexadecimal identity.`);
+    return value;
+  };
+  const address = (value, name) => {
+    if (typeof value !== "string" || !ADDRESS.test(value)) throw new Error(`${name} must be a canonical nonzero base58 Solana address.`);
     return value;
   };
   const decimal = (value, name, maximum) => {
@@ -198,29 +204,52 @@
   };
 
   const validateBundleInputs = (raw) => {
-    const names = ["registryCapabilityProfileV2BytesHex", "sourceReleaseManifestId", "evidenceOnlyRecoveryPolicyV1BytesHex", "productTemplateV4BytesHex", "priceMeasurePolicyV1BytesHex", "marketGenesisProfileV2BytesHex", "seriesFundingQuoteV1BytesHex", "seriesAttachmentPlanV1BytesHex", "seriesPlanV5BytesHex", "seriesFundingTermsV2BytesHex"];
+    const names = ["registryProgramReleaseV2BytesHex", "registryCapabilityProfileV4BytesHex", "sourceReleaseManifestId", "evidenceOnlyRecoveryPolicyV1BytesHex", "productTemplateV4BytesHex", "priceMeasurePolicyV1BytesHex", "marketGenesisProfileV2BytesHex", "seriesFundingQuoteV4BytesHex", "seriesAttachmentPlanV4BytesHex", "seriesPlanV5BytesHex", "seriesFundingTermsV2BytesHex"];
     exactKeys(raw, names, "bundle inputs");
     const output = { sourceReleaseManifestId: hash(raw.sourceReleaseManifestId, "bundleInputs.sourceReleaseManifestId") };
     for (const [name, length] of Object.entries(BUNDLE_INPUT_BYTES)) output[name] = bytes(raw[name], `bundleInputs.${name}`, length, null);
     return Object.freeze(output);
   };
 
-  const buildRequest = (compilerReleaseSha256, definition, bundleInputs) => Object.freeze({
-    schema: "dragons-clutch/compiler/production-payoff-request/v1",
-    expectedCompilerReleaseSha256: hash(compilerReleaseSha256, "compiler release SHA-256"),
-    definition: definition.value,
-    bundleInputs: validateBundleInputs(bundleInputs)
-  });
+  const validateExactMarketSearch = (raw) => {
+    if (raw === null || raw === undefined) return null;
+    exactKeys(raw, ["marketId", "priceId", "prices", "coordinates", "maximumSubsetEvaluationsPerSupport"], "exact market search");
+    if (!Array.isArray(raw.prices) || raw.prices.length === 0 || raw.prices.length > 16) throw new Error("exactMarketSearch.prices must contain 1..16 exact integers.");
+    if (!Array.isArray(raw.coordinates) || raw.coordinates.length === 0 || raw.coordinates.length > 64) throw new Error("exactMarketSearch.coordinates must contain 1..64 exact integers.");
+    const coordinates = raw.coordinates.map((value, index) => decimal(value, `exactMarketSearch.coordinates[${index}]`, U128_MAX));
+    for (let index = 1; index < coordinates.length; index += 1) if (BigInt(coordinates[index]) <= BigInt(coordinates[index - 1])) throw new Error("exactMarketSearch.coordinates must be strictly increasing.");
+    return Object.freeze({
+      marketId: hash(raw.marketId, "exactMarketSearch.marketId"),
+      priceId: hash(raw.priceId, "exactMarketSearch.priceId"),
+      prices: Object.freeze(raw.prices.map((value, index) => decimal(value, `exactMarketSearch.prices[${index}]`, U64_MAX))),
+      coordinates: Object.freeze(coordinates),
+      maximumSubsetEvaluationsPerSupport: positiveDecimal(raw.maximumSubsetEvaluationsPerSupport, "exactMarketSearch.maximumSubsetEvaluationsPerSupport", U64_MAX)
+    });
+  };
+
+  const buildRequest = (compilerReleaseSha256, programId, definition, bundleInputs, exactMarketSearch = null) => {
+    const search = validateExactMarketSearch(exactMarketSearch);
+    return Object.freeze({
+      schema: "dragons-clutch/compiler/product-exact-market-request/v1",
+      expectedCompilerReleaseSha256: hash(compilerReleaseSha256, "compiler release SHA-256"),
+      programId: address(programId, "programId"),
+      definition: definition.value,
+      bundleInputs: validateBundleInputs(bundleInputs),
+      ...(search === null ? {} : { exactMarketSearch: search })
+    });
+  };
 
   const compileRemote = async (operatorUrl, request, maximumResponseBytes, timeoutMilliseconds) => {
-    exactKeys(request, ["schema", "expectedCompilerReleaseSha256", "definition", "bundleInputs"], "compiler request");
+    exactKeys(request, request.exactMarketSearch === undefined
+      ? ["schema", "expectedCompilerReleaseSha256", "programId", "definition", "bundleInputs"]
+      : ["schema", "expectedCompilerReleaseSha256", "programId", "definition", "bundleInputs", "exactMarketSearch"], "compiler request");
     const encoded = new TextEncoder().encode(JSON.stringify(request));
     if (encoded.byteLength > 327_680) throw new Error("Compiler request exceeds the operatord 327680-byte request bound.");
     const maximum = BigInt(maximumResponseBytes);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Number(timeoutMilliseconds));
     try {
-      const response = await fetch(`${operatorUrl}/v1/compiler/production-payoff`, {
+      const response = await fetch(`${operatorUrl}/v1/compiler/product-exact-market`, {
         method: "POST",
         mode: "cors",
         credentials: "omit",
@@ -270,11 +299,64 @@
     }
   };
 
-  const validateProposal = (raw, expectedRequestSha256, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition) => {
-    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundle"], "compiler proposal");
-    if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/production-payoff-proposal/v1" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
-      throw new Error("Compiler result is not an untrusted production-payoff proposal v1.");
+  const validateExactMarketProposal = (raw, expectedSearch, bundleId, nativeBasisId, productTermsId) => {
+    if (raw === null) {
+      if (expectedSearch !== undefined) throw new Error("Compiler omitted the requested exact-market search.");
+      return null;
     }
+    if (expectedSearch === undefined) throw new Error("Compiler invented an exact-market search not present in the request.");
+    exactKeys(raw, ["authority", "registrationAuthority", "outcome", "coverage", "completeFullDomainNegative", "claims", "bindings", "target", "search", "workManifest", "certificate", "bundleV5Sidecar"], "exactMarket");
+    if (raw.authority !== "untrusted-compiler-sidecar" || raw.registrationAuthority !== false) throw new Error("exactMarket claimed authority it does not possess.");
+    if (!["solved", "unsupported", "out-of-profile", "work-truncated"].includes(raw.outcome)) throw new Error("exactMarket.outcome is unknown.");
+    if (!["full-integer-domain", "declared-coordinate-subset"].includes(raw.coverage)) throw new Error("exactMarket.coverage is unknown.");
+    if (typeof raw.completeFullDomainNegative !== "boolean") throw new Error("exactMarket.completeFullDomainNegative must be boolean.");
+    exactKeys(raw.claims, ["uniquePrice", "fairValue", "optimalClearing"], "exactMarket.claims");
+    if (Object.values(raw.claims).some((claim) => claim !== false)) throw new Error("Exact atom search must not claim unique price, fair value, or optimal clearing.");
+    exactKeys(raw.bindings, ["marketId", "productTermsId", "nativeClaimBasisId", "priceId", "bundleV5Id"], "exactMarket.bindings");
+    const bindings = Object.freeze(Object.fromEntries(Object.entries(raw.bindings).map(([name, value]) => [name, hash(value, `exactMarket.bindings.${name}`)])));
+    if (bindings.marketId !== expectedSearch.marketId || bindings.priceId !== expectedSearch.priceId || bindings.productTermsId !== productTermsId || bindings.nativeClaimBasisId !== nativeBasisId || bindings.bundleV5Id !== bundleId) throw new Error("Exact-market bindings differ from the request, Product output, or BundleV5.");
+    exactKeys(raw.target, ["outcomeCount", "payoutDenominator", "prices"], "exactMarket.target");
+    const outcomeCount = Number(decimal(raw.target.outcomeCount, "exactMarket.target.outcomeCount", 16n));
+    if (outcomeCount < 1 || !Array.isArray(raw.target.prices) || raw.target.prices.length !== outcomeCount) throw new Error("exactMarket.target.prices does not match outcomeCount.");
+    const prices = raw.target.prices.map((value, index) => decimal(value, `exactMarket.target.prices[${index}]`, U64_MAX));
+    const payoutDenominator = positiveDecimal(raw.target.payoutDenominator, "exactMarket.target.payoutDenominator", U64_MAX);
+    if (prices.reduce((sum, price) => sum + BigInt(price), 0n) !== BigInt(payoutDenominator)) throw new Error("exactMarket.target.prices is not the exact payout-denominator simplex.");
+    if (JSON.stringify(prices) !== JSON.stringify(expectedSearch.prices)) throw new Error("Exact-market prices differ from the request.");
+    exactKeys(raw.search, ["coordinateDomainMin", "coordinateDomainMax", "coordinates", "maximumSubsetEvaluationsPerSupport", "exhaustedThroughSupport", "truncatedSupport", "workBySupport"], "exactMarket.search");
+    const coordinates = Array.isArray(raw.search.coordinates) ? raw.search.coordinates.map((value, index) => decimal(value, `exactMarket.search.coordinates[${index}]`, U128_MAX)) : [];
+    if (coordinates.length === 0 || JSON.stringify(coordinates) !== JSON.stringify(expectedSearch.coordinates)) throw new Error("Exact-market coordinates differ from the request.");
+    const workBudget = positiveDecimal(raw.search.maximumSubsetEvaluationsPerSupport, "exactMarket.search.maximumSubsetEvaluationsPerSupport", U64_MAX);
+    if (workBudget !== expectedSearch.maximumSubsetEvaluationsPerSupport) throw new Error("Exact-market work budget differs from the request.");
+    const exhausted = decimal(raw.search.exhaustedThroughSupport, "exactMarket.search.exhaustedThroughSupport", 16n);
+    const truncated = decimal(raw.search.truncatedSupport, "exactMarket.search.truncatedSupport", 16n);
+    if (!Array.isArray(raw.search.workBySupport) || raw.search.workBySupport.length !== outcomeCount) throw new Error("exactMarket.search.workBySupport must cover every active support.");
+    const workBySupport = raw.search.workBySupport.map((entry, index) => {
+      exactKeys(entry, ["support", "evaluations", "exactButUnrepresentable"], `exactMarket.search.workBySupport[${index}]`);
+      if (decimal(entry.support, `exactMarket.search.workBySupport[${index}].support`, 16n) !== String(index + 1)) throw new Error("exactMarket support work is not canonical and ordered.");
+      return Object.freeze({ support: entry.support, evaluations: decimal(entry.evaluations, `exactMarket.search.workBySupport[${index}].evaluations`, U64_MAX), exactButUnrepresentable: decimal(entry.exactButUnrepresentable, `exactMarket.search.workBySupport[${index}].exactButUnrepresentable`, U64_MAX) });
+    });
+    const completeNegative = raw.outcome === "unsupported" && raw.coverage === "full-integer-domain" && exhausted === String(outcomeCount) && truncated === "0";
+    if (raw.completeFullDomainNegative !== completeNegative) throw new Error("exactMarket fabricated or omitted its complete full-domain negative qualification.");
+    exactKeys(raw.workManifest, ["id", "bytesHex"], "exactMarket.workManifest");
+    const workManifest = Object.freeze({ id: hash(raw.workManifest.id, "exactMarket.workManifest.id"), bytesHex: bytes(raw.workManifest.bytesHex, "exactMarket.workManifest.bytesHex", 1640, null) });
+    const certificate = raw.certificate === null ? null : (() => {
+      exactKeys(raw.certificate, ["outputId", "bytesHex"], "exactMarket.certificate");
+      return Object.freeze({ outputId: hash(raw.certificate.outputId, "exactMarket.certificate.outputId"), bytesHex: bytes(raw.certificate.bytesHex, "exactMarket.certificate.bytesHex", 544, null) });
+    })();
+    if ((raw.outcome === "solved") !== (certificate !== null)) throw new Error("Only a solved exact-market search may emit a certificate.");
+    exactKeys(raw.bundleV5Sidecar, ["id", "bytesHex", "bundleArtifactKind", "bundleArtifactContext"], "exactMarket.bundleV5Sidecar");
+    if (raw.bundleV5Sidecar.bundleArtifactKind !== "60" || raw.bundleV5Sidecar.bundleArtifactContext !== "0".repeat(64)) throw new Error("Exact-market sidecar is not bound to the kind-60 global BundleV5 coordinate.");
+    const bundleV5Sidecar = Object.freeze({ id: hash(raw.bundleV5Sidecar.id, "exactMarket.bundleV5Sidecar.id"), bytesHex: bytes(raw.bundleV5Sidecar.bytesHex, "exactMarket.bundleV5Sidecar.bytesHex", 176, null), bundleArtifactKind: "60", bundleArtifactContext: raw.bundleV5Sidecar.bundleArtifactContext });
+    return Object.freeze({ authority: raw.authority, registrationAuthority: false, outcome: raw.outcome, coverage: raw.coverage, completeFullDomainNegative: raw.completeFullDomainNegative, claims: Object.freeze(raw.claims), bindings, target: Object.freeze({ outcomeCount: String(outcomeCount), payoutDenominator, prices: Object.freeze(prices) }), search: Object.freeze({ coordinateDomainMin: decimal(raw.search.coordinateDomainMin, "exactMarket.search.coordinateDomainMin", U128_MAX), coordinateDomainMax: decimal(raw.search.coordinateDomainMax, "exactMarket.search.coordinateDomainMax", U128_MAX), coordinates: Object.freeze(coordinates), maximumSubsetEvaluationsPerSupport: workBudget, exhaustedThroughSupport: exhausted, truncatedSupport: truncated, workBySupport: Object.freeze(workBySupport) }), workManifest, certificate, bundleV5Sidecar });
+  };
+
+  const validateProposal = (raw, expectedRequestSha256, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition, expectedRequest) => {
+    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "programId", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundleV5", "exactMarket"], "compiler proposal");
+    if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/product-exact-market-proposal/v1" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
+      throw new Error("Compiler result is not an untrusted Product exact-market proposal v1.");
+    }
+    const programId = address(raw.programId, "programId");
+    if (!expectedRequest || programId !== expectedRequest.programId) throw new Error("Compiler result names a different Product program ID.");
     const compilerReleaseSha256 = hash(raw.compilerReleaseSha256, "compilerReleaseSha256");
     if (compilerReleaseSha256 !== expectedCompilerReleaseSha256) throw new Error("Compiler result names a different explicit compiler release.");
     const requestCanonicalSha256 = hash(raw.requestCanonicalSha256, "requestCanonicalSha256");
@@ -314,24 +396,32 @@
       ? decimal(raw.subdivisionDepth, "subdivisionDepth", 255n)
       : null;
     if (raw.classification !== "analytic-smooth" && raw.subdivisionDepth !== null) throw new Error("Only analytic smooth output carries a subdivisionDepth.");
-    exactKeys(raw.compiledProductSeriesBundle, ["id", "bytesHex", "identities"], "compiledProductSeriesBundle");
-    const bundleBytes = bytes(raw.compiledProductSeriesBundle.bytesHex, "compiledProductSeriesBundle.bytesHex", 528, null);
-    if (!plain(raw.compiledProductSeriesBundle.identities)) throw new Error("compiledProductSeriesBundle.identities is required.");
+    exactKeys(raw.compiledProductSeriesBundleV5, ["id", "bytesHex", "artifact", "identities"], "compiledProductSeriesBundleV5");
+    const bundleBytes = bytes(raw.compiledProductSeriesBundleV5.bytesHex, "compiledProductSeriesBundleV5.bytesHex", 528, null);
+    exactKeys(raw.compiledProductSeriesBundleV5.artifact, ["kind", "context", "exactBodyBytes", "programId", "pda", "bump"], "compiledProductSeriesBundleV5.artifact");
+    if (raw.compiledProductSeriesBundleV5.artifact.kind !== "60" || raw.compiledProductSeriesBundleV5.artifact.context !== "0".repeat(64) || raw.compiledProductSeriesBundleV5.artifact.exactBodyBytes !== "528" || raw.compiledProductSeriesBundleV5.artifact.programId !== programId) throw new Error("BundleV5 artifact coordinate is not exact kind 60 / global context / 528-byte body.");
+    address(raw.compiledProductSeriesBundleV5.artifact.pda, "compiledProductSeriesBundleV5.artifact.pda");
+    decimal(raw.compiledProductSeriesBundleV5.artifact.bump, "compiledProductSeriesBundleV5.artifact.bump", 255n);
+    if (!plain(raw.compiledProductSeriesBundleV5.identities)) throw new Error("compiledProductSeriesBundleV5.identities is required.");
     const identities = {};
-    const namesInProposal = Object.keys(raw.compiledProductSeriesBundle.identities);
+    const namesInProposal = Object.keys(raw.compiledProductSeriesBundleV5.identities);
     if (namesInProposal.length !== BUNDLE_IDENTITY_NAMES.length || BUNDLE_IDENTITY_NAMES.some((name) => !namesInProposal.includes(name))) {
-      throw new Error("Compiled Product/Series bundle must expose the exact sixteen typed identities owned by CompiledProductSeriesBundleV1.");
+      throw new Error("Compiled Product/Series bundle must expose the exact sixteen typed identities owned by CompiledProductSeriesBundleV5.");
     }
     for (const name of BUNDLE_IDENTITY_NAMES) {
-      identities[name] = hash(raw.compiledProductSeriesBundle.identities[name], `compiledProductSeriesBundle.identities.${name}`);
+      identities[name] = hash(raw.compiledProductSeriesBundleV5.identities[name], `compiledProductSeriesBundleV5.identities.${name}`);
     }
     if (identities.nativeClaimBasisId !== nativeClaimBasis.id) throw new Error("Compiled Product/Series bundle names a different nativeClaimBasisId than the compiler output.");
     const productTermsId = hash(raw.productTermsId, "productTermsId");
     if (productTermsId !== expectedDefinition.productTermsId) throw new Error("Compiler result names a different Product Terms identity than the exact definition.");
+    if (identities.marketGenesisProfileId !== productTermsId) throw new Error("BundleV5 names a different MarketGenesisProfileV2 than the payoff/exact-market Terms identity.");
+    const bundleId = hash(raw.compiledProductSeriesBundleV5.id, "compiledProductSeriesBundleV5.id");
+    const exactMarket = validateExactMarketProposal(raw.exactMarket, expectedRequest.exactMarketSearch, bundleId, nativeClaimBasis.id, productTermsId);
     return Object.freeze({
       schema: raw.schema,
       authority: raw.authority,
       registrationAuthority: false,
+      programId,
       compilerReleaseSha256,
       requestCanonicalSha256,
       inputCanonicalSha256,
@@ -342,12 +432,14 @@
       certificate,
       bounds: Object.freeze(bounds),
       subdivisionDepth,
-      compiledProductSeriesBundle: Object.freeze({
-        id: hash(raw.compiledProductSeriesBundle.id, "compiledProductSeriesBundle.id"),
+      compiledProductSeriesBundleV5: Object.freeze({
+        id: bundleId,
         bytesHex: bundleBytes,
         byteLength: "528",
+        artifact: Object.freeze(raw.compiledProductSeriesBundleV5.artifact),
         identities: Object.freeze(identities)
       }),
+      exactMarket,
       registration: "must reopen registry, Source release, canonical artifacts, and recompute every join"
     });
   };
