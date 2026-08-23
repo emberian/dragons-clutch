@@ -14,13 +14,13 @@
 //! | module | intents and actions |
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
-//! | [`collateral_cash_v3`] | `Intent::Endow`, `Intent::WithdrawCash` over full-width PositionV3/HoardV2/GEN1 |
-//! | [`claim_representation_v3`] | `Intent::Materialize`, `Intent::Dematerialize` over PositionV3/ClaimLedgerV3/GEN1 and the separate claim release |
-//! | [`external_redemption_v3`] | `Intent::RedeemExternal` over ResolutionV5/HoardV2/ClaimLedgerV3 and bearer Token-2022 claims |
-//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
+//! | [`collateral_cash_v3`] | withdrawn MarketBindingV1 Endow/Withdraw implementation; no checked dispatch |
+//! | [`claim_representation_v3`] | withdrawn MarketBindingV1 Materialize/Dematerialize implementation; no checked dispatch |
+//! | [`external_redemption_v3`] | withdrawn MarketBindingV1 external-redemption implementation; no checked dispatch |
+//! | [`genesis`] | current `InitRealm`, `InitProfileV2`, direct-only `InitOrderPage`, and exact revenue-record close |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | withdrawn lowered-ledger migration implementation; no live dispatch |
-//! | [`market_init`] | `Intent::CreateMarket` |
+//! | [`market_init`] | host-forensic legacy Market founder; no checked dispatch |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
@@ -29,17 +29,10 @@
 //! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
-//! Implemented: genesis (the five account-creating initializers), full-width
-//! collateral_cash_v3 (Endow/WithdrawCash), claim_representation_v3
-//! (Materialize/Dematerialize), complete_set_v3 (Split/Merge), market_init,
-//! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
-//! general clearing lifecycle in orders_batch: funded placement and
-//! cancellation, the general epoch open/freeze, the on-chain streaming walk
-//! to a verified verdict, candidate submission/selection, the entitlement
-//! freeze (verified-summary pot + per-slice receipts, `ACTIVE → ENTITLED`),
-//! and entitled `SettlePage` consumption for single-Egg direct slices and
-//! portfolio full pairs.  The standing refusals — partial fills, virtual
-//! pots, terminal closure — live in `orders_batch::settlement`'s ledger.
+//! Checked profiles route only account families whose current schemas are
+//! closed. Historical implementations remain compiled for hostile host
+//! fixtures and dependency-lower migration work, but capability admission,
+//! request decoding, and dispatch cannot reach them.
 //!
 //! [`genesis`] owns namespace construction; [`orders_batch`] reuses its shared
 //! prefund-safe System-CPI helper for the two content-addressed submission
@@ -105,8 +98,6 @@ pub mod general_v2_merge_payment_v5;
 pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-pub mod general_v2_identity;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_materialize_v5;

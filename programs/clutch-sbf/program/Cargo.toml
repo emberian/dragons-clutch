@@ -85,10 +85,9 @@ profile-non-production-dealer-policy-catalog-lab = [
     "clutch-general-v2-runtime/layout-profile-general",
     "profile-full",
 ]
-# A deliberately non-production product whose only successes are the twelve
-# General V2 empty-book identity actions.  The dependency profiles provide the
-# narrow legacy codec substrate; this crate's capability table still rejects
-# every legacy action before account inspection.
+# A deliberately non-production General successor compilation surface. No
+# action tuple succeeds until Product admission and exhaustive retirement are
+# reachable together; the dependency profile exists only for current codecs.
 profile-non-production-general-v2-empty-book-identity-lab = [
     "dep:clutch-fee-runtime-contract",
     "dep:clutch-general-v2-runtime",
@@ -177,6 +176,14 @@ solana-pubkey = { version = "=4.2.0", default-features = false }
 # source on this host holds 5.1.0 but not the newer 5.2.0 the resolver would
 # otherwise pick.  The dependency is used only through `solana-address`.
 solana-define-syscall = "=5.1.0"
+
+[dev-dependencies]
+# Historical General intent bytes remain available only to host adversarial
+# fixtures. The layout crate rejects this feature on the Solana target, so it
+# cannot enter an ELF or reopen a checked dispatch route.
+clutch-solana-layout = { path = "../../solana-layout", default-features = false, features = [
+    "non-production-legacy-general-v3-hostile-decode",
+] }
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

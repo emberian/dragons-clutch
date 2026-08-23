@@ -157,7 +157,7 @@ use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD
 use clutch_solana_layout::{
     account_len, canonical_profile_v2_id, canonical_realm_id, collateral, stream, Hash32,
     HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
-    EPOCH_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, PROFILE_SCHEMA_V2,
+    PROFILE_FLAG_POLICY_FROZEN, PROFILE_SCHEMA_V2,
 };
 use clutch_solana_reference::{Action, ReplayAccount, Request, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
@@ -492,14 +492,6 @@ pub const IX_PROFILE_TOKEN_PROGRAMDATA: usize = 7;
 
 /// Accounts in an `InitOrderPage` instruction without funding registration.
 pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
-/// Accounts in a general-plane `InitOrderPage` that also registers the
-/// page's funding: one optional trailing `GeneralFundingLedgerV1` PDA,
-/// written in the same transition that debits the payer (TerminalClosure's
-/// exact-principal-to-payer input).  The Direct V4 branch keeps the exact
-/// six-account list — its plane records funding in its own account bytes.
-pub const INIT_PAGE_LEDGERED_ACCOUNT_COUNT: usize = INIT_PAGE_ACCOUNT_COUNT + 1;
-/// The optional funding-ledger PDA.  General `InitOrderPage` only.
-pub const IX_PAGE_LEDGER: usize = 6;
 /// The market the epoch belongs to (read-only, program-owned).
 pub const IX_PAGE_MARKET: usize = 2;
 /// The epoch whose page set this page joins (read-only, program-owned).
@@ -1134,123 +1126,14 @@ fn init_order_page(
     {
         return init_direct_v4_order_page(program_id, accounts, sequence, intent);
     }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-    return init_legacy_order_page(program_id, accounts, sequence, intent);
-}
-
-#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-#[inline(never)]
-fn init_legacy_order_page(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent: &PageInit,
-) -> Outcome<()> {
-    require(
-        accounts.len() == INIT_PAGE_ACCOUNT_COUNT
-            || accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT,
-        ClutchError::AccountCount,
-    )?;
-    require_signer(&accounts[IX_PAYER])?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
-    let admitted_epoch_lengths = [account_len::EPOCH];
-    accounts::validate_state_role_lengths(
-        program_id,
-        &accounts[IX_PAGE_EPOCH],
-        false,
-        &admitted_epoch_lengths,
-    )?;
-    require_creation_sequence(sequence)?;
-    require_system_program(&accounts[IX_PAGE_SYSTEM])?;
-    let rent = read_rent(&accounts[IX_PAGE_RENT])?;
-
-    let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
-    let epoch = accounts::read_epoch(&accounts[IX_PAGE_EPOCH].data.borrow())?;
-    expect_pda(
-        accounts[IX_PAGE_MARKET].key,
-        seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
-        Some(market.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_PAGE_EPOCH].key,
-        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
-        Some(epoch.stored_bump),
-    )?;
-    require(
-        market.market == intent.market
-            && epoch.epoch == intent.epoch
-            && epoch.market == market.market,
-        ClutchError::MismatchedState,
-    )?;
-    /* A page is created into an *open* epoch and an *active* market.  A frozen
-     * epoch's page set is closed by `verify_page_set`, and adding a page to it
-     * would mean the frozen `order_set` no longer folds the set it names. */
-    require(
-        epoch.phase == EPOCH_PHASE_OPEN && market.lifecycle == 0,
-        ClutchError::NotActive,
-    )?;
-    /* The set's geometry is a decision made once.  Before the freeze the epoch
-     * carries no page count (`page_count` is zero until frozen), so the intent
-     * declares it and every page of one set must declare the same number —
-     * which `verify_page_set` then checks across the whole set. */
-    require(epoch.page_count == 0, ClutchError::MismatchedState)?;
-
-    let epoch_bytes = epoch.epoch.bytes();
-    let (address, bump) = seeds::page_pda(program_id, &epoch_bytes, intent.page_index);
-    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
-
-    let page_prior = accounts[IX_TARGET].lamports();
-    create_pda_account(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &accounts[IX_PAGE_SYSTEM],
-        &rent,
-        account_len::ORDER_PAGE,
-        &[
-            seeds::SEED_PAGE,
-            &epoch_bytes,
-            &intent.page_index.to_le_bytes(),
-            &[bump],
-        ],
-    )?;
-
-    {
-        let mut data = borrow_mut!(accounts[IX_TARGET])?;
-        write_empty_page(&mut data, intent, bump)?;
-    }
-    if accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT {
-        use crate::instructions::orders_batch::terminal_closure;
-        terminal_closure::create_funding_ledger(
-            program_id,
-            &accounts[IX_PAYER],
-            &accounts[IX_PAGE_LEDGER],
-            &accounts[IX_PAGE_SYSTEM],
-            &rent,
-            accounts[IX_TARGET].key,
-            clutch_solana_layout::clearing::FUNDING_COVERS_PAGE,
-            terminal_closure::creation_shortfall(
-                rent.minimum_balance(account_len::ORDER_PAGE)?,
-                page_prior,
-            ),
-            page_prior,
-        )?;
-    }
-    Ok(())
+    Err(ClutchError::UnsupportedInstruction.into())
 }
 
 /// Create the sole page-zero account of a routed Direct V4 Epoch.
 ///
-/// This branch is selected only by the 672-byte V4 Epoch schema, which can
-/// exist only through the routed `InitDirectEpochV4`; the legacy page path
-/// below it is byte- and behavior-stable.
+/// This is the only checked `InitOrderPage` transition. It is selected by the
+/// 672-byte V4 Epoch schema created by `InitDirectEpochV4`; the withdrawn
+/// General Epoch/page fallback is not compiled into a dispatchable release.
 #[inline(never)]
 fn init_direct_v4_order_page(
     program_id: &Pubkey,

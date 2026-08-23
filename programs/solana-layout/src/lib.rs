@@ -13,6 +13,12 @@
 //! the transaction compute ceiling.  The adapter must still authenticate
 //! account metadata and hand these checked values to the semantic kernel.
 
+#[cfg(all(
+    target_os = "solana",
+    feature = "non-production-legacy-general-v3-hostile-decode"
+))]
+compile_error!("the withdrawn General V3 hostile decoder is host-only");
+
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
@@ -364,8 +370,8 @@ mod capability_profile_tests {
     #[test]
     #[cfg(feature = "profile-general-source-v2-point")]
     fn general_profile_intent_decoder_excludes_other_families() {
-        assert_disabled(&[6, 22, 23, 27, 32]);
-        assert_enabled(&[1, 7, 8, 9, 10, 18, 47, 69, 70, 73]);
+        assert_disabled(&[6, 8, 9, 22, 23, 27, 32, 47, 69]);
+        assert_enabled(&[1, 7, 10, 18, 70, 73]);
     }
 }
 
@@ -5513,6 +5519,46 @@ fn resolution_work_codec(error: resolution_work::ResolutionWorkCodecError) -> Co
 }
 
 impl Intent {
+    const fn is_withdrawn_general_v3(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateMarket { .. }
+                | Self::Split { .. }
+                | Self::Merge { .. }
+                | Self::Materialize { .. }
+                | Self::Dematerialize { .. }
+                | Self::CancelOrder { .. }
+                | Self::SettlePage { .. }
+                | Self::InitClearWork { .. }
+                | Self::GrowClearWork { .. }
+                | Self::InitEpoch { .. }
+                | Self::FreezeEpoch { .. }
+                | Self::AdvanceClearWork { .. }
+                | Self::AdvanceClearSlices { .. }
+                | Self::CompleteClearWork { .. }
+                | Self::SubmitCandidate { .. }
+                | Self::WriteCandidateFeed { .. }
+                | Self::SealCandidate { .. }
+                | Self::FinalizeSelection { .. }
+                | Self::FreezeEntitlement { .. }
+                | Self::EntitleSlice { .. }
+                | Self::ReleaseTerminalReservation { .. }
+                | Self::CloseGeneralReceipt { .. }
+                | Self::CloseGeneralReservation { .. }
+                | Self::CloseGeneralPage { .. }
+                | Self::CloseGeneralPot { .. }
+                | Self::CloseGeneralCandidate { .. }
+                | Self::CloseGeneralClearWork { .. }
+                | Self::CloseGeneralEpoch { .. }
+                | Self::ClosePosition { .. }
+                | Self::InitPriceGrid { .. }
+                | Self::InitTerms { .. }
+                | Self::Endow { .. }
+                | Self::RedeemExternal { .. }
+                | Self::WithdrawCash { .. }
+        )
+    }
+
     /// Return the exact encoded byte length for this intent.
     pub const fn encoded_len(&self) -> usize {
         match self {
@@ -5598,6 +5644,17 @@ impl Intent {
     }
     /// Validate and encode into a caller-provided buffer.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        #[cfg(not(feature = "non-production-legacy-general-v3-hostile-decode"))]
+        if !cfg!(test)
+            && (self.is_withdrawn_general_v3()
+                || (matches!(self, Self::PlaceOrder { .. })
+                    && !cfg!(any(
+                        feature = "profile-full",
+                        feature = "profile-direct-v3-source-v2-point"
+                    ))))
+        {
+            return Err(CodecError::WrongTag);
+        }
         if out.len() < self.encoded_len() {
             return Err(CodecError::OutputTooSmall);
         };
@@ -6430,6 +6487,10 @@ impl Intent {
         }
         let mut r = Reader::new(input, tag, INTENT_VERSION, input.len())?;
         match tag {
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             CREATE_TAG => {
                 let realm = r.hash()?;
                 let profile = r.hash()?;
@@ -6448,6 +6509,10 @@ impl Intent {
                     feed,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             SPLIT_TAG | MERGE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6472,6 +6537,10 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             MATERIALIZE_TAG | DEMATERIALIZE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6503,6 +6572,10 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             REDEEM_EXTERNAL_TAG => {
                 let market = r.hash()?;
                 let claimant = r.hash()?;
@@ -6585,6 +6658,11 @@ impl Intent {
                     _ => return Err(CodecError::InvalidEnum),
                 })
             }
+            #[cfg(any(
+                feature = "profile-full",
+                feature = "profile-direct-v3-source-v2-point",
+                feature = "non-production-legacy-general-v3-hostile-decode"
+            ))]
             PLACE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6609,7 +6687,7 @@ impl Intent {
                     slot,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             CANCEL_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6630,7 +6708,7 @@ impl Intent {
                 r.done()?;
                 Ok(v)
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             SETTLE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6758,6 +6836,10 @@ impl Intent {
                     profile_version,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             INIT_PRICE_GRID_TAG | INIT_TERMS_TAG => {
                 let realm = r.hash()?;
                 let artifact = r.hash()?;
@@ -6776,6 +6858,11 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(
+                feature = "profile-full",
+                feature = "profile-direct-v3-source-v2-point",
+                feature = "non-production-legacy-general-v3-hostile-decode"
+            ))]
             INIT_ORDER_PAGE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6792,6 +6879,10 @@ impl Intent {
                     page_count,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             ENDOW_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6808,6 +6899,10 @@ impl Intent {
                     amount,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             WITHDRAW_CASH_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6919,7 +7014,7 @@ impl Intent {
                     digest,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             INIT_CLEAR_WORK_TAG | GROW_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6942,7 +7037,7 @@ impl Intent {
                     }
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             INIT_EPOCH_TAG => {
                 let market = r.hash()?;
                 let epoch_index = r.u64()?;
@@ -6961,7 +7056,7 @@ impl Intent {
                     freeze_deadline_slot,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             FREEZE_EPOCH_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6970,7 +7065,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::FreezeEpoch { market, epoch })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             ADVANCE_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6990,7 +7085,7 @@ impl Intent {
                     max_orders,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             ADVANCE_CLEAR_SLICES_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7010,7 +7105,7 @@ impl Intent {
                     max_slices,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             COMPLETE_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7025,7 +7120,7 @@ impl Intent {
                     candidate,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             SUBMIT_CANDIDATE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7072,7 +7167,7 @@ impl Intent {
                     distinct_owners,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             WRITE_CANDIDATE_FEED_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7129,7 +7224,7 @@ impl Intent {
                     chunk,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             SEAL_CANDIDATE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7144,7 +7239,7 @@ impl Intent {
                     candidate,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             FINALIZE_SELECTION_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7153,7 +7248,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::FinalizeSelection { market, epoch })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             FREEZE_ENTITLEMENT_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7168,7 +7263,7 @@ impl Intent {
                     candidate,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             ENTITLE_SLICE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7185,7 +7280,7 @@ impl Intent {
                     slice_index,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             RELEASE_TERMINAL_RESERVATION_TAG
             | CLOSE_GENERAL_RESERVATION_TAG
             | CLOSE_GENERAL_POT_TAG
@@ -7206,7 +7301,7 @@ impl Intent {
                     _ => Self::CloseGeneralEpoch { market, epoch },
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             CLOSE_GENERAL_PAGE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7220,7 +7315,7 @@ impl Intent {
                     page_index,
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             CLOSE_GENERAL_CANDIDATE_TAG | CLOSE_GENERAL_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7243,7 +7338,7 @@ impl Intent {
                     }
                 })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             CLOSE_GENERAL_RECEIPT_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7266,7 +7361,7 @@ impl Intent {
                 check_hash(realm)?;
                 Ok(Self::CloseRevenuePolicyRecord { realm })
             }
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
             CLOSE_POSITION_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -10092,7 +10187,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn terminal_closure_intents_round_trip_and_stay_tag_contiguous() {
         let market = h(1);
@@ -10188,7 +10283,7 @@ mod tests {
     /// It is deliberately *not* part of the epoch-terminal contiguity above —
     /// a Position outlives every epoch — and it carries no epoch coordinate at
     /// all, so no caller can aim it at one epoch's state.
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_position_close_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12113,7 +12208,7 @@ mod tests {
         assert_eq!(Intent::decode(&b[..n + 1]), Err(CodecError::TrailingBytes));
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn cancellation_intents_name_a_rank_an_owner_and_a_generation() {
         let market = h(1);
@@ -12177,7 +12272,7 @@ mod tests {
         assert_eq!(Intent::decode(&bytes[..len]), Err(CodecError::ZeroIdentity));
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn clear_work_creation_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12249,7 +12344,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn general_epoch_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12343,7 +12438,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_walk_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12408,7 +12503,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_slice_and_close_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12490,7 +12585,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     fn submit_candidate_intent() -> Intent {
         let market = h(1);
         let mut prices = [0u64; MAX_OUTCOMES];
@@ -12510,7 +12605,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_submission_intent_has_an_exact_unambiguous_wire() {
         let submit = submit_candidate_intent();
@@ -12587,7 +12682,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_chunked_write_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12726,7 +12821,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_seal_and_selection_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12797,7 +12892,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
     #[test]
     fn the_entitlement_intents_have_exact_unambiguous_wires() {
         let market = h(1);

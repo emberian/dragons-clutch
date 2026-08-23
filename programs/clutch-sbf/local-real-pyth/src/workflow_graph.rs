@@ -1549,23 +1549,13 @@ pub fn plan_candidate_crank(
     cursor: ResumableWorkflowCursor,
     material: WorkflowActionMaterial,
 ) -> Result<PlannedWorkflowNode> {
-    let generation = observation.epoch.generation;
-    let (position, action) = observation.next()?;
-    cursor.require(
-        WorkflowLane::Candidate,
-        generation,
-        position,
-        observation.observed_state_sha256,
-    )?;
-    observation.validate_payload(action, &material.payload)?;
-    construct(
-        manifest,
-        builder,
-        cursor,
-        ProtocolFlow::GeneralV2Candidate,
-        CanonicalActionCoordinate::General(action),
-        material,
-    )
+    let _ = (manifest, builder, observation, cursor, material);
+    // The only planner implemented here targets withdrawn SelectedCandidate,
+    // Window V4, AdmissionNode V3, and legacy General request actions. Keep
+    // its structural model available for historical untrusted observations,
+    // but never generate a transaction until the current Product-rooted
+    // V2/V5 lifecycle has its own exact planner.
+    Err(WorkflowGraphError::NotReady)
 }
 
 /// Keeper state is derived through canonical owner-settlement pure transitions,
@@ -2099,19 +2089,11 @@ fn construct(
         return Err(WorkflowGraphError::InvalidCanonicalPayload);
     }
     let draft = match coordinate {
-        CanonicalActionCoordinate::General(action) => {
-            validate_general_payload(action, &material.payload)?;
-            OwnedInstructionDraft::allocated_successor(
-                flow,
-                material.action_name,
-                material.semantic_owner,
-                manifest.clutch.program_id,
-                material.accounts,
-                material.required_signers,
-                material.exact_equations,
-                ExtensionAction::GeneralV2(action),
-                &material.payload,
-            )
+        CanonicalActionCoordinate::General(_) => {
+            // No checked release currently admits a General successor. Keep
+            // historical observation/parser types for hostile read-only
+            // inspection, but do not turn any of them into transaction bytes.
+            return Err(WorkflowGraphError::NotReady);
         }
         CanonicalActionCoordinate::Series(action) => {
             validate_series_payload(action, &material.payload)?;
