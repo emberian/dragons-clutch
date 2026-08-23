@@ -9,7 +9,6 @@
 (function (root) {
   "use strict";
 
-  const REGISTRY = root.GlassSuccessorRegistry;
   const UINT = /^(0|[1-9][0-9]*)$/;
   const HEX32 = /^[0-9a-f]{64}$/;
   const HEX = /^(?:[0-9a-f]{2})*$/;
@@ -191,7 +190,7 @@
 
   const normalizeInstruction = (raw, index, programId) => {
     requirePlain(raw, `instructions[${index}]`);
-    const expectedInstructionKeys = ["flow", "family", "localAction", "payloadHex", "semanticOwner", "accounts", "requiredSigners", "equations"];
+    const expectedInstructionKeys = ["flow", "family", "familyTag", "familyVersion", "localAction", "payloadHex", "semanticOwner", "accounts", "requiredSigners", "equations"];
     if (raw.actionName !== undefined) expectedInstructionKeys.push("actionName");
     exactKeys(raw, expectedInstructionKeys, `instructions[${index}]`);
     const flow = requireText(raw.flow, `instructions[${index}].flow`, 64);
@@ -200,10 +199,18 @@
     if (!FLOW_FAMILIES[flow].includes(familyName)) throw new Error(`${familyName} does not own the ${flow} flow.`);
     const localActionValue = decimal(raw.localAction, `instructions[${index}].localAction`, 255n);
     if (localActionValue === 0n) throw new Error("localAction must be positive.");
-    const coordinate = REGISTRY.action(familyName, Number(localActionValue));
-    if (raw.actionName !== undefined && raw.actionName !== coordinate.actionName) {
-      throw new Error(`Action name must be ${coordinate.actionName} for ${coordinate.tag}/${coordinate.version}/${coordinate.localAction}.`);
-    }
+    const familyTag = decimal(raw.familyTag, `instructions[${index}].familyTag`, 255n);
+    const familyVersion = decimal(raw.familyVersion, `instructions[${index}].familyVersion`, 255n);
+    if (familyTag === 0n || familyVersion === 0n) throw new Error("familyTag and familyVersion must be positive bytes.");
+    const actionName = raw.actionName === undefined ? null : requireText(raw.actionName, `instructions[${index}].actionName`, 96);
+    const coordinate = Object.freeze({
+      family: familyName,
+      tag: Number(familyTag),
+      version: Number(familyVersion),
+      localAction: Number(localActionValue),
+      actionName,
+      source: "explicit-semantic-owner-draft; not runtime capability admission"
+    });
     const payload = byteHex(raw.payloadHex, `instructions[${index}].payloadHex`);
     const data = Uint8Array.from([coordinate.tag, coordinate.version, coordinate.localAction, ...payload]);
     if (!Array.isArray(raw.accounts) || raw.accounts.length > 64) throw new Error(`instructions[${index}].accounts must be an array of at most 64 metas.`);
@@ -235,7 +242,7 @@
     const equations = raw.equations.map((equation, equationIndex) => normalizeEquation(equation, equationIndex, index));
     return Object.freeze({
       flow,
-      actionName: coordinate.actionName,
+      actionName,
       semanticOwner: normalizeOwner(raw.semanticOwner, index),
       coordinate,
       accounts: Object.freeze(accounts),
@@ -346,21 +353,22 @@
       capabilityProfileId: configuration.release.capabilityProfileId
     });
     return Object.freeze({
-      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v3",
+      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v4",
       authority: "local-construction-from-explicit-semantic-owner-material",
       release,
       flows: Object.freeze(uniqueFlows),
       actions: Object.freeze(instructions.map((instruction) => instruction.actionName)),
       semanticOwners: Object.freeze(instructions.map((instruction) => instruction.semanticOwner)),
-      registryBindings: Object.freeze(instructions.map((instruction) => Object.freeze({
+      instructionCoordinates: Object.freeze(instructions.map((instruction) => Object.freeze({
         family: instruction.coordinate.family,
         familyTag: String(instruction.coordinate.tag),
         familyVersion: String(instruction.coordinate.version),
         localAction: String(instruction.coordinate.localAction),
-        allocationStatus: instruction.coordinate.allocationStatus
+        actionName: instruction.coordinate.actionName,
+        source: instruction.coordinate.source
       }))),
-      runtimeAdmissions: Object.freeze(instructions.map(() => "reserved-disabled")),
-      disabledReason: "The central allocation ledger is ReservedDisabled and the operatord read API exposes no checked runtime-capability admission for this release.",
+      runtimeCapability: "not-authenticated",
+      disabledReason: "No release-authenticated runtime capability verdict was supplied; explicit draft coordinates are construction material only.",
       requiredSigners: Object.freeze(messageSigners),
       exactEquations: Object.freeze(allEquations),
       serializedTransactionEncoding: "base64",

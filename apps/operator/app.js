@@ -5,14 +5,10 @@
  * make a trust boundary legible should not ask you to trust a dependency tree
  * to read it.
  *
- * Four modes share this page. In *watch* mode the daemon replays the sealed
- * lane's forty-four-step plan and the screens are read-only. In *trade* mode
- * it founds the Friday clutch and the screens become a ticket. The page does
- * not choose: it renders whichever screen set the daemon's own stream implies,
- * because a `market` event only ever arrives from a trade session. The
- * retained local-real Pyth mode is selected only by its explicit identity.
- * The separate live-Pyth mode supervises a new loopback execution and never
- * reads the retained transcript surface. */
+ * Four explicitly named non-production modes share this historical bench.
+ * The page selects no mode and infers none from ordinary events: it renders a
+ * laboratory screen set only after the daemon publishes that exact session
+ * identity. The real/local chain surface is the separate Glass client. */
 
 import { el, fill } from "./dom.js";
 import { chip } from "./evidence.js";
@@ -53,21 +49,30 @@ const PYTH_SCREENS = Object.freeze([
 ]);
 
 const LIVE_PYTH_SCREENS = Object.freeze([
-  { id: "pyth-live", label: "Live campaign", render: renderLivePyth }
+  { id: "pyth-live", label: "Synthetic Source V2 lab", render: renderLivePyth }
 ]);
+
+const WAITING_SCREENS = Object.freeze([{
+  id: "waiting",
+  label: "Session identity",
+  render: () => [
+    el("section", "card",
+      el("h2", null, "Waiting for an explicit non-production session identity"),
+      el("p", "muted", "No mock, fixture, retained transcript, or synthetic campaign is selected by the static client. The daemon must first publish one exact non-production-* mode identity."))
+  ]
+}]);
 
 const store = createStore();
 let current = null;
 
-const screensFor = (state) => (
-  state.liveRun || (state.identity && state.identity.mode === "pyth-live")
-    ? LIVE_PYTH_SCREENS
-    : state.identity && state.identity.mode === "pyth-local"
-    ? PYTH_SCREENS
-    : state.market
-      ? TRADE_SCREENS
-      : WATCH_SCREENS
-);
+const screensFor = (state) => {
+  const mode = state.identity && state.identity.mode;
+  if (mode === "non-production-synthetic-source-v2-live") return LIVE_PYTH_SCREENS;
+  if (mode === "non-production-retained-source-v2") return PYTH_SCREENS;
+  if (mode === "non-production-mock-trade") return TRADE_SCREENS;
+  if (mode === "non-production-mock-watch") return WATCH_SCREENS;
+  return WAITING_SCREENS;
+};
 
 /* The honesty strip. Permanent, non-dismissible, and rendered before any
  * state can arrive — there is no code path on this page that removes it, and
@@ -76,23 +81,23 @@ const screensFor = (state) => (
 const renderBanner = (state) => {
   const strip = document.getElementById("honesty");
   const identity = state.identity;
-  const retainedPyth = identity && identity.mode === "pyth-local";
-  const livePyth = Boolean(state.liveRun || (identity && identity.mode === "pyth-live"));
+  const retainedPyth = identity && identity.mode === "non-production-retained-source-v2";
+  const livePyth = Boolean(identity && identity.mode === "non-production-synthetic-source-v2-live");
   const pyth = retainedPyth || livePyth;
   const parts = [
     el("span", "honesty-flag", "NON-PRODUCTION"),
-    el("span", null, pyth ? "REAL PYTH PROGRAMS / SYNTHETIC OBSERVATION" : "mock-source ELF"),
+    el("span", null, !identity ? "NO SESSION SELECTED" : pyth ? "REAL PYTH PROGRAMS / SYNTHETIC OBSERVATION" : "mock-source ELF"),
     el("span", "honesty-sep", "·"),
     el("code", "digest", identity ? identity.elf_sha256 : "sha256 pending"),
     el("span", "honesty-sep", "·"),
-    el("span", null, pyth ? "LOCAL VALIDATOR ONLY" : "LOCAL 127.0.0.1 ONLY"),
+    el("span", null, !identity ? "EXPLICIT NON-PRODUCTION IDENTITY REQUIRED" : pyth ? "LOCAL VALIDATOR ONLY" : "LOCAL 127.0.0.1 ONLY"),
     ...(retainedPyth ? [el("span", "honesty-sep", "·"), el("span", null, "READ-ONLY RETAINED TRANSCRIPT")] : []),
     ...(livePyth ? [el("span", "honesty-sep", "·"), el("span", null, "LIVE CHILD / NOT RETAINED / BROWSER READ-ONLY")] : []),
     el("span", "honesty-sep", "·"),
     el("span", null, "no value"),
     el("span", "honesty-sep", "·"),
     el("span", null, "evidence scope"),
-    chip(identity && identity.evidence_scope ? identity.evidence_scope : livePyth ? "IN_FLIGHT" : "SBF_EXECUTED"),
+    chip(identity && identity.evidence_scope ? identity.evidence_scope : livePyth ? "IN_FLIGHT" : "UNAVAILABLE"),
     el("span", "honesty-note", "unpromoted")
   ];
   fill(strip, ...parts);
@@ -127,19 +132,23 @@ const render = (state) => {
 
   const brand = document.getElementById("brand-sub");
   if (brand) {
-    brand.textContent = state.liveRun || (state.identity && state.identity.mode === "pyth-live")
-      ? "live real-Pyth lifecycle — synthetic, loopback"
-      : state.identity && state.identity.mode === "pyth-local"
+    brand.textContent = state.identity && state.identity.mode === "non-production-synthetic-source-v2-live"
+      ? "non-production synthetic Source V2 lifecycle — loopback"
+      : state.identity && state.identity.mode === "non-production-retained-source-v2"
       ? "read-only retained campaign — synthetic, local"
-      : state.market
+      : state.identity && state.identity.mode === "non-production-mock-trade"
         ? "Friday clutch — trade mode, committed, local"
-        : "general clearing, committed, local";
+        : state.identity && state.identity.mode === "non-production-mock-watch"
+          ? "general clearing, committed, local"
+          : "no session selected";
   }
 
   const status = document.getElementById("status");
-  const label = state.fault
+  const label = !state.identity
+    ? "awaiting explicit session identity"
+    : state.fault
     ? "faulted"
-    : state.liveRun
+    : state.liveRun && state.identity && state.identity.mode === "non-production-synthetic-source-v2-live"
       ? `live campaign ${state.liveRun.phase}`
     : state.pyth
       ? state.done ? `retained campaign ${state.done.verdict}` : "retained campaign loaded"
