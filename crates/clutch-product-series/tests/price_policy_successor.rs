@@ -591,8 +591,8 @@ fn every_smooth_degree_projects_exactly_and_checks_a_v3_measure() {
             &witness,
         )
         .unwrap();
-        assert_eq!(verified.basis_degree, native_basis.basis_degree);
-        assert_eq!(verified.native_outcome_count, native_basis.outcome_count);
+        assert_eq!(verified.basis_degree(), native_basis.basis_degree);
+        assert_eq!(verified.native_outcome_count(), native_basis.outcome_count);
     }
 }
 
@@ -749,8 +749,8 @@ fn finite_product_table_projects_losslessly_and_checks_a_v3_measure() {
     let verified =
         verify_quantized_price_measure_v3_degree_zero(&bindings, &table, &price_vector, &witness)
             .unwrap();
-    assert_eq!(verified.native_outcome_count, 4);
-    assert_eq!(verified.basis_region_count, 4);
+    assert_eq!(verified.native_outcome_count(), 4);
+    assert_eq!(verified.basis_region_count(), 4);
 
     let mut substituted_basis = native_basis;
     substituted_basis.payout_weights[1][1] = 250;

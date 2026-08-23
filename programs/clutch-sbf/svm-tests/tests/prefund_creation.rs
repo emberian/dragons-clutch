@@ -271,7 +271,9 @@ fn create_market_instruction(plane: &Plane, creator: Address, nonce: u64) -> Ins
     let addresses = plane.create_market_addresses(creator);
     let mut metas = vec![AccountMeta::new(addresses[0], true)];
     for (index, address) in addresses.iter().enumerate().skip(1) {
-        let writable = matches!(index, 4..=10) || index >= market_init::IX_HOARD_TOKEN;
+        let writable = matches!(index, 4..=10)
+            || index == market_init::IX_HOARD_TOKEN
+            || index >= market_init::IX_OUTCOME_MINT_BASE;
         metas.push(if writable {
             AccountMeta::new(*address, false)
         } else {
@@ -428,7 +430,7 @@ impl OrderWorld {
             book: Hash32::from_bytes([0x73; 32]),
             terms: fixture.terms_id,
             price_grid: grid.grid,
-            policy: fixture.policy.digest().unwrap(),
+            policy: Hash32::from_bytes(fixture.policy.id().unwrap().bytes()),
             order_set: Hash32::ZERO,
             first_order_id: Hash32::ZERO,
             last_order_id: Hash32::ZERO,

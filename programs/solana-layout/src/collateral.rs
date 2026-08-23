@@ -24,7 +24,7 @@
 //! parent that commits to a different Realm's collateral policy.  A parser is
 //! not evidence.  Only [`verify_collateral_binding`] — which recomputes the
 //! child digest from the actual 266 policy bytes and compares it against
-//! [`crate::ProfileAccount::collateral_policy_digest`] — decides that a Profile
+//! the superseded V1 parent digest — decided that a Profile
 //! commits to *this* policy, and only [`verify_profile_identity`] additionally
 //! decides that the account's Profile ID is the canonical parent hash over that
 //! same digest.  The Rust tests carry the same three binding refusals the Python
@@ -661,7 +661,7 @@ pub fn collateral_policy_digest(policy_bytes: &[u8]) -> Result<Hash32> {
 ///    committed to a collateral policy must not mint liabilities;
 /// 3. decodes the 266 policy bytes with every refusal of the Python model; and
 /// 4. **recomputes** `D_col` from those bytes and compares it against
-///    [`crate::ProfileAccount::collateral_policy_digest`].
+///    the Profile's stored collateral policy identity.
 ///
 /// Step 4 is the load-bearing one.  Without it a well-formed policy and a
 /// well-formed Profile can be paired freely, and an adapter that merely decoded
@@ -679,7 +679,7 @@ pub fn verify_collateral_binding(
         return Err(CodecError::ZeroIdentity);
     }
     let policy = CollateralPolicy::decode(policy_bytes)?;
-    if policy.digest()? != profile.collateral_policy_digest {
+    if policy.digest()? != profile.collateral_policy_id {
         return Err(CodecError::MismatchedBinding);
     }
     Ok(policy)
@@ -821,12 +821,11 @@ mod tests {
         let decoded = CollateralPolicy::decode(policy).expect("golden policy decodes");
         let child = decoded.digest().expect("child digest");
         ProfileAccount {
-            profile: ParentProfile::from_policy(&decoded)
-                .expect("parent composes")
-                .identity()
+            profile: crate::canonical_profile_v2_id(child, Hash32::from_bytes([0x52; HASH_BYTES]))
                 .expect("parent identity"),
             realm: Hash32::from_bytes([9; HASH_BYTES]),
-            collateral_policy_digest: child,
+            collateral_policy_id: child,
+            adapter_release_id: Hash32::from_bytes([0x52; HASH_BYTES]),
             version: crate::account_version::PROFILE,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         }
@@ -1324,9 +1323,9 @@ mod tests {
 
         // One flipped bit in the stored digest is refused the same way.
         let mut flipped = profile;
-        let mut digest_bytes = profile.collateral_policy_digest.bytes();
+        let mut digest_bytes = profile.collateral_policy_id.bytes();
         digest_bytes[0] ^= 1;
-        flipped.collateral_policy_digest = Hash32::from_bytes(digest_bytes);
+        flipped.collateral_policy_id = Hash32::from_bytes(digest_bytes);
         assert_eq!(
             verify_collateral_binding(&generic_bytes, &flipped),
             Err(CodecError::MismatchedBinding)
@@ -1338,7 +1337,7 @@ mod tests {
         let generic_bytes = generic();
         let mut unfrozen = frozen_profile(&generic_bytes);
         unfrozen.flags = 0;
-        unfrozen.collateral_policy_digest = Hash32::ZERO;
+        unfrozen.collateral_policy_id = Hash32::ZERO;
         assert_eq!(
             verify_collateral_binding(&generic_bytes, &unfrozen),
             Err(CodecError::ZeroIdentity)

@@ -14,13 +14,13 @@ use clutch_sbf::source::{
     SourceSpecFieldsV1, SourceSpecV1, ORIENTATION_QUOTE_PER_BASE,
     SELECTION_FINALIZED_BUCKET_RECORD,
 };
+use clutch_collateral_adapter_v2::CollateralPolicyV2;
 use clutch_solana_layout::{
     account_len,
     artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
     canonical_market_id, canonical_realm_id,
-    collateral::{CollateralPolicy, ParentProfile},
-    Hash32, Intent, PriceGridAccount, TermsAccount, MAX_GRID_TICKS, MAX_KNOTS, MAX_OUTCOMES,
-    MAX_PAYOUTS, PAYOUT_MAP_UNUSED, PayoutVectorBytes,
+    canonical_profile_v2_id, Hash32, Intent, PriceGridAccount, TermsAccount, MAX_GRID_TICKS,
+    MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED, PayoutVectorBytes,
 };
 use clutch_svm_fixture::{
     compute_unit_limit_data, fixture_policy, fixture_terms, layout_request, COMPUTE_BUDGET,
@@ -96,7 +96,7 @@ pub struct Walk {
     pub actor_token: Address,
     pub bearer_token: Address,
 
-    pub policy: CollateralPolicy,
+    pub policy: CollateralPolicyV2,
     pub policy_digest: Hash32,
     pub policy_body: Vec<u8>,
     pub profile_id: Hash32,
@@ -168,14 +168,16 @@ impl Walk {
         let derive = |seeds: &[&[u8]]| Address::find_program_address(seeds, &program_id);
 
         let policy = fixture_policy(collateral_mint.to_bytes());
-        let policy_digest = policy
-            .digest()
-            .map_err(|error| format!("policy digest: {error:?}"))?;
-        let profile_id = ParentProfile::from_policy(&policy)
-            .and_then(|parent| parent.identity())
-            .map_err(|error| format!("profile identity: {error:?}"))?;
+        let policy_digest = Hash32::from_bytes(
+            policy
+                .id()
+                .map_err(|error| format!("policy digest: {error:?}"))?
+                .bytes(),
+        );
+        let release_id = Hash32::from_bytes(policy.adapter_release.bytes());
+        let profile_id = canonical_profile_v2_id(policy_digest, release_id);
         let policy_body = policy
-            .canonical_bytes()
+            .encode()
             .map_err(|error| format!("policy body: {error:?}"))?
             .to_vec();
         let realm_id = canonical_realm_id(profile_id, REALM_NONCE);
@@ -502,7 +504,7 @@ impl Walk {
                     profile: self.profile_id,
                     realm_nonce: REALM_NONCE,
                     max_outcomes: u8::try_from(MAX_OUTCOMES).expect("outcome bound fits"),
-                    profile_version: 1,
+                    profile_version: 2,
                 },
             ),
             vec![
@@ -520,11 +522,11 @@ impl Walk {
             self.program_id,
             &layout_request(
                 0,
-                Intent::InitProfile {
+                Intent::InitProfileV2 {
                     realm: self.realm_id,
-                    collateral_policy_digest: self.policy_digest,
-                    subfield_schema_version: self.policy.schema_version,
-                    profile_version: 1,
+                    collateral_policy_id: self.policy_digest,
+                    adapter_release_id: Hash32::from_bytes(self.policy.adapter_release.bytes()),
+                    profile_version: 2,
                 },
             ),
             vec![
@@ -558,6 +560,7 @@ impl Walk {
             AccountMeta::new_readonly(RENT_SYSVAR, false),
             AccountMeta::new_readonly(self.hoard_authority, false),
             AccountMeta::new(self.hoard_token, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
         ];
         metas.extend(
             self.outcome_mints

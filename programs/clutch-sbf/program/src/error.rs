@@ -16,7 +16,8 @@
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
-//! | `0x00a0..=0x00af` | disabled Source/Series SBF adapter account and custody boundaries |
+//! | `0x0150..=0x0152` | non-production Dealer-policy catalog transport |
+//! | `0x00b0..=0x00bf` | disabled Source/Series SBF adapter account and custody boundaries |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -242,7 +243,7 @@ pub enum ClutchError {
     ///
     /// Series lamport custody is not token custody, so reusing
     /// [`ClutchError::TokenDeltaMismatch`] would misname the trust boundary.
-    SeriesCustodyDeltaMismatch = 0x00a0,
+    SeriesCustodyDeltaMismatch = 0x00b0,
     /// The checkpoint account's body bytes are not a `ClearWorkV1` encoding.
     ///
     /// `clutch_batch::relation_v1_stream::CodecFaultV1`, collapsed: the bytes
@@ -311,7 +312,30 @@ pub enum ClutchError {
     /// land here — the digest is recomputed from the presented bytes, never
     /// compared claim-to-claim.
     ScoreDigestMismatch = 0x00a1,
+    /// The staged DealerPolicy body failed its owning strict codec, semantic
+    /// validator, or canonical content-ID recomputation.
+    DealerPolicyFault = 0x0150,
+    /// Dealer-policy upload header, cursor, body, or immutable wrapper did not
+    /// match the exact request/PDA lifecycle.
+    DealerPolicyUploadMismatch = 0x0151,
+    /// A Dealer-policy rent principal, hostile prefund, or sink/refund split
+    /// did not match the stored full-principal plan.
+    DealerPolicyRentMismatch = 0x0152,
 }
+
+/// First globally reserved Source/Series adapter refusal code.
+pub const SOURCE_SERIES_REFUSAL_FIRST: u32 = 0x00b0;
+/// Last globally reserved Source/Series adapter refusal code.
+pub const SOURCE_SERIES_REFUSAL_LAST: u32 = 0x00bf;
+
+const _: () = assert!(ClutchError::SeriesCustodyDeltaMismatch as u32
+    >= SOURCE_SERIES_REFUSAL_FIRST);
+const _: () = assert!(ClutchError::SeriesCustodyDeltaMismatch as u32
+    <= SOURCE_SERIES_REFUSAL_LAST);
+const _: () = assert!(ClutchError::CandidateNotCompetitive as u32
+    < SOURCE_SERIES_REFUSAL_FIRST);
+const _: () = assert!(ClutchError::ScoreDigestMismatch as u32
+    < SOURCE_SERIES_REFUSAL_FIRST);
 
 impl From<ClutchError> for ProgramError {
     fn from(value: ClutchError) -> Self {

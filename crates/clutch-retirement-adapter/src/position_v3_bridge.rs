@@ -9,17 +9,15 @@
 
 use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_retirement::{
-    admit_deletable_rent, admit_reopen_rent_split, plan_position_replay_retirement_v2,
+    admit_deletable_rent, admit_reopen_rent_split, plan_position_v3_replay_v3_retirement_v1,
     reopen_position_with_replay_v2, AdapterNeutralSinkBindingProjectionV1,
     AdapterPositionAccountProjectionV1, AdapterPositionMarketBindingV3,
     AdapterReplayAbsenceProjectionV1, AdapterReplayAccountProjectionV1,
-    CoalescedRecipientCreditsV1, Identity32V1, LivePositionV2, LiveReplaySuccessorV1,
-    PositionEconomicStateV1, PositionLifecycleStateV2, PositionReplayAccountsV1,
+    CoalescedRecipientCreditsV1, Identity32V1, PositionLifecycleStateV2,
     PositionReplayReopenAccountsV1, PositionReplayReopenPlanV2, PositionReplayReopenRequestV1,
-    PositionReplayReopenRequestV2, PositionReplayRetirementRequestV1,
-    PositionReplayRetirementRequestV2, PositionRetirementTailV1, PositionTombstoneV1,
-    PositionTombstoneV3, PositionV3Fields, RecipientBalanceBookV1, RecipientBalanceV1,
-    ReplayLifecycleStateV1, ReplayV3Envelope, ReplayV3HashBackend, ReplayV3Lifecycle,
+    PositionReplayReopenRequestV2, PositionTombstoneV1, PositionTombstoneV3, PositionV3Fields,
+    PositionV3ReplayV3AccountsV1, PositionV3ReplayV3RetirementRequestV1, RecipientBalanceBookV1,
+    RecipientBalanceV1, ReplayV3Envelope, ReplayV3HashBackend, ReplayV3Lifecycle,
     RetirementErrorV2, MAX_OUTCOMES, MAX_RETIREMENT_RECIPIENTS, POSITION_TOMBSTONE_V3_BYTES,
     POSITION_V3_BYTES,
 };
@@ -237,8 +235,6 @@ pub fn authenticate_and_prepare_position_replay_close_v4<B: ReplayV3HashBackend>
     let replay = ReplayV3Envelope::decode(request.replay.data(), hash_backend)?;
     let replay_terminal = replay.terminal_projection()?;
     let replay_header = replay_terminal.header();
-    let market = position.market_instance_id();
-    let owner = position.owner();
     if replay_header.position_account() != request.position.address()
         || replay_header.replay_account() != request.replay.address()
         || replay_header.purpose() != position.purpose()
@@ -249,58 +245,28 @@ pub fn authenticate_and_prepare_position_replay_close_v4<B: ReplayV3HashBackend>
     {
         return Err(RetirementErrorV2::ReplayMismatch.into());
     }
-    let replay_terminal_semantic_id = replay.semantic_id(hash_backend)?;
-
-    let lifecycle_position = PositionLifecycleStateV2::Live(LivePositionV2 {
-        market,
-        owner,
-        generation: position.generation(),
-        stored_bump: position.stored_bump(),
-        retirement: PositionRetirementTailV1 {
-            outstanding_reservations: 0,
-            rent: position.rent(),
-        },
-    });
-    let lifecycle_replay = ReplayLifecycleStateV1::Live(LiveReplaySuccessorV1 {
-        market,
-        owner,
-        position_generation: replay_header.position_generation(),
-        sequence: replay_header.next_sequence(),
-        stored_bump: replay_header.stored_bump(),
-        rent: replay_header.rent(),
-    });
     let book = recipient_book(request.recipients)?;
-    let plan = plan_position_replay_retirement_v2(PositionReplayRetirementRequestV2 {
-        retirement: PositionReplayRetirementRequestV1 {
-            position: lifecycle_position,
-            replay: lifecycle_replay,
-            economic: PositionEconomicStateV1::ZERO,
+    let plan = plan_position_v3_replay_v3_retirement_v1(
+        PositionV3ReplayV3RetirementRequestV1 {
+            position: terminal,
+            replay: replay_terminal,
             position_balance: request.position_lamports,
             replay_balance: request.replay_lamports,
             neutral_sink: request.realm.neutral_sink,
-            neutral_sink_binding: AdapterNeutralSinkBindingProjectionV1 {
-                market,
-                neutral_sink: request.realm.neutral_sink,
-            },
-            accounts: PositionReplayAccountsV1 {
-                position: AdapterPositionAccountProjectionV1 {
-                    account: request.position.address(),
-                    market,
-                    owner,
-                },
-                replay: AdapterReplayAccountProjectionV1 {
-                    account: request.replay.address(),
-                    market,
-                    owner,
-                    position_generation: position.generation(),
-                },
+            accounts: PositionV3ReplayV3AccountsV1 {
+                position: request.position.address(),
+                replay: request.replay.address(),
             },
             recipient_balances: book,
+            signed_sequence: request.signed_sequence,
         },
-        signed_sequence: request.signed_sequence,
-    })?;
-    let tombstone = terminal.tombstone()?;
-    if plan.position_balance_after != tombstone.fields().permanent_tombstone_principal
+        hash_backend,
+    )?;
+    if plan.position_balance_after
+        != plan
+            .position_tombstone
+            .fields()
+            .permanent_tombstone_principal
         || plan.replay_balance_after != 0
     {
         return Err(RetirementErrorV2::NonCanonicalState.into());
@@ -308,8 +274,8 @@ pub fn authenticate_and_prepare_position_replay_close_v4<B: ReplayV3HashBackend>
     Ok(PreparedPositionReplayCloseV3 {
         position_account: request.position.address(),
         replay_account: request.replay.address(),
-        replay_terminal_semantic_id,
-        position_tombstone_bytes: tombstone.encode()?,
+        replay_terminal_semantic_id: plan.terminal_replay_semantic_id,
+        position_tombstone_bytes: plan.position_tombstone.encode()?,
         recipient_credits: plan.recipient_credits,
         position_lamports_after: plan.position_balance_after,
         replay_lamports_after: plan.replay_balance_after,

@@ -114,6 +114,13 @@ pub struct DealerAssetTransferAmountsV1 {
 }
 
 impl DealerAssetTransferAmountsV1 {
+    fn is_zero(self) -> bool {
+        self.cash_atoms == 0
+            && self.source_reserved_cash_atoms == 0
+            && self.destination_reserved_cash_atoms == 0
+            && self.native_eggs == [0; MAX_OUTCOMES]
+    }
+
     fn validate(self, outcome_count: u8) -> Result<()> {
         validate_padding_u64(outcome_count, &self.native_eggs)?;
         if self.source_reserved_cash_atoms > self.cash_atoms
@@ -167,13 +174,30 @@ impl DealerAssetTransferBundleV1 {
         ] {
             identity.validate_live()?;
         }
-        if self.source_account_id == self.destination_account_id
-            || self.source_pre_semantic_id == self.source_post_semantic_id
-            || self.destination_pre_semantic_id == self.destination_post_semantic_id
-        {
+        let zero_claim = self.action == DealerRuntimeActionV1::Claim && self.amounts.is_zero();
+        let zero_begin =
+            self.action == DealerRuntimeActionV1::SelectLeaseAndBegin && self.amounts.is_zero();
+        if self.source_account_id == self.destination_account_id {
             return Err(Error::MismatchedBinding);
         }
-        self.amounts.validate(self.market.outcome_count)?;
+        if zero_claim || zero_begin {
+            validate_padding_u64(self.market.outcome_count, &self.amounts.native_eggs)?;
+            if self.source_pre_semantic_id != self.source_post_semantic_id
+                || (zero_claim
+                    && self.destination_pre_semantic_id != self.destination_post_semantic_id)
+                || (zero_begin
+                    && self.destination_pre_semantic_id == self.destination_post_semantic_id)
+            {
+                return Err(Error::ConservationFailure);
+            }
+        } else {
+            if self.source_pre_semantic_id == self.source_post_semantic_id
+                || self.destination_pre_semantic_id == self.destination_post_semantic_id
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            self.amounts.validate(self.market.outcome_count)?;
+        }
         require_transfer_direction(self.action, self.source_kind, self.destination_kind)?;
         match (self.source_kind, self.destination_kind) {
             (
@@ -503,8 +527,9 @@ impl PreparedDealerPositionPairTransferV1 {
     }
 }
 
-/// Prepare sponsor/LP contribution, pre-activation withdrawal, or sponsor refund.
-pub fn prepare_dealer_position_pair_transfer_v1(
+/// Prepare sponsor initialization, LP contribution, pre-activation withdrawal,
+/// or sponsor refund.
+pub(crate) fn prepare_dealer_position_pair_transfer_v1(
     action: DealerRuntimeActionV1,
     market: DealerPositionMarketJoinV1,
     source: DealerTransferPositionV3,
@@ -514,7 +539,12 @@ pub fn prepare_dealer_position_pair_transfer_v1(
     market.validate()?;
     source.validate(market)?;
     destination.validate(market)?;
-    amounts.validate(market.outcome_count)?;
+    let zero_claim = action == DealerRuntimeActionV1::Claim && amounts.is_zero();
+    if zero_claim {
+        validate_padding_u64(market.outcome_count, &amounts.native_eggs)?;
+    } else {
+        amounts.validate(market.outcome_count)?;
+    }
     require_transfer_direction(action, source.kind(), destination.kind())?;
     if source.account_id() == destination.account_id()
         || amounts.source_reserved_cash_atoms != 0
@@ -524,8 +554,16 @@ pub fn prepare_dealer_position_pair_transfer_v1(
     }
     let source_pre_id = source.semantic_id()?;
     let destination_pre_id = destination.semantic_id()?;
-    let source_post = apply_position_debit(source.position(), amounts)?;
-    let destination_post = apply_position_credit(destination.position(), amounts)?;
+    let source_post = if zero_claim {
+        source.position()
+    } else {
+        apply_position_debit(source.position(), amounts)?
+    };
+    let destination_post = if zero_claim {
+        destination.position()
+    } else {
+        apply_position_credit(destination.position(), amounts)?
+    };
     let source_post_id = position_semantic_id(source_post)?;
     let destination_post_id = position_semantic_id(destination_post)?;
     let bundle = DealerAssetTransferBundleV1 {
@@ -547,6 +585,94 @@ pub fn prepare_dealer_position_pair_transfer_v1(
         source_post,
         destination_post,
     })
+}
+
+/// Prepare exact sponsor cash funding from the authenticated sponsor Position.
+///
+/// `sponsor_capital_atoms` must be projected from the authoritative Dealer
+/// State initialization transition. Sponsor funding never transfers Eggs or
+/// reserved cash and never crosses the Realm Hoard token boundary.
+pub fn prepare_dealer_sponsor_funding_transfer_v1(
+    market: DealerPositionMarketJoinV1,
+    sponsor_owner: Id,
+    sponsor_capital_atoms: u64,
+    sponsor_position: DealerTransferPositionV3,
+    facility_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    require_general_owner(sponsor_position, sponsor_owner)?;
+    let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
+    prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::Initialize,
+        market,
+        sponsor_position,
+        facility_position,
+        amounts,
+    )
+}
+
+/// Prepare one exact LP contribution or pre-activation withdrawal.
+///
+/// Every moved amount is derived from the immutable Dealer capital unit and
+/// the exact share delta. The caller cannot supply an independent cash/Egg
+/// vector or silently round a capital unit.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_dealer_lp_share_transfer_v1(
+    action: DealerRuntimeActionV1,
+    policy: &crate::DealerPolicyV1,
+    market: DealerPositionMarketJoinV1,
+    lp_owner: Id,
+    share_delta: u64,
+    lp_position: DealerTransferPositionV3,
+    facility_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    policy.validate()?;
+    require_general_owner(lp_position, lp_owner)?;
+    if market.market_instance_v2_id != policy.market_instance_v2_id
+        || market.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let amounts = lp_share_amounts(policy, share_delta)?;
+    match action {
+        DealerRuntimeActionV1::Contribute => prepare_dealer_position_pair_transfer_v1(
+            action,
+            market,
+            lp_position,
+            facility_position,
+            amounts,
+        ),
+        DealerRuntimeActionV1::WithdrawFunding => prepare_dealer_position_pair_transfer_v1(
+            action,
+            market,
+            facility_position,
+            lp_position,
+            amounts,
+        ),
+        _ => Err(Error::MismatchedBinding),
+    }
+}
+
+/// Prepare the exact pre-activation sponsor-principal refund.
+///
+/// The State transition supplies both the immutable refund owner and the
+/// original sponsor principal; donation, fee, rent, and liveness balances are
+/// not admitted to this internal cash movement.
+pub fn prepare_dealer_sponsor_refund_transfer_v1(
+    market: DealerPositionMarketJoinV1,
+    sponsor_refund_owner: Id,
+    sponsor_capital_atoms: u64,
+    facility_position: DealerTransferPositionV3,
+    refund_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    require_general_owner(refund_position, sponsor_refund_owner)?;
+    let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
+    prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::RefundCancelledSponsor,
+        market,
+        facility_position,
+        refund_position,
+        amounts,
+    )
 }
 
 /// Exact result prepared before atomic Position↔Pot mutation.
@@ -579,7 +705,12 @@ pub fn prepare_dealer_position_pot_transfer_v1(
     market.validate()?;
     position.validate(market)?;
     pot.validate(market)?;
-    amounts.validate(market.outcome_count)?;
+    let zero_begin = action == DealerRuntimeActionV1::SelectLeaseAndBegin && amounts.is_zero();
+    if zero_begin {
+        validate_padding_u64(market.outcome_count, &amounts.native_eggs)?;
+    } else {
+        amounts.validate(market.outcome_count)?;
+    }
     if position.account_id() == pot.pot_account_id {
         return Err(Error::MismatchedBinding);
     }
@@ -607,13 +738,26 @@ pub fn prepare_dealer_position_pot_transfer_v1(
     require_transfer_direction(action, source_kind, destination_kind)?;
     let position_post = if position_to_pot {
         require_pot_credit_delta(pot, amounts)?;
-        apply_position_debit(position.position(), amounts)?
+        if zero_begin {
+            position.position()
+        } else {
+            apply_position_debit(position.position(), amounts)?
+        }
     } else {
         if amounts.source_reserved_cash_atoms != 0 || amounts.destination_reserved_cash_atoms != 0 {
             return Err(Error::ConservationFailure);
         }
         require_pot_debit_delta(pot, amounts)?;
-        apply_position_credit(position.position(), amounts)?
+        let credited = apply_position_credit(position.position(), amounts)?;
+        if matches!(
+            action,
+            DealerRuntimeActionV1::FinalizeSettlement
+                | DealerRuntimeActionV1::AbortBeforeCollection
+        ) {
+            advance_position_generation(credited)?
+        } else {
+            credited
+        }
     };
     let position_post_id = position_semantic_id(position_post)?;
     let (source_pre, source_post, destination_pre, destination_post) = if position_to_pot {
@@ -716,6 +860,59 @@ fn apply_position_debit(
     PositionAccountV3::new(fields).map_err(|_| Error::ConservationFailure)
 }
 
+fn sponsor_capital_amounts(capital_atoms: u64) -> Result<DealerAssetTransferAmountsV1> {
+    if capital_atoms == 0 {
+        return Err(Error::InvalidParameter);
+    }
+    Ok(DealerAssetTransferAmountsV1 {
+        cash_atoms: capital_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs: [0; MAX_OUTCOMES],
+    })
+}
+
+fn lp_share_amounts(
+    policy: &crate::DealerPolicyV1,
+    share_delta: u64,
+) -> Result<DealerAssetTransferAmountsV1> {
+    if share_delta == 0 {
+        return Err(Error::InvalidParameter);
+    }
+    let cash_atoms = policy
+        .capital_unit_cash_atoms
+        .checked_mul(share_delta)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let mut native_eggs = [0u64; MAX_OUTCOMES];
+    let mut index = 0usize;
+    while index < usize::from(policy.outcome_count) {
+        native_eggs[index] = policy.capital_unit_eggs[index]
+            .checked_mul(share_delta)
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    let amounts = DealerAssetTransferAmountsV1 {
+        cash_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs,
+    };
+    amounts.validate(policy.outcome_count)?;
+    Ok(amounts)
+}
+
+fn require_general_owner(position: DealerTransferPositionV3, expected_owner: Id) -> Result<()> {
+    expected_owner.validate_live()?;
+    match position {
+        DealerTransferPositionV3::General { position, .. }
+            if identity_matches(position.position().owner(), expected_owner) =>
+        {
+            Ok(())
+        }
+        _ => Err(Error::MismatchedBinding),
+    }
+}
+
 fn apply_position_credit(
     position: PositionAccountV3,
     amounts: DealerAssetTransferAmountsV1,
@@ -781,11 +978,15 @@ fn require_transfer_direction(
     destination: DealerAssetEndpointKindV1,
 ) -> Result<()> {
     let valid = match action {
-        DealerRuntimeActionV1::Contribute => {
+        DealerRuntimeActionV1::Initialize | DealerRuntimeActionV1::Contribute => {
             source == DealerAssetEndpointKindV1::GeneralPosition
                 && destination == DealerAssetEndpointKindV1::FacilityPosition
         }
         DealerRuntimeActionV1::WithdrawFunding | DealerRuntimeActionV1::RefundCancelledSponsor => {
+            source == DealerAssetEndpointKindV1::FacilityPosition
+                && destination == DealerAssetEndpointKindV1::GeneralPosition
+        }
+        DealerRuntimeActionV1::Claim => {
             source == DealerAssetEndpointKindV1::FacilityPosition
                 && destination == DealerAssetEndpointKindV1::GeneralPosition
         }
@@ -818,7 +1019,8 @@ fn require_transfer_direction(
 const fn action_has_asset_transfer(action: DealerRuntimeActionV1) -> bool {
     matches!(
         action,
-        DealerRuntimeActionV1::Contribute
+        DealerRuntimeActionV1::Initialize
+            | DealerRuntimeActionV1::Contribute
             | DealerRuntimeActionV1::WithdrawFunding
             | DealerRuntimeActionV1::RefundCancelledSponsor
             | DealerRuntimeActionV1::SelectLeaseAndBegin
@@ -826,6 +1028,7 @@ const fn action_has_asset_transfer(action: DealerRuntimeActionV1) -> bool {
             | DealerRuntimeActionV1::Deliver
             | DealerRuntimeActionV1::FinalizeSettlement
             | DealerRuntimeActionV1::AbortBeforeCollection
+            | DealerRuntimeActionV1::Claim
     )
 }
 
@@ -846,6 +1049,15 @@ fn position_semantic_id(position: PositionAccountV3) -> Result<Id> {
         .semantic_id(&DealerPositionSha256V1)
         .map_err(|_| Error::MismatchedBinding)?;
     Ok(Id::from_bytes(identity.bytes()))
+}
+
+fn advance_position_generation(position: PositionAccountV3) -> Result<PositionAccountV3> {
+    let mut fields = position.fields();
+    fields.generation = fields
+        .generation
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    PositionAccountV3::new(fields).map_err(|_| Error::ConservationFailure)
 }
 
 #[derive(Clone, Copy, Debug)]

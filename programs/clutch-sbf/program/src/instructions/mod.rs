@@ -15,7 +15,7 @@
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
 //! | [`cash_exit`] | `Intent::WithdrawCash` |
-//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfile`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow`, `Intent::CloseRevenuePolicyRecord` |
+//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
@@ -44,6 +44,10 @@
 pub mod artifact;
 pub mod cash_exit;
 pub mod construction;
+/// Non-production immutable Dealer-policy catalog transport.
+pub mod dealer_policy;
+/// Capability-disabled Dealer facility account and instruction contracts.
+pub mod dealer_runtime;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;

@@ -597,9 +597,36 @@ fn rejected_child_observation_is_atomic() {
 #[test]
 fn pda_preimages_are_exact_disjoint_and_solana_compatible() {
     let facility = common::id(20);
+    let typed_facility = DealerFacilityIdV1::from_bytes(facility.bytes());
     let policy = DealerPdaPreimageV1::policy(common::policy().policy_id().unwrap()).unwrap();
     assert_eq!(policy.seed(0).unwrap(), DEALER_POLICY_PDA_DOMAIN_V1);
     assert_eq!(policy.seed_count(), 2);
+
+    let genesis = DealerPdaPreimageV1::facility_genesis(typed_facility).unwrap();
+    let position_binding =
+        DealerPdaPreimageV1::facility_position_binding(typed_facility).unwrap();
+    let facility_position = DealerPdaPreimageV1::facility_position(typed_facility).unwrap();
+    let facility_replay = DealerPdaPreimageV1::facility_replay(typed_facility).unwrap();
+    assert_eq!(
+        genesis.seed(0).unwrap(),
+        DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        position_binding.seed(0).unwrap(),
+        FACILITY_POSITION_BINDING_PDA_DOMAIN_V1
+    );
+    assert_eq!(genesis.seed(1).unwrap(), &facility.bytes());
+    assert_eq!(position_binding.seed(1).unwrap(), &facility.bytes());
+    assert_ne!(genesis.seed(0).unwrap(), position_binding.seed(0).unwrap());
+    assert_eq!(
+        facility_position.seed(0).unwrap(),
+        DEALER_FACILITY_POSITION_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        facility_replay.seed(0).unwrap(),
+        DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1
+    );
+    assert_ne!(facility_position.seed(0).unwrap(), facility_replay.seed(0).unwrap());
 
     let page = DealerPdaPreimageV1::lp_page(facility, 7).unwrap();
     assert_eq!(page.seed(0).unwrap(), LP_PAGE_PDA_DOMAIN_V1);
