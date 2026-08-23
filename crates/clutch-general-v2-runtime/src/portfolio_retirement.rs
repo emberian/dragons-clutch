@@ -10,16 +10,24 @@
 //! Reservations close, both Position child counts and Replays advance, and
 //! the root counters change once, or no plan exists.
 
+use clutch_batch::portfolio_execution_v2::{
+    PORTFOLIO_EXECUTION_VERSION_V2, PORTFOLIO_PAIR_RECEIPT_SET_DOMAIN_V2,
+    PORTFOLIO_PAIR_RECEIPT_TRANSITION_KIND_V2_BYTE,
+};
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1, complete_candidate_feed_v2,
-    project_general_replay_transition_v1, GeneralPositionReplayPrestateV1,
+    project_general_replay_transition_v1, verify_general_replay_last_transition_v1,
+    GeneralPositionReplayPrestateV1,
     GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32, MarketBindingV2,
     RetirePortfolioPairArchivesPayloadV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1, SettlementSliceLegKindV1, SettlementSliceV1, Sha256BackendV1,
     SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
-use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend, MAX_OUTCOMES};
+use clutch_retirement::{
+    PositionAccountV3, PositionV3Fields, PositionV3Sha256Backend, ReplayV3HashBackend,
+    MAX_OUTCOMES,
+};
 use clutch_solana_layout::reservation::RESERVATION_STATE_CONSUMED;
 use clutch_solana_layout::reservation_v9::{DeletableRentOwnerV1, ReservationAccountV9};
 use clutch_solana_layout::settlement_receipt_v5::{
@@ -196,6 +204,7 @@ pub struct PortfolioPairArchiveTerminalReceiptV2 {
     settlement_root_pre_data_id: Id32,
     settlement_root_post_data_id: Id32,
     transition_commitment: Id32,
+    action42_receipt_set_digest: Id32,
     receipt_count: u8,
     refund_owner_count: u8,
     neutral_sink: Id32,
@@ -221,6 +230,10 @@ impl PortfolioPairArchiveTerminalReceiptV2 {
     }
     /// Common immutable action-42 commitment stored by every sibling.
     pub const fn transition_commitment(&self) -> Id32 { self.transition_commitment }
+    /// Exact reconstructed pending sibling-set digest consumed by action 42.
+    pub const fn action42_receipt_set_digest(&self) -> Id32 {
+        self.action42_receipt_set_digest
+    }
     /// Exhaustive Receipt sibling count.
     pub const fn receipt_count(&self) -> u8 { self.receipt_count }
     /// Sorted unique refund-owner count.
@@ -402,6 +415,12 @@ where
     let mut entry_delivery_transition = Id32::ZERO;
     let mut entry_buy_index = 0u8;
     let mut entry_sell_index = 0u8;
+    let mut prior_outcome = None;
+    let mut payoff = [0u64; MAX_OUTCOMES];
+    let mut consideration_price_units = 0u128;
+    let mut pending_set_hash = Sha256::new();
+    pending_set_hash.update(PORTFOLIO_PAIR_RECEIPT_SET_DOMAIN_V2);
+    pending_set_hash.update([PORTFOLIO_EXECUTION_VERSION_V2, input.payload.receipt_count]);
     let mut receipt_index = 0usize;
     while receipt_index < PORTFOLIO_ARCHIVE_MAX_RECEIPTS_V2 {
         if receipt_index < receipt_count {
@@ -464,9 +483,19 @@ where
                 || slice.outcome != semantic.outcome
                 || slice.quantity != semantic.quantity
                 || semantic.price != read_u64_at(tail.prices_le(), usize::from(slice.outcome))?
+                || prior_outcome.is_some_and(|prior| semantic.outcome <= prior)
             {
                 return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
             }
+            prior_outcome = Some(semantic.outcome);
+            let payoff_at = usize::from(semantic.outcome);
+            if payoff[payoff_at] != 0 {
+                return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
+            }
+            payoff[payoff_at] = semantic.quantity;
+            consideration_price_units = consideration_price_units
+                .checked_add(semantic.consideration_price_units)
+                .ok_or(PortfolioArchiveRetirementErrorV2::ArithmeticOverflow)?;
             if receipt_index == 0 {
                 if input.payload.entry_receipt != current.account {
                     return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
@@ -489,6 +518,24 @@ where
                 return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
             }
             let rent = current.receipt.rent();
+            let pending_pre_data_id = pending_receipt_pre_data_id(current)?;
+            pending_set_hash.update(current.account.bytes());
+            pending_set_hash.update(pending_pre_data_id.bytes());
+            pending_set_hash.update(semantic.slice_index.to_le_bytes());
+            pending_set_hash.update(semantic.sequence.to_le_bytes());
+            pending_set_hash.update([semantic.outcome]);
+            pending_set_hash.update(semantic.quantity.to_le_bytes());
+            pending_set_hash.update(semantic.price.to_le_bytes());
+            pending_set_hash.update([
+                semantic.accounted_end_mask,
+                0,
+                semantic.expected_end_mask(),
+                PORTFOLIO_PAIR_RECEIPT_TRANSITION_KIND_V2_BYTE,
+            ]);
+            pending_set_hash.update([0u8; 32]);
+            pending_set_hash.update(rent.payer.bytes());
+            pending_set_hash.update(rent.refundable_principal.to_le_bytes());
+            pending_set_hash.update(rent.donation_floor.to_le_bytes());
             receipt_closes[receipt_index] = Some(close_plan(
                 current.account,
                 Id32::new(evidence.receipt_data_id().bytes())
@@ -503,6 +550,10 @@ where
                 if prior.account == current.account || prior.pre_data_id == receipt_closes[receipt_index]
                     .ok_or(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?
                     .pre_data_id
+                    || pending_receipt_pre_data_id(
+                        input.receipts[earlier]
+                            .ok_or(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?,
+                    )? == pending_pre_data_id
                 {
                     return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
                 }
@@ -513,6 +564,7 @@ where
         }
         receipt_index += 1;
     }
+    let action42_receipt_set_digest = nonzero_digest(pending_set_hash)?;
 
     let buyer_close = validate_reservation(
         input.buyer_reservation,
@@ -528,7 +580,9 @@ where
         entry_sell_order,
         1,
     )?;
+    let reservation_closes = [buyer_close, seller_close];
     if buyer_close.account == seller_close.account
+        || buyer_close.pre_data_id == seller_close.pre_data_id
         || input.buyer_position.account == input.seller_position.account
         || input.buyer_replay.replay_account() == input.seller_replay.replay_account()
     {
@@ -546,25 +600,86 @@ where
         }
         close_index += 1;
     }
+    let price_scale = u128::from(input.market_binding.base().price_scale);
+    if consideration_price_units % price_scale != 0 {
+        return Err(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch);
+    }
+    let consideration_atoms = u64::try_from(consideration_price_units / price_scale)
+        .map_err(|_| PortfolioArchiveRetirementErrorV2::ArithmeticOverflow)?;
+    let buyer_reservation_body = input.buyer_reservation.reservation.body();
+    let seller_reservation_body = input.seller_reservation.reservation.body();
+    if consideration_atoms == 0
+        || consideration_atoms != root
+            .cash_pot_expectation()
+            .map_err(|_| PortfolioArchiveRetirementErrorV2::Contract)?
+            .consideration_debit_atoms
+        || buyer_reservation_body.initial_cash_atoms < consideration_atoms
+        || buyer_reservation_body.initial_internal.iter().any(|amount| *amount != 0)
+        || seller_reservation_body.initial_cash_atoms != 0
+        || seller_reservation_body.initial_internal != payoff
+        || buyer_reservation_body.entitled_units != seller_reservation_body.entitled_units
+    {
+        return Err(PortfolioArchiveRetirementErrorV2::ReservationMismatch);
+    }
+    let buyer_prior_position_id = action42_prior_position_id(
+        input.buyer_position,
+        true,
+        consideration_atoms,
+        buyer_reservation_body.initial_cash_atoms,
+        payoff,
+        backend,
+    )?;
+    let seller_prior_position_id = action42_prior_position_id(
+        input.seller_position,
+        false,
+        consideration_atoms,
+        0,
+        payoff,
+        backend,
+    )?;
     require_immediate_portfolio_replay(
         input.buyer_replay,
         input.buyer_position,
         GeneralReplayTransitionKindV1::PortfolioPairBuyer,
         entry_delivery_transition,
+        buyer_prior_position_id,
+        action42_receipt_set_digest,
+        backend,
     )?;
     require_immediate_portfolio_replay(
         input.seller_replay,
         input.seller_position,
         GeneralReplayTransitionKindV1::PortfolioPairSeller,
         entry_delivery_transition,
+        seller_prior_position_id,
+        action42_receipt_set_digest,
+        backend,
     )?;
-    if input.buyer_replay.extension().last_delta_id().is_zero()
-        || input.seller_replay.extension().last_delta_id().is_zero()
-    {
-        return Err(PortfolioArchiveRetirementErrorV2::ReplayMismatch);
-    }
 
-    let reservation_closes = [buyer_close, seller_close];
+    let semantic_id_partition = [
+        root_pre_data_id,
+        common_commitment,
+        reservation_closes[0].pre_data_id,
+        reservation_closes[1].pre_data_id,
+        Id32::new(input.buyer_position.semantic_id)
+            .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)?,
+        Id32::new(input.seller_position.semantic_id)
+            .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)?,
+        input.buyer_replay.replay_semantic_id(),
+        input.seller_replay.replay_semantic_id(),
+    ];
+    if !distinct_nonzero(&semantic_id_partition) {
+        return Err(PortfolioArchiveRetirementErrorV2::BindingMismatch);
+    }
+    close_index = 0;
+    while close_index < receipt_count {
+        let receipt_close = receipt_closes[close_index]
+            .ok_or(PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?;
+        if semantic_id_partition.contains(&receipt_close.pre_data_id) {
+            return Err(PortfolioArchiveRetirementErrorV2::BindingMismatch);
+        }
+        close_index += 1;
+    }
     let settlement_root_poststate = root
         .retire_portfolio_pair_archives(input.payload.receipt_count)
         .map_err(|_| PortfolioArchiveRetirementErrorV2::Contract)?;
@@ -595,6 +710,12 @@ where
             .bytes(),
     )
     .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)?;
+    if buyer_position_post_id == seller_position_post_id
+        || semantic_id_partition.contains(&buyer_position_post_id)
+        || semantic_id_partition.contains(&seller_position_post_id)
+    {
+        return Err(PortfolioArchiveRetirementErrorV2::BindingMismatch);
+    }
 
     let (refund_transfers, neutral_sink_credit_lamports) = build_refund_vector(
         &input,
@@ -610,6 +731,7 @@ where
         root_pre_data_id,
         feed_bundle,
         common_commitment,
+        action42_receipt_set_digest,
         &receipt_closes,
         &reservation_closes,
     )?;
@@ -649,6 +771,7 @@ where
         root_pre_data_id,
         root_post_data_id,
         common_commitment,
+        action42_receipt_set_digest,
         &receipt_closes,
         &reservation_closes,
         buyer_position_post_id,
@@ -677,6 +800,7 @@ where
             settlement_root_pre_data_id: root_pre_data_id,
             settlement_root_post_data_id: root_post_data_id,
             transition_commitment: common_commitment,
+            action42_receipt_set_digest,
             receipt_count: input.payload.receipt_count,
             refund_owner_count: input.payload.refund_owner_count,
             neutral_sink: input.neutral_sink_account,
@@ -738,11 +862,80 @@ fn validate_reservation(
     )
 }
 
-fn require_immediate_portfolio_replay(
+fn pending_receipt_pre_data_id(
+    input: PortfolioArchiveReceiptInputV2,
+) -> Result<Id32, PortfolioArchiveRetirementErrorV2> {
+    let mut semantic = input.receipt.semantic();
+    semantic.settled_quantity = 0;
+    semantic.consumed_flags = 0;
+    let pending = SettlementReceiptAccountV5::new(
+        semantic,
+        SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+        input.receipt.rent(),
+    )
+    .map_err(|_| PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?;
+    let account = LayoutHash32::new(input.account.bytes())
+        .map_err(|_| PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?;
+    Id32::new(
+        pending
+            .data_id(account)
+            .map_err(|_| PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)?
+            .bytes(),
+    )
+    .map_err(|_| PortfolioArchiveRetirementErrorV2::ReceiptSetMismatch)
+}
+
+fn action42_prior_position_id<B: PositionV3Sha256Backend>(
+    current: AuthenticatedPositionV3,
+    buyer: bool,
+    consideration_atoms: u64,
+    buyer_reserved_release: u64,
+    payoff: [u64; MAX_OUTCOMES],
+    backend: &B,
+) -> Result<Id32, PortfolioArchiveRetirementErrorV2> {
+    let current_fields = current.semantic.fields();
+    let mut prior_fields: PositionV3Fields = current_fields;
+    if buyer {
+        prior_fields.cash_atoms = current_fields
+            .cash_atoms
+            .checked_add(consideration_atoms)
+            .ok_or(PortfolioArchiveRetirementErrorV2::ArithmeticOverflow)?;
+        prior_fields.reserved_cash_atoms = current_fields
+            .reserved_cash_atoms
+            .checked_add(buyer_reserved_release)
+            .ok_or(PortfolioArchiveRetirementErrorV2::ArithmeticOverflow)?;
+        let mut outcome = 0usize;
+        while outcome < MAX_OUTCOMES {
+            prior_fields.native_eggs[outcome] = current_fields.native_eggs[outcome]
+                .checked_sub(payoff[outcome])
+                .ok_or(PortfolioArchiveRetirementErrorV2::BindingMismatch)?;
+            outcome += 1;
+        }
+    } else {
+        prior_fields.cash_atoms = current_fields
+            .cash_atoms
+            .checked_sub(consideration_atoms)
+            .ok_or(PortfolioArchiveRetirementErrorV2::BindingMismatch)?;
+    }
+    let prior = PositionAccountV3::new(prior_fields)
+        .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)?;
+    Id32::new(
+        prior
+            .semantic_id(backend)
+            .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)?
+            .bytes(),
+    )
+    .map_err(|_| PortfolioArchiveRetirementErrorV2::BindingMismatch)
+}
+
+fn require_immediate_portfolio_replay<B: ReplayV3HashBackend>(
     replay: GeneralPositionReplayPrestateV1,
     position: AuthenticatedPositionV3,
     expected_kind: GeneralReplayTransitionKindV1,
     expected_transition_id: Id32,
+    prior_position_semantic_id: Id32,
+    expected_transition_evidence_id: Id32,
+    backend: &B,
 ) -> Result<(), PortfolioArchiveRetirementErrorV2> {
     let extension = replay.extension();
     if replay.position() != position
@@ -754,7 +947,15 @@ fn require_immediate_portfolio_replay(
     {
         return Err(PortfolioArchiveRetirementErrorV2::ReplayMismatch);
     }
-    Ok(())
+    verify_general_replay_last_transition_v1(
+        replay,
+        prior_position_semantic_id,
+        expected_kind,
+        expected_transition_id,
+        expected_transition_evidence_id,
+        backend,
+    )
+    .map_err(|_| PortfolioArchiveRetirementErrorV2::ReplayMismatch)
 }
 
 fn close_plan(
@@ -912,6 +1113,7 @@ fn transition_id(
     root_pre_data_id: Id32,
     feed_bundle: Id32,
     commitment: Id32,
+    action42_receipt_set_digest: Id32,
     receipt_closes: &[Option<PortfolioArchiveClosePlanV2>;
         PORTFOLIO_ARCHIVE_MAX_RECEIPTS_V2],
     reservation_closes: &[PortfolioArchiveClosePlanV2;
@@ -928,6 +1130,7 @@ fn transition_id(
         input.market_binding_account,
         input.neutral_sink_account,
         commitment,
+        action42_receipt_set_digest,
     ] {
         hash.update(id.bytes());
     }
@@ -998,6 +1201,7 @@ fn terminal_receipt_id(
     root_pre_data_id: Id32,
     root_post_data_id: Id32,
     commitment: Id32,
+    action42_receipt_set_digest: Id32,
     receipt_closes: &[Option<PortfolioArchiveClosePlanV2>;
         PORTFOLIO_ARCHIVE_MAX_RECEIPTS_V2],
     reservation_closes: &[PortfolioArchiveClosePlanV2;
@@ -1020,6 +1224,7 @@ fn terminal_receipt_id(
         root_pre_data_id,
         root_post_data_id,
         commitment,
+        action42_receipt_set_digest,
     ] {
         hash.update(id.bytes());
     }
@@ -1088,6 +1293,11 @@ fn hash_replay_transition(
 ) {
     hash.update(pre.replay_account().bytes());
     hash.update(pre.replay_semantic_id().bytes());
+    // These are the immediate action-42 persisted authorities. Include both
+    // explicitly in the terminal transcript rather than relying only on the
+    // transition-ID hash's transitive binding.
+    hash.update(pre.extension().last_transition_id().bytes());
+    hash.update(pre.extension().last_delta_id().bytes());
     hash.update(post.replay_poststate_semantic_id().bytes());
     hash.update(pre.next_sequence().to_le_bytes());
     hash.update(post.next_sequence().to_le_bytes());
