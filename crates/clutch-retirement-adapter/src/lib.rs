@@ -15,6 +15,7 @@ mod account_auth;
 mod composition;
 mod generation_migration;
 mod live_family_auth;
+mod position_v3_bridge;
 mod root_bundle;
 mod runtime_commit;
 
@@ -26,7 +27,8 @@ pub use account_auth::{
     authenticate_general_reservation_v5, authenticate_general_reservation_v7,
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,
-    authenticate_position_v2, authenticate_position_v2_exact, authenticate_replay_absence_v1_exact,
+    authenticate_position_tombstone_v3_exact, authenticate_position_v2,
+    authenticate_position_v2_exact, authenticate_position_v3_exact, authenticate_replay_absence_v1_exact,
     authenticate_replay_successor_v1_exact, authenticate_runtime_executable_v2,
     AbsentAccountViewV1, AccountAccessV2, AccountViewV1, AccountViewV2, AuthenticatedAccountV1,
     AuthenticatedAccountV2, CanonicalPdaV1, CountedChildSchemaV1,
@@ -56,6 +58,13 @@ pub use live_family_auth::{
     AuthenticatedGeneralV2NeutralSinkBindingV1, AuthenticatedGeneralV2RootSiblingsV1,
     AuthenticatedGeneralV2WindowRetirementV1, AuthenticatedTerminalEpochFamiliesV2,
     FamilyOwnedFinalAbsenceEpochChildV1, FamilyOwnedTerminalEpochChildV1,
+};
+pub use position_v3_bridge::{
+    authenticate_and_prepare_position_replay_close_v4,
+    authenticate_and_prepare_position_replay_reopen_v3, PositionReplayCloseRuntimeRequestV4,
+    PositionReplayRentMinimumsV3, PositionReplayReopenRuntimeRequestV3,
+    PositionV3PurposeTerminalReceiptV1, PositionV3RetirementRealmV1,
+    PreparedPositionReplayCloseV3, PreparedPositionReplayReopenV3,
 };
 pub use root_bundle::{
     authenticate_terminal_epoch_root_bundle_v1, AuthenticatedEpochChildClassV1,
@@ -117,6 +126,8 @@ pub enum RetirementAdapterErrorV2 {
     ReferenceCodec(clutch_solana_reference::Error),
     /// The authoritative General V2 codec or semantic owner refused.
     GeneralV2Codec(clutch_general_v2_contract::CodecError),
+    /// The canonical Realm-selected collateral adapter refused a binding.
+    Collateral(clutch_collateral_adapter_v2::Error),
     /// A central base encoder returned a width other than its frozen constant.
     BaseLengthMismatch,
     /// The runtime account is not owned by the expected program.
@@ -170,6 +181,12 @@ impl From<clutch_solana_reference::Error> for RetirementAdapterErrorV2 {
 impl From<clutch_general_v2_contract::CodecError> for RetirementAdapterErrorV2 {
     fn from(error: clutch_general_v2_contract::CodecError) -> Self {
         Self::GeneralV2Codec(error)
+    }
+}
+
+impl From<clutch_collateral_adapter_v2::Error> for RetirementAdapterErrorV2 {
+    fn from(error: clutch_collateral_adapter_v2::Error) -> Self {
+        Self::Collateral(error)
     }
 }
 
