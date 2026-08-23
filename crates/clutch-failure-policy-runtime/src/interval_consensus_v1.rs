@@ -426,6 +426,16 @@ impl FailureIntervalConsensusStateV1 {
         {
             return Err(Error::BindingMismatch);
         }
+        let advanced = self.transition_nonce != 0;
+        if advanced
+            != (live(self.last_transition_receipt_id.bytes())
+                && live(self.last_liveness_receipt_id.bytes()))
+            || (!advanced
+                && (self.checked_coordinates != 0 || self.current_work_id != self.initial_work_id))
+            || (advanced && self.checked_coordinates == 0)
+        {
+            return Err(Error::BindingMismatch);
+        }
         match self.phase {
             FailureIntervalConsensusPhaseV1::Active => {
                 if live(self.certificate_id.bytes())
@@ -1381,6 +1391,18 @@ mod tests {
         );
         assert_eq!(
             validate_prefund_observation(100, 3, 9, 108),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn replay_projection_refuses_a_half_recorded_paid_transition() {
+        let facts = FailureIntervalConsensusPersistedFactsV1 {
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([0; 32]),
+            ..active_facts()
+        };
+        assert_eq!(
+            project_failure_interval_consensus_replay_id_v1(facts),
             Err(Error::BindingMismatch)
         );
     }
