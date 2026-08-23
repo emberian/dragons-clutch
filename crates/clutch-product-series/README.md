@@ -8,6 +8,27 @@ and component-by-component funding transitions. It has no account tags,
 instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account memory,
 allocator, floats, or caller-selected market nonce.
 
+## Exhaustive quantized interval consensus
+
+`QuantizedIntervalConsensusWorkV1` is the fixed 592-byte, allocation-free work
+contract for lifting smooth point-only evidence without guessing a point. It
+binds the full-width Market V2, Product template, Genesis, native basis,
+SourceOccurrence, immutable SourcePlane interval result, price-measure policy,
+capability profile, evaluator release, and canonical `WEIGHT-ROUND-01` identity.
+Each bounded advance evaluates the next integer coordinate with the Product
+basis evaluator, latches the first exact payout vector, and refuses immediately
+if any later vector differs. A certificate exists only after the inclusive
+upper endpoint has been evaluated.
+
+The fixed work codec is structural and non-authorizing. The pure in-memory
+session can mint a private verified payout capability because its history starts
+at the checked Begin constructor. Restoring that capability from a persisted
+work record is intentionally absent, and
+`require_quantized_interval_consensus_runtime_capability_v1` always refuses.
+A future SBF integration must authenticate the dedicated work PDA, owner,
+lifecycle, transcript succession, and Replay transition before a Failure
+relation successor may consume the certificate and install a resolution.
+
 The crucial identity split is:
 
 ```text
@@ -270,6 +291,8 @@ identity bridge.
 | `SeriesAttachmentPlanV1` | 112: 16-byte header, FundingQuote ID `16..48`, LiquidityFacilityPlan ID `48..80`, WrapperRecipeSet ID `80..112` | `dragons-clutch/series-attachment-plan/v1` |
 | `SeriesPlanV4` | 152: 16-byte header, Template/Genesis/Attachment IDs `16..112`, first start `112..120`, stride `120..128`, count `128..132`, reserved `132..136`, lead `136..144`, cap `144..152` | `dragons-clutch/series-plan/v4` |
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
+| `RegistryProgramReleaseV1` | 160: header `0..16`, Program/ProgramData/full-ProgramData SHA-256 `16..112`, deployment slot `112..120`, compiled capability-manifest ID `120..152`, reserved `152..160`; the release ID is derived from the complete body | `dragons-clutch/registry-program-release/v1` |
+| `RegistryCapabilityProfileV2` | 800: header `0..16`, exact RegistryRelease ID `16..48`, selector mappings and hard limits `48..96`, fourteen semantic-owner IDs `96..544`, immutable Realm collateral `544..744`, exact SummaryProgram body `744..800`; the capability-profile ID is derived from the complete body and is not stored inside it | `dragons-clutch/registry-capability-profile/v2` |
 
 ## Pure compilation and funding
 

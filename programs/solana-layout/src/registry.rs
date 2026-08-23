@@ -268,7 +268,7 @@ pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact counted funded-dependencies account bytes.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 472;
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 536;
 /// Immutable-after-activation Dealer LP page discriminator.
 pub const DEALER_LP_PAGE_V2_ACCOUNT_TAG: u8 = 0x98;
 /// Dealer LP page V2 account version.
@@ -335,6 +335,12 @@ pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 /// Permanent failure-generation replay tombstone version.
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Immutable, deletable Dealer action-work receipt discriminator.
+pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
+/// Dealer action-work receipt account version.
+pub const DEALER_ACTION_RECEIPT_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer action receipt bytes including the global envelope.
+pub const DEALER_ACTION_RECEIPT_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 532;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -367,6 +373,7 @@ const _: () = assert!(DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG == 0x9c);
 const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
+const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1089,6 +1096,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "failure-replay-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+            version: DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-action-receipt-v1-account",
     },
 ];
 
