@@ -9,7 +9,11 @@ use clutch_structured_claim::{ClaimVector, MAX_OUTCOMES};
 
 use crate::{put, Error, Result};
 
-/// Maximum number of recipes in the first executable commitment profile.
+/// Maximum inline recipes in the first executable commitment profile.
+///
+/// Sixteen is a packet/witness bound, not an economic protocol maximum. A
+/// future paged recipe owner can allocate a fresh version without changing
+/// recipe identity or weakening this version's canonical fixed-depth proof.
 pub const MAX_WRAPPER_RECIPES_V1: u16 = 16;
 /// Fixed array capacity corresponding to [`MAX_WRAPPER_RECIPES_V1`].
 pub const MAX_WRAPPER_RECIPE_SLOTS_V1: usize = 16;
@@ -395,6 +399,48 @@ mod tests {
                 [9; 32],
                 &hash,
             ),
+            Err(Error::InvalidIdentity)
+        );
+    }
+
+    #[test]
+    fn partial_tree_requires_canonical_zero_tail_subtrees() {
+        let hash = DeterministicHash;
+        let recipe = recipe();
+        let recipe_id = recipe.id(&hash).unwrap();
+        let mut recipes = [[0_u8; 32]; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        recipes[0] = [21; 32];
+        recipes[1] = [22; 32];
+        recipes[2] = recipe_id;
+        let (set_id, membership) =
+            build_wrapper_recipe_membership_v1(recipes, 3, 2, &hash).unwrap();
+        assert_eq!(
+            authenticate_wrapper_recipe_membership_v1(
+                recipe,
+                recipe_id,
+                membership,
+                set_id,
+                &hash,
+            ),
+            Ok(())
+        );
+
+        let mut noncanonical = membership;
+        noncanonical.siblings[0] = [23; 32];
+        assert_eq!(
+            authenticate_wrapper_recipe_membership_v1(
+                recipe,
+                recipe_id,
+                noncanonical,
+                set_id,
+                &hash,
+            ),
+            Err(Error::InvalidIdentity)
+        );
+
+        recipes[3] = [24; 32];
+        assert_eq!(
+            build_wrapper_recipe_membership_v1(recipes, 3, 2, &hash),
             Err(Error::InvalidIdentity)
         );
     }

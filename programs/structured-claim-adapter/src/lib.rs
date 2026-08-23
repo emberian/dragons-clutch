@@ -60,7 +60,7 @@ pub use handler::{
 pub use identity::SolanaPdaVerifierV1;
 pub use identity::{
     bind_descriptor_v1, canonical_native_claim_id_v1,
-    canonical_series_scoped_wrapper_product_id_v2, canonical_wrapper_product_id_v1,
+    canonical_series_scoped_wrapper_product_id_v2,
     BoundDescriptorV1, PdaVerifierV1, RuntimeDeploymentsV1, DESCRIPTOR_SEED, MINT_AUTHORITY_SEED,
     MINT_SEED, SERIES_SCOPED_WRAPPER_PRODUCT_DOMAIN_V2, VAULT_OWNER_SEED,
 };

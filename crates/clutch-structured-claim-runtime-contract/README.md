@@ -10,6 +10,17 @@ from authenticated Product, basis, and deployment facts. Custody stages the
 required atomic Position cash/native-Egg transfer without touching global
 supply or Hoard collateral.
 
+The first inline recipe-set profile carries at most sixteen ordered leaves so
+its fixed proof fits the existing instruction packet. That is a wire-profile
+capacity, not an economic limit: a future paged set owner can take a fresh
+version while retaining the same recipe identities.
+
+The root's terminal receipt is derived from its complete final body with only
+the recursive receipt field omitted. It therefore commits the exact Product
+link lineage, immutable Series/root binding, admission and terminal
+transcripts, exhaustive counts, rent principal, donation residue, and bump;
+an arbitrary caller receipt cannot become Product terminal evidence.
+
 It does not parse Solana accounts, derive PDAs, hash, invoke CPI, or claim that
 structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,

@@ -6,9 +6,9 @@
 //! allowing an untyped market key to stand in for `MarketInstanceV2`.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV2Id, ContentId,
+    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4Id, ContentId,
     MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id, ProductTemplateV4,
-    SeriesAttachmentPlanId, SeriesAttachmentPlanV2, SeriesPlanV5, SeriesPlanV5Id,
+    SeriesAttachmentPlanV4, SeriesAttachmentPlanV4Id, SeriesPlanV5, SeriesPlanV5Id,
 };
 
 use crate::{Error, Result};
@@ -61,11 +61,11 @@ pub struct StructuredMarketProjectionV1 {
     /// Shared Product/Source generation.
     pub generation: u64,
     /// Operational attachment fixed by the Series.
-    pub attachment_plan_id: SeriesAttachmentPlanId,
+    pub attachment_plan_id: SeriesAttachmentPlanV4Id,
     /// Exact wrapper-recipe set owned by the authenticated attachment body.
     pub wrapper_recipe_set_id: ContentId,
     /// Exact authenticated successor compiler bundle.
-    pub compiler_output_id: CompiledProductSeriesBundleV2Id,
+    pub compiler_output_id: CompiledProductSeriesBundleV4Id,
     /// Product compiler release fixed by the Product template.
     pub compiler_release_id: ContentId,
     /// Capability profile fixed by the Market genesis profile.
@@ -74,7 +74,8 @@ pub struct StructuredMarketProjectionV1 {
     pub owner_release_id: ContentId,
     /// Exact market-scoped Structured root authenticated by the adapter.
     pub structured_root_id: ContentId,
-    /// Immutable Product receipt which first admitted this Structured family.
+    /// Immutable Product receipt which first admitted this Structured family,
+    /// or zero only for authenticated absence before the first root exists.
     pub product_admission_receipt_id: ContentId,
     /// Exhaustive family state.
     pub state: StructuredMarketProjectionStateV1,
@@ -152,7 +153,6 @@ impl StructuredMarketProjectionV1 {
             self.capability_profile_id,
             self.owner_release_id,
             self.structured_root_id,
-            self.product_admission_receipt_id,
         ];
         let mut left = 0_usize;
         while left < identities.len() {
@@ -168,6 +168,14 @@ impl StructuredMarketProjectionV1 {
             }
             left += 1;
         }
+        let has_product_admission = !self.product_admission_receipt_id.is_zero();
+        if has_product_admission
+            && identities
+                .iter()
+                .any(|identity| *identity == self.product_admission_receipt_id)
+        {
+            return Err(Error::InvalidIdentity);
+        }
         if self.generation == 0
             || self
             .live_descriptor_count
@@ -178,9 +186,10 @@ impl StructuredMarketProjectionV1 {
         }
         let has_receipt = self.terminal_receipt_id != [0; 32];
         if has_receipt
-            && identities
+            && (identities
                 .iter()
                 .any(|identity| identity.bytes() == self.terminal_receipt_id)
+                || self.product_admission_receipt_id.bytes() == self.terminal_receipt_id)
         {
             return Err(Error::InvalidIdentity);
         }
@@ -189,6 +198,7 @@ impl StructuredMarketProjectionV1 {
                 if self.admitted_descriptor_count != 0
                     || self.live_descriptor_count != 0
                     || self.terminal_descriptor_count != 0
+                    || has_product_admission
                     || has_receipt
                 {
                     return Err(Error::InvariantViolation);
@@ -197,6 +207,7 @@ impl StructuredMarketProjectionV1 {
             StructuredMarketProjectionStateV1::Live => {
                 if self.admitted_descriptor_count == 0
                     || self.live_descriptor_count == 0
+                    || !has_product_admission
                     || has_receipt
                 {
                     return Err(Error::InvariantViolation);
@@ -206,6 +217,7 @@ impl StructuredMarketProjectionV1 {
                 if self.admitted_descriptor_count == 0
                     || self.live_descriptor_count != 0
                     || self.terminal_descriptor_count != self.admitted_descriptor_count
+                    || !has_product_admission
                     || !has_receipt
                 {
                     return Err(Error::InvariantViolation);
@@ -224,8 +236,8 @@ pub fn project_structured_market_v1(
     ordinal: u32,
     generation: u64,
     market: &MarketInstancePreimageV2,
-    attachment: &SeriesAttachmentPlanV2,
-    compiler_output: &CompiledProductSeriesBundleV2,
+    attachment: &SeriesAttachmentPlanV4,
+    compiler_output: &CompiledProductSeriesBundleV4,
     template: &ProductTemplateV4,
     genesis: &MarketGenesisProfileV2,
     owner_release_id: ContentId,
@@ -262,15 +274,21 @@ pub fn project_structured_market_v1(
         || market.market_genesis_profile_id != series.market_genesis_profile_id
         || market.start_bucket != start_bucket
         || market.collateral_cap != series.market_collateral_cap
-        || series.attachment_plan_id
-            != attachment.id().map_err(|_| Error::InvalidIdentity)?
+        || series.attachment_plan_id.content_id()
+            != attachment
+                .id()
+                .map_err(|_| Error::InvalidIdentity)?
+                .content_id()
         || compiler_output.series_plan_id != series_plan_id
-        || compiler_output.attachment_plan_id != series.attachment_plan_id
+        || compiler_output.attachment_plan_id.content_id()
+            != series.attachment_plan_id.content_id()
         || compiler_output.product_template_id
             != template.id().map_err(|_| Error::InvalidIdentity)?
+        || compiler_output.native_claim_basis_id != template.native_claim_basis_id
         || compiler_output.market_genesis_profile_id
             != genesis.id().map_err(|_| Error::InvalidIdentity)?
-        || compiler_output.capability_profile_id != genesis.capability_profile_id
+        || compiler_output.price_measure_policy_id != genesis.price_measure_policy_id
+        || compiler_output.capability_profile_id.content_id() != genesis.capability_profile_id
         || compiler_output.product_compiler_release_id != template.compiler_release_id
         || attachment.funding_quote_id != compiler_output.funding_quote_id
     {
@@ -282,7 +300,7 @@ pub fn project_structured_market_v1(
         series_market_link_account,
         ordinal,
         generation,
-        attachment_plan_id: series.attachment_plan_id,
+        attachment_plan_id: attachment.id().map_err(|_| Error::InvalidIdentity)?,
         wrapper_recipe_set_id: attachment.wrapper_recipe_set_id,
         compiler_output_id,
         compiler_release_id: template.compiler_release_id,
@@ -322,14 +340,14 @@ mod tests {
             series_market_link_account: [3; 32],
             ordinal: 0,
             generation: 1,
-            attachment_plan_id: SeriesAttachmentPlanId::from_bytes([4; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([4; 32]),
             wrapper_recipe_set_id: ContentId::from_bytes([5; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV2Id::from_bytes([6; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes([6; 32]),
             compiler_release_id: ContentId::from_bytes([7; 32]),
             capability_profile_id: ContentId::from_bytes([8; 32]),
             owner_release_id: ContentId::from_bytes([9; 32]),
             structured_root_id: ContentId::from_bytes([10; 32]),
-            product_admission_receipt_id: ContentId::from_bytes([11; 32]),
+            product_admission_receipt_id: ContentId::ZERO,
             state: StructuredMarketProjectionStateV1::Absent,
             admitted_descriptor_count: 0,
             live_descriptor_count: 0,
@@ -340,6 +358,7 @@ mod tests {
 
         let mut live = base;
         live.state = StructuredMarketProjectionStateV1::Live;
+        live.product_admission_receipt_id = ContentId::from_bytes([11; 32]);
         live.admitted_descriptor_count = 2;
         live.live_descriptor_count = 1;
         live.terminal_descriptor_count = 1;
@@ -349,6 +368,7 @@ mod tests {
 
         let mut terminal = base;
         terminal.state = StructuredMarketProjectionStateV1::Terminal;
+        terminal.product_admission_receipt_id = ContentId::from_bytes([11; 32]);
         terminal.admitted_descriptor_count = 2;
         terminal.terminal_descriptor_count = 2;
         assert_eq!(terminal.encode_preimage(), Err(Error::InvariantViolation));
@@ -366,9 +386,9 @@ mod tests {
             series_market_link_account: [3; 32],
             ordinal: 3,
             generation: 4,
-            attachment_plan_id: SeriesAttachmentPlanId::from_bytes([5; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([5; 32]),
             wrapper_recipe_set_id: ContentId::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV2Id::from_bytes([7; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes([7; 32]),
             compiler_release_id: ContentId::from_bytes([8; 32]),
             capability_profile_id: ContentId::from_bytes([9; 32]),
             owner_release_id: ContentId::from_bytes([10; 32]),
@@ -382,11 +402,27 @@ mod tests {
         };
         let expected = projection.encode_preimage().unwrap();
         let mut changed = projection;
+        changed.series_market_link_account = [13; 32];
+        assert_ne!(changed.encode_preimage().unwrap(), expected);
+        changed = projection;
+        changed.generation = 5;
+        assert_ne!(changed.encode_preimage().unwrap(), expected);
+        changed = projection;
+        changed.product_admission_receipt_id = ContentId::from_bytes([13; 32]);
+        assert_ne!(changed.encode_preimage().unwrap(), expected);
+        changed = projection;
         changed.owner_release_id = ContentId::from_bytes([13; 32]);
         assert_ne!(changed.encode_preimage().unwrap(), expected);
         changed = projection;
         changed.terminal_descriptor_count = 0;
         changed.admitted_descriptor_count = 1;
         assert_ne!(changed.encode_preimage().unwrap(), expected);
+
+        changed = projection;
+        changed.generation = 0;
+        assert_eq!(changed.encode_preimage(), Err(Error::InvariantViolation));
+        changed = projection;
+        changed.product_admission_receipt_id = changed.structured_root_id;
+        assert_eq!(changed.encode_preimage(), Err(Error::InvalidIdentity));
     }
 }
