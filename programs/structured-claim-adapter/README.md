@@ -224,9 +224,12 @@ The adapter implementation is intentionally honest about work owned elsewhere:
 - General must integrate the exact base tuples without widening the central
   account-count/profile cutover: Structured `(75,1,1)` uses 28 accounts and
   General `(74,1,35)` uses 23;
-- Product commit `c8e84645` must precede this lane so the base consumes its
-  private authenticated Series wrapper authorization and first-admission
-  mutation rather than a caller DTO;
+- Product semantic commit `16b50c46` (integrated by `c531524a`) supplies the
+  current BundleV4/AttachmentV4 and frame-bounded Series-link authority this
+  lane consumes. The base uses Product's private authenticated wrapper
+  authorization and first-admission mutation rather than a caller DTO;
+  withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
+  creation;
 - full-vector wrap/unwind, compaction, terminal redemption, Product terminal
   promotion, and root/Position close remain deliberately disabled; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback

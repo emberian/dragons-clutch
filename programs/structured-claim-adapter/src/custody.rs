@@ -995,12 +995,14 @@ fn prepare_general_replay_write(
     }
     let mut body = [0_u8; MAX_CUSTODY_REPLAY_V3_WRITE_BYTES];
     body[..GENERAL_REPLAY_ACCOUNT_V1_BYTES].copy_from_slice(plan.replay_poststate_body());
+    let body_len = u16::try_from(GENERAL_REPLAY_ACCOUNT_V1_BYTES)
+        .map_err(|_| Error::CustodyAuthorityMismatch)?;
     Ok((
         ReplayV3WriteV1 {
             address: plan.replay_account().bytes(),
             prestate_semantic_id: plan.replay_prestate_semantic_id().bytes(),
             poststate_semantic_id: plan.replay_poststate_semantic_id().bytes(),
-            body_len: GENERAL_REPLAY_ACCOUNT_V1_BYTES as u16,
+            body_len,
             body,
         },
         plan.delta_id().bytes(),
@@ -1057,11 +1059,13 @@ fn prepare_structured_replay_write(
         .semantic_id(&sha)
         .map_err(|_| Error::CustodyAuthorityMismatch)?
         .bytes();
+    let body_len = u16::try_from(MAX_CUSTODY_REPLAY_V3_WRITE_BYTES)
+        .map_err(|_| Error::CustodyAuthorityMismatch)?;
     Ok(ReplayV3WriteV1 {
         address: replay_account.key,
         prestate_semantic_id: replay_prestate_semantic_id,
         poststate_semantic_id,
-        body_len: MAX_CUSTODY_REPLAY_V3_WRITE_BYTES as u16,
+        body_len,
         body,
     })
 }
@@ -1504,7 +1508,7 @@ mod tests {
         let mut index = 0_usize;
         while index < accounts.len() {
             accounts[index].role = roles[index];
-            accounts[index].key = [(index + 1) as u8; 32];
+            accounts[index].key = [u8::try_from(index + 1).expect("bounded account index"); 32];
             accounts[index].signer = index == IX_VAULT_AUTHORITY || index == IX_ACTOR;
             accounts[index].writable =
                 (IX_SOURCE_POSITION..=IX_DESTINATION_REPLAY).contains(&index);

@@ -56,8 +56,7 @@ use super::collateral_position_v3::{
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_market::{
     admit_series_wrapper_obligation_v1, authenticate_series_market_link_v1,
-    authenticate_series_wrapper_authorization_v1, AuthenticatedSeriesMarketLinkV1,
-    AuthenticatedSeriesWrapperAuthorizationV1,
+    authenticate_series_wrapper_authorization_v1, AuthenticatedSeriesWrapperAuthorizationV1,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, transfer_data,
@@ -283,11 +282,15 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
         false, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false,
     ];
-    let writable = [
+    let mut writable = [
         false, true, false, false, false, false, false, false, false, false, true, true, false,
-        false, false, false, false, false, false, false, false, false, false, false, true, true,
+        false, false, false, false, false, false, false, false, false, false, false, true, false,
         false, false,
     ];
+    writable[CV_SERIES_LINK] = structured_root_requires_product_write_v1(
+        accounts[CV_STRUCTURED_ROOT].owner,
+        accounts[CV_STRUCTURED_ROOT].data_len(),
+    );
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
         false, true, false, true, false, true, false, false, false, false, false, false, false,
@@ -327,32 +330,37 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     Ok(())
 }
 
-#[derive(Debug)]
-struct StructuredProductAuthorityV1 {
-    link: Box<AuthenticatedSeriesMarketLinkV1>,
-    authorization: AuthenticatedSeriesWrapperAuthorizationV1,
-    compiler_release_id: ContentId,
-}
-
-fn authenticate_structured_product_authority_v1(
+#[allow(clippy::too_many_arguments)]
+fn admit_structured_descriptor_root_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     liabilities: super::collateral_position_v3::GeneralMarketLiabilityAuthorityV1,
-) -> Outcome<StructuredProductAuthorityV1> {
+    deployments: RuntimeDeploymentsV1,
+    descriptor: StructuredClaimDescriptorV2,
+    native_claim_id: [u8; 32],
+    recipe_membership: clutch_structured_claim_adapter::runtime_contract::WrapperRecipeMembershipV1,
+) -> Outcome<()> {
+    // Product owns the framed `0xad/1` decoder and authentication formula. The
+    // fixed output buffers are adapter scratch, not persisted authority and not
+    // kernel evidence. Keeping both receipts in this lexical scope avoids a
+    // self-referential owner/borrowed-receipt DTO.
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
     let link_data = accounts[CV_SERIES_LINK]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let untrusted_link = Box::new(
-        SeriesMarketLinkAccountV1::decode(&link_data)
-            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
-    );
+    SeriesMarketLinkAccountV1::decode_into(&link_data, &mut link_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(link_data);
-    let untrusted_binding = untrusted_link.state.binding();
+    let untrusted_binding = link_output.state.binding();
     require(
         untrusted_binding.market_instance_id.bytes()
             == liabilities.market_binding.market_instance_v2_id.bytes(),
         ClutchError::MismatchedState,
     )?;
+    let root_is_uninitialized = structured_root_requires_product_write_v1(
+        accounts[CV_STRUCTURED_ROOT].owner,
+        accounts[CV_STRUCTURED_ROOT].data_len(),
+    );
     let link = authenticate_series_market_link_v1(
         program_id,
         &accounts[CV_SERIES_LINK],
@@ -361,7 +369,8 @@ fn authenticate_structured_product_authority_v1(
         untrusted_binding.market_instance_id,
         untrusted_binding.generation,
         Pubkey::new_from_array(untrusted_binding.market_root_account_id.bytes()),
-        true,
+        root_is_uninitialized,
+        &mut link_output,
     )?;
     let authorization = authenticate_series_wrapper_authorization_v1(
         program_id,
@@ -399,29 +408,12 @@ fn authenticate_structured_product_authority_v1(
                 == liabilities.market_binding.price_measure_policy_v1_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    Ok(StructuredProductAuthorityV1 {
-        link: Box::new(link),
-        authorization,
-        compiler_release_id: compiler_bundle.value().product_compiler_release_id,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn admit_structured_descriptor_root_v1(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    liabilities: super::collateral_position_v3::GeneralMarketLiabilityAuthorityV1,
-    deployments: RuntimeDeploymentsV1,
-    descriptor: StructuredClaimDescriptorV2,
-    native_claim_id: [u8; 32],
-    recipe_membership: clutch_structured_claim_adapter::runtime_contract::WrapperRecipeMembershipV1,
-) -> Outcome<()> {
-    let product = authenticate_structured_product_authority_v1(program_id, accounts, liabilities)?;
+    let compiler_release_id = compiler_bundle.value().product_compiler_release_id;
     let root_binding = structured_root_binding_v1(
         accounts,
         deployments,
-        product.authorization,
-        product.compiler_release_id,
+        authorization,
+        compiler_release_id,
     )?;
     let root_id = root_binding
         .id(&RuntimeSha256)
@@ -439,7 +431,7 @@ fn admit_structured_descriptor_root_v1(
         recipe,
         descriptor.wrapper_recipe_id,
         recipe_membership,
-        product.authorization.wrapper_recipe_set_id().bytes(),
+        authorization.wrapper_recipe_set_id().bytes(),
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -464,11 +456,9 @@ fn admit_structured_descriptor_root_v1(
         ClutchError::WrongPda,
     )?;
 
-    let root_is_uninitialized = accounts[CV_STRUCTURED_ROOT].owner == &SYSTEM_PROGRAM_ID
-        && accounts[CV_STRUCTURED_ROOT].data_len() == 0;
     if root_is_uninitialized {
         require(
-            product.authorization.requires_product_admission(),
+            authorization.requires_product_admission(),
             ClutchError::MismatchedState,
         )?;
         let first_admission_receipt = structured_descriptor_admission_receipt_v1(
@@ -479,16 +469,18 @@ fn admit_structured_descriptor_root_v1(
             &RuntimeSha256,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        let rebound_link = Box::new(admit_series_wrapper_obligation_v1(
+        let mut rebound_link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+        let rebound_link = admit_series_wrapper_obligation_v1(
             program_id,
             &accounts[CV_SERIES_LINK],
-            *product.link,
-            product.authorization,
+            link,
+            authorization,
             first_admission_receipt,
-        )?);
+            &mut rebound_link_output,
+        )?;
         let rebound_authorization = authenticate_series_wrapper_authorization_v1(
             program_id,
-            *rebound_link,
+            rebound_link,
             &accounts[CV_COMPILER_BUNDLE],
             &accounts[CV_ATTACHMENT],
         )?;
@@ -500,7 +492,7 @@ fn admit_structured_descriptor_root_v1(
                     accounts,
                     deployments,
                     rebound_authorization,
-                    product.compiler_release_id,
+                    compiler_release_id,
                 )? == root_binding,
             ClutchError::MismatchedState,
         )?;
@@ -553,7 +545,7 @@ fn admit_structured_descriptor_root_v1(
         )
     } else {
         require(
-            !product.authorization.requires_product_admission()
+            !authorization.requires_product_admission()
                 && accounts[CV_STRUCTURED_ROOT].owner == program_id
                 && accounts[CV_STRUCTURED_ROOT].data_len()
                     == STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
@@ -571,7 +563,7 @@ fn admit_structured_descriptor_root_v1(
             root.binding == root_binding
                 && root.root_bump == root_pda.1
                 && root.product_lineage.product_admission_receipt_id
-                    == product.authorization.wrapper_admission_receipt_id(),
+                    == authorization.wrapper_admission_receipt_id(),
             ClutchError::MismatchedState,
         )?;
         let current_donation = accounts[CV_STRUCTURED_ROOT]
@@ -585,7 +577,7 @@ fn admit_structured_descriptor_root_v1(
         root.current_donation_lamports = current_donation;
         root = Box::new((*root)
             .admit_descriptor(
-                structured_product_lineage_v1(product.authorization),
+                structured_product_lineage_v1(authorization),
                 descriptor_id,
                 recipe_id,
                 &RuntimeSha256,
@@ -638,6 +630,10 @@ fn structured_product_lineage_v1(
         product_admission_receipt_id: authorization.wrapper_admission_receipt_id(),
         product_link_transition_sequence: authorization.link_transition_sequence(),
     }
+}
+
+fn structured_root_requires_product_write_v1(owner: &Pubkey, data_len: usize) -> bool {
+    owner == &SYSTEM_PROGRAM_ID && data_len == 0
 }
 
 fn write_and_reauthenticate_structured_root_v1(
@@ -1714,6 +1710,22 @@ mod tests {
                 action == 1,
             );
         }
+    }
+
+    #[test]
+    fn product_link_is_writable_only_for_an_empty_system_root() {
+        assert!(structured_root_requires_product_write_v1(
+            &SYSTEM_PROGRAM_ID,
+            0,
+        ));
+        assert!(!structured_root_requires_product_write_v1(
+            &SYSTEM_PROGRAM_ID,
+            1,
+        ));
+        assert!(!structured_root_requires_product_write_v1(
+            &Pubkey::new_from_array([91; 32]),
+            0,
+        ));
     }
 
     #[test]

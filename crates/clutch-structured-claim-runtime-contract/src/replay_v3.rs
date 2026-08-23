@@ -36,6 +36,13 @@ impl StructuredClaimReplayExtensionStateV1 {
             _ => Err(Error::InvalidReplayExtension),
         }
     }
+
+    const fn encode(self) -> u8 {
+        match self {
+            Self::Founding => 0,
+            Self::Advanced => 1,
+        }
+    }
 }
 
 /// Canonical fixed-width extension for one structured-claim vault Replay V3.
@@ -124,7 +131,7 @@ impl StructuredClaimReplayExtensionV1 {
         put(
             &mut output,
             &mut cursor,
-            &[self.state as u8, self.last_action],
+            &[self.state.encode(), self.last_action],
         )?;
         put(&mut output, &mut cursor, &[0; 4])?;
         for identity in [
@@ -332,8 +339,8 @@ impl StructuredClaimReplayDeltaV1 {
 }
 
 const fn is_custody_action(action: u8) -> bool {
-    action == StructuredClaimActionV1::WrapCanonical as u8
-        || action == StructuredClaimActionV1::UnwrapCanonical as u8
+    action == StructuredClaimActionV1::WrapCanonical.tag()
+        || action == StructuredClaimActionV1::UnwrapCanonical.tag()
 }
 
 fn read_key(input: &[u8], cursor: &mut usize) -> Result<[u8; 32]> {

@@ -83,7 +83,10 @@ impl AssetTransferPhasePolicyV1 {
 
     /// Return the exact General V2 wire value.
     pub const fn to_byte(self) -> u8 {
-        self as u8
+        match self {
+            Self::ActiveOnly => 0,
+            Self::ActiveOrResolved => 1,
+        }
     }
 }
 
