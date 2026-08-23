@@ -98,9 +98,43 @@ impl FailureMarketRecoveryQuoteScheduleV1 {
             }
             index += 1;
         }
-        self.work_principal_lamports()?;
-        self.maximum_lamports_per_call()?;
+        let work_principal_lamports = self.work_principal_lamports()?;
+        let maximum_lamports_per_call = self.maximum_lamports_per_call()?;
+        let required_calls = self.required_calls_for_full_progress()?;
+        let total_call_capacity = u64::from(self.maximum_calls)
+            .checked_mul(maximum_lamports_per_call)
+            .ok_or(Error::BindingMismatch)?;
+        if self.maximum_calls < required_calls || total_call_capacity < work_principal_lamports {
+            return Err(Error::BindingMismatch);
+        }
         Ok(())
+    }
+
+    /// Minimum number of bounded calls needed to accept every attempt row's
+    /// maximum progress. Lower-priced rows still consume their own calls.
+    pub fn required_calls_for_full_progress(self) -> Result<u32> {
+        if self.maximum_progress_units_per_call == 0 {
+            return Err(Error::BindingMismatch);
+        }
+        let count = usize::from(self.attempt_count);
+        let mut total = 0u64;
+        let mut index = 0usize;
+        while index < count {
+            let progress = self.attempts[index].max_progress_units;
+            if progress == 0 {
+                return Err(Error::BindingMismatch);
+            }
+            let calls = progress
+                .checked_sub(1)
+                .ok_or(Error::BindingMismatch)?
+                .checked_div(self.maximum_progress_units_per_call)
+                .ok_or(Error::BindingMismatch)?
+                .checked_add(1)
+                .ok_or(Error::BindingMismatch)?;
+            total = total.checked_add(calls).ok_or(Error::BindingMismatch)?;
+            index += 1;
+        }
+        u32::try_from(total).map_err(|_| Error::BindingMismatch)
     }
 
     /// Exact maximum shared work principal across all attempts.
@@ -179,6 +213,19 @@ impl FailureMarketRecoveryQuoteScheduleV1 {
         }
         delta
             .checked_mul(row.lamports_per_progress_unit)
+            .ok_or(Error::BindingMismatch)
+    }
+
+    /// Exact unspent work principal returned by the liveness runtime to its
+    /// immutable payer at terminal close. Per-call exact-reward debits never
+    /// reclassify this residue as a donation or Failure-owned balance.
+    pub fn refundable_unused_work_principal_lamports(
+        self,
+        paid_rewards_lamports: u64,
+    ) -> Result<u64> {
+        self.validate()?;
+        self.work_principal_lamports()?
+            .checked_sub(paid_rewards_lamports)
             .ok_or(Error::BindingMismatch)
     }
 
@@ -393,7 +440,7 @@ mod tests {
             recovery_policy_id: EvidenceOnlyRecoveryPolicyId::from_bytes([1; 32]),
             attempt_count: 2,
             attempts,
-            maximum_calls: 6,
+            maximum_calls: 8,
             maximum_progress_units_per_call: 4,
         }
     }
@@ -403,6 +450,11 @@ mod tests {
         let schedule = schedule();
         assert_eq!(schedule.work_principal_lamports(), Ok(170));
         assert_eq!(schedule.maximum_lamports_per_call(), Ok(28));
+        assert_eq!(schedule.required_calls_for_full_progress(), Ok(8));
+        assert_eq!(
+            schedule.refundable_unused_work_principal_lamports(42),
+            Ok(128)
+        );
         assert_eq!(schedule.exact_progress_reward_lamports(1, 2, 6), Ok(28));
         assert_eq!(
             schedule.exact_progress_reward_lamports(1, 2, 7),
@@ -426,5 +478,9 @@ mod tests {
             lamports_per_progress_unit: 1,
         };
         assert_eq!(noncanonical.validate(), Err(Error::NonCanonicalReserved));
+
+        let mut undercalled = schedule;
+        undercalled.maximum_calls = 7;
+        assert_eq!(undercalled.validate(), Err(Error::BindingMismatch));
     }
 }
