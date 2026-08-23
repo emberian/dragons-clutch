@@ -648,6 +648,8 @@ fn require_current_product_failure_join(
             && link_binding.generation == root_binding.generation
             && registry.series_plan_id() == link_binding.series_plan_id
             && registry.compiler_bundle_id() == bundle.semantic_id()
+            && registry.funding_terms_id() == link_binding.funding_terms_id
+            && registry.funding_terms_id() == bundle_value.funding_terms_id
             && registry.registry_release_id() == root_binding.registry_release_id
             && registry.capability_profile_id() == root_binding.capability_profile_id
             && projection.registry_release_id == root_binding.registry_release_id
@@ -673,6 +675,10 @@ fn require_current_product_failure_join(
             && bundle_value.source_plane_contract_id == root_binding.source_plane_contract_id
             && bundle_value.source_spec_id == root_binding.source_spec_id
             && link_binding.compiler_output_id == bundle.semantic_id()
+            && link_binding.attachment_plan_id
+                == bundle_value.attachment_plan_id.content_id()
+            && link_binding.funding_quote_id == bundle_value.funding_quote_id
+            && link_binding.funding_terms_id == bundle_value.funding_terms_id
             && link_binding.source_release_id == root_binding.source_release_id
             && link_binding.source_plane_contract_id == root_binding.source_plane_contract_id
             && link_binding.source_spec_id == root_binding.source_spec_id
