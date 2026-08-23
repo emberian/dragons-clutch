@@ -1255,8 +1255,40 @@ pub struct PreparedFractionalExternalClaimRedemptionV3 {
     request: ClaimRedemptionCollateralRequestV2,
 }
 
+/// Burn-free external ClaimLedger/Hoard payout capability.
+///
+/// This collateral owner cannot authenticate Fractional credit accounts. The
+/// Fractional runtime must wrap and withhold this structural capability until
+/// it has authenticated both exact numerator-credit successors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedFractionalExternalCreditPayoutV3 {
+    prepared: PreparedFractionalExternalClaimRedemptionV3,
+}
+
+impl PreparedFractionalExternalCreditPayoutV3 {
+    /// Exact unchanged-supply ClaimLedger/0xa5 successor.
+    pub const fn fractional(self) -> FractionalClaimLedgerPlanV3 {
+        self.prepared.fractional()
+    }
+
+    /// Exact Realm collateral request exposed after both credits authenticate.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.prepared.collateral_request()
+    }
+
+    /// Canonical unchanged-supply ClaimLedger successor.
+    pub const fn claim_ledger_after(self) -> ClaimLedgerV3 {
+        self.prepared.claim_ledger_after()
+    }
+
+    /// Canonical Hoard successor after the whole-atom payout.
+    pub const fn hoard_after(self) -> HoardV2 {
+        self.prepared.hoard_after()
+    }
+}
+
 impl PreparedFractionalExternalClaimRedemptionV3 {
-    /// Exact ClaimLedger/0xa5 successor used to authenticate the bearer burn.
+    /// Exact ClaimLedger/0xa5 successor used to authenticate the owning action.
     pub const fn fractional(self) -> FractionalClaimLedgerPlanV3 {
         self.fractional
     }
@@ -1302,6 +1334,71 @@ pub fn prepare_fractional_external_claim_redemption_v3<B: PositionV3Sha256Backen
     destination_token_account: Id,
     backend: &B,
 ) -> Result<PreparedFractionalExternalClaimRedemptionV3> {
+    prepare_fractional_external_payout_v3(
+        hoard,
+        claim_ledger,
+        fractional_ledger_before_id,
+        fractional_ledger_after_id,
+        consumed_sequence,
+        FractionalClaimSupplyMutationV3::BurnMaterialized {
+            outcome,
+            amount: quantity,
+            observed_before: observed_materialized_before,
+        },
+        payout_atoms,
+        claimant,
+        destination_token_account,
+        backend,
+    )
+}
+
+/// Prepare a burn-free external whole-atom payout created solely by exact
+/// same-domain numerator-credit aggregation.
+///
+/// The returned collateral request is structural. The Fractional owner must
+/// keep it private until it authenticates and advances both exact credit
+/// accounts and the sole aggregate-credit ledger; no claim supply changes.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_fractional_external_credit_payout_v3<B: PositionV3Sha256Backend>(
+    hoard: HoardV2,
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_after_id: Id,
+    consumed_sequence: u64,
+    payout_atoms: u64,
+    claimant: Id,
+    destination_token_account: Id,
+    backend: &B,
+) -> Result<PreparedFractionalExternalCreditPayoutV3> {
+    Ok(PreparedFractionalExternalCreditPayoutV3 {
+        prepared: prepare_fractional_external_payout_v3(
+            hoard,
+            claim_ledger,
+            fractional_ledger_before_id,
+            fractional_ledger_after_id,
+            consumed_sequence,
+            FractionalClaimSupplyMutationV3::Unchanged,
+            payout_atoms,
+            claimant,
+            destination_token_account,
+            backend,
+        )?,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_fractional_external_payout_v3<B: PositionV3Sha256Backend>(
+    hoard: HoardV2,
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_after_id: Id,
+    consumed_sequence: u64,
+    supply_mutation: FractionalClaimSupplyMutationV3,
+    payout_atoms: u64,
+    claimant: Id,
+    destination_token_account: Id,
+    backend: &B,
+) -> Result<PreparedFractionalExternalClaimRedemptionV3> {
     hoard.validate()?;
     claim_ledger.validate()?;
     claimant.require_live()?;
@@ -1320,11 +1417,7 @@ pub fn prepare_fractional_external_claim_redemption_v3<B: PositionV3Sha256Backen
         fractional_ledger_before_id,
         fractional_ledger_after_id,
         consumed_sequence,
-        FractionalClaimSupplyMutationV3::BurnMaterialized {
-            outcome,
-            amount: quantity,
-            observed_before: observed_materialized_before,
-        },
+        supply_mutation,
         backend,
     )?;
     let hoard_before_id = hoard.semantic_id(backend)?;
@@ -1431,6 +1524,15 @@ pub fn accept_fractional_external_claim_redemption_v3(
         },
         receipt_id,
     })
+}
+
+/// Accept the exact Realm collateral postcondition for a burn-free payout
+/// minted by two authenticated numerator-credit successors.
+pub fn accept_fractional_external_credit_payout_v3(
+    prepared: PreparedFractionalExternalCreditPayoutV3,
+    accepted: AcceptedBearerRedemptionCollateralV3,
+) -> Result<FractionalClaimRedemptionPlanV3> {
+    accept_fractional_external_claim_redemption_v3(prepared.prepared, accepted)
 }
 
 /// Burn or preserve native supply, advance the 0xa5 latch, and release exactly

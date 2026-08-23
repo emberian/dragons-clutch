@@ -14,6 +14,7 @@ use crate::{
     DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1, DealerStateV2,
     DealerTransferPositionV3, DealerTransitionIntentV1, DealerTransitionLivenessModeV1, Error,
     FacilityPositionBindingV2, Id, PreparedDealerPositionPotTransferV1,
+    CoveredDealerRowAssetTransitionV1, CoveredDealerSettlementRowV1,
     PreparedDealerReplayTransitionV1, Result, SettlementPotV2, MAX_OUTCOMES,
 };
 use clutch_general_v2_contract::SettlementRootV1AccountV1;
@@ -89,6 +90,107 @@ pub struct PreparedDealerBeginCoveredLeaseV4 {
     pub dealer: PreparedDealerBeginLeaseV3,
     /// General root successor counting the created attachment.
     pub settlement_root_after: SettlementRootV1AccountV1,
+}
+
+/// Atomic Dealer owner for one authenticated Collect or Deliver row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedCoveredDealerRowProgressV1 {
+    /// Exact Pot cursor/custody successor.
+    pub pot_after: SettlementPotV2,
+    /// Same-generation facility Replay successor binding all user-owned writes.
+    pub facility_replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Advance one exact row after the adapter has rederived Reservation,
+/// Position, General Replay, Pot, and liveness postimages.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_covered_dealer_row_progress_v1(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    epoch: &DealerEpochBindingV2,
+    selection: &CoveredDealerSelectionV1,
+    row: CoveredDealerSettlementRowV1,
+    lease: &DealerLeaseV2,
+    pot: &SettlementPotV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    transition: CoveredDealerRowAssetTransitionV1,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+    current_slot: u64,
+) -> Result<PreparedCoveredDealerRowProgressV1> {
+    policy.validate()?;
+    state.validate_against_policy(policy)?;
+    selection.validate_lease_pot(lease, pot, epoch, policy)?;
+    authorization.validate_against(schedule, runtime)?;
+    replay.validate()?;
+    if transition.row() != row
+        || row.selection_id() != selection.selection_id()?
+        || row.selected_fee_binding_digest() != selection.selected_fee_binding_digest
+        || state_account_id != selection.dealer_state_account_id
+        || !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
+        || state.active_lease_id != lease.lease_account_id
+        || state.active_epoch_id != epoch.epoch_id
+        || state.active_epoch_binding_account_id != epoch.epoch_binding_account_id
+        || state.facility_position_id != lease.facility_position_leased_id
+        || replay.facility_position_account_id() != state.facility_position_account_id
+        || replay.replay_account_id() != state.facility_replay_account_id
+        || replay.facility_position_binding_id() != state.facility_position_binding_id
+        || replay.position_generation() != state.generation
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || authorization.action != transition.action()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let pot_after = match transition.action() {
+        DealerRuntimeActionV1::Collect => crate::advance_collect_v2(
+            pot,
+            lease,
+            schedule,
+            runtime,
+            row.collect_slice(),
+            current_slot,
+            Some(authorization),
+        )?,
+        DealerRuntimeActionV1::Deliver => crate::advance_deliver_v2(
+            pot,
+            lease,
+            schedule,
+            runtime,
+            row.deliver_slice(),
+            current_slot,
+            Some(authorization),
+        )?,
+        _ => return Err(Error::InvalidParameter),
+    };
+    let state_content_id = state.state_content_id()?;
+    let facility_replay = replay.prepare_transition(
+        replay_binding,
+        DealerTransitionIntentV1 {
+            replay_account_id: replay.replay_account_id(),
+            replay_pre_id: replay.replay_id()?,
+            state_pre_content_id: state_content_id,
+            state_post_content_id: state_content_id,
+            position_pre_semantic_id: state.facility_position_id,
+            position_post_semantic_id: state.facility_position_id,
+            liveness_receipt_semantic_id: authorization.receipt_semantic_id,
+            fee_evidence_id: selection.selected_fee_binding_digest,
+            asset_transfer_bundle_id: transition.bundle_id(),
+            position_generation_before: state.generation,
+            position_generation_after: state.generation,
+            expected_ordinal: replay.next_transition_ordinal(),
+            action: transition.action(),
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        },
+    )?;
+    Ok(PreparedCoveredDealerRowProgressV1 {
+        pot_after,
+        facility_replay,
+    })
 }
 
 /// Derive the unique pre-creation identity for one exact Pot postimage.

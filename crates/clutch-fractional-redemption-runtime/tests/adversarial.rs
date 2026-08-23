@@ -81,6 +81,29 @@ fn split_rent(payer: u8) -> RentSplitV2 {
     }
 }
 
+fn live_credit(
+    context: BoundFractionalContextV1,
+    claimant: Identity32V1,
+    numerator: u64,
+    stored_bump: u8,
+) -> FractionalCreditV2 {
+    let policy = context.policy();
+    FractionalCreditV2 {
+        policy_account: context.policy_account(),
+        ledger_account: context.ledger_account(),
+        market_instance: policy.market_instance,
+        resolution_account: policy.resolution_account,
+        resolution_data_id: policy.resolution_data_id,
+        claimant,
+        domain_generation: policy.domain_generation,
+        account_generation: 1,
+        next_sequence: 1,
+        numerator,
+        stored_bump,
+        rent: split_rent(claimant.bytes()[0]),
+    }
+}
+
 fn external_context(
     aggregate_credit: u128,
     active_credits: u64,
@@ -723,6 +746,106 @@ fn exact_bearer_request_is_hidden_until_the_bound_claim_burn_is_accepted() {
 }
 
 #[test]
+fn credited_bearer_request_is_hidden_until_its_exact_burn_is_accepted() {
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[1] = 1;
+    let mut materialized = [0; MAX_OUTCOMES];
+    materialized[0] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, internal, materialized, 1);
+    let source = BearerClaimPrestateV1 {
+        claimant: rid(50),
+        claim_token_account: rid(51),
+        claim_mint: rid(52),
+        collateral_destination: rid(53),
+        claim_issuance_binding: context.policy().claim_issuance_binding,
+        source_claim_atoms: 1,
+        observed_materialized_supply: materialized,
+    };
+    let prepared = prepare_bearer_credit_v1(
+        context,
+        1,
+        1,
+        CreditPrestateV1::Create(CreditCreationV1::Fresh {
+            claimant: rid(50),
+            stored_bump: 9,
+            rent: split_rent(50),
+        }),
+        source,
+        0,
+        1,
+    )
+    .unwrap();
+    assert_eq!(prepared.claimant(), rid(50));
+    assert_eq!(prepared.outcome(), 0);
+    assert_eq!(prepared.quantity(), 1);
+    assert_eq!(prepared.observed_materialized_supply(), materialized);
+
+    let token_before = AdapterBearerClaimObservationV3 {
+        mint: cid(52),
+        mint_authority: cid(60),
+        source_token_account: cid(51),
+        source_owner: cid(50),
+        mint_supply_atoms: 1,
+        source_atoms: 1,
+    };
+    let prepared_burn = prepare_fractional_bearer_claim_burn_v3(
+        context.claims().unwrap(),
+        cid(60),
+        cid(50),
+        0,
+        1,
+        materialized,
+        token_before,
+        prepared.fractional_claim_ledger(),
+    )
+    .unwrap();
+    let accepted_burn = accept_fractional_bearer_claim_burn_v3(
+        prepared_burn,
+        [0; MAX_OUTCOMES],
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..token_before
+        },
+    )
+    .unwrap();
+    let wrong_token_before = AdapterBearerClaimObservationV3 {
+        source_owner: cid(61),
+        ..token_before
+    };
+    let wrong_prepared_burn = prepare_fractional_bearer_claim_burn_v3(
+        context.claims().unwrap(),
+        cid(60),
+        cid(61),
+        0,
+        1,
+        materialized,
+        wrong_token_before,
+        prepared.fractional_claim_ledger(),
+    )
+    .unwrap();
+    let wrong_burn = accept_fractional_bearer_claim_burn_v3(
+        wrong_prepared_burn,
+        [0; MAX_OUTCOMES],
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..wrong_token_before
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        accept_bearer_credit_burn_v1(prepared, wrong_burn),
+        Err(Error::ClaimPlaneRefused)
+    );
+    let burned = accept_bearer_credit_burn_v1(prepared, accepted_burn).unwrap();
+    let request = burned.collateral_request();
+    assert_eq!(request.payout_atoms, 0);
+    assert_eq!(request.claim_semantic_owner, cid(50));
+    assert_eq!(request.destination_token_account, cid(53));
+}
+
+#[test]
 fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     let mut internal = [0; MAX_OUTCOMES];
     internal[1] = 1;
@@ -851,6 +974,82 @@ fn irreducible_terminal_credit_blocks_every_close_and_names_no_sweep_recipient()
 }
 
 #[test]
+fn external_credit_payout_is_exposed_only_after_both_owner_credits_authenticate() {
+    let (context, _policy, _ledger) =
+        external_context(7, 2, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
+    let source = live_credit(context, rid(50), 4, 9);
+    let destination = live_credit(context, rid(51), 3, 10);
+    assert_eq!(
+        prepare_external_credit_transfer_v1(
+            context,
+            1,
+            source,
+            1,
+            CreditPrestateV1::Live(destination),
+            rid(52),
+            1,
+            4,
+            rid(53),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+    let prepared = prepare_external_credit_transfer_v1(
+        context,
+        1,
+        source,
+        1,
+        CreditPrestateV1::Live(destination),
+        rid(51),
+        1,
+        4,
+        rid(53),
+    )
+    .unwrap();
+    let request = prepared.collateral_request();
+    assert_eq!(request.claim_semantic_owner, cid(51));
+    assert_eq!(request.destination_token_account, cid(53));
+    assert_eq!(request.payout_atoms, 1);
+    assert_eq!(request.backing_before.locked_atoms, 1);
+}
+
+#[test]
+fn internal_credit_merge_reclassifies_principal_and_commits_the_gen1_kind() {
+    let (context, _policy, _ledger) =
+        external_context(7, 2, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
+    let source = live_credit(context, rid(50), 4, 9);
+    let destination = live_credit(context, rid(51), 3, 10);
+    let position = canonical_internal_source(context, rid(51), [0; MAX_OUTCOMES], 1);
+    let plan = merge_credit_v1(
+        context,
+        1,
+        source,
+        1,
+        CreditPrestateV1::Live(destination),
+        rid(51),
+        1,
+        CreditPayoutTargetV1::Internal {
+            position,
+            expected_replay_sequence: 1,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.paid_atoms, 1);
+    assert_eq!(plan.source_after.numerator, 0);
+    assert_eq!(plan.destination_after.numerator, 0);
+    assert_eq!(plan.ledger_after.aggregate_credit_numerator, 0);
+    assert_eq!(plan.custody_after.hoard_after().locked_claim_principal_atoms, 0);
+    assert_eq!(plan.custody_after.hoard_after().cash_liability_atoms, 1);
+    let CreditPayoutPoststateV1::Internal(internal) = plan.payout_after else {
+        panic!("wrong payout disposition");
+    };
+    assert_eq!(internal.position_after.fields().cash_atoms, 1);
+    assert_eq!(
+        internal.replay.kind(),
+        GeneralReplayTransitionKindV1::FractionalMergeCreditPayout
+    );
+}
+
+#[test]
 fn close_refuses_a_nonzero_credit_without_changing_the_aggregate_owner() {
     let (context, policy, ledger) = external_context(1, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
     let credit = FractionalCreditV2 {
@@ -872,6 +1071,72 @@ fn close_refuses_a_nonzero_credit_without_changing_the_aggregate_owner() {
         Err(Error::CreditOutstanding)
     );
     assert_eq!(context.ledger(), ledger);
+}
+
+#[test]
+fn zero_credit_close_conserves_tombstone_refund_and_neutral_lamports() {
+    let (context, _policy, _ledger) =
+        external_context(0, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 0);
+    let credit = live_credit(context, rid(50), 0, 9);
+    let plan = close_zero_credit_v1(context, 1, credit, 1, 160, rid(60)).unwrap();
+    assert_eq!(plan.ledger_after.active_credit_accounts, 0);
+    assert_eq!(plan.ledger_after.aggregate_credit_numerator, 0);
+    assert_eq!(plan.funding.payer, rid(50));
+    assert_eq!(plan.funding.payer_refund_lamports, 100);
+    assert_eq!(plan.funding.tombstone_lamports, 40);
+    assert_eq!(plan.funding.neutral_lamports, 20);
+    assert_eq!(
+        plan.funding.payer_refund_lamports
+            + plan.funding.tombstone_lamports
+            + plan.funding.neutral_lamports,
+        160
+    );
+    assert_eq!(plan.tombstone.closed_next_sequence, 2);
+}
+
+#[test]
+fn credit_move_and_close_intents_refuse_noncanonical_wire_bytes() {
+    let transfer = FractionalTransferIntentV1 {
+        expected_ledger_sequence: 1,
+        expected_source_sequence: 2,
+        expected_destination_sequence: 3,
+        expected_payout_replay_sequence: 4,
+        numerator: 5,
+        source_claimant: rid(50),
+        destination_claimant: rid(51),
+        source_credit: rid(52),
+        destination_credit: rid(53),
+        payout_target: rid(54),
+        payout_kind: 1,
+        destination_mode: 1,
+    };
+    let encoded = transfer.encode().unwrap();
+    assert_eq!(FractionalTransferIntentV1::decode(&encoded), Ok(transfer));
+    let mut bad_padding = encoded;
+    bad_padding[202] = 1;
+    assert_eq!(
+        FractionalTransferIntentV1::decode(&bad_padding),
+        Err(Error::NonCanonicalPadding)
+    );
+    let mut bad_kind = encoded;
+    bad_kind[200] = 3;
+    assert_eq!(
+        FractionalTransferIntentV1::decode(&bad_kind),
+        Err(Error::MismatchedBinding)
+    );
+
+    let close = FractionalCloseCreditIntentV1 {
+        expected_ledger_sequence: 6,
+        expected_credit_sequence: 7,
+        claimant: rid(50),
+        credit_account: rid(52),
+    };
+    let encoded = close.encode().unwrap();
+    assert_eq!(FractionalCloseCreditIntentV1::decode(&encoded), Ok(close));
+    assert_eq!(
+        FractionalCloseCreditIntentV1::decode(&encoded[..79]),
+        Err(Error::Truncated)
+    );
 }
 
 #[test]
@@ -1223,10 +1488,52 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
     assert_eq!(bearer.writable_mask, 0x55300);
     assert_eq!(bearer.signer_mask, 1);
     assert!(bearer.outcome_mint_suffix);
+    assert_eq!(bearer.post_mint_accounts, 0);
+    assert!(!bearer.credit_creation_suffix);
+    assert_eq!(bearer.external_payout_extra_accounts, 0);
+
+    let internal_credit =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemInternalCredit);
+    assert_eq!(internal_credit.account_count, 19);
+    assert_eq!(internal_credit.signer_mask, 1);
+    assert!(!internal_credit.outcome_mint_suffix);
+    assert_eq!(internal_credit.post_mint_accounts, 0);
+    assert!(internal_credit.credit_creation_suffix);
+    assert_eq!(internal_credit.external_payout_extra_accounts, 0);
+
+    let bearer_credit =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerCredit);
+    assert_eq!(bearer_credit.account_count, 19);
+    assert_eq!(bearer_credit.signer_mask, 1);
+    assert!(bearer_credit.outcome_mint_suffix);
+    assert_eq!(bearer_credit.post_mint_accounts, 4);
+    assert!(bearer_credit.credit_creation_suffix);
+    assert_eq!(bearer_credit.external_payout_extra_accounts, 0);
+
+    let transfer =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::TransferCredit);
+    assert_eq!(transfer.account_count, 21);
+    assert_eq!(transfer.signer_mask, 0b11);
+    assert!(transfer.credit_creation_suffix);
+    assert_eq!(transfer.external_payout_extra_accounts, 2);
+    assert_ne!(transfer.writable_mask, transfer.external_writable_mask);
+    assert_eq!(transfer.external_writable_mask & (1 << 16), 0);
+    assert_ne!(transfer.external_writable_mask & (1 << 19), 0);
+
+    let close =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::CloseZeroCredit);
+    assert_eq!(close.account_count, 18);
+    assert_eq!(close.signer_mask, 1);
+    assert!(!close.credit_creation_suffix);
+    assert_eq!(close.external_payout_extra_accounts, 0);
+    assert_eq!(close.external_writable_mask, close.writable_mask);
 
     let seal = fractional_account_contract_v1(FractionalRedemptionActionV1::SealClaimsExhausted);
     assert_eq!(seal.account_count, 12);
     assert_eq!(seal.writable_mask, 0x900);
     assert_eq!(seal.signer_mask, 0);
     assert!(!seal.outcome_mint_suffix);
+    assert_eq!(seal.post_mint_accounts, 0);
+    assert!(!seal.credit_creation_suffix);
+    assert_eq!(seal.external_payout_extra_accounts, 0);
 }
