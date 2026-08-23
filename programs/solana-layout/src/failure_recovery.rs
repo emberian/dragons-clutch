@@ -4,7 +4,7 @@
 //! and ordered account-role contracts. It does not authenticate Source facts,
 //! Product/Series artifacts, liveness receipts, Clock, owners, PDAs, balances,
 //! or signatures. Those are obligations of the SBF adapter. Allocation also
-//! grants no capability: all nine Recovery actions remain disabled.
+//! grants no capability: all thirteen Recovery actions remain disabled.
 
 use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
 
@@ -178,6 +178,76 @@ pub struct CloseFailureRootV1 {
     pub source_release_receipt_id: [u8; HASH_BYTES],
 }
 
+/// Strict `BeginIntervalConsensus` payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BeginIntervalConsensusV1 {
+    /// Shared Failure generation and replay fields.
+    pub common: RecoveryCommonV1,
+    /// Exact Source-owned successful interval handoff.
+    pub source_success_handoff_id: [u8; HASH_BYTES],
+    /// Product-selected bounded interval work profile.
+    pub interval_profile_id: [u8; HASH_BYTES],
+    /// Typed present-funding receipt for ab/ac rent and bounded work.
+    pub funding_admission_receipt_id: [u8; HASH_BYTES],
+    /// Canonical initial Product structural-work identity.
+    pub initial_work_id: [u8; HASH_BYTES],
+    /// Exact refundable ab work-account rent principal.
+    pub work_rent_principal_lamports: u64,
+    /// Exact nonrefundable permanent ac replay rent principal.
+    pub replay_rent_principal_lamports: u64,
+}
+
+/// Strict `AdvanceIntervalConsensus` payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdvanceIntervalConsensusV1 {
+    /// Shared Failure generation and replay fields.
+    pub common: RecoveryCommonV1,
+    /// Exact ab transition nonce expected before this chunk.
+    pub expected_work_transition_nonce: u64,
+    /// Bounded number of integer coordinates requested in this call.
+    pub requested_coordinates: u16,
+    /// Sole keeper paid by liveness for this exact chunk.
+    pub reward_recipient: [u8; HASH_BYTES],
+    /// Exact scheduled liveness ceiling removed from Recovery capital.
+    pub scheduled_ceiling_lamports: u64,
+    /// Complete Product work preimage identity.
+    pub before_work_id: [u8; HASH_BYTES],
+    /// Complete Product work postimage identity.
+    pub after_work_id: [u8; HASH_BYTES],
+    /// Permanent replay postimage identity for this transition.
+    pub replay_receipt_id: [u8; HASH_BYTES],
+}
+
+/// Strict `ResolveIntervalConsensus` payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolveIntervalConsensusV1 {
+    /// Shared Failure generation and replay fields.
+    pub common: RecoveryCommonV1,
+    /// Exact Source-owned successful interval handoff.
+    pub source_success_handoff_id: [u8; HASH_BYTES],
+    /// Complete terminal Product work identity.
+    pub completed_work_id: [u8; HASH_BYTES],
+    /// Exhaustive Product interval certificate identity.
+    pub certificate_id: [u8; HASH_BYTES],
+    /// Permanent replay authentication consumed by capability restoration.
+    pub replay_receipt_id: [u8; HASH_BYTES],
+}
+
+/// Strict `CloseIntervalConsensusWork` payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseIntervalConsensusWorkV1 {
+    /// Shared Failure generation and replay fields.
+    pub common: RecoveryCommonV1,
+    /// Exhaustive Product interval certificate identity.
+    pub certificate_id: [u8; HASH_BYTES],
+    /// Failure resolution receipt which consumed that certificate.
+    pub resolution_receipt_id: [u8; HASH_BYTES],
+    /// Permanent replay postimage retained after ab close.
+    pub replay_receipt_id: [u8; HASH_BYTES],
+    /// Exact authenticated ab close authorization identity.
+    pub work_close_authorization_id: [u8; HASH_BYTES],
+}
+
 /// One exact decoded Recovery action payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureRecoveryPayloadV1 {
@@ -199,6 +269,14 @@ pub enum FailureRecoveryPayloadV1 {
     CloseRecoveryFunding(CloseRecoveryFundingV1),
     /// Close only the resolved semantic root.
     CloseFailureRoot(CloseFailureRootV1),
+    /// Begin one dedicated exhaustive interval-consensus lifecycle.
+    BeginIntervalConsensus(BeginIntervalConsensusV1),
+    /// Evaluate one bounded integer-coordinate chunk.
+    AdvanceIntervalConsensus(AdvanceIntervalConsensusV1),
+    /// Restore a verified Product payout and resolve Failure.
+    ResolveIntervalConsensus(ResolveIntervalConsensusV1),
+    /// Close deletable work while preserving permanent replay.
+    CloseIntervalConsensusWork(CloseIntervalConsensusWorkV1),
 }
 
 /// Exact payload widths, indexed by allocated Recovery action.
@@ -219,6 +297,14 @@ pub const RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1: usize = 248;
 pub const CLOSE_RECOVERY_FUNDING_PAYLOAD_BYTES_V1: usize = 112;
 /// Exact semantic-root-close payload width.
 pub const CLOSE_FAILURE_ROOT_PAYLOAD_BYTES_V1: usize = 208;
+/// Exact interval-consensus Begin payload width.
+pub const BEGIN_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1: usize = 224;
+/// Exact bounded interval-consensus Advance payload width.
+pub const ADVANCE_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1: usize = 232;
+/// Exact interval-consensus Resolve payload width.
+pub const RESOLVE_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1: usize = 208;
+/// Exact interval-consensus work-close payload width.
+pub const CLOSE_INTERVAL_CONSENSUS_WORK_PAYLOAD_BYTES_V1: usize = 208;
 /// Largest payload admitted by Recovery78/v1.
 pub const MAX_FAILURE_RECOVERY_PAYLOAD_BYTES_V1: usize = RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1;
 
@@ -477,6 +563,12 @@ pub enum RecoveryAccountRoleV1 {
     NeutralSink,
     RetirementRoot,
     ReplayTombstone,
+    ProductOccurrenceRoot,
+    IntervalConsensusWork,
+    IntervalConsensusReplay,
+    ResolutionV5,
+    HoardV2,
+    ClaimLedgerV3,
     ClockSysvar,
     RentSysvar,
     SystemProgram,
@@ -643,6 +735,117 @@ pub const CLOSE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SourceRelease, false, false),
 ];
 
+const INTERVAL_PRODUCT_METAS_V1: &[RecoveryAccountMetaV1] = &[
+    meta(RecoveryAccountRoleV1::SeriesRegistry, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgram, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgramData, false, false),
+    meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
+    meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
+    meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
+    meta(RecoveryAccountRoleV1::ProductTemplateArtifact, false, false),
+    meta(RecoveryAccountRoleV1::ClaimBasisArtifact, false, false),
+    meta(RecoveryAccountRoleV1::PricePolicyArtifact, false, false),
+    meta(RecoveryAccountRoleV1::GenesisArtifact, false, false),
+];
+
+/// Exact ordered contract for creating ab work and permanent ac replay.
+pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
+    meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, false, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
+    meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
+    meta(RecoveryAccountRoleV1::RecoveryCompartment, false, false),
+    INTERVAL_PRODUCT_METAS_V1[0],
+    INTERVAL_PRODUCT_METAS_V1[1],
+    INTERVAL_PRODUCT_METAS_V1[2],
+    INTERVAL_PRODUCT_METAS_V1[3],
+    INTERVAL_PRODUCT_METAS_V1[4],
+    INTERVAL_PRODUCT_METAS_V1[5],
+    INTERVAL_PRODUCT_METAS_V1[6],
+    INTERVAL_PRODUCT_METAS_V1[7],
+    INTERVAL_PRODUCT_METAS_V1[8],
+    INTERVAL_PRODUCT_METAS_V1[9],
+    meta(RecoveryAccountRoleV1::SourceRelease, false, false),
+    meta(RecoveryAccountRoleV1::SourceOccurrence, false, false),
+    meta(RecoveryAccountRoleV1::SourceWindow, false, false),
+    meta(RecoveryAccountRoleV1::StatisticKey, false, false),
+    meta(RecoveryAccountRoleV1::SourceResult, false, false),
+    meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
+    meta(RecoveryAccountRoleV1::RootRentPayer, false, false),
+    meta(RecoveryAccountRoleV1::NeutralSink, false, false),
+    meta(RecoveryAccountRoleV1::RentSysvar, false, false),
+    meta(RecoveryAccountRoleV1::SystemProgram, false, false),
+];
+
+/// Exact ordered contract for one bounded paid ab/ac transition.
+pub const ADVANCE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
+    meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
+    meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
+    meta(RecoveryAccountRoleV1::RecoveryCompartment, true, false),
+    meta(RecoveryAccountRoleV1::Keeper, true, false),
+    meta(RecoveryAccountRoleV1::RecoveryPayer, true, false),
+    INTERVAL_PRODUCT_METAS_V1[0],
+    INTERVAL_PRODUCT_METAS_V1[1],
+    INTERVAL_PRODUCT_METAS_V1[2],
+    INTERVAL_PRODUCT_METAS_V1[3],
+    INTERVAL_PRODUCT_METAS_V1[4],
+    INTERVAL_PRODUCT_METAS_V1[5],
+    INTERVAL_PRODUCT_METAS_V1[6],
+    INTERVAL_PRODUCT_METAS_V1[7],
+    INTERVAL_PRODUCT_METAS_V1[8],
+    INTERVAL_PRODUCT_METAS_V1[9],
+    meta(RecoveryAccountRoleV1::SourceRelease, false, false),
+    meta(RecoveryAccountRoleV1::SourceOccurrence, false, false),
+    meta(RecoveryAccountRoleV1::SourceWindow, false, false),
+    meta(RecoveryAccountRoleV1::StatisticKey, false, false),
+    meta(RecoveryAccountRoleV1::SourceResult, false, false),
+    meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
+    meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
+];
+
+/// Exact ordered contract for private Product capability restoration and the
+/// atomic full-width Resolution V5/Hoard V2/ClaimLedger V3 postimage.
+pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
+    meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
+    meta(RecoveryAccountRoleV1::ResolutionV5, true, false),
+    meta(RecoveryAccountRoleV1::HoardV2, true, false),
+    meta(RecoveryAccountRoleV1::ClaimLedgerV3, true, false),
+    INTERVAL_PRODUCT_METAS_V1[0],
+    INTERVAL_PRODUCT_METAS_V1[1],
+    INTERVAL_PRODUCT_METAS_V1[2],
+    INTERVAL_PRODUCT_METAS_V1[3],
+    INTERVAL_PRODUCT_METAS_V1[4],
+    INTERVAL_PRODUCT_METAS_V1[5],
+    INTERVAL_PRODUCT_METAS_V1[6],
+    INTERVAL_PRODUCT_METAS_V1[7],
+    INTERVAL_PRODUCT_METAS_V1[8],
+    INTERVAL_PRODUCT_METAS_V1[9],
+    meta(RecoveryAccountRoleV1::SourceRelease, false, false),
+    meta(RecoveryAccountRoleV1::SourceOccurrence, false, false),
+    meta(RecoveryAccountRoleV1::SourceWindow, false, false),
+    meta(RecoveryAccountRoleV1::StatisticKey, false, false),
+    meta(RecoveryAccountRoleV1::SourceResult, false, false),
+    meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
+    meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
+    meta(RecoveryAccountRoleV1::SystemProgram, false, false),
+];
+
+/// Exact ordered contract for closing only deletable ab work.
+pub const CLOSE_INTERVAL_CONSENSUS_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
+    meta(RecoveryAccountRoleV1::FailureRoot, false, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
+    meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
+    meta(RecoveryAccountRoleV1::RootRentPayer, true, false),
+    meta(RecoveryAccountRoleV1::NeutralSink, true, false),
+];
+
 /// Return the exact ordered account contract for one allocated action.
 pub const fn account_metas_v1(
     action: registry::RecoveryAction,
@@ -657,6 +860,12 @@ pub const fn account_metas_v1(
         registry::RecoveryAction::ResolvePaidRecovery => RESOLVE_PAID_RECOVERY_METAS_V1,
         registry::RecoveryAction::CloseRecoveryFunding => CLOSE_RECOVERY_FUNDING_METAS_V1,
         registry::RecoveryAction::CloseFailureRoot => CLOSE_FAILURE_ROOT_METAS_V1,
+        registry::RecoveryAction::BeginIntervalConsensus => BEGIN_INTERVAL_CONSENSUS_METAS_V1,
+        registry::RecoveryAction::AdvanceIntervalConsensus => ADVANCE_INTERVAL_CONSENSUS_METAS_V1,
+        registry::RecoveryAction::ResolveIntervalConsensus => RESOLVE_INTERVAL_CONSENSUS_METAS_V1,
+        registry::RecoveryAction::CloseIntervalConsensusWork => {
+            CLOSE_INTERVAL_CONSENSUS_WORK_METAS_V1
+        }
     }
 }
 
@@ -815,6 +1024,95 @@ pub fn decode_payload_v1(
             }
             Ok(FailureRecoveryPayloadV1::CloseFailureRoot(value))
         }
+        registry::RecoveryAction::BeginIntervalConsensus => {
+            let value = BeginIntervalConsensusV1 {
+                common,
+                source_success_handoff_id: id_at(input, 80),
+                interval_profile_id: id_at(input, 112),
+                funding_admission_receipt_id: id_at(input, 144),
+                initial_work_id: id_at(input, 176),
+                work_rent_principal_lamports: u64_at(input, 208),
+                replay_rent_principal_lamports: u64_at(input, 216),
+            };
+            for id in [
+                value.source_success_handoff_id,
+                value.interval_profile_id,
+                value.funding_admission_receipt_id,
+                value.initial_work_id,
+            ] {
+                require_live(id)?;
+            }
+            if value.work_rent_principal_lamports == 0 || value.replay_rent_principal_lamports == 0
+            {
+                return Err(CodecError::ZeroValue);
+            }
+            Ok(FailureRecoveryPayloadV1::BeginIntervalConsensus(value))
+        }
+        registry::RecoveryAction::AdvanceIntervalConsensus => {
+            require_reserved(&input[90..96])?;
+            let value = AdvanceIntervalConsensusV1 {
+                common,
+                expected_work_transition_nonce: u64_at(input, 80),
+                requested_coordinates: u16::from_le_bytes([input[88], input[89]]),
+                reward_recipient: id_at(input, 96),
+                scheduled_ceiling_lamports: u64_at(input, 128),
+                before_work_id: id_at(input, 136),
+                after_work_id: id_at(input, 168),
+                replay_receipt_id: id_at(input, 200),
+            };
+            for id in [
+                value.reward_recipient,
+                value.before_work_id,
+                value.after_work_id,
+                value.replay_receipt_id,
+            ] {
+                require_live(id)?;
+            }
+            if value.requested_coordinates == 0
+                || value.scheduled_ceiling_lamports == 0
+                || value.expected_work_transition_nonce == u64::MAX
+                || value.before_work_id == value.after_work_id
+            {
+                return Err(CodecError::ZeroValue);
+            }
+            Ok(FailureRecoveryPayloadV1::AdvanceIntervalConsensus(value))
+        }
+        registry::RecoveryAction::ResolveIntervalConsensus => {
+            let value = ResolveIntervalConsensusV1 {
+                common,
+                source_success_handoff_id: id_at(input, 80),
+                completed_work_id: id_at(input, 112),
+                certificate_id: id_at(input, 144),
+                replay_receipt_id: id_at(input, 176),
+            };
+            for id in [
+                value.source_success_handoff_id,
+                value.completed_work_id,
+                value.certificate_id,
+                value.replay_receipt_id,
+            ] {
+                require_live(id)?;
+            }
+            Ok(FailureRecoveryPayloadV1::ResolveIntervalConsensus(value))
+        }
+        registry::RecoveryAction::CloseIntervalConsensusWork => {
+            let value = CloseIntervalConsensusWorkV1 {
+                common,
+                certificate_id: id_at(input, 80),
+                resolution_receipt_id: id_at(input, 112),
+                replay_receipt_id: id_at(input, 144),
+                work_close_authorization_id: id_at(input, 176),
+            };
+            for id in [
+                value.certificate_id,
+                value.resolution_receipt_id,
+                value.replay_receipt_id,
+                value.work_close_authorization_id,
+            ] {
+                require_live(id)?;
+            }
+            Ok(FailureRecoveryPayloadV1::CloseIntervalConsensusWork(value))
+        }
     }
 }
 
@@ -848,6 +1146,19 @@ pub fn encode_payload_v1(value: &FailureRecoveryPayloadV1, output: &mut [u8]) ->
         FailureRecoveryPayloadV1::CloseFailureRoot(v) => {
             (registry::RecoveryAction::CloseFailureRoot, v.common)
         }
+        FailureRecoveryPayloadV1::BeginIntervalConsensus(v) => {
+            (registry::RecoveryAction::BeginIntervalConsensus, v.common)
+        }
+        FailureRecoveryPayloadV1::AdvanceIntervalConsensus(v) => {
+            (registry::RecoveryAction::AdvanceIntervalConsensus, v.common)
+        }
+        FailureRecoveryPayloadV1::ResolveIntervalConsensus(v) => {
+            (registry::RecoveryAction::ResolveIntervalConsensus, v.common)
+        }
+        FailureRecoveryPayloadV1::CloseIntervalConsensusWork(v) => (
+            registry::RecoveryAction::CloseIntervalConsensusWork,
+            v.common,
+        ),
     };
     let exact = payload_bytes_v1(action);
     require_exact(output, exact)?;
@@ -903,6 +1214,35 @@ pub fn encode_payload_v1(value: &FailureRecoveryPayloadV1, output: &mut [u8]) ->
             output[144..176].copy_from_slice(&v.replay_tombstone_id);
             output[176..208].copy_from_slice(&v.source_release_receipt_id);
         }
+        FailureRecoveryPayloadV1::BeginIntervalConsensus(v) => {
+            output[80..112].copy_from_slice(&v.source_success_handoff_id);
+            output[112..144].copy_from_slice(&v.interval_profile_id);
+            output[144..176].copy_from_slice(&v.funding_admission_receipt_id);
+            output[176..208].copy_from_slice(&v.initial_work_id);
+            output[208..216].copy_from_slice(&v.work_rent_principal_lamports.to_le_bytes());
+            output[216..224].copy_from_slice(&v.replay_rent_principal_lamports.to_le_bytes());
+        }
+        FailureRecoveryPayloadV1::AdvanceIntervalConsensus(v) => {
+            output[80..88].copy_from_slice(&v.expected_work_transition_nonce.to_le_bytes());
+            output[88..90].copy_from_slice(&v.requested_coordinates.to_le_bytes());
+            output[96..128].copy_from_slice(&v.reward_recipient);
+            output[128..136].copy_from_slice(&v.scheduled_ceiling_lamports.to_le_bytes());
+            output[136..168].copy_from_slice(&v.before_work_id);
+            output[168..200].copy_from_slice(&v.after_work_id);
+            output[200..232].copy_from_slice(&v.replay_receipt_id);
+        }
+        FailureRecoveryPayloadV1::ResolveIntervalConsensus(v) => {
+            output[80..112].copy_from_slice(&v.source_success_handoff_id);
+            output[112..144].copy_from_slice(&v.completed_work_id);
+            output[144..176].copy_from_slice(&v.certificate_id);
+            output[176..208].copy_from_slice(&v.replay_receipt_id);
+        }
+        FailureRecoveryPayloadV1::CloseIntervalConsensusWork(v) => {
+            output[80..112].copy_from_slice(&v.certificate_id);
+            output[112..144].copy_from_slice(&v.resolution_receipt_id);
+            output[144..176].copy_from_slice(&v.replay_receipt_id);
+            output[176..208].copy_from_slice(&v.work_close_authorization_id);
+        }
     }
     decode_payload_v1(action, output)?;
     Ok(exact)
@@ -924,6 +1264,18 @@ pub const fn payload_bytes_v1(action: registry::RecoveryAction) -> usize {
         registry::RecoveryAction::ResolvePaidRecovery => RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1,
         registry::RecoveryAction::CloseRecoveryFunding => CLOSE_RECOVERY_FUNDING_PAYLOAD_BYTES_V1,
         registry::RecoveryAction::CloseFailureRoot => CLOSE_FAILURE_ROOT_PAYLOAD_BYTES_V1,
+        registry::RecoveryAction::BeginIntervalConsensus => {
+            BEGIN_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1
+        }
+        registry::RecoveryAction::AdvanceIntervalConsensus => {
+            ADVANCE_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1
+        }
+        registry::RecoveryAction::ResolveIntervalConsensus => {
+            RESOLVE_INTERVAL_CONSENSUS_PAYLOAD_BYTES_V1
+        }
+        registry::RecoveryAction::CloseIntervalConsensusWork => {
+            CLOSE_INTERVAL_CONSENSUS_WORK_PAYLOAD_BYTES_V1
+        }
     }
 }
 
@@ -1087,6 +1439,39 @@ mod tests {
                 replay_tombstone_id: [24; 32],
                 source_release_receipt_id: [25; 32],
             }),
+            FailureRecoveryPayloadV1::BeginIntervalConsensus(BeginIntervalConsensusV1 {
+                common: common(),
+                source_success_handoff_id: [26; 32],
+                interval_profile_id: [27; 32],
+                funding_admission_receipt_id: [28; 32],
+                initial_work_id: [29; 32],
+                work_rent_principal_lamports: 30,
+                replay_rent_principal_lamports: 31,
+            }),
+            FailureRecoveryPayloadV1::AdvanceIntervalConsensus(AdvanceIntervalConsensusV1 {
+                common: common(),
+                expected_work_transition_nonce: 1,
+                requested_coordinates: 2,
+                reward_recipient: [32; 32],
+                scheduled_ceiling_lamports: 33,
+                before_work_id: [34; 32],
+                after_work_id: [35; 32],
+                replay_receipt_id: [36; 32],
+            }),
+            FailureRecoveryPayloadV1::ResolveIntervalConsensus(ResolveIntervalConsensusV1 {
+                common: common(),
+                source_success_handoff_id: [37; 32],
+                completed_work_id: [38; 32],
+                certificate_id: [39; 32],
+                replay_receipt_id: [40; 32],
+            }),
+            FailureRecoveryPayloadV1::CloseIntervalConsensusWork(CloseIntervalConsensusWorkV1 {
+                common: common(),
+                certificate_id: [41; 32],
+                resolution_receipt_id: [42; 32],
+                replay_receipt_id: [43; 32],
+                work_close_authorization_id: [44; 32],
+            }),
         ];
         for value in values {
             let action = match value {
@@ -1117,6 +1502,18 @@ mod tests {
                 FailureRecoveryPayloadV1::CloseFailureRoot(_) => {
                     registry::RecoveryAction::CloseFailureRoot
                 }
+                FailureRecoveryPayloadV1::BeginIntervalConsensus(_) => {
+                    registry::RecoveryAction::BeginIntervalConsensus
+                }
+                FailureRecoveryPayloadV1::AdvanceIntervalConsensus(_) => {
+                    registry::RecoveryAction::AdvanceIntervalConsensus
+                }
+                FailureRecoveryPayloadV1::ResolveIntervalConsensus(_) => {
+                    registry::RecoveryAction::ResolveIntervalConsensus
+                }
+                FailureRecoveryPayloadV1::CloseIntervalConsensusWork(_) => {
+                    registry::RecoveryAction::CloseIntervalConsensusWork
+                }
             };
             let mut bytes = [0; MAX_FAILURE_RECOVERY_PAYLOAD_BYTES_V1 + 1];
             let exact = payload_bytes_v1(action);
@@ -1131,5 +1528,26 @@ mod tests {
                 Err(CodecError::TrailingBytes)
             );
         }
+    }
+
+    #[test]
+    fn interval_resolution_requires_the_atomic_liability_postimage() {
+        let metas = account_metas_v1(registry::RecoveryAction::ResolveIntervalConsensus);
+        assert_eq!(metas.len(), 25);
+        assert_eq!(metas[1].role, RecoveryAccountRoleV1::ProductOccurrenceRoot);
+        assert!(metas[1].writable);
+        assert_eq!(metas[4].role, RecoveryAccountRoleV1::ResolutionV5);
+        assert!(metas[4].writable);
+        assert_eq!(metas[5].role, RecoveryAccountRoleV1::HoardV2);
+        assert!(metas[5].writable);
+        assert_eq!(metas[6].role, RecoveryAccountRoleV1::ClaimLedgerV3);
+        assert!(metas[6].writable);
+        assert_eq!(metas[24].role, RecoveryAccountRoleV1::SystemProgram);
+        assert!(!metas.iter().any(|meta| matches!(
+            meta.role,
+            RecoveryAccountRoleV1::RecoveryCompartment
+                | RecoveryAccountRoleV1::RootRentPayer
+                | RecoveryAccountRoleV1::NeutralSink
+        )));
     }
 }

@@ -4,20 +4,21 @@
 //!
 //! This module authenticates existing semantic owners and emits only
 //! private-field terminal capabilities. It deliberately does not move
-//! lamports or delete accounts: owner-row rent ownership is held by the
-//! separately promised creation ledger, and the fresh Epoch still lacks
-//! authoritative Receipt/Reservation/Page counts. Until those owners expose
-//! exact terminal projections, no function here can mint root-close authority.
+//! lamports or delete accounts. The counted `0xa9/1` SettlementRoot now owns
+//! the exhaustive candidate-scoped Receipt/owner-row/Reservation/fee/pot and
+//! Dealer-child graph. Its exact terminal account may be promoted here, but
+//! whole-Epoch and whole-Market close authority still requires the separate
+//! page, occurrence, Source, Failure, Position, and collateral terminal joins.
 
 use clutch_general_v2_contract::{
-    fee_runtime_id_from_bytes, AuthenticatedSelectedCandidateV1, FeeTerminalOutcomeV1,
-    derive_owner_finalized_row_data_id_v2, FeeTerminalReceiptBundleV1, FinalPotAdapterBindingV1,
-    FinalPotRetirementProjectionV1,
-    FinalPotV1AccountV1, GeneralEpochPhaseV1, GeneralEpochV6AccountV1,
-    GeneralFeeTerminalProjectionV1, GeneralOwnerFeeFinalizationProjectionV2, Id32,
-    OwnerFeeFinalizationOutcomeV2, OwnerFeeFinalizationV2AccountV1, OwnerFinalizedRowDataHashV2,
-    OwnerSettlementExpectationV2,
-    OwnerSettlementV2AccountV1, SelectedCandidateV1AccountV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    derive_owner_finalized_row_data_id_v2, fee_runtime_id_from_bytes,
+    AuthenticatedSelectedCandidateV1, FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1,
+    FinalPotAdapterBindingV1, FinalPotRetirementProjectionV1, FinalPotV1AccountV1,
+    GeneralEpochPhaseV1, GeneralEpochV6AccountV1, GeneralFeeTerminalProjectionV1,
+    GeneralOwnerFeeFinalizationProjectionV2, Id32, OwnerFeeFinalizationOutcomeV2,
+    OwnerFeeFinalizationV2AccountV1, OwnerFinalizedRowDataHashV2, OwnerSettlementExpectationV2,
+    OwnerSettlementV2AccountV1, SelectedCandidateV1AccountV1, SettlementRootTerminalProjectionV1,
+    SettlementRootV1AccountV1, Sha256BackendV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES,
 };
 use clutch_retirement::{Identity32V1, RetirementErrorV2};
@@ -26,8 +27,9 @@ use crate::{
     authenticate_general_epoch_v6_exact, authenticate_general_final_pot_v1_exact,
     authenticate_general_owner_fee_finalization_v2_exact,
     authenticate_general_owner_settlement_v2_exact,
-    authenticate_general_selected_candidate_v1_exact, AccountAccessV2, AccountViewV2,
-    CanonicalPdaV1, RetirementAdapterErrorV2,
+    authenticate_general_selected_candidate_v1_exact,
+    authenticate_general_settlement_root_v1_exact, AccountAccessV2, AccountViewV2, CanonicalPdaV1,
+    RetirementAdapterErrorV2,
 };
 
 fn identity(value: Id32) -> Result<Identity32V1, RetirementAdapterErrorV2> {
@@ -518,5 +520,77 @@ pub fn authenticate_general_epoch_terminal_counts_v1(
         program_id,
         market: identity(epoch.market_runtime)?,
         generation: epoch.generation,
+    })
+}
+
+/// Exact program-owned terminal `0xa9/1` root promoted from the structural
+/// contract projection.
+///
+/// This is candidate-scoped settlement terminality. It is not by itself
+/// General Epoch, Product occurrence, MarketInstance, or rent-close authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedGeneralSettlementRootTerminalV1 {
+    root_account: Identity32V1,
+    program_id: Identity32V1,
+    projection: SettlementRootTerminalProjectionV1,
+}
+
+impl AuthenticatedGeneralSettlementRootTerminalV1 {
+    /// Canonical writable SettlementRoot PDA.
+    pub const fn root_account(self) -> Identity32V1 {
+        self.root_account
+    }
+
+    /// Exact General runtime program owner.
+    pub const fn program_id(self) -> Identity32V1 {
+        self.program_id
+    }
+
+    /// Exhaustive candidate-scoped terminal projection.
+    pub const fn projection(self) -> SettlementRootTerminalProjectionV1 {
+        self.projection
+    }
+
+    /// Settlement terminality never capitalizes future liveness work.
+    pub const fn available_liveness_lamports(self) -> u64 {
+        0
+    }
+
+    /// Settlement terminality never releases Hoard principal.
+    pub const fn available_hoard_atoms(self) -> u64 {
+        0
+    }
+
+    /// Settlement terminality is not future fee revenue.
+    pub const fn available_future_fee_atoms(self) -> u64 {
+        0
+    }
+}
+
+/// Authenticate the exact terminal SettlementRoot PDA, General program owner,
+/// writable role, frozen 980-byte body, stored bump, and semantic zero-count
+/// projection before promoting it into candidate-scoped terminal authority.
+pub fn authenticate_general_settlement_root_terminal_v1<B: Sha256BackendV1>(
+    root_view: AccountViewV2<'_>,
+    root_pda: CanonicalPdaV1,
+    program_id: Identity32V1,
+    hash_backend: &B,
+) -> Result<AuthenticatedGeneralSettlementRootTerminalV1, RetirementAdapterErrorV2> {
+    let authenticated = authenticate_general_settlement_root_v1_exact(
+        root_view,
+        program_id,
+        root_pda,
+        AccountAccessV2::Writable,
+    )?;
+    let root = SettlementRootV1AccountV1::decode(authenticated.data())?;
+    let projection =
+        root.terminal_projection(hash_backend, general_id(authenticated.address())?)?;
+    if projection.root_account().bytes() != authenticated.address().bytes() {
+        return Err(RetirementErrorV2::WrongParent.into());
+    }
+    Ok(AuthenticatedGeneralSettlementRootTerminalV1 {
+        root_account: authenticated.address(),
+        program_id,
+        projection,
     })
 }

@@ -23,8 +23,9 @@ use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
     compile_ordinal_v2, CompiledOrdinalV2, EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2,
     MarketInstanceV2Id, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
-    RegistryCapabilityProjectionV2, SeriesAttachmentPlanV1, SeriesFundingQuoteId,
-    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
+    QuantizedIntervalConsensusCertificateV1Id, RegistryCapabilityProjectionV2,
+    SeriesAttachmentPlanV1, SeriesFundingQuoteId, SeriesFundingQuoteV1, SeriesFundingTermsV2,
+    SeriesPlanV5, VerifiedQuantizedIntervalPayoutV1,
 };
 use clutch_source_plane_v3::{
     ContentId as SourceContentId, SourcePlaneProgramV3, StatisticKeyV3, SummaryProgramV3,
@@ -45,6 +46,8 @@ use crate::{
 const ADMISSION_DOMAIN: &[u8] = b"dragons-clutch/failure-external-admission/v2";
 const WORK_RECEIPT_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-work-receipt/v2";
 const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-resolution/v2";
+const INTERVAL_ACCEPTED_RESOLUTION_DOMAIN: &[u8] =
+    b"dragons-clutch/failure-interval-accepted-resolution/v1";
 const RUNTIME_STATE_COMMITMENT_DOMAIN: &[u8] =
     b"dragons-clutch/failure-runtime-state-commitment/v2";
 const RECOVERY_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-terminal/v2";
@@ -293,7 +296,7 @@ pub struct AcceptedResolutionV2 {
     id: AcceptedResolutionId,
     source_success_handoff_id: SourceContentId,
     window_id: SourceContentId,
-    relation_record_id: [u8; 32],
+    resolution_evidence_id: [u8; 32],
     clock: RecoveryClock,
 }
 
@@ -313,9 +316,10 @@ impl AcceptedResolutionV2 {
         self.window_id
     }
 
-    /// Exact relation result record.
-    pub const fn relation_record_id(self) -> [u8; 32] {
-        self.relation_record_id
+    /// Exact relation record or exhaustive interval certificate consumed by
+    /// this accepted resolution.
+    pub const fn resolution_evidence_id(self) -> [u8; 32] {
+        self.resolution_evidence_id
     }
 }
 
@@ -616,6 +620,28 @@ impl FailureRuntimeExternalV2 {
         LivenessId::from_bytes(self.recovery.funding().neutral_sink.bytes())
     }
 
+    /// Immutable liveness policy selected at occurrence admission.
+    pub fn liveness_policy_id(self) -> LivenessId {
+        LivenessId::from_bytes(self.recovery.funding().policy_id.bytes())
+    }
+
+    /// Exact occurrence lifecycle shared with the Recovery compartment.
+    pub fn liveness_lifecycle_id(self) -> LivenessId {
+        LivenessId::from_bytes(self.recovery.funding().lifecycle_id.bytes())
+    }
+
+    /// Exact semantic quote schedule enforced by liveness.
+    pub fn recovery_quote_schedule_id(self) -> LivenessId {
+        LivenessId::from_bytes(self.recovery.funding().quote_schedule_id.bytes())
+    }
+
+    /// Current cumulative accepted progress in the active repair attempt.
+    pub fn current_accepted_progress_units(self) -> Result<u64> {
+        self.recovery
+            .accepted_progress_units(self.recovery.next_attempt_index())
+            .map_err(Into::into)
+    }
+
     /// Current deterministic semantic phase.
     pub const fn phase(self) -> RecoveryPhase {
         self.recovery.phase()
@@ -780,15 +806,51 @@ impl FailureRuntimeExternalV2 {
         let attempt_index = self.recovery.next_attempt_index();
         let prior = self.recovery.accepted_progress_units(attempt_index)?;
         let accepted_progress_total = prior.checked_add(1).ok_or(Error::BindingMismatch)?;
-        let recovery = self.recovery.plan_accept_work_progress(
+        self.plan_accept_authenticated_progress(
             clock,
             RecoveryIdentity::from_bytes(success.id().bytes()),
+            success.id(),
+            success.window_id(),
+            reward_recipient,
+            accepted_progress_total,
+            scheduled_ceiling_lamports,
+        )
+    }
+
+    /// Accept adapter-authenticated cumulative progress for one durable work
+    /// transition. The caller must have already joined the source handoff and
+    /// the dedicated work/replay accounts; raw public identities are not an
+    /// authorization boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn plan_accept_authenticated_progress(
+        &self,
+        clock: RecoveryClock,
+        work_id: RecoveryIdentity,
+        source_success_handoff_id: SourceContentId,
+        window_id: SourceContentId,
+        reward_recipient: RecoveryIdentity,
+        accepted_progress_total: u64,
+        scheduled_ceiling_lamports: u64,
+    ) -> Result<FailureExternalTransitionPlanV2> {
+        let recovery = self.recovery.plan_accept_work_progress(
+            clock,
+            work_id,
             reward_recipient,
             accepted_progress_total,
             scheduled_ceiling_lamports,
         )?;
-        let work = self.work_receipt(success, recovery)?;
+        let work = self.work_receipt(source_success_handoff_id, window_id, recovery)?;
         self.wrap_plan(recovery, None, Some(work))
+    }
+
+    /// Reopen the exact Source success under this runtime's immutable release
+    /// and recovery-window policy for the interval-work adapter.
+    pub(crate) fn authenticate_interval_source_success(
+        &self,
+        success: SuccessfulEvaluationHandoffV1,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Result<RecoveryClock> {
+        self.validate_success_handoff(success, source_release, false)
     }
 
     /// Bind one exact source success to an authenticated accepted relation.
@@ -821,9 +883,61 @@ impl FailureRuntimeExternalV2 {
             id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
             source_success_handoff_id: success.id(),
             window_id,
-            relation_record_id: relation.record_id().bytes(),
+            resolution_evidence_id: relation.record_id().bytes(),
             clock,
         })
+    }
+
+    /// Bind a private Product exhaustive-interval capability to the exact
+    /// authenticated Source success. This does not trust a decoded certificate:
+    /// callers can obtain `verified` only from Product's private session or its
+    /// adapter-authenticated durable-history restoration boundary.
+    pub(crate) fn accept_interval_consensus_resolution(
+        &self,
+        success: SuccessfulEvaluationHandoffV1,
+        verified: &VerifiedQuantizedIntervalPayoutV1,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Result<(
+        AcceptedResolutionV2,
+        QuantizedIntervalConsensusCertificateV1Id,
+    )> {
+        let clock = self.validate_success_handoff(success, source_release, false)?;
+        let certificate = verified.certificate();
+        certificate.validate()?;
+        let certificate_id = certificate.id()?;
+        let statistic_result_id = success.statistic_result_id()?;
+        if certificate.market_instance_id() != self.binding.market_instance_id
+            || certificate.product_template_id() != self.binding.product_template_id
+            || certificate.source_occurrence_id().bytes()
+                != success.occurrence().occurrence_record_id().bytes()
+            || certificate.source_interval_id() != statistic_result_id
+        {
+            return Err(Error::BindingMismatch);
+        }
+        let window_id = success.window_id();
+        let mut hasher = Sha256::new();
+        hasher.update(INTERVAL_ACCEPTED_RESOLUTION_DOMAIN);
+        hasher.update(self.binding_id.bytes());
+        hasher.update(self.binding.market_instance_id.bytes());
+        hasher.update(self.binding.generation.to_le_bytes());
+        hasher.update(success.id().bytes());
+        hasher.update(window_id.bytes());
+        hasher.update(statistic_result_id.bytes());
+        hasher.update(certificate_id.bytes());
+        hasher.update(certificate.transcript().bytes());
+        hasher.update(clock.slot.to_le_bytes());
+        hasher.update(clock.unix_timestamp.to_le_bytes());
+        hasher.update(clock.current_bucket.to_le_bytes());
+        Ok((
+            AcceptedResolutionV2 {
+                id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
+                source_success_handoff_id: success.id(),
+                window_id,
+                resolution_evidence_id: certificate_id.bytes(),
+                clock,
+            },
+            certificate_id,
+        ))
     }
 
     /// Resolve from accepted evidence without authorizing a work payment.
@@ -864,13 +978,14 @@ impl FailureRuntimeExternalV2 {
             scheduled_ceiling_lamports,
             evidence,
         )?;
-        let work = self.work_receipt(success, recovery)?;
+        let work = self.work_receipt(success.id(), success.window_id(), recovery)?;
         self.wrap_plan(recovery, None, Some(work))
     }
 
     fn work_receipt(
         &self,
-        success: SuccessfulEvaluationHandoffV1,
+        source_success_handoff_id: SourceContentId,
+        window_id: SourceContentId,
         recovery: ExternalRecoveryTransitionPlanV1,
     ) -> Result<FailureRecoveryWorkReceiptV2> {
         let work = recovery.work().ok_or(Error::BindingMismatch)?;
@@ -888,8 +1003,8 @@ impl FailureRuntimeExternalV2 {
         hasher.update(self.binding.generation.to_le_bytes());
         hasher.update([work.attempt_index]);
         hasher.update(work.call_ordinal.to_le_bytes());
-        hasher.update(success.id().bytes());
-        hasher.update(success.window_id().bytes());
+        hasher.update(source_success_handoff_id.bytes());
+        hasher.update(window_id.bytes());
         hasher.update(work.reward_recipient.bytes());
         hasher.update(work.accepted_progress_total.to_le_bytes());
         hasher.update(work.exact_reward_lamports.to_le_bytes());
@@ -909,8 +1024,8 @@ impl FailureRuntimeExternalV2 {
             generation: self.binding.generation,
             attempt_index: work.attempt_index,
             call_ordinal: work.call_ordinal,
-            source_success_handoff_id: success.id(),
-            window_id: success.window_id(),
+            source_success_handoff_id,
+            window_id,
             reward_recipient: work.reward_recipient,
             accepted_progress_total: work.accepted_progress_total,
             exact_reward_lamports: work.exact_reward_lamports,
@@ -1070,7 +1185,10 @@ impl FailureRuntimeExternalV2 {
         if accepted.id.bytes().iter().all(|byte| *byte == 0)
             || accepted.source_success_handoff_id.is_zero()
             || accepted.window_id.is_zero()
-            || accepted.relation_record_id.iter().all(|byte| *byte == 0)
+            || accepted
+                .resolution_evidence_id
+                .iter()
+                .all(|byte| *byte == 0)
         {
             return Err(Error::BindingMismatch);
         }

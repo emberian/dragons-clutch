@@ -1,0 +1,23 @@
+[package]
+name = "clutch-fractional-redemption-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Exact fixed-layout fractional-redemption runtime contract for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-collateral-adapter-v2 = { path = "../clutch-collateral-adapter-v2" }
+clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
+clutch-retirement = { path = "../clutch-retirement" }
+clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[dev-dependencies]
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }

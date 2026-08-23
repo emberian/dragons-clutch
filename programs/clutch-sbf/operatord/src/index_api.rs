@@ -13,11 +13,30 @@ use std::sync::{Arc, RwLock};
 pub struct SharedIndexApi {
     engine: Arc<RwLock<RpcIndexEngine>>,
     selector: ResumableKeeperSelector,
+    processed_enabled: bool,
 }
 
 impl SharedIndexApi {
     pub fn new(engine: Arc<RwLock<RpcIndexEngine>>, selector: ResumableKeeperSelector) -> Self {
-        Self { engine, selector }
+        Self {
+            engine,
+            selector,
+            processed_enabled: true,
+        }
+    }
+
+    /// Construct a projection backed only by repeated finalized RPC scans.
+    /// Processed queries fail closed until a transport owns all required
+    /// program/block/slot/root subscriptions and admits them to the engine.
+    pub fn finalized_only(
+        engine: Arc<RwLock<RpcIndexEngine>>,
+        selector: ResumableKeeperSelector,
+    ) -> Self {
+        Self {
+            engine,
+            selector,
+            processed_enabled: false,
+        }
     }
 
     /// Produce the GET-only route callback accepted by the loopback server.
@@ -45,7 +64,21 @@ impl SharedIndexApi {
                         "pendingAccountBytes": status.pending_account_bytes.to_string(),
                         "pendingRoot": status.pending_root.map(|slot| slot.to_string()),
                         "nextReceiveSequence": status.next_receive_sequence.to_string(),
-                        "authority": "untrusted read model"
+                        "authority": "untrusted read model",
+                        "transportMode": if self.processed_enabled { "finalized-plus-processed-subscriptions" } else { "finalized-rpc-polling" },
+                        "processedAvailable": self.processed_enabled
+                    }),
+                });
+            }
+            if !self.processed_enabled
+                && target
+                    .split_once('?')
+                    .is_some_and(|(_, query)| query == "commitment=processed")
+            {
+                return Some(JsonReadResponse {
+                    status: 409,
+                    body: json!({
+                        "error": "processed projection is disabled because this transport owns finalized scans only"
                     }),
                 });
             }
