@@ -9,9 +9,12 @@ model into strict versioned semantic bodies without adding a Solana route.
 
 It owns:
 
-- exact V1 bodies and hostile codecs for `DealerPolicy`, `DealerState`, paged
-  LP ownership, one-generation `Lease`, three-stage `SettlementPot`, `FeeBudget`,
-  and `LivenessBudget`;
+- exact V1 bodies and hostile codecs for `DealerPolicy`, canonical facility
+  genesis, the distinct external `DealerFacilityPosition`, its authority
+  binding, the permanent root tombstone, `DealerState`, paged LP
+  ownership, one-generation `Lease`, three-stage `SettlementPot`, `FeeBudget`,
+  `LivenessBudget`, the immutable 22-action liveness schedule, and the funded
+  external-runtime dependency manifest;
 - `SHA256(domain || canonical_body)` content identities under fresh, trailing-
   NUL domains;
 - Solana-compatible PDA seed recipes without importing or emulating the Solana
@@ -21,6 +24,15 @@ It owns:
   separately funded budget;
 - the exhaustive DealerState child-count graph; and
 - fail-closed enumeration of every planned action.
+
+The funded dependency manifest binds the Dealer schedule to six exact grouped
+work principals in the separately owned seven-account liveness runtime; its
+seventh Source compartment has a distinct external quote schedule. Work and
+rent are present native lamports in each external account and remain separate.
+Neither future fee revenue, Dealer cash, sponsor capital, LP assets, Hoard
+principal, nor rent principal may fund a work compartment. Fees are
+owner-netted from ordinary Positions under the bound fee policy; Dealer owns
+no separate fee vault or revenue balance.
 
 `DealerState` does not own assets. The adapter-authenticated **Facility Position
 is the sole long-lived owner of dealer cash and Eggs while no lease exists**.
@@ -46,8 +58,8 @@ The fixed body map and PDA recipes are frozen in [SCHEMA.md](SCHEMA.md).
 | Epoch binding | `0..=1` | sole active auction epoch |
 | Lease | `0..=1` | exact selected generation lock |
 | Settlement pot | `0..=1` | sole transient selected-leg custody |
-| Fee budget | `0..=1` | separate fee liabilities |
-| Liveness budget | `0..=1` | separately prepaid work/rent liabilities |
+| Fee budget | `0..=1` | preserved legacy codec; new funded route initializes zero |
+| Liveness budget | `0..=1` | preserved legacy codec; external runtime is authoritative |
 | Resolution/claim work | `0..=1` | bounded terminal work |
 
 The immutable policy is a retained catalog reference rather than a counted
@@ -67,7 +79,17 @@ rent codec.
 
 - LP pages contain 16 strictly owner-sorted entries and chain by consecutive
   page ordinal. The 4,096-page semantic cap lifts the research model's
-  `MAX_LPS=8` limit without allocation.
+  `MAX_LPS=8` limit without allocation. `DealerLpFundingFoldV1` streams the
+  complete sealed set, enforces global owner order and chain closure, and
+  binds page account keys/content IDs and exact share/queue/count totals to
+  State's canonical root.
+- `activate_dealer_v1` consumes that page fold plus the authenticated external
+  liveness admission projection and refuses unless the Facility Position holds exactly
+  `K + S*c_u` cash and `S*g_ui` Eggs. Activation donates `K` and changes only
+  the State phase. Sponsor, queue-quorum, and timed-close pure transitions
+  consume the same immutable dependency identities; the two permissionless
+  unwind paths never depend on a mutable liveness balance that could grief a
+  safety transition.
 - A Lease binds one and only one `g -> g+1` transition, the exact Epoch, final
   `SettlementCandidateId`, quote, checked dealer-leg verdict, explicit curve-
   price-certificate ID, deadlines, Facility Position pre-state, pot, and both
@@ -82,9 +104,10 @@ rent codec.
   inputs and outputs must already be netted. The Policy/State/Lease transition
   join independently recomputes `q'` and
   `ceil(C(q')) - ceil(C(q))`; a verdict digest alone is not cash authority.
-- Fee and liveness principal are separately prepaid and exactly partitioned as
-  available, reserved liability, spent, refunded, or sinked. There is no field
-  for expected future fee revenue.
+- The external runtime partitions liveness work, rent, donations, keeper
+  rewards, refunds, receipts, and terminal close state across seven accounts.
+  The legacy single `LivenessBudgetV1` is not an activation authority. Fees use
+  the separately versioned owner-netted fee runtime, not `FeeBudgetV1`.
 - Sponsor capital is a separate present amount whose refundable/donated/
   refunded disposition is explicit. The policy recomputes the selected loss
   bound and lower-corner bid-financing minimum.
@@ -92,24 +115,47 @@ rent codec.
 ## Not enabled
 
 No global account tag, instruction tag, capability-profile membership, program
-dependency, account meta list, or transfer path is allocated here.
+dependency, account meta list, or transfer path is allocated by this pure
+crate. The separate SBF adapter now allocates a non-production, catalog-only
+staged transport documented in
+[`DEALER_POLICY_SBF_VERTICAL_SLICE.md`](../../docs/implementation/DEALER_POLICY_SBF_VERTICAL_SLICE.md).
+That route persists an unadmitted immutable Policy and does not activate a
+facility action.
+The facility-genesis, Facility Position, authority-binding, root-tombstone,
+liveness schedule, funded-custody interface, sealed-page fold, and
+activation/unwind transition checkers close pure-core prerequisites, but no
+global account allocation or SBF handler persists or executes them yet. Existing
+`DealerStateV1` is joined through an explicit initialization validator, not
+silently reinterpreted.
 `require_action_enabled` refuses every current action with `ActionDisabled`.
 The price-certificate fields are binding slots, not a choice between the still
 unresolved exact-divisibility and canonical-quantization profiles. Likewise,
-`FeeBudgetV1` is only a segregated prepaid-liability ledger; it does not enable
-nonzero fee direction, custody, recipient, rebate, or distribution economics.
+`FeeBudgetV1` and `LivenessBudgetV1` remain decodable V1 history but are not
+admitted by the new initialization/activation path. Nonzero fee direction,
+custody, recipient, rebate, and distribution economics come only from the
+separately authenticated owner-netted fee runtime.
+The preserved `DealerLeaseV1`/`SettlementPotV1` still bind those legacy budget
+account IDs. They therefore cannot follow the new activation path; fresh
+successors must bind the external liveness receipt/program/quote facts and the
+selected owner-netted fee artifacts without reinterpreting V1 fields.
+Likewise, the proposed per-facility funded-dependencies PDA has no current
+DealerStateV1 child count or root-tombstone join. It cannot become a closable
+live account until a fresh State/root successor owns that lifetime; making it
+a permanent per-facility rent leak is not the selected default.
 
 The next adapter lane must separately land and review:
 
 1. central account and intent allocation plus a new disabled-by-default
    capability identity;
 2. exact SBF account codecs and metas for Policy, State, Facility Position,
-   pages, Lease, Pot, budgets, Epoch, final candidate/verdict, price
+   pages, Lease/Pot successors, external liveness accounts, fee artifacts,
+   Epoch, final candidate/verdict, price
    certificate, Clock, token accounts, system/rent, and payer/authority roles;
 3. authentication of Realm/Profile, full MarketInstanceV2, claim basis,
    collateral mint/token program, Hoard custody semantics, RelationV2,
    price-measure, curve, fee, liveness, retirement, and quote authority;
-4. atomic Begin transfer from Facility Position to sole transient Pot custody,
+4. atomic funded facility initialization/contribution/activation and Begin
+   transfer from Facility Position to sole transient Pot custody,
    row collection/delivery, final residue sweep back to Position, exact reloads,
    and hostile-prefund/rent routing;
 5. rollback tests for every failed collect/deliver/finalize or count mutation;

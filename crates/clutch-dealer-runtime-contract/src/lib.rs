@@ -12,33 +12,77 @@
 //! account, Clock, signature, token, CPI, or transfer operation.
 //!
 //! `DealerStateV1` never persists cash, Egg balances, or per-order settlement
-//! allocations. The separately authenticated Facility Position is the sole
-//! long-lived pool asset owner while idle. During a lease, SettlementPot is the
-//! sole transient selected-leg custody owner and its custody is derived from
-//! exact aggregate conservation facts rather than mirrored balance fields.
+//! allocations. The separately authenticated `DealerFacilityPositionV1` is the
+//! sole long-lived pool asset owner while idle. During a lease, SettlementPot
+//! is the sole transient selected-leg custody owner and its custody is derived
+//! from exact aggregate conservation facts rather than mirrored balance fields.
 
+mod action_receipt;
 mod budget;
 mod codec;
+mod epoch_v2;
+mod exit_ticket;
+mod facility;
+mod fee_bindings;
+mod fee_terminal;
+mod funding_dependencies;
 mod lease;
+mod lease_close_v3;
+mod lease_v2;
+mod lease_pot_v3;
+mod lease_selection_v3;
+mod lp_funding;
+mod lp_funding_v2;
 mod lp_page;
+mod lp_page_v2;
 mod pda;
 mod policy;
 mod position_transfer;
 mod pot;
+mod pot_v2;
+mod position_v3;
 mod rent;
+mod root_tombstone;
 mod replay;
 mod state;
+mod state_v2;
+mod terminal_claims;
+mod terminal_state;
+mod transitions;
+mod transitions_v3;
 
+pub use action_receipt::*;
 pub use budget::*;
+pub use epoch_v2::*;
+pub use exit_ticket::*;
+pub use facility::*;
+pub use fee_bindings::*;
+pub use fee_terminal::*;
+pub use funding_dependencies::*;
 pub use lease::*;
+pub use lease_close_v3::*;
+pub use lease_v2::*;
+pub use lease_pot_v3::*;
+pub use lease_selection_v3::*;
+pub use lp_funding::*;
+pub use lp_funding_v2::*;
 pub use lp_page::*;
+pub use lp_page_v2::*;
 pub use pda::*;
 pub use policy::*;
 pub use position_transfer::*;
 pub use pot::*;
+pub use pot_v2::*;
+pub use position_v3::*;
 pub use rent::*;
+pub use root_tombstone::*;
 pub use replay::*;
 pub use state::*;
+pub use state_v2::*;
+pub use terminal_claims::*;
+pub use terminal_state::*;
+pub use transitions::*;
+pub use transitions_v3::*;
 
 use sha2::{Digest, Sha256};
 
@@ -61,15 +105,96 @@ pub const NO_NEXT_LP_PAGE: u32 = u32::MAX;
 
 /// Exact content domain for `DealerPolicyV1`.
 pub const DEALER_POLICY_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/policy/v1\0";
+/// Exact content domain for `DealerFacilityGenesisV1`.
+pub const DEALER_FACILITY_GENESIS_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-genesis/v1\0";
+/// Exact content domain for `FacilityPositionBindingV1`.
+pub const FACILITY_POSITION_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position-binding/v1\0";
+/// Exact content domain for the canonical Position V3 purpose binding.
+pub const FACILITY_POSITION_BINDING_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position-binding/v2\0";
+/// Exact content domain for `DealerFacilityPositionV1`.
+pub const DEALER_FACILITY_POSITION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position/v1\0";
+/// Exact content domain for `DealerRootTombstoneV1`.
+pub const DEALER_ROOT_TOMBSTONE_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/root-tombstone/v1\0";
+/// Exact content domain for `DealerLivenessScheduleV1`.
+pub const DEALER_LIVENESS_SCHEDULE_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/liveness-schedule/v1\0";
+/// Exact content domain for `DealerFundedBudgetDependenciesV1`.
+pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/funded-dependencies/v1\0";
+/// Exact content domain for counted, rent-owned funded dependencies.
+pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/funded-dependencies/v2\0";
+/// Transcript domain for an authenticated external liveness bundle projection.
+pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0";
+/// Content domain for one typed successful Dealer-action liveness receipt.
+pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0";
+/// Content-addressed slot domain for one physical Dealer action receipt.
+pub const DEALER_ACTION_RECEIPT_SLOT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/action-receipt-slot/v1\0";
+/// Initial domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/init/v1\0";
+/// Initial transcript domain for the PositionV3-bound V2 LP prefix chain.
+pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/init/v2\0";
+/// Per-page domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_STEP_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/step/v1\0";
+/// Final domain for the canonical sealed LP page-set fold.
+pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/final/v1\0";
 /// Exact content domain for `DealerStateV1`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
+/// Exact content domain for authoritative `DealerStateV2`.
+pub const DEALER_STATE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/state/v2\0";
+/// Exact content domain for one counted Dealer Epoch binding successor.
+pub const DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/epoch-binding/v2\0";
 /// Exact content domain for `LpPageV1`.
 pub const LP_PAGE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lp-page/v1\0";
+/// Exact content domain for immutable-after-activation LP page V2.
+pub const LP_PAGE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/lp-page/v2\0";
+/// Exact content domain for page-scoped terminal allocations.
+pub const DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/terminal-allocation/v1\0";
+/// Exact content domain for streamed terminal claim work.
+pub const DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/claim-work/v1\0";
+/// Exact content domain for one owner-scoped mutable exit ticket.
+pub const DEALER_EXIT_TICKET_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/exit-ticket/v1\0";
+/// Exact content domain for one State-owned Replay-terminalization receipt.
+pub const DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/terminal-state-receipt/v2\0";
 /// Exact content domain for `DealerLeaseV1`.
 pub const DEALER_LEASE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lease/v1\0";
+/// Exact content domain for external-liveness `DealerLeaseV2`.
+pub const DEALER_LEASE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/lease/v2\0";
 /// Exact content domain for `SettlementPotV1`.
 pub const SETTLEMENT_POT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/settlement-pot/v1\0";
+/// Exact content domain for owner-netted `SettlementPotV2`.
+pub const SETTLEMENT_POT_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/settlement-pot/v2\0";
+/// Exact content domain for `DealerRootTombstoneV2`.
+pub const DEALER_ROOT_TOMBSTONE_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/root-tombstone/v2\0";
+/// Transcript domain for one selected owner-netted fee record projection.
+pub const DEALER_SELECTED_FEE_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/selected-fee-binding/v1\0";
+/// Transcript domain for candidate-wide completed fee settlement evidence.
+pub const DEALER_CANDIDATE_FEE_SETTLEMENT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/candidate-fee-settlement/v1\0";
+/// Transcript domain for an owner-netted selected-record abort/close receipt.
+pub const DEALER_SELECTED_FEE_ABORT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/selected-fee-abort/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.
@@ -236,6 +361,37 @@ pub enum DealerRuntimeActionV1 {
     Claim = 20,
     /// Retire one counted child or root.
     Retire = 21,
+}
+
+impl DealerRuntimeActionV1 {
+    /// Recover the frozen action coordinate from its exact vector index.
+    pub fn from_index(index: usize) -> Result<Self> {
+        match index {
+            0 => Ok(Self::CreatePolicy),
+            1 => Ok(Self::Initialize),
+            2 => Ok(Self::CreateLpPage),
+            3 => Ok(Self::Contribute),
+            4 => Ok(Self::WithdrawFunding),
+            5 => Ok(Self::Activate),
+            6 => Ok(Self::CancelFunding),
+            7 => Ok(Self::RefundCancelledSponsor),
+            8 => Ok(Self::BindEpoch),
+            9 => Ok(Self::LapseEpoch),
+            10 => Ok(Self::SelectLeaseAndBegin),
+            11 => Ok(Self::Collect),
+            12 => Ok(Self::Deliver),
+            13 => Ok(Self::FinalizeSettlement),
+            14 => Ok(Self::AbortBeforeCollection),
+            15 => Ok(Self::QueueExit),
+            16 => Ok(Self::SponsorHalt),
+            17 => Ok(Self::EnterUnwind),
+            18 => Ok(Self::TimedClose),
+            19 => Ok(Self::Resolve),
+            20 => Ok(Self::Claim),
+            21 => Ok(Self::Retire),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
 }
 
 /// Fail closed until a separately reviewed adapter allocates and enables an action.

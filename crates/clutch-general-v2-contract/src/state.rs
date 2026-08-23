@@ -2489,6 +2489,78 @@ pub struct CandidateFeedTailV2<'a> {
     slices_le: &'a [u8],
 }
 
+/// Canonical role of one leg in a thirteen-byte settlement slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SettlementSliceLegKindV1 {
+    /// One exact active order index.
+    Order = 0,
+    /// The covered dealer supplies Eggs to a user buy; valid only as the sell leg.
+    CoveredDealerSell = 1,
+    /// The covered dealer receives Eggs from a user sell; valid only as the buy leg.
+    CoveredDealerBuy = 2,
+}
+
+/// Decoded canonical settlement-slice record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementSliceV1 {
+    /// Buy-leg kind.
+    pub buy_kind: SettlementSliceLegKindV1,
+    /// Buy order index, or zero for a covered-dealer leg.
+    pub buy_index: u8,
+    /// Sell-leg kind.
+    pub sell_kind: SettlementSliceLegKindV1,
+    /// Sell order index, or zero for a covered-dealer leg.
+    pub sell_index: u8,
+    /// Active native outcome transferred by this slice.
+    pub outcome: u8,
+    /// Positive native Egg quantity.
+    pub quantity: u64,
+}
+
+impl SettlementSliceV1 {
+    /// Decode one exact record under its authenticated active widths.
+    pub fn decode(input: &[u8], order_count: u8, outcome_count: u8) -> Result<Self, CodecError> {
+        if input.len() != SETTLEMENT_SLICE_BYTES {
+            return Err(CodecError::WrongLength);
+        }
+        let buy_kind = match input[0] {
+            0 => SettlementSliceLegKindV1::Order,
+            2 => SettlementSliceLegKindV1::CoveredDealerBuy,
+            _ => return Err(CodecError::InvalidState),
+        };
+        let sell_kind = match input[2] {
+            0 => SettlementSliceLegKindV1::Order,
+            1 => SettlementSliceLegKindV1::CoveredDealerSell,
+            _ => return Err(CodecError::InvalidState),
+        };
+        if (buy_kind == SettlementSliceLegKindV1::Order && input[1] >= order_count)
+            || (buy_kind != SettlementSliceLegKindV1::Order && input[1] != 0)
+            || (sell_kind == SettlementSliceLegKindV1::Order && input[3] >= order_count)
+            || (sell_kind != SettlementSliceLegKindV1::Order && input[3] != 0)
+            || input[4] >= outcome_count
+            || (buy_kind != SettlementSliceLegKindV1::Order
+                && sell_kind != SettlementSliceLegKindV1::Order)
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut quantity = [0u8; 8];
+        quantity.copy_from_slice(&input[5..13]);
+        let quantity = u64::from_le_bytes(quantity);
+        if quantity == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(Self {
+            buy_kind,
+            buy_index: input[1],
+            sell_kind,
+            sell_index: input[3],
+            outcome: input[4],
+            quantity,
+        })
+    }
+}
+
 /// Exact byte boundaries of every active-width CandidateFeed tail.
 ///
 /// Keeping this projection beside the frame codec prevents adapters from
@@ -2749,36 +2821,35 @@ pub fn quantized_witness_parts_digest_v3<B: Sha256BackendV1>(
     ]))
 }
 
-/// Recompute the canonical nonzero empty settlement-witness identity.
-pub fn empty_settlement_witness_digest_v1<B: Sha256BackendV1>(
-    backend: &B,
-    base_relation_candidate_id: Id32,
-) -> Result<Id32, CodecError> {
-    settlement_witness_digest_v1(backend, base_relation_candidate_id, 0, &[])
-}
-
-/// Derive the canonical settlement-witness identity from the checked base
-/// RelationV2 candidate and exact active-width settlement slice tail.
+/// Recompute the canonical settlement-witness identity from exact slice bytes.
 pub fn settlement_witness_digest_v1<B: Sha256BackendV1>(
     backend: &B,
     base_relation_candidate_id: Id32,
     slice_count: u16,
-    slices_le: &[u8],
+    encoded_slices: &[u8],
 ) -> Result<Id32, CodecError> {
     live(base_relation_candidate_id)?;
     let expected = usize::from(slice_count)
         .checked_mul(SETTLEMENT_SLICE_BYTES)
         .ok_or(CodecError::ArithmeticOverflow)?;
-    if slice_count > MAX_SLICES_U16 || slices_le.len() != expected {
-        return Err(CodecError::InvalidState);
+    if slice_count > MAX_SLICES_U16 || encoded_slices.len() != expected {
+        return Err(CodecError::WrongLength);
     }
     let count = slice_count.to_le_bytes();
     Id32::new(backend.sha256(&[
         SETTLEMENT_WITNESS_DIGEST_DOMAIN_V1,
         &base_relation_candidate_id.bytes(),
         &count,
-        slices_le,
+        encoded_slices,
     ]))
+}
+
+/// Recompute the canonical nonzero empty settlement-witness identity.
+pub fn empty_settlement_witness_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    base_relation_candidate_id: Id32,
+) -> Result<Id32, CodecError> {
+    settlement_witness_digest_v1(backend, base_relation_candidate_id, 0, &[])
 }
 
 /// Recompute one complete General V2 candidate-bundle identity from typed
@@ -2942,27 +3013,7 @@ fn validate_slice(
     let bytes = input
         .get(at..at + SETTLEMENT_SLICE_BYTES)
         .ok_or(CodecError::WrongLength)?;
-    if !valid_leg(bytes[0], bytes[1], order_count, false)
-        || !valid_leg(bytes[2], bytes[3], order_count, true)
-        || bytes[4] >= outcome_count
-    {
-        return Err(CodecError::InvalidState);
-    }
-    let mut quantity_bytes = [0u8; 8];
-    quantity_bytes.copy_from_slice(&bytes[5..13]);
-    if u64::from_le_bytes(quantity_bytes) == 0 {
-        return Err(CodecError::InvalidState);
-    }
-    Ok(())
-}
-
-const fn valid_leg(kind: u8, index: u8, order_count: u8, sell_side: bool) -> bool {
-    match kind {
-        0 => index < order_count,
-        1 => sell_side && index == 0,
-        2 => !sell_side && index == 0,
-        _ => false,
-    }
+    SettlementSliceV1::decode(bytes, order_count, outcome_count).map(|_| ())
 }
 
 fn read_u64_at(input: &[u8], at: usize) -> Result<u64, CodecError> {

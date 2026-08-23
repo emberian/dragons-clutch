@@ -80,9 +80,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-fee-runtime-contract",
+ "clutch-liveness",
+ "clutch-retirement",
+ "sha2",
+]
+
+[[package]]
 name = "clutch-collateral-adapter-v2"
 version = "0.1.0"
 dependencies = [
+ "clutch-retirement",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-evidence-recovery"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+]
+
+[[package]]
+name = "clutch-failure-policy-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-evidence-recovery",
+ "clutch-failure-policy-runtime",
+ "clutch-liveness",
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-runtime",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-failure-policy-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-evidence-recovery",
+ "clutch-liveness",
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-runtime",
  "sha2 0.10.9",
 ]
 
@@ -110,9 +157,13 @@ name = "clutch-general-v2-runtime"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-collateral-adapter-v2",
+ "clutch-fee-runtime-contract",
  "clutch-general-v2-contract",
+ "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-retirement",
  "clutch-solana-layout",
  "sha2 0.10.9",
 ]
@@ -162,6 +213,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-retirement"
+version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
+
+[[package]]
 name = "clutch-sbf"
 version = "0.1.0"
 dependencies = [
@@ -170,7 +228,11 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-dealer-runtime-contract",
  "clutch-collateral-adapter-v2",
+ "clutch-evidence-recovery",
+ "clutch-failure-policy-adapter",
+ "clutch-failure-policy-runtime",
  "clutch-general-v2-contract",
  "clutch-general-v2-runtime",
  "clutch-kernel",
@@ -214,6 +276,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
  "clutch-product-series",
  "solana-sha256-hasher",
 ]

@@ -7,15 +7,16 @@
 //! rehydration restart, not a validator-ledger replay claim.
 
 use {
+    clutch_collateral_adapter_v2::COLLATERAL_POLICY_V2_BYTES,
     clutch_sbf::{error::ClutchError, seeds},
     clutch_solana_layout::{
         account_len,
         artifact::{decode_stage, ArtifactKind, ARTIFACT_CHUNK_BYTES, ARTIFACT_STAGE_HEADER_BYTES},
-        collateral::{self, ParentProfile},
         Hash32, Intent, PriceGridAccount, TermsAccount, MAX_GRID_TICKS,
     },
     clutch_svm_fixture::{
-        fixture_policy, fixture_terms, layout_request, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM,
+        fixture_policy, fixture_policy_identity, fixture_terms, layout_request, PROGRAM_ID,
+        RENT_SYSVAR, SYSTEM_PROGRAM,
     },
     solana_account::Account,
     solana_address::Address,
@@ -30,12 +31,12 @@ use {
 
 #[cfg(feature = "non-production-product-series-lab")]
 use clutch_product_series::{
-    ComponentDebitV1, ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RecoveryAttemptFundingV1,
-    RecoveryAttemptV1, SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2,
-    SeriesPlanV5, SeriesPlanV5Id, BASIS_BYTES, MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES,
-    MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED,
-    RECOVERY_POLICY_DOMAIN, UNIFORM_SPACING_NONE,
+    CompiledProductSeriesBundleV1, ComponentDebitV1, ContentId, EvidenceOnlyRecoveryPolicyV1,
+    FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, RecoveryAttemptFundingV1, RecoveryAttemptV1, SeriesAttachmentPlanV1,
+    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id, BASIS_BYTES,
+    MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES, MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS,
+    MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED, RECOVERY_POLICY_DOMAIN, UNIFORM_SPACING_NONE,
 };
 #[cfg(feature = "non-production-product-series-lab")]
 use sha2::{Digest, Sha256};
@@ -105,7 +106,10 @@ fn derive_final(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Address
         | ArtifactKind::SeriesFundingQuoteV1
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
-        | ArtifactKind::SeriesFundingTermsV2) => {
+        | ArtifactKind::SeriesFundingTermsV2
+        | ArtifactKind::RegistryProgramReleaseV1
+        | ArtifactKind::RegistryCapabilityProfileV2
+        | ArtifactKind::CompiledProductSeriesBundleV1) => {
             return Address::find_program_address(
                 &[
                     seeds::SEED_PRODUCT_ARTIFACT_V1,
@@ -516,6 +520,8 @@ fn product_quote() -> SeriesFundingQuoteV1 {
             lamports: 10,
             collateral_atoms: 0,
         },
+        failure_root_rent_principal_lamports: 3,
+        failure_replay_tombstone_rent_principal_lamports: 2,
         recovery_reserve: ComponentDebitV1 {
             lamports: 40,
             collateral_atoms: 0,
@@ -575,6 +581,29 @@ fn product_funding_terms() -> SeriesFundingTermsV2 {
 }
 
 #[cfg(feature = "non-production-product-series-lab")]
+fn compiled_product_series_bundle() -> CompiledProductSeriesBundleV1 {
+    let template = product_template();
+    CompiledProductSeriesBundleV1 {
+        registry_release_id: product_id(60),
+        capability_profile_id: product_genesis().capability_profile_id,
+        source_release_manifest_id: product_id(61),
+        source_plane_contract_id: template.source_plane_contract_id,
+        source_spec_id: template.source_spec_id,
+        summary_program_id: template.summary_program_id,
+        product_compiler_release_id: template.compiler_release_id,
+        native_claim_basis_id: product_basis().id().unwrap(),
+        evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+        product_template_id: template.id().unwrap(),
+        price_measure_policy_id: product_price_policy().id().unwrap(),
+        market_genesis_profile_id: product_genesis().id().unwrap(),
+        funding_quote_id: product_quote().id().unwrap(),
+        attachment_plan_id: product_attachment().id().unwrap(),
+        series_plan_id: product_series().id().unwrap(),
+        funding_terms_id: product_funding_terms().id().unwrap(),
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
 fn other_product_artifact_bodies() -> Vec<(ArtifactKind, Vec<u8>, Hash32)> {
     let mut cases = Vec::new();
     macro_rules! push {
@@ -596,6 +625,10 @@ fn other_product_artifact_bodies() -> Vec<(ArtifactKind, Vec<u8>, Hash32)> {
     push!(ArtifactKind::SeriesAttachmentPlanV1, product_attachment());
     push!(ArtifactKind::SeriesPlanV5, product_series());
     push!(ArtifactKind::SeriesFundingTermsV2, product_funding_terms());
+    push!(
+        ArtifactKind::CompiledProductSeriesBundleV1,
+        compiled_product_series_bundle()
+    );
     cases
 }
 
@@ -975,12 +1008,9 @@ async fn every_admitted_artifact_kind_lands_as_its_exact_raw_codec() {
         .await;
 
     let policy = fixture_policy([0x91; 32]);
-    let policy_digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("parent Profile identity");
-    let policy_body = policy.canonical_bytes().expect("policy bytes");
-    assert_eq!(policy_body.len(), collateral::COLLATERAL_POLICY_BYTES);
+    let (policy_digest, _, profile) = fixture_policy_identity(policy);
+    let policy_body = policy.encode().expect("policy bytes");
+    assert_eq!(policy_body.len(), COLLATERAL_POLICY_V2_BYTES);
     let (policy_stage, policy_final) = upload_all(
         &mut context,
         &author,
@@ -1034,11 +1064,8 @@ async fn one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls(
     let author = uploader();
     let kind = ArtifactKind::CollateralPolicy;
     let policy = fixture_policy([0xa1; 32]);
-    let digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("profile identity");
-    let body = policy.canonical_bytes().expect("policy bytes");
+    let (digest, _, profile) = fixture_policy_identity(policy);
+    let body = policy.encode().expect("policy bytes");
     let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
     let (final_account, _) = derive_final(kind, profile, digest);
     let stage_minimum = Rent::default()
@@ -1110,11 +1137,8 @@ async fn excess_prefunds_are_donations_and_never_squatting_authority() {
     let author = uploader();
     let kind = ArtifactKind::CollateralPolicy;
     let policy = fixture_policy([0xb1; 32]);
-    let digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("profile identity");
-    let body = policy.canonical_bytes().expect("policy bytes");
+    let (digest, _, profile) = fixture_policy_identity(policy);
+    let body = policy.encode().expect("policy bytes");
     let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
     let (final_account, _) = derive_final(kind, profile, digest);
     let stage_donation = Rent::default()

@@ -500,6 +500,14 @@ impl<'a> ReplayV3TerminalProjection<'a> {
     pub const fn extension(self) -> &'a [u8] {
         self.envelope.extension
     }
+
+    /// Semantic identity of the exact terminal common prefix and extension.
+    pub fn semantic_id<B: ReplayV3HashBackend>(
+        self,
+        backend: &B,
+    ) -> Result<Identity32V1, RetirementErrorV2> {
+        self.envelope.semantic_id(backend)
+    }
 }
 
 /// Stable canonical Replay V3 PDA seed facts.

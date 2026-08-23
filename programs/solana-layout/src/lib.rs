@@ -42,7 +42,6 @@ pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod order_page_v5;
 pub mod portfolio_settlement;
-#[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod projection;
 pub mod registry;
@@ -95,7 +94,7 @@ pub const INTENT_VERSION_V1: u8 = 1;
 /// Number of bytes in every identity/hash field.
 pub const HASH_BYTES: usize = 32;
 
-/// Exact byte length of the canonical parent Profile preimage.
+/// Exact byte length of the superseded V1 parent Profile preimage.
 ///
 /// Frozen by `docs/implementation/RESOLUTION_EVIDENCE_PLAN.md` §3.2: an eight
 /// byte magic, parent schema and flags, the collateral subfield tag and its
@@ -104,6 +103,10 @@ pub const HASH_BYTES: usize = 32;
 /// encoder/decoder that produces these bytes is
 /// [`collateral::ParentProfile`].
 pub const PROFILE_PARENT_BYTES: usize = 64;
+/// Canonical Profile V2 schema selected by every live Realm.
+pub const PROFILE_SCHEMA_V2: u8 = 2;
+/// Domain for the canonical Profile V2 identity over policy and release IDs.
+pub const PROFILE_V2_DOMAIN: &[u8] = b"dragons-clutch/profile/v2\0";
 /// Maximum number of outcomes in a market.
 pub const MAX_OUTCOMES: usize = 16;
 /// Maximum number of payout vectors in one immutable terms set.
@@ -550,6 +553,23 @@ pub fn canonical_profile_hash(profile_bytes: &[u8]) -> Result<ProfileHash> {
     Ok(digest(b"dragons-clutch/profile/v1", &[profile_bytes]))
 }
 
+/// Derive the canonical Profile V2 identity from its two immutable children.
+///
+/// The collateral-policy content identity binds mint, decimals, ceilings, and
+/// the selected release. The separately retained release identity makes the
+/// parent join directly inspectable and refuses a policy/release substitution.
+pub fn canonical_profile_v2_id(
+    collateral_policy_id: Hash32,
+    adapter_release_id: Hash32,
+) -> Result<ProfileHash> {
+    check_hash(collateral_policy_id)?;
+    check_hash(adapter_release_id)?;
+    Ok(digest(
+        PROFILE_V2_DOMAIN,
+        &[&collateral_policy_id.0, &adapter_release_id.0],
+    ))
+}
+
 /// Derive a canonical market ID from immutable namespace inputs.
 pub fn canonical_market_id(realm: RealmHash, profile: ProfileHash, market_nonce: u64) -> MarketId {
     digest(
@@ -836,7 +856,8 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
 /// Per-account schema versions.
 ///
 /// An account keeps version `1` exactly while its bytes are unchanged from the
-/// first prototype.  `PROFILE` grew a field and encodes `2`; `ORDER_PAGE` grew
+/// first prototype. `PROFILE` is the greenfield policy+release body at `2`;
+/// the earlier body at this coordinate has no live decoder. `ORDER_PAGE` grew
 /// the page-set commitment fields at `2`, replaced its bare records with tagged
 /// fixed-width slots at `3`, and then made order ids positional, added the
 /// retirement slot kind and its header count, and gave every record a persisted
@@ -848,7 +869,7 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
 pub mod account_version {
     /// Realm account, unchanged since the first prototype.
     pub const REALM: u8 = 1;
-    /// Profile account; version 1 lacked the collateral-policy digest.
+    /// Canonical Profile V2; prior live shapes are withdrawn in greenfield.
     pub const PROFILE: u8 = 2;
     /// Market account, unchanged since the first prototype.
     pub const MARKET: u8 = 1;
@@ -923,7 +944,7 @@ pub mod account_len {
     /// Realm account bytes.
     pub const REALM: usize = 2 + 32 + 32 + 1 + 1 + 1 + 1;
     /// Profile account bytes.
-    pub const PROFILE: usize = 2 + 32 + 32 + 32 + 1 + 1;
+    pub const PROFILE: usize = 2 + 32 + 32 + 32 + 32 + 1 + 1;
     /// Market account bytes.
     pub const MARKET: usize = 2 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 1 + 512 + 32 + 8 + 8 + 32;
     /// Hoard account bytes.
@@ -1074,34 +1095,25 @@ pub struct RealmAccount {
     pub flags: u8,
 }
 
-/// Immutable profile bytes identity.
+/// Immutable Profile V2 bytes identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProfileAccount {
+pub struct ProfileAccountV2 {
     /// Profile identity.
     pub profile: ProfileHash,
     /// Owning Realm identity.
     pub realm: RealmHash,
-    /// Domain-separated collateral-policy digest, at byte offset 66.
-    ///
-    /// Zero until the policy is frozen, and nonzero exactly when
-    /// [`PROFILE_FLAG_POLICY_FROZEN`] is set in [`ProfileAccount::flags`]; the
-    /// decoder refuses every other combination.  This account codec owns those
-    /// 32 bytes and that zero-until-frozen rule and nothing more: it cannot tell
-    /// whether the digest is the *right* one.
-    ///
-    /// The digest *algorithm* — domain string, preimage, and the Python/Rust
-    /// cross-language equality — is owned by
-    /// `research/collateral-profiles/model.py` and ported byte for byte in
-    /// [`collateral`].  Recompute it from an actual 266-byte policy with
-    /// [`collateral::verify_collateral_binding`] before treating a frozen
-    /// Profile as evidence of anything; a well-formed frozen Profile can commit
-    /// to another Realm's collateral policy.
-    pub collateral_policy_digest: Hash32,
-    /// Profile schema version.
+    /// Exact `CollateralPolicyV2` content identity.
+    pub collateral_policy_id: Hash32,
+    /// Exact compiled `AdapterReleaseV2` content identity.
+    pub adapter_release_id: Hash32,
+    /// Profile schema version; exactly [`PROFILE_SCHEMA_V2`].
     pub version: u8,
-    /// Flags; bit 0 is [`PROFILE_FLAG_POLICY_FROZEN`], all other bits reserved.
+    /// Flags; exactly [`PROFILE_FLAG_POLICY_FROZEN`] in greenfield V2.
     pub flags: u8,
 }
+
+/// Canonical Profile account. This aliases V2 only; no V1 decoder remains.
+pub type ProfileAccount = ProfileAccountV2;
 
 /// Flag bit meaning the collateral policy digest is frozen and nonzero.
 pub const PROFILE_FLAG_POLICY_FROZEN: u8 = 1;
@@ -1834,7 +1846,7 @@ impl RealmAccount {
         if self.max_outcomes as usize != MAX_OUTCOMES {
             return Err(CodecError::InvalidCount);
         }
-        if self.profile_version == 0 || self.flags != 0 {
+        if self.profile_version != PROFILE_SCHEMA_V2 || self.flags != 0 {
             return Err(CodecError::InvalidEnum);
         }
         Ok(())
@@ -1872,21 +1884,20 @@ impl RealmAccount {
     }
 }
 
-impl ProfileAccount {
-    /// Validate profile shape, parent identity, and policy-freeze consistency.
+impl ProfileAccountV2 {
+    /// Validate the exact Profile V2 shape and canonical parent identity.
     pub fn validate(&self) -> Result<()> {
         check_hash(self.profile)?;
         check_hash(self.realm)?;
-        if self.version == 0 || self.flags & !PROFILE_FLAG_POLICY_FROZEN != 0 {
+        check_hash(self.collateral_policy_id)?;
+        check_hash(self.adapter_release_id)?;
+        if self.version != PROFILE_SCHEMA_V2 || self.flags != PROFILE_FLAG_POLICY_FROZEN {
             return Err(CodecError::InvalidEnum);
         }
-        let frozen = self.flags & PROFILE_FLAG_POLICY_FROZEN != 0;
-        if frozen == (self.collateral_policy_digest == Hash32::ZERO) {
-            return Err(if frozen {
-                CodecError::ZeroIdentity
-            } else {
-                CodecError::NonCanonicalPadding
-            });
+        if self.profile
+            != canonical_profile_v2_id(self.collateral_policy_id, self.adapter_release_id)?
+        {
+            return Err(CodecError::NonCanonicalIdentity);
         }
         Ok(())
     }
@@ -1900,7 +1911,8 @@ impl ProfileAccount {
         put_header(&mut w, PROFILE_TAG, account_version::PROFILE)?;
         w.hash(self.profile)?;
         w.hash(self.realm)?;
-        w.hash(self.collateral_policy_digest)?;
+        w.hash(self.collateral_policy_id)?;
+        w.hash(self.adapter_release_id)?;
         w.u8(self.version)?;
         w.u8(self.flags)?;
         Ok(w.at)
@@ -1916,7 +1928,8 @@ impl ProfileAccount {
         let v = Self {
             profile: r.hash()?,
             realm: r.hash()?,
-            collateral_policy_digest: r.hash()?,
+            collateral_policy_id: r.hash()?,
+            adapter_release_id: r.hash()?,
             version: r.u8()?,
             flags: r.u8()?,
         };
@@ -4728,23 +4741,15 @@ pub enum Intent {
         max_outcomes: u8,
         profile_version: u8,
     },
-    /// Freeze one Realm's Profile identity against its collateral policy.
+    /// Freeze one Realm's canonical Profile V2 identity.
     ///
-    /// The 266 collateral-policy bytes **do not travel in this intent**, and
-    /// that is a decision rather than a size accident: they already have a
-    /// carrier.  `market_init`'s `IX_POLICY` established the evidence-buffer
-    /// pattern — a content-authenticated account holding the exact policy
-    /// bytes, bound by recomputation
-    /// ([`collateral::verify_profile_identity`]) rather than by address — and
-    /// a second carrier for the same bytes would be a second truth.  What the
-    /// intent carries is the **digest binding**: the child digest `D_col` the
-    /// Profile freezes, and the subfield schema version that digest was
-    /// composed under, both of which the adapter recomputes from the presented
-    /// policy and refuses on mismatch.
-    InitProfile {
+    /// The policy bytes remain in their one content-authenticated artifact.
+    /// This intent carries only the exact policy and compiled-release content
+    /// identities that the Profile persists and the adapter recomputes.
+    InitProfileV2 {
         realm: RealmHash,
-        collateral_policy_digest: Hash32,
-        subfield_schema_version: u16,
+        collateral_policy_id: Hash32,
+        adapter_release_id: Hash32,
         profile_version: u8,
     },
     /// Bring one frozen price grid into existence.
@@ -5315,7 +5320,7 @@ fn check_realm_shape(profile: ProfileHash, max_outcomes: u8, profile_version: u8
     if max_outcomes as usize != MAX_OUTCOMES {
         return Err(CodecError::InvalidCount);
     }
-    if profile_version == 0 {
+    if profile_version != PROFILE_SCHEMA_V2 {
         return Err(CodecError::InvalidEnum);
     }
     Ok(())
@@ -5323,20 +5328,17 @@ fn check_realm_shape(profile: ProfileHash, max_outcomes: u8, profile_version: u8
 
 /// The Profile-initialization admissibility rule, shared by both directions.
 ///
-/// A zero collateral-policy digest is the *unfrozen* sentinel
-/// ([`ProfileAccount::collateral_policy_digest`]), and this intent exists to
-/// freeze one, so the zero is refused as an identity rather than accepted as a
-/// value.  The subfield schema version is inside the parent preimage
-/// ([`collateral::ParentProfile`]) and a zero names no schema.
+/// Both descendants are exact content identities and the version is canonical.
 fn check_profile_shape(
     realm: RealmHash,
-    collateral_policy_digest: Hash32,
-    subfield_schema_version: u16,
+    collateral_policy_id: Hash32,
+    adapter_release_id: Hash32,
     profile_version: u8,
 ) -> Result<()> {
     check_hash(realm)?;
-    check_hash(collateral_policy_digest)?;
-    if subfield_schema_version == 0 || profile_version == 0 {
+    check_hash(collateral_policy_id)?;
+    check_hash(adapter_release_id)?;
+    if profile_version != PROFILE_SCHEMA_V2 {
         return Err(CodecError::InvalidEnum);
     }
     Ok(())
@@ -5522,7 +5524,7 @@ impl Intent {
             Self::FinalizeResolutionWork(value) => value.encoded_len(),
             Self::AbortResolutionWork(value) => value.encoded_len(),
             Self::InitRealm { .. } => 2 + 32 + 8 + 1 + 1,
-            Self::InitProfile { .. } => 2 + 32 + 32 + 2 + 1,
+            Self::InitProfileV2 { .. } => 2 + 32 + 32 + 32 + 1,
             Self::InitPriceGrid { .. } | Self::InitTerms { .. } => 2 + 32 + 32,
             Self::InitOrderPage { .. } => 2 + 32 + 32 + 2 + 2,
             Self::Endow { .. } => 2 + 32 + 32 + 8,
@@ -5866,22 +5868,22 @@ impl Intent {
                 w.u8(*max_outcomes)?;
                 w.u8(*profile_version)?
             }
-            Self::InitProfile {
+            Self::InitProfileV2 {
                 realm,
-                collateral_policy_digest,
-                subfield_schema_version,
+                collateral_policy_id,
+                adapter_release_id,
                 profile_version,
             } => {
                 check_profile_shape(
                     *realm,
-                    *collateral_policy_digest,
-                    *subfield_schema_version,
+                    *collateral_policy_id,
+                    *adapter_release_id,
                     *profile_version,
                 )?;
                 put_header(&mut w, INIT_PROFILE_TAG, INTENT_VERSION)?;
                 w.hash(*realm)?;
-                w.hash(*collateral_policy_digest)?;
-                w.u16(*subfield_schema_version)?;
+                w.hash(*collateral_policy_id)?;
+                w.hash(*adapter_release_id)?;
                 w.u8(*profile_version)?
             }
             Self::InitPriceGrid {
@@ -6718,20 +6720,20 @@ impl Intent {
             }
             INIT_PROFILE_TAG => {
                 let realm = r.hash()?;
-                let collateral_policy_digest = r.hash()?;
-                let subfield_schema_version = r.u16()?;
+                let collateral_policy_id = r.hash()?;
+                let adapter_release_id = r.hash()?;
                 let profile_version = r.u8()?;
                 r.done()?;
                 check_profile_shape(
                     realm,
-                    collateral_policy_digest,
-                    subfield_schema_version,
+                    collateral_policy_id,
+                    adapter_release_id,
                     profile_version,
                 )?;
-                Ok(Self::InitProfile {
+                Ok(Self::InitProfileV2 {
                     realm,
-                    collateral_policy_digest,
-                    subfield_schema_version,
+                    collateral_policy_id,
+                    adapter_release_id,
                     profile_version,
                 })
             }
@@ -7851,11 +7853,14 @@ mod tests {
     }
     #[test]
     fn every_account_codec_round_trips() {
+        let policy_id = h(3);
+        let release_id = h(4);
+        let profile_id = canonical_profile_v2_id(policy_id, release_id).unwrap();
         let realm = RealmAccount {
             realm: h(1),
-            profile: h(2),
+            profile: profile_id,
             max_outcomes: 16,
-            profile_version: 1,
+            profile_version: PROFILE_SCHEMA_V2,
             stored_bump: 3,
             flags: 0,
         };
@@ -7864,11 +7869,12 @@ mod tests {
         assert_eq!(RealmAccount::decode(&realm_bytes), Ok(realm));
 
         let profile = ProfileAccount {
-            profile: h(2),
+            profile: profile_id,
             realm: h(1),
-            collateral_policy_digest: Hash32::ZERO,
-            version: 1,
-            flags: 0,
+            collateral_policy_id: policy_id,
+            adapter_release_id: release_id,
+            version: PROFILE_SCHEMA_V2,
+            flags: PROFILE_FLAG_POLICY_FROZEN,
         };
         let mut profile_bytes = [0; account_len::PROFILE];
         profile.encode(&mut profile_bytes).unwrap();
@@ -8062,12 +8068,15 @@ mod tests {
     }
     #[test]
     fn changed_accounts_refuse_version_one_and_unchanged_accounts_refuse_version_two() {
+        let policy_id = h(3);
+        let release_id = h(4);
         let profile = ProfileAccount {
-            profile: h(2),
+            profile: canonical_profile_v2_id(policy_id, release_id).unwrap(),
             realm: h(1),
-            collateral_policy_digest: Hash32::ZERO,
-            version: 1,
-            flags: 0,
+            collateral_policy_id: policy_id,
+            adapter_release_id: release_id,
+            version: PROFILE_SCHEMA_V2,
+            flags: PROFILE_FLAG_POLICY_FROZEN,
         };
         let mut b = [0; account_len::PROFILE];
         profile.encode(&mut b).unwrap();
@@ -8102,30 +8111,33 @@ mod tests {
         assert_eq!(MarketAccount::decode(&b), Err(CodecError::WrongVersion));
     }
     #[test]
-    fn profile_policy_digest_is_zero_until_frozen() {
+    fn profile_v2_requires_both_exact_children_and_canonical_identity() {
+        let policy_id = h(77);
+        let release_id = h(78);
         let mut profile = ProfileAccount {
-            profile: h(2),
+            profile: canonical_profile_v2_id(policy_id, release_id).unwrap(),
             realm: h(1),
-            collateral_policy_digest: Hash32::ZERO,
-            version: 1,
-            flags: 0,
+            collateral_policy_id: policy_id,
+            adapter_release_id: release_id,
+            version: PROFILE_SCHEMA_V2,
+            flags: PROFILE_FLAG_POLICY_FROZEN,
         };
         let mut b = [0; account_len::PROFILE];
         profile.encode(&mut b).unwrap();
-        // The digest occupies bytes 66..98 of the profile account.
-        assert_eq!(&b[66..98], &[0u8; 32]);
-
-        profile.collateral_policy_digest = h(77);
-        assert_eq!(profile.validate(), Err(CodecError::NonCanonicalPadding));
-
-        profile.flags = PROFILE_FLAG_POLICY_FROZEN;
-        profile.encode(&mut b).unwrap();
         assert_eq!(&b[66..98], &[77u8; 32]);
-        assert_eq!(ProfileAccount::decode(&b), Ok(profile));
+        assert_eq!(&b[98..130], &[78u8; 32]);
 
-        profile.collateral_policy_digest = Hash32::ZERO;
+        profile.collateral_policy_id = h(79);
+        assert_eq!(profile.validate(), Err(CodecError::NonCanonicalIdentity));
+
+        profile.collateral_policy_id = Hash32::ZERO;
         assert_eq!(profile.validate(), Err(CodecError::ZeroIdentity));
 
+        profile.collateral_policy_id = policy_id;
+        profile.adapter_release_id = Hash32::ZERO;
+        assert_eq!(profile.validate(), Err(CodecError::ZeroIdentity));
+
+        profile.adapter_release_id = release_id;
         profile.flags = 2;
         assert_eq!(profile.validate(), Err(CodecError::InvalidEnum));
     }
@@ -8135,7 +8147,7 @@ mod tests {
             realm: h(1),
             profile: h(2),
             max_outcomes: 16,
-            profile_version: 1,
+            profile_version: PROFILE_SCHEMA_V2,
             stored_bump: 3,
             flags: 0,
         };
@@ -12912,10 +12924,10 @@ mod tests {
                 max_outcomes: MAX_OUTCOMES as u8,
                 profile_version: 2,
             },
-            Intent::InitProfile {
+            Intent::InitProfileV2 {
                 realm: h(4),
-                collateral_policy_digest: h(5),
-                subfield_schema_version: 1,
+                collateral_policy_id: h(5),
+                adapter_release_id: h(6),
                 profile_version: 2,
             },
             Intent::InitPriceGrid {
@@ -13053,10 +13065,10 @@ mod tests {
                 max_outcomes: MAX_OUTCOMES as u8,
                 profile_version: 2,
             },
-            Intent::InitProfile {
+            Intent::InitProfileV2 {
                 realm: h(4),
-                collateral_policy_digest: h(5),
-                subfield_schema_version: 1,
+                collateral_policy_id: h(5),
+                adapter_release_id: h(6),
                 profile_version: 2,
             },
             Intent::InitPriceGrid {
@@ -13083,7 +13095,7 @@ mod tests {
 
     #[test]
     fn genesis_intents_round_trip_at_their_exact_widths() {
-        let widths = [44_usize, 69, 66, 66, 70, 74];
+        let widths = [44_usize, 99, 66, 66, 70, 74];
         let tags = [
             INIT_REALM_TAG,
             INIT_PROFILE_TAG,
@@ -13140,7 +13152,7 @@ mod tests {
                     profile: Hash32::ZERO,
                     realm_nonce: 0,
                     max_outcomes: MAX_OUTCOMES as u8,
-                    profile_version: 1,
+                    profile_version: 2,
                 },
                 CodecError::ZeroIdentity,
             ),
@@ -13150,7 +13162,7 @@ mod tests {
                     profile: h(3),
                     realm_nonce: 0,
                     max_outcomes: 8,
-                    profile_version: 1,
+                    profile_version: 2,
                 },
                 CodecError::InvalidCount,
             ),
@@ -13166,21 +13178,21 @@ mod tests {
             ),
             (
                 "a Profile freezing the unfrozen sentinel",
-                Intent::InitProfile {
+                Intent::InitProfileV2 {
                     realm: h(4),
-                    collateral_policy_digest: Hash32::ZERO,
-                    subfield_schema_version: 1,
-                    profile_version: 1,
+                    collateral_policy_id: Hash32::ZERO,
+                    adapter_release_id: h(6),
+                    profile_version: 2,
                 },
                 CodecError::ZeroIdentity,
             ),
             (
-                "a Profile naming no subfield schema",
-                Intent::InitProfile {
+                "a Profile naming no adapter release",
+                Intent::InitProfileV2 {
                     realm: h(4),
-                    collateral_policy_digest: h(5),
-                    subfield_schema_version: 0,
-                    profile_version: 1,
+                    collateral_policy_id: h(5),
+                    adapter_release_id: Hash32::ZERO,
+                    profile_version: 2,
                 },
                 CodecError::InvalidEnum,
             ),

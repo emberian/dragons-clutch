@@ -8,6 +8,27 @@ and component-by-component funding transitions. It has no account tags,
 instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account memory,
 allocator, floats, or caller-selected market nonce.
 
+## Exhaustive quantized interval consensus
+
+`QuantizedIntervalConsensusWorkV1` is the fixed 592-byte, allocation-free work
+contract for lifting smooth point-only evidence without guessing a point. It
+binds the full-width Market V2, Product template, Genesis, native basis,
+SourceOccurrence, immutable SourcePlane interval result, price-measure policy,
+capability profile, evaluator release, and canonical `WEIGHT-ROUND-01` identity.
+Each bounded advance evaluates the next integer coordinate with the Product
+basis evaluator, latches the first exact payout vector, and refuses immediately
+if any later vector differs. A certificate exists only after the inclusive
+upper endpoint has been evaluated.
+
+The fixed work codec is structural and non-authorizing. The pure in-memory
+session can mint a private verified payout capability because its history starts
+at the checked Begin constructor. Restoring that capability from a persisted
+work record is intentionally absent, and
+`require_quantized_interval_consensus_runtime_capability_v1` always refuses.
+A future SBF integration must authenticate the dedicated work PDA, owner,
+lifecycle, transcript succession, and Replay transition before a Failure
+relation successor may consume the certificate and install a resolution.
+
 The crucial identity split is:
 
 ```text
@@ -238,6 +259,7 @@ policy body in the complete registry join.
 | `MarketInstancePreimageV2` | 88: magic `DCMKTIN2` `0..8`, Template ID `8..40`, GenesisProfileV2 ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v2` |
 | `SeriesPlanV5` | 152: fresh 16-byte schema-2 header, Template/GenesisV2/Attachment IDs `16..112`, recurrence/cap `112..152` | `dragons-clutch/series-plan/v5` |
 | `SeriesFundingTermsV2` | 240: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, lamport/collateral refund identities `48..112`, collateral-neutral token account `112..144`, lamport-neutral System account `144..176`, mint `176..208`, token program `208..240` | `dragons-clutch/series-funding-terms/v2` |
+| `CompiledProductSeriesBundleV1` | 528: 16-byte header followed by sixteen exact identities: Registry release/profile, Source release/contract/spec/summary, compiler release, native basis+payout, recovery, Template, price approximation, Genesis, Quote, Attachment, Series, and FundingTerms | `dragons-clutch/compiled-product-series-bundle/v1` |
 | `CompiledSourceOccurrenceV3` | 184: 16-byte header, SeriesPlanV5 ID + ordinal `16..56`, MarketInstanceV2/Attachment/Window/Statistic IDs `56..184` | `dragons-clutch/source-occurrence-record/v1` |
 | `SeriesFundingStateV1` | 324: 16-byte header, Series/FundingTerms/Quote IDs `16..112`, cursor/lapse fields `112..124`, five 40-byte principal/donation/consumption compartments `124..324` | mutable state; no content ID |
 
@@ -265,10 +287,12 @@ identity bridge.
 | Type | Bytes and offsets | Domain |
 |---|---|---|
 | `MarketInstancePreimageV1` | 88: magic `0..8`, Template ID `8..40`, GenesisProfile ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v1` |
-| `SeriesFundingQuoteV1` | 264: header/count `0..16`, RecoveryPolicy ID `16..48`, five ordered `(lamports u64, collateral atoms u64)` components `48..128`, recovery rent principal `128..136`, eight `(progress cap u64, lamports/unit u64)` rows `136..264` | `dragons-clutch/series-funding-quote/v1` |
+| `SeriesFundingQuoteV1` | 280: header/count `0..16`, RecoveryPolicy ID `16..48`, five ordered `(lamports u64, collateral atoms u64)` components `48..128`, failure-root and permanent replay-tombstone rent principal `128..144`, Recovery rent principal `144..152`, eight `(progress cap u64, lamports/unit u64)` rows `152..280` | `dragons-clutch/series-funding-quote/v1` |
 | `SeriesAttachmentPlanV1` | 112: 16-byte header, FundingQuote ID `16..48`, LiquidityFacilityPlan ID `48..80`, WrapperRecipeSet ID `80..112` | `dragons-clutch/series-attachment-plan/v1` |
 | `SeriesPlanV4` | 152: 16-byte header, Template/Genesis/Attachment IDs `16..112`, first start `112..120`, stride `120..128`, count `128..132`, reserved `132..136`, lead `136..144`, cap `144..152` | `dragons-clutch/series-plan/v4` |
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
+| `RegistryProgramReleaseV1` | 160: header `0..16`, Program/ProgramData/full-ProgramData SHA-256 `16..112`, deployment slot `112..120`, compiled capability-manifest ID `120..152`, reserved `152..160`; the release ID is derived from the complete body | `dragons-clutch/registry-program-release/v1` |
+| `RegistryCapabilityProfileV2` | 800: header `0..16`, exact RegistryRelease ID `16..48`, selector mappings and hard limits `48..96`, fourteen semantic-owner IDs `96..544`, immutable Realm collateral `544..744`, exact SummaryProgram body `744..800`; the capability-profile ID is derived from the complete body and is not stored inside it | `dragons-clutch/registry-capability-profile/v2` |
 
 ## Pure compilation and funding
 

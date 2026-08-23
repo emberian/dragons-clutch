@@ -26,6 +26,7 @@ path = "src/main.rs"
 [dependencies]
 clutch-sbf = { path = "../program" }
 clutch-sbf-svm-tests = { path = "../svm-tests" }
+clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }

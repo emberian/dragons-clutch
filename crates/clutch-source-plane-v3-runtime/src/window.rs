@@ -13,6 +13,9 @@ use crate::auth::{
     ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1,
     RuntimeKey,
 };
+use crate::funding::{
+    AuthenticatedSourceWorkReceiptV1, SourceReceiptDispositionV1, SourceWorkKindV1,
+};
 use crate::lineage::{AuthenticatedReopenLineageV1, LineageAccessV1, LineageFamilyV1};
 use crate::{Error, Result};
 
@@ -30,6 +33,7 @@ const RESULT_ACCOUNT_AUTH_DOMAIN: &[u8] =
 const OCCURRENCE_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-join/v1";
 const FAILURE_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-source-handoff/v1";
 const SUCCESS_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/successful-evaluation-source-handoff/v1";
+const POLICY_HANDOFF_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-policy-handoff-account-join/v1";
 
 /// Exact Product/Series-owned occurrence record width.
 pub const SOURCE_OCCURRENCE_RECORD_BYTES: usize =
@@ -633,12 +637,13 @@ pub fn authenticate_statistic_result_absence(
         return Err(Error::InvalidLineage);
     }
     let lineage_id = lineage.id()?;
-    let mut bytes = [0; 136];
+    let mut bytes = [0; 168];
     bytes[..32].copy_from_slice(&route.route_id().bytes());
     bytes[32..64].copy_from_slice(&key_id.bytes());
     bytes[64..96].copy_from_slice(&account.key.bytes());
     bytes[96..128].copy_from_slice(&lineage_id.bytes());
-    bytes[128] = derived_pda.bump;
+    bytes[128..160].copy_from_slice(&authenticated_lineage.id().bytes());
+    bytes[160] = derived_pda.bump;
     Ok(AuthenticatedStatisticResultAbsenceV1 {
         statistic_key_id: key_id,
         result_account: account.key,
@@ -779,15 +784,16 @@ pub fn authenticate_statistic_result_account(
     {
         return Err(Error::InvalidLineage);
     }
-    let mut bytes = [0_u8; 208];
+    let mut bytes = [0_u8; 240];
     bytes[..32].copy_from_slice(&route.route_id().bytes());
     bytes[32..64].copy_from_slice(&account.key.bytes());
     bytes[64..96].copy_from_slice(&account_data_id.bytes());
     bytes[96..128].copy_from_slice(&result.id()?.bytes());
     bytes[128..160].copy_from_slice(&summary_program_id.bytes());
-    bytes[160..192].copy_from_slice(&authenticated_lineage.id().bytes());
-    bytes[192..200].copy_from_slice(&header.generation.to_le_bytes());
-    bytes[200] = header.bump;
+    bytes[160..192].copy_from_slice(&evidence.id().bytes());
+    bytes[192..224].copy_from_slice(&authenticated_lineage.id().bytes());
+    bytes[224..232].copy_from_slice(&header.generation.to_le_bytes());
+    bytes[232] = header.bump;
     Ok(AuthenticatedStatisticResultAccountV1 {
         route_id: route.route_id(),
         account: account.key,
@@ -827,6 +833,7 @@ pub struct OccurrenceSourceReceiptV1 {
     statistic_key_id: ContentId,
     repair_generation: u64,
     disposition: OccurrenceDispositionV1,
+    occurrence_account: RuntimeKey,
     occurrence_account_authentication_id: ContentId,
     join_id: ContentId,
 }
@@ -895,6 +902,11 @@ impl OccurrenceSourceReceiptV1 {
     /// Created versus exact-existing disposition.
     pub const fn disposition(self) -> OccurrenceDispositionV1 {
         self.disposition
+    }
+
+    /// Physical Product/Series occurrence account authenticated by this join.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.occurrence_account
     }
 
     /// Exact created/existing occurrence-account authentication receipt.
@@ -997,6 +1009,7 @@ pub fn join_source_occurrence(
         statistic_key_id,
         repair_generation: window.repair_generation,
         disposition,
+        occurrence_account: occurrence_account.key,
         occurrence_account_authentication_id,
         join_id: domain_id(OCCURRENCE_JOIN_DOMAIN, &bytes),
     })
@@ -1139,6 +1152,253 @@ impl SuccessfulEvaluationHandoffV1 {
     /// Complete source-only handoff identity.
     pub const fn id(self) -> ContentId {
         self.handoff_id
+    }
+}
+
+/// Source-owned physical-account authentication for one policy handoff.
+///
+/// This joins the semantic handoff to the exact release, occurrence, source
+/// fact, and paid-work receipt accounts authenticated by the Source adapter.
+/// It deliberately does not classify a downstream relation or select a
+/// payout. Fields are private and construction consumes the private Source
+/// authentication receipts, so downstream semantic owners cannot mint an
+/// account-authenticated handoff from caller-supplied identity bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourcePolicyHandoffJoinV1 {
+    handoff_id: ContentId,
+    release_authentication_id: ContentId,
+    route_id: ContentId,
+    occurrence_account: RuntimeKey,
+    result_or_absence_account: RuntimeKey,
+    source_fact_authentication_id: ContentId,
+    work_receipt_account: RuntimeKey,
+    work_receipt_authentication_id: ContentId,
+    clock_policy_id: ContentId,
+    clock: ClockSnapshotV1,
+    generation: u64,
+    failure_policy_binding_id: ContentId,
+    source_spec_id: ContentId,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl SourcePolicyHandoffJoinV1 {
+    /// Authenticate the complete physical join for a successful evaluation.
+    pub fn successful_evaluation(
+        route: AuthenticatedSourceRouteV1,
+        handoff: SuccessfulEvaluationHandoffV1,
+        result: AuthenticatedStatisticResultAccountV1,
+        work_receipt: AuthenticatedSourceWorkReceiptV1,
+    ) -> Result<Self> {
+        if handoff.result_account_authentication_id() != result.id() {
+            return Err(Error::MismatchedBinding);
+        }
+        Self::new(
+            route,
+            handoff.id(),
+            handoff.failure_policy_binding_id(),
+            handoff.occurrence(),
+            result.account(),
+            result.id(),
+            handoff.clock(),
+            work_receipt,
+        )
+    }
+
+    /// Authenticate the complete physical join for a mature result absence.
+    pub fn failure_absence(
+        route: AuthenticatedSourceRouteV1,
+        handoff: FailurePolicySourceHandoffV1,
+        absence: AuthenticatedStatisticResultAbsenceV1,
+        work_receipt: AuthenticatedSourceWorkReceiptV1,
+    ) -> Result<Self> {
+        if handoff.source_fact_receipt_id() != absence.id() {
+            return Err(Error::MismatchedBinding);
+        }
+        Self::new(
+            route,
+            handoff.id(),
+            handoff.failure_policy_binding_id(),
+            handoff.occurrence(),
+            absence.result_account(),
+            absence.id(),
+            handoff.clock(),
+            work_receipt,
+        )
+    }
+
+    /// Authenticate the complete physical join for a stable source refusal.
+    pub fn failure_result(
+        route: AuthenticatedSourceRouteV1,
+        handoff: FailurePolicySourceHandoffV1,
+        result: AuthenticatedStatisticResultAccountV1,
+        work_receipt: AuthenticatedSourceWorkReceiptV1,
+    ) -> Result<Self> {
+        if handoff.source_fact_receipt_id() != result.id() {
+            return Err(Error::MismatchedBinding);
+        }
+        Self::new(
+            route,
+            handoff.id(),
+            handoff.failure_policy_binding_id(),
+            handoff.occurrence(),
+            result.account(),
+            result.id(),
+            handoff.clock(),
+            work_receipt,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        route: AuthenticatedSourceRouteV1,
+        handoff_id: ContentId,
+        failure_policy_binding_id: ContentId,
+        occurrence: OccurrenceSourceReceiptV1,
+        result_or_absence_account: RuntimeKey,
+        source_fact_authentication_id: ContentId,
+        clock: ClockSnapshotV1,
+        work_receipt: AuthenticatedSourceWorkReceiptV1,
+    ) -> Result<Self> {
+        let receipt = work_receipt.receipt();
+        if occurrence.route_id() != route.route_id()
+            || occurrence.source_spec_id() != route.source_spec_id()
+            || occurrence.source_plane_contract_id() != route.source_plane_contract_id()
+            || occurrence.clock_policy_id() != route.clock_policy_id()
+            || receipt.route_id() != route.route_id()
+            || receipt.disposition() != SourceReceiptDispositionV1::Work
+            || receipt.work_kind() != Some(SourceWorkKindV1::FailureHandoff)
+            || receipt.semantic_receipt_id() != handoff_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+
+        let release_authentication_id = route.release_authentication_id();
+        let route_id = route.route_id();
+        let occurrence_account = occurrence.occurrence_account();
+        let work_receipt_account = work_receipt.account();
+        let work_receipt_authentication_id = work_receipt.id();
+        let clock_policy_id = occurrence.clock_policy_id();
+        let generation = receipt.generation();
+        let source_spec_id = occurrence.source_spec_id();
+        let window_id = occurrence.window_id();
+        let statistic_key_id = occurrence.statistic_key_id();
+        let mut bytes = [0_u8; 440];
+        bytes[..32].copy_from_slice(&handoff_id.bytes());
+        bytes[32..64].copy_from_slice(&release_authentication_id.bytes());
+        bytes[64..96].copy_from_slice(&route_id.bytes());
+        bytes[96..128].copy_from_slice(&occurrence_account.bytes());
+        bytes[128..160].copy_from_slice(&result_or_absence_account.bytes());
+        bytes[160..192].copy_from_slice(&source_fact_authentication_id.bytes());
+        bytes[192..224].copy_from_slice(&work_receipt_account.bytes());
+        bytes[224..256].copy_from_slice(&work_receipt_authentication_id.bytes());
+        bytes[256..288].copy_from_slice(&clock_policy_id.bytes());
+        bytes[288..296].copy_from_slice(&clock.slot.to_le_bytes());
+        bytes[296..304].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+        bytes[304..312].copy_from_slice(&generation.to_le_bytes());
+        bytes[312..344].copy_from_slice(&failure_policy_binding_id.bytes());
+        bytes[344..376].copy_from_slice(&source_spec_id.bytes());
+        bytes[376..408].copy_from_slice(&window_id.bytes());
+        bytes[408..440].copy_from_slice(&statistic_key_id.bytes());
+        Ok(Self {
+            handoff_id,
+            release_authentication_id,
+            route_id,
+            occurrence_account,
+            result_or_absence_account,
+            source_fact_authentication_id,
+            work_receipt_account,
+            work_receipt_authentication_id,
+            clock_policy_id,
+            clock,
+            generation,
+            failure_policy_binding_id,
+            source_spec_id,
+            window_id,
+            statistic_key_id,
+            authentication_id: domain_id(POLICY_HANDOFF_JOIN_DOMAIN, &bytes),
+        })
+    }
+
+    /// Exact source-only semantic handoff identity persisted by the work receipt.
+    pub const fn handoff_id(self) -> ContentId {
+        self.handoff_id
+    }
+
+    /// Release owner/PDA/body/deployment authentication identity.
+    pub const fn release_authentication_id(self) -> ContentId {
+        self.release_authentication_id
+    }
+
+    /// Exact authenticated Source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Physical Product/Series occurrence account.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.occurrence_account
+    }
+
+    /// Physical StatisticResult or absent-result slot.
+    pub const fn result_or_absence_account(self) -> RuntimeKey {
+        self.result_or_absence_account
+    }
+
+    /// Exact result-account or absence authentication identity.
+    pub const fn source_fact_authentication_id(self) -> ContentId {
+        self.source_fact_authentication_id
+    }
+
+    /// Physical immutable work receipt account.
+    pub const fn work_receipt_account(self) -> RuntimeKey {
+        self.work_receipt_account
+    }
+
+    /// Exact owner/PDA/body/schedule authentication identity of the work receipt.
+    pub const fn work_receipt_authentication_id(self) -> ContentId {
+        self.work_receipt_authentication_id
+    }
+
+    /// Frozen Clock policy identity.
+    pub const fn clock_policy_id(self) -> ContentId {
+        self.clock_policy_id
+    }
+
+    /// Adapter-authenticated maturity Clock snapshot.
+    pub const fn clock(self) -> ClockSnapshotV1 {
+        self.clock
+    }
+
+    /// Exact Source liveness generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Frozen downstream FailurePolicy binding.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Existing SourceSpec identity.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Exact primary or repair Window identity.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Exact StatisticKey fixed before evaluation.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Complete release/account/result/work authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
     }
 }
 

@@ -459,7 +459,7 @@ pub struct DealerTransitionIntentV1 {
     /// Position generation expected after the transition.
     ///
     /// It is equal to the pre-generation for ordinary steps and exactly one
-    /// greater for a generation-consuming Finalize, Abort, or terminal step.
+    /// greater for a generation-consuming Lapse, Finalize, Abort, or terminal step.
     pub position_generation_after: u64,
     /// Ordinal consumed from Replay.
     pub expected_ordinal: u64,
@@ -475,13 +475,19 @@ impl DealerTransitionIntentV1 {
         for identity in [
             self.replay_account_id,
             self.replay_pre_id,
-            self.state_pre_content_id,
             self.state_post_content_id,
             self.position_pre_semantic_id,
             self.position_post_semantic_id,
             self.asset_transfer_bundle_id,
         ] {
             identity.validate_live()?;
+        }
+        if self.action == DealerRuntimeActionV1::Initialize {
+            if !self.state_pre_content_id.is_zero() {
+                return Err(Error::MismatchedBinding);
+            }
+        } else {
+            self.state_pre_content_id.validate_live()?;
         }
         let external_receipt_present = !self.liveness_receipt_semantic_id.is_zero();
         match self.liveness_mode {
@@ -521,7 +527,8 @@ impl DealerTransitionIntentV1 {
         }
         let consumes_generation = matches!(
             self.action,
-            DealerRuntimeActionV1::FinalizeSettlement
+            DealerRuntimeActionV1::LapseEpoch
+                | DealerRuntimeActionV1::FinalizeSettlement
                 | DealerRuntimeActionV1::AbortBeforeCollection
         );
         if consumes_generation
@@ -678,174 +685,6 @@ pub fn accept_dealer_replay_transition_v1(
         return Err(Error::MismatchedBinding);
     }
     Ok(observed.replay_post)
-}
-
-/// Forgeable terminal projection consumed only after runtime authentication.
-///
-/// Public fields confer no terminal authority. The Dealer State handler must
-/// first authenticate and exhaust its exact child graph; retirement separately
-/// authenticates the terminal Position and Replay account bytes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerReplayTerminalJoinV1 {
-    /// Actual Replay account being deleted.
-    pub replay_account_id: Id,
-    /// Exact Replay account retained by terminal Position V3.
-    pub position_replay_account_id: Id,
-    /// Exact canonical Position V3 account.
-    pub facility_position_account_id: Id,
-    /// Exact facility Position purpose-binding identity.
-    pub facility_position_binding_id: Id,
-    /// Exact terminal Position generation.
-    pub position_generation: u64,
-    /// Exact State-owned terminal receipt committed by the Dealer extension.
-    pub terminal_state_receipt_id: Id,
-    /// Canonical Realm neutral lamport sink authenticated outside Replay.
-    pub neutral_sink: Id,
-}
-
-/// Lamport-only Replay close plan.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerReplayClosePlanV1 {
-    /// Replay account deleted to zero lamports/data.
-    replay_account_id: Id,
-    /// Semantic identity of the exact terminal Replay bytes.
-    terminal_replay_semantic_id: Id,
-    /// Last terminal transition intent committed by the Dealer extension.
-    last_transition_intent_id: Id,
-    /// Exact terminal State receipt committed by the Dealer extension.
-    terminal_state_receipt_id: Id,
-    /// Rent payer and sole principal-refund recipient.
-    payer: Id,
-    /// Canonical Realm neutral lamport sink.
-    neutral_sink: Id,
-    /// Exact lamport principal refunded to the payer.
-    payer_refund_lamports: u64,
-    /// Donation floor and every later surplus routed to the neutral sink.
-    neutral_surplus_lamports: u64,
-    /// Expected payer balance after the atomic close.
-    payer_balance_after: u64,
-    /// Expected neutral-sink balance after the atomic close.
-    neutral_sink_balance_after: u64,
-}
-
-impl DealerReplayClosePlanV1 {
-    /// Exact Replay account deleted by the combined Position retirement commit.
-    pub const fn replay_account_id(self) -> Id {
-        self.replay_account_id
-    }
-
-    /// Semantic identity of the terminal Replay envelope and Dealer extension.
-    pub const fn terminal_replay_semantic_id(self) -> Id {
-        self.terminal_replay_semantic_id
-    }
-
-    /// Exact terminal transition intent retained as Dealer evidence.
-    pub const fn last_transition_intent_id(self) -> Id {
-        self.last_transition_intent_id
-    }
-
-    /// Exact terminal State receipt retained as Dealer evidence.
-    pub const fn terminal_state_receipt_id(self) -> Id {
-        self.terminal_state_receipt_id
-    }
-
-    /// Replay rent payer and sole principal-refund recipient.
-    pub const fn payer(self) -> Id {
-        self.payer
-    }
-
-    /// Canonical Realm neutral lamport sink.
-    pub const fn neutral_sink(self) -> Id {
-        self.neutral_sink
-    }
-
-    /// Exact refundable Replay rent principal.
-    pub const fn payer_refund_lamports(self) -> u64 {
-        self.payer_refund_lamports
-    }
-
-    /// Donation floor and later Replay surplus routed neutral.
-    pub const fn neutral_surplus_lamports(self) -> u64 {
-        self.neutral_surplus_lamports
-    }
-
-    /// Expected payer balance after atomic Replay deletion.
-    pub const fn payer_balance_after(self) -> u64 {
-        self.payer_balance_after
-    }
-
-    /// Expected neutral-sink balance after atomic Replay deletion.
-    pub const fn neutral_sink_balance_after(self) -> u64 {
-        self.neutral_sink_balance_after
-    }
-}
-
-/// Plan Replay deletion only after exact State/Position terminal joins.
-///
-/// This function moves lamports only. Position cash, native Eggs, Hoard
-/// principal, fees, and liveness compartments are absent by construction.
-pub fn plan_dealer_replay_close_v1(
-    replay: DealerFacilityReplayV1,
-    join: DealerReplayTerminalJoinV1,
-    replay_lamports: u64,
-    payer_balance_before: u64,
-    neutral_sink_balance_before: u64,
-) -> Result<DealerReplayClosePlanV1> {
-    replay.validate()?;
-    for identity in [
-        join.replay_account_id,
-        join.position_replay_account_id,
-        join.facility_position_account_id,
-        join.facility_position_binding_id,
-        join.terminal_state_receipt_id,
-        join.neutral_sink,
-    ] {
-        identity.validate_live()?;
-    }
-    if join.replay_account_id != join.position_replay_account_id
-        || join.replay_account_id != replay.replay_account_id()
-        || join.facility_position_account_id != replay.facility_position_account_id()
-        || join.facility_position_binding_id != replay.facility_position_binding_id()
-        || join.position_generation != replay.position_generation()
-        || join.terminal_state_receipt_id != replay.terminal_state_receipt_id()
-        || replay.lifecycle() != ReplayV3Lifecycle::Terminal
-    {
-        return Err(Error::MismatchedBinding);
-    }
-    let rent = replay.rent();
-    let payer = dealer_id(rent.payer());
-    if payer == join.neutral_sink {
-        return Err(Error::InvalidParameter);
-    }
-    let minimum_balance = rent
-        .refundable_principal()
-        .checked_add(rent.donation_floor())
-        .ok_or(Error::ArithmeticOverflow)?;
-    if replay_lamports < minimum_balance {
-        return Err(Error::InvalidParameter);
-    }
-    let neutral_surplus_lamports = replay_lamports
-        .checked_sub(rent.refundable_principal())
-        .ok_or(Error::ArithmeticOverflow)?;
-    let payer_balance_after = payer_balance_before
-        .checked_add(rent.refundable_principal())
-        .ok_or(Error::ArithmeticOverflow)?;
-    let neutral_sink_balance_after = neutral_sink_balance_before
-        .checked_add(neutral_surplus_lamports)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let terminal_replay_semantic_id = replay.replay_id()?;
-    Ok(DealerReplayClosePlanV1 {
-        replay_account_id: join.replay_account_id,
-        terminal_replay_semantic_id,
-        last_transition_intent_id: replay.last_transition_intent_id(),
-        terminal_state_receipt_id: replay.terminal_state_receipt_id(),
-        payer,
-        neutral_sink: join.neutral_sink,
-        payer_refund_lamports: rent.refundable_principal(),
-        neutral_surplus_lamports,
-        payer_balance_after,
-        neutral_sink_balance_after,
-    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

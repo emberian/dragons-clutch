@@ -19,8 +19,11 @@
 mod artifacts;
 mod codec;
 mod compile;
+mod compiler_output;
 mod funding;
 mod funding_state;
+mod interval_consensus;
+mod product_registry;
 mod registry;
 mod source_series;
 mod successor;
@@ -40,6 +43,11 @@ pub use clutch_bspline::{BasisSpec as QuantizedBasisSpecV1, EdgePolicy as Quanti
 pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
+pub use compiler_output::{
+    assemble_compiled_product_series_bundle_v1, CompiledProductSeriesBundleV1,
+    ProductSeriesBundleInputsV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
+};
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
     AdapterAuthenticatedFulfillmentStatusV1, ComponentDebitV1, DebitProjectionV1,
@@ -51,6 +59,24 @@ pub use funding_state::{
     SeriesFundingComponentV1, SeriesFundingPhaseV1, SeriesFundingRequirementsV1,
     SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_STATE_BYTES,
+};
+pub use interval_consensus::{
+    advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
+    quantized_interval_rounding_policy_id_v1,
+    require_quantized_interval_consensus_runtime_capability_v1,
+    QuantizedIntervalConsensusCertificateV1, QuantizedIntervalConsensusContextV1,
+    QuantizedIntervalConsensusProfileV1, QuantizedIntervalConsensusProgressV1,
+    QuantizedIntervalConsensusSessionV1, QuantizedIntervalConsensusWorkV1,
+    VerifiedQuantizedIntervalPayoutV1, BASIS_EVALUATOR_VERSION_V1,
+    QUANTIZED_INTERVAL_CONSENSUS_CERTIFICATE_BYTES_V1,
+    QUANTIZED_INTERVAL_CONSENSUS_PROFILE_BYTES_V1,
+    QUANTIZED_INTERVAL_CONSENSUS_RUNTIME_CAPABILITY_ENABLED_V1,
+    QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1, QUANTIZED_INTERVAL_ROUNDING_POLICY_DOMAIN_V1,
+};
+pub use product_registry::{
+    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
+    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
+    REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
@@ -162,6 +188,10 @@ typed_id!(
 );
 typed_id!(SeriesPlanId, "Typed identity of one `SeriesPlanV4`.");
 typed_id!(
+    CompiledProductSeriesBundleV1Id,
+    "Typed identity of one `CompiledProductSeriesBundleV1` compiler output."
+);
+typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."
 );
@@ -183,12 +213,28 @@ typed_id!(
 );
 typed_id!(SeriesPlanV5Id, "Typed identity of one `SeriesPlanV5`.");
 typed_id!(
+    RegistryProgramReleaseV1Id,
+    "Typed identity of one immutable `RegistryProgramReleaseV1`."
+);
+typed_id!(
+    RegistryCapabilityProfileV2Id,
+    "Typed identity of one immutable `RegistryCapabilityProfileV2`."
+);
+typed_id!(
     SeriesFundingTermsV2Id,
     "Typed identity of one `SeriesFundingTermsV2`."
 );
 typed_id!(
     SourceOccurrenceV1Id,
     "Typed provenance identity of one compiled SourcePlane V3 occurrence record."
+);
+typed_id!(
+    QuantizedIntervalConsensusProfileV1Id,
+    "Typed identity of one bounded quantized interval-consensus work profile."
+);
+typed_id!(
+    QuantizedIntervalConsensusCertificateV1Id,
+    "Typed identity of one exhaustive quantized interval-consensus certificate."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.
@@ -235,6 +281,20 @@ pub enum Error {
     OutsideCreationWindow,
     /// A terminal projection was requested before every ordinal advanced.
     SeriesNotClosed,
+    /// A closed source interval exceeded the profile-selected exhaustive width.
+    IntervalTooWide,
+    /// A work request was zero or exceeded the profile-selected chunk bound.
+    WorkLimitExceeded,
+    /// Exhaustive evaluation found two distinct exact quantized payout vectors.
+    IntervalPayoutDisagreement,
+    /// A verified payout was requested before every coordinate was evaluated.
+    WorkIncomplete,
+    /// A completed work record was asked to advance again.
+    WorkAlreadyComplete,
+    /// Persisted work fields did not match their canonical bindings or cursor state.
+    WorkStateMismatch,
+    /// The pure contract exists, but no live runtime capability is activated.
+    RuntimeCapabilityDisabled,
 }
 
 /// Result alias for this allocation-free core.

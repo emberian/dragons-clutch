@@ -15,18 +15,18 @@ pub const INITIALIZE_ACCOUNT3_DATA_V2_BYTES: usize = 33;
 const INITIALIZE_ACCOUNT3_DISCRIMINATOR: u8 = 18;
 const INITIALIZE_IMMUTABLE_OWNER_DISCRIMINATOR: u8 = 22;
 
-/// Position-local collateral cash accounting used only by Market Endow/Withdraw.
+/// Internal compatibility carrier for the shared token postcheck.
+///
+/// Canonical Market cash is owned only by `PositionAccountV3`; no public
+/// Market prepare path accepts this projection independently.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PositionCashV2 {
-    /// Total collateral cash credited to the position.
-    pub cash_atoms: u64,
-    /// Subset encumbered by open orders or another authenticated owner.
-    pub reserved_cash_atoms: u64,
+pub(crate) struct PositionCashV2 {
+    pub(crate) cash_atoms: u64,
+    pub(crate) reserved_cash_atoms: u64,
 }
 
 impl PositionCashV2 {
-    /// Validate the reservation subset.
-    pub fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.reserved_cash_atoms > self.cash_atoms {
             Err(Error::InsufficientUnreservedCash)
         } else {
@@ -34,8 +34,7 @@ impl PositionCashV2 {
         }
     }
 
-    /// Credit exact deposited atoms after a successful collateral CPI.
-    pub fn after_deposit(self, amount_atoms: u64) -> Result<Self> {
+    pub(crate) fn after_deposit(self, amount_atoms: u64) -> Result<Self> {
         self.validate()?;
         if amount_atoms == 0 {
             return Err(Error::InvalidParameter);
@@ -49,8 +48,7 @@ impl PositionCashV2 {
         })
     }
 
-    /// Debit only exact unreserved atoms after a successful collateral CPI.
-    pub fn after_withdrawal(self, amount_atoms: u64) -> Result<Self> {
+    pub(crate) fn after_withdrawal(self, amount_atoms: u64) -> Result<Self> {
         self.validate()?;
         if amount_atoms == 0 {
             return Err(Error::InvalidParameter);
@@ -168,6 +166,8 @@ pub enum CustodyTransferKindV2 {
     PrincipalRefund = 5,
     /// Segregated vault → registry-authenticated neutral disposition account.
     DonationDisposition = 6,
+    /// Market Hoard → exact claim-plane receive-only payout account.
+    ClaimRedemption = 7,
 }
 
 /// Typed source or destination plus its singular semantic owner.
@@ -315,8 +315,9 @@ pub struct TransferRequestV2 {
     pub authority: TransferAuthorityV2,
     /// Requested raw collateral atoms; decimals never rescale this value.
     pub amount_atoms: u64,
-    /// Position cash state for Market deposit/withdrawal, absent otherwise.
-    pub position_cash: Option<PositionCashV2>,
+    // Internal shared-postcheck carrier. Public request constructors never let
+    // a caller assert canonical Position cash independently.
+    pub(crate) position_cash: Option<PositionCashV2>,
     /// Locked Hoard principal that must remain covered after any Hoard movement.
     pub locked_collateral_atoms: u64,
 }
@@ -390,14 +391,14 @@ pub struct AcceptedCollateralTransferV2 {
     pub destination_atoms_after: u64,
     /// Unchanged admitted mint supply after CPI.
     pub mint_supply_after: u64,
-    /// Updated Position cash for Market Endow/Withdraw, absent otherwise.
-    pub next_position_cash: Option<PositionCashV2>,
+    pub(crate) next_position_cash: Option<PositionCashV2>,
     /// Visible Hoard balance after CPI when the Hoard was touched.
     pub hoard_atoms_after: Option<u64>,
 }
 
-/// Validate hostile pre-state and prepare one exact checked-transfer CPI.
-pub fn prepare_collateral_transfer_v2(
+/// Crate-private base used only after a canonical Position V3 constructor has
+/// established the semantic owner of the accounting change.
+pub(crate) fn prepare_collateral_transfer_v2(
     bound: BoundCollateralProfileV2,
     request: TransferRequestV2,
     mint: RuntimeAccountViewV2<'_>,
@@ -417,7 +418,8 @@ pub fn prepare_collateral_transfer_v2(
 ///
 /// This is the Series-safe entrypoint before an occurrence Market exists. It
 /// admits only holder/segregated-vault shapes; Market deposit, withdrawal, and
-/// any Hoard endpoint require [`prepare_collateral_transfer_v2`].
+/// any Hoard endpoint require
+/// [`crate::prepare_position_collateral_transfer_v3`].
 pub fn prepare_realm_collateral_transfer_v2(
     bound: BoundRealmCollateralV2,
     request: TransferRequestV2,
@@ -649,6 +651,7 @@ fn validate_transfer_shape(request: TransferRequestV2) -> Result<()> {
                 && (destination_is_holder || destination_is_receive_only)
                 && program_signer
         }
+        ClaimRedemption => source_is_hoard && destination_is_receive_only && program_signer,
     };
     if valid {
         Ok(())

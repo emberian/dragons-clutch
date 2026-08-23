@@ -709,6 +709,8 @@ impl Scenario {
             AccountMeta::new_readonly(self.plane.hoard_authority.address, false),
             AccountMeta::new(self.plane.hoard_token.address, false),
             AccountMeta::new(OUTCOME_SOURCE, false),
+            AccountMeta::new_readonly(self.plane.realm.address, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
         ];
         metas.extend(
             self.plane
