@@ -545,6 +545,14 @@ fn process_structured_claim(
             request.envelope.payload,
         ),
         ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::CompactDonation,
+        ) => structured_custody::process_compact_donation(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
+        ExtensionAction::StructuredClaim(
             clutch_solana_layout::registry::StructuredClaimAction::RedeemTerminal,
         ) => structured_custody::process_full_vector(
             program_id,

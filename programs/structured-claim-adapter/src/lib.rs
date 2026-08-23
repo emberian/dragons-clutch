@@ -35,9 +35,11 @@ pub use accounts::{
 };
 pub use custody::{
     authenticate_structured_custody_call_v1, prepare_structured_custody_call_v1, AdapterSha256V1,
-    prepare_current_structured_position_poststate_v1, AuthenticatedStructuredCustodyCallV1,
+    prepare_current_structured_position_poststate_v1,
+    prepare_current_structured_vault_poststate_v1, AuthenticatedStructuredCustodyCallV1,
     BasePositionTransferCpiV1, CpiAccountMetaV1, PositionV3WriteV1, ReplayV3WriteV1,
     StructuredCustodyPdaVerifierV1, StructuredCustodyPoststateV1, StructuredCustodyScratchV1,
+    StructuredVaultPoststateV1,
     BASE_POSITION_TRANSFER_CPI_BYTES, MAX_CUSTODY_REPLAY_V3_WRITE_BYTES,
     POSITION_V3_WRITE_BYTES, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
     STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
