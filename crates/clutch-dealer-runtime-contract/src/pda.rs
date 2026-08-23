@@ -40,6 +40,8 @@ pub const DEALER_EPOCH_BINDING_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-epoch-v2";
 pub const DEALER_TERMINAL_ALLOCATION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-term-v1";
 /// Canonical PDA seed prefix for singleton terminal claim work.
 pub const DEALER_CLAIM_WORK_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-claim-v1";
+/// Canonical PDA seed prefix for one owner-scoped exit ticket.
+pub const DEALER_EXIT_TICKET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-exit-v1";
 /// Canonical PDA seed prefix for the permanent V2 root tombstone.
 pub const DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-root-v2";
 /// Canonical PDA seed prefix for segregated fee budgets.
@@ -94,6 +96,8 @@ pub enum DealerPdaFamilyV1 {
     ClaimWorkV1 = 20,
     /// Permanent V2 root tombstone.
     RootTombstoneV2 = 21,
+    /// Owner-scoped mutable exit ticket.
+    ExitTicketV1 = 22,
     /// Singleton fee budget addressed by facility.
     FeeBudget = 5,
     /// Singleton liveness budget addressed by facility.
@@ -358,6 +362,18 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// Exit ticket: `[b"dc-dealer-exit-v1", facility_id, owner]`.
+    pub fn exit_ticket_v1(facility_id: Id, owner: Id) -> Result<Self> {
+        facility_id.validate_live()?;
+        owner.validate_live()?;
+        Self::three(
+            DealerPdaFamilyV1::ExitTicketV1,
+            DEALER_EXIT_TICKET_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+            &owner.bytes(),
+        )
+    }
+
     /// Permanent root tombstone: `[b"dc-dealer-root-v2", facility_id]`.
     pub fn root_tombstone_v2(facility_id: Id) -> Result<Self> {
         facility_id.validate_live()?;
@@ -461,6 +477,9 @@ impl DealerPdaPreimageV1 {
             DealerPdaFamilyV1::ClaimWorkV1 => {
                 (DEALER_CLAIM_WORK_PDA_DOMAIN_V1, 2usize, 0usize)
             }
+            DealerPdaFamilyV1::ExitTicketV1 => {
+                (DEALER_EXIT_TICKET_PDA_DOMAIN_V1, 3usize, crate::ID_BYTES)
+            }
             DealerPdaFamilyV1::RootTombstoneV2 => {
                 (DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2, 2usize, 0usize)
             }
@@ -538,6 +557,7 @@ const _: () = assert!(SETTLEMENT_POT_PDA_DOMAIN_V2.len() <= 32);
 const _: () = assert!(DEALER_EPOCH_BINDING_PDA_DOMAIN_V2.len() <= 32);
 const _: () = assert!(DEALER_TERMINAL_ALLOCATION_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_CLAIM_WORK_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_EXIT_TICKET_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2.len() <= 32);
 const _: () = assert!(FEE_BUDGET_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(LIVENESS_BUDGET_PDA_DOMAIN_V1.len() <= 32);

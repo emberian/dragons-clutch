@@ -20,12 +20,15 @@
 mod budget;
 mod codec;
 mod epoch_v2;
+mod exit_ticket;
 mod facility;
 mod fee_bindings;
+mod fee_terminal;
 mod funding_dependencies;
 mod lease;
 mod lease_v2;
 mod lp_funding;
+mod lp_funding_v2;
 mod lp_page;
 mod lp_page_v2;
 mod pda;
@@ -45,12 +48,15 @@ mod transitions;
 
 pub use budget::*;
 pub use epoch_v2::*;
+pub use exit_ticket::*;
 pub use facility::*;
 pub use fee_bindings::*;
+pub use fee_terminal::*;
 pub use funding_dependencies::*;
 pub use lease::*;
 pub use lease_v2::*;
 pub use lp_funding::*;
+pub use lp_funding_v2::*;
 pub use lp_page::*;
 pub use lp_page_v2::*;
 pub use pda::*;
@@ -145,6 +151,9 @@ pub const DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for streamed terminal claim work.
 pub const DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/claim-work/v1\0";
+/// Exact content domain for one owner-scoped mutable exit ticket.
+pub const DEALER_EXIT_TICKET_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/exit-ticket/v1\0";
 /// Exact content domain for one State-owned Replay-terminalization receipt.
 pub const DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/terminal-state-receipt/v2\0";

@@ -233,7 +233,7 @@ pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
 /// Authoritative Dealer State V2 account version.
 pub const DEALER_STATE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer State V2 account bytes.
-pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 840;
+pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 844;
 /// Counted funded-dependencies account discriminator.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 /// Counted funded-dependencies account version.
@@ -246,7 +246,7 @@ pub const DEALER_LP_PAGE_V2_ACCOUNT_TAG: u8 = 0x98;
 /// Dealer LP page V2 account version.
 pub const DEALER_LP_PAGE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer LP page V2 account bytes.
-pub const DEALER_LP_PAGE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_020;
+pub const DEALER_LP_PAGE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 972;
 /// One-generation Dealer Lease V2 discriminator.
 pub const DEALER_LEASE_V2_ACCOUNT_TAG: u8 = 0x99;
 /// Dealer Lease V2 account version.
@@ -288,6 +288,13 @@ pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact current Dealer root-tombstone V2 account bytes.
 pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 468;
+/// Owner-scoped Dealer exit-ticket discriminator.
+pub const DEALER_EXIT_TICKET_ACCOUNT_TAG: u8 = 0x9f;
+/// Dealer exit-ticket account version.
+pub const DEALER_EXIT_TICKET_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer exit-ticket account bytes.
+pub const DEALER_EXIT_TICKET_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 356;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -312,6 +319,7 @@ const _: () = assert!(DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG == 0x9b);
 const _: () = assert!(DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG == 0x9c);
 const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
+const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -908,6 +916,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-root-tombstone-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_EXIT_TICKET_ACCOUNT_TAG,
+            version: DEALER_EXIT_TICKET_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-exit-ticket-v1-account",
     },
 ];
 
@@ -1930,7 +1947,9 @@ mod tests {
             assert_eq!(
                 dealer.is_ok(),
                 (DealerPolicyAction::FIRST_TAG..=DealerPolicyAction::LAST_TAG)
-                    .contains(&local_action),
+                    .contains(&local_action)
+                    || (DealerFacilityAction::FIRST_TAG..=DealerFacilityAction::LAST_TAG)
+                        .contains(&local_action),
                 "dealer action {local_action}"
             );
             let source = decode_extension_action(77, 2, local_action);

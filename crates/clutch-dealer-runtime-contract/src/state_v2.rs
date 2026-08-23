@@ -58,7 +58,7 @@ pub const DEALER_STATE_MAGIC_V2: [u8; 8] = *b"DCDSTAT2";
 pub const DEALER_STATE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical `DealerStateV2` body.
 pub const DEALER_STATE_BYTES_V2: usize =
-    HEADER_BYTES + (16 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 44 + ROOT_RENT_OWNER_BYTES;
+    HEADER_BYTES + (16 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 48 + ROOT_RENT_OWNER_BYTES;
 
 /// Exhaustive disjoint children owned by the authoritative V2 root.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -71,6 +71,8 @@ pub struct DealerChildCountsV2 {
     pub lp_pages: u32,
     /// Live LP entries nested in the page set.
     pub live_lp_positions: u32,
+    /// Owner-scoped mutable exit tickets.
+    pub exit_tickets: u32,
     /// Terminal LP entries whose claims remain undelivered.
     pub unclaimed_lp_positions: u32,
     /// The exact rent-owned funded-dependency child; zero or one.
@@ -98,6 +100,7 @@ impl DealerChildCountsV2 {
             || self.facility_replays > 1
             || self.lp_pages > MAX_LP_PAGES
             || self.live_lp_positions > lp_capacity
+            || self.exit_tickets > self.live_lp_positions
             || self.unclaimed_lp_positions > self.live_lp_positions
             || self.funded_dependencies > 1
             || self.epoch_bindings > 1
@@ -118,6 +121,7 @@ impl DealerChildCountsV2 {
             DealerChildKindV2::FacilityReplay => self.facility_replays,
             DealerChildKindV2::LpPage => self.lp_pages,
             DealerChildKindV2::LpPosition => self.live_lp_positions,
+            DealerChildKindV2::ExitTicket => self.exit_tickets,
             DealerChildKindV2::UnclaimedLpPosition => self.unclaimed_lp_positions,
             DealerChildKindV2::FundedDependencies => self.funded_dependencies,
             DealerChildKindV2::EpochBinding => self.epoch_bindings,
@@ -133,6 +137,7 @@ impl DealerChildCountsV2 {
         writer.u32(self.facility_replays);
         writer.u32(self.lp_pages);
         writer.u32(self.live_lp_positions);
+        writer.u32(self.exit_tickets);
         writer.u32(self.unclaimed_lp_positions);
         writer.u32(self.funded_dependencies);
         writer.u32(self.epoch_bindings);
@@ -148,6 +153,7 @@ impl DealerChildCountsV2 {
             facility_replays: reader.u32(),
             lp_pages: reader.u32(),
             live_lp_positions: reader.u32(),
+            exit_tickets: reader.u32(),
             unclaimed_lp_positions: reader.u32(),
             funded_dependencies: reader.u32(),
             epoch_bindings: reader.u32(),
@@ -171,6 +177,8 @@ pub enum DealerChildKindV2 {
     LpPage = 2,
     /// Live nested LP entry.
     LpPosition = 3,
+    /// Owner-scoped mutable exit ticket.
+    ExitTicket = 11,
     /// Unclaimed terminal LP entry.
     UnclaimedLpPosition = 4,
     /// Rent-owned funded-dependency child.
@@ -236,6 +244,7 @@ impl DealerChildGraphFoldV2 {
         let generation_exact = matches!(
             child.kind,
             DealerChildKindV2::EpochBinding
+                | DealerChildKindV2::ExitTicket
                 | DealerChildKindV2::Lease
                 | DealerChildKindV2::SettlementPot
         );
@@ -250,6 +259,7 @@ impl DealerChildGraphFoldV2 {
             DealerChildKindV2::FacilityReplay => &mut next.facility_replays,
             DealerChildKindV2::LpPage => &mut next.lp_pages,
             DealerChildKindV2::LpPosition => &mut next.live_lp_positions,
+            DealerChildKindV2::ExitTicket => &mut next.exit_tickets,
             DealerChildKindV2::UnclaimedLpPosition => &mut next.unclaimed_lp_positions,
             DealerChildKindV2::FundedDependencies => &mut next.funded_dependencies,
             DealerChildKindV2::EpochBinding => &mut next.epoch_bindings,
@@ -299,8 +309,10 @@ pub struct DealerStateV2 {
     pub sponsor_refund_recipient: Id,
     /// LP page head or zero.
     pub lp_page_head_id: Id,
-    /// Exact sealed LP-page fold or zero.
+    /// Exact current tail content identity; its prefix transitively commits the page set.
     pub lp_page_set_root: Id,
+    /// Greatest owner admitted to the globally sorted LP page chain, or zero.
+    pub last_lp_owner: Id,
     /// Active Epoch identity or zero.
     pub active_epoch_id: Id,
     /// Active counted Dealer Epoch-binding account or zero.
@@ -402,7 +414,13 @@ impl DealerStateV2 {
             self.lp_page_head_id.validate_live()?;
             self.lp_page_set_root.validate_live()?;
         }
+        if self.children.live_lp_positions != 0 {
+            self.last_lp_owner.validate_live()?;
+        }
         if (self.total_shares == 0) != (self.children.live_lp_positions == 0) {
+            return Err(Error::InvalidChildGraph);
+        }
+        if (self.queued_shares == 0) != (self.children.exit_tickets == 0) {
             return Err(Error::InvalidChildGraph);
         }
 
@@ -420,6 +438,7 @@ impl DealerStateV2 {
                     || self.children.epoch_bindings != 0
                     || self.children.terminal_allocations != 0
                     || self.children.claim_work != 0
+                    || self.children.exit_tickets != 0
                     || self.children.facility_positions != 1
                     || self.children.facility_replays != 1
                 {
@@ -442,6 +461,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Resolving => {
                 if self.total_shares == 0
+                    || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
                     || self.children.unclaimed_lp_positions
                         != self.children.live_lp_positions
@@ -452,6 +472,7 @@ impl DealerStateV2 {
                     || self.children.epoch_bindings != 0
                     || self.children.terminal_allocations > self.children.lp_pages
                     || self.children.claim_work != 1
+                    || self.children.exit_tickets != 0
                     || self.children.facility_positions != 1
                     || self.children.facility_replays != 1
                 {
@@ -460,6 +481,7 @@ impl DealerStateV2 {
             }
             DealerPhaseV2::Resolved => {
                 if self.total_shares == 0
+                    || self.queued_shares != 0
                     || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
                     || self.children.funded_dependencies != 1
                     || self.children.leases != 0
@@ -467,6 +489,7 @@ impl DealerStateV2 {
                     || self.children.epoch_bindings != 0
                     || self.children.terminal_allocations != self.children.lp_pages
                     || self.children.claim_work != 1
+                    || self.children.exit_tickets != 0
                     || self.children.facility_positions != 1
                     || self.children.facility_replays != 1
                 {
@@ -483,6 +506,7 @@ impl DealerStateV2 {
                     || self.children.epoch_bindings != 0
                     || self.children.terminal_allocations != 0
                     || self.children.claim_work != 0
+                    || self.children.exit_tickets != 0
                     || self.sponsor_capital_disposition == SponsorCapitalDispositionV1::Donated
                     || self.children.facility_positions != 1
                     || self.children.facility_replays != 1
@@ -501,6 +525,7 @@ impl DealerStateV2 {
                     || self.children.settlement_pots != 0
                     || self.children.terminal_allocations != 0
                     || self.children.claim_work != 0
+                    || self.children.exit_tickets != 0
                     || self.sponsor_capital_disposition
                         == SponsorCapitalDispositionV1::Refundable
                 {
@@ -584,6 +609,7 @@ impl FixedCodec for DealerStateV2 {
             self.sponsor_refund_recipient,
             self.lp_page_head_id,
             self.lp_page_set_root,
+            self.last_lp_owner,
             self.active_epoch_id,
             self.active_epoch_binding_account_id,
             self.active_lease_id,
@@ -625,6 +651,7 @@ impl FixedCodec for DealerStateV2 {
         let sponsor_refund_recipient = reader.id();
         let lp_page_head_id = reader.id();
         let lp_page_set_root = reader.id();
+        let last_lp_owner = reader.id();
         let active_epoch_id = reader.id();
         let active_epoch_binding_account_id = reader.id();
         let active_lease_id = reader.id();
@@ -657,6 +684,7 @@ impl FixedCodec for DealerStateV2 {
             sponsor_refund_recipient,
             lp_page_head_id,
             lp_page_set_root,
+            last_lp_owner,
             active_epoch_id,
             active_epoch_binding_account_id,
             active_lease_id,
@@ -681,5 +709,5 @@ impl FixedCodec for DealerStateV2 {
     }
 }
 
-const _: () = assert!(DEALER_STATE_BYTES_V2 == 840);
+const _: () = assert!(DEALER_STATE_BYTES_V2 == 844);
 const _: () = assert!(DEALER_STATE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);
