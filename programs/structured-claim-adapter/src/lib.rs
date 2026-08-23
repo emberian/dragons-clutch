@@ -12,10 +12,10 @@
 //! authentication, hostile Solana account projection, exact CPI staging, and
 //! post-CPI reconciliation.
 //!
-//! The default adapter keeps every family-local action disabled. The distinct
-//! `live-current-wrapper` build admits exactly actions 1 through 5 for the
-//! separately deployed wrapper ELF; terminal coordinates still refuse after
-//! reading only the three-byte extension header.
+//! Every adapter profile currently keeps every family-local action disabled.
+//! The `live-current-wrapper` feature compiles the current implementation seam
+//! but does not admit it until Product, deployment-release, and collateral
+//! receipts form one exact account plane.
 
 mod accounts;
 mod custody;
@@ -83,6 +83,27 @@ pub use clutch_structured_claim_runtime_contract as runtime_contract;
 
 /// Canonical key or digest bytes.
 pub type Key = [u8; 32];
+
+/// Capability-manifest identity required by every wrapper loader release while
+/// Structured runtime coordinates remain authority-join-disabled.
+pub const STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1: Key = [
+    0x26, 0xd5, 0x38, 0x9b, 0x08, 0x17, 0x9e, 0x2b, 0x8e, 0xc2, 0x1f, 0x67, 0x10, 0x53, 0x8f, 0x11,
+    0xdb, 0xe1, 0xfa, 0xa1, 0xaf, 0xe7, 0xad, 0xb2, 0xda, 0x52, 0x0b, 0x03, 0xe3, 0xf8, 0xc0, 0x9c,
+];
+/// Reviewed central-program profile admitted by the Structured laboratory
+/// release-set join. This is the exact `profile-full` manifest identity; the
+/// separate Structured feature adds no executable tuple while the join is
+/// disabled.
+pub const STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1: Key = [
+    0x05, 0x1c, 0x8a, 0xde, 0xc7, 0x94, 0x74, 0x2b, 0x76, 0x9f, 0x0f, 0x5a, 0x19, 0xfd, 0xeb, 0x3c,
+    0x16, 0x4e, 0xef, 0xf6, 0x66, 0xcf, 0x43, 0x1e, 0x65, 0x4d, 0x3f, 0x9e, 0x4b, 0xc2, 0x93, 0xb0,
+];
+/// Reviewed Token-2022 interface-manifest identity required by the Structured
+/// release-set authenticator. This is distinct from any wrapper/base profile.
+pub const STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1: Key = [
+    0x00, 0x09, 0xef, 0xd5, 0x4d, 0xd2, 0xf4, 0x43, 0xf1, 0x42, 0x1b, 0xad, 0x0e, 0x46, 0xb5, 0x60,
+    0x2d, 0x2c, 0xf9, 0x82, 0xaf, 0x0a, 0x1a, 0xdd, 0xb1, 0xa2, 0x28, 0xd9, 0xba, 0xf8, 0x55, 0x5d,
+];
 
 /// Deterministic refusal at the structured-claim SBF boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

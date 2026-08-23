@@ -544,6 +544,15 @@ fn process_structured_claim(
             clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::UnwrapFull,
             request.envelope.payload,
         ),
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::RedeemTerminal,
+        ) => structured_custody::process_full_vector(
+            program_id,
+            accounts,
+            request.sequence,
+            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::RedeemTerminal,
+            request.envelope.payload,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }

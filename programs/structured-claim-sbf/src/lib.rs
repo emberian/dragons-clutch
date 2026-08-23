@@ -22,12 +22,10 @@ use solana_pubkey::Pubkey;
 
 /// Exact deployable capability-profile label.
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/structured-claim-wrapper/non-production-live-current/v1";
+    "dragons-clutch/structured-claim-wrapper/non-production-authority-join-disabled/v1";
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the wrapper artifact identity.
-pub const PROFILE_ID: [u8; 32] = [
-    0x0e, 0xb4, 0x84, 0xab, 0xe0, 0x2b, 0x9a, 0xa6, 0x66, 0x1f, 0xb0, 0xd6, 0xcb, 0x36, 0x00, 0xfb,
-    0xb8, 0xd7, 0x54, 0x87, 0xec, 0xa7, 0x31, 0x09, 0x8f, 0x3e, 0x03, 0x12, 0x51, 0x7b, 0xd8, 0x3e,
-];
+pub const PROFILE_ID: [u8; 32] =
+    clutch_structured_claim_adapter::STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1;
 
 /// Program entrypoint implementation, also callable by host harnesses.
 pub fn process_instruction(

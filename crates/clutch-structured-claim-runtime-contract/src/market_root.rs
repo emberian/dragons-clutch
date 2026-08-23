@@ -1,13 +1,13 @@
 //! Series-link-scoped Structured market root.
 //!
-//! Product authenticates the exact active Series link, Bundle V4, and
+//! Product authenticates the exact active Series link, Bundle V5, and
 //! Attachment V4. Structured then owns this mutable descriptor-count root,
 //! recipe membership, rent principal, donation residue, and terminal receipt.
 //! A caller-authored value is never authority; the live adapter must construct
 //! the authorization below only from Product's private authenticated receipt.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV4Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanV4Id,
+    CompiledProductSeriesBundleV5Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanV4Id,
     SeriesPlanV5Id,
 };
 use clutch_structured_claim::DeploymentBinding;
@@ -22,15 +22,19 @@ pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xaf;
 /// First Structured root account version.
 pub const STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact mutable Structured root account width.
-pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 624;
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 656;
 /// Stable root-binding identity domain.
 pub const STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/market-root-binding/v1\0";
 /// Exact wrapper/base/Token-2022 deployment-owner release domain.
 pub const STRUCTURED_OWNER_RELEASE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/owner-release/v1\0";
+/// Current release-set identity domain. Unlike V1, this commits the three
+/// content-addressed, locus-aware loader release artifacts.
+pub const STRUCTURED_OWNER_RELEASE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/structured-claim/owner-release/v2\0";
 /// Exact stable root-binding preimage width.
-pub const STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1: usize = 368;
+pub const STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1: usize = 400;
 /// Admission transcript domain.
 pub const STRUCTURED_DESCRIPTOR_ADMISSION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/descriptor-admission/v1\0";
@@ -73,6 +77,56 @@ pub fn structured_owner_release_id_v1<H: WrapperRecipeHashV1>(
     Ok(id)
 }
 
+/// Derive the current runtime-owner identity from three independently
+/// authenticated loader releases plus the exact deployment addresses/slots
+/// incorporated by the wrapper product identity.
+pub fn structured_owner_release_id_v2<H: WrapperRecipeHashV1>(
+    binding: DeploymentBinding,
+    wrapper_release_id: ContentId,
+    base_release_id: ContentId,
+    token_release_id: ContentId,
+    hasher: &H,
+) -> Result<ContentId> {
+    binding.validate().map_err(|_| Error::InvalidIdentity)?;
+    let releases = [wrapper_release_id, base_release_id, token_release_id];
+    let mut left = 0usize;
+    while left < releases.len() {
+        if releases[left].is_zero() {
+            return Err(Error::InvalidIdentity);
+        }
+        let mut right = left + 1;
+        while right < releases.len() {
+            if releases[left] == releases[right] {
+                return Err(Error::InvalidIdentity);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    let wrapper_slot = binding.wrapper_deployment_slot.to_le_bytes();
+    let base_slot = binding.base_deployment_slot.to_le_bytes();
+    let token_slot = binding.token_2022_deployment_slot.to_le_bytes();
+    let id = ContentId::from_bytes(hasher.hashv(&[
+        STRUCTURED_OWNER_RELEASE_DOMAIN_V2,
+        &binding.wrapper_program,
+        &binding.wrapper_program_data,
+        &wrapper_slot,
+        &wrapper_release_id.bytes(),
+        &binding.base_program,
+        &binding.base_program_data,
+        &base_slot,
+        &base_release_id.bytes(),
+        &binding.token_2022_program,
+        &binding.token_2022_program_data,
+        &token_slot,
+        &token_release_id.bytes(),
+    ]));
+    if id.is_zero() {
+        return Err(Error::InvalidIdentity);
+    }
+    Ok(id)
+}
+
 /// Stable immutable Product/Series authority for one Structured root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredMarketRootBindingV1 {
@@ -89,9 +143,11 @@ pub struct StructuredMarketRootBindingV1 {
     /// Exact successor attachment.
     pub attachment_plan_id: SeriesAttachmentPlanV4Id,
     /// Exact successor compiler bundle.
-    pub compiler_output_id: CompiledProductSeriesBundleV4Id,
+    pub compiler_output_id: CompiledProductSeriesBundleV5Id,
     /// Exact compiler semantic owner.
     pub compiler_release_id: ContentId,
+    /// Exact loader-authenticated central Registry ReleaseV2.
+    pub registry_release_id: ContentId,
     /// Exact central capability profile.
     pub capability_profile_id: ContentId,
     /// Exact Structured-owned recipe-set commitment.
@@ -117,6 +173,7 @@ impl StructuredMarketRootBindingV1 {
             self.attachment_plan_id.bytes(),
             self.compiler_output_id.bytes(),
             self.compiler_release_id.bytes(),
+            self.registry_release_id.bytes(),
             self.capability_profile_id.bytes(),
             self.wrapper_recipe_set_id.bytes(),
             self.owner_release_id.bytes(),
@@ -157,6 +214,7 @@ impl StructuredMarketRootBindingV1 {
             self.attachment_plan_id.bytes(),
             self.compiler_output_id.bytes(),
             self.compiler_release_id.bytes(),
+            self.registry_release_id.bytes(),
             self.capability_profile_id.bytes(),
             self.wrapper_recipe_set_id.bytes(),
             self.owner_release_id.bytes(),
@@ -553,6 +611,7 @@ impl StructuredMarketRootV1 {
             wrapper_recipe_set_id: self.binding.wrapper_recipe_set_id,
             compiler_output_id: self.binding.compiler_output_id,
             compiler_release_id: self.binding.compiler_release_id,
+            registry_release_id: self.binding.registry_release_id,
             capability_profile_id: self.binding.capability_profile_id,
             owner_release_id: self.binding.owner_release_id,
             structured_root_id: self.binding.id(hasher)?,
@@ -809,8 +868,9 @@ fn decode_binding(input: [u8; STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1]) -> Resul
         series_plan_id: SeriesPlanV5Id::from_bytes(read_id(&input, &mut cursor)?),
         market_instance_id: MarketInstanceV2Id::from_bytes(read_id(&input, &mut cursor)?),
         attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(read_id(&input, &mut cursor)?),
-        compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes(read_id(&input, &mut cursor)?),
+        compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes(read_id(&input, &mut cursor)?),
         compiler_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
+        registry_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         capability_profile_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         wrapper_recipe_set_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         owner_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
@@ -889,14 +949,51 @@ mod tests {
             market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
             generation: 5,
             attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes([7; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes([7; 32]),
             compiler_release_id: id(8),
-            capability_profile_id: id(9),
-            wrapper_recipe_set_id: id(10),
-            owner_release_id: id(11),
-            rent_refund_owner: id(12),
-            neutral_lamport_sink: id(13),
+            registry_release_id: id(9),
+            capability_profile_id: id(10),
+            wrapper_recipe_set_id: id(11),
+            owner_release_id: id(12),
+            rent_refund_owner: id(13),
+            neutral_lamport_sink: id(14),
         }
+    }
+
+    fn deployment() -> DeploymentBinding {
+        DeploymentBinding {
+            wrapper_program: [21; 32],
+            wrapper_program_data: [22; 32],
+            wrapper_deployment_slot: 23,
+            base_program: [24; 32],
+            base_program_data: [25; 32],
+            base_deployment_slot: 26,
+            token_2022_program: [27; 32],
+            token_2022_program_data: [28; 32],
+            token_2022_deployment_slot: 29,
+        }
+    }
+
+    #[test]
+    fn current_owner_release_commits_each_disjoint_release_artifact() {
+        let hash = DeterministicHash;
+        let expected = structured_owner_release_id_v2(
+            deployment(),
+            id(30),
+            id(31),
+            id(32),
+            &hash,
+        )
+        .unwrap();
+        assert_ne!(
+            structured_owner_release_id_v2(deployment(), id(33), id(31), id(32), &hash)
+                .unwrap(),
+            expected,
+        );
+        assert_eq!(
+            structured_owner_release_id_v2(deployment(), id(30), id(30), id(32), &hash),
+            Err(Error::InvalidIdentity),
+        );
     }
 
     fn lineage(hash: &DeterministicHash) -> StructuredProductLineageV1 {

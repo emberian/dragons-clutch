@@ -14,8 +14,8 @@ pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
 
 /// Runtime actions admitted by this adapter artifact.
 ///
-/// The default is empty. The separately deployed wrapper feature admits only
-/// construction plus canonical and full-vector wrap/unwind.
+/// The default is empty. The separately deployed wrapper feature is also empty
+/// until every current authority join is present in one executable frame.
 #[cfg(not(feature = "live-current-wrapper"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
 /// Wrapper build seam. No action is admitted until the current Product,
