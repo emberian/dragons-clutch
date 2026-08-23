@@ -29,6 +29,12 @@ use clutch_product_series::MarketGenesisProfileV2;
 use clutch_solana_layout::{
     order_page_v5::verify_page_v5,
     registry::{
+        GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
+        GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
+        GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES,
+        GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG,
+        GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION,
+        GENERAL_V2_FROZEN_ORDER_LOCATOR_MAX_ACCOUNT_BYTES,
         GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES,
         GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
         GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
@@ -49,10 +55,28 @@ use crate::{
 pub const EXACT_INDEX_PLANE_VERSION_V1: u8 = 1;
 /// Sealed immutable state; no partially built account is a valid index.
 pub const EXACT_INDEX_PLANE_STATE_SEALED_V1: u8 = 1;
-/// Exact locator account magic.
-pub const FROZEN_ORDER_LOCATOR_MAGIC_V1: [u8; 8] = *b"DCIXLOC1";
-/// Exact candidate adjacency/aggregate account magic.
-pub const CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1: [u8; 8] = *b"DCIXADJ1";
+/// Exact locator account tag/version plus domain suffix.
+pub const FROZEN_ORDER_LOCATOR_MAGIC_V1: [u8; 8] = [
+    GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG,
+    GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION,
+    b'D',
+    b'C',
+    b'I',
+    b'X',
+    b'L',
+    b'1',
+];
+/// Exact candidate adjacency tag/version plus domain suffix.
+pub const CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1: [u8; 8] = [
+    GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
+    GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
+    b'D',
+    b'C',
+    b'I',
+    b'X',
+    b'A',
+    b'1',
+];
 /// Domain for the exact MarketBinding V2 account-data digest.
 pub const EXACT_INDEX_MARKET_BINDING_DIGEST_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/exact-index-market-binding/v1\0";
@@ -106,6 +130,13 @@ const _: () = assert!(MAX_ORDERS_PER_PAGE == 16);
 const _: () = assert!(EXACT_INDEX_COMMON_HEADER_BYTES_V1 == 664);
 const _: () = assert!(FROZEN_ORDER_LOCATOR_MAX_BYTES_V1 == 920);
 const _: () = assert!(CANDIDATE_ORDER_SLICE_INDEX_MAX_BYTES_V1 == 16_024);
+const _: () = assert!(
+    FROZEN_ORDER_LOCATOR_MAX_BYTES_V1 == GENERAL_V2_FROZEN_ORDER_LOCATOR_MAX_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    CANDIDATE_ORDER_SLICE_INDEX_MAX_BYTES_V1
+        == GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES
+);
 const _: () = assert!(
     INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG == GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG
 );
