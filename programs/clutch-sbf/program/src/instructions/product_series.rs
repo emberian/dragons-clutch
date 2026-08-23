@@ -61,10 +61,15 @@ use clutch_product_series::{
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
+    validate_activate_series_funding_account_metas_v2, ActivateSeriesFundingAccountRoleV2,
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
-    LapseSeriesOccurrenceIntentV1, ObserveSeriesDonationIntentV2, RegisterSeriesIntentV1,
-    SeriesFundingAccountV1, SeriesFundingAssetV1, SeriesRegistryAccountV1,
-    SeriesFundingAccountV2, SeriesRegistryAccountV2, SERIES_FUNDING_ACCOUNT_BYTES_V1,
+    LapseSeriesOccurrenceIntentV1, ObserveSeriesDonationIntentV2,
+    ObservedActivateSeriesFundingAccountMetaV2, RegisterSeriesIntentV1, SeriesFundingAccountV1,
+    SeriesFundingAccountV2, SeriesFundingAssetV1, SeriesRegistryAccountV1,
+    SeriesRegistryAccountV2, ACTIVATE_SERIES_ARTIFACT_END_V2,
+    ACTIVATE_SERIES_ARTIFACT_START_V2, ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2,
+    ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2, ACTIVATE_SERIES_LAMPORT_VAULT_END_V2,
+    ACTIVATE_SERIES_LAMPORT_VAULT_START_V2, SERIES_FUNDING_ACCOUNT_BYTES_V1,
     SERIES_FUNDING_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V1,
     SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
@@ -120,6 +125,10 @@ const SERIES_COLLATERAL_SOURCE_PRESTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-source-prestate/v2\0";
 const SERIES_COLLATERAL_SOURCE_POSTSTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-source-poststate/v2\0";
+const SERIES_COLLATERAL_PRINCIPAL_REFUND_STATE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-collateral-principal-refund-state/v2\0";
+const SERIES_NEUTRAL_COLLATERAL_DISPOSITION_STATE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-neutral-collateral-disposition-state/v2\0";
 const SERIES_LAMPORT_ACTIVATION_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lamport-activation-authority/v2\0";
 
@@ -328,13 +337,93 @@ fn process_activate_funding(
     accounts: &[AccountInfo<'_>],
     request: ActivateSeriesFundingIntentV1,
 ) -> Outcome<()> {
-    authenticate_current_series_authority_stack(
+    validate_activate_series_funding_account_metas_v2(accounts.len(), |index| {
+        accounts
+            .get(index)
+            .map(|account| ObservedActivateSeriesFundingAccountMetaV2 {
+                key: account.key.to_bytes(),
+                signer: account.is_signer,
+                writable: account.is_writable,
+                executable: account.executable,
+            })
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let account = |role: ActivateSeriesFundingAccountRoleV2| &accounts[role.index()];
+    let registry_account = account(ActivateSeriesFundingAccountRoleV2::Registry);
+    let funding_account = account(ActivateSeriesFundingAccountRoleV2::Funding);
+    let rent_account = account(ActivateSeriesFundingAccountRoleV2::RentSysvar);
+    let rent = read_rent(rent_account)?;
+    let registry = read_series_registry_account_v2_with_role(
         program_id,
-        accounts,
+        registry_account,
         request.series_plan_id,
+        &rent,
         true,
     )?;
-    Err(ClutchError::AuthorizationUnavailable.into())
+    let artifacts = authenticate_series_artifact_accounts_v4(
+        program_id,
+        &accounts[ACTIVATE_SERIES_ARTIFACT_START_V2..ACTIVATE_SERIES_ARTIFACT_END_V2],
+        request.series_plan_id,
+        registry.value().funding_terms_id,
+    )?;
+    let registry_refs = authenticate_series_registry_capability_refs_v2_for_mutation(
+        program_id,
+        registry_account,
+        request.series_plan_id,
+    )?;
+    let registry_capability = authenticate_registry_capability_v3(
+        program_id,
+        registry_refs,
+        account(ActivateSeriesFundingAccountRoleV2::ExecutingProgram),
+        account(ActivateSeriesFundingAccountRoleV2::ExecutingProgramData),
+        account(ActivateSeriesFundingAccountRoleV2::RegistryRelease),
+        account(ActivateSeriesFundingAccountRoleV2::CapabilityProfile),
+    )?;
+    artifacts.validate_registry_projection(&registry_capability.projection())?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        account(ActivateSeriesFundingAccountRoleV2::SourceRelease),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let compiler_bundle = authenticate_compiled_product_series_bundle_v5(
+        program_id,
+        account(ActivateSeriesFundingAccountRoleV2::CompilerBundle),
+        registry_capability,
+        source_release,
+        &artifacts,
+    )?;
+    require(
+        compiler_bundle.bundle_id() == registry.value().compiler_bundle_id,
+        ClutchError::MismatchedState,
+    )?;
+    let _ = deploy_and_activate_series_funding_v2(
+        program_id,
+        registry_account,
+        funding_account,
+        account(ActivateSeriesFundingAccountRoleV2::Payer),
+        &accounts
+            [ACTIVATE_SERIES_LAMPORT_VAULT_START_V2..ACTIVATE_SERIES_LAMPORT_VAULT_END_V2],
+        account(ActivateSeriesFundingAccountRoleV2::PayerCollateralSource),
+        account(ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund),
+        account(ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition),
+        account(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralAuthority),
+        account(ActivateSeriesFundingAccountRoleV2::Realm),
+        account(ActivateSeriesFundingAccountRoleV2::Profile),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralPolicy),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralMint),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgram),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgramData),
+        &accounts[ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2
+            ..ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2],
+        account(ActivateSeriesFundingAccountRoleV2::SystemProgram),
+        rent_account,
+        registry,
+        &artifacts,
+        compiler_bundle,
+    )?;
+    Ok(())
 }
 
 fn process_advance_occurrence(
@@ -1108,6 +1197,8 @@ struct AuthenticatedSeriesCollateralActivationPostwriteV2 {
     payer: Pubkey,
     payer_token_account: Pubkey,
     payer_token_authority: Pubkey,
+    collateral_principal_refund: Pubkey,
+    neutral_collateral_disposition: Pubkey,
     collateral_authority: Pubkey,
     neutral_lamport_sink: Pubkey,
     rent_sysvar: Pubkey,
@@ -1129,6 +1220,8 @@ struct AuthenticatedSeriesCollateralActivationPostwriteV2 {
     transfer_poststate_ids: [ContentId; SERIES_COLLATERAL_VAULT_COUNT_V2],
     source_prestate_id: ContentId,
     source_poststate_id: ContentId,
+    collateral_principal_refund_state_id: ContentId,
+    neutral_collateral_disposition_state_id: ContentId,
     vault_rent: AuthenticatedSeriesCollateralVaultRentV2,
     receipt_id: ContentId,
 }
@@ -2736,6 +2829,8 @@ fn series_collateral_activation_postwrite_receipt_id_v2(
     payer: &Pubkey,
     payer_token_account: &Pubkey,
     payer_token_authority: &Pubkey,
+    collateral_principal_refund: &Pubkey,
+    neutral_collateral_disposition: &Pubkey,
     collateral_authority: &Pubkey,
     neutral_lamport_sink: &Pubkey,
     rent_sysvar: &Pubkey,
@@ -2749,6 +2844,8 @@ fn series_collateral_activation_postwrite_receipt_id_v2(
     funding_commitment_id: ContentId,
     source_prestate_id: ContentId,
     source_poststate_id: ContentId,
+    collateral_principal_refund_state_id: ContentId,
+    neutral_collateral_disposition_state_id: ContentId,
     vault_poststate_ids: &[ContentId; SERIES_COLLATERAL_VAULT_COUNT_V2],
     transfer_poststate_ids: &[ContentId; SERIES_COLLATERAL_VAULT_COUNT_V2],
 ) -> Outcome<ContentId> {
@@ -2784,6 +2881,8 @@ fn series_collateral_activation_postwrite_receipt_id_v2(
             payer.as_ref(),
             payer_token_account.as_ref(),
             payer_token_authority.as_ref(),
+            collateral_principal_refund.as_ref(),
+            neutral_collateral_disposition.as_ref(),
             collateral_authority.as_ref(),
             neutral_lamport_sink.as_ref(),
             rent_sysvar.as_ref(),
@@ -2798,6 +2897,8 @@ fn series_collateral_activation_postwrite_receipt_id_v2(
             &funding_commitment_id.bytes(),
             &source_prestate_id.bytes(),
             &source_poststate_id.bytes(),
+            &collateral_principal_refund_state_id.bytes(),
+            &neutral_collateral_disposition_state_id.bytes(),
             &vault_poststates,
             &transfer_poststates,
         ])
@@ -2830,6 +2931,8 @@ fn deploy_series_collateral_activation_v2<'a>(
     payer: &AccountInfo<'a>,
     payer_token_account: &AccountInfo<'a>,
     payer_token_authority: &AccountInfo<'a>,
+    collateral_principal_refund: &AccountInfo<'a>,
+    neutral_collateral_disposition: &AccountInfo<'a>,
     collateral_authority: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
@@ -2882,6 +2985,16 @@ fn deploy_series_collateral_activation_v2<'a>(
             && artifacts.funding_terms.series_plan_id == series_plan_id
             && artifacts.funding_terms.collateral_mint.bytes() == mint.key.to_bytes()
             && artifacts.funding_terms.token_program.bytes() == token_program.key.to_bytes()
+            && artifacts
+                .funding_terms
+                .collateral_principal_refund_token_account
+                .bytes()
+                == collateral_principal_refund.key.to_bytes()
+            && artifacts
+                .funding_terms
+                .neutral_collateral_disposition_token_account
+                .bytes()
+                == neutral_collateral_disposition.key.to_bytes()
             && artifacts.funding_terms.lamport_principal_refund.bytes() == payer.key.to_bytes()
             && artifacts.funding_terms.neutral_lamport_sink.bytes()
                 == neutral_lamport_sink.key.to_bytes()
@@ -2892,6 +3005,15 @@ fn deploy_series_collateral_activation_v2<'a>(
     require_system_lamport_destination(
         neutral_lamport_sink,
         artifacts.funding_terms.neutral_lamport_sink,
+    )?;
+    require(
+        !collateral_principal_refund.is_signer
+            && !collateral_principal_refund.is_writable
+            && !collateral_principal_refund.executable
+            && !neutral_collateral_disposition.is_signer
+            && !neutral_collateral_disposition.is_writable
+            && !neutral_collateral_disposition.executable,
+        ClutchError::MismatchedState,
     )?;
 
     let bound = crate::collateral_release::authenticate_realm_collateral_v2(
@@ -2940,12 +3062,29 @@ fn deploy_series_collateral_activation_v2<'a>(
             && payer_token_account.key != token_program.key
             && payer_token_account.key != token_programdata.key
             && payer_token_account.key != collateral_authority.key
+            && payer_token_account.key != collateral_principal_refund.key
+            && payer_token_account.key != neutral_collateral_disposition.key
             && payer_token_account.key != neutral_lamport_sink.key
             && payer_token_authority.key != payer_token_account.key
             && payer_token_authority.key != mint.key
             && payer_token_authority.key != token_program.key
             && payer_token_authority.key != token_programdata.key
-            && payer_token_authority.key != collateral_authority.key,
+            && payer_token_authority.key != collateral_authority.key
+            && payer_token_authority.key != collateral_principal_refund.key
+            && payer_token_authority.key != neutral_collateral_disposition.key
+            && collateral_principal_refund.key != neutral_collateral_disposition.key
+            && collateral_principal_refund.key != payer.key
+            && collateral_principal_refund.key != collateral_authority.key
+            && collateral_principal_refund.key != mint.key
+            && collateral_principal_refund.key != token_program.key
+            && collateral_principal_refund.key != token_programdata.key
+            && collateral_principal_refund.key != neutral_lamport_sink.key
+            && neutral_collateral_disposition.key != payer.key
+            && neutral_collateral_disposition.key != collateral_authority.key
+            && neutral_collateral_disposition.key != mint.key
+            && neutral_collateral_disposition.key != token_program.key
+            && neutral_collateral_disposition.key != token_programdata.key
+            && neutral_collateral_disposition.key != neutral_lamport_sink.key,
         ClutchError::AccountAlias,
     )?;
     let mut left = 0usize;
@@ -2954,6 +3093,8 @@ fn deploy_series_collateral_activation_v2<'a>(
             vaults[left].key != payer.key
                 && vaults[left].key != payer_token_account.key
                 && vaults[left].key != payer_token_authority.key
+                && vaults[left].key != collateral_principal_refund.key
+                && vaults[left].key != neutral_collateral_disposition.key
                 && vaults[left].key != collateral_authority.key
                 && vaults[left].key != mint.key
                 && vaults[left].key != token_program.key
@@ -2975,6 +3116,55 @@ fn deploy_series_collateral_activation_v2<'a>(
         }
         left += 1;
     }
+
+    require(
+        collateral_principal_refund.key != &registry_account_key
+            && collateral_principal_refund.key != &funding_account
+            && neutral_collateral_disposition.key != &registry_account_key
+            && neutral_collateral_disposition.key != &funding_account,
+        ClutchError::AccountAlias,
+    )?;
+
+    let collateral_principal_refund_data = collateral_principal_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(
+            collateral_principal_refund,
+            &collateral_principal_refund_data,
+        ),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(collateral_principal_refund.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let collateral_principal_refund_state_id = series_collateral_account_state_id_v2(
+        SERIES_COLLATERAL_PRINCIPAL_REFUND_STATE_DOMAIN_V2,
+        collateral_principal_refund,
+        &collateral_principal_refund_data,
+    )?;
+    drop(collateral_principal_refund_data);
+    let neutral_collateral_disposition_data = neutral_collateral_disposition
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(
+            neutral_collateral_disposition,
+            &neutral_collateral_disposition_data,
+        ),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(neutral_collateral_disposition.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let neutral_collateral_disposition_state_id = series_collateral_account_state_id_v2(
+        SERIES_NEUTRAL_COLLATERAL_DISPOSITION_STATE_DOMAIN_V2,
+        neutral_collateral_disposition,
+        &neutral_collateral_disposition_data,
+    )?;
+    drop(neutral_collateral_disposition_data);
 
     let funding_join = SeriesCollateralFundingJoinV2 {
         realm: realm.realm,
@@ -3253,6 +3443,8 @@ fn deploy_series_collateral_activation_v2<'a>(
         payer.key,
         payer_token_account.key,
         payer_token_authority.key,
+        collateral_principal_refund.key,
+        neutral_collateral_disposition.key,
         collateral_authority.key,
         neutral_lamport_sink.key,
         rent_sysvar.key,
@@ -3266,6 +3458,8 @@ fn deploy_series_collateral_activation_v2<'a>(
         funding_commitment_id,
         source_prestate_id,
         source_poststate_id,
+        collateral_principal_refund_state_id,
+        neutral_collateral_disposition_state_id,
         &vault_poststate_ids,
         &transfer_poststate_ids,
     )?;
@@ -3286,6 +3480,8 @@ fn deploy_series_collateral_activation_v2<'a>(
         payer: *payer.key,
         payer_token_account: *payer_token_account.key,
         payer_token_authority: *payer_token_authority.key,
+        collateral_principal_refund: *collateral_principal_refund.key,
+        neutral_collateral_disposition: *neutral_collateral_disposition.key,
         collateral_authority: *collateral_authority.key,
         neutral_lamport_sink: *neutral_lamport_sink.key,
         rent_sysvar: *rent_sysvar.key,
@@ -3307,6 +3503,8 @@ fn deploy_series_collateral_activation_v2<'a>(
         transfer_poststate_ids,
         source_prestate_id,
         source_poststate_id,
+        collateral_principal_refund_state_id,
+        neutral_collateral_disposition_state_id,
         vault_rent,
         receipt_id,
     })
@@ -4821,6 +5019,16 @@ fn activate_series_funding_with_collateral_v2<'a>(
             && collateral.attachment_plan_id == attachment_plan_id
             && collateral.funding_account == *funding_account.key
             && collateral.payer == *payer.key
+            && collateral.collateral_principal_refund.to_bytes()
+                == artifacts
+                    .funding_terms
+                    .collateral_principal_refund_token_account
+                    .bytes()
+            && collateral.neutral_collateral_disposition.to_bytes()
+                == artifacts
+                    .funding_terms
+                    .neutral_collateral_disposition_token_account
+                    .bytes()
             && collateral.neutral_lamport_sink == *neutral_lamport_sink.key
             && collateral.rent_sysvar == *rent_sysvar.key
             && collateral.rent == rent
@@ -4835,6 +5043,8 @@ fn activate_series_funding_with_collateral_v2<'a>(
             && !collateral.deployment.receipt_id().is_zero()
             && !collateral.source_prestate_id.is_zero()
             && !collateral.source_poststate_id.is_zero()
+            && !collateral.collateral_principal_refund_state_id.is_zero()
+            && !collateral.neutral_collateral_disposition_state_id.is_zero()
             && collateral.payer_token_account != collateral.payer_token_authority
             && collateral.collateral_authority
                 == seeds::series_collateral_authority_pda(program_id, &series_plan_id.bytes()).0
@@ -4941,6 +5151,8 @@ pub(crate) fn deploy_and_activate_series_funding_v2<'a>(
     lamport_vaults: &[AccountInfo<'a>],
     payer_token_account: &AccountInfo<'a>,
     payer_token_authority: &AccountInfo<'a>,
+    collateral_principal_refund: &AccountInfo<'a>,
+    neutral_collateral_disposition: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
     collateral_authority: &AccountInfo<'a>,
     realm_account: &AccountInfo<'a>,
@@ -4997,6 +5209,8 @@ pub(crate) fn deploy_and_activate_series_funding_v2<'a>(
                 && lamport_vaults[lamport_index].key != neutral_lamport_sink.key
                 && lamport_vaults[lamport_index].key != payer_token_account.key
                 && lamport_vaults[lamport_index].key != payer_token_authority.key
+                && lamport_vaults[lamport_index].key != collateral_principal_refund.key
+                && lamport_vaults[lamport_index].key != neutral_collateral_disposition.key
                 && lamport_vaults[lamport_index].key != collateral_authority.key
                 && lamport_vaults[lamport_index].key != mint.key
                 && lamport_vaults[lamport_index].key != token_program.key
@@ -5049,6 +5263,8 @@ pub(crate) fn deploy_and_activate_series_funding_v2<'a>(
         payer,
         payer_token_account,
         payer_token_authority,
+        collateral_principal_refund,
+        neutral_collateral_disposition,
         collateral_authority,
         neutral_lamport_sink,
         system_program,
@@ -6983,6 +7199,21 @@ pub fn close_series_program_account(
 #[cfg(test)]
 mod collateral_activation_v2_adversarial_tests {
     use super::*;
+
+    #[test]
+    fn disabled_activation_refuses_before_payload_or_accounts() {
+        let program_id = Pubkey::new_from_array([0x41; 32]);
+        assert!(matches!(
+            process(
+                &program_id,
+                &[],
+                0,
+                RecurringSeriesAction::ActivateFunding,
+                &[],
+            ),
+            Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
+        ));
+    }
 
     fn debits() -> [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2] {
         [
