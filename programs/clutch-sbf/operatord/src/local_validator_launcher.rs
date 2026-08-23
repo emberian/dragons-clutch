@@ -39,6 +39,11 @@ const MAX_CAPABILITY_MANIFEST_BYTES: usize = 1_048_576;
 const MAX_ELF_BYTES: usize = 10 * 1024 * 1024;
 const MAX_VALIDATOR_BYTES: usize = 256 * 1024 * 1024;
 const MAX_GENESIS_ACCOUNT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EXTERNAL_PROGRAMS: usize = 16;
+const MAX_EXTERNAL_PROGRAM_BYTES: usize = 80 * 1024 * 1024;
+const MAX_GENESIS_ACCOUNTS: usize = 256;
+const MAX_GENESIS_ACCOUNTS_BYTES: usize = 64 * 1024 * 1024;
+const MAX_STAGED_INPUT_BYTES: usize = 384 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalLaunchOptions {
@@ -157,6 +162,7 @@ struct PreparedLocalChain {
     faucet_port: u16,
     provenance_validator: PathBuf,
     validator_sha256: [u8; 32],
+    staged_executables: Vec<StagedExecutable>,
 }
 
 struct ValidatorGuard(Child);
@@ -167,6 +173,13 @@ struct StagedInput {
     expected_sha256: [u8; 32],
     maximum_bytes: usize,
     mode: u32,
+    name: &'static str,
+}
+
+struct StagedExecutable {
+    path: PathBuf,
+    expected_sha256: [u8; 32],
+    maximum_bytes: usize,
     name: &'static str,
 }
 
@@ -193,16 +206,31 @@ fn refuse_key_like_path(path: &Path, name: &str) -> Result<()> {
         return Err(format!("{name} path must be narrow and absolute").into());
     }
     for component in path.components() {
-        if let Component::Normal(value) = component {
-            let value = value.to_string_lossy().to_ascii_lowercase();
-            if value == ".solana"
-                || value == "ephemeral-keys"
-                || value == "id.json"
-                || value.contains("keypair")
-                || value.contains("private-key")
-            {
-                return Err(format!("{name} path is key-like and refused").into());
-            }
+        let value = match component {
+            Component::RootDir => continue,
+            Component::Normal(value) => value,
+            _ => return Err(format!("{name} path contains a non-normal component").into()),
+        };
+        let value = value.to_string_lossy().to_ascii_lowercase();
+        if value == ".solana"
+            || value == "ephemeral-keys"
+            || value == "id.json"
+            || [
+                "wallet",
+                "keypair",
+                "private-key",
+                "private_key",
+                "mnemonic",
+                "seed",
+                "secret",
+                "keystore",
+                "recovery-phrase",
+                "recovery_phrase",
+            ]
+            .iter()
+            .any(|marker| value.contains(*marker))
+        {
+            return Err(format!("{name} path is key-like and refused").into());
         }
     }
     Ok(())
@@ -246,6 +274,13 @@ fn positive_u64(text: &str, name: &str) -> Result<u64> {
     Ok(value)
 }
 
+fn local_synthesized_slot(text: &str, name: &str) -> Result<u64> {
+    if text != "0" {
+        return Err(format!("{name} must be canonical zero for --bpf-program genesis").into());
+    }
+    Ok(0)
+}
+
 fn port(text: &str, name: &str) -> Result<u16> {
     Ok(u16::try_from(positive_u64(text, name)?)?)
 }
@@ -258,9 +293,32 @@ fn address(text: &str, name: &str) -> Result<Address> {
     Ok(value)
 }
 
-fn verify_file_digest(path: &Path, expected: [u8; 32], maximum: usize, name: &str) -> Result<()> {
-    if solana_sha256_hasher::hash(&bounded_read(path, maximum, name)?).to_bytes() != expected {
+fn verify_file_digest(
+    path: &Path,
+    expected: [u8; 32],
+    maximum: usize,
+    name: &str,
+) -> Result<usize> {
+    let bytes = bounded_read(path, maximum, name)?;
+    if solana_sha256_hasher::hash(&bytes).to_bytes() != expected {
         return Err(format!("{name} bytes disagree with their exact digest").into());
+    }
+    Ok(bytes.len())
+}
+
+fn add_bounded_size(total: &mut usize, size: usize, maximum: usize, name: &str) -> Result<()> {
+    *total = total
+        .checked_add(size)
+        .ok_or_else(|| format!("{name} byte count overflowed"))?;
+    if *total > maximum {
+        return Err(format!("{name} bytes exceed the aggregate {maximum}-byte bound").into());
+    }
+    Ok(())
+}
+
+fn require_bounded_count(count: usize, maximum: usize, name: &str) -> Result<()> {
+    if count > maximum {
+        return Err(format!("{name} exceeds the {maximum}-entry bound").into());
     }
     Ok(())
 }
@@ -319,12 +377,12 @@ fn release(
     wire: ExternalProgramWire,
     index: usize,
     sealed_inputs: &Path,
-) -> Result<(LocalProgramRelease, StagedInput)> {
+) -> Result<(LocalProgramRelease, StagedInput, usize)> {
     if wire.elf_path.extension().and_then(|value| value.to_str()) != Some("so") {
         return Err("external program ELF input must be an absolute .so path".into());
     }
     let elf_sha256 = digest(&wire.elf_sha256, "external elf_sha256")?;
-    verify_file_digest(
+    let elf_bytes = verify_file_digest(
         &wire.elf_path,
         elf_sha256,
         MAX_ELF_BYTES,
@@ -337,7 +395,10 @@ fn release(
     let release = LocalProgramRelease {
         program_id,
         program_data,
-        deployment_slot: positive_u64(&wire.deployment_slot, "external deployment_slot")?,
+        deployment_slot: local_synthesized_slot(
+            &wire.deployment_slot,
+            "external deployment_slot",
+        )?,
         elf_sha256,
         elf_path: destination.clone(),
     };
@@ -351,6 +412,7 @@ fn release(
             mode: 0o400,
             name: "external program ELF",
         },
+        elf_bytes,
     ))
 }
 
@@ -410,11 +472,33 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     if wire.schema != LOCAL_LAUNCH_CONFIG_SCHEMA || wire.cluster.name != "local-validator" {
         return Err("local launch config has an unsupported schema or network".into());
     }
+    require_bounded_count(
+        wire.external_programs.len(),
+        MAX_EXTERNAL_PROGRAMS,
+        "external_programs",
+    )?;
+    require_bounded_count(
+        wire.genesis_accounts.len(),
+        MAX_GENESIS_ACCOUNTS,
+        "genesis_accounts",
+    )?;
     if let Some(expected) = wire.cluster.expected_genesis_hash.as_deref() {
         address(expected, "expected_genesis_hash")?;
     }
     refuse_key_like_path(&options.capability_manifest, "capability manifest")?;
+    let capability_bytes = bounded_read(
+        &options.capability_manifest,
+        MAX_CAPABILITY_MANIFEST_BYTES,
+        "capability manifest",
+    )?;
     let checked = checked_capability_release(&options.capability_manifest)?;
+    let mut staged_input_bytes = 0;
+    add_bounded_size(
+        &mut staged_input_bytes,
+        capability_bytes.len(),
+        MAX_STAGED_INPUT_BYTES,
+        "staged input",
+    )?;
     let session_root = wire.session_root.clone();
     let sealed_inputs = session_root.join("sealed-inputs");
     let clutch_elf_source = wire.release.elf_path.clone();
@@ -422,20 +506,32 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         return Err("Clutch release ELF input must be an absolute .so path".into());
     }
     let clutch_elf_path = sealed_inputs.join("clutch_sbf.so");
-    verify_file_digest(
+    let clutch_elf_bytes = verify_file_digest(
         &clutch_elf_source,
         checked.elf_sha256,
         MAX_ELF_BYTES,
         "Clutch release ELF",
     )?;
+    add_bounded_size(
+        &mut staged_input_bytes,
+        clutch_elf_bytes,
+        MAX_STAGED_INPUT_BYTES,
+        "staged input",
+    )?;
     let validator_source = wire.validator.binary.clone();
     let validator_binary = sealed_inputs.join("solana-test-validator");
     let validator_sha256 = digest(&wire.validator.sha256, "validator sha256")?;
-    verify_file_digest(
+    let validator_bytes = verify_file_digest(
         &validator_source,
         validator_sha256,
         MAX_VALIDATOR_BYTES,
         "local validator binary",
+    )?;
+    add_bounded_size(
+        &mut staged_input_bytes,
+        validator_bytes,
+        MAX_STAGED_INPUT_BYTES,
+        "staged input",
     )?;
 
     let ports = LocalValidatorPorts {
@@ -453,14 +549,17 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     let clutch_release = LocalProgramRelease {
         program_id: clutch_program,
         program_data: clutch_program_data,
-        deployment_slot: positive_u64(&wire.release.deployment_slot, "deployment_slot")?,
+        deployment_slot: local_synthesized_slot(
+            &wire.release.deployment_slot,
+            "deployment_slot",
+        )?,
         elf_sha256: checked.elf_sha256,
         elf_path: clutch_elf_path.clone(),
     };
     let mut staged_inputs = vec![
         StagedInput {
             source: clutch_elf_source,
-            destination: clutch_elf_path,
+            destination: clutch_elf_path.clone(),
             expected_sha256: checked.elf_sha256,
             maximum_bytes: MAX_ELF_BYTES,
             mode: 0o400,
@@ -475,9 +574,42 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
             name: "local validator binary",
         },
     ];
+    let mut staged_executables = vec![
+        StagedExecutable {
+            path: clutch_elf_path,
+            expected_sha256: checked.elf_sha256,
+            maximum_bytes: MAX_ELF_BYTES,
+            name: "sealed Clutch release ELF",
+        },
+        StagedExecutable {
+            path: validator_binary.clone(),
+            expected_sha256: validator_sha256,
+            maximum_bytes: MAX_VALIDATOR_BYTES,
+            name: "sealed local validator binary",
+        },
+    ];
+    let mut external_program_bytes = 0;
     let mut external_program_releases = Vec::with_capacity(wire.external_programs.len());
     for (index, external) in wire.external_programs.into_iter().enumerate() {
-        let (program, staged) = release(external, index, &sealed_inputs)?;
+        let (program, staged, byte_count) = release(external, index, &sealed_inputs)?;
+        add_bounded_size(
+            &mut external_program_bytes,
+            byte_count,
+            MAX_EXTERNAL_PROGRAM_BYTES,
+            "external program",
+        )?;
+        add_bounded_size(
+            &mut staged_input_bytes,
+            byte_count,
+            MAX_STAGED_INPUT_BYTES,
+            "staged input",
+        )?;
+        staged_executables.push(StagedExecutable {
+            path: program.elf_path.clone(),
+            expected_sha256: program.elf_sha256,
+            maximum_bytes: MAX_ELF_BYTES,
+            name: "sealed external program ELF",
+        });
         external_program_releases.push(program);
         staged_inputs.push(staged);
     }
@@ -487,7 +619,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
             &wire.source.receiver_program_data,
             "receiver_program_data",
         )?,
-        receiver_deployment_slot: positive_u64(
+        receiver_deployment_slot: local_synthesized_slot(
             &wire.source.receiver_deployment_slot,
             "receiver_deployment_slot",
         )?,
@@ -498,7 +630,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         )?,
         parser_program: address(&wire.source.parser_program, "parser_program")?,
         parser_program_data: address(&wire.source.parser_program_data, "parser_program_data")?,
-        parser_deployment_slot: positive_u64(
+        parser_deployment_slot: local_synthesized_slot(
             &wire.source.parser_deployment_slot,
             "parser_deployment_slot",
         )?,
@@ -514,7 +646,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
             &wire.source.transport_program_data,
             "transport_program_data",
         )?,
-        transport_deployment_slot: positive_u64(
+        transport_deployment_slot: local_synthesized_slot(
             &wire.source.transport_deployment_slot,
             "transport_deployment_slot",
         )?,
@@ -551,6 +683,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         .iter()
         .map(|release| release.program_id)
         .collect::<BTreeSet<_>>();
+    let mut genesis_account_bytes = 0;
     let mut genesis_accounts = Vec::with_capacity(wire.genesis_accounts.len());
     for (index, account) in wire.genesis_accounts.into_iter().enumerate() {
         if account
@@ -563,11 +696,23 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         }
         let body_sha256 = digest(&account.body_sha256, "genesis body_sha256")?;
         validate_genesis_account_json(&account.account_json, &allowed_genesis_owners)?;
-        verify_file_digest(
+        let byte_count = verify_file_digest(
             &account.account_json,
             body_sha256,
             MAX_GENESIS_ACCOUNT_BYTES,
             "genesis account JSON",
+        )?;
+        add_bounded_size(
+            &mut genesis_account_bytes,
+            byte_count,
+            MAX_GENESIS_ACCOUNTS_BYTES,
+            "genesis account",
+        )?;
+        add_bounded_size(
+            &mut staged_input_bytes,
+            byte_count,
+            MAX_STAGED_INPUT_BYTES,
+            "staged input",
         )?;
         let destination = sealed_inputs.join(format!("genesis-account-{index}.json"));
         staged_inputs.push(StagedInput {
@@ -597,11 +742,6 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         for input in staged_inputs {
             stage_input(input)?;
         }
-        let capability_bytes = bounded_read(
-            &options.capability_manifest,
-            MAX_CAPABILITY_MANIFEST_BYTES,
-            "capability manifest",
-        )?;
         let sealed_capability_manifest = sealed_inputs.join("capability-manifest.json");
         write_new(&sealed_capability_manifest, &capability_bytes)?;
         let staged_checked = checked_capability_release(&sealed_capability_manifest)?;
@@ -656,6 +796,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
             faucet_port: ports.faucet,
             provenance_validator: validator_source,
             validator_sha256,
+            staged_executables,
         }),
         Err(error) => {
             layout.destroy()?;
@@ -706,6 +847,18 @@ fn verify_pinned_validator(prepared: &PreparedLocalChain) -> Result<()> {
         != prepared.validator_sha256
     {
         return Err("provenance validator digest changed after preparation".into());
+    }
+    Ok(())
+}
+
+fn verify_staged_executables(prepared: &PreparedLocalChain) -> Result<()> {
+    for executable in &prepared.staged_executables {
+        verify_file_digest(
+            &executable.path,
+            executable.expected_sha256,
+            executable.maximum_bytes,
+            executable.name,
+        )?;
     }
     Ok(())
 }
@@ -831,6 +984,7 @@ pub fn launch_and_serve(options: &LocalLaunchOptions) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    verify_staged_executables(&prepared)?;
     let mut validator = ValidatorGuard(command.spawn()?);
     probe_loopback_listeners(&prepared, &mut validator.0)?;
     let observed_genesis = observe_local_genesis(&mut validator.0, &prepared.rpc_http_url)?;
@@ -845,10 +999,35 @@ mod tests {
     #[test]
     fn key_like_and_noncanonical_inputs_are_refused() {
         assert!(refuse_key_like_path(Path::new("/tmp/.solana/id.json"), "fixture").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/wallet.json"), "fixture").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/seed.json"), "fixture").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/mnemonic.json"), "fixture").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/secret.json"), "fixture").is_err());
         assert!(refuse_key_like_path(Path::new("relative.so"), "ELF").is_err());
         assert!(positive_u64("01", "slot").is_err());
         assert!(positive_u64("0", "slot").is_err());
+        assert_eq!(local_synthesized_slot("0", "slot").unwrap(), 0);
+        assert!(local_synthesized_slot("1", "slot").is_err());
+        assert!(local_synthesized_slot("00", "slot").is_err());
         assert!(digest(&"00".repeat(32), "digest").is_err());
+    }
+
+    #[test]
+    fn collection_aggregate_bounds_are_checked() {
+        let mut total = MAX_EXTERNAL_PROGRAM_BYTES;
+        assert!(add_bounded_size(
+            &mut total,
+            1,
+            MAX_EXTERNAL_PROGRAM_BYTES,
+            "external program"
+        )
+        .is_err());
+        assert!(require_bounded_count(
+            MAX_GENESIS_ACCOUNTS + 1,
+            MAX_GENESIS_ACCOUNTS,
+            "genesis_accounts"
+        )
+        .is_err());
     }
 
     #[test]

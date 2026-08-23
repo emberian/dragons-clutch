@@ -7,7 +7,7 @@
 //! transaction-submission capability.
 
 use crate::compose_chain_config::{
-    checked_capability_release, compose_checked_chain_config,
+    checked_capability_release, compose_checked_chain_config, DeploymentSlotPolicy,
 };
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -69,15 +69,31 @@ fn refuse_key_like_path(path: &Path, name: &str) -> Result<()> {
         return Err(format!("{name} path must be narrow and absolute").into());
     }
     for component in path.components() {
-        if let Component::Normal(value) = component {
-            let value = value.to_string_lossy().to_ascii_lowercase();
-            if value == ".solana"
-                || value == "id.json"
-                || value.contains("keypair")
-                || value.contains("private-key")
-            {
-                return Err(format!("{name} path is key-like and refused").into());
-            }
+        let value = match component {
+            Component::RootDir => continue,
+            Component::Normal(value) => value,
+            _ => return Err(format!("{name} path contains a non-normal component").into()),
+        };
+        let value = value.to_string_lossy().to_ascii_lowercase();
+        if value == ".solana"
+            || value == "ephemeral-keys"
+            || value == "id.json"
+            || [
+                "wallet",
+                "keypair",
+                "private-key",
+                "private_key",
+                "mnemonic",
+                "seed",
+                "secret",
+                "keystore",
+                "recovery-phrase",
+                "recovery_phrase",
+            ]
+            .iter()
+            .any(|marker| value.contains(*marker))
+        {
+            return Err(format!("{name} path is key-like and refused").into());
         }
     }
     Ok(())
@@ -211,6 +227,7 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
         program,
         program_data,
         slot,
+        DeploymentSlotPolicy::ObservedPublicPositive,
         &manifest.source_neutral_sink,
         &manifest.compiler_release_sha256,
         &workflow_binding,
@@ -265,5 +282,9 @@ mod tests {
         assert_ne!(wrong.rpc_http_url, DEVNET_RPC_HTTP);
         assert!(canonical_positive("01", "slot").is_err());
         assert!(canonical_positive("0", "slot").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/wallet.json"), "manifest").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/seed.json"), "manifest").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/mnemonic.json"), "manifest").is_err());
+        assert!(refuse_key_like_path(Path::new("/tmp/secret.json"), "manifest").is_err());
     }
 }

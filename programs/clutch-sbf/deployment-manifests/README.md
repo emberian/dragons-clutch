@@ -20,6 +20,11 @@ Program/ProgramData/deployment-slot coordinates, the checked capability
 manifest/profile/source/ELF tuple, compiler release, neutral sink, and explicit
 `not-exposed` signing/submission/deployment fields.
 
+The devnet deployment slot must be a canonical positive decimal observed from
+the finalized ProgramData account. Local `--bpf-program` releases instead use
+the synthesized slot zero and are owned only by the v6 local session seal; the
+two coordinate types are deliberately not interchangeable.
+
 A devnet record must never be copied from or encoded as the
 `dragons-clutch/local-validator-public-manifest/v6` session seal. The composer
 performs no RPC call, wallet read, signing, submission, faucet request, or

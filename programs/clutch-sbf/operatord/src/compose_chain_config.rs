@@ -27,6 +27,21 @@ const MAX_CAPABILITY_MANIFEST_BYTES: usize = 1_048_576;
 const WORKFLOW_DOMAIN: &[u8] = b"dragons-clutch/operatord-chain-config-workflow/v2\0";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeploymentSlotPolicy {
+    SynthesizedLocalZero,
+    ObservedPublicPositive,
+}
+
+impl DeploymentSlotPolicy {
+    const fn accepts(self, slot: u64) -> bool {
+        match self {
+            Self::SynthesizedLocalZero => slot == 0,
+            Self::ObservedPublicPositive => slot != 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComposeOptions {
     pub local_release_manifest: PathBuf,
@@ -434,10 +449,10 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
     let program = Address::from_str(field(&local, "clutch_program")?)?;
     let program_data = Address::from_str(field(&local, "clutch_program_data")?)?;
     validate_upgradeable_release_coordinates(program, program_data)?;
-    let slot: u64 = field(&local, "clutch_deployment_slot")?.parse()?;
-    if slot == 0 || field(&local, "clutch_deployment_slot")?.starts_with('0') {
-        return Err("sealed deployment slot is not a canonical positive integer".into());
+    if field(&local, "clutch_deployment_slot")? != "0" {
+        return Err("sealed local deployment slot must be canonical zero".into());
     }
+    let slot = 0;
     compose_checked_chain_config(
         &checked,
         &options.cluster_name,
@@ -447,6 +462,7 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
         program,
         program_data,
         slot,
+        DeploymentSlotPolicy::SynthesizedLocalZero,
         field(&local, "source_neutral_sink")?,
         field(&local, "compiler_release_sha256")?,
         &checked.manifest_sha256,
@@ -463,6 +479,7 @@ pub(crate) fn compose_checked_chain_config(
     program: Address,
     program_data: Address,
     slot: u64,
+    slot_policy: DeploymentSlotPolicy,
     source_neutral_sink: &str,
     compiler_release_sha256: &str,
     workflow_binding: &[u8; 32],
@@ -475,7 +492,7 @@ pub(crate) fn compose_checked_chain_config(
     }
     hash32(compiler_release_sha256, "compiler_release_sha256")?;
     validate_upgradeable_release_coordinates(program, program_data)?;
-    if slot == 0
+    if !slot_policy.accepts(slot)
         || workflow_binding == &[0; 32]
         || cluster_name.is_empty()
         || expected_genesis.is_empty()
@@ -557,5 +574,13 @@ mod tests {
         assert!(families.contains(&CanonicalFamily::Dealer));
         assert!(families.contains(&CanonicalFamily::Failure));
         assert!(families.contains(&CanonicalFamily::Fractional));
+    }
+
+    #[test]
+    fn deployment_slot_policies_are_disjoint() {
+        assert!(DeploymentSlotPolicy::SynthesizedLocalZero.accepts(0));
+        assert!(!DeploymentSlotPolicy::SynthesizedLocalZero.accepts(1));
+        assert!(!DeploymentSlotPolicy::ObservedPublicPositive.accepts(0));
+        assert!(DeploymentSlotPolicy::ObservedPublicPositive.accepts(1));
     }
 }

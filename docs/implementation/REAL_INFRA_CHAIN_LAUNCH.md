@@ -44,7 +44,7 @@ placeholders, not a checked release):
   "release": {
     "program_id": "BASE58_PROGRAM",
     "program_data": "BASE58_PROGRAM_DATA",
-    "deployment_slot": "1",
+    "deployment_slot": "0",
     "elf_path": "/absolute/build/clutch_sbf.so",
     "compiler_release_sha256": "64-lowercase-hex",
     "source_neutral_sink": "BASE58_ADDRESS"
@@ -53,7 +53,7 @@ placeholders, not a checked release):
     {
       "program_id": "BASE58_PROGRAM",
       "program_data": "BASE58_PROGRAM_DATA",
-      "deployment_slot": "1",
+      "deployment_slot": "0",
       "elf_sha256": "64-lowercase-hex",
       "elf_path": "/absolute/capture/program.so"
     }
@@ -61,19 +61,19 @@ placeholders, not a checked release):
   "source": {
     "receiver_program": "BASE58_ADDRESS",
     "receiver_program_data": "BASE58_ADDRESS",
-    "receiver_deployment_slot": "1",
+    "receiver_deployment_slot": "0",
     "receiver_config": "BASE58_ADDRESS",
     "receiver_release_sha256": "64-lowercase-hex",
     "parser_program": "BASE58_ADDRESS",
     "parser_program_data": "BASE58_ADDRESS",
-    "parser_deployment_slot": "1",
+    "parser_deployment_slot": "0",
     "parser_config": "BASE58_ADDRESS",
     "parser_release_sha256": "64-lowercase-hex",
     "feed_account": "BASE58_ADDRESS",
     "feed_id": "64-lowercase-hex",
     "transport_program": "BASE58_ADDRESS",
     "transport_program_data": "BASE58_ADDRESS",
-    "transport_deployment_slot": "1",
+    "transport_deployment_slot": "0",
     "transport_release_sha256": "64-lowercase-hex",
     "source_spec_id": "64-lowercase-hex",
     "acquisition": {
@@ -101,8 +101,18 @@ Program/ProgramData/slot/digest coordinates must close the Source receiver,
 parser, and transport tuple. Genesis-account JSON and every executable are
 hashed before the session directory is created; every genesis account must be
 non-executable state owned by one of those loaded external releases, so this
-path cannot inject Clutch-owned protocol state as mock authority. RPC WebSocket is exactly
-`rpc_port + 1`, and every fixed/dynamic port is disjoint.
+path cannot inject Clutch-owned protocol state as mock authority. The local
+slot fields are exactly the string `"0"`: pinned Agave's `--bpf-program`
+genesis path synthesizes each ProgramData body with slot zero. Historical
+devnet deployment slots are therefore invalid local coordinates and are never
+reported by the local seal or served chain configuration. RPC WebSocket is
+exactly `rpc_port + 1`, and every fixed/dynamic port is disjoint.
+
+The launcher accepts at most 16 external programs and 256 genesis accounts.
+External ELF bytes are capped at 80 MiB in aggregate, genesis JSON bytes at
+64 MiB in aggregate, and all staged inputs at 384 MiB in aggregate, in addition
+to the per-file limits. It refuses wallet-, keypair-, seed-, mnemonic-,
+secret-, and recovery-material-like paths and non-normal path components.
 
 Preparation starts no validator and performs no RPC operation; it does invoke
 the repository's offline capability-profile checker:
@@ -129,10 +139,12 @@ operatord launch-local-chain \
 The launcher starts the exact digest-checked validator, observes only its
 configured loopback RPC, and refuses before serving unless the repository's
 pinned-runtime verifier and live RPC/WebSocket/faucet/non-loopback listener
-probe both pass for the exact child. It then creates `operatord-chain.json`
-through the existing capability/profile composer and enters `chain-serve`. An optional non-null
-`expected_genesis_hash` is checked against the observation. Validator logs and
-the ledger remain under the fresh mode-0700 session root.
+probe both pass for the exact child. The staged validator and every staged ELF
+are rehashed immediately before process spawn. It then creates
+`operatord-chain.json` through the existing capability/profile composer and
+enters `chain-serve`. An optional non-null `expected_genesis_hash` is checked
+against the observation. Validator logs and the ledger remain under the fresh
+mode-0700 session root.
 
 ## Devnet deployment manifest
 
@@ -145,7 +157,9 @@ followed by one newline:
 
 This manifest is a post-deployment coordinate record. It is not produced by
 the local launcher and must never name `local-validator` or the v6 local
-session schema. Composition independently checks the deployable capability
+session schema. Its deployment slot is a canonical positive value observed
+from the finalized public-cluster ProgramData account; zero is refused.
+Composition independently checks the deployable capability
 manifest and the built ELF, binds the canonical deployment-manifest digest into
 the workflow identity, and emits only read-only `chain-serve` configuration:
 
