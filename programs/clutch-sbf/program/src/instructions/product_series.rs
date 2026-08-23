@@ -58,6 +58,7 @@ use clutch_product_series::{
     SeriesFundingQuoteV1, SeriesFundingQuoteV4, SeriesFundingRequirementsV1,
     SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTerminalProjectionV1,
     SeriesFundingTerminalProjectionV2,
+    SeriesLifecycleLapseProjectionV1, SeriesLifecycleReplayBindingV1Id,
     SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
     SourceOccurrenceV1Id, SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
@@ -93,6 +94,8 @@ pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
 const SERIES_OCCURRENCE_COMPLETION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-occurrence-completion-authentication/v2";
+const SERIES_LAPSE_POSTWRITE_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-lapse-postwrite-authentication/v2\0";
 
 /// Exact read-only Product/Series artifact count used by registration and
 /// every later transition that reconstructs the immutable join.
@@ -533,16 +536,21 @@ fn process_lapse_occurrence(
         source_release,
         &accounts[IX_LAPSE_CLOCK],
     )?;
-    let (_, ordinal) = lapse_series_occurrence_v2(
-        program_id,
-        &accounts[IX_LAPSE_FUNDING],
-        funding,
-        &artifacts,
-        &clock,
-        &rent,
+    // FundingV2 alone cannot prove the terminal partition across every Market
+    // link admitted by this Series.  Keep the current account graph hostile-
+    // authenticated, but refuse before mutation until the permanent bounded
+    // Series lifecycle replay is advanced atomically with this lapse.
+    require(
+        funding.value().state.phase == clutch_product_series::SeriesFundingPhaseV2::Active
+            && funding.value().state.next_ordinal == request.ordinal
+            && clock.clock.bucket()
+                >= artifacts
+                    .series
+                    .start_bucket(request.ordinal)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::Replay,
     )?;
-    require(ordinal == request.ordinal, ClutchError::Replay)?;
-    Ok(())
+    Err(ClutchError::AuthorizationUnavailable.into())
 }
 
 /// Current local account contract for the donation route: registry, funding,
@@ -1269,6 +1277,29 @@ pub(crate) struct AuthenticatedSeriesOccurrenceCompletionV2 {
     disposition: clutch_product_series::SeriesMarketDispositionV1,
     reservation_receipt_id: ContentId,
     market_admission_receipt_id: ContentId,
+}
+
+/// Private exact FundingV2 lapse postwrite consumed only by the permanent
+/// bounded Series lifecycle replay writer.
+///
+/// The receipt is minted after hostile FundingV2 postwrite authentication and
+/// retains the sole Source-owned Clock policy/snapshot receipt. It authorizes
+/// no standalone account mutation; the outer lapse operation must advance the
+/// permanent replay in the same atomic instruction or roll back this write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesLapsePostwriteV2 {
+    id: ContentId,
+    projection: SeriesLifecycleLapseProjectionV1,
+}
+
+impl AuthenticatedSeriesLapsePostwriteV2 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn projection(self) -> SeriesLifecycleLapseProjectionV1 {
+        self.projection
+    }
 }
 
 impl AuthenticatedSeriesOccurrenceCompletionV2 {
@@ -6163,14 +6194,23 @@ fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>
 }
 
 /// Apply a free lapse from the authenticated Clock owner.
-pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+fn lapse_series_occurrence_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
-    authority: &A,
+    authority: &AuthenticatedSeriesClockAuthorityV2,
+    lifecycle_binding_id: SeriesLifecycleReplayBindingV1Id,
     rent: &RentParameters,
-) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
+) -> Outcome<(
+    AuthenticatedSeriesFundingAccountV2,
+    AuthenticatedSeriesLapsePostwriteV2,
+)> {
+    let before = current.value().state;
+    let funding_state_before_id = before
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
     let mut next = current.value().state;
     let ordinal = next
         .lapse(
@@ -6183,7 +6223,99 @@ pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
     let written = write_series_funding_state_v2(
         program_id, account, current, next, artifacts, rent,
     )?;
-    Ok((written, ordinal))
+    let funding_state_after_id = written
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let id = series_lapse_postwrite_authentication_id_v2(
+        program_id,
+        account.key,
+        lifecycle_binding_id,
+        series_plan_id,
+        ordinal,
+        before.compiler_bundle_id,
+        funding_state_before_id,
+        funding_state_after_id,
+        authority.clock.policy_id(),
+        authority.clock.id(),
+        authority.clock.bucket(),
+    )?;
+    let projection = SeriesLifecycleLapseProjectionV1 {
+        binding_id: lifecycle_binding_id,
+        series_plan_id,
+        ordinal,
+        funding_account_id: ContentId::from_bytes(account.key.to_bytes()),
+        funding_state_before_id,
+        funding_state_after_id,
+        clock_policy_id: authority.clock.policy_id(),
+        clock_receipt_id: authority.clock.id(),
+        lapse_receipt_id: id,
+        compiler_bundle_id: before.compiler_bundle_id,
+        current_bucket: authority.clock.bucket(),
+    };
+    projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((
+        written,
+        AuthenticatedSeriesLapsePostwriteV2 { id, projection },
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn series_lapse_postwrite_authentication_id_v2(
+    program_id: &Pubkey,
+    funding_account: &Pubkey,
+    lifecycle_binding_id: SeriesLifecycleReplayBindingV1Id,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    funding_state_before_id: ContentId,
+    funding_state_after_id: ContentId,
+    clock_policy_id: ContentId,
+    clock_receipt_id: ContentId,
+    current_bucket: u64,
+) -> Outcome<ContentId> {
+    require(
+        funding_state_before_id != funding_state_after_id,
+        ClutchError::MismatchedState,
+    )?;
+    for id in [
+        lifecycle_binding_id.content_id(),
+        series_plan_id.content_id(),
+        compiler_bundle_id.content_id(),
+        funding_state_before_id,
+        funding_state_after_id,
+        clock_policy_id,
+        clock_receipt_id,
+    ] {
+        require_live_content_id(id)?;
+    }
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_LAPSE_POSTWRITE_AUTHENTICATION_DOMAIN_V2,
+            program_id.as_ref(),
+            funding_account.as_ref(),
+            &lifecycle_binding_id.bytes(),
+            &series_plan_id.bytes(),
+            &ordinal.to_le_bytes(),
+            &compiler_bundle_id.bytes(),
+            &funding_state_before_id.bytes(),
+            &funding_state_after_id.bytes(),
+            &clock_policy_id.bytes(),
+            &clock_receipt_id.bytes(),
+            &current_bucket.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(id)
 }
 
 /// Fold physical surplus into exactly one current donation compartment.
@@ -7917,5 +8049,60 @@ mod occurrence_completion_v2_adversarial_tests {
             facts,
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod series_lapse_postwrite_v2_adversarial_tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    fn receipt_id(
+        binding: SeriesLifecycleReplayBindingV1Id,
+        ordinal: u32,
+        before: ContentId,
+        after: ContentId,
+        clock_receipt: ContentId,
+    ) -> Outcome<ContentId> {
+        series_lapse_postwrite_authentication_id_v2(
+            &Pubkey::new_from_array([1; 32]),
+            &Pubkey::new_from_array([2; 32]),
+            binding,
+            SeriesPlanV5Id::from_bytes([3; 32]),
+            ordinal,
+            CompiledProductSeriesBundleV5Id::from_bytes([4; 32]),
+            before,
+            after,
+            id(7),
+            clock_receipt,
+            11,
+        )
+    }
+
+    #[test]
+    fn lapse_receipt_binds_replay_ordinal_and_clock_postwrite() {
+        let binding = SeriesLifecycleReplayBindingV1Id::from_bytes([5; 32]);
+        let expected = receipt_id(binding, 6, id(8), id(9), id(10)).unwrap();
+        assert_ne!(
+            expected,
+            receipt_id(
+                SeriesLifecycleReplayBindingV1Id::from_bytes([11; 32]),
+                6,
+                id(8),
+                id(9),
+                id(10),
+            )
+            .unwrap(),
+        );
+        assert_ne!(expected, receipt_id(binding, 7, id(8), id(9), id(10)).unwrap());
+        assert_ne!(expected, receipt_id(binding, 6, id(12), id(9), id(10)).unwrap());
+        assert_ne!(expected, receipt_id(binding, 6, id(8), id(12), id(10)).unwrap());
+        assert_ne!(expected, receipt_id(binding, 6, id(8), id(9), id(12)).unwrap());
+        assert!(receipt_id(binding, 6, id(8), id(8), id(10)).is_err());
+        assert!(receipt_id(binding, 6, ContentId::ZERO, id(9), id(10)).is_err());
+        assert!(receipt_id(binding, 6, id(8), id(9), ContentId::ZERO).is_err());
     }
 }

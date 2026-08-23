@@ -2,11 +2,15 @@
 //!
 //! FundingV2 proves that every ordinal was either completed or lapsed, while
 //! each Market root proves terminality only for links admitted to that one
-//! Market. This owner closes the bounded cross-Market gap without scanning an
-//! unbounded account set: every ordinal completion/lapse and every exact link
-//! retirement advances one canonical transcript and counted partition.
-//! Solana account coordinates, rent, hostile decoding and write authority stay
-//! in the adapter; this module allocates no tag and owns only fixed semantics.
+//! Market. This owner defines the bounded cross-Market count equations and
+//! transcript without scanning an unbounded account set. It is not, by itself,
+//! physical account authority: the adapter must make admission inseparable
+//! from creation of the one canonical ordinal link, make retirement inseparable
+//! from consumption and close of that same still-live link, and forbid every
+//! completion/lapse/close bypass. The final pure projection is evidence for,
+//! not a replacement for, hostile postwrite authentication of the permanent
+//! replay account. Solana coordinates, rent and write authority stay in the
+//! adapter; this module allocates no tag and owns only fixed semantics.
 
 use crate::codec::{Reader, Writer};
 use crate::{
@@ -547,7 +551,13 @@ impl SeriesLifecycleReplayV1 {
         Ok(next)
     }
 
-    /// Count one physically closed Product link exactly once.
+    /// Apply the count transition for one physically closed Product link.
+    ///
+    /// Fixed counts cannot prove ordinal membership or physical uniqueness.
+    /// The sole SBF caller must consume the still-live canonical ordinal link,
+    /// close it in the same atomic operation, and bind this event to the
+    /// private close postwrite. Replaying an event into this pure method alone
+    /// is not terminal authority.
     pub fn record_link_retirement(
         self,
         event: SeriesLifecycleLinkRetirementProjectionV1,
@@ -779,7 +789,12 @@ impl FixedCodec for SeriesLifecycleReplayV1 {
     }
 }
 
-/// Exhaustive terminal authorization consumed by physical FundingV2 close.
+/// Pure exhaustive terminal evidence.
+///
+/// Physical FundingV2 close must consume a private adapter receipt minted only
+/// after this projection and the exact Terminal replay successor are written
+/// and hostile-reopened. This value alone authorizes no account mutation or
+/// value disposition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesLifecycleTerminalProjectionV1 {
     id: SeriesLifecycleTerminalProjectionV1Id,
