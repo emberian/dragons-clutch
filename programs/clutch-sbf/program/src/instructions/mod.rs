@@ -109,6 +109,8 @@ pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
+/// Always-compiled Product Market/link account authentication; routes remain capability-gated.
+pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod resolution_work;
