@@ -23,6 +23,7 @@ mod compiler_output;
 mod funding;
 mod funding_state;
 mod interval_consensus;
+mod occurrence_lifecycle;
 mod product_registry;
 mod registry;
 mod source_series;
@@ -74,6 +75,15 @@ pub use interval_consensus::{
     QUANTIZED_INTERVAL_CONSENSUS_PROFILE_BYTES_V1,
     QUANTIZED_INTERVAL_CONSENSUS_RUNTIME_CAPABILITY_ENABLED_V1,
     QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1, QUANTIZED_INTERVAL_ROUNDING_POLICY_DOMAIN_V1,
+};
+pub use occurrence_lifecycle::{
+    MarketInstanceTerminalProjectionV1, ProductOccurrenceBindingV1,
+    ProductOccurrenceCapitalizationV1, ProductOccurrenceCountsV1,
+    ProductOccurrenceFamilyDispositionV1, ProductOccurrenceFamilyTerminalProjectionV1,
+    ProductOccurrenceFamilyV1, ProductOccurrencePhaseV1, ProductOccurrenceRootV1,
+    MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, PRODUCT_OCCURRENCE_BINDING_DOMAIN_V1,
+    PRODUCT_OCCURRENCE_FAMILY_COUNT_V1, PRODUCT_OCCURRENCE_FAMILY_TERMINAL_DOMAIN_V1,
+    PRODUCT_OCCURRENCE_ROOT_BYTES_V1, PRODUCT_OCCURRENCE_ROOT_DOMAIN_V1,
 };
 pub use product_registry::{
     RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
