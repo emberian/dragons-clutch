@@ -712,6 +712,11 @@ impl AuthenticatedSourceRouteV1 {
         self.source_plane_contract_id
     }
 
+    /// Sole reviewed SourcePlane semantic program selected by this release.
+    pub const fn source_plane(self) -> SourcePlaneProgramV3 {
+        self.manifest.source_plane
+    }
+
     /// Existing SourceSpec identity.
     pub const fn source_spec_id(self) -> ContentId {
         self.manifest.source_spec_id
@@ -786,7 +791,8 @@ impl AuthenticatedSourceRouteV1 {
         self.manifest.feed_owner
     }
 
-    pub(crate) const fn generation_authority_program(self) -> RuntimeKey {
+    /// Program that owns and derives immutable generation requests.
+    pub const fn generation_authority_program(self) -> RuntimeKey {
         self.manifest.generation_authority_program
     }
 
