@@ -472,6 +472,44 @@ fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
     assert_eq!(close.terminal_requirement().domain_generation(), 7);
     assert_eq!(close.terminal_requirement().policy_account(), rid(41));
     assert_eq!(close.terminal_requirement().ledger_account(), rid(42));
+    assert_eq!(
+        close.terminal_requirement().policy_terminal_state_id(),
+        terminal_context.policy().state_id().unwrap()
+    );
+    assert_eq!(
+        close
+            .terminal_requirement()
+            .ledger_before_state_id()
+            .bytes(),
+        close
+            .claim_ledger_after()
+            .fractional_ledger_before_id()
+            .bytes()
+    );
+    assert_eq!(
+        close
+            .terminal_requirement()
+            .ledger_terminal_state_id()
+            .bytes(),
+        close
+            .claim_ledger_after()
+            .fractional_ledger_retirement_id()
+            .bytes()
+    );
+    assert_eq!(
+        close
+            .terminal_requirement()
+            .claim_ledger_post_state_id()
+            .bytes(),
+        close.claim_ledger_after().claim_ledger_after_id().bytes()
+    );
+    assert_eq!(
+        close
+            .terminal_requirement()
+            .claim_ledger_transition_id()
+            .bytes(),
+        close.claim_ledger_after().transition_id().bytes()
+    );
     assert_ne!(
         close.claim_ledger_after().fractional_ledger_before_id(),
         close.claim_ledger_after().fractional_ledger_retirement_id()
