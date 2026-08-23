@@ -161,18 +161,67 @@ pub struct QuantizedAtomWitnessV3 {
 }
 
 /// Successful V3 certificate summary for a versioned adapter checkpoint.
+///
+/// Private fields prevent callers from fabricating or mutating verification
+/// authority; read-only projections are exposed through accessors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedPriceMeasureV3 {
+    /// Adapter-authenticated candidate-feed identity checked by this capability.
+    candidate_feed: [u8; 32],
+    /// Adapter-authenticated relation/domain digest checked by this capability.
+    relation_domain_digest: [u8; 32],
+    /// Adapter-authenticated NativeClaimBasisV1 identity checked by this capability.
+    basis_digest: [u8; 32],
+    /// Adapter-authenticated exact candidate-price digest checked by this capability.
+    candidate_price_digest: [u8; 32],
     /// Checked basis degree.
-    pub basis_degree: u8,
+    basis_degree: u8,
     /// Checked active native claim width.
-    pub native_outcome_count: u8,
+    native_outcome_count: u8,
     /// Degree-zero cells or `native_outcome_count - basis_degree` smooth regions.
-    pub basis_region_count: u8,
+    basis_region_count: u8,
     /// Primitive checked witness denominator.
-    pub common_denominator: u64,
+    common_denominator: u64,
     /// Adapter-authenticated canonical V3 body digest.
-    pub body_digest: [u8; 32],
+    body_digest: [u8; 32],
+}
+
+impl VerifiedPriceMeasureV3 {
+    /// Return the exact checked adapter bindings.
+    pub const fn bindings(&self) -> AdapterBindingsV3 {
+        AdapterBindingsV3 {
+            candidate_feed: self.candidate_feed,
+            relation_domain_digest: self.relation_domain_digest,
+            basis_digest: self.basis_digest,
+            candidate_price_digest: self.candidate_price_digest,
+            observed_body_digest: self.body_digest,
+        }
+    }
+
+    /// Return the checked basis degree.
+    pub const fn basis_degree(&self) -> u8 {
+        self.basis_degree
+    }
+
+    /// Return the checked native outcome width.
+    pub const fn native_outcome_count(&self) -> u8 {
+        self.native_outcome_count
+    }
+
+    /// Return the checked basis-region count.
+    pub const fn basis_region_count(&self) -> u8 {
+        self.basis_region_count
+    }
+
+    /// Return the primitive checked witness denominator.
+    pub const fn common_denominator(&self) -> u64 {
+        self.common_denominator
+    }
+
+    /// Return the adapter-authenticated canonical V3 body digest.
+    pub const fn body_digest(&self) -> [u8; 32] {
+        self.body_digest
+    }
 }
 
 /// Adapter binding coordinate that did not match authenticated truth.
@@ -411,6 +460,7 @@ impl ValidatedDegreeZeroPayoutTableV3<'_> {
 /// a separately versioned adapter checkpoint may authorize later protocol work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuantizedPriceMeasureAccumulatorV3<'a> {
+    bindings: AdapterBindingsV3,
     evaluator: EvaluatorV3<'a>,
     prices: &'a PriceVectorV3,
     witness: &'a QuantizedAtomWitnessV3,
@@ -443,7 +493,12 @@ impl<'a> QuantizedPriceMeasureAccumulatorV3<'a> {
             prices,
             witness,
         )?;
-        Ok(Self::new(EvaluatorV3::degree_zero(table), prices, witness))
+        Ok(Self::new(
+            *expected,
+            EvaluatorV3::degree_zero(table),
+            prices,
+            witness,
+        ))
     }
 
     /// Validate a smooth degree-one-through-three certificate and open its staged sum.
@@ -470,6 +525,7 @@ impl<'a> QuantizedPriceMeasureAccumulatorV3<'a> {
         let last = basis.knots[usize::from(basis.knot_count) - 1];
         validate_common_body(first, last, prices, witness)?;
         Ok(Self::new(
+            *expected,
             EvaluatorV3::smooth(validated_basis),
             prices,
             witness,
@@ -477,11 +533,13 @@ impl<'a> QuantizedPriceMeasureAccumulatorV3<'a> {
     }
 
     fn new(
+        bindings: AdapterBindingsV3,
         evaluator: EvaluatorV3<'a>,
         prices: &'a PriceVectorV3,
         witness: &'a QuantizedAtomWitnessV3,
     ) -> Self {
         Self {
+            bindings,
             evaluator,
             prices,
             witness,
@@ -546,6 +604,10 @@ impl<'a> QuantizedPriceMeasureAccumulatorV3<'a> {
         )
         .map_err(core_error_v3)?;
         Ok(VerifiedPriceMeasureV3 {
+            candidate_feed: self.bindings.candidate_feed,
+            relation_domain_digest: self.bindings.relation_domain_digest,
+            basis_digest: self.bindings.basis_digest,
+            candidate_price_digest: self.bindings.candidate_price_digest,
             basis_degree: self.prices.basis_degree,
             native_outcome_count: self.prices.native_outcome_count,
             basis_region_count: if self.prices.basis_degree == 0 {

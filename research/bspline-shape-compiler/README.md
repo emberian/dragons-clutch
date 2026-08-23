@@ -1,6 +1,6 @@
 # Native B-spline shape compiler
 
-Status: **offline research tool; not consensus code**.
+Status: **untrusted offline production compiler; not consensus or authority**.
 
 This crate compiles bounded payout descriptions into coefficient vectors over
 the exact open-clamped degree-0 through degree-3 basis owned by
@@ -14,6 +14,38 @@ the exact open-clamped degree-0 through degree-3 basis owned by
 
 All construction and certification arithmetic is `BigRational`. Floating point
 is available only through an explicitly display-only helper.
+
+## Product-facing canonical target
+
+`production::compile_production_payoff_v1` now emits the exact
+`clutch_product_series::NativeClaimBasisV1` body, its 2,352 canonical bytes,
+and its typed content ID. The compiler remains untrusted: registration must
+reopen the basis, Product, registry, Source, funding, and Series artifacts and
+recompute their joins.
+
+Three input classes remain deliberately distinct:
+
+- an exact rational categorical table is integerized at its least common
+  denominator, deduplicated in canonical first-use order, and emitted directly
+  as the Product-owned finite payout basis;
+- exact rational smooth control values define an exact payoff in the selected
+  native spline span and emit a canonical variable-length recipe certificate;
+- a named analytic smooth target uses the existing rational compiler and emits
+  its recompilable certificate with `ExactInSpan` or
+  `CertifiedApproximation` preserved verbatim.
+
+Quadratic/cubic nonuniform grids, rational categorical tables whose least
+denominator exceeds `u64`, malformed simplexes, negative or nonminimal smooth
+liability descriptions, incomplete refusing domains, and other shapes outside
+the canonical Product representation are refused. The only production payout
+rounding named in certificates is the existing largest-remainder,
+lowest-outcome-index rule.
+
+`clutch_product_series::assemble_compiled_product_series_bundle_v1` accepts
+canonical Product/Series bodies and recomputes all sixteen identities in
+`CompiledProductSeriesBundleV1`. The Source release and registry projection are
+still untrusted inputs; the assembler is a deterministic static-client target,
+not registration authority.
 
 `src/artifact.rs` gives this host compiler a canonical, domain-separated
 BasisSpec and shape-certificate byte boundary, plus the exact live typed Terms

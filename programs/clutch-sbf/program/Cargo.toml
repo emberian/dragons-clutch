@@ -42,7 +42,6 @@ laboratory-fixtures = []
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.
 non-production-product-series-lab = [
-    "dep:clutch-collateral-adapter-v2",
     "clutch-solana-layout/non-production-product-series-lab",
 ]
 # Compiles the strict Recovery78/v1 account/mutation adapter while leaving all
@@ -68,6 +67,13 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# A distinct non-production product containing only the immutable Dealer-policy
+# catalog transport. The hostile wire dependencies use their full decoders,
+# while this crate's capability table rejects every legacy action before
+# accounts. It must never be combined with another profile.
+profile-non-production-dealer-policy-catalog-lab = [
+    "profile-full",
+]
 # A deliberately non-production product whose only successes are the twelve
 # General V2 empty-book identity actions.  The dependency profiles provide the
 # narrow legacy codec substrate; this crate's capability table still rejects
@@ -92,14 +98,12 @@ clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
-clutch-collateral-adapter-v2 = {
-    path = "../../../crates/clutch-collateral-adapter-v2",
-    optional = true,
-}
+clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-evidence-recovery = { path = "../../../crates/clutch-evidence-recovery", optional = true }
 clutch-failure-policy-adapter = { path = "../../../crates/clutch-failure-policy-adapter", optional = true }
 clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime", optional = true }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
 clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement", optional = true }

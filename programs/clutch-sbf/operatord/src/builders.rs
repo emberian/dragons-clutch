@@ -84,6 +84,7 @@ pub fn create_market(f: &Friday, creator: [u8; 32]) -> Vec<u8> {
         shared.rent_sysvar,
         f.hoard_authority.bytes,
         f.hoard_token.bytes,
+        shared.token_program,
     ];
     keys.extend(f.outcome_mints.iter().map(|mint| mint.bytes));
     assert_eq!(

@@ -1320,7 +1320,7 @@ fn require_collateral_binding(
     profile: &ProfileAccount,
 ) -> Result<collateral::CollateralPolicy> {
     if profile.flags & PROFILE_FLAG_POLICY_FROZEN == 0
-        || profile.collateral_policy_digest == Hash32::ZERO
+        || profile.collateral_policy_id == Hash32::ZERO
     {
         return Err(Error::CollateralPolicyNotFrozen);
     }
@@ -2927,7 +2927,8 @@ mod tests {
             realm: realm_hash,
             version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
-            collateral_policy_digest: policy_digest,
+            collateral_policy_id: policy_digest,
+            adapter_release_id: h(0x52),
         };
         let mut realm_bytes = [0; account_len::REALM];
         let mut profile_bytes = [0; account_len::PROFILE];
@@ -3546,7 +3547,7 @@ mod tests {
         clear_init_cash(&mut f.state);
         let mut profile = ProfileAccount::decode(&f.profile).unwrap();
         profile.flags = 0;
-        profile.collateral_policy_digest = Hash32::ZERO;
+        profile.collateral_policy_id = Hash32::ZERO;
         let mut unfrozen = [0; account_len::PROFILE];
         profile.encode(&mut unfrozen).unwrap();
         assert_eq!(
@@ -7080,9 +7081,9 @@ mod tests {
         /* A bit-flipped stored digest: the Profile still decodes (frozen
          * flag, nonzero digest), and the binding is what refuses. */
         let mut flipped = ProfileAccount::decode(&f.profile).unwrap();
-        let mut digest = flipped.collateral_policy_digest.bytes();
+        let mut digest = flipped.collateral_policy_id.bytes();
         digest[0] ^= 1;
-        flipped.collateral_policy_digest = Hash32::from_bytes(digest);
+        flipped.collateral_policy_id = Hash32::from_bytes(digest);
         let mut flipped_bytes = [0; account_len::PROFILE];
         flipped.encode(&mut flipped_bytes).unwrap();
         assert_eq!(

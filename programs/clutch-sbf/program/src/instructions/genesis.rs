@@ -9,7 +9,7 @@
 //! | intent | creates | accounts |
 //! | --- | --- | ---: |
 //! | [`Intent::InitRealm`] | [`RealmAccount`] | 5 |
-//! | [`Intent::InitProfile`] | [`ProfileAccount`], policy frozen | 6 |
+//! | [`Intent::InitProfileV2`] | [`ProfileAccount`], policy/release frozen | 6 |
 //! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
@@ -62,7 +62,7 @@
 //! content-derived PDA under this program.  Genesis consumers therefore admit
 //! neither caller-owned buffers nor arbitrary program-owned copies.
 //!
-//! `InitRealm` and `InitProfile` both require the same canonical policy PDA,
+//! `InitRealm` and `InitProfileV2` both require the same canonical policy PDA,
 //! `policy(Profile, policy_digest)`, and recompute both identities from its
 //! bytes.  `InitPriceGrid` and `InitTerms` are obsolete wire intents: the
 //! canonical accounts already exist when their typed seal succeeds, so a
@@ -138,21 +138,23 @@
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
+use crate::collateral_release::{compiled_collateral_catalog_v2, LOCAL_REAL_TOKEN_2022_RELEASE_V2};
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
 use clutch_batch_policy_identity::revenue_policy_v1::{
     revenue_policy_digest, REVENUE_POLICY_V1, REVENUE_TREASURY_UNSET_V1,
 };
+use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
 use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
 use clutch_solana_layout::direct_selection_v3::{
     DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
 };
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{
-    account_len, canonical_realm_id, collateral, stream, Hash32, HoardAccount, Intent,
-    MarketAccount, PositionAccount, ProfileAccount, RealmAccount, EPOCH_PHASE_OPEN,
-    PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_profile_v2_id, canonical_realm_id, collateral, stream, Hash32,
+    HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
+    EPOCH_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, PROFILE_SCHEMA_V2,
 };
 use clutch_solana_reference::{Action, ReplayAccount, Request, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
@@ -470,15 +472,15 @@ pub const IX_REALM_REVENUE_LEDGER: usize = 6;
 /// funding ledger, the recorded payer, and the frozen sink.
 pub const CLOSE_REVENUE_RECORD_ACCOUNT_COUNT: usize = 5;
 
-/// Accounts in an `InitProfile` instruction, exactly.
+/// Accounts in an `InitProfileV2` instruction, exactly.
 pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 6;
 /// The Realm this Profile belongs to (read-only, program-owned).
 pub const IX_PROFILE_REALM: usize = 2;
 /// Canonical sealed collateral-policy PDA (read-only, program-owned).
 pub const IX_PROFILE_POLICY: usize = 3;
-/// The system program.  `InitProfile`.
+/// The system program.  `InitProfileV2`.
 pub const IX_PROFILE_SYSTEM: usize = 4;
-/// The rent sysvar.  `InitProfile`.
+/// The rent sysvar.  `InitProfileV2`.
 pub const IX_PROFILE_RENT: usize = 5;
 
 /// Accounts in an `InitOrderPage` instruction without funding registration.
@@ -541,7 +543,7 @@ pub const IX_ENDOW_TERMS: usize = 13;
 /// Canonical immutable SourceSpec bound by Terms (read-only).
 pub const IX_ENDOW_SOURCE_SPEC: usize = 14;
 
-/// Program-owned roles of `InitProfile`, in account-index order.
+/// Program-owned roles of `InitProfileV2`, in account-index order.
 const PROFILE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PROFILE_REALM, account_len::REALM)];
 /// Program-owned roles of `InitOrderPage`.
@@ -574,7 +576,7 @@ const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
     StateRole::writable(IX_ENDOW_REPLAY, REPLAY_ACCOUNT_LEN),
 ];
 
-/// Read and authenticate the one canonical sealed collateral-policy artifact.
+/// Read and authenticate the one canonical sealed CollateralPolicy V2 artifact.
 ///
 /// Byte recomputation proves the policy digest and parent Profile identity;
 /// program ownership plus the content-derived PDA proves these are the bytes
@@ -583,21 +585,21 @@ const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
 fn read_canonical_policy(
     program_id: &Pubkey,
     account: &AccountInfo,
-) -> Outcome<(Hash32, Hash32, u16)> {
+) -> Outcome<(Hash32, Hash32, Hash32)> {
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.is_writable, ClutchError::UnexpectedWritable)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
     require(
-        account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
+        account.data_len() == COLLATERAL_POLICY_V2_BYTES,
         ClutchError::WrongDataLength,
     )?;
-    let (profile, digest, schema) = profile_identity_from_policy(&account.data.borrow())?;
+    let (profile, policy_id, release_id) = profile_identity_from_policy(&account.data.borrow())?;
     expect_pda(
         account.key,
-        seeds::policy_pda(program_id, &profile.bytes(), &digest.bytes()),
+        seeds::policy_pda(program_id, &profile.bytes(), &policy_id.bytes()),
         None,
     )?;
-    Ok((profile, digest, schema))
+    Ok((profile, policy_id, release_id))
 }
 
 /// A creation consumes no replay sequence.
@@ -614,19 +616,25 @@ fn require_creation_sequence(sequence: u64) -> Outcome<()> {
 /* Frame-bounded readers                                                     */
 /* ------------------------------------------------------------------------ */
 
-/// Recompute a Profile identity from the Realm's actual collateral policy.
-///
-/// The whole chain of `RESOLUTION_EVIDENCE_PLAN.md` §3.2 in one call: decode
-/// the 266 bytes, take the child digest `D_col`, compose the parent under the
-/// policy's own schema version, and hash it.  Returns the pair the two Realm
-/// and Profile initializers both need — the identity and the digest — and
-/// never lets the decoded policy escape into a caller's frame.
+/// Recompute Profile V2 from the actual policy and compiled release catalog.
 #[inline(never)]
-fn profile_identity_from_policy(policy_bytes: &[u8]) -> Outcome<(Hash32, Hash32, u16)> {
-    let policy = collateral::CollateralPolicy::decode(policy_bytes)?;
-    let digest = policy.digest()?;
-    let parent = collateral::ParentProfile::from_policy_digest(digest, policy.schema_version)?;
-    Ok((parent.identity()?, digest, policy.schema_version))
+fn profile_identity_from_policy(policy_bytes: &[u8]) -> Outcome<(Hash32, Hash32, Hash32)> {
+    let policy = CollateralPolicyV2::decode(policy_bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+    let catalog = compiled_collateral_catalog_v2()?;
+    catalog
+        .resolve(policy.adapter_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let policy_id = policy
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+    let policy_id = Hash32::from_bytes(policy_id.bytes());
+    let release_id = Hash32::from_bytes(policy.adapter_release.bytes());
+    Ok((
+        canonical_profile_v2_id(policy_id, release_id)?,
+        policy_id,
+        release_id,
+    ))
 }
 
 /// Encode one Realm account into a freshly created account's bytes.
@@ -641,20 +649,19 @@ fn write_realm(target: &mut [u8], value: &RealmAccount) -> Outcome<()> {
     require(written == *value, ClutchError::MismatchedState)
 }
 
-/// Encode one Profile account, then re-bind it to the policy it froze.
-///
-/// The strongest post-write check in this module:
-/// [`collateral::verify_profile_identity`] recomputes the child digest from
-/// the 266 policy bytes *and* the parent identity from that digest, so a
-/// Profile that landed committing to some other Realm's policy cannot survive
-/// this call.
+/// Encode one Profile V2 account, then re-bind it to its exact policy/release.
 #[inline(never)]
 fn write_profile(target: &mut [u8], value: &ProfileAccount, policy_bytes: &[u8]) -> Outcome<()> {
     value.encode(target)?;
     let written = ProfileAccount::decode(target)?;
     require(written == *value, ClutchError::MismatchedState)?;
-    collateral::verify_profile_identity(policy_bytes, &written)?;
-    Ok(())
+    let (profile, policy_id, release_id) = profile_identity_from_policy(policy_bytes)?;
+    require(
+        written.profile == profile
+            && written.collateral_policy_id == policy_id
+            && written.adapter_release_id == release_id,
+        ClutchError::MismatchedState,
+    )
 }
 
 /* ------------------------------------------------------------------------ */
@@ -680,10 +687,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 profile_version,
             },
         ),
-        Action::Layout(Intent::InitProfile {
+        Action::Layout(Intent::InitProfileV2 {
             realm,
-            collateral_policy_digest,
-            subfield_schema_version,
+            collateral_policy_id,
+            adapter_release_id,
             profile_version,
         }) => init_profile(
             program_id,
@@ -691,8 +698,8 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             request.sequence,
             &ProfileInit {
                 realm,
-                collateral_policy_digest,
-                subfield_schema_version,
+                collateral_policy_id,
+                adapter_release_id,
                 profile_version,
             },
         ),
@@ -780,7 +787,7 @@ fn init_realm(
      * collateral policy, so a Realm cannot be founded pointing at a Profile
      * nobody can produce a policy for.  This is the check that makes
      * `RealmAccount::profile` evidence rather than a caller's assertion. */
-    let (profile, _digest, _schema) =
+    let (profile, _policy_id, _release_id) =
         read_canonical_policy(program_id, &accounts[IX_REALM_POLICY])?;
     require(
         profile == intent.profile,
@@ -960,19 +967,19 @@ fn close_revenue_policy_record(
 }
 
 /* ------------------------------------------------------------------------ */
-/* InitProfile                                                               */
+/* InitProfileV2                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// One already-matched `InitProfile` intent.
+/// One already-matched `InitProfileV2` intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProfileInit {
     /// Realm this Profile belongs to.
     pub realm: Hash32,
-    /// Child collateral-policy digest the Profile freezes.
-    pub collateral_policy_digest: Hash32,
-    /// Subfield schema version the parent identity was composed under.
-    pub subfield_schema_version: u16,
-    /// Profile schema version.
+    /// Exact CollateralPolicy V2 content identity.
+    pub collateral_policy_id: Hash32,
+    /// Exact compiled AdapterRelease V2 content identity.
+    pub adapter_release_id: Hash32,
+    /// Profile schema version; exactly V2.
     pub profile_version: u8,
 }
 
@@ -990,13 +997,12 @@ fn init_profile(
     require_system_program(&accounts[IX_PROFILE_SYSTEM])?;
     let rent = read_rent(&accounts[IX_PROFILE_RENT])?;
 
-    let (profile, digest, schema) =
+    let (profile, policy_id, release_id) =
         read_canonical_policy(program_id, &accounts[IX_PROFILE_POLICY])?;
-    /* Both declared bindings are checked against the recomputation rather than
-     * trusted: the digest the Profile will freeze, and the schema version that
-     * digest was composed under. */
     require(
-        digest == intent.collateral_policy_digest && schema == intent.subfield_schema_version,
+        policy_id == intent.collateral_policy_id
+            && release_id == intent.adapter_release_id
+            && intent.profile_version == PROFILE_SCHEMA_V2,
         ClutchError::EvidenceBufferMismatch,
     )?;
 
@@ -1014,7 +1020,7 @@ fn init_profile(
     require(
         realm.realm == intent.realm
             && realm.profile == profile
-            && realm.profile_version == intent.profile_version,
+            && realm.profile_version == PROFILE_SCHEMA_V2,
         ClutchError::MismatchedState,
     )?;
 
@@ -1039,8 +1045,9 @@ fn init_profile(
     let value = ProfileAccount {
         profile,
         realm: realm.realm,
-        collateral_policy_digest: digest,
-        version: intent.profile_version,
+        collateral_policy_id: policy_id,
+        adapter_release_id: release_id,
+        version: PROFILE_SCHEMA_V2,
         flags: PROFILE_FLAG_POLICY_FROZEN,
     };
     let policy_bytes = accounts[IX_PROFILE_POLICY].data.borrow();
@@ -1870,11 +1877,12 @@ mod tests {
     #[test]
     fn the_profile_writer_binds_the_policy_it_froze() {
         let policy = policy_bytes();
-        let (profile, digest, _schema) = profile_identity_from_policy(&policy).unwrap();
+        let (profile, policy_id, release_id) = profile_identity_from_policy(&policy).unwrap();
         let value = ProfileAccount {
             profile,
             realm: h(9),
-            collateral_policy_digest: digest,
+            collateral_policy_id: policy_id,
+            adapter_release_id: release_id,
             version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         };
@@ -1888,11 +1896,8 @@ mod tests {
          * *different* policy digest is refused by the post-write binding, not
          * accepted because it decodes. */
         let mut forged = value;
-        forged.collateral_policy_digest = h(0x5a);
-        forged.profile = collateral::ParentProfile::from_policy_digest(h(0x5a), 1)
-            .unwrap()
-            .identity()
-            .unwrap();
+        forged.collateral_policy_id = h(0x5a);
+        forged.profile = canonical_profile_v2_id(h(0x5a), release_id).unwrap();
         let mut out = [0_u8; account_len::PROFILE];
         assert_eq!(
             write_profile(&mut out, &forged, &policy),
@@ -2238,28 +2243,26 @@ mod tests {
     /* Fixtures                                                            */
     /* ------------------------------------------------------------------ */
 
-    /// A generic, well-formed 266-byte collateral policy.
+    /// A generic, well-formed CollateralPolicy V2.
     ///
     /// Built through the layout crate's own encoder rather than transcribed as
     /// hex: this module is not the owner of those bytes and has no business
     /// carrying a second copy of them.
-    fn policy_bytes() -> [u8; collateral::COLLATERAL_POLICY_BYTES] {
-        let backing = collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, [0x6d; 32], 6);
-        let policy = collateral::CollateralPolicy {
-            schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
-            flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
-            collateral: backing,
-            fee: collateral::CurrencyRef::NATIVE_SOL,
-            liveness: collateral::CurrencyRef::NATIVE_SOL,
-            max_supply_atoms: 10_000,
-            allowed_mint_extensions: 0,
-            required_mint_extensions: 0,
-            allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
-            required_account_extensions: 0,
-        };
-        let mut out = [0; collateral::COLLATERAL_POLICY_BYTES];
-        policy.encode(&mut out).unwrap();
-        out
+    fn policy_bytes() -> [u8; COLLATERAL_POLICY_V2_BYTES] {
+        CollateralPolicyV2::for_release(
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+            clutch_collateral_adapter_v2::Id::from_bytes([0x6d; 32]),
+            6,
+            10_000,
+            5_000,
+            0,
+            0,
+            clutch_collateral_adapter_v2::EXTENSION_IMMUTABLE_OWNER,
+            0,
+        )
+        .unwrap()
+        .encode()
+        .unwrap()
     }
 
     fn order_record(rank: u64) -> clutch_solana_layout::OrderRecord {

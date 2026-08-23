@@ -12,6 +12,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 
 /// Canonical native-basis, compiler-certificate, and market-intent artifacts.
 pub mod artifact;
+/// Untrusted canonical Product-facing basis, payoff, and bundle target.
+pub mod production;
 /// Exact bridge from compiler coefficients to the live portfolio identity and
 /// a transferable, complete-set-compressed backing plan.
 pub mod wrapper;

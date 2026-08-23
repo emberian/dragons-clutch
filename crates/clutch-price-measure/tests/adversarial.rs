@@ -344,19 +344,19 @@ fn canonical_atom_encoding_is_not_a_unique_witness_for_one_price() {
     );
     assert_eq!(
         (
-            one_verified.basis_degree,
+            one_verified.basis_degree(),
             one_verified.outcome_count,
             one_verified.span_count,
         ),
         (
-            two_verified.basis_degree,
+            two_verified.basis_degree(),
             two_verified.outcome_count,
             two_verified.span_count,
         )
     );
     assert_ne!(
-        one_verified.common_denominator,
-        two_verified.common_denominator
+        one_verified.common_denominator(),
+        two_verified.common_denominator()
     );
     assert_ne!(one_atom.body_digest, two_atoms.body_digest);
 }

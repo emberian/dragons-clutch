@@ -84,6 +84,7 @@
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
+    feature = "profile-non-production-dealer-policy-catalog-lab",
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
@@ -108,6 +109,18 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-general-source-v2-point",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        any(
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-general-source-v2-point",
+            feature = "profile-non-production-general-v2-empty-book-identity-lab"
+        )
+    ),
+    all(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "non-production-product-series-lab"
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
@@ -119,7 +132,9 @@ compile_error!("the Product/Series artifact-catalog laboratory requires profile-
 
 pub mod accounts;
 pub mod capabilities;
+pub mod claim_release;
 pub mod claim_truth;
+pub mod collateral_release;
 pub mod dispatch;
 pub mod error;
 pub mod instructions;

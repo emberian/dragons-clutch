@@ -10,13 +10,15 @@
 /// Full research/runtime surface retained by the historical default build.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
-    feature = "non-production-product-series-lab"
+    feature = "non-production-product-series-lab",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v1";
@@ -26,6 +28,14 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-sou
 /// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
+/// Dealer-policy catalog laboratory. This identity is non-production and
+/// contains no legacy intent capability.
+#[cfg(all(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    not(feature = "non-production-product-series-lab")
+))]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/non-production-dealer-policy-catalog-lab/v1";
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
@@ -34,6 +44,7 @@ pub const PROFILE_LABEL: &str =
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
@@ -43,7 +54,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
     feature = "profile-full",
-    feature = "non-production-product-series-lab"
+    feature = "non-production-product-series-lab",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
     0x64, 0xa6, 0x52, 0x0b, 0xf9, 0x7a, 0xca, 0xba, 0xe3, 0x3e, 0xec, 0xf4, 0xe2, 0x90, 0xf9, 0xe3,
@@ -61,6 +73,15 @@ pub const PROFILE_ID: [u8; 32] = [
     0x1f, 0x9e, 0x2f, 0x27, 0x4c, 0x09, 0xa8, 0x30, 0x14, 0x50, 0x60, 0xef, 0xe1, 0x70, 0x91, 0x28,
     0x78, 0x0a, 0x12, 0x72, 0xc0, 0x83, 0xc7, 0xc2, 0x25, 0x4f, 0x35, 0x3a, 0xa7, 0x8b, 0xf8, 0x20,
 ];
+/// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
+#[cfg(all(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    not(feature = "non-production-product-series-lab")
+))]
+pub const PROFILE_ID: [u8; 32] = [
+    0xcb, 0x80, 0x25, 0xae, 0x72, 0xa0, 0xbc, 0x86, 0x66, 0xd9, 0x31, 0x9b, 0xe6, 0xfb, 0x67, 0x82,
+    0x82, 0xd5, 0xa9, 0x12, 0x96, 0x9e, 0x6a, 0x10, 0xdf, 0xcd, 0xdd, 0x84, 0x06, 0x23, 0x7d, 0x72,
+];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
@@ -72,30 +93,42 @@ pub const PROFILE_ID: [u8; 32] = [
 pub const GENERAL_V2_IDENTITY_LAB: bool =
     cfg!(feature = "profile-non-production-general-v2-empty-book-identity-lab");
 
+/// Whether this artifact is the explicitly non-production Dealer catalog lab.
+pub const DEALER_POLICY_CATALOG_LAB: bool =
+    cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
+
 /// Whether the profile contains legacy Source V1 ingestion and resolution.
-pub const SOURCE_V1: bool = cfg!(feature = "profile-full");
+pub const SOURCE_V1: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Source V2 ingestion and resolution.
-pub const SOURCE_V2: bool = !GENERAL_V2_IDENTITY_LAB;
+pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
 /// Whether the profile contains legacy Direct V2 clearing.
-pub const DIRECT_V2: bool = cfg!(feature = "profile-full");
+pub const DIRECT_V2: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Direct V3 clearing.
-pub const DIRECT_V3: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
-));
+pub const DIRECT_V3: bool =
+    cfg!(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains general clearing.
-pub const GENERAL_CLEARING: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-general-source-v2-point"
-));
+pub const GENERAL_CLEARING: bool =
+    cfg!(any(
+        feature = "profile-full",
+        feature = "profile-general-source-v2-point"
+    )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains occupation and resumable resolution.
-pub const OCCUPATION_RESOLUTION: bool = cfg!(feature = "profile-full");
+pub const OCCUPATION_RESOLUTION: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 
 /// Return whether one canonical legacy Intent tag belongs to this product.
 ///
 /// Direct V3 tags `36..=46` use their own strict decoder and are handled by
 /// [`direct_v3_tag_enabled`].  Unknown values are false.
 pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
+    if DEALER_POLICY_CATALOG_LAB {
+        return false;
+    }
     match tag {
         // Common construction, custody, trading, exit and artifact plane.
         1..=5 | 7 | 10..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
@@ -136,39 +169,37 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability. General V2,
-/// StructuredClaim, SourcePlane V3, recurring-Series, and Recovery actions
-/// have registered local actions; every exact tuple remains separately
-/// disabled until its handler is admitted. Frozen payload and account codecs
-/// do not activate any runtime tuple.
+/// Allocation does not imply execution capability. General V2, Dealer policy
+/// and facility, StructuredClaim, SourcePlane V3, recurring-Series, and
+/// Recovery actions have registered local actions; every exact tuple remains
+/// separately disabled until its handler is admitted. Frozen payload and
+/// account codecs do not activate any runtime tuple.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
     local_action: u8,
 ) -> bool {
-    matches!(
-        clutch_solana_layout::registry::decode_extension_action(
-            family_tag,
-            family_version,
-            local_action,
-        ),
-        Ok(
-            clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
-                | clutch_solana_layout::registry::ExtensionAction::StructuredClaim(_)
-                | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
-                | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
-                | clutch_solana_layout::registry::ExtensionAction::Recovery(_)
-        )
+    clutch_solana_layout::registry::decode_extension_action(
+        family_tag,
+        family_version,
+        local_action,
     )
+    .is_ok()
 }
 
 /// Exact extension actions executable by this product.
 ///
-/// The empty slice is the mechanical activation gate for this registry-only
-/// wave.  A later runtime wave must add each exact `(family, version, action)`
-/// tuple atomically with its handler and account contract.
-#[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
+/// Ordinary profiles keep every extension action disabled.
+#[cfg(not(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+)))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
+
+/// The laboratory enables only the bounded immutable policy-catalog transport.
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
+    &[(76, 1, 1), (76, 1, 2), (76, 1, 3), (76, 1, 4)];
 
 /// Exact identity, unrevealed-expiry, and solver-claim action set.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -210,8 +241,8 @@ mod tests {
             solana_sha256_hasher::hash(PROFILE_LABEL.as_bytes()).to_bytes(),
             PROFILE_ID
         );
-        assert_eq!(legacy_intent_tag_enabled(1), !GENERAL_V2_IDENTITY_LAB);
-        assert_eq!(legacy_intent_tag_enabled(70), !GENERAL_V2_IDENTITY_LAB);
+        assert_eq!(legacy_intent_tag_enabled(1), !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB);
+        assert_eq!(legacy_intent_tag_enabled(70), !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
@@ -252,6 +283,16 @@ mod tests {
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
+                    let dealer = family_tag
+                        == clutch_solana_layout::registry::DEALER_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
+                            .contains(&local_action)
+                            || (clutch_solana_layout::registry::DealerFacilityAction::FIRST_TAG
+                                ..=clutch_solana_layout::registry::DealerFacilityAction::LAST_TAG)
+                                .contains(&local_action));
                     let source_or_series = family_tag
                         == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
                         && family_version
@@ -276,19 +317,28 @@ mod tests {
                         && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
                             .contains(&local_action);
-                    let expected_allocated = general || structured || source_or_series || recovery;
+                    let expected_allocated =
+                        general || dealer || structured || source_or_series || recovery;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
                         "{family_tag}/{family_version}/{local_action}"
                     );
-                    let expected_enabled = GENERAL_V2_IDENTITY_LAB
+                    let dealer_enabled = DEALER_POLICY_CATALOG_LAB
+                        && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
+                            .contains(&local_action);
+                    let general_enabled = GENERAL_V2_IDENTITY_LAB
                         && family_tag == 74
                         && family_version == 1
                         && matches!(
                             local_action,
                             2 | 6 | 7 | 8 | 9 | 10 | 14 | 15 | 16 | 20 | 21 | 32
                         );
+                    let expected_enabled = dealer_enabled || general_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,
@@ -298,7 +348,7 @@ mod tests {
         }
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
-            !GENERAL_V2_IDENTITY_LAB
+            !(DEALER_POLICY_CATALOG_LAB || GENERAL_V2_IDENTITY_LAB)
         );
     }
 }
