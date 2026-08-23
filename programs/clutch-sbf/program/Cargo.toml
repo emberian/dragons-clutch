@@ -80,8 +80,6 @@ profile-non-production-dealer-policy-catalog-lab = [
 # every legacy action before account inspection.
 profile-non-production-general-v2-empty-book-identity-lab = [
     "dep:clutch-general-v2-runtime",
-    "dep:clutch-owner-settlement",
-    "dep:clutch-retirement",
     "clutch-general-v2-runtime/layout-profile-general",
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
@@ -106,8 +104,8 @@ clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
-clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement", optional = true }
-clutch-retirement = { path = "../../../crates/clutch-retirement", optional = true }
+clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
+clutch-retirement = { path = "../../../crates/clutch-retirement" }
 clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
 clutch-product-series = { path = "../../../crates/clutch-product-series" }
 # The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
@@ -122,6 +120,10 @@ clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"
+solana-clock = { version = "=3.1.1", default-features = false, features = [
+    "sysvar",
+] }
+solana-get-sysvar = "=1.0.0"
 
 # Cross-program invocation, added by the Token-2022 lane.  Both resolve from
 # this host's offline cache and both survive `cargo-build-sbf`, which resolves

@@ -39,6 +39,7 @@ dragons-clutch/dealer-runtime/liveness-budget/v1\0
 | DealerPolicyV1 | `DCDPOLV1` | 1,148 | IDs, including the one neutral sink, `12..524`; width/padding `524..532`; scalar/array rules `532..1140`; page cap/reserved `1140..1148` |
 | DealerFacilityGenesisV1 | `DCDFGNV1` | 116 | policy ID, sponsor, and refund recipient `12..108`; facility nonce `108..116` |
 | FacilityPositionBindingV1 | `DCFPBND1` | 244 | facility/policy/Market/Position/account/Replay/State identities `12..236`; initial Position generation `236..244` |
+| FacilityPositionBindingV2 | `DCFPBND2` | 220 | facility/policy/full Market/collateral-policy/collateral-release/State-controller identities `12..204`; fixed Dealer purpose byte plus zero padding `204..212`; founding PositionV3 generation `212..220`. Its purpose ID hashes exactly those non-cyclic facts and never either derived Position/Replay address; `DealerStateV2` solely persists both physical IDs. |
 | DealerFacilityPositionV1 | `DCFPOSV1` | 388 | policy/facility/full Market/collateral/token/State authority/Replay identities `12..236`; phase/padding `236..244`; generation/cash `244..260`; exact Egg balances `260..388` |
 | DealerRootTombstoneV1 | `DCRTMBV1` | 276 | policy/facility/Position binding/terminal State/root account/rent payer/sink identities `12..236`; terminal generation/child sequence and exact original rent split `236..276` |
 | DealerLivenessScheduleV1 | `DCLSCHV1` | 372 | exact action mask/reserved `12..20`; maximum-call vector indexed by the frozen 22-action enum `20..196`; per-success lamport rewards `196..372` |

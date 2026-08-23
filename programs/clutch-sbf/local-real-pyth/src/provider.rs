@@ -7,6 +7,7 @@
 //! guardian indices 0 through 12 so output is reproducible for its inputs.
 
 use borsh::to_vec;
+use crate::workflow_graph::ReleasedProgram;
 use clutch_sbf::{
     source_identity::real_pyth_lab,
     source_v2::fixtures::{programdata_body, receiver_program_body},
@@ -23,7 +24,7 @@ use solana_address::Address;
 use wormhole_sdk::vaa::{Body, Header, Signature as VaaSignature};
 use wormhole_sdk::Vaa;
 
-pub use crate::capture::{fixture, sha256};
+pub use crate::capture::{fixture, sha256, sha256_digest};
 
 pub const PRICE: i64 = 100_000_000;
 pub const CONFIDENCE: u64 = 6_357;
@@ -51,6 +52,28 @@ pub struct Observation {
     pub vaa: Vec<u8>,
     pub update: MerklePriceUpdate,
     pub post_data: Vec<u8>,
+}
+
+/// Exact Program/ProgramData/deployment/ELF identities reconstructed from the
+/// captured Pyth receiver and router inputs. This is laboratory provenance,
+/// not current public-cluster deployment evidence.
+pub fn captured_operator_releases(
+) -> Result<(ReleasedProgram, ReleasedProgram), Box<dyn std::error::Error>> {
+    let receiver_elf = fixture("receiver.so")?;
+    let router_elf = fixture("router.so")?;
+    let receiver = ReleasedProgram {
+        program_id: Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM),
+        program_data: Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAMDATA),
+        deployment_slot: real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT,
+        elf_sha256: sha256_digest(&receiver_elf),
+    };
+    let router = ReleasedProgram {
+        program_id: Address::new_from_array(real_pyth_lab::ROUTER_PROGRAM),
+        program_data: Address::new_from_array(real_pyth_lab::ROUTER_PROGRAMDATA),
+        deployment_slot: real_pyth_lab::ROUTER_DEPLOYMENT_SLOT,
+        elf_sha256: sha256_digest(&router_elf),
+    };
+    Ok((receiver, router))
 }
 
 pub fn deployment_accounts() -> Result<Vec<ProviderAccount>, Box<dyn std::error::Error>> {

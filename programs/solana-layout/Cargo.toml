@@ -17,7 +17,7 @@ default = ["profile-full"]
 # host/default surface.
 profile-full = []
 profile-direct-v3-source-v2-point = []
-profile-general-source-v2-point = []
+profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point"]
 # Makes the successor Product/Series-only artifact kinds decodable for the
 # explicit local-bank vertical slice. RegistryRelease and CapabilityProfile
 # remain central immutable artifact kinds in every build.
@@ -30,6 +30,8 @@ clutch-batch = { path = "../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }
 clutch-product-series = { path = "../../crates/clutch-product-series" }
+clutch-source-plane-v3-adapter = { path = "../../crates/clutch-source-plane-v3-adapter" }
+clutch-source-plane-v3-runtime = { path = "../../crates/clutch-source-plane-v3-runtime" }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 # Safe wrapper around Solana's native SHA-256 syscall.  Order-page verification

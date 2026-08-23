@@ -11,8 +11,10 @@
 
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_retirement::{
-    PositionAccountV3, PositionPurposeV3, PositionV3Fields, PositionV3Sha256Backend,
-    ReplayV3Envelope, ReplayV3EnvelopeHeader, ReplayV3HashBackend, ReplayV3Lifecycle,
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+    PositionV3Fields, PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope,
+    ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema, ReplayV3HashBackend,
+    ReplayV3Lifecycle, MAX_OUTCOMES,
 };
 
 use crate::{CodecError, Id32, Reader, Writer};
@@ -25,11 +27,14 @@ pub const GENERAL_REPLAY_EXTENSION_V1_BYTES: usize = 136;
 pub const GENERAL_REPLAY_ACCOUNT_V1_BYTES: usize =
     clutch_retirement::PURPOSE_REPLAY_V3_PREFIX_BYTES + GENERAL_REPLAY_EXTENSION_V1_BYTES;
 /// Domain for one exact General Position pre/post delta.
-pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/general-replay/delta/v1\0";
+pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] = b"dragons-clutch/general-replay/delta/v1\0";
+
+/// Canonical founding generation for a fresh ordinary General Position.
+pub const GENERAL_POSITION_FOUNDING_GENERATION_V1: u64 = 1;
 
 const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
+const COLLATERAL_CASH_FAMILY: u8 = 3;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -38,10 +43,19 @@ const DIRECT_SELLER_ROLE: u8 = 4;
 const VIRTUAL_SPLIT_BUYER_ROLE: u8 = 5;
 const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
+const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralReplayTransitionKindV1 {
+    /// Legacy Intent `Endow`, promoted to the canonical Holder→Hoard deposit.
+    Endow,
+    /// Legacy Intent `WithdrawCash`, promoted to canonical Hoard→Holder exit.
+    WithdrawCash,
+    /// Legacy Intent `Split`, locking cash as complete-set backing.
+    Split,
+    /// Legacy Intent `Merge`, unlocking complete-set backing into cash.
+    Merge,
     /// Action 25 owner accounting; the Position body is unchanged.
     AccountReceiptEnd,
     /// Action 38 owner cash realization.
@@ -61,6 +75,30 @@ pub enum GeneralReplayTransitionKindV1 {
 impl GeneralReplayTransitionKindV1 {
     fn coordinates(self) -> (u8, u8, u8, u8) {
         match self {
+            Self::Endow => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::WithdrawCash => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Split => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Merge => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
             Self::AccountReceiptEnd => (
                 SETTLEMENT_FAMILY,
                 TRANSITION_VERSION_V1,
@@ -106,13 +144,32 @@ impl GeneralReplayTransitionKindV1 {
         }
     }
 
-    fn from_coordinates(
-        family: u8,
-        version: u8,
-        action: u8,
-        role: u8,
-    ) -> Result<Self, CodecError> {
+    fn from_coordinates(family: u8, version: u8, action: u8, role: u8) -> Result<Self, CodecError> {
         match (family, version, action, role) {
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Endow),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::WithdrawCash),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Split),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Merge),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 25, OWNER_ACCOUNTING_ROLE) => {
                 Ok(Self::AccountReceiptEnd)
             }
@@ -131,17 +188,14 @@ impl GeneralReplayTransitionKindV1 {
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 37, VIRTUAL_MERGE_SELLER_ROLE) => {
                 Ok(Self::VirtualMergeSeller)
             }
-            (
-                STRUCTURED_EXCHANGE_FAMILY,
-                TRANSITION_VERSION_V1,
-                35,
-                STRUCTURED_GENERAL_ROLE,
-            ) => Ok(Self::StructuredGeneral),
+            (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
+                Ok(Self::StructuredGeneral)
+            }
             _ => Err(CodecError::InvalidState),
         }
     }
 
-    /// Exact centrally allocated General action number.
+    /// Exact owner-local action coordinate within this Replay family.
     pub fn action(self) -> u8 {
         self.coordinates().2
     }
@@ -335,6 +389,149 @@ pub struct GeneralPositionReplayPrestateV1 {
     extension: GeneralReplayExtensionV1,
 }
 
+/// Exact pure founding plan for one canonical General Position/Replay pair.
+///
+/// The runtime remains responsible for authenticating both absent PDAs,
+/// immutable Market/Realm collateral facts, rent calculations, payer funding,
+/// and account creation. Private fields ensure those callers cannot replace
+/// either semantic body after this constructor has joined the complete facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralPositionReplayFoundingPlanV1 {
+    position: PositionAccountV3,
+    position_semantic_id: Id32,
+    position_body: [u8; clutch_retirement::POSITION_V3_BYTES],
+    replay_semantic_id: Id32,
+    replay_body: [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
+}
+
+impl GeneralPositionReplayFoundingPlanV1 {
+    /// Canonical zero-balance Position body at founding generation one.
+    pub const fn position(self) -> PositionAccountV3 {
+        self.position
+    }
+
+    /// Internally derived semantic identity of the founding Position body.
+    pub const fn position_semantic_id(self) -> Id32 {
+        self.position_semantic_id
+    }
+
+    /// Exact canonical 480-byte founding Position body.
+    pub const fn position_body(&self) -> &[u8; clutch_retirement::POSITION_V3_BYTES] {
+        &self.position_body
+    }
+
+    /// Internally derived semantic identity of the founding Replay body.
+    pub const fn replay_semantic_id(self) -> Id32 {
+        self.replay_semantic_id
+    }
+
+    /// Exact canonical 344-byte founding Replay body.
+    pub const fn replay_body(&self) -> &[u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES] {
+        &self.replay_body
+    }
+}
+
+/// Construct the unique zero-liability General Position and sequence-zero
+/// GEN1 Replay pair for complete authenticated external founding facts.
+#[allow(clippy::too_many_arguments)]
+pub fn found_general_position_replay_v1<B>(
+    position_account: Identity32V1,
+    replay_account: Identity32V1,
+    market_instance_id: Identity32V1,
+    realm_id: Identity32V1,
+    collateral_policy_id: Identity32V1,
+    collateral_release_id: Identity32V1,
+    owner: Identity32V1,
+    general_market_runtime: Identity32V1,
+    outcome_count: u8,
+    position_bump: u8,
+    replay_bump: u8,
+    position_rent: RentSplitV2,
+    replay_rent: DeletableRentOwnerV1,
+    backend: &B,
+) -> Result<GeneralPositionReplayFoundingPlanV1, CodecError>
+where
+    B: PositionV3Sha256Backend + ReplayV3HashBackend,
+{
+    if position_account == replay_account
+        || owner == replay_account
+        || general_market_runtime == replay_account
+        || usize::from(outcome_count) == 0
+        || usize::from(outcome_count) > MAX_OUTCOMES
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let position = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::General,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count,
+        stored_bump: position_bump,
+        generation: GENERAL_POSITION_FOUNDING_GENERATION_V1,
+        market_instance_id,
+        realm_id,
+        collateral_policy_id,
+        collateral_release_id,
+        owner,
+        controller: owner,
+        replay_account,
+        purpose_binding_id: general_market_runtime,
+        cash_atoms: 0,
+        reserved_cash_atoms: 0,
+        native_eggs: [0; MAX_OUTCOMES],
+        outstanding_reservations: 0,
+        rent: position_rent,
+    })
+    .map_err(|_| CodecError::InvalidState)?;
+    let position_semantic_id = Id32::new(
+        position
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let position_body = position.encode().map_err(|_| CodecError::InvalidState)?;
+    let extension = GeneralReplayExtensionV1::initial(
+        Id32::new(general_market_runtime.bytes())?,
+        position_semantic_id,
+    )?
+    .encode()?;
+    let header = ReplayV3EnvelopeHeader::new_live(
+        ReplayV3EnvelopeFields {
+            position_account,
+            replay_account,
+            purpose: PositionPurposeV3::General,
+            purpose_binding_id: general_market_runtime,
+            position_generation: GENERAL_POSITION_FOUNDING_GENERATION_V1,
+            next_sequence: 0,
+            stored_bump: replay_bump,
+            rent: replay_rent,
+        },
+        ReplayV3ExtensionSchema::new(GENERAL_REPLAY_EXTENSION_SCHEMA_V1)
+            .map_err(|_| CodecError::InvalidState)?,
+        &extension,
+        backend,
+    )
+    .map_err(|_| CodecError::InvalidState)?;
+    let envelope = ReplayV3Envelope::from_header(header, &extension, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    let replay_semantic_id = Id32::new(
+        envelope
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let mut replay_body = [0_u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES];
+    envelope
+        .encode_into(&mut replay_body, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    Ok(GeneralPositionReplayFoundingPlanV1 {
+        position,
+        position_semantic_id,
+        position_body,
+        replay_semantic_id,
+        replay_body,
+    })
+}
+
 impl GeneralPositionReplayPrestateV1 {
     /// Exact checked Position prestate.
     pub const fn position(self) -> AuthenticatedPositionV3 {
@@ -374,7 +571,9 @@ pub fn project_general_position_replay_prestate_v1<B>(
 where
     B: PositionV3Sha256Backend + ReplayV3HashBackend,
 {
-    position.validate().map_err(|_| CodecError::MismatchedBinding)?;
+    position
+        .validate()
+        .map_err(|_| CodecError::MismatchedBinding)?;
     let position_fields = position.semantic.fields();
     let derived_position_id = position
         .semantic
@@ -555,7 +754,11 @@ where
     let unchanged_required = kind == GeneralReplayTransitionKindV1::AccountReceiptEnd;
     let changed_required = matches!(
         kind,
-        GeneralReplayTransitionKindV1::DirectBuyer
+        GeneralReplayTransitionKindV1::Endow
+            | GeneralReplayTransitionKindV1::WithdrawCash
+            | GeneralReplayTransitionKindV1::Split
+            | GeneralReplayTransitionKindV1::Merge
+            | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::StructuredGeneral
     );

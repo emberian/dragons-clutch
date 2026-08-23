@@ -63,11 +63,35 @@ impl PreparedClaimRedemptionCollateralV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcceptedClaimRedemptionCollateralV2 {
     /// Complete admitted custody result.
-    pub custody: AcceptedCollateralTransferV2,
+    custody: AcceptedCollateralTransferV2,
+    /// Exact authenticated claim request that selected the destination.
+    request: ClaimRedemptionCollateralRequestV2,
     /// Derived locked-principal state after claim retirement.
-    pub backing_after: CollateralBackingV2,
+    backing_after: CollateralBackingV2,
     /// Receipt binding claim identity, payout, exact deltas, and backing state.
-    pub receipt_id: Id,
+    receipt_id: Id,
+}
+
+impl AcceptedClaimRedemptionCollateralV2 {
+    /// Complete admitted custody result.
+    pub const fn custody(self) -> AcceptedCollateralTransferV2 {
+        self.custody
+    }
+
+    /// Exact authenticated claim request that selected the destination.
+    pub const fn request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.request
+    }
+
+    /// Derived locked-principal state after claim retirement.
+    pub const fn backing_after(self) -> CollateralBackingV2 {
+        self.backing_after
+    }
+
+    /// Receipt binding claim identity, payout, exact deltas, and backing state.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
 }
 
 /// Prepared zero-payout claim proof with no collateral invocation.
@@ -279,6 +303,7 @@ pub fn accept_claim_redemption_collateral_v2(
     )?;
     Ok(AcceptedClaimRedemptionCollateralV2 {
         custody,
+        request,
         backing_after: prepared.backing_after,
         receipt_id,
     })

@@ -52,10 +52,14 @@ pub const SEED_PROFILE: &[u8] = b"dragons-clutch:profile:v1";
 pub const SEED_MARKET: &[u8] = b"dragons-clutch:market:v1";
 /// Hoard account seed prefix.
 pub const SEED_HOARD: &[u8] = b"dragons-clutch:hoard:v1";
+/// Full-width MarketInstance Hoard V2 seed prefix.
+pub const SEED_HOARD_V2: &[u8] = b"dc:hoard:v2";
 /// Position account seed prefix.
 pub const SEED_POSITION: &[u8] = b"dragons-clutch:position:v1";
 /// Reference-only kernel-aggregate account seed prefix.
 pub const SEED_KERNEL: &[u8] = b"dragons-clutch:kernel:v1";
+/// Full-width native ClaimLedger V3 seed prefix.
+pub const SEED_CLAIM_LEDGER_V3: &[u8] = b"dc:claim-ledger:v3";
 /// Reference-only external-shadow account seed prefix.
 pub const SEED_EXTERNAL: &[u8] = b"dragons-clutch:external:v1";
 /// Reference-only replay-sequence account seed prefix.
@@ -106,20 +110,16 @@ pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POL
 pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
     clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
 /// Authoritative Dealer StateV2.
-pub const SEED_DEALER_STATE_V2: &[u8] =
-    clutch_dealer_runtime_contract::DEALER_STATE_PDA_DOMAIN_V2;
+pub const SEED_DEALER_STATE_V2: &[u8] = clutch_dealer_runtime_contract::DEALER_STATE_PDA_DOMAIN_V2;
 /// Counted Dealer funded-dependency child.
 pub const SEED_DEALER_FUNDED_V2: &[u8] =
     clutch_dealer_runtime_contract::DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2;
 /// Dealer LP ownership page V2.
-pub const SEED_DEALER_LP_PAGE_V2: &[u8] =
-    clutch_dealer_runtime_contract::LP_PAGE_PDA_DOMAIN_V2;
+pub const SEED_DEALER_LP_PAGE_V2: &[u8] = clutch_dealer_runtime_contract::LP_PAGE_PDA_DOMAIN_V2;
 /// Dealer LeaseV2.
-pub const SEED_DEALER_LEASE_V2: &[u8] =
-    clutch_dealer_runtime_contract::DEALER_LEASE_PDA_DOMAIN_V2;
+pub const SEED_DEALER_LEASE_V2: &[u8] = clutch_dealer_runtime_contract::DEALER_LEASE_PDA_DOMAIN_V2;
 /// Dealer SettlementPotV2.
-pub const SEED_DEALER_POT_V2: &[u8] =
-    clutch_dealer_runtime_contract::SETTLEMENT_POT_PDA_DOMAIN_V2;
+pub const SEED_DEALER_POT_V2: &[u8] = clutch_dealer_runtime_contract::SETTLEMENT_POT_PDA_DOMAIN_V2;
 /// Dealer counted Epoch-binding V2.
 pub const SEED_DEALER_EPOCH_V2: &[u8] =
     clutch_dealer_runtime_contract::DEALER_EPOCH_BINDING_PDA_DOMAIN_V2;
@@ -161,6 +161,8 @@ pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-au
 pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 /// Immutable SourcePlane V3 occurrence-provenance record prefix.
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
+/// Immutable Source-selected runtime-liveness policy account prefix.
+pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -278,6 +280,11 @@ pub fn hoard_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_HOARD, market])
 }
 
+/// Canonical full-width Hoard V2 address.
+pub fn hoard_v2_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_HOARD_V2, market_instance_v2_id])
+}
+
 /// Canonical Position address and bump.
 pub fn position_pda(program_id: &Pubkey, market: &[u8; 32], owner: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_POSITION, market, owner])
@@ -286,6 +293,11 @@ pub fn position_pda(program_id: &Pubkey, market: &[u8; 32], owner: &[u8; 32]) ->
 /// Canonical reference-only kernel-aggregate address and bump.
 pub fn kernel_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_KERNEL, market])
+}
+
+/// Canonical full-width ClaimLedger V3 address.
+pub fn claim_ledger_v3_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_CLAIM_LEDGER_V3, market_instance_v2_id])
 }
 
 /// Canonical reference-only external-shadow address and bump.
@@ -595,7 +607,6 @@ pub fn general_v2_owner_settlement_pda(
 }
 
 /// Canonical global Position V3 address for one General owner.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub fn position_v3_pda(
     program_id: &Pubkey,
     market_instance: &[u8; 32],
@@ -617,7 +628,6 @@ pub fn position_v3_pda(
 }
 
 /// Canonical purpose-owned Replay V3 address paired with one Position.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub fn purpose_replay_v3_pda(
     program_id: &Pubkey,
     position: &[u8; 32],
@@ -745,10 +755,7 @@ pub fn dealer_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, 
 }
 
 /// Canonical immutable Dealer liveness-schedule address.
-pub fn dealer_liveness_schedule_pda(
-    program_id: &Pubkey,
-    schedule_id: &[u8; 32],
-) -> (Pubkey, u8) {
+pub fn dealer_liveness_schedule_pda(program_id: &Pubkey, schedule_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_LIVENESS_SCHEDULE, schedule_id])
 }
 
@@ -770,7 +777,11 @@ pub fn dealer_lp_page_v2_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_LP_PAGE_V2, facility_id, &page_ordinal.to_le_bytes()],
+        &[
+            SEED_DEALER_LP_PAGE_V2,
+            facility_id,
+            &page_ordinal.to_le_bytes(),
+        ],
     )
 }
 
@@ -858,6 +869,14 @@ pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]
 /// Canonical immutable successor Product/Series artifact address.
 pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
+}
+
+/// Canonical immutable liveness policy selected by a Source release.
+pub fn source_liveness_policy_pda(
+    program_id: &Pubkey,
+    policy_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_LIVENESS_POLICY_V1, policy_id])
 }
 
 /// Canonical immutable registered-Series address.
@@ -1161,8 +1180,12 @@ pub const SEED_OUTCOME_MINT: &[u8] = b"dragons-clutch:outcome-mint:v1";
 ///
 /// Shortened from the plan's `hoard-authority`, which does not fit a seed.
 pub const SEED_HOARD_AUTHORITY: &[u8] = b"dragons-clutch:hoard-auth:v1";
+/// Full-width Hoard V2 signing authority.
+pub const SEED_HOARD_AUTHORITY_V2: &[u8] = b"dc:hoard-auth:v2";
 /// Hoard token-account seed prefix; 29 bytes.
 pub const SEED_HOARD_TOKEN: &[u8] = b"dragons-clutch:hoard-token:v1";
+/// Full-width Hoard V2 collateral token account.
+pub const SEED_HOARD_TOKEN_V2: &[u8] = b"dc:hoard-token:v2";
 
 /// Canonical outcome-mint address and bump.
 ///
@@ -1182,12 +1205,31 @@ pub fn hoard_authority_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u
     find(program_id, &[SEED_HOARD_AUTHORITY, market])
 }
 
+/// Canonical full-width Hoard V2 signing authority.
+pub fn hoard_authority_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_HOARD_AUTHORITY_V2, market_instance_v2_id],
+    )
+}
+
 /// Canonical Hoard token-account address and bump.
 ///
 /// The Token-2022 account [`hoard_authority_pda`] owns.  Distinct from
 /// [`hoard_pda`], which is this program's own collateral-accounting state.
 pub fn hoard_token_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_HOARD_TOKEN, market])
+}
+
+/// Canonical full-width Hoard V2 collateral token account.
+pub fn hoard_token_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_HOARD_TOKEN_V2, market_instance_v2_id])
 }
 
 #[cfg(test)]

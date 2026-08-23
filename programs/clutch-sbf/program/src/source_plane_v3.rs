@@ -7,9 +7,10 @@
 //! consumed directly from `clutch-source-plane-v3-runtime`; there is no SBF-
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
-//! SourceSeries 77/v2 actions 1 through 12 remain capability-disabled. These
-//! functions are the typed trust-boundary seam a later activation must call;
-//! their existence does not make any instruction executable.
+//! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
+//! seam; actions 2 and 3 are its atomic SourceHead/OpenRawPage lineage,
+//! receipt, and liveness creation path in full profiles. Actions 4 through 12
+//! remain separately disabled until their complete runtime joins enter dispatch.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
@@ -28,25 +29,26 @@ use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
     account_data_id, authenticate_boundary, authenticate_evaluation_authority,
     authenticate_open_raw_page_account, authenticate_raw_page_account,
-    authenticate_reopen_lineage_account, authenticate_source_head_account,
-    authenticate_source_release_account, authenticate_source_route,
-    authenticate_source_work_receipt_account, authenticate_statistic_result,
-    authenticate_statistic_result_absence, authenticate_statistic_result_account,
-    authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
-    join_source_occurrence, AdapterInvocationV1, AuthenticatedBoundaryV1,
-    AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1,
-    AuthenticatedRawPageV1, AuthenticatedReopenLineageV1, AuthenticatedSourceHeadV1,
+    authenticate_reopen_lineage_account, authenticate_source_generation_request,
+    authenticate_source_head_account, authenticate_source_release_account,
+    authenticate_source_route, authenticate_source_work_receipt_account,
+    authenticate_statistic_result, authenticate_statistic_result_absence,
+    authenticate_statistic_result_account, authenticate_window_seal_account,
+    authenticate_window_work_account, decode_runtime_account, join_source_occurrence,
+    AdapterInvocationV1, AuthenticatedBoundaryV1, AuthenticatedClockBucketV1,
+    AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
+    AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
     AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
     ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, LineageAccessV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1,
-    RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceReceiptDispositionV1,
-    SourceReleaseManifestV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, OPEN_RAW_PAGE_ACCOUNT_TAG,
-    RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION,
-    RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_TAG,
-    SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
+    RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceGenerationRequestV1,
+    SourceReceiptDispositionV1, SourceReleaseManifestV1, SourceWorkReceiptAccessV1,
+    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
+    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
+    REOPEN_LINEAGE_ACCOUNT_VERSION, RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
     SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
     WINDOW_WORK_ACCOUNT_TAG,
 };
@@ -64,12 +66,13 @@ const ACCOUNT_VECTOR_DOMAIN: &[u8] = b"dragons-clutch/sbf-account-vector/v1";
 const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
+const SOURCE_GENERATION_REQUEST_SEED_V1: &[u8] = b"dc-sp3-generation-request";
 
-/// Route one centrally allocated SourcePlane action to its reserved-disabled handler.
+/// Route one centrally allocated but disabled SourcePlane action to refusal.
 ///
 /// This boundary is deliberately account-free. The dispatcher calls it before
 /// account inspection, so merely allocating actions 1 through 12 cannot make a
-/// partially implemented transition executable. The exhaustive match also
+/// partially implemented action 2 through 12 executable. The exhaustive match also
 /// prevents a newly allocated Source action from inheriting this refusal
 /// without an explicit review here.
 #[inline(never)]
@@ -521,6 +524,39 @@ pub fn authenticate_route(
     .map_err(Into::into)
 }
 
+/// Authenticate one immutable Product/failure generation request under the
+/// exact authority program selected by the Source release.
+///
+/// The request body is content addressed under a disjoint external-authority
+/// namespace. The executing Clutch program never derives this PDA under its
+/// own identity and therefore cannot silently become generation authority.
+pub fn authenticate_generation_request(
+    route: AuthenticatedSourceRouteV1,
+    request_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedSourceGenerationV1> {
+    let data = request_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let request = SourceGenerationRequestV1::decode(&data)?;
+    let request_id = request.id()?;
+    let authority = Pubkey::new_from_array(route.generation_authority_program().bytes());
+    let (address, bump) = crate::seeds::find(
+        &authority,
+        &[SOURCE_GENERATION_REQUEST_SEED_V1, &request_id.bytes()],
+    );
+    authenticate_source_generation_request(
+        route,
+        runtime_account_view(request_account, &data),
+        RuntimeDerivedPdaV1 {
+            program_id: route.generation_authority_program(),
+            recipe_id: request_id,
+            address: runtime_key(&address),
+            bump,
+        },
+    )
+    .map_err(Into::into)
+}
+
 /// Derive a policy-bound current bucket from the canonical Solana Clock account.
 pub fn authenticate_clock_bucket(
     release: AuthenticatedSourceReleaseV1,
@@ -790,6 +826,7 @@ pub fn successful_evaluation_handoff(
 /// StatisticResult against the already-authenticated Window evidence.
 #[allow(clippy::too_many_arguments)]
 pub fn invoke_statistic_evaluator(
+    route: AuthenticatedSourceRouteV1,
     binding: EvaluationReleaseBindingV1,
     summary: SummaryProgramV3,
     evaluator_program: &AccountInfo<'_>,
@@ -808,6 +845,7 @@ pub fn invoke_statistic_evaluator(
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
     let authority = authenticate_evaluation_authority(
+        route,
         binding,
         summary,
         runtime_account_view(evaluator_program, &program_data),
