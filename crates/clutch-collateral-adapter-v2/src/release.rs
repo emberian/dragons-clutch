@@ -29,7 +29,7 @@ pub const EXTENSION_IMMUTABLE_OWNER: u64 = 1_u64 << 7;
 const RELEASE_MAGIC: [u8; 8] = *b"DCCAR2\0\0";
 const RELEASE_VERSION: u16 = 2;
 const RELEASE_DOMAIN: &[u8] = b"dragons-clutch/collateral-adapter-release/v2\0";
-const RELEASE_RESERVED_BYTES: usize = 30;
+const RELEASE_RESERVED_BYTES: usize = 29;
 
 /// Exact canonical release-record width.
 pub const ADAPTER_RELEASE_V2_BYTES: usize = 192;
@@ -44,11 +44,15 @@ pub const OPERATION_TRANSFER_IN: u16 = 1 << 1;
 pub const OPERATION_TRANSFER_OUT: u16 = 1 << 2;
 /// Release supports exact checked transfers between authenticated custody roles.
 pub const OPERATION_CUSTODY_TRANSFER: u16 = 1 << 3;
+/// Release supports closing an admitted empty custody account to one exact
+/// lamport destination through its canonical PDA authority.
+pub const OPERATION_CLOSE_CUSTODY: u16 = 1 << 4;
 /// Complete operation surface required by V2.
 pub const REQUIRED_OPERATIONS: u16 = OPERATION_CREATE_HOARD
     | OPERATION_TRANSFER_IN
     | OPERATION_TRANSFER_OUT
-    | OPERATION_CUSTODY_TRANSFER;
+    | OPERATION_CUSTODY_TRANSFER
+    | OPERATION_CLOSE_CUSTODY;
 
 /// Release proves visible integer amounts and mint supply.
 pub const RELEASE_FLAG_VISIBLE_INTEGER_ATOMS: u16 = 1 << 0;
@@ -143,6 +147,8 @@ pub struct AdapterReleaseV2 {
     pub owner_guard: OwnerGuardV2,
     /// Checked-transfer instruction discriminator emitted by this release.
     pub transfer_checked_discriminator: u8,
+    /// Close-account instruction discriminator emitted by this release.
+    pub close_account_discriminator: u8,
     /// Exact supported operation mask.
     pub supported_operations: u16,
     /// Exact semantic guarantee flags.
@@ -176,14 +182,12 @@ pub struct AdapterReleaseV2 {
 impl AdapterReleaseV2 {
     /// Build the exact legacy SPL family row around real deployment and
     /// parser/CPI component identities. Validation still rejects zero ids.
-    pub const fn legacy_spl(
-        token_program_deployment: Id,
-        parser_cpi_code: Id,
-    ) -> Self {
+    pub const fn legacy_spl(token_program_deployment: Id, parser_cpi_code: Id) -> Self {
         Self {
             family: ProgramFamilyV2::LegacySpl,
             owner_guard: OwnerGuardV2::PdaSoleSigner,
             transfer_checked_discriminator: 12,
+            close_account_discriminator: 9,
             supported_operations: REQUIRED_OPERATIONS,
             release_flags: REQUIRED_RELEASE_FLAGS,
             intrinsic_behaviors: 0,
@@ -203,14 +207,12 @@ impl AdapterReleaseV2 {
 
     /// Build the exact conservative Token-2022 family row around real
     /// deployment and parser/CPI component identities.
-    pub const fn token_2022_base(
-        token_program_deployment: Id,
-        parser_cpi_code: Id,
-    ) -> Self {
+    pub const fn token_2022_base(token_program_deployment: Id, parser_cpi_code: Id) -> Self {
         Self {
             family: ProgramFamilyV2::Token2022Base,
             owner_guard: OwnerGuardV2::ImmutableOwner,
             transfer_checked_discriminator: 12,
+            close_account_discriminator: 9,
             supported_operations: REQUIRED_OPERATIONS,
             release_flags: REQUIRED_RELEASE_FLAGS,
             intrinsic_behaviors: 0,
@@ -234,6 +236,7 @@ impl AdapterReleaseV2 {
         self.token_program_deployment.require_live()?;
         self.parser_cpi_code.require_live()?;
         if self.transfer_checked_discriminator != 12
+            || self.close_account_discriminator != 9
             || self.supported_operations != REQUIRED_OPERATIONS
             || self.release_flags != REQUIRED_RELEASE_FLAGS
             || self.intrinsic_behaviors & behavior::ALL != 0
@@ -288,6 +291,7 @@ impl AdapterReleaseV2 {
         writer.u16(self.family as u16)?;
         writer.u8(self.owner_guard as u8)?;
         writer.u8(self.transfer_checked_discriminator)?;
+        writer.u8(self.close_account_discriminator)?;
         writer.u16(self.supported_operations)?;
         writer.u16(self.release_flags)?;
         writer.u16(self.intrinsic_behaviors)?;
@@ -320,6 +324,7 @@ impl AdapterReleaseV2 {
             family: ProgramFamilyV2::decode(reader.u16()?)?,
             owner_guard: OwnerGuardV2::decode(reader.u8()?)?,
             transfer_checked_discriminator: reader.u8()?,
+            close_account_discriminator: reader.u8()?,
             supported_operations: reader.u16()?,
             release_flags: reader.u16()?,
             intrinsic_behaviors: reader.u16()?,

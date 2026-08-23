@@ -27,16 +27,20 @@
 mod account;
 mod binding;
 mod claim;
+mod close;
 mod codec;
 mod policy;
 mod release;
+mod series;
 mod transfer;
 
 pub use account::*;
 pub use binding::*;
 pub use claim::*;
+pub use close::*;
 pub use policy::*;
 pub use release::*;
+pub use series::*;
 pub use transfer::*;
 
 use sha2::{Digest, Sha256};
@@ -50,7 +54,8 @@ pub const ID_BYTES: usize = 32;
 pub struct Id([u8; ID_BYTES]);
 
 impl Id {
-    /// Canonical zero value, reserved for inactive padding.
+    /// Canonical zero value, reserved for inactive padding except where a type
+    /// explicitly denotes Solana's all-zero System Program address.
     pub const ZERO: Self = Self([0; ID_BYTES]);
 
     /// Wrap exact bytes without claiming that an external account was checked.
@@ -139,6 +144,14 @@ pub enum Error {
     PostAdmissionFailed,
     /// Collateral and claim adapter identities were incorrectly collapsed.
     CollateralClaimPlaneAliased,
+    /// A custody token account retained collateral atoms and cannot be closed.
+    CustodyNotEmpty,
+    /// A close-account lamport movement or terminal state was not exact.
+    CloseDeltaMismatch,
+    /// Stored refundable token-vault rent principal was not fully covered.
+    RentPrincipalNotCovered,
+    /// A Series funding or one-shot terminal receipt join was inconsistent.
+    SeriesJoinMismatch,
 }
 
 /// Result alias for the V2 collateral contract.
