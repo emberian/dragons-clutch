@@ -33,21 +33,26 @@ pub use builder::{
 };
 
 pub use direct::{
-    prepare_direct_egg_settlement_v1, AuthenticatedDirectSettlementReceiptV1,
-    AuthenticatedOrderMembershipV1, AuthenticatedPositionV1, AuthenticatedReservationV1,
-    DirectEggSettlementInputV1, DirectEggSettlementPlanV1, DirectEggTransferAuditV1, OrderKindV1,
-    ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
+    prepare_direct_egg_settlement_v1, prepare_direct_receipt_accounting_v1,
+    AuthenticatedDirectSettlementReceiptV1, AuthenticatedOrderMembershipV1,
+    AuthenticatedPositionV1, AuthenticatedReservationV1, DirectEggSettlementInputV1,
+    DirectEggSettlementPlanV1, DirectEggTransferAuditV1, DirectReceiptAccountingInputV1,
+    DirectReceiptAccountingPlanV1, OrderKindV1, ReservationStateV1,
+    DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
 };
 
 pub use virtual_claim::{
-    prepare_virtual_merge_inventory_v1, prepare_virtual_merge_receipt_v1,
-    prepare_virtual_split_inventory_v1, prepare_virtual_split_receipt_v1,
+    prepare_virtual_merge_composite_v1, prepare_virtual_merge_receipt_accounting_v1,
+    prepare_virtual_split_composite_v1, prepare_virtual_split_receipt_accounting_v1,
     AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
     AuthenticatedVirtualInventoryBudgetV1, AuthenticatedVirtualMergeReceiptV1,
     AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
-    VirtualInventoryPlanV1, VirtualInventoryStateV1, VirtualMergeReceiptInputV1,
-    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitReceiptInputV1,
-    VirtualSplitReceiptPlanV1,
+    VirtualInventoryPlanV1, VirtualInventoryStateV1, VirtualMergeCashPotPostV1,
+    VirtualMergeCompositeInputV1, VirtualMergeCompositePlanV1, VirtualMergeReceiptInputV1,
+    VirtualMergeReceiptAccountingInputV1, VirtualMergeReceiptAccountingPlanV1,
+    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitCompositeInputV1,
+    VirtualSplitCompositePlanV1, VirtualSplitReceiptAccountingInputV1,
+    VirtualSplitReceiptAccountingPlanV1, VirtualSplitReceiptInputV1, VirtualSplitReceiptPlanV1,
 };
 
 /// Maximum orders in one frozen General book.
@@ -56,7 +61,7 @@ pub const MAX_ORDERS: usize = 64;
 ///
 /// General V2's central account registry owns the eventual outer tag/version;
 /// this crate owns only the body and its canonical zero padding.
-pub const OWNER_SETTLEMENT_BODY_V1_BYTES: usize = 288;
+pub const OWNER_SETTLEMENT_BODY_V1_BYTES: usize = 320;
 
 /// Exact atomic collateral quantity.
 pub type Amount = u64;
@@ -234,6 +239,8 @@ pub struct OwnerSettlementAccumulatorV1 {
     pub completed_sell_order_mask: u64,
     /// Consumed receipt count.
     pub consumed_slice_count: u16,
+    /// Once-only action-38 identity; zero until cash realization commits.
+    pub owner_finalization_id: [u8; 32],
     /// Zero while accumulating, one after final cash realization, two after
     /// the persistent owner row is retired.
     pub state: u8,
@@ -250,6 +257,7 @@ impl OwnerSettlementAccumulatorV1 {
             completed_buy_order_mask: 0,
             completed_sell_order_mask: 0,
             consumed_slice_count: 0,
+            owner_finalization_id: [0; 32],
             state: 0,
         })
     }
@@ -324,10 +332,20 @@ impl OwnerSettlementAccumulatorV1 {
         &mut self,
         position_cash_atoms: Amount,
         position_reserved_cash_atoms: Amount,
+        owner_finalization_id: [u8; 32],
     ) -> Result<OwnerSettlementDispositionV1> {
         self.validate()?;
         if self.state != 0 {
             return Err(Error::Terminal);
+        }
+        if owner_finalization_id == [0; 32]
+            || owner_finalization_id == self.expectation.market
+            || owner_finalization_id == self.expectation.epoch
+            || owner_finalization_id == self.expectation.candidate
+            || owner_finalization_id == self.expectation.owner
+            || owner_finalization_id == self.expectation.owner_order_set_digest
+        {
+            return Err(Error::InvalidIdentity);
         }
         if self.consumed_slice_count != self.expectation.expected_slice_count
             || self.consumed_buy_price_units != self.expectation.expected_buy_price_units
@@ -372,6 +390,7 @@ impl OwnerSettlementAccumulatorV1 {
             .checked_sub(debit_atoms)
             .ok_or(Error::InsufficientCash)?;
         let mut next = *self;
+        next.owner_finalization_id = owner_finalization_id;
         next.state = 1;
         next.validate()?;
         *self = next;
@@ -409,6 +428,11 @@ impl OwnerSettlementAccumulatorV1 {
             || self.consumed_slice_count > self.expectation.expected_slice_count
             || self.consumed_buy_price_units > self.expectation.expected_buy_price_units
             || self.consumed_sell_price_units > self.expectation.expected_sell_price_units
+        {
+            return Err(Error::InvariantViolation);
+        }
+        if (self.state == 0 && self.owner_finalization_id != [0; 32])
+            || (self.state != 0 && self.owner_finalization_id == [0; 32])
         {
             return Err(Error::InvariantViolation);
         }
@@ -503,6 +527,7 @@ impl OwnerSettlementAccumulatorV1 {
             &mut cursor,
             &self.consumed_slice_count.to_le_bytes(),
         )?;
+        put(&mut output, &mut cursor, &self.owner_finalization_id)?;
         put(&mut output, &mut cursor, &[self.state])?;
         put(&mut output, &mut cursor, &[0; 3])?;
         if cursor != OWNER_SETTLEMENT_BODY_V1_BYTES {
@@ -539,6 +564,7 @@ impl OwnerSettlementAccumulatorV1 {
             completed_buy_order_mask: read_u64(input, &mut cursor)?,
             completed_sell_order_mask: read_u64(input, &mut cursor)?,
             consumed_slice_count: read_u16(input, &mut cursor)?,
+            owner_finalization_id: read_key(input, &mut cursor)?,
             state: read_u8(input, &mut cursor)?,
         };
         if take(input, &mut cursor, 3)? != &[0; 3] || cursor != input.len() {

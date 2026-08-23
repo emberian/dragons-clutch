@@ -543,7 +543,8 @@ pub struct SettlementCashPotV1 {
     pub realized_rounding_price_units: u128,
     /// Number of atomically finalized owner rows.
     pub finalized_owner_count: u16,
-    /// Zero while allocating; one when complete but still liability-bearing.
+    /// Zero while allocating, one after owner finalization, two after every
+    /// split-cash atom has entered an atomic inventory-and-delivery transition.
     pub state: u8,
 }
 
@@ -564,7 +565,7 @@ impl SettlementCashPotV1 {
     /// Validate progress bounds and the allocation-complete state.
     pub fn validate(self) -> Result<()> {
         self.expectation.validate()?;
-        if self.state > 1
+        if self.state > 2
             || self.finalized_owner_count > self.expectation.owner_count
             || self.available_consideration_atoms
                 > self
@@ -583,20 +584,31 @@ impl SettlementCashPotV1 {
         {
             return Err(Error::InvariantViolation);
         }
-        if self.state == 1
-            && (self.finalized_owner_count != self.expectation.owner_count
-                || self.available_consideration_atoms
-                    != Amount::try_from(
-                        self.expectation.rounding_pot_price_units
-                            / u128::from(self.expectation.price_scale),
-                    )
-                    .map_err(|_| Error::ArithmeticOverflow)?
-                    .checked_add(self.expectation.terminal_split_cash_atoms())
-                    .ok_or(Error::ArithmeticOverflow)?
+        if self.state != 0 {
+            let rounding_atoms = Amount::try_from(
+                self.expectation.rounding_pot_price_units
+                    / u128::from(self.expectation.price_scale),
+            )
+            .map_err(|_| Error::ArithmeticOverflow)?;
+            if self.finalized_owner_count != self.expectation.owner_count
                 || self.collected_fee_atoms != self.expectation.selected_fee_atoms
-                || self.realized_rounding_price_units != self.expectation.rounding_pot_price_units)
-        {
-            return Err(Error::InvariantViolation);
+                || self.realized_rounding_price_units != self.expectation.rounding_pot_price_units
+            {
+                return Err(Error::InvariantViolation);
+            }
+            match (self.expectation.virtual_cash_direction, self.state) {
+                (VirtualCashDirectionV1::Split, 1)
+                    if self.available_consideration_atoms >= rounding_atoms
+                        && self.available_consideration_atoms
+                            <= rounding_atoms
+                                .checked_add(self.expectation.virtual_cash_atoms)
+                                .ok_or(Error::ArithmeticOverflow)? => {}
+                (VirtualCashDirectionV1::Split, 2)
+                    if self.available_consideration_atoms == rounding_atoms => {}
+                (VirtualCashDirectionV1::None | VirtualCashDirectionV1::Merge, 1)
+                    if self.available_consideration_atoms == rounding_atoms => {}
+                _ => return Err(Error::InvariantViolation),
+            }
         }
         Ok(())
     }
@@ -765,6 +777,8 @@ pub struct AuthenticatedOwnerFeeDebitV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct OwnerCashRealizationPlanV1 {
+    /// Exact once-only action-38 identity persisted in the owner row.
+    pub owner_finalization_id: [u8; 32],
     /// Owner row to write.
     pub owner_settlement_account: [u8; 32],
     /// Finalized owner-row body.
@@ -792,6 +806,7 @@ pub fn prepare_realize_owner_cash_v1(
     position: AuthenticatedPositionCashV1,
     fee: AuthenticatedOwnerFeeDebitV1,
     pot: SettlementCashPotV1,
+    owner_finalization_id: [u8; 32],
 ) -> Result<OwnerCashRealizationPlanV1> {
     pot.validate()?;
     let expected = account.accumulator.expectation;
@@ -816,7 +831,11 @@ pub fn prepare_realize_owner_cash_v1(
         return Err(Error::AuthorityUnavailable);
     }
     let mut next_row = account.accumulator;
-    let disposition = next_row.finalize(position.cash_atoms, position.reserved_cash_atoms)?;
+    let disposition = next_row.finalize(
+        position.cash_atoms,
+        position.reserved_cash_atoms,
+        owner_finalization_id,
+    )?;
     let consideration_debit = disposition
         .debit_atoms
         .checked_sub(disposition.selected_fee_atoms)
@@ -846,6 +865,7 @@ pub fn prepare_realize_owner_cash_v1(
     }
     next_pot.validate()?;
     Ok(OwnerCashRealizationPlanV1 {
+        owner_finalization_id,
         owner_settlement_account: account.address,
         owner_settlement_body: next_row.encode_body()?,
         position: position.position,
@@ -999,6 +1019,7 @@ mod tests {
             position(4, 2, 2),
             zero_fee(4),
             pot(),
+            key(40),
         )
         .unwrap();
         assert_eq!(first.settlement_cash_pot.available_consideration_atoms, 2);
@@ -1009,6 +1030,7 @@ mod tests {
             position(5, 0, 0),
             zero_fee(5),
             first.settlement_cash_pot,
+            key(41),
         )
         .unwrap();
         assert_eq!(second.settlement_cash_pot.available_consideration_atoms, 1);
@@ -1024,6 +1046,7 @@ mod tests {
                 position(5, 0, 0),
                 zero_fee(5),
                 pot(),
+                key(41),
             ),
             Err(Error::SettlementLiquidityUnavailable)
         );
