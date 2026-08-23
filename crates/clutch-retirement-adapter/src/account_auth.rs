@@ -10,7 +10,8 @@ use clutch_retirement::{
     POSITION_ACCOUNT_VERSION_V3, POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_V1_BYTES,
     POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_V3_BYTES, POSITION_TOMBSTONE_VERSION_V1,
     POSITION_TOMBSTONE_VERSION_V2, POSITION_TOMBSTONE_VERSION_V3, POSITION_V2_BYTES,
-    POSITION_V3_BYTES, RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5,
+    POSITION_V3_BYTES, PURPOSE_REPLAY_ACCOUNT_TAG, PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
+    PURPOSE_REPLAY_V3_PREFIX_BYTES, RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5,
     RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
 };
 use clutch_solana_layout::direct_selection_v3::{DIRECT_EPOCH_V4_BYTES, DIRECT_EPOCH_V4_VERSION};
@@ -30,6 +31,8 @@ const POSITION_TOMBSTONE_STORED_BUMP_OFFSET: usize = 75;
 const POSITION_TOMBSTONE_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_TOMBSTONE_STORED_BUMP_OFFSET: usize = 83;
 const REPLAY_SUCCESSOR_STORED_BUMP_OFFSET: usize = 82;
+const PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET: usize = 4;
+const PURPOSE_REPLAY_V3_EXTENSION_LEN_OFFSET: usize = 24;
 const EPOCH_BUDGET_STORED_BUMP_OFFSET: usize = 270;
 
 /// Runtime facts read from one Solana account before any state mutation.
@@ -355,6 +358,47 @@ pub fn authenticate_position_v3_exact<'a>(
             version: POSITION_ACCOUNT_VERSION_V3,
             len: POSITION_V3_BYTES,
             bump_offset: POSITION_V3_STORED_BUMP_OFFSET,
+        },
+        access,
+    )
+}
+
+/// Authenticate one purpose-owned Replay V3 under an exact runtime role.
+///
+/// The common prefix owns the exact extension length. The purpose-neutral
+/// account boundary enforces that geometry and the canonical PDA bump here;
+/// the Replay V3 codec subsequently authenticates the full extension hash.
+pub fn authenticate_purpose_replay_v3_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+    access: AccountAccessV2,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    if view.data.len() < PURPOSE_REPLAY_V3_PREFIX_BYTES {
+        return Err(RetirementErrorV2::Truncated.into());
+    }
+    let mut extension_len_bytes = [0u8; 4];
+    extension_len_bytes.copy_from_slice(
+        &view.data
+            [PURPOSE_REPLAY_V3_EXTENSION_LEN_OFFSET..PURPOSE_REPLAY_V3_EXTENSION_LEN_OFFSET + 4],
+    );
+    let extension_len = usize::try_from(u32::from_le_bytes(extension_len_bytes))
+        .map_err(|_| RetirementErrorV2::ArithmeticOverflow)?;
+    if extension_len == 0 {
+        return Err(RetirementErrorV2::NonCanonicalState.into());
+    }
+    let expected_len = PURPOSE_REPLAY_V3_PREFIX_BYTES
+        .checked_add(extension_len)
+        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: PURPOSE_REPLAY_ACCOUNT_TAG,
+            version: PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
+            len: expected_len,
+            bump_offset: PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET,
         },
         access,
     )
