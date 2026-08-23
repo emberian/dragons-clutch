@@ -41,7 +41,7 @@ family version creates a new namespace; it does not inherit capability.
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
 
-General V2 reserves local actions 1 through 38, in order:
+General V2 reserves local actions 1 through 41, in order:
 
 1. `CreateMarket`
 2. `InitEpoch`
@@ -81,6 +81,9 @@ General V2 reserves local actions 1 through 38, in order:
 36. `ConsumeVirtualSplitReceiptEggs`
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
+39. `InitializeSettlementRoot`
+40. `FinalizeMergeReceiptPayment`
+41. `ReleaseUnfilledReservation`
 
 These names allocate local tags only. They do not freeze payload bytes, account
 lists, account codecs, or transition semantics. Dealer now allocates the
@@ -148,7 +151,7 @@ These registry names allocate local tags only; this document does not freeze
 payload bytes, account lists, account codecs, transition semantics, or runtime
 capabilities. Action-specific contracts may do so separately. In particular,
 the non-production identity slice named below freezes a strict subset, and
-actions 35 through 38 have canonical payload contracts while remaining
+actions 35 through 41 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
@@ -302,6 +305,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
 | `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
 | `0x81/3` | General V2 | canonical Reservation-handoff owner settlement V3 |
+| `0x81/4` | General V2 | canonical counted merge-delivery owner settlement V4 (292 bytes) |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |
@@ -334,6 +338,12 @@ pure runtime elsewhere does not make a route executable.
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
+| `0xa4/1` | FractionalRedemption | immutable Market/Resolution/Realm/claim policy (296 bytes) |
+| `0xa5/1` | FractionalRedemption | sole aggregate numerator-credit ledger (224 bytes) |
+| `0xa6/1` | FractionalRedemption | owner-scoped exact numerator credit (296 bytes) |
+| `0xa7/1` | FractionalRedemption/replay | permanent zero-credit tombstone (232 bytes) |
+| `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
+| `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | occurrence-scoped counted whole-Market lifecycle root |
 | `0xab/1` | Failure | mutable interval-consensus work (1,088 bytes) |
 | `0xac/1` | Failure/replay | permanent interval-consensus replay receipt (416 bytes) |
@@ -393,9 +403,9 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 38 are allocated numeric coordinates, not a
+General V2 local actions 1 through 41 are allocated numeric coordinates, not a
 blanket activation. Actions 2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 are
-confined to the named non-production profile. Actions 35 through 38 have
+confined to the named non-production profile. Actions 35 through 41 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their

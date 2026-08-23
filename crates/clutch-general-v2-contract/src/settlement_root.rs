@@ -183,14 +183,16 @@ pub struct SettlementRootChildCountsV1 {
     pub admitted_owner_rows: u16,
     /// Owner rows not yet terminally closed.
     pub live_owner_rows: u16,
-    /// Every selected Epoch order Reservation adopted or explicitly released.
+    /// Every active frozen order Reservation, filled or unfilled.
     pub expected_reservations: u16,
-    /// Reservations brought under this root, including adopt-and-close.
+    /// Distinct filled Reservations expected to be adopted by action 24.
+    pub expected_filled_reservations: u16,
+    /// Filled Reservations brought under this root by action 24.
     pub admitted_reservations: u16,
-    /// Adopted Reservations not yet terminally closed.
+    /// Filled adopted Reservations not yet terminally closed.
     pub live_reservations: u16,
-    /// Every participating owner that must complete action 38.
-    pub expected_owner_finalizations: u16,
+    /// Unfilled Reservations atomically released and closed by action 41.
+    pub released_unfilled_reservations: u16,
     /// Owners whose row/Position/pot/Replay action-38 transition completed.
     pub completed_owner_finalizations: u16,
     /// Fee-bearing `0x83/2` receipts not yet candidate-terminally consumed.
@@ -208,8 +210,6 @@ pub struct SettlementRootChildCountsV1 {
     pub admitted_merge_payments: u16,
     /// Merge payment latches completed by action 40.
     pub completed_merge_payments: u16,
-    /// Number of action-24 slice cursors atomically materialized beneath this root.
-    pub materialized_slices: u16,
 }
 
 impl SettlementRootChildCountsV1 {
@@ -227,12 +227,7 @@ impl SettlementRootChildCountsV1 {
                 self.live_owner_rows,
             ),
             (
-                self.expected_reservations,
-                self.admitted_reservations,
-                self.live_reservations,
-            ),
-            (
-                self.expected_owner_finalizations,
+                self.expected_owner_rows,
                 self.completed_owner_finalizations,
                 self.live_fee_finalizations,
             ),
@@ -246,9 +241,15 @@ impl SettlementRootChildCountsV1 {
                 return Err(CodecError::InvalidCount);
             }
         }
-        if self.admitted_merge_payments > self.expected_merge_payments
+        let expected_unfilled = self
+            .expected_reservations
+            .checked_sub(self.expected_filled_reservations)
+            .ok_or(CodecError::InvalidCount)?;
+        if self.admitted_reservations > self.expected_filled_reservations
+            || self.live_reservations > self.admitted_reservations
+            || self.released_unfilled_reservations > expected_unfilled
+            || self.admitted_merge_payments > self.expected_merge_payments
             || self.completed_merge_payments > self.admitted_merge_payments
-            || self.materialized_slices > self.expected_receipts
         {
             return Err(CodecError::InvalidCount);
         }
@@ -256,19 +257,25 @@ impl SettlementRootChildCountsV1 {
     }
 
     fn terminal(self) -> bool {
+        let Some(expected_unfilled) = self
+            .expected_reservations
+            .checked_sub(self.expected_filled_reservations)
+        else {
+            return false;
+        };
         self.admitted_receipts == self.expected_receipts
             && self.live_receipts == 0
             && self.admitted_owner_rows == self.expected_owner_rows
             && self.live_owner_rows == 0
-            && self.admitted_reservations == self.expected_reservations
+            && self.admitted_reservations == self.expected_filled_reservations
             && self.live_reservations == 0
-            && self.completed_owner_finalizations == self.expected_owner_finalizations
+            && self.released_unfilled_reservations == expected_unfilled
+            && self.completed_owner_finalizations == self.expected_owner_rows
             && self.live_fee_finalizations == 0
             && self.admitted_dealer_children == self.expected_dealer_children
             && self.live_dealer_children == 0
             && self.admitted_merge_payments == self.expected_merge_payments
             && self.completed_merge_payments == self.expected_merge_payments
-            && self.materialized_slices == self.expected_receipts
     }
 }
 
@@ -423,6 +430,11 @@ impl SettlementRootV1AccountV1 {
         self.outcome_count
     }
 
+    /// Every active frozen order counted by this settlement root.
+    pub const fn order_count(&self) -> u8 {
+        self.order_count
+    }
+
     /// Immutable virtual-cash direction.
     pub const fn virtual_cash_direction(&self) -> VirtualCashDirectionV1 {
         self.virtual_cash_direction
@@ -573,7 +585,10 @@ impl SettlementRootV1AccountV1 {
             || self.counts.expected_receipts == 0
             || self.counts.expected_owner_rows == 0
             || self.counts.expected_reservations == 0
-            || self.counts.expected_reservations > u16::from(self.order_count)
+            || self.counts.expected_reservations != u16::from(self.order_count)
+            || self.counts.expected_filled_reservations == 0
+            || self.counts.expected_filled_reservations > self.counts.expected_reservations
+            || self.counts.expected_owner_rows > self.counts.expected_filled_reservations
             || self.flags != 0
             || self.retained_feed_state == SettlementRootChildStateV1::Absent
             || self.retained_feed_state == SettlementRootChildStateV1::ExpectedUncreated
@@ -590,7 +605,6 @@ impl SettlementRootV1AccountV1 {
         if fee_present != (self.selected_fee_atoms != 0)
             || fee_present != (self.fee_record_state != SettlementRootChildStateV1::Absent)
             || (!fee_present && self.fee_record_state != SettlementRootChildStateV1::Absent)
-            || self.counts.expected_owner_finalizations != self.counts.expected_owner_rows
             || (!fee_present && self.counts.live_fee_finalizations != 0)
         {
             return Err(CodecError::InvalidState);
@@ -632,10 +646,10 @@ impl SettlementRootV1AccountV1 {
                 }
             }
         }
+        let materialization_complete = self.materialization_complete();
         match self.phase {
             SettlementRootPhaseV1::Materializing => {
-                if self.counts.materialized_slices == self.counts.expected_receipts
-                    || self.counts.admitted_receipts != self.counts.materialized_slices
+                if materialization_complete
                     || self.counts.live_receipts != self.counts.admitted_receipts
                     || self.counts.completed_owner_finalizations != 0
                     || self.counts.live_fee_finalizations != 0
@@ -644,12 +658,7 @@ impl SettlementRootV1AccountV1 {
                 }
             }
             SettlementRootPhaseV1::Settling => {
-                if self.counts.materialized_slices != self.counts.expected_receipts
-                    || self.counts.admitted_receipts != self.counts.expected_receipts
-                    || self.counts.admitted_owner_rows != self.counts.expected_owner_rows
-                    || self.counts.admitted_reservations != self.counts.expected_reservations
-                    || self.counts.admitted_merge_payments != self.counts.expected_merge_payments
-                {
+                if !materialization_complete {
                     return Err(CodecError::InvalidState);
                 }
             }
@@ -672,6 +681,21 @@ impl SettlementRootV1AccountV1 {
             }
         }
         Ok(())
+    }
+
+    fn materialization_complete(&self) -> bool {
+        let Some(expected_unfilled) = self
+            .counts
+            .expected_reservations
+            .checked_sub(self.counts.expected_filled_reservations)
+        else {
+            return false;
+        };
+        self.counts.admitted_receipts == self.counts.expected_receipts
+            && self.counts.admitted_owner_rows == self.counts.expected_owner_rows
+            && self.counts.admitted_reservations == self.counts.expected_filled_reservations
+            && self.counts.released_unfilled_reservations == expected_unfilled
+            && self.counts.admitted_merge_payments == self.counts.expected_merge_payments
     }
 
     /// Encode the exact 980-byte root.
@@ -793,13 +817,13 @@ impl SettlementRootV1AccountV1 {
     pub fn admit_materialization_delta(
         &self,
         owner_rows_created: u8,
-        reservations_admitted: u8,
+        filled_reservations_admitted: u8,
         merge_receipt: bool,
     ) -> Result<Self, CodecError> {
         self.validate()?;
         if self.phase != SettlementRootPhaseV1::Materializing
             || owner_rows_created > 2
-            || reservations_admitted > 2
+            || filled_reservations_admitted > 2
         {
             return Err(CodecError::InvalidState);
         }
@@ -814,18 +838,45 @@ impl SettlementRootV1AccountV1 {
             checked_add(next.counts.live_owner_rows, u16::from(owner_rows_created))?;
         next.counts.admitted_reservations = checked_add(
             next.counts.admitted_reservations,
-            u16::from(reservations_admitted),
+            u16::from(filled_reservations_admitted),
         )?;
         next.counts.live_reservations = checked_add(
             next.counts.live_reservations,
-            u16::from(reservations_admitted),
+            u16::from(filled_reservations_admitted),
         )?;
         if merge_receipt {
             next.counts.admitted_merge_payments =
                 checked_add(next.counts.admitted_merge_payments, 1)?;
         }
-        next.counts.materialized_slices = checked_add(next.counts.materialized_slices, 1)?;
-        if next.counts.materialized_slices == next.counts.expected_receipts {
+        if next.materialization_complete() {
+            next.phase = SettlementRootPhaseV1::Settling;
+        }
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Record one action-41 zero-fill Reservation release.
+    ///
+    /// This structural successor does not authenticate the frozen page/order,
+    /// sealed Feed zero fill, Reservation, PositionV3, GEN1 Replay, rent owner,
+    /// value return, or account close. The live adapter must compose all of
+    /// those exact facts atomically before writing the returned root bytes.
+    pub fn release_unfilled_reservation(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        let expected_unfilled = self
+            .counts
+            .expected_reservations
+            .checked_sub(self.counts.expected_filled_reservations)
+            .ok_or(CodecError::InvalidCount)?;
+        if self.phase != SettlementRootPhaseV1::Materializing
+            || self.counts.released_unfilled_reservations >= expected_unfilled
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.released_unfilled_reservations =
+            checked_add(next.counts.released_unfilled_reservations, 1)?;
+        if next.materialization_complete() {
             next.phase = SettlementRootPhaseV1::Settling;
         }
         next.validate()?;
@@ -857,7 +908,7 @@ impl SettlementRootV1AccountV1 {
         self.validate()?;
         if self.phase != SettlementRootPhaseV1::Settling
             || fee_receipt_created != !self.fee_record.is_zero()
-            || self.counts.completed_owner_finalizations >= self.counts.expected_owner_finalizations
+            || self.counts.completed_owner_finalizations >= self.counts.expected_owner_rows
         {
             return Err(CodecError::InvalidState);
         }
@@ -992,6 +1043,9 @@ pub struct InitializeSettlementRootV1<'a> {
     pub cash_expectation: SettlementCashPotExpectationV1,
     /// Distinct selected Reservations derived from the complete frozen book.
     pub expected_reservations: u16,
+    /// Distinct filled Reservations adopted by action 24; the complement is
+    /// released and co-closed one at a time by action 41.
+    pub expected_filled_reservations: u16,
     /// Number of merge receipts requiring action-40 payment latches.
     pub expected_merge_payments: u16,
     /// Canonical cash-pot PDA, including merge's not-yet-created identity.
@@ -1243,8 +1297,10 @@ pub fn initialize_settlement_root_v1(
         || request.cash_expectation.price_scale != market.price_scale
         || request.cash_expectation.owner_count == 0
         || request.cash_expectation.owner_count > u16::from(request.feed.order_count)
-        || request.expected_reservations == 0
-        || request.expected_reservations > u16::from(request.feed.order_count)
+        || request.expected_reservations != u16::from(request.feed.order_count)
+        || request.expected_filled_reservations == 0
+        || request.expected_filled_reservations > request.expected_reservations
+        || request.cash_expectation.owner_count > request.expected_filled_reservations
         || request.expected_merge_payments > request.feed.slice_count
         || (direction == VirtualCashDirectionV1::Merge) != (request.expected_merge_payments != 0)
     {
@@ -1325,9 +1381,10 @@ pub fn initialize_settlement_root_v1(
             admitted_owner_rows: 0,
             live_owner_rows: 0,
             expected_reservations: request.expected_reservations,
+            expected_filled_reservations: request.expected_filled_reservations,
             admitted_reservations: 0,
             live_reservations: 0,
-            expected_owner_finalizations: request.cash_expectation.owner_count,
+            released_unfilled_reservations: 0,
             completed_owner_finalizations: 0,
             live_fee_finalizations: 0,
             expected_dealer_children: 0,
@@ -1336,7 +1393,6 @@ pub fn initialize_settlement_root_v1(
             expected_merge_payments: request.expected_merge_payments,
             admitted_merge_payments: 0,
             completed_merge_payments: 0,
-            materialized_slices: 0,
         },
         outcome_count: request.feed.outcome_count,
         order_count: request.feed.order_count,
@@ -1555,9 +1611,10 @@ fn write_counts(
         counts.admitted_owner_rows,
         counts.live_owner_rows,
         counts.expected_reservations,
+        counts.expected_filled_reservations,
         counts.admitted_reservations,
         counts.live_reservations,
-        counts.expected_owner_finalizations,
+        counts.released_unfilled_reservations,
         counts.completed_owner_finalizations,
         counts.live_fee_finalizations,
         counts.expected_dealer_children,
@@ -1566,7 +1623,6 @@ fn write_counts(
         counts.expected_merge_payments,
         counts.admitted_merge_payments,
         counts.completed_merge_payments,
-        counts.materialized_slices,
     ] {
         writer.u16(value)?;
     }
@@ -1582,9 +1638,10 @@ fn read_counts(reader: &mut Reader<'_>) -> Result<SettlementRootChildCountsV1, C
         admitted_owner_rows: reader.u16()?,
         live_owner_rows: reader.u16()?,
         expected_reservations: reader.u16()?,
+        expected_filled_reservations: reader.u16()?,
         admitted_reservations: reader.u16()?,
         live_reservations: reader.u16()?,
-        expected_owner_finalizations: reader.u16()?,
+        released_unfilled_reservations: reader.u16()?,
         completed_owner_finalizations: reader.u16()?,
         live_fee_finalizations: reader.u16()?,
         expected_dealer_children: reader.u16()?,
@@ -1593,7 +1650,6 @@ fn read_counts(reader: &mut Reader<'_>) -> Result<SettlementRootChildCountsV1, C
         expected_merge_payments: reader.u16()?,
         admitted_merge_payments: reader.u16()?,
         completed_merge_payments: reader.u16()?,
-        materialized_slices: reader.u16()?,
     };
     value.validate()?;
     Ok(value)

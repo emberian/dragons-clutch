@@ -321,6 +321,11 @@ impl AcceptedResolutionV2 {
     pub const fn resolution_evidence_id(self) -> [u8; 32] {
         self.resolution_evidence_id
     }
+
+    /// Exact authenticated Clock at which this evidence was accepted.
+    pub const fn clock(self) -> RecoveryClock {
+        self.clock
+    }
 }
 
 /// Single-custody failure runtime for one V5 occurrence.

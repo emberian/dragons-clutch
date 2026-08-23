@@ -43,6 +43,8 @@ pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
 /// Exact action-40 merge-payment selector bytes.
 pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 64;
+/// Exact action-41 zero-fill Reservation-release selector bytes.
+pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -768,6 +770,36 @@ impl FinalizeMergeReceiptPaymentPayloadV1 {
     }
 }
 
+/// Action-41 `ReleaseUnfilledReservation` immutable selector.
+///
+/// The selected zero-fill order is not a caller fact. The live adapter must
+/// derive it from one authenticated V5 page/order and the sealed Feed, then
+/// join the exact Reservation, PositionV3, GEN1 Replay, rent owner, value
+/// return, account close, and counted root successor atomically.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReleaseUnfilledReservationPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
+}
+
+impl ReleaseUnfilledReservationPayloadV1 {
+    /// Decode exactly 64 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.settlement_root {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -814,6 +846,8 @@ pub enum SettlementRootPayloadV1 {
     InitializeSettlementRoot(InitializeSettlementRootPayloadV1),
     /// Action 40 selector only; all merge-payment mutation remains disabled.
     FinalizeMergeReceiptPayment(FinalizeMergeReceiptPaymentPayloadV1),
+    /// Action 41 selector only; all zero-fill release mutation remains disabled.
+    ReleaseUnfilledReservation(ReleaseUnfilledReservationPayloadV1),
 }
 
 /// Decode action 26 without adding it to the live-lab union.
@@ -845,7 +879,7 @@ pub fn decode_virtual_settlement_payload_v1(
     }
 }
 
-/// Decode actions 39 and 40 without adding them to the live-lab union.
+/// Decode actions 39 through 41 without adding them to the live-lab union.
 pub fn decode_settlement_root_payload_v1(
     local_action: u8,
     payload: &[u8],
@@ -856,6 +890,9 @@ pub fn decode_settlement_root_payload_v1(
         )),
         40 => Ok(SettlementRootPayloadV1::FinalizeMergeReceiptPayment(
             FinalizeMergeReceiptPaymentPayloadV1::decode(payload)?,
+        )),
+        41 => Ok(SettlementRootPayloadV1::ReleaseUnfilledReservation(
+            ReleaseUnfilledReservationPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
