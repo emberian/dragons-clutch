@@ -41,6 +41,7 @@ pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod portfolio_settlement;
 pub mod projection;
+pub mod registry;
 pub mod reservation;
 pub mod resolution_work;
 pub mod revenue;

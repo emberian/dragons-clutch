@@ -78,9 +78,65 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
     }
 }
 
+/// Return whether an exact legacy intent tag/version pair belongs to this product.
+///
+/// This is the version-aware admission boundary.  The tag-only helper remains
+/// for compile-time profile descriptions, but dispatch must use this function
+/// so a future version cannot inherit version-3 capability accidentally.
+pub const fn legacy_intent_enabled(tag: u8, version: u8) -> bool {
+    version == clutch_solana_layout::registry::LEGACY_INTENT_VERSION
+        && legacy_intent_tag_enabled(tag)
+}
+
 /// Return whether one dedicated Direct V3 tag belongs to this product.
 pub const fn direct_v3_tag_enabled(tag: u8) -> bool {
     (tag >= 36 && tag <= 46) && DIRECT_V3
+}
+
+/// Return whether an exact dedicated Direct V3 tag/version pair belongs to this product.
+pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
+    version == clutch_solana_layout::registry::LEGACY_INTENT_VERSION && direct_v3_tag_enabled(tag)
+}
+
+/// Return whether a family-local action has an allocation in the central registry.
+///
+/// Allocation does not imply execution capability.  Currently only General V2
+/// local actions 1 through 34 are allocated; the other family action spaces
+/// remain intentionally empty until their payload contracts are fixed.
+pub const fn extension_intent_action_allocated(
+    family_tag: u8,
+    family_version: u8,
+    local_action: u8,
+) -> bool {
+    matches!(
+        clutch_solana_layout::registry::decode_extension_action(
+            family_tag,
+            family_version,
+            local_action,
+        ),
+        Ok(clutch_solana_layout::registry::ExtensionAction::GeneralV2(
+            _
+        ))
+    )
+}
+
+/// Exact extension actions executable by this product.
+///
+/// The empty slice is the mechanical activation gate for this registry-only
+/// wave.  A later runtime wave must add each exact `(family, version, action)`
+/// tuple atomically with its handler and account contract.
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
+
+/// Return whether an exact versioned extension action belongs to this product.
+pub fn extension_intent_action_enabled(
+    family_tag: u8,
+    family_version: u8,
+    local_action: u8,
+) -> bool {
+    ENABLED_EXTENSION_ACTIONS.iter().any(|candidate| {
+        *candidate == (family_tag, family_version, local_action)
+            && extension_intent_action_allocated(family_tag, family_version, local_action)
+    })
 }
 
 #[cfg(test)]
@@ -102,5 +158,53 @@ mod tests {
         assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
         assert_eq!(legacy_intent_tag_enabled(27), DIRECT_V2);
+    }
+
+    #[test]
+    fn version_aware_legacy_membership_never_inherits_another_version() {
+        for tag in u8::MIN..=u8::MAX {
+            for version in u8::MIN..=u8::MAX {
+                assert_eq!(
+                    legacy_intent_enabled(tag, version),
+                    version == clutch_solana_layout::registry::LEGACY_INTENT_VERSION
+                        && legacy_intent_tag_enabled(tag),
+                    "legacy {tag}/{version}"
+                );
+                assert_eq!(
+                    direct_v3_intent_enabled(tag, version),
+                    version == clutch_solana_layout::registry::LEGACY_INTENT_VERSION
+                        && direct_v3_tag_enabled(tag),
+                    "direct {tag}/{version}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extension_membership_is_exact_and_every_allocated_action_is_disabled() {
+        for family_tag in u8::MIN..=u8::MAX {
+            for family_version in u8::MIN..=3 {
+                for local_action in u8::MIN..=u8::MAX {
+                    let expected_allocated = family_tag
+                        == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
+                            ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
+                            .contains(&local_action);
+                    assert_eq!(
+                        extension_intent_action_allocated(family_tag, family_version, local_action,),
+                        expected_allocated,
+                        "{family_tag}/{family_version}/{local_action}"
+                    );
+                    assert!(!extension_intent_action_enabled(
+                        family_tag,
+                        family_version,
+                        local_action,
+                    ));
+                }
+            }
+        }
+        assert!(ENABLED_EXTENSION_ACTIONS.is_empty());
     }
 }

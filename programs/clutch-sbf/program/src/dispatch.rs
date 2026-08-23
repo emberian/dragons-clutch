@@ -323,18 +323,48 @@ pub fn process(
 /// whether the compiled product omitted it. This happens before decoding and
 /// therefore before any account is inspected.
 fn disabled_canonical_tag(instruction_data: &[u8]) -> bool {
-    if instruction_data.len() < 14
+    if instruction_data.len() < 15
         || instruction_data[0] != 0xd1
         || instruction_data[1] != 1
         || instruction_data[10] != ACTION_LAYOUT_HINT
     {
         return false;
     }
+    let Ok(length_bytes) = instruction_data[11..13].try_into() else {
+        return false;
+    };
+    let inner_len = usize::from(u16::from_le_bytes(length_bytes));
+    let Some(exact_len) = 13usize.checked_add(inner_len) else {
+        return false;
+    };
+    if inner_len > clutch_solana_layout::MAX_INTENT_BYTES
+        || instruction_data.len() != exact_len
+        || inner_len < 2
+    {
+        return false;
+    }
     let tag = instruction_data[13];
-    let known = (1..=73).contains(&tag);
-    known
-        && !capabilities::legacy_intent_tag_enabled(tag)
-        && !capabilities::direct_v3_tag_enabled(tag)
+    let version = instruction_data[14];
+    match clutch_solana_layout::registry::classify_intent(tag, version) {
+        Some(clutch_solana_layout::registry::IntentAllocation::LegacyV3) => {
+            !capabilities::legacy_intent_enabled(tag, version)
+                && !capabilities::direct_v3_intent_enabled(tag, version)
+        }
+        Some(clutch_solana_layout::registry::IntentAllocation::Extension(_)) => {
+            inner_len >= clutch_solana_layout::registry::EXTENSION_ENVELOPE_BYTES
+                && capabilities::extension_intent_action_allocated(
+                    tag,
+                    version,
+                    instruction_data[15],
+                )
+                && !capabilities::extension_intent_action_enabled(
+                    tag,
+                    version,
+                    instruction_data[15],
+                )
+        }
+        None => false,
+    }
 }
 
 #[inline(never)]
@@ -1519,5 +1549,69 @@ mod profile_tests {
         bytes[1] ^= 1;
         assert!(!disabled_canonical_tag(&bytes));
         assert!(!disabled_canonical_tag(&bytes[..13]));
+    }
+}
+
+#[cfg(test)]
+mod extension_registry_tests {
+    extern crate std;
+
+    use super::*;
+    use solana_program_error::ProgramError;
+    use std::vec::Vec;
+
+    fn extension_request(family_tag: u8, family_version: u8, local_action: u8) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 16];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[10] = ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[13] = family_tag;
+        bytes[14] = family_version;
+        bytes[15] = local_action;
+        bytes
+    }
+
+    #[test]
+    fn every_allocated_extension_action_refuses_before_accounts() {
+        for local_action in clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
+            ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+                clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(disabled_canonical_tag(&bytes), "action {local_action}");
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::Custom(
+                    ClutchError::UnsupportedInstruction as u32
+                )),
+                "action {local_action}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_family_version_and_local_action_do_not_gain_capability() {
+        for (family_tag, family_version, local_action) in
+            [(74, 2, 1), (74, 1, 0), (74, 1, 35), (75, 1, 1), (79, 1, 1)]
+        {
+            let bytes = extension_request(family_tag, family_version, local_action);
+            assert!(!disabled_canonical_tag(&bytes));
+            assert!(process(&Pubkey::new_from_array([9; 32]), &[], &bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_outer_lengths_are_never_classified_as_disabled() {
+        let mut bytes = extension_request(74, 1, 1);
+        bytes[11..13].copy_from_slice(&4_u16.to_le_bytes());
+        assert!(!disabled_canonical_tag(&bytes));
+        bytes[11..13].copy_from_slice(&3_u16.to_le_bytes());
+        bytes.push(0);
+        assert!(!disabled_canonical_tag(&bytes));
+        assert!(!disabled_canonical_tag(&bytes[..15]));
     }
 }

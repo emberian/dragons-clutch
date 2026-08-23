@@ -577,6 +577,37 @@ pub struct Request {
     pub action: Action,
 }
 
+/// Errors from the registry-only successor request envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtensionRequestError {
+    /// The outer request length or its declared inner length was not exact.
+    WrongLength,
+    /// The outer request discriminator or action was not the layout envelope.
+    WrongTag,
+    /// The outer request version was unsupported.
+    WrongVersion,
+    /// The central successor-family registry refused the inner envelope.
+    Registry(clutch_solana_layout::registry::RegistryError),
+}
+
+impl From<clutch_solana_layout::registry::RegistryError> for ExtensionRequestError {
+    fn from(value: clutch_solana_layout::registry::RegistryError) -> Self {
+        Self::Registry(value)
+    }
+}
+
+/// Borrowed registry-only request for one versioned successor-family action.
+///
+/// This type is deliberately separate from [`Request`]: decoding it records a
+/// collision-free family/action allocation but grants no runtime capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtensionRequest<'a> {
+    /// Exact replay sequence.
+    pub sequence: u64,
+    /// Strict family/version/action envelope.
+    pub envelope: clutch_solana_layout::registry::ExtensionEnvelope<'a>,
+}
+
 /// Dedicated request envelope for the versioned Direct V3 lifecycle.
 ///
 /// This decoder deliberately does not widen [`Intent`] or [`Request`]. Until
@@ -954,6 +985,69 @@ impl Request {
             _ => return Err(Error::NonCanonical),
         };
         Ok(Self { sequence, action })
+    }
+}
+
+impl<'a> ExtensionRequest<'a> {
+    /// Encode the strict outer request without changing [`MAX_REQUEST_LEN`].
+    pub fn encode(&self, out: &mut [u8]) -> core::result::Result<usize, ExtensionRequestError> {
+        self.envelope.validate()?;
+        let inner_len = self.envelope.encoded_len();
+        let exact = 13usize
+            .checked_add(inner_len)
+            .ok_or(ExtensionRequestError::WrongLength)?;
+        if exact > MAX_REQUEST_LEN || out.len() < exact {
+            return Err(ExtensionRequestError::WrongLength);
+        }
+        out[0] = REQUEST_TAG;
+        out[1] = REFERENCE_VERSION;
+        out[2..10].copy_from_slice(&self.sequence.to_le_bytes());
+        out[10] = ACTION_LAYOUT;
+        out[11..13].copy_from_slice(
+            &u16::try_from(inner_len)
+                .map_err(|_| ExtensionRequestError::WrongLength)?
+                .to_le_bytes(),
+        );
+        let written = self.envelope.encode(&mut out[13..exact])?;
+        if written != inner_len {
+            return Err(ExtensionRequestError::WrongLength);
+        }
+        Ok(exact)
+    }
+
+    /// Decode only an exact registered successor-family envelope.
+    ///
+    /// Unknown families, wrong family versions, and unknown local actions keep
+    /// their registry refusal and never fall through to a legacy [`Intent`].
+    pub fn decode(bytes: &'a [u8]) -> core::result::Result<Self, ExtensionRequestError> {
+        if bytes.len() < 13 || bytes.len() > MAX_REQUEST_LEN {
+            return Err(ExtensionRequestError::WrongLength);
+        }
+        if bytes[0] != REQUEST_TAG || bytes[10] != ACTION_LAYOUT {
+            return Err(ExtensionRequestError::WrongTag);
+        }
+        if bytes[1] != REFERENCE_VERSION {
+            return Err(ExtensionRequestError::WrongVersion);
+        }
+        let inner_len = usize::from(u16::from_le_bytes(
+            bytes[11..13]
+                .try_into()
+                .map_err(|_| ExtensionRequestError::WrongLength)?,
+        ));
+        let exact = 13usize
+            .checked_add(inner_len)
+            .ok_or(ExtensionRequestError::WrongLength)?;
+        if inner_len > clutch_solana_layout::MAX_INTENT_BYTES || bytes.len() != exact {
+            return Err(ExtensionRequestError::WrongLength);
+        }
+        Ok(Self {
+            sequence: u64::from_le_bytes(
+                bytes[2..10]
+                    .try_into()
+                    .map_err(|_| ExtensionRequestError::WrongLength)?,
+            ),
+            envelope: clutch_solana_layout::registry::ExtensionEnvelope::decode(&bytes[13..])?,
+        })
     }
 }
 
@@ -2926,6 +3020,91 @@ mod tests {
 
     fn layout_request_len(request: &[u8; MAX_REQUEST_LEN]) -> usize {
         13 + usize::from(u16::from_le_bytes([request[11], request[12]]))
+    }
+
+    #[test]
+    fn successor_request_is_separate_strict_and_packet_bounded() {
+        use clutch_solana_layout::registry::{
+            ExtensionAction, ExtensionEnvelope, ExtensionFamily, GeneralV2Action, RegistryError,
+            MAX_EXTENSION_PAYLOAD_BYTES,
+        };
+
+        let request = ExtensionRequest {
+            sequence: 9,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::GeneralV2,
+                action: ExtensionAction::GeneralV2(GeneralV2Action::FinalizeSelection),
+                payload: &[7, 8],
+            },
+        };
+        let mut bytes = [0xa5_u8; MAX_REQUEST_LEN];
+        let written = request.encode(&mut bytes).unwrap();
+        assert_eq!(written, 18);
+        assert_eq!(ExtensionRequest::decode(&bytes[..written]), Ok(request));
+        assert_eq!(
+            Request::decode(&bytes[..written]),
+            Err(Error::Layout(CodecError::WrongVersion))
+        );
+
+        let mut hostile = bytes;
+        hostile[14] = 2;
+        assert_eq!(
+            ExtensionRequest::decode(&hostile[..written]),
+            Err(ExtensionRequestError::Registry(
+                RegistryError::UnknownFamilyVersion
+            ))
+        );
+        let mut hostile = bytes;
+        hostile[15] = 0;
+        assert_eq!(
+            ExtensionRequest::decode(&hostile[..written]),
+            Err(ExtensionRequestError::Registry(
+                RegistryError::UnknownLocalAction
+            ))
+        );
+        let mut hostile = bytes;
+        hostile[13] = 75;
+        assert_eq!(
+            ExtensionRequest::decode(&hostile[..written]),
+            Err(ExtensionRequestError::Registry(
+                RegistryError::UnknownLocalAction
+            ))
+        );
+        assert_eq!(
+            ExtensionRequest::decode(&bytes[..written - 1]),
+            Err(ExtensionRequestError::WrongLength)
+        );
+
+        let payload = [0_u8; MAX_EXTENSION_PAYLOAD_BYTES];
+        let widest = ExtensionRequest {
+            sequence: u64::MAX,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::GeneralV2,
+                action: ExtensionAction::GeneralV2(GeneralV2Action::CreateMarket),
+                payload: &payload,
+            },
+        };
+        assert_eq!(widest.encode(&mut bytes), Ok(MAX_REQUEST_LEN));
+        assert_eq!(ExtensionRequest::decode(&bytes), Ok(widest));
+        assert_eq!(MAX_REQUEST_LEN, 415);
+    }
+
+    #[test]
+    fn legacy_request_golden_ceiling_and_header_are_unchanged() {
+        let request = layout_request(
+            0x0102_0304_0506_0708,
+            Intent::Split {
+                market: h(1),
+                owner: h(2),
+                quantity: 9,
+            },
+        );
+        let length = layout_request_len(&request);
+        assert_eq!(&request[..13], &[0xd1, 1, 8, 7, 6, 5, 4, 3, 2, 1, 0, 74, 0]);
+        assert_eq!(&request[13..15], &[2, 3]);
+        assert!(Request::decode(&request[..length]).is_ok());
+        assert_eq!(clutch_solana_layout::MAX_INTENT_BYTES, 402);
+        assert_eq!(MAX_REQUEST_LEN, 415);
     }
 
     #[cfg(any(
