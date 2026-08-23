@@ -386,6 +386,8 @@ pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG: u8 = 0xa0;
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Shared-Market failure policy/funding root successor version.
 pub const FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Market-scoped mutable Failure runtime root successor version.
+pub const FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_VERSION_V1: u8 = 3;
 /// Immutable runtime-liveness policy account discriminator.
 pub const FAILURE_LIVENESS_POLICY_ACCOUNT_TAG: u8 = 0xa1;
 /// Immutable runtime-liveness policy account version.
@@ -1348,6 +1350,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "failure-market-root-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+            version: FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-market-runtime-root-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
