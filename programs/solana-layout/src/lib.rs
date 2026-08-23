@@ -13623,10 +13623,7 @@ mod tests {
         } else {
             CodecError::WrongTag
         };
-        assert_eq!(
-            Intent::decode(&v2_bytes[..v2_len]),
-            Err(v1_tag_result)
-        );
+        assert_eq!(Intent::decode(&v2_bytes[..v2_len]), Err(v1_tag_result));
 
         // The widest admitted intent is exactly this one.
         assert_eq!(intents[0].encoded_len(), MAX_INTENT_BYTES);

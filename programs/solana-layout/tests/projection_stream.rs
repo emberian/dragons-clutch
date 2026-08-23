@@ -27,8 +27,8 @@ use clutch_solana_layout::clearing::{LegRef, PairingSlice};
 use clutch_solana_layout::projection::{project_slot, OwnerInterner};
 use clutch_solana_layout::{
     account_len, canonical_epoch_id, canonical_order_id, stream, CodecError, EpochAccount, Hash32,
-    OrderRecord, OrderSlot, PortfolioRecord, EPOCH_PHASE_FROZEN, MAX_ORDERS_PER_PAGE,
-    MAX_OUTCOMES, MAX_PORTFOLIO_ORDERS, RELATION_VERSION,
+    OrderRecord, OrderSlot, PortfolioRecord, EPOCH_PHASE_FROZEN, MAX_ORDERS_PER_PAGE, MAX_OUTCOMES,
+    MAX_PORTFOLIO_ORDERS, RELATION_VERSION,
 };
 
 const SCALE: u64 = PRICE_SCALE;
@@ -301,7 +301,9 @@ fn drive_projected(
             FeedStatusV1::Complete => {}
         }
     }
-    work.verdict().expect("complete feed has a verdict").copied()
+    work.verdict()
+        .expect("complete feed has a verdict")
+        .copied()
 }
 
 /// The differential gate: the projection reproduces the hand-assembled book
@@ -385,10 +387,7 @@ fn hand_portfolio(
 /// refusal identity on three candidate mutations.
 #[test]
 fn single_page_crossing_book_matches_batch_verdict() {
-    let slots = [
-        single_slot(20, 0, 0, 4, SCALE),
-        single_slot(21, 0, 1, 4, 0),
-    ];
+    let slots = [single_slot(20, 0, 0, 4, SCALE), single_slot(21, 0, 1, 4, 0)];
     let pages = build_pages(&slots, &[]);
     let book = book_of(&[
         hand_single(1, 0, 0, Side::Buy, 4, SCALE, EPOCH_INDEX),

@@ -198,11 +198,25 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
         "release_declaration": False,
         "manifest_input_source_clean": True,
         "source": {
-            "git_commit": digest("commit"),
-            "git_tree": digest("tree"),
-            "closure_paths": ["crates", "programs/clutch-sbf/program"],
-            "closure_file_count": 2,
+            "git_commit": digest("commit")[:40],
+            "git_tree": digest("tree")[:40],
+            "closure_paths": [
+                "crates",
+                "programs/clutch-sbf/program",
+                "programs/clutch-sbf/scripts/check_capability_profile.py",
+                "programs/clutch-sbf/scripts/measure_capability_profiles.py",
+            ],
+            "closure_file_count": 4,
             "closure_digest_sha256": digest("closure"),
+            "measurement_code": [
+                {
+                    "role": role,
+                    "path": path,
+                    "sha256": digest(role),
+                    "git_blob_oid": digest(f"{role}-blob")[:40],
+                }
+                for role, path in checker.LINKED_MEASUREMENT_CODE_INPUTS
+            ],
             "cleanliness": {
                 "tracked_before": [],
                 "untracked_before": [],
@@ -453,6 +467,64 @@ class CapabilityProfileTests(unittest.TestCase):
                 ):
                     checker.validate_manifest(value, repo=repo)
 
+    def test_measurement_code_must_be_in_closure_with_exact_sha_and_blob_provenance(
+        self,
+    ) -> None:
+        mutations = (
+            ("bad-commit", lambda source: source.__setitem__("git_commit", "f")),
+            ("zero-tree", lambda source: source.__setitem__("git_tree", "0" * 40)),
+            ("mixed-oids", lambda source: source["measurement_code"][0].__setitem__(
+                "git_blob_oid", digest("mixed-blob")
+            )),
+            ("outside-closure", lambda source: source["closure_paths"].remove(
+                "programs/clutch-sbf/scripts/check_capability_profile.py"
+            )),
+            ("missing-code-row", lambda source: source["measurement_code"].pop()),
+            ("bad-sha", lambda source: source["measurement_code"][0].__setitem__("sha256", "f")),
+            ("bad-blob", lambda source: source["measurement_code"][0].__setitem__("git_blob_oid", "0" * 40)),
+            ("swapped-role", lambda source: source["measurement_code"][0].__setitem__("role", "producer")),
+        )
+        for name, mutate in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                value = manifest(
+                    linkage="linked",
+                    classification="deployable",
+                    measurement_class="linked",
+                    evidence_path="measurement.json",
+                    evidence_profile_name="test-profile",
+                )
+                evidence = measurement_document(value)
+                mutate(evidence["source"])
+                (repo / "measurement.json").write_text(
+                    json.dumps(evidence), encoding="utf-8"
+                )
+                with self.assertRaises(checker.ProfileError):
+                    checker.validate_manifest(value, repo=repo)
+
+    def test_linked_source_accepts_uniform_sha256_git_object_format(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            value = manifest(
+                linkage="linked",
+                classification="deployable",
+                measurement_class="linked",
+                evidence_path="measurement.json",
+                evidence_profile_name="test-profile",
+            )
+            evidence = measurement_document(value)
+            evidence["source"]["git_commit"] = digest("sha256-commit")
+            evidence["source"]["git_tree"] = digest("sha256-tree")
+            for index, row in enumerate(evidence["source"]["measurement_code"]):
+                row["git_blob_oid"] = digest(f"sha256-blob-{index}")
+            (repo / "measurement.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            summary = checker.validate_manifest(
+                value, repo=repo, require_deployable=True
+            )
+            self.assertTrue(summary["deployment_eligible"])
+
     def test_loader_data_lengths_overhead_and_lifetimes_are_recomputed(self) -> None:
         mutations = (
             ("program", "data_len_bytes"),
@@ -489,8 +561,54 @@ class CapabilityProfileTests(unittest.TestCase):
             mock_summary["profile_identity_sha256"],
             real_summary["profile_identity_sha256"],
         )
-        self.assertIn("non-production-mock-source", mock_summary["cargo_features"])
-        self.assertIn("non-production-real-pyth-lab", real_summary["cargo_features"])
+        self.assertEqual(
+            mock_summary["cargo_features"],
+            [
+                "custom-heap",
+                "profile-general-source-v2-point",
+                "non-production-mock-source",
+            ],
+        )
+        self.assertEqual(
+            real_summary["cargo_features"],
+            [
+                "custom-heap",
+                "profile-general-source-v2-point",
+                "non-production-real-pyth-lab",
+            ],
+        )
+
+    def test_full_profile_records_cargo_default_identity_marker(self) -> None:
+        full = checker.validate_manifest(
+            manifest(profile_feature="profile-full"), repo=ROOT
+        )
+        direct = checker.validate_manifest(
+            manifest(profile_feature="profile-direct-v3-source-v2-point"), repo=ROOT
+        )
+        full_lab = checker.validate_manifest(
+            manifest(
+                profile_feature="profile-full",
+                source_identity="non-production-real-pyth-lab",
+            ),
+            repo=ROOT,
+        )
+        self.assertEqual(
+            full["cargo_features"],
+            ["custom-heap", "default", "profile-full"],
+        )
+        self.assertEqual(
+            direct["cargo_features"],
+            ["custom-heap", "profile-direct-v3-source-v2-point"],
+        )
+        self.assertEqual(
+            full_lab["cargo_features"],
+            [
+                "custom-heap",
+                "default",
+                "profile-full",
+                "non-production-real-pyth-lab",
+            ],
+        )
 
     def test_default_equals_explicit_full_only_under_the_same_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -521,6 +639,39 @@ class CapabilityProfileTests(unittest.TestCase):
                 checker.ProfileError, "identity-manifest mismatch"
             ):
                 checker.validate_manifest(value, repo=repo)
+
+    def test_same_elf_hash_backend_or_frame_mismatch_cannot_pass_default_gate(self) -> None:
+        mutations = (
+            ("backend_stack_diagnostic_lines", 3, "backend_stack_diagnostic_lines"),
+            (
+                "final_frame_audit",
+                {
+                    **measurement_run(3, build_mode="cargo-default")["final_frame_audit"],
+                    "deepest_direct_r10_offset": 512,
+                },
+                "final_frame_audit",
+            ),
+        )
+        for key, changed, message in mutations:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                value = manifest(
+                    linkage="linked",
+                    classification="deployable",
+                    measurement_class="linked",
+                    evidence_path="measurement.json",
+                    evidence_profile_name="test-profile",
+                    profile_feature="profile-full",
+                )
+                evidence = measurement_document(value)
+                default = evidence["profiles"][0]["default_feature_equivalence"]["measurement"]
+                self.assertEqual(default["elf_sha256"], evidence["profiles"][0]["measurements"][0]["elf_sha256"])
+                default[key] = changed
+                (repo / "measurement.json").write_text(
+                    json.dumps(evidence), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(checker.ProfileError, message):
+                    checker.validate_manifest(value, repo=repo)
 
     def test_lab_full_profile_cannot_reuse_default_equivalence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

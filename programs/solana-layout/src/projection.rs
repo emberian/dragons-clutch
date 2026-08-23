@@ -406,17 +406,17 @@ mod tests {
     #[test]
     fn ranks_sides_and_flags_outside_the_representation_refuse() {
         let record = single_record(20, 1);
-        assert_eq!(
-            project_single(&record, 0, 0),
-            Err(CodecError::ZeroIdentity)
-        );
+        assert_eq!(project_single(&record, 0, 0), Err(CodecError::ZeroIdentity));
         assert_eq!(
             project_single(&record, MAX_EPOCH_ORDERS as u64 + 1, 0),
             Err(CodecError::InvalidCount)
         );
         let mut bad_side = record;
         bad_side.side = 2;
-        assert_eq!(project_single(&bad_side, 1, 0), Err(CodecError::InvalidEnum));
+        assert_eq!(
+            project_single(&bad_side, 1, 0),
+            Err(CodecError::InvalidEnum)
+        );
         let mut bad_flags = record;
         bad_flags.flags = 2;
         assert_eq!(

@@ -382,7 +382,11 @@ pub fn write_owner_interner(account: &mut [u8], owners: &OwnerInterner) -> Resul
     let live = owners.owners();
     let mut i = 0usize;
     while i < MAX_EPOCH_ORDERS {
-        w.hash(if i < live.len() { live[i] } else { Hash32::ZERO })?;
+        w.hash(if i < live.len() {
+            live[i]
+        } else {
+            Hash32::ZERO
+        })?;
         i += 1;
     }
     if w.at != CLEAR_WORK_INTERNER_BYTES {
@@ -1758,7 +1762,11 @@ impl CandidateFeedStage {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, CANDIDATE_FEED_STAGE_TAG, CANDIDATE_FEED_STAGE_VERSION)?;
+        put_header(
+            &mut w,
+            CANDIDATE_FEED_STAGE_TAG,
+            CANDIDATE_FEED_STAGE_VERSION,
+        )?;
         w.hash(self.candidate)?;
         w.hash(self.epoch)?;
         w.hash(self.market)?;
@@ -2071,7 +2079,11 @@ impl GeneralFundingLedgerV1 {
             return Err(CodecError::OutputTooSmall);
         }
         let mut w = Writer::new(out);
-        put_header(&mut w, GENERAL_FUNDING_LEDGER_TAG, GENERAL_FUNDING_LEDGER_VERSION)?;
+        put_header(
+            &mut w,
+            GENERAL_FUNDING_LEDGER_TAG,
+            GENERAL_FUNDING_LEDGER_VERSION,
+        )?;
         w.hash(self.target)?;
         w.hash(self.payer)?;
         w.u64(self.payer_principal_lamports)?;
@@ -2448,10 +2460,7 @@ mod tests {
             // checkpoint reader and writer refuses it on the exact-length
             // rule before interpreting one byte.
             assert_eq!(ClearWorkGrowStage::decode(&grown[..len]), Ok(stage));
-            assert_eq!(
-                verify_clear_work(&grown[..len]),
-                Err(CodecError::Truncated)
-            );
+            assert_eq!(verify_clear_work(&grown[..len]), Err(CodecError::Truncated));
             assert_eq!(clear_work_body(&grown[..len]), Err(CodecError::Truncated));
             assert_eq!(
                 clear_work_body_mut(&mut grown[..len]),
@@ -2997,10 +3006,7 @@ mod tests {
 
         // A region on a half-grown account has no framing to live in.
         let mut short = [0u8; CLEAR_WORK_GROW_STEP];
-        assert_eq!(
-            read_owner_interner(&short[..]),
-            Err(CodecError::Truncated)
-        );
+        assert_eq!(read_owner_interner(&short[..]), Err(CodecError::Truncated));
         assert_eq!(
             write_owner_interner(&mut short[..], &owners),
             Err(CodecError::Truncated)
@@ -3012,7 +3018,10 @@ mod tests {
         let mut account = work();
         advance_walk(&mut account, 1, 3, 7).unwrap();
         // An open checkpoint has no pass boundary to rewind at.
-        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
+        assert_eq!(
+            rewind_walk(&mut account),
+            Err(CodecError::MismatchedBinding)
+        );
 
         bind_order_set(&mut account, h(9), 0xF01D).unwrap();
         let rewound = rewind_walk(&mut account).unwrap();
@@ -3027,7 +3036,10 @@ mod tests {
 
         // A completed checkpoint rewinds nowhere.
         complete_clear_work(&mut account).unwrap();
-        assert_eq!(rewind_walk(&mut account), Err(CodecError::MismatchedBinding));
+        assert_eq!(
+            rewind_walk(&mut account),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     /* ------------------------------------------------------------------ */
@@ -3066,7 +3078,10 @@ mod tests {
     fn the_epoch_window_round_trips_and_refuses_hostile_frames() {
         for value in [window(), stamped_window()] {
             let mut bytes = [0; EPOCH_WINDOW_ACCOUNT_BYTES];
-            assert_eq!(value.encode(&mut bytes).unwrap(), EPOCH_WINDOW_ACCOUNT_BYTES);
+            assert_eq!(
+                value.encode(&mut bytes).unwrap(),
+                EPOCH_WINDOW_ACCOUNT_BYTES
+            );
             assert_eq!(bytes[0], EPOCH_WINDOW_TAG);
             assert_eq!(bytes[1], EPOCH_WINDOW_VERSION);
             assert_eq!(EpochWindowAccount::decode(&bytes), Ok(value));
@@ -3294,9 +3309,15 @@ mod tests {
             Err(CodecError::InvalidCount)
         );
         // A premature seal refuses at every stage of incompleteness.
-        assert_eq!(seal_candidate_feed(&mut account), Err(CodecError::InvalidCount));
+        assert_eq!(
+            seal_candidate_feed(&mut account),
+            Err(CodecError::InvalidCount)
+        );
         stage_append_fills(&mut account, &[1, 2, 3, 4, 5]).unwrap();
-        assert_eq!(seal_candidate_feed(&mut account), Err(CodecError::InvalidCount));
+        assert_eq!(
+            seal_candidate_feed(&mut account),
+            Err(CodecError::InvalidCount)
+        );
         // A slice the staged coordinates cannot admit refuses before writing.
         let mut bad = witness_slices()[0];
         bad.buy_ref = LegRef::Order(5);
@@ -3398,8 +3419,8 @@ mod tests {
     #[test]
     fn the_open_general_epoch_is_canonical_and_wide() {
         let market = h(0x53);
-        let epoch = open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 2, 253)
-            .unwrap();
+        let epoch =
+            open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 16, 2, 253).unwrap();
         assert_eq!(epoch.epoch, canonical_epoch_id(market, 7));
         assert_eq!(epoch.book, canonical_general_book_id(epoch.epoch));
         assert_eq!(
@@ -3420,7 +3441,9 @@ mod tests {
         // The full 16-outcome width the direct plane's `== 2` gates refuse is
         // exactly what this constructor admits; outside the codec bound stays
         // refused.
-        assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 2, 253).is_err());
+        assert!(
+            open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 10_000, 17, 2, 253).is_err()
+        );
         assert!(open_general_epoch(market, h(0x54), h(0x55), h(0x56), 7, 0, 4, 2, 253).is_err());
     }
 
@@ -3481,7 +3504,9 @@ mod tests {
             GeneralFundingLedgerV1::decode(&bytes),
             Err(CodecError::WrongVersion)
         );
-        assert!(GeneralFundingLedgerV1::decode(&bytes[..GENERAL_FUNDING_LEDGER_BYTES - 1]).is_err());
+        assert!(
+            GeneralFundingLedgerV1::decode(&bytes[..GENERAL_FUNDING_LEDGER_BYTES - 1]).is_err()
+        );
 
         // The account tag is not any existing family's.
         assert_eq!(GENERAL_FUNDING_LEDGER_TAG, 26);

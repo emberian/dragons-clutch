@@ -1,11 +1,13 @@
 # ScoreV2-Q: quotient-risk candidate ranking
 
-Status: **IMPLEMENTED CORE INTERFACE / NOT SELECTED BY AN SBF PROFILE**
-(2026-08-22). The safe, `no_std`, allocation-free arithmetic lives in
-`crates/clutch-batch/src/score_v2.rs`. This document does not change an account
-layout, dispatcher, persisted policy, deployed program, fee, bond, or solver
-payment. ScoreV1 remains the selected relation score until an explicitly
-versioned integration completes the gates below.
+Status: **EXECUTABLE PURE-CORE GENERAL V2 PATH / NOT SELECTED BY AN SBF
+PROFILE** (2026-08-23). The safe, `no_std`, allocation-free arithmetic lives
+in `crates/clutch-batch/src/score_v2.rs`; the owner-blind coefficient relation
+lives in `relation_v2.rs`; and `crates/clutch-general-v2-runtime` composes both
+with the sealed General feed and exact quantized degree-two/three price
+certificate. This does not activate a dispatcher, persisted verdict, deployed
+program, fee, bond, or solver payment. ScoreV1 remains selected until an
+explicitly versioned SBF integration completes the gates below.
 
 ## 1. Question answered
 
@@ -150,11 +152,13 @@ separate wash-recovery bound.
 
 Before an SBF profile selects ScoreV2-Q:
 
-1. choose an owner-blind relation normalization, or explicitly name a different
-   credential/trust boundary;
-2. freeze a separate price-quality tie/certificate policy;
-3. bind a new score-policy identity and new persisted score/rank bytes rather
-   than reinterpreting ScoreV1;
+1. bind the implemented owner-blind relation and quantized certificate join to
+   authenticated SBF accounts without introducing an owner-tagged feasible set;
+2. freeze a separate price-quality rule; quantized measure coherence is not a
+   price-quality or welfare theorem;
+3. authenticate the pure runtime's canonical ScoreV2-Q policy identity across
+   the SBF Market, Window, Node, work, and selected-artifact transitions; never
+   reinterpret ScoreV1;
 4. make monolithic, streamed, and Direct-V3 derivations agree on every frozen
    vector and refusal;
 5. compose ScoreV2-Q with fee, bond, and reward policies under adversarial wash

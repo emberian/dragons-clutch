@@ -12,6 +12,10 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [features]
+# Cargo also exposes the named `default` marker to rustc.  Explicit full-profile
+# builds must retain that marker (`--no-default-features --features
+# custom-heap,default,profile-full`) to preserve the Cargo-default crate and ELF
+# identity; see docs/reviews/DEFAULT_EXPLICIT_ELF_IDENTITY_AUDIT_2026-08-23.md.
 default = ["custom-heap", "profile-full"]
 # Suppresses the Anza `entrypoint!` macro's 32-KiB downward bump allocator so
 # the `bpf` module can install the upward allocator that reaches a
