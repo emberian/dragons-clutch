@@ -417,6 +417,8 @@ pub enum MissingFailureRetirementOwnerV1 {
 pub struct FailureRootCloseAuthorizationV1 {
     id: FailureRootCloseAuthorizationIdV1,
     prerequisite_id: FailureRetirementPrerequisiteIdV1,
+    product_occurrence_terminal_account_id: [u8; 32],
+    product_occurrence_terminal_owner_program_id: [u8; 32],
     product_occurrence_terminal_receipt_id: [u8; 32],
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
@@ -432,6 +434,16 @@ impl FailureRootCloseAuthorizationV1 {
     /// Exact prerequisite consumed by the future owner join.
     pub const fn prerequisite_id(self) -> FailureRetirementPrerequisiteIdV1 {
         self.prerequisite_id
+    }
+
+    /// Physical account of the missing Product occurrence-liability owner.
+    pub const fn product_occurrence_terminal_account_id(self) -> [u8; 32] {
+        self.product_occurrence_terminal_account_id
+    }
+
+    /// Runtime program which must own the physical terminal account.
+    pub const fn product_occurrence_terminal_owner_program_id(self) -> [u8; 32] {
+        self.product_occurrence_terminal_owner_program_id
     }
 
     /// Receipt from the missing Product occurrence liability owner.
@@ -510,7 +522,7 @@ pub fn prepare_failure_retirement_prerequisite_v1(
         return Err(FailureRetirementErrorV1::BindingMismatch);
     }
 
-    let closed_recovery_join_id = authenticate_closed_recovery(
+    let closed_recovery_join_id = authenticate_closed_failure_recovery_close_v1(
         closed_recovery,
         recovery_terminal,
         runtime.recovery_compartment_account_id().bytes(),
@@ -580,7 +592,11 @@ pub fn prepare_failure_retirement_prerequisite_v1(
     })
 }
 
-fn authenticate_closed_recovery(
+/// Authenticate the exact successful Recovery close transition and derive its
+/// canonical join identity. Adapters may use this to recheck that an atomic
+/// a0/a2/a3 writer is applying the same close embedded in a retirement
+/// prerequisite.
+pub fn authenticate_closed_failure_recovery_close_v1(
     close: RuntimeAtomicTransitionV1,
     terminal: FailureRecoveryTerminalReceiptV2,
     expected_account_id: [u8; 32],

@@ -12,10 +12,14 @@
 use std::vec;
 use std::vec::Vec;
 
-use clutch_liveness::runtime_adapter_v1::{RuntimeReceiptObservationV1, RuntimeTransitionIntentV1};
+use clutch_liveness::runtime_adapter_v1::{
+    plan_runtime_transition_v1, RuntimeAtomicTransitionV1, RuntimePersistedAccountViewV1,
+    RuntimeReceiptObservationV1, RuntimeTransferRoleV1, RuntimeTransitionIntentV1,
+};
+use clutch_liveness::Id as LivenessId;
 use clutch_source_plane_v3::{
     ContentId, FixedCodec, OpenRawPageV3, SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3,
-    StatisticResultV3, WindowSpecV3, WindowWorkV3,
+    StatisticResultV3, SummaryProgramV3, WindowSpecV3, WindowWorkV3,
 };
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 pub use clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1;
@@ -24,37 +28,47 @@ use clutch_source_plane_v3_runtime::{
     authorize_reopen, close_lineage_generation, decode_runtime_account, encode_runtime_account,
     initialize_source_head, open_lineage_generation, plan_runtime_account_close_from_header,
     plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
-    AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
+    AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedEvaluationV1,
+    AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
     AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
     AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
-    ClockSnapshotV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1, LineageFamilyV1,
+    ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1,
+    IngestBatchOutputV1, LineageFamilyV1,
     RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
     RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1, SourceReleaseManifestV1,
     SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
     SourceWorkKindV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
     SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, RUNTIME_ACCOUNT_HEADER_BYTES,
+    REOPEN_LINEAGE_BYTES,
 };
 use solana_account_info::AccountInfo;
+use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
-use crate::accounts::{require, Outcome};
+use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program, RentParameters,
     SYSTEM_PROGRAM_ID,
 };
 use crate::source_plane_v3::{
-    derive_runtime_pda, project_liveness_receipt, project_liveness_terminal_intent,
-    project_liveness_work_intent, runtime_key, SourceV3SbfError,
+    derive_runtime_pda, invoke_parser_boundary, invoke_statistic_evaluator,
+    project_liveness_receipt, project_liveness_terminal_intent, project_liveness_work_intent,
+    runtime_key, SourceV3SbfError,
 };
+use crate::seeds;
+use clutch_solana_layout::artifact::ArtifactKind;
 
 /// Complete open-account postimage committed with one lineage postimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpenRuntimeAccountResultV1 {
     /// Exact prefund-safe payer/donation partition.
     pub funding: AccountCreationFundingV1,
+    /// Permanent lineage-account rent funding when this action bootstrapped
+    /// the lineage; absent for an already-authenticated reopen.
+    pub lineage_funding: Option<ImmutableAccountFundingV1>,
     /// Globally tagged account header written onchain.
     pub header: RuntimeAccountHeaderV1,
     /// Digest of the complete account postimage.
@@ -126,6 +140,358 @@ pub struct SourceTerminalExecutionV1 {
     pub observation: RuntimeReceiptObservationV1,
     /// Sole Source-compartment terminal intent.
     pub intent: RuntimeTransitionIntentV1,
+}
+
+/// Apply the Source work receipt's sole liveness debit in the same SBF
+/// instruction as its parser/evaluator CPI and Source state mutation.
+/// Any later refusal rolls every preceding CPI-visible write back.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_source_work_liveness(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    execution: SourceWorkExecutionV1,
+    policy_account: &AccountInfo<'_>,
+    compartment_account: &AccountInfo<'_>,
+    keeper: &AccountInfo<'_>,
+    payer_refund: &AccountInfo<'_>,
+) -> Outcome<RuntimeAtomicTransitionV1> {
+    require(
+        policy_account.owner == program_id
+            && !policy_account.is_writable
+            && !policy_account.is_signer
+            && !policy_account.executable
+            && compartment_account.owner == program_id
+            && compartment_account.is_writable
+            && !compartment_account.is_signer
+            && !compartment_account.executable
+            && keeper.is_writable
+            && payer_refund.is_writable
+            && !keeper.executable
+            && !payer_refund.executable,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        runtime_key(compartment_account.key) == route.source_compartment_account()
+            && policy_account.key != compartment_account.key
+            && policy_account.key != keeper.key
+            && policy_account.key != payer_refund.key
+            && compartment_account.key != keeper.key
+            && compartment_account.key != payer_refund.key
+            && keeper.key != payer_refund.key,
+        ClutchError::AccountAlias,
+    )?;
+    expect_pda(
+        policy_account.key,
+        seeds::source_liveness_policy_pda(program_id, &route.liveness_policy_id().bytes()),
+        None,
+    )?;
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let compartment_data = compartment_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let balance_after = compartment_account
+        .lamports()
+        .checked_sub(execution.intent.call_ceiling_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let transition = plan_runtime_transition_v1(
+        LivenessId::from_bytes(program_id.to_bytes()),
+        LivenessId::from_bytes(policy_account.key.to_bytes()),
+        RuntimePersistedAccountViewV1 {
+            account_id: LivenessId::from_bytes(policy_account.key.to_bytes()),
+            owner_program_id: LivenessId::from_bytes(policy_account.owner.to_bytes()),
+            lamports: policy_account.lamports(),
+            data: &policy_data,
+            writable: policy_account.is_writable,
+        },
+        RuntimePersistedAccountViewV1 {
+            account_id: LivenessId::from_bytes(compartment_account.key.to_bytes()),
+            owner_program_id: LivenessId::from_bytes(compartment_account.owner.to_bytes()),
+            lamports: compartment_account.lamports(),
+            data: &compartment_data,
+            writable: compartment_account.is_writable,
+        },
+        execution.intent,
+        Some(execution.observation),
+        balance_after,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(compartment_data);
+    drop(policy_data);
+    require(
+        transition.write_account_data
+            && !transition.close_account
+            && transition.account_balance_before == compartment_account.lamports()
+            && transition.account_balance_after == balance_after,
+        ClutchError::MismatchedState,
+    )?;
+    let mut keeper_lamports = 0_u64;
+    let mut payer_lamports = 0_u64;
+    for movement in transition.transfers() {
+        match movement.role {
+            RuntimeTransferRoleV1::KeeperPayment => {
+                require(
+                    movement.destination == LivenessId::from_bytes(keeper.key.to_bytes())
+                        && keeper_lamports == 0,
+                    ClutchError::MismatchedState,
+                )?;
+                keeper_lamports = movement.lamports;
+            }
+            RuntimeTransferRoleV1::PayerWorkRefund => {
+                require(
+                    movement.destination == LivenessId::from_bytes(payer_refund.key.to_bytes())
+                        && payer_lamports == 0,
+                    ClutchError::MismatchedState,
+                )?;
+                payer_lamports = movement.lamports;
+            }
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        }
+    }
+    require(
+        keeper_lamports == execution.intent.keeper_payment_lamports
+            && payer_lamports
+                == execution
+                    .intent
+                    .call_ceiling_lamports
+                    .checked_sub(execution.intent.keeper_payment_lamports)
+                    .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    let keeper_after = keeper
+        .lamports()
+        .checked_add(keeper_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let payer_after = payer_refund
+        .lamports()
+        .checked_add(payer_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    {
+        let mut data = compartment_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            data.len() == transition.post_account_data.len(),
+            ClutchError::WrongDataLength,
+        )?;
+        data.copy_from_slice(&transition.post_account_data);
+    }
+    {
+        let mut compartment_lamports = compartment_account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut keeper_balance = keeper
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut payer_balance = payer_refund
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **compartment_lamports = balance_after;
+        **keeper_balance = keeper_after;
+        **payer_balance = payer_after;
+    }
+    Ok(transition)
+}
+
+/// Complete action-4 parser, Source mutation, receipt, and liveness result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AtomicBoundaryIngestExecutionV1 {
+    /// Exact parser-authenticated boundary consumed by the mutation.
+    pub boundary: AuthenticatedBoundaryV1,
+    /// Exact open-page mutation receipt.
+    pub ingest: IngestBatchOutputV1,
+    /// Persisted paid-work receipt and intent.
+    pub work: SourceWorkExecutionV1,
+    /// Applied Source-compartment debit/refund transition.
+    pub liveness: RuntimeAtomicTransitionV1,
+}
+
+/// Execute one real parser CPI and atomically append its authenticated output,
+/// persist the paid-work receipt, and debit Source liveness custody.
+#[allow(clippy::too_many_arguments)]
+pub fn ingest_parser_boundary_atomic(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    clock: AuthenticatedClockBucketV1,
+    head: AuthenticatedSourceHeadV1,
+    open: AuthenticatedOpenRawPageV1,
+    open_lineage: AuthenticatedReopenLineageV1,
+    feed: &AccountInfo<'_>,
+    parser_instruction: &Instruction,
+    parser_accounts: &[AccountInfo<'_>],
+    open_account: &AccountInfo<'_>,
+    open_lineage_account: &AccountInfo<'_>,
+    schedule: SourceWorkScheduleBindingV1,
+    receipt_account: &AccountInfo<'_>,
+    call_ordinal: u32,
+    call_ceiling_lamports: u64,
+    keeper: &AccountInfo<'_>,
+    keeper_payment_lamports: u64,
+    payer: &AccountInfo<'_>,
+    payer_refund: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    compartment_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<AtomicBoundaryIngestExecutionV1> {
+    let open_state = open.open();
+    let expected_bucket = open_state
+        .start_bucket
+        .checked_add(u64::from(open_state.record_count))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let boundary = invoke_parser_boundary(
+        route,
+        clock,
+        feed,
+        expected_bucket,
+        open_state.repair_generation,
+        parser_instruction,
+        parser_accounts,
+    )
+    .map_err(Refusal::from)?;
+    let batch = BoundaryBatchV1::new(&[boundary]).map_err(source_runtime)?;
+    let ingest = ingest_boundary_batch(
+        route,
+        head,
+        open,
+        &batch,
+        open_account,
+        open_lineage_account,
+        open_lineage,
+    )?;
+    let work = bind_work_execution(
+        program_id,
+        route,
+        schedule,
+        SourceWorkKindV1::AppendBoundaryBatch,
+        ingest.transition_receipt_id,
+        receipt_account,
+        call_ordinal,
+        call_ceiling_lamports,
+        keeper.key,
+        keeper_payment_lamports,
+        payer,
+        system_program,
+        rent_sysvar,
+    )?;
+    let liveness = apply_source_work_liveness(
+        program_id,
+        route,
+        work,
+        policy_account,
+        compartment_account,
+        keeper,
+        payer_refund,
+    )?;
+    Ok(AtomicBoundaryIngestExecutionV1 {
+        boundary,
+        ingest,
+        work,
+        liveness,
+    })
+}
+
+/// Complete action-9 evaluator, persistence, receipt, and liveness result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AtomicEvaluationExecutionV1 {
+    /// Release-selected evaluator output authenticated after CPI.
+    pub evaluation: AuthenticatedEvaluationV1,
+    /// Persisted StatisticResult and bootstrapped lineage.
+    pub result: OpenRuntimeAccountResultV1,
+    /// Persisted paid-work receipt and intent.
+    pub work: SourceWorkExecutionV1,
+    /// Applied Source-compartment debit/refund transition.
+    pub liveness: RuntimeAtomicTransitionV1,
+}
+
+/// Execute the release-selected evaluator CPI and atomically persist its
+/// result, work receipt, and Source liveness debit.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_statistic_atomic(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    binding: EvaluationReleaseBindingV1,
+    summary: SummaryProgramV3,
+    evaluator_program: &AccountInfo<'_>,
+    evaluator_programdata: &AccountInfo<'_>,
+    clock: ClockSnapshotV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    evidence: AuthenticatedWindowEvidenceV1,
+    evaluator_instruction: &Instruction,
+    evaluator_accounts: &[AccountInfo<'_>],
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    schedule: SourceWorkScheduleBindingV1,
+    receipt_account: &AccountInfo<'_>,
+    call_ordinal: u32,
+    call_ceiling_lamports: u64,
+    keeper: &AccountInfo<'_>,
+    keeper_payment_lamports: u64,
+    payer: &AccountInfo<'_>,
+    payer_refund: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    compartment_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<AtomicEvaluationExecutionV1> {
+    let evaluation = invoke_statistic_evaluator(
+        route,
+        binding,
+        summary,
+        evaluator_program,
+        evaluator_programdata,
+        clock,
+        window,
+        key,
+        evidence,
+        evaluator_instruction,
+        evaluator_accounts,
+    )
+    .map_err(Refusal::from)?;
+    let result = persist_evaluation_result(
+        program_id,
+        route,
+        key,
+        evidence,
+        evaluation,
+        payer,
+        result_account,
+        result_lineage_account,
+        system_program,
+        rent_sysvar,
+    )?;
+    let work = bind_work_execution(
+        program_id,
+        route,
+        schedule,
+        SourceWorkKindV1::EvaluateStatistic,
+        result.account_data_id,
+        receipt_account,
+        call_ordinal,
+        call_ceiling_lamports,
+        keeper.key,
+        keeper_payment_lamports,
+        payer,
+        system_program,
+        rent_sysvar,
+    )?;
+    let liveness = apply_source_work_liveness(
+        program_id,
+        route,
+        work,
+        policy_account,
+        compartment_account,
+        keeper,
+        payer_refund,
+    )?;
+    Ok(AtomicEvaluationExecutionV1 {
+        evaluation,
+        result,
+        work,
+        liveness,
+    })
 }
 
 /// Atomic raw-page seal outputs across the immutable page, head CAS, and
@@ -331,13 +697,148 @@ pub fn register_release(
     })
 }
 
-/// Initialize action 2: construct and persist the exact first/reopened SourceHead.
+/// Register action 1 from the sealed content-addressed artifact transport.
+/// The 1,008-byte manifest never appears in instruction data. Repeating the
+/// same registration converges on the exact existing 0x8a account; any byte,
+/// owner, or PDA mismatch refuses.
+#[allow(clippy::too_many_arguments)]
+pub fn register_release_from_artifact(
+    program_id: &Pubkey,
+    expected_manifest_id: ContentId,
+    artifact_account: &AccountInfo<'_>,
+    payer: &AccountInfo<'_>,
+    release_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<ImmutableAccountFundingV1> {
+    expected_manifest_id
+        .validate()
+        .map_err(source_core)?;
+    require(
+        artifact_account.owner == program_id
+            && !artifact_account.is_signer
+            && !artifact_account.is_writable
+            && !artifact_account.executable
+            && artifact_account.data_len()
+                == clutch_source_plane_v3_runtime::SOURCE_RELEASE_MANIFEST_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        artifact_account.key,
+        seeds::product_artifact_pda(
+            program_id,
+            ArtifactKind::SourceReleaseManifestV1.byte(),
+            &expected_manifest_id.bytes(),
+        ),
+        None,
+    )?;
+    let artifact_data = artifact_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let manifest = SourceReleaseManifestV1::decode(&artifact_data).map_err(source_runtime)?;
+    require(
+        manifest.id().map_err(source_runtime)? == expected_manifest_id,
+        ClutchError::MismatchedState,
+    )?;
+    let expected_bytes = manifest.encode().map_err(source_runtime)?;
+    drop(artifact_data);
+
+    if release_account.owner == program_id
+        && release_account.data_len() == expected_bytes.len()
+    {
+        require(
+            release_account.is_writable
+                && !release_account.is_signer
+                && !release_account.executable,
+            ClutchError::MismatchedState,
+        )?;
+        let recipe = PdaRecipeV3::source_release(expected_manifest_id).map_err(source_pda)?;
+        let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+        require(
+            derived.address == runtime_key(release_account.key),
+            ClutchError::WrongPda,
+        )?;
+        let release_data = release_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            &*release_data == expected_bytes.as_slice(),
+            ClutchError::MismatchedState,
+        )?;
+        let rent = read_rent(rent_sysvar)?;
+        let minimum = rent.minimum_balance(expected_bytes.len())?;
+        require(
+            release_account.lamports() >= minimum,
+            ClutchError::MismatchedState,
+        )?;
+        return Ok(ImmutableAccountFundingV1 {
+            account: runtime_key(release_account.key),
+            payer: RuntimeKey::ZERO,
+            payer_debit_lamports: 0,
+            donation_lamports: release_account.lamports(),
+            rent_sysvar_id: rent_sysvar_id(rent_sysvar)?,
+            rent_exempt_minimum_lamports: minimum,
+            account_balance_after: release_account.lamports(),
+        });
+    }
+    register_release(
+        program_id,
+        &manifest,
+        payer,
+        release_account,
+        system_program,
+        rent_sysvar,
+    )
+}
+
+/// Authenticate the sole content-addressed paid-work schedule selected by the
+/// immutable Source release. Callers supply only the physical account; they
+/// cannot substitute a different schedule body with the same instruction.
+pub fn authenticate_source_work_schedule_artifact(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule_account: &AccountInfo<'_>,
+) -> Outcome<SourceWorkScheduleBindingV1> {
+    require(
+        schedule_account.owner == program_id
+            && !schedule_account.is_signer
+            && !schedule_account.is_writable
+            && !schedule_account.executable
+            && schedule_account.data_len()
+                == clutch_source_plane_v3_runtime::SOURCE_WORK_SCHEDULE_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        schedule_account.key,
+        seeds::product_artifact_pda(
+            program_id,
+            ArtifactKind::SourceWorkScheduleV1.byte(),
+            &route.source_work_schedule_id().bytes(),
+        ),
+        None,
+    )?;
+    let data = schedule_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let schedule = SourceWorkScheduleBindingV1::decode(&data).map_err(source_runtime)?;
+    require(
+        schedule.id().map_err(source_runtime)? == route.source_work_schedule_id()
+            && schedule.liveness_policy_id() == route.liveness_policy_id()
+            && schedule.source_compartment_account() == route.source_compartment_account()
+            && schedule.source_compartment_owner() == route.source_compartment_owner()
+            && schedule.receipt_account_owner_program() == route.adapter_program(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(schedule)
+}
+
+/// Initialize action 2: atomically bootstrap the never-created release-bound
+/// lineage and persist the exact first SourceHead generation.
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_head(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     authorization: AuthenticatedSourceGenerationV1,
-    lineage: AuthenticatedReopenLineageV1,
     payer: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
@@ -352,10 +853,9 @@ pub fn initialize_head(
     )
     .map_err(source_pda)?;
     let semantic_binding_id = recipe.id().map_err(source_pda)?;
-    open_runtime_account(
+    bootstrap_runtime_account(
         program_id,
         route,
-        lineage,
         LineageFamilyV1::SourceHead,
         semantic_binding_id,
         &recipe,
@@ -374,7 +874,6 @@ pub fn open_raw_page(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     head: AuthenticatedSourceHeadV1,
-    lineage: AuthenticatedReopenLineageV1,
     payer: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
@@ -390,10 +889,9 @@ pub fn open_raw_page(
     )
     .map_err(source_pda)?;
     let semantic_binding_id = recipe.id().map_err(source_pda)?;
-    open_runtime_account(
+    bootstrap_runtime_account(
         program_id,
         route,
-        lineage,
         LineageFamilyV1::OpenRawPage,
         semantic_binding_id,
         &recipe,
@@ -444,7 +942,6 @@ pub fn initialize_window_work(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     window: &WindowSpecV3,
-    lineage: AuthenticatedReopenLineageV1,
     payer: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
@@ -454,10 +951,9 @@ pub fn initialize_window_work(
     let body = WindowWorkV3::new(window).map_err(source_core)?;
     let window_id = window.id().map_err(source_core)?;
     let recipe = PdaRecipeV3::window_work(window_id).map_err(source_pda)?;
-    open_runtime_account(
+    bootstrap_runtime_account(
         program_id,
         route,
-        lineage,
         LineageFamilyV1::WindowWork,
         window_id,
         &recipe,
@@ -628,7 +1124,6 @@ pub fn persist_evaluation_result(
     key: &StatisticKeyV3,
     evidence: AuthenticatedWindowEvidenceV1,
     evaluation: AuthenticatedEvaluationV1,
-    lineage: AuthenticatedReopenLineageV1,
     payer: &AccountInfo<'_>,
     result_account: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
@@ -641,10 +1136,9 @@ pub fn persist_evaluation_result(
         ClutchError::MismatchedState,
     )?;
     let recipe = PdaRecipeV3::statistic_result(key_id).map_err(source_pda)?;
-    open_runtime_account(
+    bootstrap_runtime_account(
         program_id,
         route,
-        lineage,
         LineageFamilyV1::StatisticResult,
         key_id,
         &recipe,
@@ -848,7 +1342,7 @@ pub fn join_successful_evaluation_handoff(
 /// Generic action 11 engine: open the exact next generation and persist body
 /// plus lineage as one rollback-safe postimage pair.
 #[allow(clippy::too_many_arguments)]
-fn open_runtime_account<T: RuntimeAccountBodyV1>(
+pub fn reopen_runtime_account<T: RuntimeAccountBodyV1>(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     lineage: AuthenticatedReopenLineageV1,
@@ -864,6 +1358,10 @@ fn open_runtime_account<T: RuntimeAccountBodyV1>(
 ) -> Outcome<OpenRuntimeAccountResultV1> {
     require_creation_roles(program_id, payer, target, system_program)?;
     require_lineage_account(route, lineage, lineage_account)?;
+    require(
+        lineage.lineage().latest_generation != 0 && !lineage.lineage().is_open,
+        ClutchError::MismatchedState,
+    )?;
     let derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
     let reopen = authorize_reopen(
         route,
@@ -931,8 +1429,168 @@ fn open_runtime_account<T: RuntimeAccountBodyV1>(
     write_exact_account_data(lineage_account, &lineage_bytes)?;
     Ok(OpenRuntimeAccountResultV1 {
         funding,
+        lineage_funding: None,
         header,
         account_data_id: data_id,
+        lineage_after,
+    })
+}
+
+/// Create a permanent release/route-bound lineage and its first runtime
+/// generation as one rollback-safe instruction. This is intentionally used
+/// only for action 2; action 11 requires an authenticated closed lineage.
+#[allow(clippy::too_many_arguments)]
+fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    family: LineageFamilyV1,
+    semantic_binding_id: ContentId,
+    recipe: &PdaRecipeV3,
+    body: &T,
+    payer: &AccountInfo<'_>,
+    target: &AccountInfo<'_>,
+    lineage_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<OpenRuntimeAccountResultV1> {
+    require_creation_roles(program_id, payer, target, system_program)?;
+    require_creation_roles(program_id, payer, lineage_account, system_program)?;
+    require(
+        target.key != lineage_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    let target_derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
+    require(
+        target_derived.address == runtime_key(target.key),
+        ClutchError::WrongPda,
+    )?;
+    let lineage_recipe_id = ReopenLineageV1::recipe_id_for(
+        route.adapter_program(),
+        route.release_manifest_id(),
+        route.route_id(),
+        family,
+        semantic_binding_id,
+        route.source_work_schedule_id(),
+    )
+    .map_err(source_runtime)?;
+    let lineage_recipe = PdaRecipeV3::reopen_lineage(lineage_recipe_id).map_err(source_pda)?;
+    let lineage_derived =
+        derive_runtime_pda(program_id, &lineage_recipe).map_err(Refusal::from)?;
+    require(
+        lineage_derived.address == runtime_key(lineage_account.key),
+        ClutchError::WrongPda,
+    )?;
+    let lineage = ReopenLineageV1::new(
+        route.adapter_program(),
+        route.release_manifest_id(),
+        route.route_id(),
+        semantic_binding_id,
+        runtime_key(lineage_account.key),
+        family,
+        route.source_work_schedule_id(),
+        route.neutral_sink(),
+    )
+    .map_err(source_runtime)?;
+    let reopen = authorize_reopen(
+        route,
+        lineage,
+        family,
+        semantic_binding_id,
+        recipe.id().map_err(source_pda)?,
+        runtime_key(target.key),
+        target_derived,
+    )
+    .map_err(source_runtime)?;
+    let target_space = RUNTIME_ACCOUNT_HEADER_BYTES
+        .checked_add(T::ENCODED_LEN)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let rent = read_rent(rent_sysvar)?;
+    let rent_id = rent_sysvar_id(rent_sysvar)?;
+    let target_minimum = rent.minimum_balance(target_space)?;
+    let target_before = target.lamports();
+    let target_debit = target_minimum.saturating_sub(target_before);
+    let target_after = target_before
+        .checked_add(target_debit)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let funding = plan_source_account_creation(
+        route,
+        reopen,
+        RentExemptionQuoteV1 {
+            rent_sysvar_id: rent_id,
+            account: runtime_key(target.key),
+            data_len: u32::try_from(target_space)
+                .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+            minimum_balance_lamports: target_minimum,
+        },
+        runtime_key(payer.key),
+        target_before,
+        target_debit,
+        target_after,
+    )
+    .map_err(source_runtime)?;
+    let header = RuntimeAccountHeaderV1 {
+        family: T::FAMILY,
+        bump: target_derived.bump,
+        principal_recipient: funding.ledger.principal_recipient,
+        payer_principal_lamports: funding.ledger.payer_principal_lamports,
+        donation_floor_lamports: funding.ledger.donation_lamports,
+        generation: funding.ledger.generation,
+    };
+    let mut target_postimage = vec![0_u8; target_space];
+    encode_runtime_account(header, body, route.neutral_sink(), &mut target_postimage)
+        .map_err(source_runtime)?;
+    let target_data_id = account_data_id(runtime_key(target.key), &target_postimage)
+        .map_err(source_runtime)?;
+    let lineage_after = open_lineage_generation(lineage, reopen, target_data_id)
+        .map_err(source_runtime)?;
+    let lineage_postimage = lineage_after.encode().map_err(source_runtime)?;
+    let lineage_minimum = rent.minimum_balance(REOPEN_LINEAGE_BYTES)?;
+    let lineage_before = lineage_account.lamports();
+    let lineage_debit = lineage_minimum.saturating_sub(lineage_before);
+    let lineage_after_balance = lineage_before
+        .checked_add(lineage_debit)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let lineage_funding = ImmutableAccountFundingV1 {
+        account: runtime_key(lineage_account.key),
+        payer: if lineage_debit == 0 {
+            RuntimeKey::ZERO
+        } else {
+            runtime_key(payer.key)
+        },
+        payer_debit_lamports: lineage_debit,
+        donation_lamports: lineage_before,
+        rent_sysvar_id: rent_id,
+        rent_exempt_minimum_lamports: lineage_minimum,
+        account_balance_after: lineage_after_balance,
+    };
+
+    create_with_recipe(
+        program_id,
+        payer,
+        lineage_account,
+        system_program,
+        &rent,
+        REOPEN_LINEAGE_BYTES,
+        &lineage_recipe,
+        lineage_derived.bump,
+    )?;
+    create_with_recipe(
+        program_id,
+        payer,
+        target,
+        system_program,
+        &rent,
+        target_space,
+        recipe,
+        target_derived.bump,
+    )?;
+    write_exact_account_data(lineage_account, &lineage_postimage)?;
+    write_exact_account_data(target, &target_postimage)?;
+    Ok(OpenRuntimeAccountResultV1 {
+        funding,
+        lineage_funding: Some(lineage_funding),
+        header,
+        account_data_id: target_data_id,
         lineage_after,
     })
 }

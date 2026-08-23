@@ -7,9 +7,9 @@
 //! consumed directly from `clutch-source-plane-v3-runtime`; there is no SBF-
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
-//! SourceSeries 77/v2 actions 1 through 12 remain capability-disabled. These
-//! functions are the typed trust-boundary seam a later activation must call;
-//! their existence does not make any instruction executable.
+//! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
+//! seam in full profiles. Actions 2 through 12 remain separately disabled
+//! until their complete runtime joins enter dispatch.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
@@ -65,11 +65,11 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 
-/// Route one centrally allocated SourcePlane action to its reserved-disabled handler.
+/// Route one centrally allocated but disabled SourcePlane action to refusal.
 ///
 /// This boundary is deliberately account-free. The dispatcher calls it before
 /// account inspection, so merely allocating actions 1 through 12 cannot make a
-/// partially implemented transition executable. The exhaustive match also
+/// partially implemented action 2 through 12 executable. The exhaustive match also
 /// prevents a newly allocated Source action from inheriting this refusal
 /// without an explicit review here.
 #[inline(never)]
@@ -790,6 +790,7 @@ pub fn successful_evaluation_handoff(
 /// StatisticResult against the already-authenticated Window evidence.
 #[allow(clippy::too_many_arguments)]
 pub fn invoke_statistic_evaluator(
+    route: AuthenticatedSourceRouteV1,
     binding: EvaluationReleaseBindingV1,
     summary: SummaryProgramV3,
     evaluator_program: &AccountInfo<'_>,
@@ -808,6 +809,7 @@ pub fn invoke_statistic_evaluator(
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
     let authority = authenticate_evaluation_authority(
+        route,
         binding,
         summary,
         runtime_account_view(evaluator_program, &program_data),

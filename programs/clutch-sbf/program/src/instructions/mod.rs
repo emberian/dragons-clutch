@@ -43,6 +43,7 @@
 
 pub mod artifact;
 pub mod cash_exit;
+pub(crate) mod collateral_position_v3;
 pub mod construction;
 /// Non-production immutable Dealer-policy catalog transport.
 pub mod dealer_policy;
@@ -71,4 +72,5 @@ pub mod resolution_work;
 pub mod series_failure_funding;
 pub mod source_ingest;
 pub mod source_ingest_v2;
+pub mod source_series;
 pub mod split;

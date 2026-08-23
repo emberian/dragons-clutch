@@ -32,6 +32,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-bspline"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-candidate-lifecycle"
 version = "0.1.0"
 
@@ -42,10 +46,6 @@ dependencies = [
  "clutch-retirement",
  "sha2",
 ]
-
-[[package]]
-name = "clutch-bspline"
-version = "0.1.0"
 
 [[package]]
 name = "clutch-liveness"
@@ -64,6 +64,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-bspline",
  "clutch-price-measure",
+ "clutch-source-plane-v3",
  "sha2",
 ]
 
@@ -82,7 +83,51 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
  "clutch-product-series",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
  "solana-sha256-hasher",
+]
+
+[[package]]
+name = "clutch-source-plane-v3"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-source-plane-v3",
+ "clutch-source-profile-v1",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-profile-v1"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-terminal-identity-v1"
+version = "0.1.0"
+dependencies = [
+ "clutch-liveness",
 ]
 
 [[package]]
@@ -149,9 +194,9 @@ checksum = "57e5b1c0bc1d4a4d10c88a4100499d954c09d3fecfae4912c1a074dff68b1738"
 
 [[package]]
 name = "solana-hash"
-version = "4.5.0"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f4c847893a2ea50b4ae3ca723b124e07cd0544fecea3598f785168f9b78333f"
+checksum = "0df9b01495ed31100aca97a7f5862d5e19ab1636d60d1a9f02391408dd9dec84"
 
 [[package]]
 name = "solana-sha256-hasher"

@@ -7,15 +7,17 @@ use crate::auth::{
 };
 use crate::{Error, Result};
 
-const LINEAGE_MAGIC: [u8; 8] = [0x8c, 1, b'D', b'C', b'S', b'L', b'N', b'1'];
-const LINEAGE_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-lineage/v1";
+const LINEAGE_MAGIC: [u8; 8] = [0x8c, 2, b'D', b'C', b'S', b'L', b'N', b'2'];
+const LINEAGE_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-lineage/v2";
 const REOPEN_AUTH_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-authorization/v1";
-const LINEAGE_RECIPE_DOMAIN: &[u8] = b"dragons-clutch/source-lineage-pda-recipe/v1";
-const LINEAGE_ACCOUNT_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-lineage/v1";
-const SCHEMA_V1: u16 = 1;
+const LINEAGE_RECIPE_DOMAIN: &[u8] = b"dragons-clutch/source-lineage-pda-recipe/v2";
+const LINEAGE_ACCOUNT_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-lineage/v2";
+const SCHEMA_V2: u16 = 2;
 
-/// Exact canonical bytes in [`ReopenLineageV1`].
-pub const REOPEN_LINEAGE_BYTES: usize = 288;
+/// Exact canonical bytes in [`ReopenLineageV2`].
+pub const REOPEN_LINEAGE_BYTES: usize = 352;
+/// Explicit v2 name for the release/route-bound lineage layout.
+pub const REOPEN_LINEAGE_V2_BYTES: usize = REOPEN_LINEAGE_BYTES;
 /// Registered main-program reopen-lineage account discriminator.
 pub const REOPEN_LINEAGE_ACCOUNT_TAG: u8 = LINEAGE_MAGIC[0];
 /// Registered main-program reopen-lineage account version.
@@ -50,11 +52,15 @@ impl LineageFamilyV1 {
     }
 }
 
-/// Durable one-open-generation-at-a-time lineage state.
+/// Durable release/route-bound one-open-generation-at-a-time lineage state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReopenLineageV1 {
+pub struct ReopenLineageV2 {
     /// Exact deployed adapter owning this lineage.
     pub adapter_program: RuntimeKey,
+    /// Exact immutable release manifest governing every generation.
+    pub release_manifest_id: ContentId,
+    /// Exact fully authenticated route governing every generation.
+    pub route_id: ContentId,
     /// Semantic account coordinate: source generation, page cursor, Window, or key.
     pub semantic_binding_id: ContentId,
     /// Physical lineage/tombstone account.
@@ -77,10 +83,12 @@ pub struct ReopenLineageV1 {
     pub neutral_sink: RuntimeKey,
 }
 
-impl ReopenLineageV1 {
+impl ReopenLineageV2 {
     /// Construct a never-created lineage value for a new persistent tombstone.
     pub fn new(
         adapter_program: RuntimeKey,
+        release_manifest_id: ContentId,
+        route_id: ContentId,
         semantic_binding_id: ContentId,
         lineage_account: RuntimeKey,
         family: LineageFamilyV1,
@@ -89,6 +97,8 @@ impl ReopenLineageV1 {
     ) -> Result<Self> {
         let value = Self {
             adapter_program,
+            release_manifest_id,
+            route_id,
             semantic_binding_id,
             lineage_account,
             family,
@@ -107,6 +117,8 @@ impl ReopenLineageV1 {
     /// Validate exhaustive never-created/open/closed state partition.
     pub fn validate(&self) -> Result<()> {
         self.adapter_program.validate()?;
+        live_id(self.release_manifest_id)?;
+        live_id(self.route_id)?;
         live_id(self.semantic_binding_id)?;
         self.lineage_account.validate()?;
         live_id(self.source_work_schedule_id)?;
@@ -145,18 +157,20 @@ impl ReopenLineageV1 {
         self.validate()?;
         let mut out = [0; REOPEN_LINEAGE_BYTES];
         out[..8].copy_from_slice(&LINEAGE_MAGIC);
-        out[8..10].copy_from_slice(&SCHEMA_V1.to_le_bytes());
+        out[8..10].copy_from_slice(&SCHEMA_V2.to_le_bytes());
         out[10] = self.family as u8;
         out[16..48].copy_from_slice(&self.adapter_program.bytes());
-        out[48..80].copy_from_slice(&self.semantic_binding_id.bytes());
-        out[80..112].copy_from_slice(&self.lineage_account.bytes());
-        out[112..144].copy_from_slice(&self.active_account.bytes());
-        out[144..152].copy_from_slice(&self.latest_generation.to_le_bytes());
-        out[152] = u8::from(self.is_open);
-        out[160..192].copy_from_slice(&self.last_opened_state_id.bytes());
-        out[192..224].copy_from_slice(&self.last_close_receipt_id.bytes());
-        out[224..256].copy_from_slice(&self.source_work_schedule_id.bytes());
-        out[256..288].copy_from_slice(&self.neutral_sink.bytes());
+        out[48..80].copy_from_slice(&self.release_manifest_id.bytes());
+        out[80..112].copy_from_slice(&self.route_id.bytes());
+        out[112..144].copy_from_slice(&self.semantic_binding_id.bytes());
+        out[144..176].copy_from_slice(&self.lineage_account.bytes());
+        out[176..208].copy_from_slice(&self.active_account.bytes());
+        out[208..216].copy_from_slice(&self.latest_generation.to_le_bytes());
+        out[216] = u8::from(self.is_open);
+        out[224..256].copy_from_slice(&self.last_opened_state_id.bytes());
+        out[256..288].copy_from_slice(&self.last_close_receipt_id.bytes());
+        out[288..320].copy_from_slice(&self.source_work_schedule_id.bytes());
+        out[320..352].copy_from_slice(&self.neutral_sink.bytes());
         Ok(out)
     }
 
@@ -164,28 +178,30 @@ impl ReopenLineageV1 {
     pub fn decode(input: &[u8]) -> Result<Self> {
         if input.len() != REOPEN_LINEAGE_BYTES
             || input[..8] != LINEAGE_MAGIC
-            || le_u16(&input[8..10]) != SCHEMA_V1
+            || le_u16(&input[8..10]) != SCHEMA_V2
             || input[11..16].iter().any(|byte| *byte != 0)
-            || input[153..160].iter().any(|byte| *byte != 0)
+            || input[217..224].iter().any(|byte| *byte != 0)
         {
             return Err(Error::InvalidCodec);
         }
-        let is_open = match input[152] {
+        let is_open = match input[216] {
             0 => false,
             1 => true,
             _ => return Err(Error::InvalidCodec),
         };
         let value = Self {
             adapter_program: key_at(input, 16),
-            semantic_binding_id: id_at(input, 48),
-            lineage_account: key_at(input, 80),
-            active_account: key_at(input, 112),
-            latest_generation: le_u64(&input[144..152]),
+            release_manifest_id: id_at(input, 48),
+            route_id: id_at(input, 80),
+            semantic_binding_id: id_at(input, 112),
+            lineage_account: key_at(input, 144),
+            active_account: key_at(input, 176),
+            latest_generation: le_u64(&input[208..216]),
             is_open,
-            last_opened_state_id: id_at(input, 160),
-            last_close_receipt_id: id_at(input, 192),
-            source_work_schedule_id: id_at(input, 224),
-            neutral_sink: key_at(input, 256),
+            last_opened_state_id: id_at(input, 224),
+            last_close_receipt_id: id_at(input, 256),
+            source_work_schedule_id: id_at(input, 288),
+            neutral_sink: key_at(input, 320),
             family: LineageFamilyV1::decode(input[10])?,
         };
         value.validate()?;
@@ -200,14 +216,45 @@ impl ReopenLineageV1 {
     /// PDA recipe identity for the persistent lineage account.
     pub fn recipe_id(&self) -> Result<ContentId> {
         self.validate()?;
-        let mut bytes = [0; 104];
-        bytes[0] = self.family as u8;
-        bytes[8..40].copy_from_slice(&self.adapter_program.bytes());
-        bytes[40..72].copy_from_slice(&self.semantic_binding_id.bytes());
-        bytes[72..104].copy_from_slice(&self.source_work_schedule_id.bytes());
+        Self::recipe_id_for(
+            self.adapter_program,
+            self.release_manifest_id,
+            self.route_id,
+            self.family,
+            self.semantic_binding_id,
+            self.source_work_schedule_id,
+        )
+    }
+
+    /// PDA recipe identity before the persistent lineage account exists.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recipe_id_for(
+        adapter_program: RuntimeKey,
+        release_manifest_id: ContentId,
+        route_id: ContentId,
+        family: LineageFamilyV1,
+        semantic_binding_id: ContentId,
+        source_work_schedule_id: ContentId,
+    ) -> Result<ContentId> {
+        adapter_program.validate()?;
+        live_id(release_manifest_id)?;
+        live_id(route_id)?;
+        live_id(semantic_binding_id)?;
+        live_id(source_work_schedule_id)?;
+        let mut bytes = [0; 168];
+        bytes[0] = family as u8;
+        bytes[8..40].copy_from_slice(&adapter_program.bytes());
+        bytes[40..72].copy_from_slice(&release_manifest_id.bytes());
+        bytes[72..104].copy_from_slice(&route_id.bytes());
+        bytes[104..136].copy_from_slice(&semantic_binding_id.bytes());
+        bytes[136..168].copy_from_slice(&source_work_schedule_id.bytes());
         Ok(domain_id(LINEAGE_RECIPE_DOMAIN, &bytes))
     }
 }
+
+/// Compatibility type name for callers compiled against the pre-promotion
+/// semantic API. Its exact persisted codec is the v2, tag-0x8c/version-2 body.
+pub type ReopenLineageV1 = ReopenLineageV2;
 
 /// Required instruction privilege for one lineage account use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +315,8 @@ pub fn authenticate_reopen_lineage_account(
     let lineage = ReopenLineageV1::decode(account.data)?;
     if lineage.lineage_account != account.key
         || lineage.adapter_program != route.adapter_program()
+        || lineage.release_manifest_id != route.release_manifest_id()
+        || lineage.route_id != route.route_id()
         || lineage.source_work_schedule_id != route.source_work_schedule_id()
         || lineage.neutral_sink != route.neutral_sink()
     {

@@ -15,6 +15,7 @@ mod adapter;
 mod builder;
 mod direct;
 mod position;
+mod receipt_v4;
 mod successor;
 mod successor_v3;
 mod virtual_claim;
@@ -37,6 +38,13 @@ pub use builder::{
 };
 
 pub use position::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
+
+pub use receipt_v4::{
+    derive_settlement_receipt_data_id_v4, AuthenticatedSettlementReceiptEndV4,
+    OwnerSettlementReceiptAccountingProjectionV4, SettlementReceiptDataHashV4,
+    SettlementReceiptDataIdV4, SettlementReceiptRouteV4, SETTLEMENT_RECEIPT_BODY_V4_BYTES,
+    SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V4, SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V4_BYTES,
+};
 
 pub use successor::{
     build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v2,
@@ -62,7 +70,8 @@ pub use successor_v3::{
     build_owner_settlement_expectation_basis_book_v3,
     derive_owner_finalized_row_data_id_v3, derive_settlement_receipt_data_id_v3,
     prepare_create_owner_settlement_account_v3, prepare_realize_owner_cash_v3,
-    project_owner_receipt_end_v3, project_owner_settlement_account_v3,
+    project_owner_receipt_end_v3, project_owner_receipt_end_v4,
+    project_owner_settlement_account_v3,
     AuthenticatedReservationHandoffV3, AuthenticatedSettlementReceiptEndV3,
     OwnerCashRealizationPlanV3, OwnerFinalizedRowDataHashV3, OwnerFinalizedRowDataIdV3,
     OwnerSettlementAccountProjectionV3, OwnerSettlementAccountViewV3,

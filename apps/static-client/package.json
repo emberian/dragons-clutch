@@ -1,12 +1,11 @@
 {
   "name": "dragons-clutch-static-client",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check embedded-data.js && node --check protocol-contracts.js && node --check protocol-client.js && node --check native-bspline-v1.js && node --check tools/embed.mjs",
-    "embed": "node tools/embed.mjs",
+    "check": "node --check successor-registry.js && node --check successor-builder.js && node --check chain-client.js && node --check compiler-proposal.js && node --check app.js",
     "test": "node --test test/*.mjs"
   }
 }

@@ -56,6 +56,11 @@ pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG: u8 = 0x0f;
 /// General SettlementReceipt successor version.
 pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
+/// General SettlementReceipt V4 discriminator. V3 remains withdrawn and is
+/// never reinterpreted despite the shared tag and width.
+pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG: u8 = 0x0f;
+/// General SettlementReceipt V4 version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION: u8 = 4;
 /// General OrderPage successor discriminator. This deliberately reuses the
 /// historical OrderPage tag under a fresh version.
 pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
@@ -97,6 +102,8 @@ pub const GENERAL_V2_FEED_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_WINDOW_ACCOUNT_TAG: u8 = 24;
 /// General V2 Window successor account version.
 pub const GENERAL_V2_WINDOW_ACCOUNT_VERSION: u8 = 4;
+/// General V2 full-rank Window successor version.
+pub const GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2: u8 = 5;
 /// General V2 active-width feed-stage successor account discriminator.
 pub const GENERAL_V2_FEED_STAGE_ACCOUNT_TAG: u8 = 25;
 /// General V2 active-width feed-stage successor account version.
@@ -105,6 +112,8 @@ pub const GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG: u8 = 0x77;
 /// Funded General V2 admission-node account version.
 pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION: u8 = 1;
+/// General V2 cost-certificate AdmissionNode successor version.
+pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 epoch-budget account discriminator.
 pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG: u8 = 0x78;
 /// General V2 epoch-budget account version.
@@ -113,6 +122,8 @@ pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 /// General V2 immutable Market-binding account version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
+/// General V2 immutable candidate-cost Market-binding successor version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -228,8 +239,10 @@ pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
 pub const SOURCE_V3_HEAD_ACCOUNT_VERSION: u8 = 1;
 /// Durable SourcePlane V3 reopen-lineage account discriminator.
 pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG: u8 = 0x8c;
-/// SourcePlane V3 reopen-lineage account version.
-pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 1;
+/// SourcePlane V3 release/route-bound reopen-lineage account version.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 2;
+/// Exact SourcePlane V3 release/route-bound reopen-lineage account width.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_BYTES: usize = 352;
 /// Mutable SourcePlane V3 open-page account discriminator.
 pub const SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8d;
 /// SourcePlane V3 open-page account version.
@@ -386,6 +399,8 @@ const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG == 15);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION == 4);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
@@ -554,6 +569,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
+            version: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-settlement-receipt-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
             version: GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
         },
@@ -698,6 +722,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_WINDOW_ACCOUNT_TAG,
+            version: GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-window-v5-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
             version: GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
         },
@@ -716,6 +749,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+            version: GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-admission-node-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
             version: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
         },
@@ -730,6 +772,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-market-binding-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2148,6 +2199,10 @@ mod tests {
                 GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
             ),
@@ -2165,6 +2220,10 @@ mod tests {
                 GENERAL_V2_WINDOW_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_WINDOW_ACCOUNT_TAG,
+                GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2,
+            ),
+            (
                 GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
                 GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
             ),
@@ -2173,12 +2232,20 @@ mod tests {
                 GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2,
+            ),
+            (
                 GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
                 GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,

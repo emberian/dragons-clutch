@@ -16,7 +16,8 @@ use clutch_retirement::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    digest, AcceptedClaimRedemptionCollateralV2, CustodyTransferKindV2, Error, Id, Result,
+    digest, AcceptedClaimRedemptionCollateralV2, AcceptedPositionCollateralTransferV3,
+    CustodyTransferKindV2, Error, Id, Result,
 };
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
@@ -39,6 +40,9 @@ pub const CLAIM_LEDGER_V3_SEMANTIC_DOMAIN: &[u8] = b"dragons-clutch/claim-ledger
 /// Exact classified-cash transition receipt domain.
 pub const HOARD_CASH_LIABILITY_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/hoard/cash-liability/v2\0";
+/// Accepted Position/Hoard/custody cash-transition domain.
+pub const POSITION_HOARD_CASH_TRANSITION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/position-hoard/cash-transition/v3\0";
 /// Exact complete-set reclassification receipt domain.
 pub const COMPLETE_SET_RECLASSIFICATION_RECEIPT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/complete-set-reclassification/v3\0";
@@ -1013,6 +1017,79 @@ pub fn prepare_hoard_cash_liability_v2<B: PositionV3Sha256Backend>(
     })
 }
 
+/// Accepted external custody delta joined to both canonical liability owners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedPositionHoardCashTransitionV3 {
+    position: AcceptedPositionCollateralTransferV3,
+    hoard: HoardCashLiabilityPlanV2,
+    transition_id: Id,
+}
+
+impl AcceptedPositionHoardCashTransitionV3 {
+    /// Exact accepted Position/custody successor.
+    pub const fn position(self) -> AcceptedPositionCollateralTransferV3 {
+        self.position
+    }
+
+    /// Exact classified Hoard successor.
+    pub const fn hoard(self) -> HoardCashLiabilityPlanV2 {
+        self.hoard
+    }
+
+    /// Canonical identity committed by GEN1 Replay.
+    pub const fn transition_id(self) -> Id {
+        self.transition_id
+    }
+}
+
+/// Join an accepted Holder↔Hoard CPI to the exact aggregate cash-liability
+/// successor and require visible custody to cover cash plus locked principal.
+pub fn accept_position_hoard_cash_transition_v3<B: PositionV3Sha256Backend>(
+    position: AcceptedPositionCollateralTransferV3,
+    hoard: HoardV2,
+    backend: &B,
+) -> Result<AcceptedPositionHoardCashTransitionV3> {
+    hoard.validate()?;
+    let kind = match position.kind() {
+        CustodyTransferKindV2::HolderDeposit => HoardCashLiabilityKindV2::Deposit,
+        CustodyTransferKindV2::HolderWithdrawal => HoardCashLiabilityKindV2::Withdrawal,
+        _ => return Err(Error::InvalidParameter),
+    };
+    let position_post = position.position_post();
+    if Id::from_bytes(position_post.market_instance_id().bytes()) != hoard.market_instance_id
+        || Id::from_bytes(position_post.realm_id().bytes()) != hoard.realm_id
+        || Id::from_bytes(position_post.collateral_policy_id().bytes())
+            != hoard.collateral_policy_id
+        || Id::from_bytes(position_post.collateral_release_id().bytes())
+            != hoard.collateral_release_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let hoard_plan =
+        prepare_hoard_cash_liability_v2(hoard, kind, position.amount_atoms(), backend)?;
+    if position.hoard_atoms_after() < hoard_plan.hoard_after.required_custody_atoms()? {
+        return Err(Error::HoardCoverageMismatch);
+    }
+    let custody_receipt = position.receipt_id()?;
+    let transition_id = digest(
+        POSITION_HOARD_CASH_TRANSITION_DOMAIN_V3,
+        &[
+            &position.position_account_id().bytes(),
+            &position.position_pre_semantic_id().bytes(),
+            &position.position_post_semantic_id().bytes(),
+            &hoard_plan.hoard_before_id.bytes(),
+            &hoard_plan.hoard_after_id.bytes(),
+            &custody_receipt.bytes(),
+            &hoard_plan.receipt_id.bytes(),
+        ],
+    );
+    transition_id.require_live()?;
+    Ok(AcceptedPositionHoardCashTransitionV3 {
+        position,
+        hoard: hoard_plan,
+        transition_id,
+    })
+}
 /// Split locks a complete set; Merge unlocks one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompleteSetReclassificationKindV3 {

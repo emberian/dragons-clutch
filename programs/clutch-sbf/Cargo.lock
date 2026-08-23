@@ -84,19 +84,22 @@ name = "clutch-candidate-lifecycle"
 version = "0.1.0"
 
 [[package]]
-name = "clutch-dealer-runtime-contract"
-version = "0.1.0"
-dependencies = [
- "clutch-fee-runtime-contract",
- "clutch-liveness",
- "clutch-retirement",
- "sha2",
-]
-
-[[package]]
 name = "clutch-collateral-adapter-v2"
 version = "0.1.0"
 dependencies = [
+ "clutch-retirement",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-fee-runtime-contract",
+ "clutch-general-v2-contract",
+ "clutch-liveness",
+ "clutch-price-measure",
  "clutch-retirement",
  "sha2 0.10.9",
 ]
@@ -150,6 +153,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-fee-runtime-contract",
  "clutch-owner-settlement",
+ "clutch-retirement",
 ]
 
 [[package]]
@@ -157,6 +161,7 @@ name = "clutch-general-v2-runtime"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
  "clutch-fee-runtime-contract",
  "clutch-general-v2-contract",
@@ -194,6 +199,9 @@ version = "0.1.0"
 [[package]]
 name = "clutch-owner-settlement"
 version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+]
 
 [[package]]
 name = "clutch-price-measure"
@@ -228,8 +236,8 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
- "clutch-dealer-runtime-contract",
  "clutch-collateral-adapter-v2",
+ "clutch-dealer-runtime-contract",
  "clutch-evidence-recovery",
  "clutch-failure-policy-adapter",
  "clutch-failure-policy-runtime",
@@ -237,8 +245,10 @@ dependencies = [
  "clutch-general-v2-runtime",
  "clutch-kernel",
  "clutch-liveness",
+ "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",
  "clutch-source-plane-v3",
@@ -278,6 +288,8 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
  "clutch-product-series",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
  "solana-sha256-hasher",
 ]
 
