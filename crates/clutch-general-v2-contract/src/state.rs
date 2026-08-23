@@ -828,6 +828,62 @@ pub struct CandidateWindowV4AccountV1 {
     pub flags: u8,
 }
 
+/// Semantic-owner proof that a General V2 Window has finalized its one-way
+/// selection and that every reverse-linked AdmissionNode has been deleted.
+///
+/// This proof deliberately retains the historical selected-artifact identity:
+/// a separate authenticated selected-family close proves that account absent
+/// and decrements its Epoch count exactly once. A Window alone cannot
+/// authorize root retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateWindowRetirementDispositionV1 {
+    market: Id32,
+    epoch_account: Id32,
+    epoch_generation: u64,
+    rent: DeletableRentOwnerV1,
+    admitted_count: u64,
+    closed_node_count: u64,
+    selected_candidate_artifact: Id32,
+}
+
+impl CandidateWindowRetirementDispositionV1 {
+    /// Parent Market authenticated by the Window codec.
+    pub const fn market(self) -> Id32 {
+        self.market
+    }
+
+    /// Parent Epoch account identity authenticated by the Window codec.
+    pub const fn epoch_account(self) -> Id32 {
+        self.epoch_account
+    }
+
+    /// Exact parent generation authenticated by the Window codec.
+    pub const fn epoch_generation(self) -> u64 {
+        self.epoch_generation
+    }
+
+    /// Independently owned Window rent principal and donation floor.
+    pub const fn rent(self) -> DeletableRentOwnerV1 {
+        self.rent
+    }
+
+    /// Total number of nodes ever admitted by this Window.
+    pub const fn admitted_count(self) -> u64 {
+        self.admitted_count
+    }
+
+    /// Total number of nodes deleted through the reverse-linked close path.
+    pub const fn closed_node_count(self) -> u64 {
+        self.closed_node_count
+    }
+
+    /// Historical selected-artifact identity, or the all-zero sentinel when
+    /// this Window finalized without a valid submitted candidate.
+    pub const fn selected_candidate_artifact(self) -> Id32 {
+        self.selected_candidate_artifact
+    }
+}
+
 impl CandidateWindowV4AccountV1 {
     /// Validate canonical count, schedule, rank, and rent state.
     pub fn validate(self) -> Result<(), CodecError> {
@@ -943,6 +999,35 @@ impl CandidateWindowV4AccountV1 {
             }
         }
         Ok(())
+    }
+
+    /// Consume the semantic Window terminality check for atomic root close.
+    ///
+    /// Finalization is one-way, the reverse-linked head must be absent, and
+    /// every admitted node must already have traversed its authoritative close
+    /// transition. The selected artifact is only a historical pointer here;
+    /// its independently counted account family still requires exact absence
+    /// evidence before the Epoch root may retire.
+    pub fn retirement_disposition(
+        self,
+    ) -> Result<CandidateWindowRetirementDispositionV1, CodecError> {
+        self.validate()?;
+        if self.finalized_slot == 0
+            || self.live_node_count != 0
+            || !self.admission_head.is_zero()
+            || self.closed_node_count != self.admitted_count
+        {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(CandidateWindowRetirementDispositionV1 {
+            market: self.market,
+            epoch_account: self.epoch,
+            epoch_generation: self.epoch_generation,
+            rent: self.rent,
+            admitted_count: self.admitted_count,
+            closed_node_count: self.closed_node_count,
+            selected_candidate_artifact: self.selected_candidate_artifact,
+        })
     }
 
     /// Encode exactly [`WINDOW_ACCOUNT_BYTES`] bytes.
@@ -2431,7 +2516,7 @@ pub struct EpochBudgetV2AccountV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochBudgetRetirementDispositionV1 {
     market: Id32,
-    epoch: Id32,
+    epoch_account: Id32,
     epoch_generation: u64,
     funding_payer: Id32,
     root_close_reward: u64,
@@ -2444,9 +2529,9 @@ impl EpochBudgetRetirementDispositionV1 {
         self.market
     }
 
-    /// Parent Epoch authenticated by the Budget codec.
-    pub const fn epoch(self) -> Id32 {
-        self.epoch
+    /// Parent General V2 Epoch account authenticated by the Budget codec.
+    pub const fn epoch_account(self) -> Id32 {
+        self.epoch_account
     }
 
     /// Exact parent generation authenticated by the Budget codec.
@@ -2524,9 +2609,7 @@ impl EpochBudgetV2AccountV1 {
     /// explicitly neutralized, and selected-artifact rent must be materialized
     /// or reclaimed. The root-close reward deliberately remains present: the
     /// root-close transaction pays it once and deletes the Budget atomically.
-    pub fn retirement_disposition(
-        self,
-    ) -> Result<EpochBudgetRetirementDispositionV1, CodecError> {
+    pub fn retirement_disposition(self) -> Result<EpochBudgetRetirementDispositionV1, CodecError> {
         self.validate()?;
         if self.freeze_paid != 1
             || self.freeze_remaining != 0
@@ -2542,7 +2625,7 @@ impl EpochBudgetV2AccountV1 {
         }
         Ok(EpochBudgetRetirementDispositionV1 {
             market: self.market,
-            epoch: self.epoch,
+            epoch_account: self.epoch,
             epoch_generation: self.epoch_generation,
             funding_payer: self.funding_payer,
             root_close_reward: self.root_close_remaining,
@@ -3684,10 +3767,16 @@ mod tests {
         };
         let terminal = terminal_budget.retirement_disposition().unwrap();
         assert_eq!(terminal.market(), terminal_budget.market);
-        assert_eq!(terminal.epoch(), terminal_budget.epoch);
-        assert_eq!(terminal.epoch_generation(), terminal_budget.epoch_generation);
+        assert_eq!(terminal.epoch_account(), terminal_budget.epoch);
+        assert_eq!(
+            terminal.epoch_generation(),
+            terminal_budget.epoch_generation
+        );
         assert_eq!(terminal.funding_payer(), terminal_budget.funding_payer);
-        assert_eq!(terminal.root_close_reward(), terminal_budget.root_close_initial);
+        assert_eq!(
+            terminal.root_close_reward(),
+            terminal_budget.root_close_initial
+        );
         assert_eq!(terminal.rent(), terminal_budget.rent);
         budget_bytes[EPOCH_BUDGET_ACCOUNT_BYTES - 1] = 1;
         assert_eq!(

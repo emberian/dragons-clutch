@@ -87,6 +87,10 @@ pub const RETIREMENT_V2_MARKET_ACCOUNT_VERSION: u8 = 2;
 pub const RETIREMENT_V2_POSITION_ACCOUNT_TAG: u8 = 6;
 /// Counted-retirement Position wrapper version.
 pub const RETIREMENT_V2_POSITION_ACCOUNT_VERSION: u8 = 2;
+/// Rent-owner-complete permanent Position tombstone discriminator.
+pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_TAG: u8 = 0x75;
+/// Rent-owner-complete permanent Position tombstone version.
+pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V2: u8 = 2;
 /// Counted-retirement general-Epoch wrapper discriminator.
 pub const RETIREMENT_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// Counted-retirement general-Epoch wrapper version.
@@ -247,6 +251,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "retirement-provisional-position-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_TAG,
+            version: RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-position-tombstone-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

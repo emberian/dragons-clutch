@@ -7,9 +7,10 @@ use clutch_retirement::{
     GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_VERSION_V1, MARKET_ACCOUNT_TAG, MARKET_ACCOUNT_VERSION_V2,
     MARKET_V2_BYTES, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2, POSITION_TOMBSTONE_TAG,
-    POSITION_TOMBSTONE_V1_BYTES, POSITION_TOMBSTONE_VERSION_V1, POSITION_V2_BYTES,
-    RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7,
-    RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
+    POSITION_TOMBSTONE_V1_BYTES, POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_VERSION_V1,
+    POSITION_TOMBSTONE_VERSION_V2, POSITION_V2_BYTES, RESERVATION_ACCOUNT_TAG,
+    RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V5_BYTES,
+    RESERVATION_V7_BYTES,
 };
 use clutch_solana_layout::direct_selection_v3::{DIRECT_EPOCH_V4_BYTES, DIRECT_EPOCH_V4_VERSION};
 use clutch_solana_layout::registry::{
@@ -143,6 +144,16 @@ impl<'a> AuthenticatedAccountV2<'a> {
     /// Canonical derived and stored bump.
     pub const fn bump(self) -> u8 {
         self.canonical_bump
+    }
+
+    /// Whether the exact authenticated runtime role is writable.
+    pub const fn is_writable(self) -> bool {
+        self.view.is_writable
+    }
+
+    /// Exact program owner authenticated for this account family.
+    pub const fn program_id(self) -> Identity32V1 {
+        self.view.owner
     }
 }
 
@@ -385,6 +396,66 @@ pub fn authenticate_replay_successor_v1_exact<'a>(
             bump_offset: REPLAY_SUCCESSOR_STORED_BUMP_OFFSET,
         },
         access,
+    )
+}
+
+/// Authenticate one exact writable permanent Position tombstone for reopen.
+pub fn authenticate_position_tombstone_v1_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: POSITION_TOMBSTONE_TAG,
+            version: POSITION_TOMBSTONE_VERSION_V1,
+            len: POSITION_TOMBSTONE_V1_BYTES,
+            bump_offset: POSITION_TOMBSTONE_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
+}
+
+/// Authenticate one exact writable rent-owner-complete Position tombstone V2.
+pub fn authenticate_position_tombstone_v2_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: POSITION_TOMBSTONE_TAG,
+            version: POSITION_TOMBSTONE_VERSION_V2,
+            len: POSITION_TOMBSTONE_V2_BYTES,
+            bump_offset: POSITION_TOMBSTONE_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
+}
+
+/// Authenticate one exact writable permanent general Epoch tombstone.
+pub fn authenticate_general_epoch_tombstone_v1_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: GENERAL_EPOCH_TOMBSTONE_TAG,
+            version: GENERAL_EPOCH_TOMBSTONE_VERSION_V1,
+            len: GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
+            bump_offset: EPOCH_TOMBSTONE_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
     )
 }
 
@@ -701,6 +772,15 @@ pub fn authenticate_counted_child<'a>(
         true,
     )
 }
+
+const _: () = assert!(
+    POSITION_TOMBSTONE_TAG
+        == clutch_solana_layout::registry::RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_TAG
+);
+const _: () = assert!(
+    POSITION_TOMBSTONE_VERSION_V2
+        == clutch_solana_layout::registry::RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V2
+);
 
 const _: () = assert!(POSITION_STORED_BUMP_OFFSET < POSITION_V2_BYTES);
 const _: () = assert!(MARKET_STORED_BUMP_OFFSET < MARKET_V2_BYTES);

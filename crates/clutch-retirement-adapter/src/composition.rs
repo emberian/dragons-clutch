@@ -288,48 +288,41 @@ pub fn project_authenticated_epoch_budget_semantic_disposition_v1(
     )
 }
 
-/// Join an exact authenticated Budget account, its semantic owner's terminal
-/// disposition, and the Market/Realm-authenticated neutral sink into the
-/// retirement capability used by the atomic Budget deletion planner.
+/// Legacy EpochV5 Budget lowering retained as an explicit fail-closed seam.
+///
+/// General V2 Budget stores its parent Epoch PDA, while the legacy EpochV5
+/// planner expects a distinct semantic Epoch identity. Lowering between those
+/// namespaces is unsound even when byte values happen to coincide. Production
+/// General V2 callers must use
+/// `authenticate_general_v2_budget_retirement_v2` and the fresh-family root
+/// join instead.
 pub fn project_authenticated_epoch_budget_retirement_v1(
     account: AuthenticatedAccountV2<'_>,
     neutral_sink: Identity32V1,
 ) -> Result<clutch_retirement::AuthenticatedEpochBudgetDispositionV1, RetirementAdapterErrorV2> {
-    let budget_account = account.address();
-    let disposition = project_authenticated_epoch_budget_semantic_disposition_v1(account)?;
-    let rent = disposition.rent();
-    let retirement_rent = DeletableRentOwnerV1::from_persisted(
-        Identity32V1::new(rent.payer.bytes())?,
-        rent.refundable_principal,
-        rent.donation_floor,
-    )?;
-    Ok(
-        clutch_retirement::AuthenticatedEpochBudgetDispositionV1::after_semantic_owner_validation(
-            budget_account,
-            Identity32V1::new(disposition.market().bytes())?,
-            Identity32V1::new(disposition.epoch().bytes())?,
-            disposition.epoch_generation(),
-            neutral_sink,
-            Identity32V1::new(disposition.funding_payer().bytes())?,
-            retirement_rent,
-            disposition.root_close_reward(),
-        )?,
-    )
+    let _ = (account, neutral_sink);
+    Err(RetirementErrorV2::BudgetRetirementUnauthenticated.into())
 }
 
 const _: () = assert!(REFERENCE_REPLAY_V1_BYTES == REPLAY_ACCOUNT_LEN);
-const _: () = assert!(POSITION_ACCOUNT_TAG
-    == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_TAG);
-const _: () = assert!(POSITION_ACCOUNT_VERSION_V2
-    == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_VERSION);
-const _: () = assert!(MARKET_ACCOUNT_TAG
-    == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_TAG);
-const _: () = assert!(MARKET_ACCOUNT_VERSION_V2
-    == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_VERSION);
-const _: () = assert!(EPOCH_ACCOUNT_TAG
-    == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_TAG);
-const _: () = assert!(EPOCH_ACCOUNT_VERSION_V5
-    == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_VERSION);
+const _: () = assert!(
+    POSITION_ACCOUNT_TAG == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_TAG
+);
+const _: () = assert!(
+    POSITION_ACCOUNT_VERSION_V2
+        == clutch_solana_layout::registry::RETIREMENT_V2_POSITION_ACCOUNT_VERSION
+);
+const _: () =
+    assert!(MARKET_ACCOUNT_TAG == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_TAG);
+const _: () = assert!(
+    MARKET_ACCOUNT_VERSION_V2
+        == clutch_solana_layout::registry::RETIREMENT_V2_MARKET_ACCOUNT_VERSION
+);
+const _: () =
+    assert!(EPOCH_ACCOUNT_TAG == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_TAG);
+const _: () = assert!(
+    EPOCH_ACCOUNT_VERSION_V5 == clutch_solana_layout::registry::RETIREMENT_V2_EPOCH_ACCOUNT_VERSION
+);
 const _: () = assert!(
     PROJECTED_REPLAY_SUCCESSOR_BYTES
         == REPLAY_ACCOUNT_LEN + clutch_retirement::DELETABLE_RENT_OWNER_V1_BYTES
