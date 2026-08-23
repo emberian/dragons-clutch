@@ -1010,6 +1010,49 @@ fn external_credit_payout_is_exposed_only_after_both_owner_credits_authenticate(
     assert_eq!(request.destination_token_account, cid(53));
     assert_eq!(request.payout_atoms, 1);
     assert_eq!(request.backing_before.locked_atoms, 1);
+
+    let alternate = prepare_external_credit_transfer_v1(
+        context,
+        1,
+        live_credit(context, rid(54), 5, 11),
+        1,
+        CreditPrestateV1::Live(live_credit(context, rid(51), 2, 10)),
+        rid(51),
+        1,
+        5,
+        rid(53),
+    )
+    .unwrap();
+    let alternate_request = alternate.collateral_request();
+    assert_eq!(alternate_request.destination_token_account, cid(53));
+    assert_eq!(alternate_request.claim_semantic_owner, cid(51));
+    assert_eq!(alternate_request.payout_atoms, 1);
+    assert_eq!(alternate_request.backing_before, request.backing_before);
+    assert_ne!(alternate.credit_transition_id(), prepared.credit_transition_id());
+    assert_ne!(alternate_request.claim_redemption_id, request.claim_redemption_id);
+
+    let wrong_destination = prepare_external_credit_transfer_v1(
+        context,
+        1,
+        source,
+        1,
+        CreditPrestateV1::Live(destination),
+        rid(51),
+        1,
+        4,
+        rid(55),
+    )
+    .unwrap();
+    assert_ne!(
+        wrong_destination.credit_transition_id(),
+        prepared.credit_transition_id()
+    );
+    assert_ne!(
+        wrong_destination
+            .collateral_request()
+            .claim_redemption_id,
+        request.claim_redemption_id
+    );
 }
 
 #[test]
