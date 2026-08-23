@@ -243,6 +243,7 @@ impl AuthenticatedFailureMarketIntervalCloseV2 {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn initialize_failure_market_interval_accounts_v2<'a, A>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     cell_account: &AccountInfo<'a>,
     history_account: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
@@ -257,11 +258,16 @@ where
 {
     require_system_program(system_program)?;
     require_distinct(&[
+        admission_root_account.clone(),
         cell_account.clone(),
         history_account.clone(),
         rent_sysvar.clone(),
         system_program.clone(),
     ])?;
+    let live_admission =
+        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+    require(live_admission == admission, ClutchError::MismatchedState)?;
+    let admission = live_admission;
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
     let work_balance = funding_facts

@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Capability-disabled SBF seam for permanent Market Failure replay.
 //!
-//! No instruction route or initializer exists here. Product must first supply
-//! the private accepted foundation receipt for slot 7. These helpers only
-//! authenticate an already initialized fresh `0xa3/v2` successor and persist
-//! its exact one-shot terminal plan without changing any lamport.
+//! No instruction route exists here. Initialization is available only through
+//! a crate-private Product adapter over the accepted slot-7 foundation
+//! receipt. These helpers then authenticate the fresh `0xa3/v2` successor and
+//! persist its exact one-shot terminal plan without changing any lamport.
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::{
+    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+};
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
@@ -102,6 +104,7 @@ impl FailureMarketReplayPostimageV2 {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn initialize_failure_market_replay_v2<'a, A>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     replay_account: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
@@ -114,10 +117,15 @@ where
 {
     require_system_program(system_program)?;
     require_distinct(&[
+        admission_root_account.clone(),
         replay_account.clone(),
         rent_sysvar.clone(),
         system_program.clone(),
     ])?;
+    let live_admission =
+        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+    require(live_admission == admission, ClutchError::MismatchedState)?;
+    let admission = live_admission;
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
     let expected_balance = funding_facts
