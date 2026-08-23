@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     DealerActionLivenessAuthorizationV1, DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
-    DealerFundedDependenciesV2, DealerLeaseSelectionEvidenceV3, DealerLeaseV2,
+    CoveredDealerSelectionV1, DealerFundedDependenciesV2, DealerLeaseSelectionEvidenceV3,
+    DealerLeaseV2,
     DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1,
     DealerPotCustodyTransitionV1, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
     DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1, DealerStateV2,
@@ -15,6 +16,7 @@ use crate::{
     FacilityPositionBindingV2, Id, PreparedDealerPositionPotTransferV1,
     PreparedDealerReplayTransitionV1, Result, SettlementPotV2, MAX_OUTCOMES,
 };
+use clutch_general_v2_contract::SettlementRootV1AccountV1;
 
 /// Exact domain for the pre-creation identity of a newly admitted Pot account.
 pub const DEALER_POT_CREATION_INTENT_DOMAIN_V1: &[u8] =
@@ -33,6 +35,60 @@ pub struct PreparedDealerBeginLeaseV3 {
     pub replay: PreparedDealerReplayTransitionV1,
     /// Canonical pre-creation Pot intent, never a persisted balance owner.
     pub pot_creation_intent_id: Id,
+}
+
+/// Selection owner accepted by the common atomic Lease/Pot admission.
+///
+/// Implementations retain their own semantic authority. The legacy in-memory
+/// General projection and the persisted CoveredDealer attachment are never
+/// reinterpreted as one another.
+pub trait DealerLeasePotSelectionV3 {
+    /// Require exact Lease/Pot/Epoch/Policy equality.
+    fn validate_selected_lease_pot(
+        &self,
+        lease: &DealerLeaseV2,
+        pot: &SettlementPotV2,
+        epoch: &DealerEpochBindingV2,
+        policy: &DealerPolicyV1,
+    ) -> Result<()>;
+}
+
+impl DealerLeasePotSelectionV3 for DealerLeaseSelectionEvidenceV3 {
+    fn validate_selected_lease_pot(
+        &self,
+        _lease: &DealerLeaseV2,
+        _pot: &SettlementPotV2,
+        _epoch: &DealerEpochBindingV2,
+        _policy: &DealerPolicyV1,
+    ) -> Result<()> {
+        // The historical projection authenticates legacy SelectedCandidate,
+        // while Lease V2 now binds counted SettlementRoot plus one persisted
+        // CoveredDealer attachment. There is deliberately no coercion between
+        // those authorities; the never-activated legacy route stays closed.
+        let _ = self;
+        Err(Error::ActionDisabled)
+    }
+}
+
+impl DealerLeasePotSelectionV3 for CoveredDealerSelectionV1 {
+    fn validate_selected_lease_pot(
+        &self,
+        lease: &DealerLeaseV2,
+        pot: &SettlementPotV2,
+        epoch: &DealerEpochBindingV2,
+        policy: &DealerPolicyV1,
+    ) -> Result<()> {
+        self.validate_lease_pot(lease, pot, epoch, policy)
+    }
+}
+
+/// Full atomic result for the persisted CoveredDealer route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerBeginCoveredLeaseV4 {
+    /// Dealer State/Epoch/Position/Replay transition.
+    pub dealer: PreparedDealerBeginLeaseV3,
+    /// General root successor counting the created attachment.
+    pub settlement_root_after: SettlementRootV1AccountV1,
 }
 
 /// Derive the unique pre-creation identity for one exact Pot postimage.
@@ -59,7 +115,7 @@ pub fn dealer_pot_creation_intent_id_v1(
 
 /// Admit one authenticated selected Lease/Pot and move the exact Begin deposit.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_begin_lease_pot_v3(
+pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
     genesis: &DealerFacilityGenesisV1,
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
@@ -67,7 +123,7 @@ pub fn prepare_begin_lease_pot_v3(
     state_account_id: Id,
     dependency: &DealerFundedDependenciesV2,
     epoch: &DealerEpochBindingV2,
-    selection: &DealerLeaseSelectionEvidenceV3,
+    selection: &S,
     lease: &DealerLeaseV2,
     pot_account_id: Id,
     pot: &SettlementPotV2,
@@ -89,7 +145,7 @@ pub fn prepare_begin_lease_pot_v3(
     epoch.validate()?;
     lease.validate()?;
     pot.validate_against_lease(lease)?;
-    selection.validate_lease_pot(lease, pot, epoch, policy)?;
+    selection.validate_selected_lease_pot(lease, pot, epoch, policy)?;
     replay.validate()?;
     let facility_before = match facility_position {
         DealerTransferPositionV3::Facility {
@@ -206,7 +262,6 @@ pub fn prepare_begin_lease_pot_v3(
             state_pre_content_id: state.state_content_id()?,
             state_post_content_id: state_after.state_content_id()?,
             position_pre_semantic_id: bundle.source_pre_semantic_id,
-            position_post_semantic_id: bundle.source_post_semantic_id,
             liveness_receipt_semantic_id: select_begin.receipt_semantic_id,
             fee_evidence_id: selected_fee_digest,
             asset_transfer_bundle_id: bundle.bundle_id()?,
@@ -223,5 +278,89 @@ pub fn prepare_begin_lease_pot_v3(
         transfer,
         replay: prepared_replay,
         pot_creation_intent_id,
+    })
+}
+
+/// Atomically admit a root-counted CoveredDealer attachment and consume it
+/// into the same-instruction Lease/Pot transition.
+///
+/// The permissionless actor may front account creation, but every refundable
+/// rent principal remains owned by the original Candidate-compartment funding
+/// payer. The prepaid action ceiling must cover all three exact principals;
+/// adapters must additionally require the successful keeper payment to cover
+/// the same sum before applying account creation.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_begin_covered_lease_pot_v4(
+    genesis: &DealerFacilityGenesisV1,
+    policy: &DealerPolicyV1,
+    binding: &FacilityPositionBindingV2,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    epoch: &DealerEpochBindingV2,
+    settlement_root: &SettlementRootV1AccountV1,
+    selection: &CoveredDealerSelectionV1,
+    lease: &DealerLeaseV2,
+    pot_account_id: Id,
+    pot: &SettlementPotV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    select_begin: &DealerActionLivenessAuthorizationV1,
+    selected_fee: &DealerSelectedFeeRecordBindingV1,
+    market: DealerPositionMarketJoinV1,
+    facility_position: DealerTransferPositionV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+    current_slot: u64,
+) -> Result<PreparedDealerBeginCoveredLeaseV4> {
+    selection.validate_lease_pot(lease, pot, epoch, policy)?;
+    if selection.settlement_root_account_id != lease.settlement_root_account_id
+        || selection.created_slot != current_slot
+        || selection.rent.payer
+            != runtime.payer(crate::DealerLivenessCompartmentV1::Candidate)
+        || lease.rent.payer != selection.rent.payer
+        || pot.rent.payer != selection.rent.payer
+        || lease.rent.neutral_sink != policy.neutral_sink
+        || pot.rent.neutral_sink != policy.neutral_sink
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let rent_principal = selection
+        .rent
+        .refundable_principal
+        .checked_add(lease.rent.refundable_principal)
+        .and_then(|value| value.checked_add(pot.rent.refundable_principal))
+        .ok_or(Error::ArithmeticOverflow)?;
+    if rent_principal > select_begin.call_ceiling_lamports {
+        return Err(Error::InvalidSchedule);
+    }
+    let settlement_root_after = settlement_root
+        .admit_dealer_child()
+        .map_err(|_| Error::MismatchedBinding)?;
+    let dealer = prepare_begin_lease_pot_v3(
+        genesis,
+        policy,
+        binding,
+        state,
+        state_account_id,
+        dependency,
+        epoch,
+        selection,
+        lease,
+        pot_account_id,
+        pot,
+        schedule,
+        runtime,
+        select_begin,
+        selected_fee,
+        market,
+        facility_position,
+        replay,
+        replay_binding,
+        current_slot,
+    )?;
+    Ok(PreparedDealerBeginCoveredLeaseV4 {
+        dealer,
+        settlement_root_after,
     })
 }
