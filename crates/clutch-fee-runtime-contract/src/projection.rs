@@ -2,7 +2,8 @@
 
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
 use clutch_owner_settlement::{
-    owner_debit_atoms, CandidateSettlementTotalsV1, SelectedOwnerFeeV1, MAX_ORDERS,
+    owner_debit_atoms, CandidateSettlementTotalsV1, CandidateSettlementTotalsV2,
+    OwnerSettlementExpectationV2, SelectedOwnerFeeV1, MAX_ORDERS,
 };
 
 use crate::allocation::{
@@ -42,6 +43,62 @@ pub struct AuthenticatedSelectedOwnerFeeV1 {
     settlement_candidate: Id,
     revenue_policy: Id,
     row: SelectedOwnerFeeV1,
+}
+
+/// Presence-explicit successor to [`AuthenticatedSelectedOwnerFeeV1`].
+///
+/// V2 is minted only from the exact V2 owner-settlement expectation, so a
+/// present zero-price buy cannot be confused with an absent buy side. The
+/// public fee row remains the same exact `(owner, fee_atoms)` contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSelectedOwnerFeeV2 {
+    fee_record: Id,
+    carry_account: Id,
+    payer_allocation_account: Id,
+    owner_settlement_account: Id,
+    settlement_candidate: Id,
+    revenue_policy: Id,
+    row: SelectedOwnerFeeV1,
+}
+
+impl AuthenticatedSelectedOwnerFeeV2 {
+    pub const EMPTY: Self = Self {
+        fee_record: Id([0; 32]),
+        carry_account: Id([0; 32]),
+        payer_allocation_account: Id([0; 32]),
+        owner_settlement_account: Id([0; 32]),
+        settlement_candidate: Id([0; 32]),
+        revenue_policy: Id([0; 32]),
+        row: SelectedOwnerFeeV1::EMPTY,
+    };
+
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+
+    pub const fn carry_account(&self) -> Id {
+        self.carry_account
+    }
+
+    pub const fn payer_allocation_account(&self) -> Id {
+        self.payer_allocation_account
+    }
+
+    pub const fn owner_settlement_account(&self) -> Id {
+        self.owner_settlement_account
+    }
+
+    pub const fn settlement_candidate(&self) -> Id {
+        self.settlement_candidate
+    }
+
+    pub const fn revenue_policy(&self) -> Id {
+        self.revenue_policy
+    }
+
+    pub const fn row(&self) -> SelectedOwnerFeeV1 {
+        self.row
+    }
 }
 
 impl AuthenticatedSelectedOwnerFeeV1 {
@@ -224,6 +281,111 @@ pub fn project_terminal_owner_fee_v1(
     })
 }
 
+/// Project one terminal owner carry through the presence-explicit V2 owner row.
+///
+/// The authenticated V2 expectation is the sole owner of side presence,
+/// consideration, and reserved buy cash. In particular, zero consideration is
+/// valid when the buy side is present. The payer snapshot is reconstructed
+/// from every signed pre-transition envelope before its complete bytes may be
+/// used as Replay evidence and atomically deleted.
+#[allow(clippy::too_many_arguments)]
+pub fn project_terminal_owner_fee_v2(
+    selected: &SelectedCompositeFeeV1,
+    transition: &OwnerFeeTransitionIntentV1,
+    carry: &OwnerFeeCarryV1,
+    assessment: &OwnerFeeAssessmentV1,
+    payer: &PayerAllocationV1,
+    expectation: OwnerSettlementExpectationV2,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    envelope_len: u8,
+) -> Result<AuthenticatedSelectedOwnerFeeV2> {
+    expectation
+        .validate()
+        .map_err(|_| Error::InvalidAccountData)?;
+    let owner = Id(expectation.owner);
+    live(owner)?;
+    if transition.fee_record().identity() != selected.fee_record()
+        || transition.settlement_candidate() != selected.selected_candidate()
+        || transition.revenue_policy() != selected.revenue_policy()
+        || transition.owner() != owner
+        || carry.fee_record() != selected.fee_record()
+        || carry.owner() != owner
+        || carry.denominator() != selected.carry_denominator()
+        || assessment.fee_record() != selected.fee_record()
+        || assessment.owner() != owner
+        || assessment.denominator() != selected.carry_denominator()
+        || payer.fee_record() != selected.fee_record()
+        || payer.owner() != owner
+        || payer.carry_denominator() != selected.carry_denominator()
+        || expectation.candidate != selected.selected_candidate().0
+        || expectation.price_scale != selected.price_scale()
+        || expectation.selected_fee_atoms != carry.paid_atoms()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    if !carry.is_closed()
+        || carry.remainder() != 0
+        || assessment.boundary() != AssessmentBoundaryV1::TerminalCeil
+        || assessment.next_carry() != 0
+        || payer.boundary() != AssessmentBoundaryV1::TerminalCeil
+        || payer.next_carry() != 0
+    {
+        return Err(Error::TerminalStateRequired);
+    }
+
+    let recomputed = allocate_payer_debit(assessment, envelopes, envelope_len)?;
+    if recomputed != *payer {
+        return Err(Error::MismatchedBinding);
+    }
+
+    let has_buy = expectation.expected_buy_order_mask != 0;
+    let mut post_debited_atoms = 0u128;
+    let mut has_buy_envelope = false;
+    let mut index = 0usize;
+    while index < usize::from(envelope_len) {
+        let envelope = envelopes[index];
+        let transition_debit = payer.debit_atoms()[index];
+        if envelope.funding == FeeEnvelopeFundingV1::BuyCashReservation {
+            has_buy_envelope = true;
+        } else if transition_debit != 0 {
+            return Err(Error::SellerFeeForbidden);
+        }
+        post_debited_atoms = post_debited_atoms
+            .checked_add(u128::from(envelope.debited_atoms))
+            .and_then(|value| value.checked_add(u128::from(transition_debit)))
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    if post_debited_atoms != u128::from(carry.paid_atoms()) {
+        return Err(Error::ConservationFailure);
+    }
+    if carry.paid_atoms() != 0 && (!has_buy || !has_buy_envelope) {
+        return Err(Error::SellerFeeForbidden);
+    }
+    let required = owner_debit_atoms(
+        expectation.expected_buy_price_units.value,
+        expectation.price_scale,
+        carry.paid_atoms(),
+    )
+    .map_err(|_| Error::ArithmeticOverflow)?;
+    if required > expectation.reserved_cash_atoms {
+        return Err(Error::InsufficientBuyReservation);
+    }
+
+    Ok(AuthenticatedSelectedOwnerFeeV2 {
+        fee_record: selected.fee_record(),
+        carry_account: transition.carry().identity(),
+        payer_allocation_account: transition.payer_allocation().identity(),
+        owner_settlement_account: transition.owner_settlement().identity(),
+        settlement_candidate: selected.selected_candidate(),
+        revenue_policy: selected.revenue_policy(),
+        row: SelectedOwnerFeeV1 {
+            owner: expectation.owner,
+            fee_atoms: carry.paid_atoms(),
+        },
+    })
+}
+
 /// Require one authenticated projection for every canonical participating
 /// owner, including explicit zero rows, and bind the exact candidate total.
 pub fn assemble_selected_owner_fee_book_v1(
@@ -263,6 +425,63 @@ pub fn assemble_selected_owner_fee_book_v1(
     while index < MAX_ORDERS {
         if participating_owners[index] != Id([0; 32])
             || projections[index] != AuthenticatedSelectedOwnerFeeV1::EMPTY
+        {
+            return Err(Error::NonCanonicalPadding);
+        }
+        index += 1;
+    }
+    if total != expected.selected_fee_atoms {
+        return Err(Error::SelectedFeeTotalMismatch);
+    }
+    Ok(SelectedOwnerFeeBookV1 {
+        fee_record: selected.fee_record(),
+        settlement_candidate: selected.selected_candidate(),
+        revenue_policy: selected.revenue_policy(),
+        rows,
+        owner_count,
+        selected_fee_atoms: total,
+    })
+}
+
+/// Assemble the exact fee book used by the presence-explicit V2 settlement.
+/// Explicit seller-only and zero-fee participants remain mandatory rows.
+pub fn assemble_selected_owner_fee_book_v2(
+    selected: &SelectedCompositeFeeV1,
+    participating_owners: &[Id; MAX_ORDERS],
+    projections: &[AuthenticatedSelectedOwnerFeeV2; MAX_ORDERS],
+    projection_len: u8,
+    expected: CandidateSettlementTotalsV2,
+) -> Result<SelectedOwnerFeeBookV1> {
+    let owner_count = u8::try_from(expected.owner_count).map_err(|_| Error::InvalidWidth)?;
+    if owner_count == 0 || usize::from(owner_count) > MAX_ORDERS || projection_len != owner_count {
+        return Err(Error::MissingParticipant);
+    }
+    let mut rows = [SelectedOwnerFeeV1::EMPTY; MAX_ORDERS];
+    let mut total = 0u128;
+    let mut index = 0usize;
+    while index < usize::from(owner_count) {
+        let owner = participating_owners[index];
+        live(owner)?;
+        if index != 0 && owner <= participating_owners[index - 1] {
+            return Err(Error::NonCanonicalOrder);
+        }
+        let projection = projections[index];
+        if projection.fee_record != selected.fee_record()
+            || projection.settlement_candidate != selected.selected_candidate()
+            || projection.revenue_policy != selected.revenue_policy()
+            || projection.row.owner != owner.0
+        {
+            return Err(Error::MissingParticipant);
+        }
+        rows[index] = projection.row;
+        total = total
+            .checked_add(u128::from(projection.row.fee_atoms))
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    while index < MAX_ORDERS {
+        if participating_owners[index] != Id([0; 32])
+            || projections[index] != AuthenticatedSelectedOwnerFeeV2::EMPTY
         {
             return Err(Error::NonCanonicalPadding);
         }

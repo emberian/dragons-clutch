@@ -23,6 +23,8 @@
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
+//! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
+//! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers plus `Endow`),
 //! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
@@ -48,7 +50,11 @@ pub mod external_exit;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_fee_terminal;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_receipt_v3;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;

@@ -71,6 +71,22 @@ impl PositionProjectionV1 {
     }
 }
 
+impl AssetTransferPhasePolicyV1 {
+    /// Decode the exact General V2 wire value.
+    pub const fn from_byte(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::ActiveOnly),
+            1 => Ok(Self::ActiveOrResolved),
+            _ => Err(Error::InvalidPhase),
+        }
+    }
+
+    /// Return the exact General V2 wire value.
+    pub const fn to_byte(self) -> u8 {
+        self as u8
+    }
+}
+
 /// Exact expected identities and asset quantities for one atomic transfer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]

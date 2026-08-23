@@ -547,6 +547,7 @@ fn authenticate_product(
         (2..=3).contains(&basis.basis_degree)
             && basis.basis_degree == binding.basis_degree
             && basis.outcome_count == binding.outcome_count
+            && basis.denominator == binding.price_scale
             && genesis.relation_policy_id.bytes() == binding.relation_policy_id.bytes()
             && genesis.score_policy_id.bytes() == binding.score_policy_id.bytes()
             && binding.relation_policy_id == relation_policy
@@ -1563,6 +1564,7 @@ fn runtime_error_is_checked_refusal(error: GeneralV2RuntimeError) -> bool {
         error,
         GeneralV2RuntimeError::PriceGrid(_)
             | GeneralV2RuntimeError::PriceMeasure(_)
+            | GeneralV2RuntimeError::AtomMixture(_)
             | GeneralV2RuntimeError::Relation(_)
             | GeneralV2RuntimeError::UnsupportedCandidateKind
             | GeneralV2RuntimeError::UnsupportedSmoothDegree
