@@ -686,17 +686,10 @@ impl IndexedSettlementRootV1AccountV1 {
         if identities.iter().any(|identity| identity.is_zero()) {
             return Err(CodecError::ZeroIdentity);
         }
-        let mut left = 0usize;
-        while left < identities.len() {
-            let mut right = left + 1;
-            while right < identities.len() {
-                if identities[left] == identities[right] {
-                    return Err(CodecError::MismatchedBinding);
-                }
-                right += 1;
-            }
-            left += 1;
-        }
+        // Semantic hashes and profile identities occupy independent domains;
+        // byte equality between them is not account aliasing and must not make
+        // an otherwise valid root unrepresentable. Only physical accounts
+        // require pairwise nonaliasing below.
         let physical = [
             self.locator_account,
             self.adjacency_account,
@@ -705,7 +698,7 @@ impl IndexedSettlementRootV1AccountV1 {
             self.base.market_binding(),
             self.base.retained_feed(),
         ];
-        left = 0;
+        let mut left = 0usize;
         while left < physical.len() {
             let mut right = left + 1;
             while right < physical.len() {
