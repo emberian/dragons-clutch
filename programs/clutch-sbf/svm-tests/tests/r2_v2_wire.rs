@@ -451,7 +451,7 @@ struct PullPlane {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PullMarketKind {
     Occupation,
-    Categorical,
+    Categorical { knots: [u128; 3] },
 }
 
 /// Build a market bound to one v2 pull spec and one window, with the source
@@ -461,9 +461,13 @@ fn pull_plane(
     actor: Address,
     spec: SourceSpecV2,
     start_bucket: u64,
+    end_bucket_exclusive: u64,
     kind: PullMarketKind,
 ) -> PullPlane {
-    let end_bucket_exclusive = start_bucket + SPAN;
+    let span = end_bucket_exclusive
+        .checked_sub(start_bucket)
+        .filter(|span| *span > 0)
+        .expect("the pull window must contain at least one bucket");
     let feed_id = Hash32::from_bytes(spec.feed_id());
     let mut plane = build_plane(actor, COLLATERAL_MINT, MARKET_NONCE, Mode::Funded);
 
@@ -501,14 +505,12 @@ fn pull_plane(
                 *knot = (index as u128) * 8;
             }
         }
-        PullMarketKind::Categorical => {
+        PullMarketKind::Categorical { knots } => {
             terms.statistic_id = STAT_TERMINAL_01;
             terms.basis_degree = 0;
             terms.knot_count = OUTCOMES - 1;
             terms.uniform_log2_spacing = clutch_solana_layout::UNIFORM_SPACING_NONE;
-            terms.knots[0] = 500;
-            terms.knots[1] = 1_000;
-            terms.knots[2] = 1_500;
+            terms.knots[..knots.len()].copy_from_slice(&knots);
             for payout in 0..OUTCOMES {
                 terms.payout_map[usize::from(payout)] = payout;
             }
@@ -518,7 +520,7 @@ fn pull_plane(
     terms.expected_end_bucket_exclusive = end_bucket_exclusive;
     /* `read_frozen_terms` requires the maturity bucket to be exactly one past
      * the window end, so the horizon is the span plus one. */
-    terms.maturity_horizon_buckets = SPAN + 1;
+    terms.maturity_horizon_buckets = span + 1;
     terms.terms = Hash32::ZERO;
     terms.terms = terms
         .recomputed_terms_digest()
@@ -574,7 +576,7 @@ fn pull_plane(
         phase: 0,
         basis_mode: match kind {
             PullMarketKind::Occupation => clutch_kernel::BasisMode::DerivedBasis,
-            PullMarketKind::Categorical => clutch_kernel::BasisMode::FinitePreset,
+            PullMarketKind::Categorical { .. } => clutch_kernel::BasisMode::FinitePreset,
         },
         resolved_payout: 0,
         payouts: payout_set,
@@ -611,7 +613,7 @@ fn pull_plane(
             account_mut(&mut plane, resolution_address).data =
                 encode(OCCUPATION_RESOLUTION_LEN, |out| unresolved.encode(out));
         }
-        PullMarketKind::Categorical => {
+        PullMarketKind::Categorical { .. } => {
             let unresolved = ResolutionAccount {
                 market: market_id,
                 terms: terms_id,
@@ -664,11 +666,25 @@ fn pull_plane(
 }
 
 fn pull_occupation_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) -> PullPlane {
-    pull_plane(actor, spec, start_bucket, PullMarketKind::Occupation)
+    pull_plane(
+        actor,
+        spec,
+        start_bucket,
+        start_bucket + SPAN,
+        PullMarketKind::Occupation,
+    )
 }
 
 fn pull_categorical_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64) -> PullPlane {
-    pull_plane(actor, spec, start_bucket, PullMarketKind::Categorical)
+    pull_plane(
+        actor,
+        spec,
+        start_bucket,
+        start_bucket + SPAN,
+        PullMarketKind::Categorical {
+            knots: [500, 1_000, 1_500],
+        },
+    )
 }
 
 /// Recompute the canonical window identity the archive PDA is derived from.
@@ -732,10 +748,42 @@ impl Campaign {
     }
 
     async fn start_categorical(spec: SourceSpecV2) -> Self {
-        Self::start_with(spec, PullMarketKind::Categorical).await
+        Self::start_with(
+            spec,
+            PullMarketKind::Categorical {
+                knots: [500, 1_000, 1_500],
+            },
+        )
+        .await
     }
 
     async fn start_with(spec: SourceSpecV2, kind: PullMarketKind) -> Self {
+        Self::start_with_window(spec, kind, None).await
+    }
+
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    async fn start_real_pyth_one_bucket_categorical(spec: SourceSpecV2) -> Self {
+        assert!(is_real_pyth_spec(spec));
+        let boundary_bucket = u64::try_from(REAL_PYTH_PUBLISH_TIME)
+            .expect("the real-Pyth fixture publish time is positive")
+            / 60;
+        Self::start_with_window(
+            spec,
+            PullMarketKind::Categorical {
+                /* The authenticated nonzero-confidence interval is
+                 * [99,980,929, 100,019,071], wholly inside cell one. */
+                knots: [99_000_000, 101_000_000, 102_000_000],
+            },
+            Some((boundary_bucket - 1, boundary_bucket)),
+        )
+        .await
+    }
+
+    async fn start_with_window(
+        spec: SourceSpecV2,
+        kind: PullMarketKind,
+        window: Option<(u64, u64)>,
+    ) -> Self {
         let actor = actor_keypair();
         let update = update_keypair();
         let decoy_update = decoy_update_keypair();
@@ -877,17 +925,35 @@ impl Campaign {
          * boundary is at least two minutes behind the Clock, so every append's
          * boundary-plus-grace maturity check is satisfied, while the first
          * boundary is well inside the spec's 600-second staleness bound. */
-        let end_bucket_exclusive = (unix as u64 - 120) / 60;
-        let start_bucket = end_bucket_exclusive - SPAN;
+        let (start_bucket, end_bucket_exclusive) = window.unwrap_or_else(|| {
+            let end_bucket_exclusive = (unix as u64 - 120) / 60;
+            (end_bucket_exclusive - SPAN, end_bucket_exclusive)
+        });
         assert!(
             start_bucket > 0,
             "the bank clock must be past the epoch for a 60-second grid"
         );
+        assert!(
+            end_bucket_exclusive > start_bucket,
+            "the pull window must contain at least one bucket"
+        );
 
-        let built = match kind {
-            PullMarketKind::Occupation => pull_occupation_plane(actor.pubkey(), spec, start_bucket),
-            PullMarketKind::Categorical => {
-                pull_categorical_plane(actor.pubkey(), spec, start_bucket)
+        let built = if window.is_some() {
+            pull_plane(
+                actor.pubkey(),
+                spec,
+                start_bucket,
+                end_bucket_exclusive,
+                kind,
+            )
+        } else {
+            match kind {
+                PullMarketKind::Occupation => {
+                    pull_occupation_plane(actor.pubkey(), spec, start_bucket)
+                }
+                PullMarketKind::Categorical { .. } => {
+                    pull_categorical_plane(actor.pubkey(), spec, start_bucket)
+                }
             }
         };
         let plane = built.plane;
@@ -2297,7 +2363,13 @@ async fn custody_opens_against_the_spec_this_family_just_founded() {
 async fn real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic() {
     use clutch_sbf::pyth_receiver::{parse_full_price_update_v2, PriceUpdateAccountViewV1};
 
-    let mut campaign = Campaign::start(real_pyth_spec(real_pyth_lab::PROVIDER_FEED_ID)).await;
+    let mut campaign = Campaign::start_real_pyth_one_bucket_categorical(real_pyth_spec(
+        real_pyth_lab::PROVIDER_FEED_ID,
+    ))
+    .await;
+    let publish_boundary = u64::try_from(REAL_PYTH_PUBLISH_TIME).unwrap() / 60;
+    assert_eq!(campaign.start_bucket + 1, publish_boundary);
+    assert_eq!(campaign.end_bucket_exclusive, publish_boundary);
     campaign.initialize_real_pyth().await;
     assert_eq!(campaign.send(campaign.init_spec()).await.0, Ok(()));
     assert_eq!(campaign.send(campaign.init_archive()).await.0, Ok(()));
@@ -2395,6 +2467,40 @@ async fn real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic
     assert_eq!(u64_at(48), parsed.posted_slot);
     assert_eq!(u64_at(56), REAL_PYTH_PUBLISH_TIME as u64);
 
+    // This is a complete one-bucket market, not merely an admitted source
+    // record. The exact nonzero-confidence interval lies wholly between the
+    // 99m and 101m categorical knots, so no caller discretion selects cell 1.
+    let lower = u128_at(8);
+    let upper = u128_at(24);
+    assert!(99_000_000 < lower);
+    assert!(lower <= upper);
+    assert!(upper < 101_000_000);
+    let (result, seal_cu) = campaign.send(campaign.seal(1)).await;
+    assert_eq!(result, Ok(()), "the complete one-record page must seal");
+    let feed = FeedAccount::decode(&campaign.data(campaign.plane.feed.address).await)
+        .expect("the one-bucket real-Pyth feed decodes after seal");
+    assert_eq!(feed.cursor, campaign.end_bucket_exclusive);
+    assert_eq!(feed.archive_pages, 1);
+
+    let (result, resolve_cu) = campaign.send(campaign.resolve_with_payout(1)).await;
+    assert_eq!(
+        result,
+        Ok(()),
+        "the authenticated interval wholly selects categorical cell 1"
+    );
+    let resolution =
+        ResolutionAccount::decode(&campaign.data(campaign.plane.resolution.address).await)
+            .expect("the one-bucket real-Pyth categorical resolution decodes");
+    assert_eq!(resolution.payout_index, 1);
+    assert_eq!(
+        resolution.sealed_end_bucket_exclusive,
+        campaign.end_bucket_exclusive
+    );
+    assert_eq!(resolution.feed_cursor, campaign.end_bucket_exclusive);
+    let market =
+        MarketAccount::decode(&campaign.data(campaign.plane.market.address).await).expect("market");
+    assert_eq!(market.lifecycle, 1, "the one-bucket market is resolved");
+
     // A spec pinning another feed still selects the same reviewed release, but
     // the real proof writes 0x2a... and the account-level feed join refuses.
     let mut wrong_feed = Campaign::start(real_pyth_spec([0x2b; 32])).await;
@@ -2421,5 +2527,8 @@ async fn real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic
         "wrong-feed refusal rolls back provider and Clutch writes"
     );
 
-    println!("local-real Pyth CU: joined_post_update_plus_clutch_append={joined_cu}");
+    println!(
+        "local-real Pyth CU: joined_post_update_plus_clutch_append={joined_cu} \
+         seal_one_bucket={seal_cu} resolve_categorical={resolve_cu}"
+    );
 }
