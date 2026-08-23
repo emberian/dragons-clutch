@@ -27,8 +27,9 @@ use clutch_fee_runtime_contract::selected::{
 };
 pub use clutch_fee_runtime_contract::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1, FeeRecordTerminalReceiptV1,
-    FeeTerminalOutcomeV1, GeneralFeeTerminalProjectionV1, GeneralOwnerFeeFinalizationProjectionV2,
-    OwnerFeeFinalizationOutcomeV2, OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1, GeneralFeeTerminalProjectionV1,
+    GeneralOwnerFeeFinalizationProjectionV2, OwnerFeeFinalizationOutcomeV2,
+    OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES, OWNER_FEE_FINALIZATION_BODY_V2_BYTES,
 };
 use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;

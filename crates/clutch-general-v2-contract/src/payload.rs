@@ -684,10 +684,10 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
 
 /// Action-38 `FinalizeOwnerSettlement` immutable selector.
 ///
-/// The finalized row data ID is accepted only after the accounting-complete
-/// owner row, Position, and candidate cash pot have all reached the exact
-/// atomic poststate. It is the action's canonical Replay transition identity
-/// and remains distinct from receipt accounting and Egg-delivery identities.
+/// The sixth identity is the SHA-256 data ID of the exact finalized V2 owner
+/// row. The live composer rederives it together with Position, Replay, and
+/// candidate cash-pot successors before any atomic write. It is distinct from
+/// receipt-accounting and Egg-delivery transition identities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeOwnerSettlementPayloadV1 {
     /// Counted parent Epoch PDA.
@@ -700,7 +700,7 @@ pub struct FinalizeOwnerSettlementPayloadV1 {
     pub position: Id32,
     /// Candidate-wide directional settlement cash-pot PDA.
     pub settlement_cash_pot: Id32,
-    /// Canonical data ID of the exact finalized OwnerSettlement V2 row.
+    /// Data ID of the exact canonical finalized 288-byte V2 owner row.
     pub finalized_owner_row_data_id: Id32,
 }
 

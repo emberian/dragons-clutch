@@ -12,6 +12,7 @@
 
 mod codec;
 mod fee_accounts;
+mod fee_terminal;
 mod final_pot;
 mod owner_settlement;
 mod payload;
@@ -22,6 +23,7 @@ mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
 pub use fee_accounts::*;
+pub use fee_terminal::*;
 pub use final_pot::*;
 pub use owner_settlement::*;
 pub use payload::*;
