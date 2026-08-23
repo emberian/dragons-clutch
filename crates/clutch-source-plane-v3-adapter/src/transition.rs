@@ -1076,6 +1076,172 @@ pub fn project_runtime_seal_raw_page(
     plan.finish()
 }
 
+/// Recompute action 6 from the canonical WindowSpec, exact initial work body,
+/// promoted runtime postimage, and Product/Source occurrence-window join.
+pub fn project_runtime_initialize_window_work(
+    source_plane: &SourcePlaneProgramV3,
+    window: &WindowSpecV3,
+    work: &WindowWorkV3,
+    work_runtime: RuntimeCreationProjectionV1,
+    occurrence_window_authentication_id: ContentId,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    window.validate()?;
+    work.validate_against(window)?;
+    let expected_work = WindowWorkV3::new(window)?;
+    if source_plane.id()? != window.source_plane_program_id
+        || expected_work != *work
+        || work_runtime.account_data_id.is_zero()
+        || work_runtime.generation == 0
+        || work_runtime.payer.is_zero() != (work_runtime.rent_principal_lamports == 0)
+        || occurrence_window_authentication_id.is_zero()
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let binding_id = PdaRecipeV3::window_work(window.id()?)?.id()?;
+    let mut plan = TransitionPlanV3::new(
+        TransitionActionV3::CreateWindowWork,
+        occurrence_window_authentication_id,
+    );
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::WindowWork,
+            binding_id,
+            work_runtime.account_data_id,
+            work_runtime.generation,
+        )?,
+        payer: work_runtime.payer,
+        rent_principal_lamports: work_runtime.rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
+    })?;
+    plan.finish()
+}
+
+/// Recompute action 7 from one exact canonical page fold and promoted
+/// WindowWork compare-and-swap observation.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_fold_window_page(
+    source_plane: &SourcePlaneProgramV3,
+    window: &WindowSpecV3,
+    work_before: &WindowWorkV3,
+    page: &RawPageV3,
+    work_after: &WindowWorkV3,
+    work_runtime: RuntimeMutationProjectionV1,
+    fold_authentication_id: ContentId,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    window.validate()?;
+    work_before.validate_against(window)?;
+    page.validate()?;
+    work_after.validate_against(window)?;
+    let expected_after = work_before.push_page(window, page)?;
+    if source_plane.id()? != window.source_plane_program_id
+        || expected_after != *work_after
+        || work_runtime.account_data_before_id.is_zero()
+        || work_runtime.account_data_after_id.is_zero()
+        || work_runtime.account_data_before_id == work_runtime.account_data_after_id
+        || work_runtime.generation == 0
+        || fold_authentication_id.is_zero()
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let binding_id = PdaRecipeV3::window_work(window.id()?)?.id()?;
+    let mut plan = TransitionPlanV3::new(
+        TransitionActionV3::FoldWindowPage,
+        fold_authentication_id,
+    );
+    plan.push_mutation(StateMutationV3 {
+        before: AccountStateV3::new(
+            AccountFamilyV3::WindowWork,
+            binding_id,
+            work_runtime.account_data_before_id,
+            work_runtime.generation,
+        )?,
+        after: AccountStateV3::new(
+            AccountFamilyV3::WindowWork,
+            binding_id,
+            work_runtime.account_data_after_id,
+            work_runtime.generation,
+        )?,
+    })?;
+    plan.finish()
+}
+
+/// Recompute action 8 from exact mature page semantics, the immutable
+/// WindowSeal postimage, and the once-only consumed WindowWork close split.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_seal_window(
+    source_plane: &SourcePlaneProgramV3,
+    window: &WindowSpecV3,
+    work: &WindowWorkV3,
+    maturity_page: &RawPageV3,
+    closure: &WindowClosureReceiptV3,
+    seal: &WindowSealV3,
+    work_runtime: RuntimeCloseProjectionV1,
+    seal_runtime: RuntimeCreationProjectionV1,
+    window_evidence_authentication_id: ContentId,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    window.validate()?;
+    work.validate_against(window)?;
+    maturity_page.validate()?;
+    seal.validate_against(window)?;
+    let expected_closure = WindowClosureReceiptV3::from_page(source_plane, window, maturity_page)?;
+    let expected_seal = work.finish(window, &expected_closure)?;
+    if source_plane.id()? != window.source_plane_program_id
+        || expected_closure != *closure
+        || expected_seal != *seal
+        || work_runtime.account_data_id.is_zero()
+        || work_runtime.generation == 0
+        || work_runtime.principal_recipient.is_zero()
+            != (work_runtime.payer_principal_lamports == 0)
+        || work_runtime.neutral_sink.is_zero()
+        || (!work_runtime.principal_recipient.is_zero()
+            && work_runtime.principal_recipient == work_runtime.neutral_sink)
+        || seal_runtime.account_data_id.is_zero()
+        || seal_runtime.generation == 0
+        || seal_runtime.payer.is_zero() != (seal_runtime.rent_principal_lamports == 0)
+        || window_evidence_authentication_id.is_zero()
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let window_id = window.id()?;
+    let work_binding_id = PdaRecipeV3::window_work(window_id)?.id()?;
+    let seal_binding_id = PdaRecipeV3::window_seal(window_id)?.id()?;
+    let mut plan = TransitionPlanV3::new(
+        TransitionActionV3::SealWindow,
+        window_evidence_authentication_id,
+    );
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::WindowSeal,
+            seal_binding_id,
+            seal_runtime.account_data_id,
+            seal_runtime.generation,
+        )?,
+        payer: seal_runtime.payer,
+        rent_principal_lamports: seal_runtime.rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
+    })?;
+    plan.push_close(AccountClosureV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::WindowWork,
+            work_binding_id,
+            work_runtime.account_data_id,
+            work_runtime.generation,
+        )?,
+        principal_recipient: work_runtime.principal_recipient,
+        payer_principal_lamports: work_runtime.payer_principal_lamports,
+        neutral_sink: work_runtime.neutral_sink,
+        neutral_surplus_lamports: work_runtime.neutral_surplus_lamports,
+    })?;
+    plan.finish()
+}
+
 /// Create page work at the exact state-owned head cursor.
 pub fn project_open_raw_page(
     source_plane: &SourcePlaneProgramV3,

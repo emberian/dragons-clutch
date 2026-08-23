@@ -97,6 +97,15 @@ pub struct PersistedIngestBoundaryBatchV1 {
     pub mutation: MutateRuntimeAccountResultV1,
 }
 
+/// Exact action-7 semantic fold plus committed WindowWork compare-and-swap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedFoldWindowPagesV1 {
+    /// Pure ordered page-fold result.
+    pub semantic: clutch_source_plane_v3_runtime::FoldPagesOutputV1,
+    /// Exact WindowWork preimage/postimage and lineage mutation receipt.
+    pub mutation: MutateRuntimeAccountResultV1,
+}
+
 /// Complete close split and lineage tombstone postimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CloseRuntimeAccountResultV1 {
@@ -548,6 +557,10 @@ pub struct SealWindowExecutionV1 {
     pub evidence: AuthenticatedWindowEvidenceV1,
     /// Immutable WindowSeal rent postimage.
     pub seal_funding: ImmutableAccountFundingV1,
+    /// Exact immutable WindowSeal envelope persisted by this instruction.
+    pub seal_header: RuntimeAccountHeaderV1,
+    /// Digest of the complete immutable WindowSeal account postimage.
+    pub seal_account_data_id: ContentId,
     /// WindowWork close/refund/sink postimage.
     pub work_close: CloseRuntimeAccountResultV1,
 }
@@ -1007,18 +1020,21 @@ pub fn fold_window_pages(
     work_account: &AccountInfo<'_>,
     work_lineage_account: &AccountInfo<'_>,
     work_lineage: AuthenticatedReopenLineageV1,
-) -> Outcome<clutch_source_plane_v3_runtime::FoldPagesOutputV1> {
+) -> Outcome<PersistedFoldWindowPagesV1> {
     let output =
         clutch_source_plane_v3_runtime::fold_authenticated_pages(route, window, work, pages)
             .map_err(source_runtime)?;
-    mutate_runtime_account(
+    let mutation = mutate_runtime_account(
         route,
         work_lineage,
         work_account,
         work_lineage_account,
         &output.work_after,
     )?;
-    Ok(output)
+    Ok(PersistedFoldWindowPagesV1 {
+        semantic: output,
+        mutation,
+    })
 }
 
 /// Seal action 5: create the immutable RawPage, advance SourceHead, then close
@@ -1121,7 +1137,7 @@ pub fn seal_window(
     )
     .map_err(source_runtime)?;
     let recipe = PdaRecipeV3::window_seal(window.id().map_err(source_core)?).map_err(source_pda)?;
-    let (seal_funding, _, _) = create_immutable_runtime_account(
+    let (seal_funding, seal_header, seal_account_data_id) = create_immutable_runtime_account(
         program_id,
         route,
         &recipe,
@@ -1144,6 +1160,8 @@ pub fn seal_window(
     Ok(SealWindowExecutionV1 {
         evidence,
         seal_funding,
+        seal_header,
+        seal_account_data_id,
         work_close,
     })
 }

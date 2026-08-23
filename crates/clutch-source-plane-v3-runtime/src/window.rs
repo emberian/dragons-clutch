@@ -840,6 +840,75 @@ pub enum OccurrenceDispositionV1 {
     ExactExisting = 2,
 }
 
+/// Private-field runtime receipt joining Product/Series provenance to one
+/// exact Source Window before a StatisticKey body is needed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceWindowReceiptV1 {
+    route_id: ContentId,
+    clock_policy_id: ContentId,
+    occurrence_record_id: ContentId,
+    series_plan_id: ContentId,
+    ordinal: u32,
+    market_instance_id: ContentId,
+    attachment_plan_id: ContentId,
+    source_plane_contract_id: ContentId,
+    source_spec_id: ContentId,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
+    repair_generation: u64,
+    disposition: OccurrenceDispositionV1,
+    occurrence_account: RuntimeKey,
+    occurrence_account_authentication_id: ContentId,
+    join_id: ContentId,
+}
+
+impl OccurrenceWindowReceiptV1 {
+    /// Complete authenticated source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Product/Series-owned occurrence record identity.
+    pub const fn occurrence_record_id(self) -> ContentId {
+        self.occurrence_record_id
+    }
+
+    /// Predictable WindowKey authenticated against the supplied body.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Predictable StatisticKey identity committed by Product compilation.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Exact selected repair generation.
+    pub const fn repair_generation(self) -> u64 {
+        self.repair_generation
+    }
+
+    /// Created versus exact-existing disposition.
+    pub const fn disposition(self) -> OccurrenceDispositionV1 {
+        self.disposition
+    }
+
+    /// Physical Product/Series occurrence account authenticated by this join.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.occurrence_account
+    }
+
+    /// Exact occurrence-account owner/PDA/body authentication.
+    pub const fn occurrence_account_authentication_id(self) -> ContentId {
+        self.occurrence_account_authentication_id
+    }
+
+    /// Complete Product/Source Window join identity.
+    pub const fn id(self) -> ContentId {
+        self.join_id
+    }
+}
+
 /// Private-field runtime receipt joining Product/Series provenance to SourcePlane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OccurrenceSourceReceiptV1 {
@@ -950,15 +1019,34 @@ pub fn source_occurrence_record_id(input: &[u8]) -> Result<ContentId> {
     Ok(ContentId::from_bytes(id.bytes()))
 }
 
-/// Join the exact Product/Series-owned 184-byte codec without persisting a parallel DTO.
-pub fn join_source_occurrence(
+fn occurrence_join_preimage(receipt: OccurrenceWindowReceiptV1) -> [u8; 376] {
+    let mut bytes = [0; 376];
+    bytes[..32].copy_from_slice(&receipt.occurrence_record_id.bytes());
+    bytes[32..64].copy_from_slice(&receipt.series_plan_id.bytes());
+    bytes[64..68].copy_from_slice(&receipt.ordinal.to_le_bytes());
+    bytes[72..104].copy_from_slice(&receipt.market_instance_id.bytes());
+    bytes[104..136].copy_from_slice(&receipt.attachment_plan_id.bytes());
+    bytes[136..168].copy_from_slice(&receipt.source_plane_contract_id.bytes());
+    bytes[168..200].copy_from_slice(&receipt.source_spec_id.bytes());
+    bytes[200..232].copy_from_slice(&receipt.window_id.bytes());
+    bytes[232..264].copy_from_slice(&receipt.statistic_key_id.bytes());
+    bytes[264..272].copy_from_slice(&receipt.repair_generation.to_le_bytes());
+    bytes[272] = receipt.disposition as u8;
+    bytes[280..312].copy_from_slice(&receipt.occurrence_account_authentication_id.bytes());
+    bytes[312..344].copy_from_slice(&receipt.route_id.bytes());
+    bytes[344..376].copy_from_slice(&receipt.clock_policy_id.bytes());
+    bytes
+}
+
+/// Join the exact Product/Series-owned 184-byte codec to one authenticated
+/// WindowSpec without accepting an unneeded caller StatisticKey body.
+pub fn join_source_occurrence_window(
     route: AuthenticatedSourceRouteV1,
     occurrence_account: RuntimeAccountViewV1<'_>,
     derived_pda: RuntimeDerivedPdaV1,
     disposition: OccurrenceDispositionV1,
     window: &WindowSpecV3,
-    key: &StatisticKeyV3,
-) -> Result<OccurrenceSourceReceiptV1> {
+) -> Result<OccurrenceWindowReceiptV1> {
     let occurrence = CompiledSourceOccurrenceV3::decode(occurrence_account.data)
         .map_err(|_| Error::InvalidCodec)?;
     let occurrence_record_id =
@@ -973,17 +1061,13 @@ pub fn join_source_occurrence(
         return Err(Error::WrongPrivilege);
     }
     validate_window_route(route, window)?;
-    key.validate()?;
     let series_plan_id = ContentId::from_bytes(occurrence.series_plan_id.bytes());
     let ordinal = occurrence.ordinal;
     let market_instance_id = ContentId::from_bytes(occurrence.market_instance_id.bytes());
     let attachment_plan_id = ContentId::from_bytes(occurrence.attachment_plan_id.bytes());
     let source_window_id = ContentId::from_bytes(occurrence.source_window_id.bytes());
     let statistic_key_id = ContentId::from_bytes(occurrence.statistic_key_id.bytes());
-    if source_window_id != window.id()?
-        || statistic_key_id != key.id()?
-        || key.window_id != source_window_id
-    {
+    if source_window_id != window.id()? {
         return Err(Error::MismatchedBinding);
     }
     derived_pda.validate_for(
@@ -1003,22 +1087,7 @@ pub fn join_source_occurrence(
         b"dragons-clutch/authenticated-source-occurrence-account/v1",
         &account_auth_bytes,
     );
-    let mut bytes = [0; 376];
-    bytes[..32].copy_from_slice(&occurrence_record_id.bytes());
-    bytes[32..64].copy_from_slice(&series_plan_id.bytes());
-    bytes[64..68].copy_from_slice(&ordinal.to_le_bytes());
-    bytes[72..104].copy_from_slice(&market_instance_id.bytes());
-    bytes[104..136].copy_from_slice(&attachment_plan_id.bytes());
-    bytes[136..168].copy_from_slice(&route.source_plane_contract_id().bytes());
-    bytes[168..200].copy_from_slice(&route.source_spec_id().bytes());
-    bytes[200..232].copy_from_slice(&source_window_id.bytes());
-    bytes[232..264].copy_from_slice(&statistic_key_id.bytes());
-    bytes[264..272].copy_from_slice(&window.repair_generation.to_le_bytes());
-    bytes[272] = disposition as u8;
-    bytes[280..312].copy_from_slice(&occurrence_account_authentication_id.bytes());
-    bytes[312..344].copy_from_slice(&route.route_id().bytes());
-    bytes[344..376].copy_from_slice(&route.clock_policy_id().bytes());
-    Ok(OccurrenceSourceReceiptV1 {
+    let mut receipt = OccurrenceWindowReceiptV1 {
         route_id: route.route_id(),
         clock_policy_id: route.clock_policy_id(),
         occurrence_record_id,
@@ -1034,6 +1103,54 @@ pub fn join_source_occurrence(
         disposition,
         occurrence_account: occurrence_account.key,
         occurrence_account_authentication_id,
+        join_id: ContentId::ZERO,
+    };
+    let bytes = occurrence_join_preimage(receipt);
+    receipt.join_id = domain_id(
+        b"dragons-clutch/source-occurrence-window-join/v1",
+        &bytes,
+    );
+    Ok(receipt)
+}
+
+/// Join the exact Product/Series-owned occurrence and Window receipt to the
+/// complete predictable StatisticKey body without persisting a parallel DTO.
+pub fn join_source_occurrence(
+    route: AuthenticatedSourceRouteV1,
+    occurrence_account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    disposition: OccurrenceDispositionV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+) -> Result<OccurrenceSourceReceiptV1> {
+    let receipt = join_source_occurrence_window(
+        route,
+        occurrence_account,
+        derived_pda,
+        disposition,
+        window,
+    )?;
+    key.validate()?;
+    if receipt.statistic_key_id != key.id()? || key.window_id != receipt.window_id {
+        return Err(Error::MismatchedBinding);
+    }
+    let bytes = occurrence_join_preimage(receipt);
+    Ok(OccurrenceSourceReceiptV1 {
+        route_id: receipt.route_id,
+        clock_policy_id: receipt.clock_policy_id,
+        occurrence_record_id: receipt.occurrence_record_id,
+        series_plan_id: receipt.series_plan_id,
+        ordinal: receipt.ordinal,
+        market_instance_id: receipt.market_instance_id,
+        attachment_plan_id: receipt.attachment_plan_id,
+        source_plane_contract_id: receipt.source_plane_contract_id,
+        source_spec_id: receipt.source_spec_id,
+        window_id: receipt.window_id,
+        statistic_key_id: receipt.statistic_key_id,
+        repair_generation: receipt.repair_generation,
+        disposition: receipt.disposition,
+        occurrence_account: receipt.occurrence_account,
+        occurrence_account_authentication_id: receipt.occurrence_account_authentication_id,
         join_id: domain_id(OCCURRENCE_JOIN_DOMAIN, &bytes),
     })
 }

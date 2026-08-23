@@ -35,7 +35,8 @@ use clutch_source_plane_v3_runtime::{
     authenticate_source_work_receipt_account, authenticate_statistic_result,
     authenticate_statistic_result_absence, authenticate_statistic_result_account,
     authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
-    join_source_occurrence, AdapterInvocationV1, AuthenticatedBoundaryV1,
+    join_source_occurrence, join_source_occurrence_window, AdapterInvocationV1,
+    AuthenticatedBoundaryV1,
     AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1,
     AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2, AuthenticatedReopenLineageV1,
     AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
@@ -43,8 +44,9 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
     ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, LineageAccessV1,
-    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1,
-    RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceGenerationRequestV1,
+    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
+    ParserOutputV1, ReopenLineageV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
+    SourceGenerationRequestV1,
     SourceReceiptDispositionV1, SourceReleaseManifestV2, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
     OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
@@ -385,6 +387,263 @@ pub fn authenticate_raw_page(
         .map_err(Into::into)
 }
 
+/// Runtime-authenticated immutable WindowSpec input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedWindowSpecInputV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    window: WindowSpecV3,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedWindowSpecInputV1 {
+    /// Physical content-addressed WindowSpec account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of the complete canonical account body.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Exact canonical WindowSpec body.
+    pub const fn window(self) -> WindowSpecV3 {
+        self.window
+    }
+
+    /// Owner/PDA/body/route authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+/// Runtime-authenticated immutable SummaryProgram input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSummaryProgramInputV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    summary: SummaryProgramV3,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSummaryProgramInputV1 {
+    /// Physical content-addressed SummaryProgram account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of the complete canonical account body.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Exact canonical SummaryProgram body.
+    pub const fn summary(self) -> SummaryProgramV3 {
+        self.summary
+    }
+
+    /// Owner/PDA/body/route authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+/// Runtime-authenticated immutable StatisticKey input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedStatisticKeyInputV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    key: StatisticKeyV3,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedStatisticKeyInputV1 {
+    /// Physical content-addressed StatisticKey account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of the complete canonical account body.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Exact canonical StatisticKey body.
+    pub const fn key(self) -> StatisticKeyV3 {
+        self.key
+    }
+
+    /// Owner/PDA/body/route authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+fn require_immutable_source_input(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<()> {
+    if account.owner != program_id {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongOwner,
+        ));
+    }
+    if account.is_writable || account.is_signer {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongPrivilege,
+        ));
+    }
+    if account.executable {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongExecutableState,
+        ));
+    }
+    Ok(())
+}
+
+fn immutable_source_input_id(
+    domain: &[u8],
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    semantic_id: ContentId,
+) -> ContentId {
+    ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            domain,
+            &route.route_id().bytes(),
+            &account.bytes(),
+            &account_data_id.bytes(),
+            &semantic_id.bytes(),
+        ])
+        .to_bytes(),
+    )
+}
+
+/// Authenticate one canonical program-owned WindowSpec content account.
+pub fn authenticate_window_spec_input(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedWindowSpecInputV1> {
+    require_immutable_source_input(program_id, account)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let window = WindowSpecV3::decode(&data)?;
+    let window_id = window.id()?;
+    if window.source_spec_id != route.source_spec_id()
+        || window.source_plane_program_id != route.source_plane_contract_id()
+    {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::MismatchedBinding,
+        ));
+    }
+    let recipe = PdaRecipeV3::window_spec(window_id)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    if derived.address != runtime_key(account.key) {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongPda,
+        ));
+    }
+    let account_key = runtime_key(account.key);
+    let data_id = account_data_id(account_key, &data)?;
+    Ok(AuthenticatedWindowSpecInputV1 {
+        account: account_key,
+        account_data_id: data_id,
+        window,
+        authentication_id: immutable_source_input_id(
+            b"dragons-clutch/authenticated-window-spec-input/v1",
+            route,
+            account_key,
+            data_id,
+            window_id,
+        ),
+    })
+}
+
+/// Authenticate one canonical program-owned SummaryProgram content account.
+pub fn authenticate_summary_program_input(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedSummaryProgramInputV1> {
+    require_immutable_source_input(program_id, account)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let summary = SummaryProgramV3::decode(&data)?;
+    let summary_id = summary.id()?;
+    let recipe = PdaRecipeV3::summary_program(summary_id)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    if derived.address != runtime_key(account.key) {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongPda,
+        ));
+    }
+    let account_key = runtime_key(account.key);
+    let data_id = account_data_id(account_key, &data)?;
+    Ok(AuthenticatedSummaryProgramInputV1 {
+        account: account_key,
+        account_data_id: data_id,
+        summary,
+        authentication_id: immutable_source_input_id(
+            b"dragons-clutch/authenticated-summary-program-input/v1",
+            route,
+            account_key,
+            data_id,
+            summary_id,
+        ),
+    })
+}
+
+/// Authenticate one canonical program-owned StatisticKey content account and
+/// bind it to the already-authenticated WindowSpec and SummaryProgram inputs.
+pub fn authenticate_statistic_key_input(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    account: &AccountInfo<'_>,
+    window: AuthenticatedWindowSpecInputV1,
+    summary: AuthenticatedSummaryProgramInputV1,
+) -> SourceV3SbfResult<AuthenticatedStatisticKeyInputV1> {
+    require_immutable_source_input(program_id, account)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let key = StatisticKeyV3::decode(&data)?;
+    let key_id = key.id()?;
+    if key.window_id != window.window().id()?
+        || key.summary_program_id != summary.summary().id()?
+        || !summary.summary().supports(key.statistic)
+    {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::MismatchedBinding,
+        ));
+    }
+    let recipe = PdaRecipeV3::statistic_key(key_id)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    if derived.address != runtime_key(account.key) {
+        return Err(SourceV3SbfError::Runtime(
+            clutch_source_plane_v3_runtime::Error::WrongPda,
+        ));
+    }
+    let account_key = runtime_key(account.key);
+    let data_id = account_data_id(account_key, &data)?;
+    Ok(AuthenticatedStatisticKeyInputV1 {
+        account: account_key,
+        account_data_id: data_id,
+        key,
+        authentication_id: immutable_source_input_id(
+            b"dragons-clutch/authenticated-statistic-key-input/v1",
+            route,
+            account_key,
+            data_id,
+            key_id,
+        ),
+    })
+}
+
 /// Authenticate one globally tagged mutable WindowWork PDA and lineage.
 pub fn authenticate_window_work(
     program_id: &Pubkey,
@@ -689,6 +948,47 @@ pub fn authenticate_occurrence(
         disposition,
         window,
         key,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate Product's exact occurrence PDA/body and its canonical
+/// WindowSpec before a StatisticKey body is needed by evaluation.
+pub fn authenticate_occurrence_window(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    occurrence_account: &AccountInfo<'_>,
+    disposition: OccurrenceDispositionV1,
+    window: &WindowSpecV3,
+) -> SourceV3SbfResult<OccurrenceWindowReceiptV1> {
+    let data = occurrence_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let occurrence = CompiledSourceOccurrenceV3::decode(&data).map_err(|_| {
+        SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+    })?;
+    let occurrence_record_id = ContentId::from_bytes(
+        occurrence
+            .id()
+            .map_err(|_| {
+                SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+            })?
+            .bytes(),
+    );
+    let (address, bump) =
+        crate::seeds::source_occurrence_pda(program_id, &occurrence_record_id.bytes());
+    let derived = RuntimeDerivedPdaV1 {
+        program_id: runtime_key(program_id),
+        recipe_id: occurrence_record_id,
+        address: runtime_key(&address),
+        bump,
+    };
+    join_source_occurrence_window(
+        route,
+        runtime_account_view(occurrence_account, &data),
+        derived,
+        disposition,
+        window,
     )
     .map_err(Into::into)
 }

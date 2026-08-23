@@ -84,6 +84,12 @@ pub enum PdaFamilyV3 {
     SourceWorkReceipt = 14,
     /// Durable Source reopen lineage addressed by its semantic recipe identity.
     ReopenLineage = 15,
+    /// Immutable canonical WindowSpec content input.
+    WindowSpec = 16,
+    /// Immutable reviewed SummaryProgram content input.
+    SummaryProgram = 17,
+    /// Immutable predictable StatisticKey content input.
+    StatisticKey = 18,
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -181,6 +187,36 @@ impl PdaRecipeV3 {
             b"dc-sp3-page",
             &source_plane_contract_id.bytes(),
             &page_id.bytes(),
+        )
+    }
+
+    /// Immutable canonical WindowSpec addressed by its complete semantic identity.
+    pub fn window_spec(window_id: ContentId) -> Result<Self> {
+        live(window_id)?;
+        Self::two(
+            PdaFamilyV3::WindowSpec,
+            b"dc-sp3-window-spec",
+            &window_id.bytes(),
+        )
+    }
+
+    /// Reviewed SummaryProgram addressed by its complete semantic identity.
+    pub fn summary_program(summary_program_id: ContentId) -> Result<Self> {
+        live(summary_program_id)?;
+        Self::two(
+            PdaFamilyV3::SummaryProgram,
+            b"dc-sp3-summary",
+            &summary_program_id.bytes(),
+        )
+    }
+
+    /// Predictable StatisticKey addressed by its complete semantic identity.
+    pub fn statistic_key(statistic_key_id: ContentId) -> Result<Self> {
+        live(statistic_key_id)?;
+        Self::two(
+            PdaFamilyV3::StatisticKey,
+            b"dc-sp3-stat-key",
+            &statistic_key_id.bytes(),
         )
     }
 

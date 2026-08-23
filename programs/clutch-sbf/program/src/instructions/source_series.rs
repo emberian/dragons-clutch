@@ -84,6 +84,21 @@ pub fn process(
                 program_id, accounts, sequence, intent,
             )
         }
+        (SourceSeriesAction::InitializeWindowWork, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_initialize_window_work(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::FoldWindowPages, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_fold_window_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::SealWindow, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_window(
+                program_id, accounts, sequence, intent,
+            )
+        }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
