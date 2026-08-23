@@ -358,6 +358,16 @@ pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer action receipt bytes including the global envelope.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 532;
+/// Counted General V2 candidate-scoped settlement root discriminator.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = 0xa9;
+/// First counted General V2 settlement-root version.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact fixed width of the counted General V2 settlement root.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
+/// Reserved Product occurrence-scoped terminal root discriminator.
+pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
+/// First reserved Product occurrence-root version.
+pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -393,6 +403,8 @@ const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
+const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
+const _: () = assert!(PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG == 0xaa);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1161,6 +1173,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-action-receipt-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+            version: GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-settlement-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG,
+            version: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-occurrence-root-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -1344,6 +1374,10 @@ pub enum GeneralV2Action {
     ConsumeVirtualMergeReceiptEggs = 37,
     /// Atomically realize one accounting-complete owner into the cash pot.
     FinalizeOwnerSettlement = 38,
+    /// Create the counted candidate-scoped settlement root and exact singleton children.
+    InitializeSettlementRoot = 39,
+    /// Complete one merge receipt's separately authenticated payment latch.
+    FinalizeMergeReceiptPayment = 40,
 }
 
 /// Dealer family-local policy-catalog transport actions.
@@ -1495,7 +1529,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 38;
+    pub const LAST_TAG: u8 = 40;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1538,6 +1572,8 @@ impl GeneralV2Action {
             Self::ConsumeVirtualSplitReceiptEggs => 36,
             Self::ConsumeVirtualMergeReceiptEggs => 37,
             Self::FinalizeOwnerSettlement => 38,
+            Self::InitializeSettlementRoot => 39,
+            Self::FinalizeMergeReceiptPayment => 40,
         }
     }
 
@@ -1582,6 +1618,8 @@ impl GeneralV2Action {
             36 => Some(Self::ConsumeVirtualSplitReceiptEggs),
             37 => Some(Self::ConsumeVirtualMergeReceiptEggs),
             38 => Some(Self::FinalizeOwnerSettlement),
+            39 => Some(Self::InitializeSettlementRoot),
+            40 => Some(Self::FinalizeMergeReceiptPayment),
             _ => None,
         }
     }
@@ -2169,6 +2207,10 @@ mod tests {
             (
                 GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
                 GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+                GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
