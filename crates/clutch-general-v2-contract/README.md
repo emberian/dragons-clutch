@@ -13,6 +13,7 @@ counted Epoch codecs must not be described as General V2-compatible.
 
 | Semantic owner | Tag/version | Exact length |
 |---|---:|---:|
+| canonical General `SettlementReceiptAccountV3` | `0x0f/3` | 217 |
 | genesis-assisted `MarketRuntimeV3AccountV1` | `3/3` | 148 |
 | counted `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, max 9,120 |
@@ -59,7 +60,14 @@ mass scale, and live slice shape.
 
 Fresh seed domains are exported for Market binding, Epoch, EconomicDomain,
 Window, admission node, feed, work, budget, selected candidate, order page,
-reservation, receipt, and final pot. The frozen FinalPot tuple is
+reservation, receipt, and final pot. The frozen receipt tuple is
+`general-receipt:v3`, Epoch PDA, final SettlementCandidateId, slice index LE.
+The V3 receipt keeps the 217-byte tag-15 footprint: V2 consumed flags retain
+delivered-buy/delivered-sell/exhausted semantics and the former reserved final
+byte becomes the independent accounted-end mask. Accounting and delivery IDs
+are distinct domain hashes of the authenticated receipt PDA and are never
+caller facts or persisted fields. Its data ID hashes the PDA and exact current
+217 bytes, including both latch families. The frozen FinalPot tuple is
 `general-final-pot:v2`, Epoch PDA, final SettlementCandidateId. PDA derivation,
 stored-bump checking,
 program ownership, and generation authentication remain adapter obligations.
@@ -77,6 +85,7 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
+| SettlementReceipt V3 | `general-receipt:v3`, Epoch PDA, final `SettlementCandidateId`, `slice_index_le` |
 | OwnerSettlement V2 | `owner-settlement:v2`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
@@ -87,7 +96,7 @@ The first-spine tuples are exact ordered seeds:
 
 The Window assigns the ordinal atomically before deriving a node; no
 submitter-selected commitment or address controls the final rank tie. Remaining
-order-page/reservation/receipt/pot seed suffixes stay unallocated until their
+order-page/reservation/pot seed suffixes stay unallocated until their
 complete successor handler contracts are frozen.
 This fresh General V2 node identity deliberately supersedes ADR-0008's
 submitter/commitment-derived `candidate-admission-v3` tuple; no handler may mix
