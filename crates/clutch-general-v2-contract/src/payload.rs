@@ -45,6 +45,8 @@ pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
 pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 64;
 /// Exact action-41 zero-fill Reservation-release selector bytes.
 pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
+/// Exact action-42 coefficient-portfolio pair selector bytes.
+pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -800,6 +802,56 @@ impl ReleaseUnfilledReservationPayloadV1 {
     }
 }
 
+/// Action-42 `ConsumePortfolioPairEggs` immutable selector.
+///
+/// No order index, owner, coefficient, valuation, Position, Reservation,
+/// Replay, or postimage identity is caller-owned. The live composer derives
+/// all of them from the counted SettlementRoot, retained Feed, complete V5
+/// page set, and complete canonical pending Receipt V5 sibling set. The two
+/// counts delimit account metas only; the composer must reproduce both from
+/// the authenticated page set and retained Feed rather than trusting them as
+/// economic facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsumePortfolioPairEggsPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
+    /// Exact pending rent-owned SettlementReceipt V5 PDA.
+    pub receipt: Id32,
+    /// Active canonical OrderPage V5 prefix, exactly `1..=4`.
+    pub page_count: u8,
+    /// Complete pending Receipt V5 sibling count, exactly `1..=16`.
+    pub receipt_count: u8,
+}
+
+impl ConsumePortfolioPairEggsPayloadV1 {
+    /// Decode exactly 104 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+            page_count: reader.u8()?,
+            receipt_count: reader.u8()?,
+        };
+        let reserved: [u8; 6] = reader.array()?;
+        reader.finish()?;
+        if value.epoch == value.settlement_root
+            || value.epoch == value.receipt
+            || value.settlement_root == value.receipt
+            || !(1..=4).contains(&value.page_count)
+            || !(1..=16).contains(&value.receipt_count)
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if reserved.iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -1093,6 +1145,49 @@ mod tests {
         assert_eq!(
             decode_virtual_settlement_payload_v1(37, &selector),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn action42_selector_is_strict_and_cannot_route_through_action26() {
+        let mut selector = [0u8; CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES];
+        selector[..ID_BYTES].copy_from_slice(&live(1));
+        selector[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(3));
+        selector[3 * ID_BYTES] = 4;
+        selector[3 * ID_BYTES + 1] = 16;
+        assert!(matches!(
+            decode_portfolio_settlement_payload_v1(42, &selector),
+            Ok(PortfolioSettlementPayloadV1::ConsumePortfolioPairEggs(_))
+        ));
+        assert_eq!(
+            decode_direct_settlement_payload_v1(42, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(26, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(42, &selector[..103]),
+            Err(CodecError::WrongLength)
+        );
+        selector[3 * ID_BYTES + 2] = 1;
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(42, &selector),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        selector[3 * ID_BYTES + 2] = 0;
+        selector[3 * ID_BYTES + 1] = 0;
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(42, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[3 * ID_BYTES + 1] = 16;
+        selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(2));
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(42, &selector),
+            Err(CodecError::MismatchedBinding)
         );
     }
 
