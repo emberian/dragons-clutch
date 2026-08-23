@@ -45,6 +45,31 @@ const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-prop
 
 type CompileResult<T> = std::result::Result<T, String>;
 
+fn parse_product_program_id(value: &str) -> CompileResult<Address> {
+    let program_id = Address::from_str(value)
+        .map_err(|_| "programId is not a canonical Solana address".to_string())?;
+    if program_id.to_string() != value {
+        return Err("programId is not in canonical base58 form".to_string());
+    }
+    if program_id.to_bytes().iter().all(|byte| *byte == 0) {
+        return Err("programId must be a nonzero Product program address".to_string());
+    }
+    Ok(program_id)
+}
+
+fn require_release_program_coordinate(
+    program_id: &Address,
+    release_program: ContentId,
+) -> CompileResult<()> {
+    if release_program != ContentId::from_bytes(program_id.to_bytes()) {
+        return Err(
+            "programId differs from RegistryProgramReleaseV2.program; refusing a cross-program artifact PDA"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CompileRequest {
@@ -729,11 +754,7 @@ impl CompilerService {
         if request.schema != REQUEST_SCHEMA {
             return Err("request.schema is not product-exact-market-request/v1".to_string());
         }
-        let program_id = Address::from_str(&request.program_id)
-            .map_err(|_| "programId is not a canonical Solana address".to_string())?;
-        if program_id.to_string() != request.program_id {
-            return Err("programId is not in canonical base58 form".to_string());
-        }
+        let program_id = parse_product_program_id(&request.program_id)?;
         let expected_compiler_release = decode_hex(
             &request.expected_compiler_release_sha256,
             32,
@@ -770,6 +791,7 @@ impl CompilerService {
                 .registry_program_release_v2_bytes_hex,
             "bundleInputs.registryProgramReleaseV2BytesHex",
         )?;
+        require_release_program_coordinate(&program_id, registry_release.program)?;
         let registry_profile: RegistryCapabilityProfileV4 = decode_body(
             &request
                 .bundle_inputs
@@ -1047,5 +1069,25 @@ mod tests {
         assert!(parse_exact_market_search(&zero_market, ContentId::from_bytes([3; 32]))
             .unwrap_err()
             .contains("must be nonzero"));
+    }
+
+    #[test]
+    fn product_program_coordinate_refuses_default_and_release_splice() {
+        assert!(parse_product_program_id("11111111111111111111111111111111")
+            .unwrap_err()
+            .contains("nonzero Product program"));
+
+        let program = Address::from_str("11111111111111111111111111111112").unwrap();
+        assert!(require_release_program_coordinate(
+            &program,
+            ContentId::from_bytes([9; 32]),
+        )
+        .unwrap_err()
+        .contains("cross-program artifact PDA"));
+        assert!(require_release_program_coordinate(
+            &program,
+            ContentId::from_bytes(program.to_bytes()),
+        )
+        .is_ok());
     }
 }
