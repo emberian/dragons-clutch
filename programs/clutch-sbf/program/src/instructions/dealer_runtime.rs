@@ -264,6 +264,12 @@ pub struct DealerRuntimePayloadV1 {
     pub share_delta: u64,
     /// Facility disambiguator for Initialize; zero otherwise.
     pub facility_nonce: u64,
+    /// Sponsor cash capital moved by Initialize; zero otherwise.
+    pub sponsor_capital_atoms: u64,
+    /// Generic-runtime monotone call ordinal for a funded action.
+    pub liveness_call_ordinal: u32,
+    /// Actual successful keeper payment, bounded by the immutable action quote.
+    pub keeper_payment_lamports: u64,
     /// Bounded row start for Collect/Deliver.
     pub row_start: u16,
     /// Positive bounded row count for Collect/Deliver.
@@ -277,12 +283,13 @@ impl DealerRuntimePayloadV1 {
         input: &[u8],
     ) -> Result<Self, DealerRuntimeContractErrorV1> {
         let suffix_len = match action {
-            DealerFacilityAction::Initialize => 8,
+            DealerFacilityAction::Initialize => 32,
             DealerFacilityAction::CreateLpPage => 4,
             DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => 12,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 4,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
+            DealerFacilityAction::BindEpoch => 16,
             _ => 0,
         };
         let expected = DEALER_RUNTIME_PAYLOAD_PREFIX_BYTES_V1 + suffix_len;
@@ -308,13 +315,36 @@ impl DealerRuntimePayloadV1 {
             terminal_last_page: false,
             share_delta: 0,
             facility_nonce: 0,
+            sponsor_capital_atoms: 0,
+            liveness_call_ordinal: 0,
+            keeper_payment_lamports: 0,
             row_start: 0,
             row_count: 0,
         };
         match action {
             DealerFacilityAction::Initialize => {
                 value.facility_nonce = read_u64(input, 16);
-                if value.expected_generation != 1 || value.expected_replay_ordinal != 0 {
+                value.sponsor_capital_atoms = read_u64(input, 24);
+                value.liveness_call_ordinal = read_u32(input, 32);
+                if input[36..40].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 40);
+                if value.expected_generation != 1
+                    || value.expected_replay_ordinal != 0
+                    || value.sponsor_capital_atoms == 0
+                    || value.liveness_call_ordinal == 0
+                {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::BindEpoch => {
+                value.liveness_call_ordinal = read_u32(input, 16);
+                if input[20..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if value.liveness_call_ordinal == 0 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
                 }
             }
@@ -414,6 +444,8 @@ pub enum DealerMetaOwnerV1 {
     System,
     /// Clock sysvar at its exact well-known address.
     ClockSysvar,
+    /// Rent sysvar at its exact well-known address.
+    RentSysvar,
     /// Signer identity with no data-owner requirement.
     Signer,
 }
@@ -435,6 +467,8 @@ pub enum DealerMetaRoleV1 {
     FundedDependencies,
     /// Immutable Dealer quote schedule.
     LivenessSchedule,
+    /// Immutable generic runtime-liveness policy.
+    LivenessPolicy,
     /// Selected external liveness compartment.
     LivenessCompartment,
     /// Source liveness compartment used by exhaustive initialization.
@@ -481,6 +515,8 @@ pub enum DealerMetaRoleV1 {
     SettlementPot,
     /// Authenticated General V2 Epoch.
     GeneralEpoch,
+    /// Authenticated General V2 candidate Window.
+    GeneralWindow,
     /// Immutable selected-candidate artifact.
     SelectedCandidate,
     /// Selected sealed General feed that owns candidate and settlement witness bytes.
@@ -501,6 +537,8 @@ pub enum DealerMetaRoleV1 {
     SponsorRefundPosition,
     /// Clock sysvar.
     Clock,
+    /// Rent sysvar.
+    Rent,
     /// System Program.
     SystemProgram,
 }
@@ -542,6 +580,7 @@ const INITIALIZE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
@@ -549,8 +588,9 @@ const INITIALIZE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
@@ -562,6 +602,7 @@ const CREATE_FIRST: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::NewPage, DealerMetaOwnerV1::System, false, true),
@@ -639,12 +680,14 @@ const BIND_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::GeneralEpoch, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::GeneralWindow, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::PriceMeasurePolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
