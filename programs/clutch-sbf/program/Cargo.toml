@@ -178,6 +178,13 @@ solana-pubkey = { version = "=4.2.0", default-features = false }
 # otherwise pick.  The dependency is used only through `solana-address`.
 solana-define-syscall = "=5.1.0"
 
+[dev-dependencies]
+# Program host tests retain hostile fixtures for the withdrawn General V3
+# wires. The layout crate itself compile-refuses this decoder on Solana.
+clutch-solana-layout = { path = "../../solana-layout", default-features = false, features = [
+    "non-production-legacy-general-v3-hostile-decode",
+] }
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0

@@ -1,28 +1,19 @@
-//! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`,
-//! `Intent::SettlePage`, the staged checkpoint creation pair
-//! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]), the
-//! general epoch lifecycle ([`general_epoch`]), the on-chain streaming walk
-//! ([`clear_walk`]), the candidate submission and selection lifecycle
-//! ([`selection`]), and the entitlement freeze ([`entitlement`]).
+//! The checked program enters this module only for exact DirectEpochV4
+//! placement and the current direct submission route. Historical General
+//! placement, cancellation, clearing, selection, entitlement, settlement, and
+//! terminal-close handlers remain host-test fixtures; no checked capability or
+//! dispatch arm can reach them.
 //!
-//! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
-//! `CancelOrder` own the funded order lifecycle.  Since T2-8, `SettlePage`
-//! consumes the entitled receipts the freeze (tags 58-59) creates from the
-//! SELECTED candidate's verified allocation: single-Egg direct slices through
-//! the generalized entitled seam, portfolio full pairs through the layout
-//! crate's `{prepare,apply}_full_pair`, and one-ended virtual legs — a
-//! `sigma` split or a `mu` merge — through the pooled complete-set primitive.
-//! Partial fills, mixed pairs and inexact conversions all consume; the
-//! `pub(super)` `settlement` submodule's standing ledger row list is empty,
-//! and what still refuses is authority (a fee) rather than a missing join.
+//! The historical handlers remain useful as hostile fixtures and dependency-
+//! lower arithmetic adapters, but they are not a deployable General lifecycle.
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
-//! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
+//! | `PlaceOrder` | **current only for DirectEpochV4**; other epoch widths refuse before legacy account processing |
+//! | `CancelOrder` | withdrawn General host fixture; no checked route |
 //! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
-//! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts, 8 with the pot), one entitled virtual leg in either churn direction (11 accounts, the pooled complete-set five among them), or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
-//! | `FreezeEntitlement` / `EntitleSlice` | **entitlement freeze** ([`entitlement`]): pot from the verified summary, resumable per-slice receipts, reservations `ACTIVE → ENTITLED` |
+//! | `SettlePage` | withdrawn General host fixture; current settlement uses the disabled V5 successor modules |
+//! | `FreezeEntitlement` / `EntitleSlice` | withdrawn General host fixtures; no checked route |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
 //! atomically writes one order record, encumbers exact free cash or moves exact
@@ -71,9 +62,11 @@
 //! post-state against a page built and encoded by `OrderPageAccount::encode`,
 //! which is the golden reference.
 //!
-//! ## The account lists
+//! ## Historical General host-fixture account lists
 //!
-//! `PlaceOrder`: eight accounts, exact count, no remaining-account tail.
+//! The checked Solana route does not consume these lists. `PlaceOrder` below
+//! describes the eight-account General fixture retained under `cfg(test)`;
+//! the current DirectEpochV4 route owns its separate exact account contract.
 //!
 //! | index | account | role |
 //! | --- | --- | --- |
@@ -308,9 +301,9 @@
 //! `MAX_INTENT_BYTES` is the wider of the two exactly rather than a round
 //! number with slack in it.
 //!
-//! The portfolio placement path is **implemented** here rather than named as a
-//! gap, because its validation surface is the same shape as the single-Egg one
-//! check for check, not merely similar:
+//! The historical portfolio placement host fixture is implemented here rather
+//! than named as a gap, because its validation surface is the same shape as
+//! the single-Egg fixture one check for check, not merely similar:
 //!
 //! | check | single-Egg | portfolio |
 //! | --- | --- | --- |
@@ -526,9 +519,10 @@ macro_rules! borrow_mut {
 /* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Accounts in a `PlaceOrder` instruction, exactly.
+/// Accounts in the historical General `PlaceOrder` fixture, exactly.
+#[cfg(test)]
 pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
-/// Accounts in the still-unrouted Direct V3 placement branch, exactly.
+/// Accounts in the exact checked Direct V4 placement branch, exactly.
 pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 
 /// Accounts in a `CancelOrder` instruction, exactly.
@@ -1134,7 +1128,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *max_fee_atoms,
             slot,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CancelOrder {
             market,
             epoch,
@@ -1153,7 +1147,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 generation: *generation,
             },
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SettlePage {
             market,
             epoch,
@@ -1179,7 +1173,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::InitClearWork {
             market,
             epoch,
@@ -1192,7 +1186,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::GrowClearWork {
             market,
             epoch,
@@ -1205,7 +1199,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::InitEpoch {
             market,
             epoch_index,
@@ -1220,11 +1214,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             policy,
             *freeze_deadline_slot,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FreezeEpoch { market, epoch }) => {
             general_epoch::freeze_epoch(program_id, accounts, request.sequence, market, epoch)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::AdvanceClearWork {
             market,
             epoch,
@@ -1239,7 +1233,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_orders,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::AdvanceClearSlices {
             market,
             epoch,
@@ -1254,7 +1248,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_slices,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CompleteClearWork {
             market,
             epoch,
@@ -1267,7 +1261,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SubmitCandidate {
             market,
             epoch,
@@ -1294,7 +1288,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *limit_surplus_price_units,
             *distinct_owners,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::WriteCandidateFeed {
             market,
             epoch,
@@ -1309,7 +1303,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             chunk,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SealCandidate {
             market,
             epoch,
@@ -1322,11 +1316,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FinalizeSelection { market, epoch }) => {
             selection::finalize_selection(program_id, accounts, request.sequence, market, epoch)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FreezeEntitlement {
             market,
             epoch,
@@ -1339,7 +1333,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::EntitleSlice {
             market,
             epoch,
@@ -1354,7 +1348,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::ReleaseTerminalReservation { market, epoch }) => {
             terminal_closure::release_terminal_reservation(
                 program_id,
@@ -1364,7 +1358,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralReceipt {
             market,
             epoch,
@@ -1379,7 +1373,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralReservation { market, epoch }) => {
             terminal_closure::close_general_reservation(
                 program_id,
@@ -1389,11 +1383,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::ClosePosition { market, owner }) => {
             terminal_closure::close_position(program_id, accounts, request.sequence, market, owner)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralPage {
             market,
             epoch,
@@ -1406,7 +1400,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralPot { market, epoch }) => {
             terminal_closure::close_general_pot(
                 program_id,
@@ -1416,7 +1410,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralCandidate {
             market,
             epoch,
@@ -1429,7 +1423,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralClearWork {
             market,
             epoch,
@@ -1442,7 +1436,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralEpoch { market, epoch }) => {
             terminal_closure::close_general_epoch(
                 program_id,
@@ -2033,8 +2027,12 @@ fn read_grid_boxed(bytes: &[u8]) -> Outcome<Box<PriceGridAccount>> {
     Ok(grid)
 }
 
-/// Boxed [`reservation::prepare_placement`]: the staged Position/Reservation
-/// pair lives on the heap rather than beside the handler's other locals.
+/// Private heap boundary around the frozen reservation arithmetic.
+///
+/// DirectEpochV4 authenticates every current-only field before this projection
+/// and reconstructs the resulting current-width Reservation wrapper after it.
+/// The V1 transition stays the sole integer-conservation owner; no historical
+/// account codec or public placement DTO is admitted by this helper.
 #[inline(never)]
 fn prepare_placement_boxed(
     position: &PositionAccount,
@@ -2095,7 +2093,11 @@ fn place_order(
             *slot,
         );
     }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    /* The shared tag is current only for the exact DirectEpochV4 account
+     * plane. A different epoch width is a withdrawn General placement, not an
+     * alternate account list to probe. Refuse before any role, signer, PDA,
+     * rent, or account-data inspection. */
+    #[cfg(test)]
     return place_legacy_order(
         program_id,
         accounts,
@@ -2105,9 +2107,22 @@ fn place_order(
         max_fee_atoms,
         slot,
     );
+    #[cfg(not(test))]
+    {
+        let _ = (
+            program_id,
+            accounts,
+            sequence,
+            intent_market,
+            intent_epoch,
+            max_fee_atoms,
+            slot,
+        );
+        Err(ClutchError::UnsupportedInstruction.into())
+    }
 }
 
-#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+#[cfg(test)]
 #[inline(never)]
 fn place_legacy_order(
     program_id: &Pubkey,
@@ -2562,7 +2577,7 @@ fn stage_direct_v4_existing(
 /// Cancellation reads no grid account: its reservation has already frozen the
 /// grid and the Epoch still authenticates that identity.
 #[inline(never)]
-#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+#[cfg(test)]
 fn cancel_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -3003,7 +3018,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_writes_exactly_what_the_layout_encoder_would() {
         let d = domain();
         let first = order(0x20, 1, 5_000);
@@ -3161,7 +3176,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_writes_a_portfolio_record_the_same_way() {
         /* The v1 wire could not carry a portfolio record at all.  It can now,
          * and the placement path is the same one: the same writer, the same
@@ -3234,7 +3249,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn cancel_order_writes_exactly_what_the_layout_encoder_would() {
         let d = domain();
         let first = order(0x20, 1, 5_000);
@@ -3315,7 +3330,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn cancel_order_refuses_a_replayed_retirement() {
         let d = domain();
         let placed = order(0x20, 1, 5_000);
@@ -3347,7 +3362,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn cancel_order_refuses_a_stale_generation_a_foreign_owner_and_another_page() {
         let d = domain();
         /* A record whose own generation is 5, so a retirement must carry a
@@ -3434,7 +3449,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn cancel_order_refuses_a_closed_epoch_a_frozen_page_and_a_foreign_epoch() {
         let grid = grid_account();
         let placed = order(0x20, 1, 5_000);
@@ -3509,7 +3524,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_fills_a_page_and_then_refuses_a_seventeenth_record() {
         let d = domain();
         let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3538,7 +3553,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_every_page_the_streaming_decoder_refuses() {
         let d = domain();
         let existing = order(0x20, 1, 5_000);
@@ -3629,7 +3644,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_an_off_grid_limit_and_a_grid_the_epoch_does_not_name() {
         let d = domain();
         let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3681,7 +3696,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_a_closed_epoch_and_a_frozen_page() {
         let grid = grid_account();
         for phase in [EPOCH_PHASE_FROZEN, EPOCH_PHASE_CLEARED] {
@@ -3719,7 +3734,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_a_rank_that_is_not_the_one_the_page_fixes() {
         /* At v3 this was an ordering rule — an id had to be strictly above its
          * predecessor — and a caller could burn a page by claiming a huge one.
@@ -3781,7 +3796,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_an_unauthenticated_owner_and_a_replayed_sequence() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3815,7 +3830,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_refuses_a_page_or_an_intent_that_names_another_epoch() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3850,7 +3865,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn place_order_mirrors_the_record_codec_and_the_epochs_width_and_horizon() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3969,7 +3984,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     fn the_place_order_wire_carries_both_order_families() {
         /* `Intent::PlaceOrder` carries an `OrderSlot` and, at intent v3, an
          * exact fee ceiling.  The portfolio family is expressible: 182 bytes
