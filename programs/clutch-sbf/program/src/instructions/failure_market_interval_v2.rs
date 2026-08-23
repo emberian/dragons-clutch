@@ -42,7 +42,9 @@ use clutch_failure_policy_runtime::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
-use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV2};
+use clutch_product_series::{
+    ContentId as ProductContentId, MarketFoundationSlotV2, SourceOccurrenceV1Id,
+};
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
@@ -178,6 +180,7 @@ pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
     accounts: AuthenticatedFailureMarketIntervalAccountsV2,
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
+    source_occurrence_id: SourceOccurrenceV1Id,
 }
 
 impl FailureMarketIntervalArchivePostwriteV2 {
@@ -199,6 +202,12 @@ impl FailureMarketIntervalArchivePostwriteV2 {
     /// Exact reset receipt paired to the append.
     pub(crate) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 {
         self.reset
+    }
+
+    /// Exact Source occurrence retained from the terminal Product work before
+    /// canonical Idle reset clears the reusable cell's session-local body.
+    pub(crate) const fn source_occurrence_id(self) -> SourceOccurrenceV1Id {
+        self.source_occurrence_id
     }
 }
 
@@ -859,6 +868,12 @@ fn write_failure_market_interval_archive_v2<'a>(
     cell_plan: FailureMarketIntervalCellPlanV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
 ) -> Outcome<FailureMarketIntervalArchivePostwriteV2> {
+    let source_occurrence_id = authenticated
+        .cell
+        .product_work()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+        .source_occurrence_id();
     let mut next_history = authenticated.history;
     next_history
         .commit_plan(history_plan)
@@ -958,6 +973,7 @@ fn write_failure_market_interval_archive_v2<'a>(
             &append.completed_session_count().to_le_bytes(),
             &append.market_instance_id().bytes(),
             &append.generation().to_le_bytes(),
+            &source_occurrence_id.bytes(),
         ])
         .to_bytes(),
     );
@@ -967,6 +983,7 @@ fn write_failure_market_interval_archive_v2<'a>(
         accounts,
         append,
         reset,
+        source_occurrence_id,
     })
 }
 
