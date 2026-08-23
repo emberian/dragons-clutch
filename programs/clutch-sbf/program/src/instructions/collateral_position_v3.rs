@@ -15,9 +15,7 @@ use clutch_general_v2_contract::{
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
-use clutch_product_series::{
-    FixedCodec, MarketInstancePreimageV2, MARKET_INSTANCE_PREIMAGE_V2_BYTES,
-};
+use clutch_product_series::MarketInstancePreimageV2;
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
     GeneralPositionProjectionV3, Identity32V1, PositionAccountV3, PositionPurposeV3,
@@ -29,6 +27,8 @@ use solana_pubkey::Pubkey;
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+
+use super::product_artifact::authenticate_product_artifact_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeSha256;
@@ -155,14 +155,12 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
     )?;
     let (market_binding, market_runtime) =
         authenticate_general_market_v1(program_id, market_binding_account, market_runtime_account)?;
-    require_program_account(
+    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         market_instance_account,
-        false,
-        MARKET_INSTANCE_PREIMAGE_V2_BYTES,
+        market_binding.market_instance_v2_id.content_id(),
     )?;
-    let market_instance = MarketInstancePreimageV2::decode(&market_instance_account.data.borrow())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_instance = *market_instance_artifact.value();
     let market_instance_id = market_instance
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;

@@ -35,8 +35,9 @@ use clutch_product_series::{
     SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
 };
 use clutch_product_series::{
-    FixedCodec, RegistryCapabilityProfileV2, RegistryProgramReleaseV1,
-    REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
+    FixedCodec, MarketInstancePreimageV2, RegistryCapabilityProfileV2, RegistryProgramReleaseV1,
+    MARKET_INSTANCE_PREIMAGE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
+    REGISTRY_PROGRAM_RELEASE_V1_BYTES,
 };
 use clutch_source_plane_v3_runtime::{
     SourceReleaseManifestV1, SourceWorkScheduleBindingV1, SOURCE_RELEASE_MANIFEST_BYTES,
@@ -155,6 +156,8 @@ pub enum ArtifactKind {
     SourceReleaseManifestV1 = 44,
     /// Immutable Source-selected paid-work schedule.
     SourceWorkScheduleV1 = 45,
+    /// Full-width economic MarketInstance V2 identity preimage.
+    MarketInstancePreimageV2 = 46,
 }
 
 impl ArtifactKind {
@@ -195,6 +198,7 @@ impl ArtifactKind {
             43 => Ok(Self::RegistryCapabilityProfileV2),
             44 => Ok(Self::SourceReleaseManifestV1),
             45 => Ok(Self::SourceWorkScheduleV1),
+            46 => Ok(Self::MarketInstancePreimageV2),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -226,6 +230,7 @@ impl ArtifactKind {
             Self::RegistryCapabilityProfileV2 => REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
             Self::SourceReleaseManifestV1 => SOURCE_RELEASE_MANIFEST_BYTES,
             Self::SourceWorkScheduleV1 => SOURCE_WORK_SCHEDULE_BYTES,
+            Self::MarketInstancePreimageV2 => MARKET_INSTANCE_PREIMAGE_V2_BYTES,
         }
     }
 
@@ -252,6 +257,7 @@ impl ArtifactKind {
                 | Self::RegistryCapabilityProfileV2
                 | Self::SourceReleaseManifestV1
                 | Self::SourceWorkScheduleV1
+                | Self::MarketInstancePreimageV2
         )
     }
 }
@@ -774,8 +780,8 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             Ok(0)
         }
         ArtifactKind::SourceReleaseManifestV1 => {
-            let value = SourceReleaseManifestV1::decode(body)
-                .map_err(|_| CodecError::MismatchedBinding)?;
+            let value =
+                SourceReleaseManifestV1::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
             if Hash32::from_bytes(
                 value
                     .id()
@@ -789,6 +795,20 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
         }
         ArtifactKind::SourceWorkScheduleV1 => {
             let value = SourceWorkScheduleBindingV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::MarketInstancePreimageV2 => {
+            let value = MarketInstancePreimageV2::decode(body)
                 .map_err(|_| CodecError::MismatchedBinding)?;
             if Hash32::from_bytes(
                 value
