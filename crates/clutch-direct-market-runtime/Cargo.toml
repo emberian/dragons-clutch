@@ -1,0 +1,17 @@
+[package]
+name = "clutch-direct-market-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Current Direct market lifecycle, Product family authority, and settlement semantics"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clutch-batch = { path = "../clutch-batch" }
+clutch-product-series = { path = "../clutch-product-series" }
+
+[dev-dependencies]
+sha2 = { version = "=0.10.9", default-features = false }
