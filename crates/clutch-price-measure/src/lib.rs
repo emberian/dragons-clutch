@@ -14,7 +14,7 @@
 //! judge price quality beyond measure coherence, or determine fees, bonds, and
 //! solver compensation.
 
-use clutch_bspline::BasisSpec;
+use clutch_bspline::{BasisSpec, ValidatedBasisSpec};
 
 /// Semantic version of the certificate and checker interface.
 pub const PRICE_MEASURE_WITNESS_VERSION_V2: u8 = 2;
@@ -214,6 +214,27 @@ pub struct VerifiedPriceMeasureV2 {
     pub body_digest: [u8; 32],
 }
 
+/// Validated append-only verifier for one quantized atom certificate.
+///
+/// [`Self::begin`] validates the complete immutable basis, candidate price,
+/// certificate header, atom order, coordinate bounds, mass, primitive scale,
+/// and canonical padding exactly once. Each [`Self::accumulate_atom`] then
+/// evaluates one exact atom through the captured [`ValidatedBasisSpec`].
+/// [`Self::finish`] succeeds only after the exact active atom prefix has been
+/// consumed and the accumulated mixture reconstructs every candidate price.
+///
+/// Fields are private so a caller cannot forge a cursor, partial sum, or
+/// validated-basis capability. This value is an in-memory arithmetic state,
+/// not a canonical account layout or persistence codec.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuantizedPriceMeasureAccumulatorV2 {
+    basis: ValidatedBasisSpec,
+    prices: PriceVectorV2,
+    witness: QuantizedAtomWitnessV2,
+    atom_cursor: u8,
+    accumulators: [u128; MAX_OUTCOMES],
+}
+
 /// Binding coordinate that did not match adapter-authenticated truth.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BindingFieldV2 {
@@ -308,6 +329,22 @@ pub enum ErrorV2 {
     AtomMassMismatch,
     /// Denominator and atom masses shared a nontrivial common divisor.
     NonPrimitiveAtomScale,
+    /// A staged atom did not equal the exact next active atom.
+    AtomCursorMismatch {
+        /// Exact next atom required by the accumulator.
+        expected: u8,
+        /// Atom cursor supplied by the caller.
+        provided: u8,
+    },
+    /// A staged append was attempted after every active atom was consumed.
+    AtomCursorExhausted,
+    /// Staged reconstruction was requested before every active atom was consumed.
+    IncompleteAtomAccumulation {
+        /// Exact next atom that remained to be consumed.
+        cursor: u8,
+        /// Total active atom count committed by the witness.
+        atom_count: u8,
+    },
     /// An inactive moment cell was nonzero.
     NonCanonicalMomentPadding {
         /// First nonzero inactive moment cell.
@@ -341,6 +378,119 @@ pub enum ErrorV2 {
 /// Result alias for certificate operations.
 pub type Result<T> = core::result::Result<T, ErrorV2>;
 
+impl QuantizedPriceMeasureAccumulatorV2 {
+    /// Validate one complete quantized certificate and open its empty staged sum.
+    ///
+    /// Refusal order through this constructor is version and policy, bindings,
+    /// immutable basis and shape, price simplex and padding, then atom count,
+    /// denominator, coordinate range and order, mass, padding, and primitive
+    /// scale. No atom is evaluated until every structural check succeeds.
+    pub fn begin(
+        expected: &AdapterBindingsV2,
+        basis: &BasisSpec,
+        prices: &PriceVectorV2,
+        witness: &QuantizedAtomWitnessV2,
+    ) -> Result<Self> {
+        let basis = validate_quantized_header(expected, basis, prices, witness)?;
+        let outcomes = usize::from(prices.outcome_count);
+        validate_prices(prices, outcomes)?;
+        validate_atoms(&basis.spec(), prices.outcome_count, witness)?;
+        Ok(Self {
+            basis,
+            prices: *prices,
+            witness: *witness,
+            atom_cursor: 0,
+            accumulators: [0; MAX_OUTCOMES],
+        })
+    }
+
+    /// Exact next active atom required by [`Self::accumulate_atom`].
+    pub const fn atom_cursor(&self) -> u8 {
+        self.atom_cursor
+    }
+
+    /// Total active atom count committed by the validated witness.
+    pub const fn atom_count(&self) -> u8 {
+        self.witness.atom_count
+    }
+
+    /// Evaluate and accumulate exactly the next certified atom.
+    ///
+    /// `atom` must equal [`Self::atom_cursor`]. A skipped, replayed, or
+    /// post-completion cursor refuses. Every checked evaluation and component
+    /// addition is staged locally, so a refusal leaves `self` unchanged.
+    pub fn accumulate_atom(&mut self, atom: u8) -> Result<()> {
+        if atom != self.atom_cursor {
+            return Err(ErrorV2::AtomCursorMismatch {
+                expected: self.atom_cursor,
+                provided: atom,
+            });
+        }
+        if atom >= self.witness.atom_count {
+            return Err(ErrorV2::AtomCursorExhausted);
+        }
+        let index = usize::from(atom);
+        let weights = self
+            .basis
+            .evaluate_point(self.witness.atom_coordinates[index])
+            .map_err(|_| ErrorV2::InvalidBasis)?;
+        let mass = u128::from(self.witness.atom_masses[index]);
+        let mut accumulators = self.accumulators;
+        let mut outcome = 0_usize;
+        while outcome < usize::from(self.prices.outcome_count) {
+            let term = mass
+                .checked_mul(u128::from(weights.weights[outcome]))
+                .ok_or(ErrorV2::ArithmeticOverflow)?;
+            accumulators[outcome] = accumulators[outcome]
+                .checked_add(term)
+                .ok_or(ErrorV2::ArithmeticOverflow)?;
+            outcome += 1;
+        }
+        let next = atom.checked_add(1).ok_or(ErrorV2::ArithmeticOverflow)?;
+        self.accumulators = accumulators;
+        self.atom_cursor = next;
+        Ok(())
+    }
+
+    /// Finish exact reconstruction after consuming every active atom.
+    ///
+    /// This consumes the accumulator. An incomplete walk refuses before any
+    /// price comparison; a complete walk compares reduced exact rational pairs
+    /// in ascending outcome order and performs no rounding.
+    pub fn finish(self) -> Result<VerifiedPriceMeasureV2> {
+        if self.atom_cursor != self.witness.atom_count {
+            return Err(ErrorV2::IncompleteAtomAccumulation {
+                cursor: self.atom_cursor,
+                atom_count: self.witness.atom_count,
+            });
+        }
+        let spec = self.basis.spec();
+        let witness_scale = u128::from(spec.denominator)
+            .checked_mul(u128::from(self.witness.common_denominator))
+            .ok_or(ErrorV2::ArithmeticOverflow)?;
+        let mut outcome = 0_u8;
+        while outcome < self.prices.outcome_count {
+            let index = usize::from(outcome);
+            if !ratios_equal(
+                u128::from(self.prices.prices[index]),
+                u128::from(self.prices.price_scale),
+                self.accumulators[index],
+                witness_scale,
+            ) {
+                return Err(ErrorV2::PriceReconstructionMismatch { outcome });
+            }
+            outcome += 1;
+        }
+        Ok(VerifiedPriceMeasureV2 {
+            basis_degree: self.prices.basis_degree,
+            outcome_count: self.prices.outcome_count,
+            span_count: self.prices.outcome_count - self.prices.basis_degree,
+            common_denominator: self.witness.common_denominator,
+            body_digest: self.witness.body_digest,
+        })
+    }
+}
+
 /// Verify the complete adapter-bound price-measure certificate.
 ///
 /// Refusal order is version and policy, bindings, shape, price simplex and
@@ -371,27 +521,22 @@ pub fn verify_continuous_price_measure_v2(
 /// Verify a support-bounded measure over the current production payout vectors.
 ///
 /// `basis` must be the owner-checked immutable `BasisSpec` whose canonical byte
-/// digest equals `expected.basis_digest`. This function validates it again,
-/// evaluates every certified integer coordinate through `clutch-bspline`, and
-/// compares the resulting mixture to every candidate price exactly.
+/// digest equals `expected.basis_digest`. This function delegates to
+/// [`QuantizedPriceMeasureAccumulatorV2`], validating the basis once and then
+/// evaluating every certified integer coordinate through `clutch-bspline`.
 pub fn verify_quantized_price_measure_v2(
     expected: &AdapterBindingsV2,
     basis: &BasisSpec,
     prices: &PriceVectorV2,
     witness: &QuantizedAtomWitnessV2,
 ) -> Result<VerifiedPriceMeasureV2> {
-    validate_quantized_header(expected, basis, prices, witness)?;
-    let outcomes = usize::from(prices.outcome_count);
-    validate_prices(prices, outcomes)?;
-    validate_atoms(basis, prices.outcome_count, witness)?;
-    reconstruct_quantized_prices(basis, prices, witness, outcomes)?;
-    Ok(VerifiedPriceMeasureV2 {
-        basis_degree: prices.basis_degree,
-        outcome_count: prices.outcome_count,
-        span_count: prices.outcome_count - prices.basis_degree,
-        common_denominator: witness.common_denominator,
-        body_digest: witness.body_digest,
-    })
+    let mut accumulator =
+        QuantizedPriceMeasureAccumulatorV2::begin(expected, basis, prices, witness)?;
+    while accumulator.atom_cursor() < accumulator.atom_count() {
+        let atom = accumulator.atom_cursor();
+        accumulator.accumulate_atom(atom)?;
+    }
+    accumulator.finish()
 }
 
 /// Return the generated exact transfer matrix for one span.
@@ -480,7 +625,7 @@ fn validate_quantized_header(
     basis: &BasisSpec,
     prices: &PriceVectorV2,
     witness: &QuantizedAtomWitnessV2,
-) -> Result<()> {
+) -> Result<ValidatedBasisSpec> {
     if witness.schema_version != PRICE_MEASURE_WITNESS_VERSION_V2 {
         return Err(ErrorV2::UnsupportedSchemaVersion);
     }
@@ -519,12 +664,12 @@ fn validate_quantized_header(
             return Err(ErrorV2::BindingMismatch { field });
         }
     }
-    basis.validate().map_err(|_| ErrorV2::InvalidBasis)?;
+    let validated_basis = basis.validated().map_err(|_| ErrorV2::InvalidBasis)?;
     validate_shape(prices.basis_degree, prices.outcome_count)?;
     if basis.degree != prices.basis_degree || basis.outcome_count != prices.outcome_count {
         return Err(ErrorV2::InvalidBasis);
     }
-    Ok(())
+    Ok(validated_basis)
 }
 
 fn validate_shape(degree: u8, outcome_count: u8) -> Result<()> {
@@ -731,51 +876,6 @@ fn reconstruct_prices(
     let witness_denominator = u128::from(witness.common_denominator);
     let witness_scale = denominator
         .checked_mul(witness_denominator)
-        .ok_or(ErrorV2::ArithmeticOverflow)?;
-    let mut outcome = 0_u8;
-    while usize::from(outcome) < outcomes {
-        let index = usize::from(outcome);
-        if !ratios_equal(
-            u128::from(prices.prices[index]),
-            u128::from(prices.price_scale),
-            accumulators[index],
-            witness_scale,
-        ) {
-            return Err(ErrorV2::PriceReconstructionMismatch { outcome });
-        }
-        outcome += 1;
-    }
-    Ok(())
-}
-
-fn reconstruct_quantized_prices(
-    basis: &BasisSpec,
-    prices: &PriceVectorV2,
-    witness: &QuantizedAtomWitnessV2,
-    outcomes: usize,
-) -> Result<()> {
-    let mut accumulators = [0_u128; MAX_OUTCOMES];
-    let mut atom = 0_u8;
-    while atom < witness.atom_count {
-        let index = usize::from(atom);
-        let weights = basis
-            .evaluate(witness.atom_coordinates[index])
-            .map_err(|_| ErrorV2::InvalidBasis)?;
-        let mass = u128::from(witness.atom_masses[index]);
-        let mut outcome = 0_usize;
-        while outcome < outcomes {
-            let term = mass
-                .checked_mul(u128::from(weights.weights[outcome]))
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
-            accumulators[outcome] = accumulators[outcome]
-                .checked_add(term)
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
-            outcome += 1;
-        }
-        atom += 1;
-    }
-    let witness_scale = u128::from(basis.denominator)
-        .checked_mul(u128::from(witness.common_denominator))
         .ok_or(ErrorV2::ArithmeticOverflow)?;
     let mut outcome = 0_u8;
     while usize::from(outcome) < outcomes {

@@ -3,7 +3,8 @@ use clutch_price_measure::{
     transfer_span_v2, verify_continuous_price_measure_v2, verify_quantized_price_measure_v2,
     AdapterBindingsV2, BasisSemanticsV2, BindingFieldV2, ContinuousPriceMeasureWitnessV2,
     CubicConstraintV2, ErrorV2, PayoutRoundingBoundaryV2, PriceRoundingBoundaryV2, PriceVectorV2,
-    QuantizedAtomWitnessV2, MAX_COMMON_DENOMINATOR, MAX_MOMENTS, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
+    QuantizedAtomWitnessV2, QuantizedPriceMeasureAccumulatorV2, VerifiedPriceMeasureV2,
+    MAX_COMMON_DENOMINATOR, MAX_MOMENTS, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
     PRICE_MEASURE_WITNESS_VERSION_V2, TRANSFER_TABLE_VERSION_V1,
 };
 
@@ -136,6 +137,33 @@ fn quantized_mixture_prices(
     }
 }
 
+fn verify_quantized_staged(
+    expected: &AdapterBindingsV2,
+    basis: &BasisSpec,
+    prices: &PriceVectorV2,
+    witness: &QuantizedAtomWitnessV2,
+) -> clutch_price_measure::Result<VerifiedPriceMeasureV2> {
+    let mut accumulator =
+        QuantizedPriceMeasureAccumulatorV2::begin(expected, basis, prices, witness)?;
+    while accumulator.atom_cursor() < accumulator.atom_count() {
+        let atom = accumulator.atom_cursor();
+        accumulator.accumulate_atom(atom)?;
+    }
+    accumulator.finish()
+}
+
+fn verify_quantized_both(
+    expected: &AdapterBindingsV2,
+    basis: &BasisSpec,
+    prices: &PriceVectorV2,
+    witness: &QuantizedAtomWitnessV2,
+) -> clutch_price_measure::Result<VerifiedPriceMeasureV2> {
+    let monolithic = verify_quantized_price_measure_v2(expected, basis, prices, witness);
+    let staged = verify_quantized_staged(expected, basis, prices, witness);
+    assert_eq!(staged, monolithic);
+    staged
+}
+
 #[test]
 fn frozen_continuous_vectors_remain_exact() {
     let mut seen = 0_usize;
@@ -257,7 +285,7 @@ fn quantized_live_point_that_v1b_refuses_has_an_exact_runtime_certificate() {
     assert!(!v1b_degree_two_accepts(&weights.weights[..5], 10_000));
     let price = price_vector(2, &weights.weights[..5], 10_000);
     let witness = quantized_witness(&[85], &[1], 1);
-    verify_quantized_price_measure_v2(&bindings(), &basis, &price, &witness).unwrap();
+    verify_quantized_both(&bindings(), &basis, &price, &witness).unwrap();
 }
 
 #[test]
@@ -268,7 +296,7 @@ fn quantization_can_make_a_coherent_knot_point_one_hot() {
     assert!(!v1b_degree_two_accepts(&weights.weights[..5], 1));
     let price = price_vector(2, &weights.weights[..5], 1);
     let witness = quantized_witness(&[1], &[1], 1);
-    verify_quantized_price_measure_v2(&bindings(), &basis, &price, &witness).unwrap();
+    verify_quantized_both(&bindings(), &basis, &price, &witness).unwrap();
 }
 
 #[test]
@@ -283,10 +311,10 @@ fn continuous_single_span_hankel_acceptance_can_be_a_runtime_false_acceptance() 
     assert_eq!(&basis.evaluate(0).unwrap().weights[..3], &[4, 0, 0]);
     assert_eq!(&basis.evaluate(1).unwrap().weights[..3], &[0, 0, 4]);
     let quantized = quantized_witness(&[0, 1], &[1, 1], 2);
-    assert!(matches!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &quantized),
-        Err(ErrorV2::PriceReconstructionMismatch { .. })
-    ));
+    assert_eq!(
+        verify_quantized_both(&bindings(), &basis, &price, &quantized),
+        Err(ErrorV2::PriceReconstructionMismatch { outcome: 0 })
+    );
 }
 
 #[test]
@@ -301,7 +329,7 @@ fn canonical_atom_encoding_is_not_a_unique_witness_for_one_price() {
     let price = price_vector(2, &at_six.weights[..5], 8);
 
     let one_atom = quantized_witness(&[6], &[1], 1);
-    verify_quantized_price_measure_v2(&bindings(), &basis, &price, &one_atom).unwrap();
+    let one_verified = verify_quantized_both(&bindings(), &basis, &price, &one_atom).unwrap();
 
     let mut two_atoms = quantized_witness(&[5, 7], &[1, 1], 2);
     two_atoms.body_digest = [6; 32];
@@ -309,12 +337,179 @@ fn canonical_atom_encoding_is_not_a_unique_witness_for_one_price() {
         observed_body_digest: [6; 32],
         ..bindings()
     };
-    verify_quantized_price_measure_v2(&second_binding, &basis, &price, &two_atoms).unwrap();
+    let two_verified = verify_quantized_both(&second_binding, &basis, &price, &two_atoms).unwrap();
     assert_eq!(
         one_atom.candidate_price_digest,
         two_atoms.candidate_price_digest
     );
+    assert_eq!(
+        (
+            one_verified.basis_degree,
+            one_verified.outcome_count,
+            one_verified.span_count,
+        ),
+        (
+            two_verified.basis_degree,
+            two_verified.outcome_count,
+            two_verified.span_count,
+        )
+    );
+    assert_ne!(
+        one_verified.common_denominator,
+        two_verified.common_denominator
+    );
     assert_ne!(one_atom.body_digest, two_atoms.body_digest);
+}
+
+#[test]
+fn staged_atom_cursor_and_finish_are_exact_and_transactional() {
+    let basis = basis(3, &[8, 16, 24], 10_000, 3);
+    let coordinates = [8_u128, 13, 24];
+    let masses = [1_u64, 2, 4];
+    let price = quantized_mixture_prices(&basis, &coordinates, &masses);
+    let witness = quantized_witness(&coordinates, &masses, 7);
+    let mut accumulator =
+        QuantizedPriceMeasureAccumulatorV2::begin(&bindings(), &basis, &price, &witness).unwrap();
+
+    assert_eq!(accumulator.atom_cursor(), 0);
+    assert_eq!(accumulator.atom_count(), 3);
+    let initial = accumulator.clone();
+    assert_eq!(
+        accumulator.accumulate_atom(1),
+        Err(ErrorV2::AtomCursorMismatch {
+            expected: 0,
+            provided: 1,
+        })
+    );
+    assert_eq!(accumulator, initial);
+    assert_eq!(
+        accumulator.clone().finish(),
+        Err(ErrorV2::IncompleteAtomAccumulation {
+            cursor: 0,
+            atom_count: 3,
+        })
+    );
+
+    accumulator.accumulate_atom(0).unwrap();
+    let after_first = accumulator.clone();
+    assert_eq!(
+        accumulator.accumulate_atom(0),
+        Err(ErrorV2::AtomCursorMismatch {
+            expected: 1,
+            provided: 0,
+        })
+    );
+    assert_eq!(accumulator, after_first);
+    assert_eq!(
+        accumulator.accumulate_atom(2),
+        Err(ErrorV2::AtomCursorMismatch {
+            expected: 1,
+            provided: 2,
+        })
+    );
+    assert_eq!(accumulator, after_first);
+
+    accumulator.accumulate_atom(1).unwrap();
+    assert_eq!(
+        accumulator.clone().finish(),
+        Err(ErrorV2::IncompleteAtomAccumulation {
+            cursor: 2,
+            atom_count: 3,
+        })
+    );
+    accumulator.accumulate_atom(2).unwrap();
+    let complete = accumulator.clone();
+    assert_eq!(
+        accumulator.accumulate_atom(3),
+        Err(ErrorV2::AtomCursorExhausted)
+    );
+    assert_eq!(accumulator, complete);
+    assert_eq!(
+        accumulator.finish(),
+        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &witness)
+    );
+}
+
+#[test]
+fn staged_begin_enforces_degree_width_count_mass_and_primitive_bounds() {
+    let basis = basis(2, &[0, 4, 8, 12], 8, 2);
+    let coordinates = [0_u128, 6, 12];
+    let masses = [1_u64, 2, 4];
+    let price = quantized_mixture_prices(&basis, &coordinates, &masses);
+    let witness = quantized_witness(&coordinates, &masses, 7);
+
+    for (mutated, expected) in [
+        (
+            QuantizedAtomWitnessV2 {
+                atom_count: 0,
+                ..witness
+            },
+            ErrorV2::InvalidAtomCount,
+        ),
+        (
+            QuantizedAtomWitnessV2 {
+                atom_count: price.outcome_count + 1,
+                ..witness
+            },
+            ErrorV2::InvalidAtomCount,
+        ),
+        (
+            QuantizedAtomWitnessV2 {
+                common_denominator: 0,
+                ..witness
+            },
+            ErrorV2::InvalidCommonDenominator,
+        ),
+        (
+            QuantizedAtomWitnessV2 {
+                common_denominator: 8,
+                ..witness
+            },
+            ErrorV2::AtomMassMismatch,
+        ),
+        (
+            QuantizedAtomWitnessV2 {
+                common_denominator: 14,
+                atom_masses: {
+                    let mut values = witness.atom_masses;
+                    values[..3].copy_from_slice(&[2, 4, 8]);
+                    values
+                },
+                ..witness
+            },
+            ErrorV2::NonPrimitiveAtomScale,
+        ),
+    ] {
+        assert_eq!(
+            verify_quantized_both(&bindings(), &basis, &price, &mutated),
+            Err(expected)
+        );
+    }
+
+    let invalid_degree = PriceVectorV2 {
+        basis_degree: 1,
+        ..price
+    };
+    assert_eq!(
+        verify_quantized_both(&bindings(), &basis, &invalid_degree, &witness),
+        Err(ErrorV2::InvalidDegree)
+    );
+    let invalid_width = PriceVectorV2 {
+        outcome_count: 17,
+        ..price
+    };
+    assert_eq!(
+        verify_quantized_both(&bindings(), &basis, &invalid_width, &witness),
+        Err(ErrorV2::InvalidOutcomeCount)
+    );
+    let mismatched_basis_shape = PriceVectorV2 {
+        basis_degree: 3,
+        ..price
+    };
+    assert_eq!(
+        verify_quantized_both(&bindings(), &basis, &mismatched_basis_shape, &witness),
+        Err(ErrorV2::InvalidBasis)
+    );
 }
 
 #[test]
@@ -335,7 +530,7 @@ fn quantized_cross_span_mixtures_verify_for_every_shape() {
             let masses = [1_u64, 2, 4];
             let price = quantized_mixture_prices(&basis, &coordinates, &masses);
             let witness = quantized_witness(&coordinates, &masses, 7);
-            verify_quantized_price_measure_v2(&bindings(), &basis, &price, &witness).unwrap();
+            verify_quantized_both(&bindings(), &basis, &price, &witness).unwrap();
             outcomes += 1;
         }
     }
@@ -349,7 +544,7 @@ fn quantized_arithmetic_accepts_the_full_u64_denominator_boundary() {
     let coordinates = [0_u128, 4];
     let price = price_vector(3, &[denominator - 1, 0, 0, 1], denominator);
     let witness = quantized_witness(&coordinates, &masses, denominator);
-    verify_quantized_price_measure_v2(&bindings(), &basis, &price, &witness).unwrap();
+    verify_quantized_both(&bindings(), &basis, &price, &witness).unwrap();
     assert_eq!(MAX_COMMON_DENOMINATOR, denominator);
 }
 
@@ -365,7 +560,7 @@ fn full_u64_continuous_denominator_is_exact_and_basis_overflow_refuses() {
     let quantized = quantized_witness(&[0], &[1], 1);
     let endpoint_price = price_vector(3, &[1, 0, 0, 0], 1);
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &invalid_basis, &endpoint_price, &quantized),
+        verify_quantized_both(&bindings(), &invalid_basis, &endpoint_price, &quantized),
         Err(ErrorV2::InvalidBasis)
     );
 }
@@ -385,7 +580,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         value
     };
     assert!(matches!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &wrong_price, &witness),
+        verify_quantized_both(&bindings(), &basis, &wrong_price, &witness),
         Err(ErrorV2::PriceReconstructionMismatch { .. })
     ));
 
@@ -398,7 +593,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         ..witness
     };
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &out_of_range),
+        verify_quantized_both(&bindings(), &basis, &price, &out_of_range),
         Err(ErrorV2::AtomCoordinateOutOfRange { atom: 0 })
     );
 
@@ -411,7 +606,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         ..witness
     };
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &duplicate),
+        verify_quantized_both(&bindings(), &basis, &price, &duplicate),
         Err(ErrorV2::NonCanonicalAtomOrder { atom: 1 })
     );
 
@@ -424,7 +619,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         ..witness
     };
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &zero_mass),
+        verify_quantized_both(&bindings(), &basis, &price, &zero_mass),
         Err(ErrorV2::ZeroAtomMass { atom: 1 })
     );
 
@@ -437,7 +632,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         ..witness
     };
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &padded),
+        verify_quantized_both(&bindings(), &basis, &price, &padded),
         Err(ErrorV2::NonCanonicalAtomPadding { atom: 3 })
     );
 
@@ -451,7 +646,7 @@ fn quantized_certificate_mutations_refuse_without_rounding_or_clamping() {
         ..witness
     };
     assert_eq!(
-        verify_quantized_price_measure_v2(&bindings(), &basis, &price, &nonprimitive),
+        verify_quantized_both(&bindings(), &basis, &price, &nonprimitive),
         Err(ErrorV2::NonPrimitiveAtomScale)
     );
 }
