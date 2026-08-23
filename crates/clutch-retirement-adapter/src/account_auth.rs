@@ -20,6 +20,15 @@ use clutch_solana_layout::registry::{
 };
 
 use crate::{RetirementAdapterErrorV1, RetirementAdapterErrorV2};
+use clutch_general_v2_contract::{
+    FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG, FINAL_POT_ACCOUNT_VERSION,
+    GENERAL_EPOCH_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
+    OWNER_FEE_CARRY_ACCOUNT_TAG, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+    OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_BYTES,
+    OWNER_SETTLEMENT_ACCOUNT_TAG, OWNER_SETTLEMENT_ACCOUNT_VERSION,
+    SELECTED_CANDIDATE_ACCOUNT_BYTES, SELECTED_CANDIDATE_ACCOUNT_TAG,
+    SELECTED_CANDIDATE_ACCOUNT_VERSION,
+};
 
 const POSITION_STORED_BUMP_OFFSET: usize = 218;
 const POSITION_V3_STORED_BUMP_OFFSET: usize = 5;
@@ -33,6 +42,12 @@ const EPOCH_TOMBSTONE_STORED_BUMP_OFFSET: usize = 83;
 const REPLAY_SUCCESSOR_STORED_BUMP_OFFSET: usize = 82;
 const PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_BUDGET_STORED_BUMP_OFFSET: usize = 270;
+const GENERAL_V2_EPOCH_STORED_BUMP_OFFSET: usize = GENERAL_EPOCH_ACCOUNT_BYTES - 2;
+const GENERAL_V2_SELECTED_STORED_BUMP_OFFSET: usize = SELECTED_CANDIDATE_ACCOUNT_BYTES - 2;
+const GENERAL_V2_OWNER_SETTLEMENT_STORED_BUMP_OFFSET: usize = OWNER_SETTLEMENT_ACCOUNT_BYTES - 2;
+const GENERAL_V2_OWNER_FEE_FINALIZATION_STORED_BUMP_OFFSET: usize =
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES - 2;
+const GENERAL_V2_FINAL_POT_STORED_BUMP_OFFSET: usize = FINAL_POT_ACCOUNT_BYTES - 2;
 
 /// Runtime facts read from one Solana account before any state mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,6 +381,108 @@ pub fn authenticate_purpose_replay_v3_exact<'a>(
         view,
         canonical_bump: canonical_pda.bump,
     })
+}
+
+/// Authenticate the exact fresh counted General Epoch V6 account.
+pub fn authenticate_general_epoch_v6_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+    access: AccountAccessV2,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: GENERAL_EPOCH_ACCOUNT_TAG,
+            version: GENERAL_EPOCH_ACCOUNT_VERSION,
+            len: GENERAL_EPOCH_ACCOUNT_BYTES,
+            bump_offset: GENERAL_V2_EPOCH_STORED_BUMP_OFFSET,
+        },
+        access,
+    )
+}
+
+/// Authenticate one exact General SelectedCandidate account.
+pub fn authenticate_general_selected_candidate_v1_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+    access: AccountAccessV2,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: SELECTED_CANDIDATE_ACCOUNT_TAG,
+            version: SELECTED_CANDIDATE_ACCOUNT_VERSION,
+            len: SELECTED_CANDIDATE_ACCOUNT_BYTES,
+            bump_offset: GENERAL_V2_SELECTED_STORED_BUMP_OFFSET,
+        },
+        access,
+    )
+}
+
+/// Authenticate one exact writable General owner-settlement row.
+pub fn authenticate_general_owner_settlement_v1_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            len: OWNER_SETTLEMENT_ACCOUNT_BYTES,
+            bump_offset: GENERAL_V2_OWNER_SETTLEMENT_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
+}
+
+/// Authenticate one exact writable 0x83/version-2 owner fee receipt.
+pub fn authenticate_general_owner_fee_finalization_v2_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+            len: OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+            bump_offset: GENERAL_V2_OWNER_FEE_FINALIZATION_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
+}
+
+/// Authenticate the exact writable 332-byte General FinalPot.
+pub fn authenticate_general_final_pot_v1_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: FINAL_POT_ACCOUNT_TAG,
+            version: FINAL_POT_ACCOUNT_VERSION,
+            len: FINAL_POT_ACCOUNT_BYTES,
+            bump_offset: GENERAL_V2_FINAL_POT_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
 }
 
 /// Authenticate Position V2 under an exact read-only or writable role.
