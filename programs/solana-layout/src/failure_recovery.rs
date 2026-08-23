@@ -566,6 +566,9 @@ pub enum RecoveryAccountRoleV1 {
     ProductOccurrenceRoot,
     IntervalConsensusWork,
     IntervalConsensusReplay,
+    ResolutionV5,
+    HoardV2,
+    ClaimLedgerV3,
     ClockSysvar,
     RentSysvar,
     SystemProgram,
@@ -803,11 +806,16 @@ pub const ADVANCE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
 ];
 
-/// Exact ordered contract for private Product capability restoration.
+/// Exact ordered contract for private Product capability restoration and the
+/// atomic full-width Resolution V5/Hoard V2/ClaimLedger V3 postimage.
 pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
+    meta(RecoveryAccountRoleV1::ResolutionV5, true, false),
+    meta(RecoveryAccountRoleV1::HoardV2, true, false),
+    meta(RecoveryAccountRoleV1::ClaimLedgerV3, true, false),
     INTERVAL_PRODUCT_METAS_V1[0],
     INTERVAL_PRODUCT_METAS_V1[1],
     INTERVAL_PRODUCT_METAS_V1[2],
@@ -825,6 +833,7 @@ pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SourceResult, false, false),
     meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
     meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
+    meta(RecoveryAccountRoleV1::SystemProgram, false, false),
 ];
 
 /// Exact ordered contract for closing only deletable ab work.
@@ -1033,8 +1042,7 @@ pub fn decode_payload_v1(
             ] {
                 require_live(id)?;
             }
-            if value.work_rent_principal_lamports == 0
-                || value.replay_rent_principal_lamports == 0
+            if value.work_rent_principal_lamports == 0 || value.replay_rent_principal_lamports == 0
             {
                 return Err(CodecError::ZeroValue);
             }
@@ -1103,9 +1111,7 @@ pub fn decode_payload_v1(
             ] {
                 require_live(id)?;
             }
-            Ok(FailureRecoveryPayloadV1::CloseIntervalConsensusWork(
-                value,
-            ))
+            Ok(FailureRecoveryPayloadV1::CloseIntervalConsensusWork(value))
         }
     }
 }
@@ -1459,15 +1465,13 @@ mod tests {
                 certificate_id: [39; 32],
                 replay_receipt_id: [40; 32],
             }),
-            FailureRecoveryPayloadV1::CloseIntervalConsensusWork(
-                CloseIntervalConsensusWorkV1 {
-                    common: common(),
-                    certificate_id: [41; 32],
-                    resolution_receipt_id: [42; 32],
-                    replay_receipt_id: [43; 32],
-                    work_close_authorization_id: [44; 32],
-                },
-            ),
+            FailureRecoveryPayloadV1::CloseIntervalConsensusWork(CloseIntervalConsensusWorkV1 {
+                common: common(),
+                certificate_id: [41; 32],
+                resolution_receipt_id: [42; 32],
+                replay_receipt_id: [43; 32],
+                work_close_authorization_id: [44; 32],
+            }),
         ];
         for value in values {
             let action = match value {
@@ -1524,5 +1528,26 @@ mod tests {
                 Err(CodecError::TrailingBytes)
             );
         }
+    }
+
+    #[test]
+    fn interval_resolution_requires_the_atomic_liability_postimage() {
+        let metas = account_metas_v1(registry::RecoveryAction::ResolveIntervalConsensus);
+        assert_eq!(metas.len(), 25);
+        assert_eq!(metas[1].role, RecoveryAccountRoleV1::ProductOccurrenceRoot);
+        assert!(metas[1].writable);
+        assert_eq!(metas[4].role, RecoveryAccountRoleV1::ResolutionV5);
+        assert!(metas[4].writable);
+        assert_eq!(metas[5].role, RecoveryAccountRoleV1::HoardV2);
+        assert!(metas[5].writable);
+        assert_eq!(metas[6].role, RecoveryAccountRoleV1::ClaimLedgerV3);
+        assert!(metas[6].writable);
+        assert_eq!(metas[24].role, RecoveryAccountRoleV1::SystemProgram);
+        assert!(!metas.iter().any(|meta| matches!(
+            meta.role,
+            RecoveryAccountRoleV1::RecoveryCompartment
+                | RecoveryAccountRoleV1::RootRentPayer
+                | RecoveryAccountRoleV1::NeutralSink
+        )));
     }
 }
