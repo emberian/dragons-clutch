@@ -17,7 +17,7 @@ first-party `clutch-kernel`; the SBF adapter must additionally reconcile its
 authenticated internal/external SupplyLedger closure and enforce the immutable
 collateral cap.
 
-`crates/clutch-structured-claim-adapter` now freezes the exact descriptor image,
+`crates/clutch-structured-claim-runtime-contract` now freezes the exact descriptor image,
 reconstructs native/deployment identity hashing inputs, and stages the required
 atomic Position cash/native-Egg transfer over authenticated semantic
 projections. The remaining implementation work is the Solana account/CPI

@@ -1,4 +1,4 @@
-//! Supply-sensitive canonical wrap and unwind orchestration contracts.
+//! Supply-sensitive structured-claim lifecycle orchestration contracts.
 
 use clutch_structured_claim::{
     BackingVault, DonationDelta, HolderAssets, MarketLedger, StructuredClaimMachine, WrapperState,

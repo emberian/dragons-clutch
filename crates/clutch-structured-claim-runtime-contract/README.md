@@ -1,4 +1,4 @@
-# `clutch-structured-claim-adapter`
+# `clutch-structured-claim-runtime-contract`
 
 This crate is the allocation-free runtime contract between the pure
 `clutch-structured-claim` economics and a future small SBF/Token-2022 adapter.
