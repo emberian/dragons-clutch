@@ -1034,14 +1034,26 @@ impl SeriesFundingTermsV2 {
     /// Validate exact local shape.
     pub fn validate_shape(&self) -> Result<()> {
         self.series_plan_id.validate()?;
-        for id in [
+        let roles = [
             self.lamport_principal_refund,
             self.collateral_principal_refund_token_account,
             self.neutral_sink,
             self.collateral_mint,
             self.token_program,
-        ] {
+        ];
+        for id in roles {
             id.validate()?;
+        }
+        let mut left = 0_usize;
+        while left < roles.len() {
+            let mut right = left + 1;
+            while right < roles.len() {
+                if roles[left] == roles[right] {
+                    return Err(Error::InvalidParameter);
+                }
+                right += 1;
+            }
+            left += 1;
         }
         Ok(())
     }

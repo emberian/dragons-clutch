@@ -248,6 +248,14 @@ input, Hoard principal input, volume forecast, or implicit borrowing. A future
 production account design may split the source-work envelope further only when
 the exact route quotes and custody owners are frozen.
 
+FundingTerms V2 also treats its five external account roles as pairwise
+distinct: lamport-principal refund, collateral-principal refund token account,
+neutral donation sink, collateral mint, and token program. In particular,
+payer-owned refundable principal can never alias the neutral donation sink.
+This is semantic validation of the existing 208-byte V2 preimage, not a parallel
+adapter policy; an aliased body is now refused before it can mint a valid typed
+artifact ID.
+
 Series collateral is passive-liquidity capital, not claimant backing. User
 split/endowment collateral enters the market-local Hoard separately and remains
 the sole backing of Egg liabilities.
