@@ -10,15 +10,16 @@
 //! with the returned root successor.
 
 use clutch_owner_settlement::{
-    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
-    VirtualReceiptKindV1,
+    AuthenticatedFinalPotV1, SettlementCashPotExpectationV1, SettlementCashPotV1,
+    VirtualCashDirectionV1, VirtualInventoryStateV1, VirtualReceiptKindV1, MAX_OUTCOMES,
 };
 
 use crate::{
     AdmissionNodeStatusV1, AdmissionNodeV4AccountV1, CandidateFeedHeaderV2,
-    CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, FirstAdmittedTieV1, Id32,
-    MarketBindingV2, Reader, SettlementCandidateKindV1, Sha256BackendV1, Writer, ID_BYTES,
-    SCORE_V2_Q_RANK_CAPACITY,
+    CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, FirstAdmittedTieV1,
+    GeneralEpochPhaseV1, GeneralEpochV6AccountV1, Id32, MarketBindingV2, Reader,
+    SettlementCandidateKindV1, Sha256BackendV1, Writer, FINAL_POT_ACCOUNT_BYTES,
+    FINAL_POT_ACCOUNT_TAG, FINAL_POT_ACCOUNT_VERSION, ID_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 
 /// Fresh centrally reserved SettlementRoot account discriminator.
@@ -1091,6 +1092,8 @@ pub struct InitializeSettlementRootV1<'a> {
     pub epoch_generation: u64,
     /// Full Product MarketInstance V2 identity.
     pub market_instance_v2_id: Id32,
+    /// Exact frozen Epoch prestate whose unique selected child becomes this root.
+    pub epoch: &'a GeneralEpochV6AccountV1,
     /// Exact immutable MarketBinding V2 body.
     pub market: &'a MarketBindingV2,
     /// Exact pre-finalization Window V5 body.
@@ -1131,6 +1134,7 @@ pub struct InitializeSettlementRootV1<'a> {
 /// Exact action-39 poststate and singleton creation projections.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InitializeSettlementRootPlanV1 {
+    epoch: GeneralEpochV6AccountV1,
     root: SettlementRootV1AccountV1,
     window: CandidateWindowV5AccountV1,
     cash_pot: Option<SettlementCashPotV1>,
@@ -1138,6 +1142,11 @@ pub struct InitializeSettlementRootPlanV1 {
 }
 
 impl InitializeSettlementRootPlanV1 {
+    /// Finalized Epoch successor counting this unique SettlementRoot.
+    pub const fn epoch(&self) -> &GeneralEpochV6AccountV1 {
+        &self.epoch
+    }
+
     /// Newly counted SettlementRoot.
     pub const fn root(&self) -> &SettlementRootV1AccountV1 {
         &self.root
@@ -1221,6 +1230,41 @@ impl SettlementFinalPotInitializationV1 {
     pub const fn stored_bump(&self) -> u8 {
         self.stored_bump
     }
+
+    /// Encode the exact fresh FinalPot outer without consulting a historical
+    /// SelectedCandidate account. The action-39 root plan is the sole budget
+    /// authority and fixes every semantic field in this postimage.
+    pub fn encode(self, output: &mut [u8]) -> Result<(), CodecError> {
+        let semantic = AuthenticatedFinalPotV1 {
+            account: self.account.bytes(),
+            market: self.market.bytes(),
+            epoch: self.epoch.bytes(),
+            candidate: self.candidate.bytes(),
+            owner_order_set_digest: self.owner_order_set_digest.bytes(),
+            relation_witness_digest: self.settlement_witness_digest.bytes(),
+            cash_principal_atoms: 0,
+            internal_claims: [0; MAX_OUTCOMES],
+            inventory_kind: self.kind,
+            authorized_complete_set_atoms: self.authorized_complete_set_atoms,
+            processed_complete_set_atoms: 0,
+            inventory_transition_sequence: 0,
+            inventory_state: VirtualInventoryStateV1::Open,
+            outcome_count: self.outcome_count,
+            phase: 0,
+            writable: true,
+            selected_budget_authenticated: true,
+        };
+        let body = semantic
+            .encode_body()
+            .map_err(|_| CodecError::InvalidState)?;
+        let mut writer = Writer::exact(output, FINAL_POT_ACCOUNT_BYTES)?;
+        writer.u8(FINAL_POT_ACCOUNT_TAG)?;
+        writer.u8(FINAL_POT_ACCOUNT_VERSION)?;
+        writer.bytes(&body)?;
+        writer.u8(self.stored_bump)?;
+        writer.u8(0)?;
+        writer.finish()
+    }
 }
 
 /// Exact action-37 sole merge cash-pot creation poststate.
@@ -1279,6 +1323,7 @@ pub fn prepare_activate_merge_cash_pot_v1(
 pub fn initialize_settlement_root_v1(
     request: InitializeSettlementRootV1<'_>,
 ) -> Result<InitializeSettlementRootPlanV1, CodecError> {
+    request.epoch.validate()?;
     request.market.validate()?;
     request.window.validate()?;
     request.node.validate()?;
@@ -1306,6 +1351,14 @@ pub fn initialize_settlement_root_v1(
     let market = request.market.base();
     let direction = request.cash_expectation.virtual_cash_direction;
     if request.epoch_generation == 0
+        || request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.epoch.selected_candidate_count != 0
+        || request.epoch.generation != request.epoch_generation
+        || request.epoch.market_binding != request.market_binding_account
+        || request.epoch.market_runtime != market.market
+        || request.epoch.market_instance_v2_id != request.market_instance_v2_id
+        || request.epoch.window != request.window_account
+        || request.epoch.order_set != request.feed.order_set
         || request.current_slot < window.verification_closes_slot
         || request.current_slot == 0
         || request.feed.order_count == 0
@@ -1493,6 +1546,12 @@ pub fn initialize_settlement_root_v1(
         flags: 0,
     };
     root.validate()?;
+    let epoch = GeneralEpochV6AccountV1 {
+        selected_candidate_count: 1,
+        phase: GeneralEpochPhaseV1::Finalized,
+        ..*request.epoch
+    };
+    epoch.validate()?;
     let mut window_after = *window;
     window_after.finalized_slot = request.current_slot;
     window_after.selected_candidate_artifact = request.root_account;
@@ -1529,6 +1588,7 @@ pub fn initialize_settlement_root_v1(
         }),
     };
     Ok(InitializeSettlementRootPlanV1 {
+        epoch,
         root,
         window,
         cash_pot,
