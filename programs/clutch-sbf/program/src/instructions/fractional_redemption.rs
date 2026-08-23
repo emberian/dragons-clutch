@@ -1,7 +1,7 @@
 //! Exact fractional-redemption successor over canonical full-width accounts.
 //!
-//! The first executable slice is action 2, exact internal redemption. It
-//! mutates only the sole owners of the affected facts: Position V3 and GEN1
+//! Executable actions 2 through 9 mutate only the sole owners of affected
+//! facts: owner credit/tombstone, Position V3 and GEN1
 //! Replay for claimant state, ClaimLedger V3 for native supply, Hoard V2 for
 //! locked-principal/cash classification, and `0xa5/v1` for the global
 //! fractional sequence and aggregate numerator credit. The immutable
@@ -22,16 +22,20 @@ use clutch_collateral_adapter_v2::{
 use clutch_fractional_redemption_runtime::{
     accept_bearer_credit_burn_v1, accept_bearer_exact_burn_v1, bind_fractional_context_v1,
     bind_fractional_internal_context_v1, finish_bearer_credit_v1, finish_bearer_exact_v1,
-    prepare_bearer_credit_v1, prepare_bearer_exact_v1,
+    finish_external_credit_transfer_v1, merge_credit_v1, prepare_bearer_credit_v1,
+    prepare_bearer_exact_v1, prepare_external_credit_merge_v1,
+    prepare_external_credit_transfer_v1,
     project_fractional_family_terminal_receipt_v1, redeem_internal_exact_v1,
-    redeem_internal_to_credit_v1, seal_claims_exhausted_v1,
+    redeem_internal_to_credit_v1, seal_claims_exhausted_v1, transfer_credit_v1,
     verify_fractional_family_admission_postwrite_v1,
     verify_fractional_family_terminal_postwrite_v1, BearerClaimPrestateV1,
-    CreditCreationV1, CreditPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
+    close_zero_credit_v1, CreditCreationV1, CreditPayoutPoststateV1, CreditPayoutTargetV1,
+    CreditPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalFamilyAdmissionReceiptV1,
     FractionalFamilyTerminalReceiptV1, FractionalInitializationPlanV1, FractionalLedgerV1,
     FractionalPolicyV2, FractionalRedeemIntentV1, FractionalRedemptionActionV1,
-    FractionalTerminalIntentV1, InternalPositionV1, RedemptionSourcePoststateV1,
+    FractionalTerminalIntentV1, FractionalTransferIntentV1, FractionalCloseCreditIntentV1,
+    InternalPositionV1, RedemptionSourcePoststateV1,
     VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
     FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
@@ -139,6 +143,48 @@ mod seal_ix {
     pub const RESOLUTION: usize = 9;
     pub const FRACTIONAL_POLICY: usize = 10;
     pub const FRACTIONAL_LEDGER: usize = 11;
+}
+
+mod move_ix {
+    pub const SOURCE_CLAIMANT: usize = 0;
+    pub const DESTINATION_CLAIMANT: usize = 1;
+    pub const REALM: usize = 2;
+    pub const PROFILE: usize = 3;
+    pub const COLLATERAL_POLICY: usize = 4;
+    pub const COLLATERAL_TOKEN_PROGRAM: usize = 5;
+    pub const MARKET_BINDING: usize = 6;
+    pub const MARKET_RUNTIME: usize = 7;
+    pub const MARKET_INSTANCE: usize = 8;
+    pub const HOARD: usize = 9;
+    pub const CLAIM_LEDGER: usize = 10;
+    pub const RESOLUTION: usize = 11;
+    pub const FRACTIONAL_POLICY: usize = 12;
+    pub const FRACTIONAL_LEDGER: usize = 13;
+    pub const SOURCE_CREDIT: usize = 14;
+    pub const DESTINATION_CREDIT: usize = 15;
+    pub const PAYOUT: usize = 16;
+}
+
+mod close_credit_ix {
+    pub const CLAIMANT: usize = 0;
+    pub const REALM: usize = 1;
+    pub const PROFILE: usize = 2;
+    pub const COLLATERAL_POLICY: usize = 3;
+    pub const COLLATERAL_TOKEN_PROGRAM: usize = 4;
+    pub const MARKET_BINDING: usize = 5;
+    pub const MARKET_RUNTIME: usize = 6;
+    pub const MARKET_INSTANCE: usize = 7;
+    pub const HOARD: usize = 8;
+    pub const CLAIM_LEDGER: usize = 9;
+    pub const RESOLUTION: usize = 10;
+    pub const FRACTIONAL_POLICY: usize = 11;
+    pub const FRACTIONAL_LEDGER: usize = 12;
+    pub const CREDIT: usize = 13;
+    pub const PAYER: usize = 14;
+    pub const MARKET_ROOT: usize = 15;
+    pub const NEUTRAL: usize = 16;
+    pub const RENT: usize = 17;
+    pub const COUNT: usize = 18;
 }
 
 fn map_fractional(error: FractionalError) -> Refusal {
@@ -421,6 +467,26 @@ impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
         self.verified.verification_id()
     }
 
+    pub(crate) const fn resolution_account(self) -> Identity32V1 {
+        self.verified.terminal_requirement().resolution_account()
+    }
+
+    pub(crate) const fn resolution_semantic_id(self) -> Identity32V1 {
+        self.verified
+            .terminal_requirement()
+            .resolution_semantic_id()
+    }
+
+    pub(crate) const fn resolution_data_id(self) -> Identity32V1 {
+        self.verified.terminal_requirement().resolution_data_id()
+    }
+
+    pub(crate) const fn native_claim_basis_id(self) -> Identity32V1 {
+        self.verified
+            .terminal_requirement()
+            .native_claim_basis_id()
+    }
+
     pub(crate) const fn runtime_release(self) -> AuthenticatedFractionalRuntimeReleaseV1 {
         self.runtime_release
     }
@@ -573,10 +639,16 @@ fn decode_fractional_accounts(
         true,
         FRACTIONAL_LEDGER_ACCOUNT_BYTES,
     )?;
-    let policy = FractionalPolicyV2::decode(&accounts[policy_index].data.borrow())
-        .map_err(map_fractional)?;
-    let ledger = FractionalLedgerV1::decode(&accounts[ledger_index].data.borrow())
-        .map_err(map_fractional)?;
+    let policy_data = accounts[policy_index]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    drop(policy_data);
+    let ledger_data = accounts[ledger_index]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
+    drop(ledger_data);
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         accounts[policy_index].key,
@@ -626,6 +698,15 @@ pub fn process(
         FractionalRedemptionActionV1::RedeemBearerCredit => {
             let intent = FractionalRedeemIntentV1::decode(payload).map_err(map_fractional)?;
             process_redeem_bearer_credit(program_id, accounts, envelope_sequence, intent)
+        }
+        FractionalRedemptionActionV1::TransferCredit
+        | FractionalRedemptionActionV1::MergeCredit => {
+            let intent = FractionalTransferIntentV1::decode(payload).map_err(map_fractional)?;
+            process_credit_move(program_id, accounts, envelope_sequence, action, intent)
+        }
+        FractionalRedemptionActionV1::CloseZeroCredit => {
+            let intent = FractionalCloseCreditIntentV1::decode(payload).map_err(map_fractional)?;
+            process_close_zero_credit(program_id, accounts, envelope_sequence, intent)
         }
         FractionalRedemptionActionV1::SealClaimsExhausted => {
             let intent = FractionalTerminalIntentV1::decode(payload).map_err(map_fractional)?;
@@ -1974,6 +2055,655 @@ fn process_redeem_bearer_credit(
         .claim_ledger_after()
         .encode(
             &mut accounts[bearer_ix::CLAIM_LEDGER]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CreditMoveGeometryV1 {
+    root: usize,
+    neutral: usize,
+    rent: usize,
+    funding: usize,
+}
+
+fn require_credit_move_contract(
+    accounts: &[AccountInfo<'_>],
+    payout_kind: u8,
+    destination_mode: u8,
+) -> Outcome<CreditMoveGeometryV1> {
+    let creation = matches!(destination_mode, 2 | 3);
+    let (root, neutral, rent) = match payout_kind {
+        1 => (18, 19, 20),
+        2 => (20, 21, 22),
+        _ => return Err(ClutchError::MismatchedState.into()),
+    };
+    let funding = rent + 1;
+    let expected = funding + if creation { CREDIT_CREATION_SUFFIX_ACCOUNTS_V1 } else { 0 };
+    require_count(accounts, expected)?;
+    let payer_alias_source =
+        creation && accounts[move_ix::SOURCE_CLAIMANT].key == accounts[funding].key;
+    let payer_alias_destination =
+        creation && accounts[move_ix::DESTINATION_CLAIMANT].key == accounts[funding].key;
+    let mut index = 0usize;
+    while index < accounts.len() {
+        let payout_writable = if payout_kind == 1 {
+            matches!(index, 16 | 17)
+        } else {
+            matches!(index, 17 | 19)
+        };
+        let expected_writable = matches!(
+            index,
+            move_ix::HOARD
+                | move_ix::CLAIM_LEDGER
+                | move_ix::FRACTIONAL_LEDGER
+                | move_ix::SOURCE_CREDIT
+                | move_ix::DESTINATION_CREDIT
+        ) || payout_writable
+            || (creation && index == funding)
+            || (index == move_ix::SOURCE_CLAIMANT && payer_alias_source)
+            || (index == move_ix::DESTINATION_CLAIMANT && payer_alias_destination);
+        require(
+            accounts[index].is_writable == expected_writable,
+            if expected_writable {
+                ClutchError::NotWritable
+            } else {
+                ClutchError::UnexpectedWritable
+            },
+        )?;
+        let expected_signer = index == move_ix::SOURCE_CLAIMANT
+            || index == move_ix::DESTINATION_CLAIMANT
+            || (creation && index == funding);
+        require(
+            accounts[index].is_signer == expected_signer,
+            ClutchError::MismatchedState,
+        )?;
+        let mut other = index + 1;
+        while other < accounts.len() {
+            let payer_alias = creation
+                && other == funding
+                && matches!(index, move_ix::SOURCE_CLAIMANT | move_ix::DESTINATION_CLAIMANT);
+            if !payer_alias {
+                require(accounts[index].key != accounts[other].key, ClutchError::AccountAlias)?;
+            }
+            other += 1;
+        }
+        index += 1;
+    }
+    Ok(CreditMoveGeometryV1 {
+        root,
+        neutral,
+        rent,
+        funding,
+    })
+}
+
+#[inline(never)]
+fn process_credit_move(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    envelope_sequence: u64,
+    action: FractionalRedemptionActionV1,
+    intent: FractionalTransferIntentV1,
+) -> Outcome<()> {
+    let geometry =
+        require_credit_move_contract(accounts, intent.payout_kind, intent.destination_mode)?;
+    require(
+        envelope_sequence == intent.expected_ledger_sequence
+            && accounts[move_ix::SOURCE_CLAIMANT].key.to_bytes()
+                == intent.source_claimant.bytes()
+            && accounts[move_ix::DESTINATION_CLAIMANT].key.to_bytes()
+                == intent.destination_claimant.bytes()
+            && accounts[move_ix::SOURCE_CREDIT].key.to_bytes() == intent.source_credit.bytes()
+            && accounts[move_ix::DESTINATION_CREDIT].key.to_bytes()
+                == intent.destination_credit.bytes()
+            && ((action == FractionalRedemptionActionV1::TransferCredit
+                && intent.numerator != 0)
+                || (action == FractionalRedemptionActionV1::MergeCredit
+                    && intent.numerator == 0))
+            && ((intent.payout_kind == 1 && intent.expected_payout_replay_sequence != 0)
+                || (intent.payout_kind == 2 && intent.expected_payout_replay_sequence == 0)),
+        ClutchError::MismatchedState,
+    )?;
+    let liabilities = authenticate_general_market_liabilities_v1(
+        program_id,
+        &accounts[move_ix::REALM],
+        &accounts[move_ix::PROFILE],
+        &accounts[move_ix::COLLATERAL_POLICY],
+        &accounts[move_ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[move_ix::MARKET_BINDING],
+        &accounts[move_ix::MARKET_RUNTIME],
+        &accounts[move_ix::MARKET_INSTANCE],
+        &accounts[move_ix::HOARD],
+        &accounts[move_ix::CLAIM_LEDGER],
+        true,
+        true,
+    )?;
+    let resolution =
+        authenticate_resolution_v5(program_id, &accounts[move_ix::RESOLUTION], liabilities)?;
+    let (policy, ledger) = decode_fractional_accounts(
+        program_id,
+        accounts,
+        move_ix::FRACTIONAL_POLICY,
+        move_ix::FRACTIONAL_LEDGER,
+        move_ix::RESOLUTION,
+    )?;
+    require(
+        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+            && policy.resolution_account.bytes() == resolution.account_id.bytes()
+            && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
+            && ledger.claim_ledger_account.bytes()
+                == accounts[move_ix::CLAIM_LEDGER].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        &accounts[geometry.root],
+        liabilities.market_binding.market_instance_v2_id,
+        policy.domain_generation,
+        false,
+    )?;
+    let neutral = root.state().capital().neutral_lamport_sink;
+    require(
+        accounts[geometry.neutral].key.to_bytes() == neutral.bytes()
+            && accounts[geometry.neutral].owner == &SYSTEM_PROGRAM_ID
+            && accounts[geometry.neutral].data_is_empty()
+            && !accounts[geometry.neutral].executable,
+        ClutchError::MismatchedState,
+    )?;
+    let policy_account = identity32(accounts[move_ix::FRACTIONAL_POLICY].key.to_bytes())?;
+    let ledger_account = identity32(accounts[move_ix::FRACTIONAL_LEDGER].key.to_bytes())?;
+    let (source_prestate, source_funding) = prepare_credit_prestate(
+        program_id,
+        accounts,
+        move_ix::SOURCE_CREDIT,
+        geometry.rent,
+        geometry.funding,
+        1,
+        policy_account,
+        ledger_account,
+        intent.source_claimant,
+        identity32(neutral.bytes())?,
+    )?;
+    let CreditPrestateV1::Live(source_credit) = source_prestate else {
+        return Err(ClutchError::MismatchedState.into());
+    };
+    require(
+        matches!(source_funding, CreditFundingAdmissionV1::Live),
+        ClutchError::MismatchedState,
+    )?;
+    let (destination_prestate, destination_funding) = prepare_credit_prestate(
+        program_id,
+        accounts,
+        move_ix::DESTINATION_CREDIT,
+        geometry.rent,
+        geometry.funding,
+        intent.destination_mode,
+        policy_account,
+        ledger_account,
+        intent.destination_claimant,
+        identity32(neutral.bytes())?,
+    )?;
+    let context = bind_fractional_internal_context_v1(
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        identity32(accounts[move_ix::CLAIM_LEDGER].key.to_bytes())?,
+        liabilities.claim_ledger,
+        liabilities.hoard,
+        resolution.resolution,
+        liabilities.bound,
+    )
+    .map_err(map_fractional)?;
+
+    let plan = if intent.payout_kind == 1 {
+        require(
+            accounts[move_ix::PAYOUT].key.to_bytes() == intent.payout_target.bytes(),
+            ClutchError::MismatchedState,
+        )?;
+        let position = authenticate_general_position_replay_v1(
+            program_id,
+            liabilities.bound,
+            &accounts[move_ix::MARKET_BINDING],
+            &accounts[move_ix::MARKET_RUNTIME],
+            &accounts[move_ix::PAYOUT],
+            &accounts[move_ix::PAYOUT + 1],
+            intent.destination_claimant.bytes(),
+            intent.expected_payout_replay_sequence,
+        )?;
+        let target = CreditPayoutTargetV1::Internal {
+            position: InternalPositionV1 {
+                position_replay: position.replay,
+            },
+            expected_replay_sequence: intent.expected_payout_replay_sequence,
+        };
+        if action == FractionalRedemptionActionV1::TransferCredit {
+            transfer_credit_v1(
+                context,
+                intent.expected_ledger_sequence,
+                source_credit,
+                intent.expected_source_sequence,
+                destination_prestate,
+                intent.destination_claimant,
+                intent.expected_destination_sequence,
+                intent.numerator,
+                target,
+            )
+        } else {
+            merge_credit_v1(
+                context,
+                intent.expected_ledger_sequence,
+                source_credit,
+                intent.expected_source_sequence,
+                destination_prestate,
+                intent.destination_claimant,
+                intent.expected_destination_sequence,
+                target,
+            )
+        }
+        .map_err(map_fractional)?
+    } else {
+        require(
+            accounts[move_ix::PAYOUT + 1].key.to_bytes() == intent.payout_target.bytes()
+                && accounts[move_ix::PAYOUT].key.to_bytes()
+                    == liabilities.bound.policy().mint.bytes()
+                && accounts[move_ix::PAYOUT + 3].key.to_bytes()
+                    == liabilities.hoard.token_account.bytes()
+                && accounts[move_ix::PAYOUT + 2].key.to_bytes()
+                    == liabilities.hoard.authority.bytes()
+                && !accounts[move_ix::PAYOUT + 2].executable
+                && accounts[move_ix::PAYOUT + 2].data_is_empty(),
+            ClutchError::MismatchedState,
+        )?;
+        let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+        expect_pda(
+            accounts[move_ix::PAYOUT + 2].key,
+            seeds::hoard_authority_v2_pda(program_id, &market_bytes),
+            None,
+        )?;
+        expect_pda(
+            accounts[move_ix::PAYOUT + 3].key,
+            seeds::hoard_token_v2_pda(program_id, &market_bytes),
+            None,
+        )?;
+        let prepared = if action == FractionalRedemptionActionV1::TransferCredit {
+            prepare_external_credit_transfer_v1(
+                context,
+                intent.expected_ledger_sequence,
+                source_credit,
+                intent.expected_source_sequence,
+                destination_prestate,
+                intent.destination_claimant,
+                intent.expected_destination_sequence,
+                intent.numerator,
+                intent.payout_target,
+            )
+        } else {
+            prepare_external_credit_merge_v1(
+                context,
+                intent.expected_ledger_sequence,
+                source_credit,
+                intent.expected_source_sequence,
+                destination_prestate,
+                intent.destination_claimant,
+                intent.expected_destination_sequence,
+                intent.payout_target,
+            )
+        }
+        .map_err(map_fractional)?;
+        let request = prepared.collateral_request();
+        let collateral = {
+            let mint_data = accounts[move_ix::PAYOUT]
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            let hoard_data = accounts[move_ix::PAYOUT + 3]
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            let destination_data = accounts[move_ix::PAYOUT + 1]
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            if request.payout_atoms == 0 {
+                let prepared = prepare_zero_claim_redemption_collateral_v2(
+                    liabilities.bound,
+                    request,
+                    runtime_account_view(&accounts[move_ix::PAYOUT], &mint_data),
+                    runtime_account_view(&accounts[move_ix::PAYOUT + 3], &hoard_data),
+                    runtime_account_view(&accounts[move_ix::PAYOUT + 1], &destination_data),
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+                drop((mint_data, hoard_data, destination_data));
+                AcceptedBearerRedemptionCollateralV3::Zero(
+                    accept_zero_claim_collateral_payout(
+                        prepared,
+                        &accounts[move_ix::PAYOUT],
+                        &accounts[move_ix::PAYOUT + 3],
+                        &accounts[move_ix::PAYOUT + 1],
+                    )?,
+                )
+            } else {
+                let prepared = prepare_claim_redemption_collateral_v2(
+                    liabilities.bound,
+                    request,
+                    TransferAuthorityV2 {
+                        address: CollateralId::from_bytes(
+                            accounts[move_ix::PAYOUT + 2].key.to_bytes(),
+                        ),
+                        kind: TransferAuthorityKindV2::ProgramDerived,
+                        is_transaction_signer: false,
+                        program_address_authenticated: true,
+                        is_writable: accounts[move_ix::PAYOUT + 2].is_writable,
+                        executable: accounts[move_ix::PAYOUT + 2].executable,
+                        data_is_empty: accounts[move_ix::PAYOUT + 2].data_is_empty(),
+                    },
+                    runtime_account_view(&accounts[move_ix::PAYOUT], &mint_data),
+                    runtime_account_view(&accounts[move_ix::PAYOUT + 3], &hoard_data),
+                    runtime_account_view(&accounts[move_ix::PAYOUT + 1], &destination_data),
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+                drop((mint_data, hoard_data, destination_data));
+                let bump = [seeds::hoard_authority_v2_pda(program_id, &market_bytes).1];
+                let signer: [&[u8]; 3] =
+                    [seeds::SEED_HOARD_AUTHORITY_V2, &market_bytes, &bump];
+                AcceptedBearerRedemptionCollateralV3::Nonzero(
+                    invoke_claim_collateral_payout(
+                        prepared,
+                        &accounts[move_ix::PAYOUT],
+                        &accounts[move_ix::PAYOUT + 3],
+                        &accounts[move_ix::PAYOUT + 1],
+                        &accounts[move_ix::PAYOUT + 2],
+                        &accounts[move_ix::COLLATERAL_TOKEN_PROGRAM],
+                        &signer,
+                    )?,
+                )
+            }
+        };
+        finish_external_credit_transfer_v1(prepared, collateral).map_err(map_fractional)?
+    };
+
+    require(
+        plan.source_after.claimant == intent.source_claimant
+            && plan.destination_after.claimant == intent.destination_claimant
+            && plan.custody_after.payout_atoms() == plan.paid_atoms,
+        ClutchError::MismatchedState,
+    )?;
+    apply_credit_funding(
+        program_id,
+        accounts,
+        move_ix::DESTINATION_CREDIT,
+        accounts[move_ix::FRACTIONAL_POLICY].key.to_bytes(),
+        intent.destination_claimant.bytes(),
+        destination_funding,
+    )?;
+    accounts[move_ix::SOURCE_CREDIT]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.source_after.encode().map_err(map_fractional)?);
+    accounts[move_ix::DESTINATION_CREDIT]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.destination_after.encode().map_err(map_fractional)?);
+    accounts[move_ix::FRACTIONAL_LEDGER]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.ledger_after.encode().map_err(map_fractional)?);
+    plan.custody_after
+        .hoard_after()
+        .encode(
+            &mut accounts[move_ix::HOARD]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    plan.custody_after
+        .fractional()
+        .claim_ledger_after()
+        .encode(
+            &mut accounts[move_ix::CLAIM_LEDGER]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    match plan.payout_after {
+        CreditPayoutPoststateV1::Internal(internal) if intent.payout_kind == 1 => {
+            accounts[move_ix::PAYOUT]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                .copy_from_slice(
+                    &internal
+                        .position_after
+                        .encode()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+                );
+            accounts[move_ix::PAYOUT + 1]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                .copy_from_slice(internal.replay.replay_poststate_body());
+        }
+        CreditPayoutPoststateV1::External {
+            claimant,
+            collateral_hoard,
+            collateral_destination,
+            payout_atoms,
+        } if intent.payout_kind == 2 => {
+            require(
+                claimant == intent.destination_claimant
+                    && collateral_hoard.bytes()
+                        == accounts[move_ix::PAYOUT + 3].key.to_bytes()
+                    && collateral_destination == intent.payout_target
+                    && payout_atoms == plan.paid_atoms,
+                ClutchError::MismatchedState,
+            )?;
+        }
+        _ => return Err(ClutchError::MismatchedState.into()),
+    }
+    Ok(())
+}
+
+fn require_close_credit_contract(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+    require_count(accounts, close_credit_ix::COUNT)?;
+    let payer_alias = accounts[close_credit_ix::CLAIMANT].key == accounts[close_credit_ix::PAYER].key;
+    let mut index = 0usize;
+    while index < accounts.len() {
+        let expected_writable = matches!(
+            index,
+            close_credit_ix::CLAIM_LEDGER
+                | close_credit_ix::FRACTIONAL_LEDGER
+                | close_credit_ix::CREDIT
+                | close_credit_ix::PAYER
+                | close_credit_ix::NEUTRAL
+        ) || (index == close_credit_ix::CLAIMANT && payer_alias);
+        require(
+            accounts[index].is_writable == expected_writable,
+            if expected_writable {
+                ClutchError::NotWritable
+            } else {
+                ClutchError::UnexpectedWritable
+            },
+        )?;
+        require(
+            accounts[index].is_signer
+                == (index == close_credit_ix::CLAIMANT
+                    || (index == close_credit_ix::PAYER && payer_alias)),
+            ClutchError::MismatchedState,
+        )?;
+        let mut other = index + 1;
+        while other < accounts.len() {
+            let allowed_payer_alias = index == close_credit_ix::CLAIMANT
+                && other == close_credit_ix::PAYER;
+            if !allowed_payer_alias {
+                require(accounts[index].key != accounts[other].key, ClutchError::AccountAlias)?;
+            }
+            other += 1;
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn process_close_zero_credit(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    envelope_sequence: u64,
+    intent: FractionalCloseCreditIntentV1,
+) -> Outcome<()> {
+    require_close_credit_contract(accounts)?;
+    require(
+        envelope_sequence == intent.expected_ledger_sequence
+            && accounts[close_credit_ix::CLAIMANT].key.to_bytes() == intent.claimant.bytes()
+            && accounts[close_credit_ix::CREDIT].key.to_bytes() == intent.credit_account.bytes()
+            && !accounts[close_credit_ix::PAYER].executable,
+        ClutchError::MismatchedState,
+    )?;
+    let liabilities = authenticate_general_market_liabilities_v1(
+        program_id,
+        &accounts[close_credit_ix::REALM],
+        &accounts[close_credit_ix::PROFILE],
+        &accounts[close_credit_ix::COLLATERAL_POLICY],
+        &accounts[close_credit_ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[close_credit_ix::MARKET_BINDING],
+        &accounts[close_credit_ix::MARKET_RUNTIME],
+        &accounts[close_credit_ix::MARKET_INSTANCE],
+        &accounts[close_credit_ix::HOARD],
+        &accounts[close_credit_ix::CLAIM_LEDGER],
+        false,
+        true,
+    )?;
+    let resolution = authenticate_resolution_v5(
+        program_id,
+        &accounts[close_credit_ix::RESOLUTION],
+        liabilities,
+    )?;
+    let (policy, ledger) = decode_fractional_accounts(
+        program_id,
+        accounts,
+        close_credit_ix::FRACTIONAL_POLICY,
+        close_credit_ix::FRACTIONAL_LEDGER,
+        close_credit_ix::RESOLUTION,
+    )?;
+    require(
+        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+            && policy.resolution_account.bytes() == resolution.account_id.bytes()
+            && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
+            && ledger.claim_ledger_account.bytes()
+                == accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        &accounts[close_credit_ix::MARKET_ROOT],
+        liabilities.market_binding.market_instance_v2_id,
+        policy.domain_generation,
+        false,
+    )?;
+    let neutral = root.state().capital().neutral_lamport_sink;
+    require(
+        accounts[close_credit_ix::NEUTRAL].key.to_bytes() == neutral.bytes()
+            && accounts[close_credit_ix::NEUTRAL].owner == &SYSTEM_PROGRAM_ID
+            && accounts[close_credit_ix::NEUTRAL].data_is_empty()
+            && !accounts[close_credit_ix::NEUTRAL].executable,
+        ClutchError::MismatchedState,
+    )?;
+    let policy_account = identity32(accounts[close_credit_ix::FRACTIONAL_POLICY].key.to_bytes())?;
+    let ledger_account = identity32(accounts[close_credit_ix::FRACTIONAL_LEDGER].key.to_bytes())?;
+    let (credit_prestate, funding) = prepare_credit_prestate(
+        program_id,
+        accounts,
+        close_credit_ix::CREDIT,
+        close_credit_ix::RENT,
+        close_credit_ix::COUNT,
+        1,
+        policy_account,
+        ledger_account,
+        intent.claimant,
+        identity32(neutral.bytes())?,
+    )?;
+    let CreditPrestateV1::Live(credit) = credit_prestate else {
+        return Err(ClutchError::MismatchedState.into());
+    };
+    require(
+        matches!(funding, CreditFundingAdmissionV1::Live)
+            && accounts[close_credit_ix::PAYER].key.to_bytes() == credit.rent.payer.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let context = bind_fractional_internal_context_v1(
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        identity32(accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes())?,
+        liabilities.claim_ledger,
+        liabilities.hoard,
+        resolution.resolution,
+        liabilities.bound,
+    )
+    .map_err(map_fractional)?;
+    let plan = close_zero_credit_v1(
+        context,
+        intent.expected_ledger_sequence,
+        credit,
+        intent.expected_credit_sequence,
+        accounts[close_credit_ix::CREDIT].lamports(),
+        identity32(neutral.bytes())?,
+    )
+    .map_err(map_fractional)?;
+    require(
+        plan.funding.payer.bytes() == accounts[close_credit_ix::PAYER].key.to_bytes()
+            && plan.funding.neutral_sink.bytes()
+                == accounts[close_credit_ix::NEUTRAL].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let payer_after = accounts[close_credit_ix::PAYER]
+        .lamports()
+        .checked_add(plan.funding.payer_refund_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let neutral_after = accounts[close_credit_ix::NEUTRAL]
+        .lamports()
+        .checked_add(plan.funding.neutral_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    accounts[close_credit_ix::CREDIT]
+        .resize(FRACTIONAL_CREDIT_TOMBSTONE_BYTES)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    accounts[close_credit_ix::CREDIT]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.tombstone.encode().map_err(map_fractional)?);
+    {
+        let mut credit_lamports = accounts[close_credit_ix::CREDIT]
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **credit_lamports = plan.funding.tombstone_lamports;
+    }
+    {
+        let mut payer_lamports = accounts[close_credit_ix::PAYER]
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **payer_lamports = payer_after;
+    }
+    {
+        let mut neutral_lamports = accounts[close_credit_ix::NEUTRAL]
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **neutral_lamports = neutral_after;
+    }
+    require(
+        accounts[close_credit_ix::CREDIT].lamports() == plan.funding.tombstone_lamports
+            && accounts[close_credit_ix::PAYER].lamports() == payer_after
+            && accounts[close_credit_ix::NEUTRAL].lamports() == neutral_after,
+        ClutchError::MismatchedState,
+    )?;
+    accounts[close_credit_ix::FRACTIONAL_LEDGER]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.ledger_after.encode().map_err(map_fractional)?);
+    plan.claim_ledger_after
+        .claim_ledger_after()
+        .encode(
+            &mut accounts[close_credit_ix::CLAIM_LEDGER]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )

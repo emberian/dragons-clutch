@@ -133,12 +133,20 @@ The frozen future account order is:
   outcome, with only the selected mint writable. Credited form appends, after
   those mints, credit/tombstone, authenticated Product Market root, its neutral
   sink, and Rent sysvar; fresh/reopen mode then appends payer and System.
-- Transfer/merge: source and destination claimant signers; policy; ledger;
-  source and destination credits; ClaimLedger V3; Hoard V2; exact Position/Replay or
-  external collateral payout target; collateral release/program; funding and
-  tombstone metas; capability manifest.
-- Close credit: claimant; policy; ledger; ClaimLedger V3; live credit; stored
-  rent payer; neutral sink; System Program; capability manifest; Resolution.
+- Transfer/merge: source and destination claimant signers; Realm collateral
+  profile/policy/program; MarketBinding/Runtime/Instance; writable Hoard V2 and
+  ClaimLedger V3; Resolution; policy; ledger; both credits; then either exact
+  Position/GEN1 or collateral mint/destination/Hoard authority/Hoard token;
+  Product root; neutral sink; Rent. Fresh/reopen destinations append payer and
+  System. External payout authority stays private until both credits advance.
+  Without a Position/GEN1 consumer, external `MergeCredit` is intentionally
+  the full-source instance of `TransferCredit`; it does not invent a replay
+  account merely to persist two labels for the same exact successor.
+- Close credit: claimant; Realm collateral profile/policy/program;
+  MarketBinding/Runtime/Instance; Hoard V2; ClaimLedger V3; Resolution; policy;
+  ledger; live credit; stored rent payer; Product root; writable neutral sink;
+  Rent. Only the refundable principal returns to the payer; only donation and
+  excess go to the neutral sink; permanent tombstone principal stays put.
 - Terminal seal: Realm; collateral Profile/policy/token program; MarketBinding;
   MarketRuntime; MarketInstance artifact; Hoard V2; writable ClaimLedger V3;
   Resolution V5; policy; writable aggregate ledger.
@@ -148,7 +156,7 @@ The frozen future account order is:
   atomically and advances ClaimLedger to Retiring.
 
 Disabled tuples refuse before parsing payloads or inspecting accounts. Actions
-2 through 5 and 9 already perform their complete typed authentication, external-
+2 through 9 already perform their complete typed authentication, external-
 effect ordering where applicable, and atomic writeback. Action 2 remains
 independent of bearer claim-release availability. Enabling actions 1 and 2
 together still depends on Product exposing its stable per-slot Foundation
