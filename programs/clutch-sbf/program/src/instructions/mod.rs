@@ -157,6 +157,8 @@ pub(crate) mod product_fractional_family;
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
+/// Capability-disabled Product FoundationVault/Recovery/founder compositor.
+pub(crate) mod product_market_foundation_init;
 /// Always-compiled Product/Series semantic owner; executable routes remain
 /// independently capability-disabled.
 pub mod product_series;
