@@ -27,6 +27,7 @@ dynamic_port_range="${CLUTCH_OPERATOR_DYNAMIC_PORT_RANGE:-9201-9250}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/clutch-operator-bench.XXXXXX")"
 events="$work/events.sse"
+cookie_jar="$work/operator.cookies"
 daemon_pid=""
 watcher_pid=""
 
@@ -77,7 +78,8 @@ for _ in $(seq 1 900); do
   if ! kill -0 "$daemon_pid" 2>/dev/null; then
     break
   fi
-  if curl -fsS -m 2 -o /dev/null "127.0.0.1:$http_port/" 2>/dev/null; then
+  if curl -fsS -m 2 -c "$cookie_jar" -o /dev/null \
+    "127.0.0.1:$http_port/" 2>/dev/null; then
     ready=1
     break
   fi
@@ -93,7 +95,8 @@ echo "  bench is serving; attaching to /api/events as a client"
 # The raw stream is captured verbatim and the `data:` frames are unwrapped by
 # the reader below.  No line-buffered filter in the pipeline, so nothing the
 # daemon published can be lost to a stalled buffer when the watcher is cut.
-curl -sN -m 3600 "127.0.0.1:$http_port/api/events" >"$events" &
+curl -sN -m 3600 -b "$cookie_jar" \
+  "127.0.0.1:$http_port/api/events" >"$events" &
 watcher_pid=$!
 
 set +e
