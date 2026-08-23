@@ -4,292 +4,234 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101312">
-    <meta name="description" content="Offline unsigned protocol console for Dragon's Clutch">
-    <!--
-      Meta-delivered CSP. A <meta> policy can only carry the directives below;
-      frame-ancestors, sandbox, and report-to are ignored when delivered this
-      way, so clickjacking protection is NOT claimed here. It requires response
-      headers from the host - see SERVING.md for the exact header set.
-    -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; connect-src 'none'; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
-    <title>Glass · Dragon's Clutch</title>
+    <meta name="description" content="Read-only chain console and unsigned successor transaction builder for Dragon's Clutch">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+    <meta name="referrer" content="no-referrer">
+    <title>Glass · Dragon's Clutch chain console</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main">Skip to chain console</a>
 
     <header class="topbar">
-      <a class="brand" href="#main" aria-label="Glass, Dragon's Clutch unsigned protocol console">
+      <a class="brand" href="#main" aria-label="Glass, Dragon's Clutch chain console">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>GLASS</span>
         <small>DRAGON'S CLUTCH</small>
       </a>
       <nav class="site-nav" aria-label="Page sections">
-        <a href="#runtime">Runtime</a>
+        <a href="#target">Target</a>
         <a href="#state">State</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#product-compiler">Product</a>
         <a href="#construct">Construct</a>
-        <a href="#basis">Protocol</a>
-        <a href="#evidence">Evidence</a>
       </nav>
-      <span class="offline-pill"><span class="status-mark" aria-hidden="true"></span>LOCAL · UNSIGNED</span>
+      <span class="mode-pill"><span class="status-mark" aria-hidden="true"></span>READ ONLY · UNSIGNED</span>
     </header>
 
     <main id="main" class="shell">
       <section class="hero" aria-labelledby="page-title">
-        <p class="eyebrow">Unsigned protocol console</p>
-        <h1 id="page-title">Real contracts.<br><em>Explicit boundaries.</em></h1>
-        <p class="hero-copy">Configure a cluster and release target, inspect owner-aggregated settlement and protocol lifecycles, and export the exact unsigned bytes the current contracts actually own.</p>
-        <p class="boundary-line">This static file reads no RPC, wallet, index, browser session, or chain state. Imported account projections are untrusted inputs: local shape and arithmetic checks do not authenticate their provenance.</p>
-        <p class="boundary-line"><strong>No deployment claim:</strong> no checked release manifest is bundled, and every exported object remains unsigned and unsubmitted.</p>
-        <div class="hero-actions" aria-label="Client capability status">
-          <span class="tag tag-neutral">Explicit release target</span>
-          <span class="tag tag-neutral">Authenticated-fact projections</span>
-          <span class="tag tag-neutral">Unsigned wire export</span>
+        <p class="eyebrow">Chain-attached successor console</p>
+        <h1 id="page-title">Observe the chain.<br><em>Trust the program.</em></h1>
+        <p class="hero-copy">Select an exact network and program release, acquire bounded fork-aware state through operatord, and construct blockhash-free successor transactions from semantic-owner bytes.</p>
+        <div class="boundary-banner">
+          <strong>Projection boundary</strong>
+          <p>Every account, fork, cursor, and release row shown here is an untrusted operator projection. Onchain programs must reload and authenticate the complete accounts. This page never reads a wallet, keypair, browser session, or validator RPC directly.</p>
         </div>
-        <div class="hero-links">
-          <a href="#runtime">Configure runtime <span aria-hidden="true">↓</span></a>
-          <a href="#state">Load protocol state <span aria-hidden="true">↓</span></a>
+        <div class="hero-tags" aria-label="Capability summary">
+          <span class="chip">explicit release</span>
+          <span class="chip">bounded GET only</span>
+          <span class="chip">decimal integer transport</span>
+          <span class="chip">no sign / submit</span>
         </div>
       </section>
 
-      <section id="runtime" class="content-section runtime-section" aria-labelledby="runtime-title">
+      <section id="target" class="content-section" aria-labelledby="target-title">
         <div class="section-intro split-intro">
           <div>
-            <p class="eyebrow">Cluster · program · release</p>
-            <h2 id="runtime-title">Name the target before describing state</h2>
+            <p class="eyebrow">Network · executable · release</p>
+            <h2 id="target-title">Nothing is selected by default</h2>
           </div>
-          <p>Configuration is local and ephemeral. An endpoint is a target string, not evidence that it was contacted; a program ID without a checked release binding is not a Dragon's Clutch deployment.</p>
+          <p>The RPC URLs bind the intended daemon acquisition plan; this browser contacts only the operatord URL. Applying the form is local. Reading state is a separate explicit action.</p>
         </div>
-        <div class="configuration-layout">
-          <form id="configuration-form" class="configuration-form">
-            <label class="field"><span>Cluster</span><select id="cluster-target"></select></label>
-            <label class="field"><span>RPC target</span><input id="rpc-target" type="url" autocomplete="off"><small>Displayed and exported only. This page cannot connect to it.</small></label>
-            <label class="field"><span>Base program ID <i>optional until deployed</i></span><input id="program-target" inputmode="text" autocomplete="off" placeholder="Base58 public key"></label>
-            <label class="field"><span>Release source commit</span><input id="release-source" inputmode="text" autocomplete="off" placeholder="40 lowercase hex characters"></label>
-            <label class="field"><span>SBF ELF SHA-256</span><input id="release-elf" inputmode="text" autocomplete="off" placeholder="64 lowercase hex characters"></label>
-            <label class="field"><span>Release-manifest SHA-256</span><input id="release-manifest" inputmode="text" autocomplete="off" placeholder="64 lowercase hex characters"></label>
-            <button class="primary-button" type="submit">Apply local target <span aria-hidden="true">→</span></button>
-            <p id="configuration-error" class="form-error" role="alert" hidden></p>
-          </form>
-          <div class="configuration-output">
-            <p id="configuration-result" class="configuration-result"></p>
-            <pre id="configured-target-json" class="code-block"></pre>
-            <p class="micro-note">Still required for release authentication: exact genesis hash, ProgramData address and deployment slot, capability profile, and independent agreement between the manifest, ELF and source.</p>
-          </div>
-        </div>
-        <div id="protocol-capabilities" class="capability-grid" aria-label="Protocol capabilities and disabled reasons"></div>
-        <details class="disclosure">
-          <summary>Inspect contract inventory and source anchors</summary>
-          <div class="disclosure-body"><div id="contract-inventory" class="contract-inventory"></div></div>
-        </details>
-      </section>
 
-      <section id="state" class="content-section state-section" aria-labelledby="state-title">
-        <div class="section-intro split-intro">
-          <div>
-            <p class="eyebrow">Untrusted projection of authenticated facts</p>
-            <h2 id="state-title">Reconcile real protocol state without pretending the browser observed it</h2>
+        <form id="configuration-form" class="configuration-form">
+          <fieldset>
+            <legend>Transport and cluster identity</legend>
+            <div class="field-grid">
+              <label class="field"><span>operatord base URL</span><input id="operator-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:PORT" required><small>GET-only <code>/v1/*</code> endpoint. Plain HTTP is accepted only on loopback.</small></label>
+              <label class="field"><span>Cluster name</span><input id="cluster-name" autocomplete="off" placeholder="localnet, devnet, or explicit private name" required></label>
+              <label class="field wide"><span>Genesis hash</span><input id="genesis-hash" class="mono" autocomplete="off" placeholder="Exact cluster genesis identity" required></label>
+              <label class="field"><span>Validator RPC HTTP URL</span><input id="rpc-http-url" type="url" autocomplete="off" placeholder="Explicit acquisition target" required><small>Configuration binding only; the browser does not contact it.</small></label>
+              <label class="field"><span>Validator RPC WebSocket URL</span><input id="rpc-websocket-url" type="url" autocomplete="off" placeholder="Explicit subscription target" required><small>Configuration binding only; the browser does not open it.</small></label>
+              <label class="field"><span>Projection commitment</span><select id="commitment"><option value="finalized">finalized</option><option value="processed">processed</option></select><small>Processed state remains fork-sensitive even when its slot is frozen.</small></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Exact executable release</legend>
+            <div class="field-grid">
+              <label class="field"><span>Program ID</span><input id="program-id" class="mono" autocomplete="off" placeholder="Base58 program address" required></label>
+              <label class="field"><span>ProgramData address</span><input id="program-data" class="mono" autocomplete="off" placeholder="Base58 ProgramData address" required></label>
+              <label class="field"><span>Deployment slot</span><input id="deployment-slot" class="mono" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Canonical decimal string" required></label>
+              <label class="field wide"><span>SBF ELF SHA-256</span><input id="elf-sha256" class="mono" autocomplete="off" placeholder="64 lowercase hexadecimal characters" required></label>
+              <label class="field wide"><span>Release-manifest SHA-256</span><input id="release-manifest-sha256" class="mono" autocomplete="off" placeholder="64 lowercase hexadecimal characters" required></label>
+              <label class="field wide"><span>Source commit</span><input id="source-commit" class="mono" autocomplete="off" placeholder="40 lowercase hexadecimal characters" required></label>
+              <label class="field wide"><span>Capability-profile identity</span><input id="capability-profile-id" class="mono" autocomplete="off" placeholder="64 lowercase hexadecimal characters" required><small>The current operatord read API does not authenticate this value; that missing join stays visible below.</small></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Browser acquisition limits</legend>
+            <div class="field-grid bounds-grid">
+              <label class="field"><span>Maximum account rows</span><input id="maximum-accounts" inputmode="numeric" pattern="[0-9]*" value="4096" required></label>
+              <label class="field"><span>Total response bytes</span><input id="maximum-response-bytes" inputmode="numeric" pattern="[0-9]*" value="8388608" required></label>
+              <label class="field"><span>Per-request timeout ms</span><input id="timeout-milliseconds" inputmode="numeric" pattern="[0-9]*" value="10000" required></label>
+              <label class="field"><span>Maximum accepted slot lag</span><input id="maximum-slot-lag" inputmode="numeric" pattern="[0-9]*" value="150" required></label>
+            </div>
+          </fieldset>
+
+          <div class="form-actions">
+            <button class="primary-button" type="submit">Apply explicit target</button>
+            <button id="read-chain" class="secondary-button" type="button" disabled>Read bounded operatord state</button>
+            <button id="export-configuration" class="quiet-button" type="button" disabled>Copy configuration</button>
           </div>
-          <p>Paste an account projection from a separate collector. Every observation must bind an address, owner program, complete body digest and common slot. The client checks protocol shape and exact integer joins, then keeps the result visibly untrusted.</p>
-        </div>
-        <form id="projection-form" class="projection-form">
-          <label class="field"><span>Account projection JSON</span><textarea id="projection-input" spellcheck="false" placeholder="{ &quot;schema&quot;: &quot;dragons-clutch.account-projection.v1&quot;, ... }"></textarea><small>No sample state is supplied: this surface is for observed accounts, not mock sources.</small></label>
-          <button class="primary-button" type="submit">Validate and render projection <span aria-hidden="true">→</span></button>
-          <p id="projection-error" class="form-error" role="alert" hidden></p>
+          <p id="configuration-error" class="form-error" role="alert" hidden></p>
         </form>
-        <p id="projection-status" class="configuration-result incomplete">No account projection loaded. No state below is inferred from fixtures, indexes, or defaults.</p>
-        <div id="protocol-state-grid" class="protocol-state-grid"></div>
-        <details class="disclosure">
-          <summary>Projection contract</summary>
-          <div class="disclosure-body projection-contract">
-            <p>Recognized component keys are <code>generalV2</code>, <code>fee</code>, <code>sourcePlaneV3</code>, <code>liveness</code>, <code>series</code>, and <code>structuredClaims</code>. Exact quantities are decimal strings; semantic identities are lowercase 32-byte hex; account addresses and owners are base58.</p>
-            <p>General V2 requires canonical owner order, disjoint masks, one explicit fee row per owner, exact candidate-wide fee conservation, owner-level ceil/floor realization, and fundable Position reservations. Liveness and Series require their full canonical compartment orders.</p>
+
+        <div class="configuration-output">
+          <p id="configuration-status" class="status-panel incomplete">No explicit chain target has been applied.</p>
+          <details>
+            <summary>Exact ephemeral configuration</summary>
+            <pre id="configuration-json" class="code-block">No configuration.</pre>
+          </details>
+        </div>
+      </section>
+
+      <section id="state" class="content-section" aria-labelledby="state-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Bounded acquisition · untrusted projection</p>
+            <h2 id="state-title">Market and lifecycle state</h2>
           </div>
+          <p>Account values stay as canonical decimal strings. Fork status, observed commitment, finalized root, slot lag, decode context, body digest, and release identity are never collapsed into one “healthy” badge.</p>
+        </div>
+
+        <p id="projection-status" class="status-panel incomplete">No account projection loaded.</p>
+        <div id="observation-metrics" class="metric-grid" aria-label="Acquisition and finality metrics"></div>
+
+        <div class="release-panel">
+          <div>
+            <p class="eyebrow">Selected release</p>
+            <h3>Displayed with every projection</h3>
+          </div>
+          <dl id="release-identity" class="release-facts"></dl>
+        </div>
+
+        <div id="state-groups" class="state-groups"></div>
+
+        <details class="raw-projection">
+          <summary>Inspect complete normalized projection JSON</summary>
+          <p id="snapshot-digest" class="micro">No projection digest.</p>
+          <pre id="snapshot-json" class="code-block">No chain projection loaded.</pre>
+          <button id="copy-snapshot" class="quiet-button" type="button" disabled>Copy projection</button>
         </details>
       </section>
 
-      <section id="construct" class="content-section construct-section" aria-labelledby="construct-title">
+      <section id="capabilities" class="content-section" aria-labelledby="capability-title">
         <div class="section-intro split-intro">
           <div>
-            <p class="eyebrow">Exact local construction</p>
-            <h2 id="construct-title">Export only the wire contract that exists</h2>
+            <p class="eyebrow">Allocation is not execution</p>
+            <h2 id="capability-title">Capability reasons stay explicit</h2>
           </div>
-          <p>Series emits the complete successor request bytes but is runtime-disabled. Liveness and structured claims emit exact inner bytes only. General V2 and SourcePlane construction remain disabled until their outer contracts exist.</p>
+          <p>A decoded family proves only that the selected release told operatord which hostile decoder to use. Successor families remain ReservedDisabled; Product registration and Owner/Position V3 remain not authenticated until operatord exposes a release-bound action verdict.</p>
         </div>
-        <div class="intent-layout protocol-intent-layout">
-          <form id="intent-builder-form" class="intent-form">
-            <label class="field"><span>Contract action</span><select id="protocol-intent-kind">
-              <optgroup label="Series V2 · exact successor request">
-                <option value="series-register">Register Series</option><option value="series-activate">Activate funding</option><option value="series-advance">Advance occurrence</option><option value="series-lapse">Lapse occurrence</option><option value="series-observe-donation">Observe donation</option><option value="series-close">Close funding</option>
-              </optgroup>
-              <optgroup label="Liveness · exact inner contract only"><option value="liveness-transition">Liveness transition</option></optgroup>
-              <optgroup label="Structured claims · exact family payload only">
-                <option value="structured-create">Create descriptor payload</option><option value="structured-wrap-canonical">Wrap canonical payload</option><option value="structured-wrap-full">Wrap full payload</option><option value="structured-unwrap-canonical">Unwrap canonical payload</option><option value="structured-unwrap-full">Unwrap full payload</option><option value="structured-compact-donation">Compact donation payload</option><option value="structured-redeem-terminal">Redeem terminal payload</option><option value="structured-retire">Retire payload</option>
-              </optgroup>
-            </select></label>
-            <label class="field"><span>Replay sequence</span><input id="protocol-sequence" inputmode="numeric" pattern="[0-9]*" value="0" autocomplete="off"><small>Used by the complete Series successor request; retained as context for inner-only payloads.</small></label>
-            <label class="field"><span>Action fields JSON</span><textarea id="protocol-intent-fields" spellcheck="false">{}</textarea><small>Use lowercase 32-byte hex IDs and decimal strings for exact integers.</small></label>
-            <button class="primary-button" type="submit">Construct unsigned bytes <span aria-hidden="true">→</span></button>
-            <p id="builder-error" class="form-error" role="alert" hidden></p>
+        <div id="capability-grid" class="capability-grid"></div>
+      </section>
+
+      <section id="product-compiler" class="content-section" aria-labelledby="compiler-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Exact rational definition · Rust compiler boundary</p>
+            <h2 id="compiler-title">Inspect a canonical Product proposal</h2>
+          </div>
+          <p>The browser performs no spline, approximation, payout, or bundle math. It binds the definition's canonical UTF-8 SHA-256 to output from an external operatord/CLI that calls <code>compile_production_payoff_v1</code> and the canonical Product/Series bundle assembler.</p>
+        </div>
+
+        <div class="compiler-layout">
+          <form id="compiler-form" class="compiler-form">
+            <label class="field"><span>Compiler release SHA-256</span><input id="compiler-release-sha256" class="mono" autocomplete="off" placeholder="Exact external compiler build/release identity" required></label>
+            <label class="field"><span>Exact rational payoff definition JSON</span><textarea id="compiler-definition" class="mono" spellcheck="false" placeholder="production-payoff-definition/v1 with productTermsId, kind, and the exact categorical, smooth-control, or analytic definition. Every integer and rational component must use canonical decimal strings." required></textarea><small>JavaScript numbers are refused; this page validates transport shape but leaves payout math to Rust.</small></label>
+            <label class="field"><span>operatord/CLI compiler proposal JSON</span><textarea id="compiler-proposal" class="mono" spellcheck="false" placeholder="Untrusted production-payoff proposal v1 containing the input digest, exact-vs-approximate status, rational bounds, canonical basis/certificate bytes, and the 528-byte Product/Series bundle." required></textarea><small>The proposal must bind the definition and compiler release exactly. It remains non-authoritative.</small></label>
+            <button id="bind-compiler-proposal" class="primary-button" type="submit">Bind and display compiler proposal</button>
+            <p id="compiler-error" class="form-error" role="alert" hidden></p>
           </form>
-          <div class="intent-output" aria-live="polite">
-            <div class="output-heading"><span>Unsigned protocol object</span><span id="protocol-intent-status">waiting for input</span></div>
-            <pre id="protocol-intent-output" class="code-block output-code">No instruction has been constructed.
 
-Nothing will be signed, submitted, or sent to an RPC endpoint.</pre>
-            <div class="output-actions"><button id="copy-protocol-intent" class="secondary-button" type="button" disabled>Copy JSON</button><span>signer: absent · signatures: empty · submission: absent</span></div>
+          <div class="compiler-output" aria-live="polite">
+            <div class="output-heading"><span>Untrusted Product proposal</span><span id="compiler-status">waiting for external compiler output</span></div>
+            <dl id="compiler-identities" class="release-facts compiler-facts"></dl>
+            <div id="compiler-bounds" class="bounds-list"></div>
+            <pre id="compiler-output" class="code-block output-code">No compiler proposal bound.
+
+The Rust compiler is not reimplemented in this page.
+Registration remains authority.</pre>
+            <div class="output-footer"><button id="copy-compiler-output" class="quiet-button" type="button" disabled>Copy compiler proposal</button><span>canonical IDs are proposals until onchain registration recomputes every join</span></div>
           </div>
         </div>
       </section>
 
-      <section class="evidence-rail" aria-labelledby="evidence-rail-title">
-        <div class="rail-heading">
-          <p class="eyebrow">Evidence, not a health meter</p>
-          <h2 id="evidence-rail-title">What the record can—and cannot—say</h2>
+      <section id="construct" class="content-section" aria-labelledby="construct-title">
+        <div class="section-intro split-intro">
+          <div>
+            <p class="eyebrow">Exact outer transaction · no authority</p>
+            <h2 id="construct-title">Construct an unsigned successor workflow node</h2>
+          </div>
+          <p>The browser owns only the Solana outer message boundary. Semantic crates must supply the exact payload, ordered account roles, signer public keys, and balanced integer equations. No caller boolean can enable a route.</p>
         </div>
-        <div id="evidence-rail" class="rail-list"></div>
+
+        <div class="constructor-layout">
+          <form id="workflow-form" class="workflow-form">
+            <label class="field"><span>Chain-derived keeper cursor</span><select id="keeper-action" disabled><option value="">Manual explicit construction (no keeper cursor)</option></select><small>When selected, the action coordinate, driver account, and dependencies must all join the draft metas.</small></label>
+            <label class="field"><span>Transport packet limit bytes</span><input id="packet-limit" inputmode="numeric" pattern="[0-9]*" value="1232" required></label>
+            <label class="field"><span>Semantic-owner construction draft JSON</span><textarea id="draft-json" class="mono" spellcheck="false" placeholder="Explicit object with payer and 1..16 instructions. Each instruction names flow, family, localAction as a decimal string, payloadHex, semanticOwner, ordered accounts, requiredSigners, and exact equations." required></textarea><small>No example payload is embedded: bytes must come from the selected release's semantic owner, not a UI fixture.</small></label>
+            <details class="draft-contract">
+              <summary>Draft field contract</summary>
+              <p><code>payer</code> is a public base58 address. Each instruction carries <code>flow</code>, <code>family</code>, <code>localAction</code>, optional exact <code>actionName</code>, lowercase <code>payloadHex</code>, <code>semanticOwner</code> (<code>package</code>, <code>schema</code>, <code>releaseSha256</code>), ordered <code>accounts</code> (<code>address</code>, <code>isSigner</code>, <code>isWritable</code>), <code>requiredSigners</code>, and one or more <code>equations</code> with equal canonical decimal <code>left</code>/<code>right</code>. Each equation's typed <code>unit</code> is lamports, collateral/fee/wrapper atoms with a mint, price units with a positive scale, or Egg atoms with a Market ID and outcome.</p>
+            </details>
+            <button id="build-workflow" class="primary-button" type="submit" disabled>Construct blockhash-free transaction</button>
+            <p id="workflow-error" class="form-error" role="alert" hidden></p>
+          </form>
+
+          <div class="workflow-output" aria-live="polite">
+            <div class="output-heading"><span>Unsigned resumable workflow node</span><span id="workflow-status">waiting for chain state</span></div>
+            <pre id="workflow-output" class="code-block output-code">No transaction constructed.
+
+Wallet: absent
+Recent blockhash: absent
+Signatures: empty
+Submission: absent</pre>
+            <div class="output-footer"><button id="copy-workflow" class="quiet-button" type="button" disabled>Copy workflow JSON</button><span>fresh authoritative account reload required after every node</span></div>
+          </div>
+        </div>
       </section>
 
-      <section id="basis" class="content-section basis-section" aria-labelledby="basis-title">
+      <section class="content-section boundary-section" aria-labelledby="boundary-title">
         <div class="section-intro">
-          <p class="eyebrow">The claim surface</p>
-          <h2 id="basis-title">A complete set stays coherent across two native forms</h2>
-          <p>A Clutch is a complete conserved basis of state claims. The visual below is semantic, not a market chart, price curve, or live payout.</p>
+          <p class="eyebrow">Remaining live seam</p>
+          <h2 id="boundary-title">A wallet is not hidden in the page</h2>
         </div>
-        <div class="basis-layout">
-          <figure class="basis-figure" aria-labelledby="basis-figure-caption">
-            <div class="basis-art" aria-hidden="true">
-              <div class="basis-side">
-                <span class="basis-art-label">D0</span>
-                <div class="partition-cells"><i></i><i></i><i></i><i></i><i></i></div>
-                <span class="basis-art-caption">one realized cell</span>
-              </div>
-              <div class="basis-divider"></div>
-              <div class="basis-side">
-                <span class="basis-art-label">D1–3</span>
-                <div class="spline-lines"><i></i><i></i><i></i><i></i></div>
-                <span class="basis-art-caption">overlapping support</span>
-              </div>
-            </div>
-            <figcaption id="basis-figure-caption">Left: a symbolic exhaustive categorical partition. Right: symbolic overlapping native basis functions. The table supplies the accessible semantic equivalent.</figcaption>
-          </figure>
-          <div class="basis-copy">
-            <p class="pull-quote">Smooth native claims remain smooth at resolution. Compatibility lowering is a separately disclosed adapter, never a redefinition.</p>
-            <p>Exact coefficient algebra lives over the selected finite basis. A target outside that span needs an explicit approximation statement; it is not silently sampled into degree-zero outcomes.</p>
-          </div>
+        <div class="boundary-grid">
+          <article><h3>Available here</h3><p>Explicit release configuration, bounded read-only acquisition, fork/finality/staleness display, account-family projections, keeper cursors, successor envelopes, exact legacy message compilation, zero-signature transaction bytes, and canonical decimal integer metadata.</p></article>
+          <article><h3>Still external</h3><p>operatord must expose release-authenticated capability admission and Rust semantic-owner construction material. A separate explicitly reviewed wallet launcher must acquire a recent blockhash, reauthenticate state, present exact effects, sign, and submit. This client cannot perform any of those acts.</p></article>
         </div>
-        <div class="table-wrap">
-          <table class="comparison-table">
-            <caption>Native basis semantics</caption>
-            <thead><tr><th scope="col">Aspect</th><th scope="col">Native degree 0</th><th scope="col">Native degrees 1–3</th><th scope="col">Categorical compatibility lowering</th></tr></thead>
-            <tbody id="basis-table-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="evidence" class="content-section evidence-section" aria-labelledby="path-title">
-        <div class="section-intro split-intro">
-          <div>
-            <p class="eyebrow">A bounded evidence path</p>
-            <h2 id="path-title">Terms, source lineage, resolution, and exits are different facts</h2>
-          </div>
-          <p>Each node names the snapshot's recorded evidence and the boundary it left open. The line is not a live workflow, current status, or a promise that one node authorizes the next.</p>
-        </div>
-        <ol id="evidence-path" class="path-list"></ol>
-      </section>
-
-      <section id="boundaries" class="content-section boundary-section" aria-labelledby="boundaries-title">
-        <div class="section-intro split-intro">
-          <div>
-            <p class="eyebrow">Refusal is product information</p>
-            <h2 id="boundaries-title">Bundled boundary ledger</h2>
-          </div>
-          <p>These labels prevent a local fixture, a focused bank run, and a future design from impersonating a public, live protocol surface.</p>
-        </div>
-        <div id="boundary-ledger" class="boundary-ledger"></div>
-      </section>
-
-      <section class="content-section roadmap-section" aria-labelledby="roadmap-title">
-        <div class="section-intro split-intro">
-          <div>
-            <p class="eyebrow">Models and stops</p>
-            <h2 id="roadmap-title">What must remain visibly unfinished</h2>
-          </div>
-          <p>Proposed work is useful for inspection, but it is not a route this client can invoke and it is not accepted protocol state.</p>
-        </div>
-        <div id="roadmap-list" class="roadmap-list"></div>
-      </section>
-
-      <section id="inspect" class="content-section inspect-section" aria-labelledby="inspect-title">
-        <div class="section-intro split-intro">
-          <div>
-            <p class="eyebrow">Local fixture inspector</p>
-            <h2 id="inspect-title">Inspect what is in this file—not what might exist elsewhere</h2>
-          </div>
-          <p id="fixture-inspector-note">Loading fixture information…</p>
-        </div>
-
-        <div class="inspect-grid">
-          <section class="inspect-card digest-card" aria-labelledby="digest-title">
-            <div class="subheading"><h3 id="digest-title">Declared fixture digest</h3><span id="terms-fixture-status" class="evidence-chip local-chip">loading…</span></div>
-            <p>The digest binds the canonical terms object only. It is not an account hash, deployment identity, or market proof.</p>
-            <div class="digest-box"><span class="digest-algorithm">SHA-256</span><code id="terms-digest">loading…</code><button id="copy-digest" class="copy-button" type="button" aria-label="Copy terms digest">Copy</button></div>
-            <p id="digest-status" class="digest-status" role="status" aria-live="polite">Checking the declared digest against bundled terms…</p>
-            <dl class="fixture-facts">
-              <div><dt>Template</dt><dd id="term-template">—</dd></div>
-              <div><dt>Outcomes</dt><dd id="term-outcomes">—</dd></div>
-              <div><dt>Rounding</dt><dd id="term-rounding">—</dd></div>
-              <div><dt>Redemption</dt><dd id="term-redemption">—</dd></div>
-            </dl>
-            <p id="terms-semantics" class="micro-note"></p>
-          </section>
-
-          <section class="inspect-card provenance-card" aria-labelledby="provenance-title">
-            <div class="subheading"><h3 id="provenance-title">Unpublished provenance</h3><span id="release-status" class="evidence-chip stop-chip">loading…</span></div>
-            <dl id="release-identity" class="identity-list"></dl>
-            <p id="snapshot-provenance" class="micro-note"></p>
-          </section>
-        </div>
-
-        <details class="disclosure" id="local-description">
-          <summary>Render a local JSON description</summary>
-          <div class="disclosure-body">
-            <p>This is a deterministic local object for inspection. It has no account metas, serializer, signer, wallet, RPC client, or submit path.</p>
-            <div class="intent-layout">
-              <form id="intent-form" class="intent-form">
-                <label class="field"><span>Description type</span><select id="intent-kind"><option value="inspect-fixture">Inspect fixture</option><option value="describe-reference">Describe an external reference</option><option value="describe-atoms">Describe exact collateral atoms</option></select></label>
-                <label class="field"><span>External reference <i>optional</i></span><input id="account-ref" name="account" inputmode="text" placeholder="Local text only" autocomplete="off"><small>No value is resolved or sent anywhere.</small></label>
-                <label class="field"><span>Collateral atoms <i>optional</i></span><input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" placeholder="0" autocomplete="off"><small>Exact integer atoms only; no decimal conversion.</small></label>
-                <button class="primary-button" id="build-intent" type="submit" aria-describedby="form-error">Render local description <span aria-hidden="true">→</span></button>
-                <p class="form-error" id="form-error" role="alert" tabindex="-1" hidden></p>
-              </form>
-              <div class="intent-output" aria-live="polite">
-                <div class="output-heading"><span>Unsigned local object</span><span id="intent-state">waiting for input</span></div>
-                <pre id="intent-json" class="code-block output-code">Select a description to render a local object.
-
-No bytes will be signed or submitted.</pre>
-                <div class="output-actions"><button id="copy-intent" class="secondary-button" type="button" disabled>Copy JSON</button><span>signing: disabled · submit: disabled</span></div>
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <details class="disclosure">
-          <summary>Inspect raw bundled records</summary>
-          <div class="disclosure-body raw-records">
-            <section aria-labelledby="terms-json-title"><h3 id="terms-json-title">Canonical terms object</h3><pre id="terms-json" class="code-block"></pre></section>
-            <section aria-labelledby="manifest-json-title"><h3 id="manifest-json-title">Manifest record</h3><pre id="manifest-json" class="code-block"></pre></section>
-            <section aria-labelledby="vocabulary-title"><h3 id="vocabulary-title">Local fixture provenance</h3><dl id="evidence-vocabulary" class="vocabulary-list"></dl></section>
-          </div>
-        </details>
       </section>
     </main>
 
-    <footer class="footer"><span>DRAGON'S CLUTCH · LOCAL UNSIGNED CONSOLE</span><span>Untrusted projection · no official release</span></footer>
-    <script src="embedded-data.js"></script>
-    <script src="protocol-contracts.js"></script>
-    <script src="protocol-client.js"></script>
-    <script src="native-bspline-v1.js"></script>
+    <footer class="footer"><span>DRAGON'S CLUTCH · UNTRUSTED CHAIN PROJECTION</span><span>NO WALLET · NO SIGNATURE · NO SUBMISSION</span></footer>
+    <script src="successor-registry.js"></script>
+    <script src="successor-builder.js"></script>
+    <script src="chain-client.js"></script>
+    <script src="compiler-proposal.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
