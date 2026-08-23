@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 /// Marker proving a directory was created by this lifecycle owner.
 pub const SESSION_MARKER: &str = "dragons-clutch/local-validator-session/v1\n";
 /// Public, secret-free configuration artifact written into every session.
-pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v2";
+pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v3";
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -161,12 +161,14 @@ impl RealSourceAcquisitionV3 {
 /// Complete source binding required before a SourcePlane V3 plan is built.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealSourceConfigV3 {
+    /// Reviewed parser/receiver program selected by the Source release.
     pub provider_program: Address,
     pub provider_config: Address,
     pub feed_id: [u8; 32],
     pub provider_release_sha256: [u8; 32],
-    pub source_adapter_program: Address,
-    pub source_adapter_release_sha256: [u8; 32],
+    /// Reviewed transport/router program used by the provider release.
+    pub transport_program: Address,
+    pub transport_release_sha256: [u8; 32],
     pub source_spec_id: [u8; 32],
     pub acquisition: RealSourceAcquisitionV3,
 }
@@ -175,11 +177,13 @@ impl RealSourceConfigV3 {
     pub fn validate(&self) -> Result<()> {
         if self.provider_program == Address::default()
             || self.provider_config == Address::default()
-            || self.source_adapter_program == Address::default()
-            || self.provider_program == self.source_adapter_program
+            || self.transport_program == Address::default()
+            || self.provider_program == self.provider_config
+            || self.provider_program == self.transport_program
+            || self.provider_config == self.transport_program
         {
             return Err(SessionError::InvalidSource(
-                "real source program and Config identities are invalid",
+                "real source provider, transport, and Config identities are invalid",
             ));
         }
         require_digest(self.feed_id, "real source feed identity is zero")?;
@@ -188,8 +192,8 @@ impl RealSourceConfigV3 {
             "provider release digest is zero",
         )?;
         require_digest(
-            self.source_adapter_release_sha256,
-            "source adapter release digest is zero",
+            self.transport_release_sha256,
+            "transport release digest is zero",
         )?;
         require_digest(self.source_spec_id, "source specification identity is zero")?;
         self.acquisition.validate()
@@ -230,8 +234,9 @@ pub struct LocalSessionConfig {
     pub root: PathBuf,
     pub ports: LocalValidatorPorts,
     pub clutch_release: LocalProgramRelease,
-    /// Separately released adapters loaded alongside the main Clutch program.
-    pub adapter_releases: Vec<LocalProgramRelease>,
+    /// External parser/transport releases loaded alongside Clutch. Source V3
+    /// itself executes inside `clutch_release`, never as a second adapter ELF.
+    pub external_program_releases: Vec<LocalProgramRelease>,
     pub source: RealSourceConfigV3,
 }
 
@@ -241,9 +246,16 @@ impl LocalSessionConfig {
         self.ports.validate()?;
         self.clutch_release.validate()?;
         self.source.validate()?;
+        if self.source.provider_program == self.clutch_release.program_id
+            || self.source.transport_program == self.clutch_release.program_id
+        {
+            return Err(SessionError::InvalidRelease(
+                "external Source infrastructure aliases the Clutch program",
+            ));
+        }
         let mut programs = BTreeSet::from([self.clutch_release.program_id]);
         let mut previous_program = None;
-        for release in &self.adapter_releases {
+        for release in &self.external_program_releases {
             release.validate()?;
             if previous_program.is_some_and(|previous| previous >= release.program_id) {
                 return Err(SessionError::InvalidRelease(
@@ -257,13 +269,17 @@ impl LocalSessionConfig {
             }
             previous_program = Some(release.program_id);
         }
-        let source_adapter_is_loaded = self.adapter_releases.iter().any(|release| {
-            release.program_id == self.source.source_adapter_program
-                && release.elf_sha256 == self.source.source_adapter_release_sha256
+        let provider_is_loaded = self.external_program_releases.iter().any(|release| {
+            release.program_id == self.source.provider_program
+                && release.elf_sha256 == self.source.provider_release_sha256
         });
-        if !source_adapter_is_loaded {
+        let transport_is_loaded = self.external_program_releases.iter().any(|release| {
+            release.program_id == self.source.transport_program
+                && release.elf_sha256 == self.source.transport_release_sha256
+        });
+        if !provider_is_loaded || !transport_is_loaded {
             return Err(SessionError::InvalidRelease(
-                "source adapter release is not present in local validator programs",
+                "Source provider and transport releases are not both loaded locally",
             ));
         }
         Ok(())
@@ -363,20 +379,28 @@ impl SessionLayout {
             config.clutch_release.elf_path.display()
         )
         .expect("String write is infallible");
-        writeln!(body, "adapter_count={}", config.adapter_releases.len())
-            .expect("String write is infallible");
-        for (index, release) in config.adapter_releases.iter().enumerate() {
-            writeln!(body, "adapter_{index}_program={}", release.program_id)
-                .expect("String write is infallible");
+        writeln!(
+            body,
+            "external_program_count={}",
+            config.external_program_releases.len()
+        )
+        .expect("String write is infallible");
+        for (index, release) in config.external_program_releases.iter().enumerate() {
             writeln!(
                 body,
-                "adapter_{index}_elf_sha256={}",
+                "external_program_{index}_program={}",
+                release.program_id
+            )
+            .expect("String write is infallible");
+            writeln!(
+                body,
+                "external_program_{index}_elf_sha256={}",
                 hex(&release.elf_sha256)
             )
             .expect("String write is infallible");
             writeln!(
                 body,
-                "adapter_{index}_elf_path={}",
+                "external_program_{index}_elf_path={}",
                 release.elf_path.display()
             )
             .expect("String write is infallible");
@@ -393,16 +417,24 @@ impl SessionLayout {
         .expect("String write is infallible");
         writeln!(
             body,
-            "source_adapter_program={}",
-            config.source.source_adapter_program
+            "transport_program={}",
+            config.source.transport_program
         )
         .expect("String write is infallible");
         writeln!(
             body,
-            "source_adapter_release_sha256={}",
-            hex(&config.source.source_adapter_release_sha256)
+            "transport_release_sha256={}",
+            hex(&config.source.transport_release_sha256)
         )
         .expect("String write is infallible");
+        writeln!(
+            body,
+            "source_series_program={}",
+            config.clutch_release.program_id
+        )
+        .expect("String write is infallible");
+        writeln!(body, "source_series_execution=inside-clutch-sbf")
+            .expect("String write is infallible");
         writeln!(body, "feed_id={}", hex(&config.source.feed_id))
             .expect("String write is infallible");
         writeln!(
@@ -570,7 +602,9 @@ impl LocalValidatorInvocation {
             OsString::from("--warp-slot"),
             OsString::from(warp_slot.to_string()),
         ];
-        for release in core::iter::once(&config.clutch_release).chain(&config.adapter_releases) {
+        for release in
+            core::iter::once(&config.clutch_release).chain(&config.external_program_releases)
+        {
             arguments.push(OsString::from("--bpf-program"));
             arguments.push(OsString::from(release.program_id.to_string()));
             arguments.push(release.elf_path.as_os_str().to_owned());
@@ -727,5 +761,45 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn source_executes_in_clutch_while_external_releases_are_provider_and_transport() {
+        let program = |byte, digest, name: &str| LocalProgramRelease {
+            program_id: Address::new_from_array([byte; 32]),
+            elf_sha256: [digest; 32],
+            elf_path: PathBuf::from(format!("/tmp/{name}.so")),
+        };
+        let mut config = LocalSessionConfig {
+            root: PathBuf::from("/tmp/dragons-clutch-session-test"),
+            ports: LocalValidatorPorts {
+                rpc: 9137,
+                rpc_websocket: 9138,
+                faucet: 9139,
+                gossip: 9200,
+                dynamic_start: 9201,
+                dynamic_end: 9250,
+            },
+            clutch_release: program(1, 11, "clutch"),
+            external_program_releases: vec![
+                program(2, 12, "provider"),
+                program(3, 13, "transport"),
+            ],
+            source: RealSourceConfigV3 {
+                provider_program: Address::new_from_array([2; 32]),
+                provider_config: Address::new_from_array([4; 32]),
+                feed_id: [14; 32],
+                provider_release_sha256: [12; 32],
+                transport_program: Address::new_from_array([3; 32]),
+                transport_release_sha256: [13; 32],
+                source_spec_id: [15; 32],
+                acquisition: RealSourceAcquisitionV3::PinnedLocalCapture {
+                    capture_manifest_sha256: [16; 32],
+                },
+            },
+        };
+        assert!(config.validate().is_ok());
+        config.source.provider_program = config.clutch_release.program_id;
+        assert!(config.validate().is_err());
     }
 }

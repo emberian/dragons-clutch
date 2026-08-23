@@ -6,8 +6,8 @@
 //! signing, submission, or optimistic post-state projection.
 
 use crate::transaction_builder::{
-    ExactEquation, OwnedInstructionDraft, ProtocolFlow, ProtocolTransactionBuilder, SemanticOwner,
-    UnsignedProtocolTransaction,
+    ExactEquation, IntegerUnit, OwnedInstructionDraft, ProtocolFlow, ProtocolTransactionBuilder,
+    SemanticOwner, UnsignedProtocolTransaction,
 };
 use clutch_general_v2_contract::{
     claim_solver_poststate_v1, cleanup_candidate_poststate_v1, close_clear_work_poststate_v1,
@@ -42,11 +42,18 @@ use clutch_solana_layout::product_series::{
 use clutch_solana_layout::registry::{
     ExtensionAction, GeneralV2Action, RecurringSeriesAction, SourceSeriesAction,
 };
+use clutch_solana_layout::source_series::{
+    account_contract_v2, validate_account_metas_v2, ObservedSourceAccountMetaV2,
+    SourceAccountRoleV2,
+};
 use clutch_source_plane_v3::ContentId;
 use clutch_source_plane_v3_adapter::{
     IntentPreimageV3, TransitionActionV3, TransitionPlanV3, INTENT_PREIMAGE_BYTES,
 };
-use clutch_source_plane_v3_runtime::{ReopenLineageV1, SourceReleaseManifestV1};
+use clutch_source_plane_v3_runtime::{
+    LineageFamilyV1, ReopenLineageV1, SourceReleaseManifestV1, SourceWorkKindV1,
+    SourceWorkScheduleBindingV1,
+};
 use clutch_structured_claim_runtime_contract::{
     decode_structured_claim_payload_v1, DescriptorStateV1, StructuredClaimActionV1,
     StructuredClaimDescriptorV1,
@@ -244,12 +251,296 @@ pub struct WorkflowActionMaterial {
 pub struct SourceWorkflowActionMaterial {
     pub action_name: String,
     pub semantic_owner: SemanticOwner,
-    pub accounts: Vec<AccountMeta>,
-    pub required_signers: Vec<Address>,
-    pub exact_equations: Vec<ExactEquation>,
+    /// Exact Source work-call ordinal carried as the outer replay sequence.
+    pub call_ordinal: u32,
+    /// Closed account projection for one currently executable Source action.
+    pub accounts: EnabledSourceActionAccountsV2,
     pub transition_plan: TransitionPlanV3,
     pub submitter: ContentId,
     pub valid_before_slot: u64,
+}
+
+/// Release-selected immutable route shared by Source actions 2 through 12.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceRouteAccountsV2 {
+    pub source_release: Address,
+    pub adapter_program: Address,
+    pub adapter_program_data: Address,
+    pub parser_program: Address,
+    pub parser_program_data: Address,
+    pub parser_config: Address,
+    pub source_spec: Address,
+    pub source_work_schedule: Address,
+}
+
+impl AuthenticatedSourceRouteAccountsV2 {
+    fn append_to(self, addresses: &mut Vec<Address>) {
+        addresses.extend([
+            self.source_release,
+            self.adapter_program,
+            self.adapter_program_data,
+            self.parser_program,
+            self.parser_program_data,
+            self.parser_config,
+            self.source_spec,
+            self.source_work_schedule,
+        ]);
+    }
+}
+
+/// Named physical accounts for executable Source action 2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializeHeadAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub generation_request: Address,
+    pub source_head: Address,
+    pub head_lineage: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub payer: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+/// Named physical accounts for executable Source action 3.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OpenRawPageAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub source_head: Address,
+    pub head_lineage: Address,
+    pub open_raw_page: Address,
+    pub open_page_lineage: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub payer: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+/// Closed executable Source account vocabulary. Adding an onchain action does
+/// not make it constructible until its named projection is added here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnabledSourceActionAccountsV2 {
+    InitializeHead(InitializeHeadAccountsV2),
+    OpenRawPage(OpenRawPageAccountsV2),
+}
+
+/// One exact ordered role exposed to operator/session projections.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceAccountRoleProjectionV2 {
+    pub role: SourceAccountRoleV2,
+    pub address: Address,
+    pub writable: bool,
+    pub signer: bool,
+}
+
+impl EnabledSourceActionAccountsV2 {
+    #[must_use]
+    pub const fn action(self) -> SourceSeriesAction {
+        match self {
+            Self::InitializeHead(_) => SourceSeriesAction::InitializeHead,
+            Self::OpenRawPage(_) => SourceSeriesAction::OpenRawPage,
+        }
+    }
+
+    const fn route(self) -> AuthenticatedSourceRouteAccountsV2 {
+        match self {
+            Self::InitializeHead(accounts) => accounts.route,
+            Self::OpenRawPage(accounts) => accounts.route,
+        }
+    }
+
+    const fn keeper(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.keeper,
+            Self::OpenRawPage(accounts) => accounts.keeper,
+        }
+    }
+
+    const fn payer(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.payer,
+            Self::OpenRawPage(accounts) => accounts.payer,
+        }
+    }
+
+    const fn source_compartment(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.source_compartment,
+            Self::OpenRawPage(accounts) => accounts.source_compartment,
+        }
+    }
+
+    const fn liveness_policy(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.liveness_policy,
+            Self::OpenRawPage(accounts) => accounts.liveness_policy,
+        }
+    }
+
+    const fn source_head(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.source_head,
+            Self::OpenRawPage(accounts) => accounts.source_head,
+        }
+    }
+
+    const fn head_lineage(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.head_lineage,
+            Self::OpenRawPage(accounts) => accounts.head_lineage,
+        }
+    }
+
+    const fn system_program(self) -> Address {
+        match self {
+            Self::InitializeHead(accounts) => accounts.system_program,
+            Self::OpenRawPage(accounts) => accounts.system_program,
+        }
+    }
+
+    fn validate_route_selection(
+        self,
+        observation: SourceCrankObservation<'_>,
+        release: &SourceReleaseManifestV1,
+        schedule: &SourceWorkScheduleBindingV1,
+    ) -> Result<()> {
+        let route = self.route();
+        if route.source_release != observation.release_account
+            || route.source_work_schedule != observation.schedule_account
+            || self.liveness_policy() != observation.liveness_policy_account
+            || route.adapter_program.to_bytes() != release.adapter.program.bytes()
+            || route.adapter_program_data.to_bytes() != release.adapter.programdata.bytes()
+            || route.parser_program.to_bytes() != release.parser.program.bytes()
+            || route.parser_program_data.to_bytes() != release.parser.programdata.bytes()
+            || route.parser_config.to_bytes() != release.parser_config.bytes()
+            || route.source_spec.to_bytes() != release.source_spec_account.bytes()
+            || self.payer().to_bytes() != schedule.payer().bytes()
+            || self.source_compartment().to_bytes() != schedule.source_compartment_account().bytes()
+            || self.system_program().to_bytes() != release.system_program.bytes()
+        {
+            return Err(WorkflowGraphError::ActionStateMismatch);
+        }
+        let expected_lineage = observation
+            .lineages
+            .iter()
+            .find(|lineage| {
+                lineage.lineage.family == LineageFamilyV1::SourceHead
+                    && match self {
+                        Self::InitializeHead(_) => {
+                            lineage.expectation == SourceLineageExpectation::NeverCreated
+                        }
+                        Self::OpenRawPage(_) => matches!(
+                            lineage.expectation,
+                            SourceLineageExpectation::OpenAtGeneration(generation)
+                                if generation == observation.generation
+                        ),
+                    }
+            })
+            .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+        if self.head_lineage().to_bytes() != expected_lineage.lineage.lineage_account.bytes()
+            || matches!(self, Self::OpenRawPage(_))
+                && self.source_head().to_bytes() != expected_lineage.lineage.active_account.bytes()
+        {
+            return Err(WorkflowGraphError::ActionStateMismatch);
+        }
+        Ok(())
+    }
+
+    fn addresses(self) -> Vec<Address> {
+        let mut addresses = Vec::new();
+        match self {
+            Self::InitializeHead(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.generation_request,
+                    accounts.source_head,
+                    accounts.head_lineage,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.payer,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::OpenRawPage(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.source_head,
+                    accounts.head_lineage,
+                    accounts.open_raw_page,
+                    accounts.open_page_lineage,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.payer,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+        }
+        addresses
+    }
+
+    /// Project the authoritative layout role table onto named addresses. The
+    /// layout validator remains the single owner of count, privilege, and
+    /// payer/keeper alias rules.
+    pub fn ordered_projection(self) -> Result<Vec<SourceAccountRoleProjectionV2>> {
+        let action = self.action();
+        let contract = account_contract_v2(action);
+        let addresses = self.addresses();
+        if addresses.len() != contract.len() {
+            return Err(WorkflowGraphError::InvalidCanonicalPayload);
+        }
+        let mut projection = Vec::with_capacity(addresses.len());
+        let mut observed = Vec::with_capacity(addresses.len());
+        for (index, address) in addresses.into_iter().enumerate() {
+            let required = contract
+                .meta(index)
+                .ok_or(WorkflowGraphError::InvalidCanonicalPayload)?;
+            projection.push(SourceAccountRoleProjectionV2 {
+                role: required.role,
+                address,
+                writable: required.writable,
+                signer: required.signer,
+            });
+            observed.push(ObservedSourceAccountMetaV2 {
+                key: address.to_bytes(),
+                writable: required.writable,
+                signer: required.signer,
+            });
+        }
+        validate_account_metas_v2(action, &observed)
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
+        Ok(projection)
+    }
+
+    fn instruction_parts(self) -> Result<(Vec<AccountMeta>, Vec<Address>)> {
+        let projection = self.ordered_projection()?;
+        let accounts = projection
+            .iter()
+            .map(|account| AccountMeta {
+                pubkey: account.address,
+                is_signer: account.signer,
+                is_writable: account.writable,
+            })
+            .collect();
+        let required_signers = projection
+            .iter()
+            .filter(|account| account.signer)
+            .map(|account| account.address)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok((accounts, required_signers))
+    }
 }
 
 /// One construction result and its mandatory fresh-state reload barrier.
@@ -626,6 +917,15 @@ pub struct SourceCrankObservation<'a> {
     /// Canonical immutable release body selected by the operator. Execution
     /// independently authenticates its owner, content-addressed PDA and bytes.
     pub release: &'a SourceReleaseManifestV1,
+    /// Physical immutable release account observed by the operator.
+    pub release_account: Address,
+    /// Canonical release-selected paid-work schedule body. The physical
+    /// schedule account remains an explicit role in the action projection.
+    pub schedule: &'a SourceWorkScheduleBindingV1,
+    /// Physical content-addressed schedule Artifact observed by the operator.
+    pub schedule_account: Address,
+    /// Physical release-selected liveness policy observed by the operator.
+    pub liveness_policy_account: Address,
     pub generation: u64,
     pub stage: SourceCrankStage,
     pub lineages: &'a [ObservedSourceLineage<'a>],
@@ -634,18 +934,39 @@ pub struct SourceCrankObservation<'a> {
 
 impl SourceCrankObservation<'_> {
     fn validate(self, manifest: &ExplicitOperatorReleaseManifest) -> Result<()> {
-        if self.generation == 0 || self.observed_state_sha256 == [0; 32] || self.lineages.is_empty()
+        if self.generation == 0
+            || self.observed_state_sha256 == [0; 32]
+            || self.lineages.is_empty()
+            || self.release_account == Address::default()
+            || self.schedule_account == Address::default()
+            || self.liveness_policy_account == Address::default()
         {
             return Err(WorkflowGraphError::InvalidCanonicalState);
         }
         self.release
             .validate()
             .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        let release_id = self
+            .release
+            .id()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        if self
+            .schedule
+            .id()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?
+            != self.release.source_work_schedule_id
+            || self.schedule.liveness_policy_id() != self.release.liveness_policy_id
+            || self.schedule.source_compartment_account() != self.release.source_compartment_account
+            || self.schedule.source_compartment_owner() != self.release.source_compartment_owner
+            || self.schedule.receipt_account_owner_program() != self.release.adapter.program
+            || self.schedule.payer() == self.release.neutral_sink
+        {
+            return Err(WorkflowGraphError::ActionStateMismatch);
+        }
         if self.release.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
             || self.release.adapter.programdata.bytes() != manifest.clutch.program_data.to_bytes()
             || self.release.adapter.deployment_slot != manifest.clutch.deployment_slot
-            || self.release.parser.program.bytes()
-                != manifest.pyth_receiver.program_id.to_bytes()
+            || self.release.parser.program.bytes() != manifest.pyth_receiver.program_id.to_bytes()
             || self.release.parser.programdata.bytes()
                 != manifest.pyth_receiver.program_data.to_bytes()
             || self.release.parser.deployment_slot != manifest.pyth_receiver.deployment_slot
@@ -659,6 +980,9 @@ impl SourceCrankObservation<'_> {
                 .validate()
                 .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
             if lineage.adapter_program.bytes() != manifest.clutch.program_id.to_bytes()
+                || lineage.release_manifest_id != release_id
+                || lineage.source_work_schedule_id != self.release.source_work_schedule_id
+                || lineage.neutral_sink != self.release.neutral_sink
                 || !accounts.insert(lineage.lineage_account.bytes())
             {
                 return Err(WorkflowGraphError::InvalidCanonicalState);
@@ -703,6 +1027,24 @@ pub fn plan_source_crank(
 ) -> Result<PlannedWorkflowNode> {
     observation.validate(manifest)?;
     let (position, registry, transition) = observation.stage.coordinate();
+    if material.call_ordinal == 0
+        || material.call_ordinal > observation.schedule.maximum_calls()
+        || material.accounts.action() != registry
+        || material.submitter.bytes() != material.accounts.keeper().to_bytes()
+    {
+        return Err(WorkflowGraphError::ActionStateMismatch);
+    }
+    material.accounts.validate_route_selection(
+        observation,
+        observation.release,
+        observation.schedule,
+    )?;
+    let call_ceiling = observation
+        .schedule
+        .ceiling_for(SourceWorkKindV1::TerminalLifecycle);
+    if call_ceiling == 0 {
+        return Err(WorkflowGraphError::NotReady);
+    }
     material
         .transition_plan
         .validate()
@@ -730,24 +1072,86 @@ pub fn plan_source_crank(
         position,
         observation.observed_state_sha256,
     )?;
-    construct(
+    let (accounts, required_signers) = material.accounts.instruction_parts()?;
+    construct_enabled_source_transition(
         manifest,
         builder,
         cursor,
-        ProtocolFlow::SourcePlaneV3,
-        CanonicalActionCoordinate::SourceTransition {
-            registry,
-            transition,
-        },
+        registry,
+        transition,
+        material.call_ordinal,
         WorkflowActionMaterial {
             action_name: material.action_name,
             semantic_owner: material.semantic_owner,
-            accounts: material.accounts,
-            required_signers: material.required_signers,
-            exact_equations: material.exact_equations,
+            accounts,
+            required_signers,
+            exact_equations: vec![ExactEquation {
+                name: "release-selected Source call ceiling equals keeper payment".into(),
+                unit: IntegerUnit::Lamports,
+                left: u128::from(call_ceiling),
+                right: u128::from(call_ceiling),
+            }],
             payload: payload.to_vec(),
         },
     )
+}
+
+fn construct_enabled_source_transition(
+    manifest: &ExplicitOperatorReleaseManifest,
+    builder: &ProtocolTransactionBuilder,
+    cursor: ResumableWorkflowCursor,
+    registry: SourceSeriesAction,
+    transition: TransitionActionV3,
+    call_ordinal: u32,
+    material: WorkflowActionMaterial,
+) -> Result<PlannedWorkflowNode> {
+    manifest.admits_owner(&material.semantic_owner)?;
+    if builder.clutch_program() != manifest.clutch.program_id
+        || builder.clutch_release_sha256() != manifest.clutch.elf_sha256
+    {
+        return Err(WorkflowGraphError::WrongProgramRelease);
+    }
+    if material.action_name.trim().is_empty()
+        || material.payload.is_empty()
+        || material.exact_equations.is_empty()
+        || call_ordinal == 0
+    {
+        return Err(WorkflowGraphError::InvalidCanonicalPayload);
+    }
+    let intent = IntentPreimageV3::decode(&material.payload)
+        .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
+    if intent.action() != transition
+        || intent.adapter_program_id().bytes() != manifest.clutch.program_id.to_bytes()
+        || material.payload.len() != INTENT_PREIMAGE_BYTES
+        || source_registry_action(transition)? != registry
+    {
+        return Err(WorkflowGraphError::ActionStateMismatch);
+    }
+    let draft = OwnedInstructionDraft::enabled_source_successor(
+        material.action_name,
+        material.semantic_owner,
+        manifest.clutch.program_id,
+        material.accounts,
+        material.required_signers,
+        material.exact_equations,
+        registry,
+        call_ordinal,
+        &material.payload,
+    )
+    .map_err(|_| WorkflowGraphError::Construction)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| WorkflowGraphError::Construction)?;
+    Ok(PlannedWorkflowNode {
+        manifest_sha256: manifest.manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::SourceTransition {
+            registry,
+            transition,
+        },
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    })
 }
 
 /// Canonical account projection sufficient to derive the next candidate action.
@@ -1623,8 +2027,7 @@ fn construct(
             let intent = IntentPreimageV3::decode(&material.payload)
                 .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
             if intent.action() != transition
-                || intent.adapter_program_id().bytes()
-                    != manifest.clutch.program_id.to_bytes()
+                || intent.adapter_program_id().bytes() != manifest.clutch.program_id.to_bytes()
                 || material.payload.len() != INTENT_PREIMAGE_BYTES
             {
                 return Err(WorkflowGraphError::ActionStateMismatch);
@@ -1763,4 +2166,74 @@ pub fn owner_accounting_is_complete(owner: &OwnerSettlementAccumulatorV1) -> Res
         && owner.consumed_sell_price_units == owner.expectation.expected_sell_price_units
         && owner.completed_buy_order_mask == owner.expectation.expected_buy_order_mask
         && owner.completed_sell_order_mask == owner.expectation.expected_sell_order_mask)
+}
+
+#[cfg(test)]
+mod source_account_projection_tests {
+    use super::*;
+
+    fn address(byte: u8) -> Address {
+        Address::new_from_array([byte; 32])
+    }
+
+    fn route() -> AuthenticatedSourceRouteAccountsV2 {
+        AuthenticatedSourceRouteAccountsV2 {
+            source_release: address(1),
+            adapter_program: address(2),
+            adapter_program_data: address(3),
+            parser_program: address(4),
+            parser_program_data: address(5),
+            parser_config: address(6),
+            source_spec: address(7),
+            source_work_schedule: address(8),
+        }
+    }
+
+    #[test]
+    fn initialize_head_projection_preserves_authoritative_roles_and_alias() {
+        let projection = EnabledSourceActionAccountsV2::InitializeHead(InitializeHeadAccountsV2 {
+            route: route(),
+            generation_request: address(9),
+            source_head: address(10),
+            head_lineage: address(11),
+            source_work_receipt: address(12),
+            liveness_policy: address(13),
+            source_compartment: address(14),
+            keeper: address(15),
+            payer: address(15),
+            system_program: address(16),
+            rent_sysvar: address(17),
+        })
+        .ordered_projection()
+        .unwrap();
+        assert_eq!(projection.len(), 18);
+        assert_eq!(projection[0].role, SourceAccountRoleV2::SourceRelease);
+        assert_eq!(projection[14].role, SourceAccountRoleV2::Keeper);
+        assert_eq!(projection[15].role, SourceAccountRoleV2::Payer);
+        assert_eq!(projection[14].address, projection[15].address);
+        assert!(projection[14].signer && projection[15].signer);
+        assert_eq!(projection[17].role, SourceAccountRoleV2::RentSysvar);
+    }
+
+    #[test]
+    fn open_page_projection_refuses_a_foreign_alias() {
+        let accounts = EnabledSourceActionAccountsV2::OpenRawPage(OpenRawPageAccountsV2 {
+            route: route(),
+            source_head: address(9),
+            head_lineage: address(10),
+            open_raw_page: address(11),
+            open_page_lineage: address(12),
+            source_work_receipt: address(13),
+            liveness_policy: address(14),
+            source_compartment: address(15),
+            keeper: address(16),
+            payer: address(17),
+            system_program: address(1),
+            rent_sysvar: address(18),
+        });
+        assert_eq!(
+            accounts.ordered_projection(),
+            Err(WorkflowGraphError::InvalidCanonicalPayload)
+        );
+    }
 }
