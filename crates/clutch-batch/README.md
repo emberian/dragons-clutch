@@ -50,9 +50,9 @@ Executable facts:
 
 ## ScoreV2-Q core interface
 
-`src/score_v2.rs` implements the production-quality core arithmetic for the
-complete-set-quotiented successor score, without selecting it in the V1
-relation or any SBF profile. It independently derives
+`src/score_v2.rs` owns the production kernel for the complete-set-quotiented
+successor score, without selecting it in the V1 relation or an SBF profile.
+The kernel independently derives
 `d_i = B_i - sigma = E_i - mu` and ranks valid submitted candidates by:
 
 1. maximum `max(d) - min(d)`;
@@ -81,6 +81,13 @@ canonical virtual split-or-merge, per-outcome conservation, and both
 `d_i = B_i - sigma = E_i - mu` derivations. It SHA-256 commits every canonical
 economic input using a local safe, allocation-free FIPS-180 implementation and
 feeds the full digest into ScoreV2-Q.
+
+Successful verification returns a private-field, domain-bound score
+certificate retaining the exact canonical score input and independently
+derived direct flow. `relation_v2_ranking` reverifies every candidate against
+one immutable domain, book, and price precondition, then retains the best valid
+submitted candidate by the certificate's deterministic total order. It makes
+no optimality claim.
 
 Price coherence remains an upstream semantic precondition. RelationV2
 recomputes a proof-independent semantic digest from the immutable domain,

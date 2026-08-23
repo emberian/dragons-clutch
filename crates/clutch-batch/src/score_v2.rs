@@ -157,6 +157,183 @@ impl ScoreV2 {
     }
 }
 
+/// Immutable economic domain of one checked ScoreV2-Q certificate.
+///
+/// Identities are opaque semantic digests supplied by a caller such as
+/// RelationV2. This kernel compares and retains them but does not authenticate
+/// an account, recompute their hashes, or infer a market from flow bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScoreDomainV2 {
+    market_semantics_digest: [u8; 32],
+    epoch_semantics_digest: [u8; 32],
+    relation_policy_digest: [u8; 32],
+    outcome_count: u8,
+}
+
+impl ScoreDomainV2 {
+    /// Validate and capture the exact Market/epoch/policy/width binding.
+    pub fn new(
+        market_semantics_digest: [u8; 32],
+        epoch_semantics_digest: [u8; 32],
+        relation_policy_digest: [u8; 32],
+        outcome_count: u8,
+    ) -> Result<Self, ScoreErrorV2> {
+        if is_zero_digest(&market_semantics_digest)
+            || is_zero_digest(&epoch_semantics_digest)
+            || is_zero_digest(&relation_policy_digest)
+        {
+            return Err(ScoreErrorV2::ZeroBindingIdentity);
+        }
+        if !(2..=MAX_OUTCOMES).contains(&usize::from(outcome_count)) {
+            return Err(ScoreErrorV2::InvalidOutcomeCount);
+        }
+        Ok(Self {
+            market_semantics_digest,
+            epoch_semantics_digest,
+            relation_policy_digest,
+            outcome_count,
+        })
+    }
+
+    /// Immutable Market semantic identity.
+    pub const fn market_semantics_digest(&self) -> [u8; 32] {
+        self.market_semantics_digest
+    }
+
+    /// Immutable recurring epoch semantic identity.
+    pub const fn epoch_semantics_digest(&self) -> [u8; 32] {
+        self.epoch_semantics_digest
+    }
+
+    /// Frozen RelationV2 policy identity under which flow was admitted.
+    pub const fn relation_policy_digest(&self) -> [u8; 32] {
+        self.relation_policy_digest
+    }
+
+    /// Number of active native Egg coordinates.
+    pub const fn outcome_count(&self) -> u8 {
+        self.outcome_count
+    }
+}
+
+/// Private-field proof that exact owner-blind flow produced one ScoreV2-Q key.
+///
+/// The certificate is not candidate-admission, price-quality, settlement, or
+/// execution authority. RelationV2 is responsible for deriving its flow from
+/// a valid submitted candidate before invoking this kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckedCandidateScoreV2 {
+    domain: ScoreDomainV2,
+    candidate_delta: CandidateDeltaV2,
+    direct_flow: [u64; MAX_OUTCOMES],
+    score: ScoreV2,
+}
+
+impl CheckedCandidateScoreV2 {
+    /// Exact Market/epoch/policy/width binding checked at construction.
+    pub const fn domain(&self) -> ScoreDomainV2 {
+        self.domain
+    }
+
+    /// Exact canonical aggregate flow, conversion, and candidate identity
+    /// from which the certificate was independently derived.
+    pub const fn candidate_delta(&self) -> &CandidateDeltaV2 {
+        &self.candidate_delta
+    }
+
+    /// Independently re-derived active direct flow with canonical padding.
+    pub const fn direct_flow(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.direct_flow
+    }
+
+    /// Exact total ScoreV2-Q comparison key.
+    pub const fn score(&self) -> &ScoreV2 {
+        &self.score
+    }
+
+    /// Compare two checked keys only when every domain binding is identical.
+    /// `Greater` means `self` is the preferred valid submitted candidate.
+    pub fn total_order_same_domain(
+        &self,
+        other: &Self,
+    ) -> Result<Ordering, ScoreErrorV2> {
+        if self.domain != other.domain {
+            return Err(ScoreErrorV2::MismatchedScoreDomain);
+        }
+        Ok(self.score.total_order(&other.score))
+    }
+}
+
+/// Result of admitting one more checked candidate to a bounded selection fold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SelectionUpdateV2 {
+    /// The incoming checked candidate became the retained best.
+    ReplacedBest = 0,
+    /// The existing best remained preferred or exactly equal.
+    RetainedBest = 1,
+}
+
+/// Bounded fold retaining the best submitted checked ScoreV2-Q certificate.
+///
+/// The fold begins from one checked certificate, never an artificial sentinel.
+/// Equal keys retain the earlier submission; distinct candidate-digest bytes
+/// make the score order total without treating collision resistance as a
+/// theorem. This fold does not itself certify RelationV2 candidate validity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BestSubmittedScoreV2 {
+    best: CheckedCandidateScoreV2,
+    checked_submission_count: u64,
+}
+
+impl BestSubmittedScoreV2 {
+    /// Begin a selection fold from the first already-checked candidate.
+    pub const fn begin(first: CheckedCandidateScoreV2) -> Self {
+        Self {
+            best: first,
+            checked_submission_count: 1,
+        }
+    }
+
+    /// Consider one more checked certificate in the exact same score domain.
+    ///
+    /// State changes only after the domain and count checks succeed.
+    pub fn consider(
+        &mut self,
+        incoming: CheckedCandidateScoreV2,
+    ) -> Result<SelectionUpdateV2, ScoreErrorV2> {
+        let order = incoming.total_order_same_domain(&self.best)?;
+        let next_count = self
+            .checked_submission_count
+            .checked_add(1)
+            .ok_or(ScoreErrorV2::CheckedSubmissionCountOverflow)?;
+        let update = if order == Ordering::Greater {
+            self.best = incoming;
+            SelectionUpdateV2::ReplacedBest
+        } else {
+            SelectionUpdateV2::RetainedBest
+        };
+        self.checked_submission_count = next_count;
+        Ok(update)
+    }
+
+    /// Retained best submitted checked score certificate.
+    pub const fn best(&self) -> &CheckedCandidateScoreV2 {
+        &self.best
+    }
+
+    /// Number of checked score submissions folded so far.
+    pub const fn checked_submission_count(&self) -> u64 {
+        self.checked_submission_count
+    }
+
+    /// Force the private counter to a boundary value in crate tests.
+    #[cfg(test)]
+    pub(crate) fn set_checked_submission_count_for_test(&mut self, count: u64) {
+        self.checked_submission_count = count;
+    }
+}
+
 /// Every refusal produced while deriving ScoreV2-Q.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScoreErrorV2 {
@@ -165,22 +342,50 @@ pub enum ScoreErrorV2 {
     /// The caller selected an owner-tag-dependent normalization contract.
     NormalizationNotRepresentationNeutral,
     /// An inactive fixed-array cell was nonzero.
-    NonCanonicalPadding { field: FlowFieldV2, outcome: u8 },
+    NonCanonicalPadding {
+        /// Aggregate or claimed vector containing the nonzero padding cell.
+        field: FlowFieldV2,
+        /// First inactive coordinate observed to be nonzero.
+        outcome: u8,
+    },
     /// Both virtual split and virtual merge were nonzero.
     NonCanonicalVirtualConversion,
     /// `sigma` exceeded `B_i` at this active outcome.
-    VirtualSplitExceedsBuyFlow { outcome: u8 },
+    VirtualSplitExceedsBuyFlow {
+        /// Active coordinate at which subtraction would underflow.
+        outcome: u8,
+    },
     /// `mu` exceeded `E_i` at this active outcome.
-    VirtualMergeExceedsSellFlow { outcome: u8 },
+    VirtualMergeExceedsSellFlow {
+        /// Active coordinate at which subtraction would underflow.
+        outcome: u8,
+    },
     /// A checked exact aggregate or churn calculation exceeded `u64`.
-    ArithmeticOverflow { outcome: u8 },
+    ArithmeticOverflow {
+        /// Active coordinate, or `u8::MAX` for scalar churn overflow.
+        outcome: u8,
+    },
     /// `B_i + mu != E_i + sigma` or the two derived direct flows differed.
-    OutcomeConservationMismatch { outcome: u8 },
+    OutcomeConservationMismatch {
+        /// First active coordinate violating the two-sided equality.
+        outcome: u8,
+    },
     /// The candidate's claimed `d_i` did not equal the independently derived
     /// direct flow.
-    DirectFlowMismatch { outcome: u8 },
+    DirectFlowMismatch {
+        /// First active coordinate disagreeing with recomputation.
+        outcome: u8,
+    },
     /// A claimed total score did not equal the independently derived score.
     ScoreMismatch,
+    /// A required Market, epoch, or relation-policy identity was all zero.
+    ZeroBindingIdentity,
+    /// Score-domain width and exact flow width differed.
+    ScoreDomainWidthMismatch,
+    /// Checked candidate scores came from different immutable score domains.
+    MismatchedScoreDomain,
+    /// The checked score-submission counter exceeded its fixed width.
+    CheckedSubmissionCountOverflow,
 }
 
 /// Re-derive the canonical direct-flow vector from both sides of a candidate.
@@ -248,6 +453,32 @@ pub fn derive_direct_flow_v2(
 /// Recompute the exact ScoreV2-Q total key of one candidate.
 pub fn score_candidate_v2(candidate: &CandidateDeltaV2) -> Result<ScoreV2, ScoreErrorV2> {
     let direct_flow = derive_direct_flow_v2(candidate)?;
+    score_from_direct_flow_v2(candidate, &direct_flow)
+}
+
+/// Bind exact owner-blind flow and its independently recomputed key into one
+/// private-field candidate score certificate.
+pub fn certify_candidate_score_v2(
+    domain: ScoreDomainV2,
+    candidate: &CandidateDeltaV2,
+) -> Result<CheckedCandidateScoreV2, ScoreErrorV2> {
+    if domain.outcome_count != candidate.outcome_count {
+        return Err(ScoreErrorV2::ScoreDomainWidthMismatch);
+    }
+    let direct_flow = derive_direct_flow_v2(candidate)?;
+    let score = score_from_direct_flow_v2(candidate, &direct_flow)?;
+    Ok(CheckedCandidateScoreV2 {
+        domain,
+        candidate_delta: *candidate,
+        direct_flow,
+        score,
+    })
+}
+
+fn score_from_direct_flow_v2(
+    candidate: &CandidateDeltaV2,
+    direct_flow: &[u64; MAX_OUTCOMES],
+) -> Result<ScoreV2, ScoreErrorV2> {
     let outcomes = usize::from(candidate.outcome_count);
     let mut lowest = direct_flow[0];
     let mut highest = direct_flow[0];
@@ -302,4 +533,15 @@ fn validate_padding(
         outcome += 1;
     }
     Ok(())
+}
+
+fn is_zero_digest(value: &[u8; 32]) -> bool {
+    let mut byte = 0usize;
+    while byte < value.len() {
+        if value[byte] != 0 {
+            return false;
+        }
+        byte += 1;
+    }
+    true
 }

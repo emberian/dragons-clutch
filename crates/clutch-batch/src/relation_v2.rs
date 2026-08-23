@@ -3,7 +3,8 @@
 //! `EconomicRelationV2` deliberately has no owner, signer, account, fee,
 //! dealer, or settlement field. It validates one submitted coefficient-vector
 //! fill witness, derives its aggregate flow from both sides, binds an upstream
-//! price-policy precondition, and recomputes [`crate::score_v2::ScoreV2`].
+//! price-policy precondition, and recomputes a domain-bound
+//! [`crate::score_v2::CheckedCandidateScoreV2`].
 //! Changing an external account or controller label cannot change this
 //! relation because no such label is representable in its inputs.
 //!
@@ -16,7 +17,8 @@
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::score_v2::{
-    score_candidate_v2, CandidateDeltaV2, NormalizationPolicyV2, ScoreErrorV2, ScoreV2,
+    certify_candidate_score_v2, CandidateDeltaV2, CheckedCandidateScoreV2,
+    NormalizationPolicyV2, ScoreDomainV2, ScoreErrorV2,
 };
 use crate::{PartialPolicy, Side, MAX_ORDERS};
 
@@ -348,8 +350,8 @@ pub struct VerifiedEconomicsV2 {
     pub virtual_merge: u64,
     /// Full SHA-256 identity of every canonical economic input.
     pub economic_candidate_digest: [u8; 32],
-    /// Independently recomputed ScoreV2-Q key.
-    pub score: ScoreV2,
+    /// Domain-bound independently recomputed ScoreV2-Q certificate.
+    pub score: CheckedCandidateScoreV2,
 }
 
 /// Validated owner-blind order flow before a counterparty relation closes it.
@@ -429,7 +431,7 @@ pub enum EconomicErrorV2 {
     OutcomeConservationMismatch { outcome: u8 },
     /// A checked non-flow integer calculation overflowed.
     ArithmeticOverflow,
-    /// The already-validated aggregate unexpectedly failed ScoreV2.
+    /// ScoreV2 certification or checked same-domain ranking refused.
     Score(ScoreErrorV2),
     /// A resumed canonical-candidate SHA-256 checkpoint was malformed.
     InvalidHashCheckpoint,
@@ -504,7 +506,15 @@ pub(crate) fn close_economic_candidate_v2(
         virtual_merge: candidate.virtual_merge,
         candidate_digest: digest,
     };
-    let score = score_candidate_v2(&delta).map_err(EconomicErrorV2::Score)?;
+    let score_domain = ScoreDomainV2::new(
+        domain.market_semantics_digest,
+        domain.epoch_semantics_digest,
+        domain.relation_policy_digest,
+        domain.outcome_count,
+    )
+    .map_err(EconomicErrorV2::Score)?;
+    let score =
+        certify_candidate_score_v2(score_domain, &delta).map_err(EconomicErrorV2::Score)?;
     Ok(VerifiedEconomicsV2 {
         outcome_count: domain.outcome_count,
         aggregate_buy_flow: buy_flow,

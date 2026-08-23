@@ -1,4 +1,4 @@
-//! Adversarial and property-style tests for ScoreV2-Q.
+//! Adversarial and property-style tests for the ScoreV2-Q kernel.
 
 extern crate std;
 
@@ -6,8 +6,10 @@ use core::cmp::Ordering;
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::score_v2::{
-    derive_direct_flow_v2, score_candidate_v2, verify_candidate_score_v2, CandidateDeltaV2,
-    FlowFieldV2, NormalizationPolicyV2, RiskObjectiveV2, ScoreErrorV2, ScoreV2,
+    certify_candidate_score_v2, derive_direct_flow_v2, score_candidate_v2,
+    verify_candidate_score_v2, BestSubmittedScoreV2, CandidateDeltaV2, FlowFieldV2,
+    NormalizationPolicyV2, RiskObjectiveV2, ScoreDomainV2, ScoreErrorV2, ScoreV2,
+    SelectionUpdateV2,
 };
 
 const FROZEN_VECTORS: &str = include_str!("../fixtures/score_v2_q_vectors.txt");
@@ -35,7 +37,7 @@ fn candidate(
     }
     CandidateDeltaV2 {
         normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
-        outcome_count: direct.len() as u8,
+        outcome_count: u8::try_from(direct.len()).unwrap(),
         aggregate_buy_flow: buys,
         aggregate_sell_flow: sells,
         claimed_direct_flow: active(direct),
@@ -49,6 +51,16 @@ fn risk_of(direct: &[u64]) -> RiskObjectiveV2 {
     score_candidate_v2(&candidate(direct, 0, 0, 0))
         .unwrap()
         .risk
+}
+
+fn score_domain(outcomes: u8, market_byte: u8) -> ScoreDomainV2 {
+    ScoreDomainV2::new(
+        [market_byte; 32],
+        [2u8; 32],
+        [3u8; 32],
+        outcomes,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -74,7 +86,7 @@ fn frozen_score_v2_q_vectors_remain_exact() {
 
         let delta = CandidateDeltaV2 {
             normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
-            outcome_count: outcomes as u8,
+            outcome_count: u8::try_from(outcomes).unwrap(),
             aggregate_buy_flow: buys,
             aggregate_sell_flow: sells,
             claimed_direct_flow: claimed,
@@ -120,7 +132,7 @@ fn quotient_shift_complement_relabel_and_scale_properties_hold() {
             }
             let base = score_candidate_v2(&candidate(&flow[..outcomes], 0, 0, 0)).unwrap();
 
-            let shift = case as u64;
+            let shift = u64::try_from(case).unwrap();
             let mut shifted = flow;
             let mut complement = flow;
             let mut relabeled = [0u64; MAX_OUTCOMES];
@@ -401,6 +413,127 @@ fn claimed_scores_are_recomputed_not_trusted() {
 fn buy_and_sell_derivations_are_byte_identical() {
     let delta = candidate(&[13, 0, 8, 1], 4, 0, 7);
     assert_eq!(derive_direct_flow_v2(&delta), Ok(active(&[13, 0, 8, 1])));
+}
+
+#[test]
+fn checked_certificate_binds_domain_width_flow_and_score() {
+    let domain = score_domain(3, 1);
+    let delta = candidate(&[9, 0, 4], 5, 0, 7);
+    let certificate = certify_candidate_score_v2(domain, &delta).unwrap();
+
+    assert_eq!(certificate.domain(), domain);
+    assert_eq!(certificate.candidate_delta(), &delta);
+    assert_eq!(&certificate.direct_flow()[..3], &[9, 0, 4]);
+    assert_eq!(certificate.score().risk.certified_risk_flow_atoms, 9);
+    assert_eq!(certificate.score().cash_equivalent_direct_flow_atoms, 0);
+    assert_eq!(certificate.score().virtual_churn_atoms, 5);
+    assert_eq!(certificate.score().digest, [7u8; 32]);
+
+    assert_eq!(
+        ScoreDomainV2::new([0u8; 32], [2u8; 32], [3u8; 32], 3),
+        Err(ScoreErrorV2::ZeroBindingIdentity)
+    );
+    assert_eq!(
+        certify_candidate_score_v2(score_domain(2, 1), &delta),
+        Err(ScoreErrorV2::ScoreDomainWidthMismatch)
+    );
+}
+
+#[test]
+fn checked_selection_rejects_cross_domain_and_preserves_state_on_refusal() {
+    let first = certify_candidate_score_v2(
+        score_domain(2, 1),
+        &candidate(&[4, 0], 0, 0, 9),
+    )
+    .unwrap();
+    let foreign = certify_candidate_score_v2(
+        score_domain(2, 8),
+        &candidate(&[99, 0], 0, 0, 1),
+    )
+    .unwrap();
+    assert_eq!(
+        foreign.total_order_same_domain(&first),
+        Err(ScoreErrorV2::MismatchedScoreDomain)
+    );
+
+    let mut selection = BestSubmittedScoreV2::begin(first);
+    let before = selection;
+    assert_eq!(
+        selection.consider(foreign),
+        Err(ScoreErrorV2::MismatchedScoreDomain)
+    );
+    assert_eq!(selection, before);
+}
+
+#[test]
+fn checked_selection_penalizes_complete_set_wash_and_freezes_ties() {
+    let domain = score_domain(4, 1);
+    let wash = certify_candidate_score_v2(
+        domain,
+        &candidate(&[7, 7, 7, 7], 0, 0, 1),
+    )
+    .unwrap();
+    let empty = certify_candidate_score_v2(
+        domain,
+        &candidate(&[0, 0, 0, 0], 0, 0, 255),
+    )
+    .unwrap();
+    let risk_large_digest = certify_candidate_score_v2(
+        domain,
+        &candidate(&[8, 0, 3, 4], 0, 0, 9),
+    )
+    .unwrap();
+    let risk_small_digest = certify_candidate_score_v2(
+        domain,
+        &candidate(&[8, 0, 3, 4], 0, 0, 2),
+    )
+    .unwrap();
+
+    let mut selection = BestSubmittedScoreV2::begin(wash);
+    assert_eq!(
+        selection.consider(empty),
+        Ok(SelectionUpdateV2::ReplacedBest)
+    );
+    assert_eq!(selection.best().score().digest, [255u8; 32]);
+    assert_eq!(
+        selection.consider(risk_large_digest),
+        Ok(SelectionUpdateV2::ReplacedBest)
+    );
+    assert_eq!(
+        selection.consider(risk_small_digest),
+        Ok(SelectionUpdateV2::ReplacedBest)
+    );
+    assert_eq!(selection.best().score().digest, [2u8; 32]);
+    assert_eq!(
+        selection.consider(risk_small_digest),
+        Ok(SelectionUpdateV2::RetainedBest)
+    );
+    assert_eq!(selection.checked_submission_count(), 5);
+}
+
+#[test]
+fn checked_certificate_and_selection_support_all_sixteen_eggs() {
+    let mut direct = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        direct[outcome] = u64::try_from(outcome).unwrap();
+        outcome += 1;
+    }
+    let certificate = certify_candidate_score_v2(
+        score_domain(16, 1),
+        &candidate(&direct, 0, 0, 1),
+    )
+    .unwrap();
+    assert_eq!(certificate.score().risk.certified_risk_flow_atoms, 15);
+
+    let mut selection = BestSubmittedScoreV2::begin(certificate);
+    selection.set_checked_submission_count_for_test(u64::MAX);
+    let before = selection;
+    assert_eq!(
+        selection.consider(certificate),
+        Err(ScoreErrorV2::CheckedSubmissionCountOverflow)
+    );
+    assert_eq!(selection, before);
 }
 
 fn parse_flow(text: &str, outcomes: usize) -> [u64; MAX_OUTCOMES] {
