@@ -40,6 +40,12 @@ pub enum RuntimeAdapterErrorV1 {
     BalanceMismatch,
     TransferOverflow,
     TransferConservation,
+    EmptyBatch,
+    BatchTooWide,
+    DuplicateAccount,
+    DuplicateCompartment,
+    DuplicateReceipt,
+    BatchBindingMismatch,
     CodecLength,
     CodecMagic,
     CodecVersion,
@@ -552,6 +558,86 @@ pub struct RuntimeAtomicTransitionV1 {
 impl RuntimeAtomicTransitionV1 {
     pub fn transfers(&self) -> &[RuntimeLamportTransferV1] {
         &self.transfers[..self.transfer_count]
+    }
+}
+
+/// Multiple compartment plans which the concrete adapter applies or rolls
+/// back as one instruction. `N` is bounded by the seven canonical accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeAtomicTransitionBatchV1<const N: usize> {
+    pub policy_id: Id,
+    pub lifecycle_id: Id,
+    pub total_account_outflow_lamports: u64,
+    pub transitions: [RuntimeAtomicTransitionV1; N],
+}
+
+/// Join independently planned compartment mutations into one atomic bundle.
+///
+/// Account and semantic receipt identities are disjoint. A family action which
+/// spans, for example, Candidate and Settlement cannot apply only one debit.
+pub fn join_runtime_atomic_transition_batch_v1<const N: usize>(
+    policy_id: Id,
+    lifecycle_id: Id,
+    transitions: [RuntimeAtomicTransitionV1; N],
+) -> RuntimeAdapterResultV1<RuntimeAtomicTransitionBatchV1<N>> {
+    live(policy_id)?;
+    live(lifecycle_id)?;
+    if N == 0 {
+        return Err(RuntimeAdapterErrorV1::EmptyBatch);
+    }
+    if N > RUNTIME_COMPARTMENT_COUNT_V1 {
+        return Err(RuntimeAdapterErrorV1::BatchTooWide);
+    }
+    let mut total_account_outflow_lamports = 0u64;
+    let mut index = 0usize;
+    while index < N {
+        let transition = transitions[index];
+        if transition.state_before.identity.policy_id != policy_id
+            || transition.state_after.identity.policy_id != policy_id
+            || transition.state_before.identity.lifecycle_id != lifecycle_id
+            || transition.state_after.identity.lifecycle_id != lifecycle_id
+            || transition.state_before.identity.account_id != transition.account_id
+            || transition.state_after.identity.account_id != transition.account_id
+        {
+            return Err(RuntimeAdapterErrorV1::BatchBindingMismatch);
+        }
+        let outflow = transition
+            .account_balance_before
+            .checked_sub(transition.account_balance_after)
+            .ok_or(RuntimeAdapterErrorV1::BalanceMismatch)?;
+        total_account_outflow_lamports = add(total_account_outflow_lamports, outflow)?;
+        let receipt_id = transition_receipt_id(transition);
+        let mut prior = 0usize;
+        while prior < index {
+            if transitions[prior].account_id == transition.account_id {
+                return Err(RuntimeAdapterErrorV1::DuplicateAccount);
+            }
+            if transitions[prior].kind == transition.kind {
+                return Err(RuntimeAdapterErrorV1::DuplicateCompartment);
+            }
+            let prior_receipt_id = transition_receipt_id(transitions[prior]);
+            if !receipt_id.is_zero() && receipt_id == prior_receipt_id {
+                return Err(RuntimeAdapterErrorV1::DuplicateReceipt);
+            }
+            prior += 1;
+        }
+        index += 1;
+    }
+    Ok(RuntimeAtomicTransitionBatchV1 {
+        policy_id,
+        lifecycle_id,
+        total_account_outflow_lamports,
+        transitions,
+    })
+}
+
+fn transition_receipt_id(transition: RuntimeAtomicTransitionV1) -> Id {
+    match transition.action {
+        RuntimeTransitionActionV1::ObserveDonation => Id::ZERO,
+        RuntimeTransitionActionV1::SpendWork => transition.state_after.last_work_receipt_id,
+        RuntimeTransitionActionV1::CloseSuccess | RuntimeTransitionActionV1::CloseFailure => {
+            transition.state_after.terminal_receipt_id
+        }
     }
 }
 
