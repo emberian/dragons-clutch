@@ -93,6 +93,13 @@ addresses:
 - a fully prefunded account has zero principal and no invented payer authority;
 - close returns principal once and routes the entire remainder to the sink.
 
+The runtime crate therefore owns an exact 72-byte `DCSRTA01` account prefix.
+Its layout retains family, bump, principal, donation floor, and generation,
+but permits `principal_recipient = 0` exactly when the principal is zero. The
+older proposed `DCSP3ACT`/`TerminalIdentityV1` prefix cannot represent that
+case and is not accepted by these runtime account decoders. This is an
+intentional versioned replacement, not aliasing between the two magics.
+
 Mandatory work remains in the separate liveness Source compartment. A
 `SourceWorkScheduleBindingV1` owns the exact schedule digest, aggregate
 dot-product work capital, maximum calls, largest single-call ceiling, rent, and

@@ -4,9 +4,9 @@ use clutch_source_plane_v3::{
     WindowSealV3, WindowSpecV3, WindowWorkV3, RAW_PAGE_BYTES, STATISTIC_RESULT_BYTES,
     WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
 };
-use clutch_source_plane_v3_adapter::{decode_account, PdaRecipeV3};
-use clutch_terminal_identity_v1::Id as TerminalId;
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 
+use crate::account::decode_runtime_account;
 use crate::auth::{
     account_data_id, domain_id, live_id, AdapterInvocationV1, AuthenticatedSourceRouteV1,
     ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1,
@@ -115,8 +115,7 @@ pub fn authenticate_raw_page_account(
     derived_pda: RuntimeDerivedPdaV1,
 ) -> Result<AuthenticatedRawPageV1> {
     require_immutable_adapter_account(route, account)?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, page) = decode_account::<RawPageV3>(account.data, neutral_sink)?;
+    let (header, page) = decode_runtime_account::<RawPageV3>(account.data, route.neutral_sink())?;
     page.validate()?;
     let recipe = PdaRecipeV3::raw_page(route.source_plane_contract_id(), page.id()?)?;
     derived_pda.validate_for(
@@ -156,8 +155,8 @@ pub fn authenticate_window_work_account(
     validate_window_route(route, window)?;
     let lineage = authenticated_lineage.lineage();
     lineage.validate()?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, work) = decode_account::<WindowWorkV3>(account.data, neutral_sink)?;
+    let (header, work) =
+        decode_runtime_account::<WindowWorkV3>(account.data, route.neutral_sink())?;
     work.validate_against(window)?;
     let recipe = PdaRecipeV3::window_work(window.id()?)?;
     derived_pda.validate_for(
@@ -171,7 +170,7 @@ pub fn authenticate_window_work_account(
         || lineage.semantic_binding_id != window.id()?
         || !lineage.is_open
         || lineage.active_account != account.key
-        || lineage.latest_generation != header.terminal.generation
+        || lineage.latest_generation != header.generation
         || lineage.source_work_schedule_id != route.source_work_schedule_id()
         || lineage.neutral_sink != route.neutral_sink()
     {
@@ -186,7 +185,7 @@ pub fn authenticate_window_work_account(
     bytes[96..128].copy_from_slice(&account_data_id.bytes());
     bytes[128..160].copy_from_slice(&state_id.bytes());
     bytes[160..192].copy_from_slice(&lineage.lineage_account.bytes());
-    bytes[192..200].copy_from_slice(&header.terminal.generation.to_le_bytes());
+    bytes[192..200].copy_from_slice(&header.generation.to_le_bytes());
     bytes[200] = header.bump;
     let authentication_id = domain_id(WORK_AUTH_DOMAIN, &bytes);
     if lineage.last_opened_state_id != account_data_id {
@@ -195,7 +194,7 @@ pub fn authenticate_window_work_account(
     Ok(AuthenticatedWindowWorkV1 {
         route_id: route.route_id(),
         account: account.key,
-        terminal_generation: header.terminal.generation,
+        terminal_generation: header.generation,
         work,
         authentication_id,
     })
@@ -1024,8 +1023,8 @@ pub fn authenticate_window_seal_account(
 ) -> Result<AuthenticatedWindowSealAccountV1> {
     require_immutable_adapter_account(route, account)?;
     validate_window_route(route, window)?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, seal) = decode_account::<WindowSealV3>(account.data, neutral_sink)?;
+    let (header, seal) =
+        decode_runtime_account::<WindowSealV3>(account.data, route.neutral_sink())?;
     seal.validate_against(window)?;
     let recipe = PdaRecipeV3::window_seal(window.id()?)?;
     derived_pda.validate_for(

@@ -18,12 +18,18 @@
 //! can from supplied bytes and refuses free-form booleans or caller-selected
 //! opaque authorization hashes.
 
+mod account;
 mod auth;
 mod funding;
 mod ingest;
 mod lineage;
 mod window;
 
+pub use account::{
+    decode_runtime_account, encode_runtime_account, observe_runtime_account_header,
+    RuntimeAccountBodyV1, RuntimeAccountHeaderV1, RUNTIME_ACCOUNT_HEADER_BYTES,
+    RUNTIME_ACCOUNT_LAYOUT_VERSION,
+};
 pub use auth::{
     account_data_id, authenticate_boundary, authenticate_source_route, AdapterInvocationV1,
     AuthenticatedBoundaryV1, AuthenticatedSourceRouteV1, ClockPolicyV1, ClockSnapshotV1,
