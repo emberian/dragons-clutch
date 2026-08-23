@@ -1722,6 +1722,8 @@ pub enum GeneralV2Action {
     FinalizeMergeReceiptPayment = 40,
     /// Release and close one exact zero-fill Reservation.
     ReleaseUnfilledReservation = 41,
+    /// Atomically consume one exact full coefficient-portfolio pair.
+    ConsumePortfolioPairEggs = 42,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -1904,7 +1906,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 41;
+    pub const LAST_TAG: u8 = 42;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1950,6 +1952,7 @@ impl GeneralV2Action {
             Self::InitializeSettlementRoot => 39,
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
+            Self::ConsumePortfolioPairEggs => 42,
         }
     }
 
@@ -1997,6 +2000,7 @@ impl GeneralV2Action {
             39 => Some(Self::InitializeSettlementRoot),
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
+            42 => Some(Self::ConsumePortfolioPairEggs),
             _ => None,
         }
     }
