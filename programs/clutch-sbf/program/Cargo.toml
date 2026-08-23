@@ -43,7 +43,6 @@ laboratory-fixtures = []
 # is part of this profile because the default/public artifact intentionally has
 # no unaudited token release rows.
 non-production-structured-custody-lab = [
-    "laboratory-fixtures",
     "dep:clutch-structured-claim",
     "dep:clutch-structured-claim-adapter",
 ]

@@ -30,6 +30,17 @@ pub enum StructuredMarketProjectionStateV1 {
     Terminal = 2,
 }
 
+impl StructuredMarketProjectionStateV1 {
+    /// Stable canonical byte without relying on an unchecked representation cast.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Absent => 0,
+            Self::Live => 1,
+            Self::Terminal => 2,
+        }
+    }
+}
+
 /// Exact structured-claim projection consumed by Product's private aggregator.
 ///
 /// The struct is a forgeable pure value. A live adapter must authenticate the
@@ -86,7 +97,7 @@ impl StructuredMarketProjectionV1 {
             put(&mut output, &mut cursor, &identity)?;
         }
         put(&mut output, &mut cursor, &self.ordinal.to_le_bytes())?;
-        put(&mut output, &mut cursor, &[self.state as u8, 0, 0, 0])?;
+        put(&mut output, &mut cursor, &[self.state.byte(), 0, 0, 0])?;
         for count in [
             self.admitted_descriptor_count,
             self.live_descriptor_count,
