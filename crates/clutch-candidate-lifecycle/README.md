@@ -24,7 +24,10 @@ unchanged, splits submission into commit and reveal subintervals, removes the
 shared finite sponsor-funded candidate page, and enumerates individually funded
 nodes through a reverse-linked head plus exact live/closed counts. One
 instruction creates, reveals, terminalizes, or closes one node. The checked
-best rank remains independent of append order.
+best rank remains independent of append order under the successor's specified
+ordinal-independent canonical node derivation. Refused and abandoned nodes pay
+separate exact policy penalties, and close outputs bind every recipient as well
+as an exact partition of the observed lamports.
 
 It does not own hashing, PDAs, Solana account memory, Clock authentication,
 relation execution, score computation, lamport movement, CPI, or transaction
@@ -36,7 +39,10 @@ from redirecting the reward and removes the fixed shared admission slot, but it
 does not claim private order flow, proposer-censorship resistance, general MEV
 resistance, or unlimited verification throughput. Its hash/account adapter,
 live tags, candidate-bundle join, SVM evidence, and counted Epoch integration
-remain unimplemented.
+remain unimplemented. Candidate-bundle cleanup and selected-settlement terminal
+liveness are not established; an externally unclosable newest head would delay
+older reverse-linked refunds. The identity tie break is deterministic but can
+be ground by searching over commitments or authorities.
 
 Run independently:
 

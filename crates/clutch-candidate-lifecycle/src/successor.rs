@@ -14,6 +14,15 @@ use crate::{add, live, Error, Id, RankKey, ScorePolicyBindingV1, RANK_KEY_CAPACI
 /// Hash-domain bytes the adapter must prefix to every V3 commitment preimage.
 pub const CANDIDATE_COMMITMENT_DOMAIN_V1: &[u8] = b"dragons-clutch/candidate-commitment/v1";
 
+/// First seed of the future canonical admission-node PDA.
+///
+/// The remaining seeds, in order, are `epoch`, `admission_policy_id`,
+/// `submitter_authority`, and `commitment`. In particular, neither the append
+/// ordinal nor the Window head is a seed, so the address is independent of
+/// transaction ordering. The future adapter must use its checked program id
+/// and the canonical bump for exactly these seeds.
+pub const CANDIDATE_NODE_SEED_DOMAIN_V1: &[u8] = b"candidate-admission-v3";
+
 /// Security facts supplied by the future account adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionAdapterObligationV3 {
@@ -49,16 +58,22 @@ pub enum AdmissionSuccessorLimitV3 {
     LiveAccountTagsNotAllocated,
     CommitmentHasherOutsideKernel,
     CandidateBundleJoinNotConnected,
+    CandidateBundleCleanupLivenessNotEstablished,
+    SelectedSettlementLivenessNotEstablished,
     VerificationBandwidthCanStillBeContended,
+    NodeIdentityTieBreakCanBeGround,
     ProposerCensorshipAndGeneralMevNotSolved,
 }
 
-pub const ADMISSION_SUCCESSOR_LIMITS_V3: [AdmissionSuccessorLimitV3; 6] = [
+pub const ADMISSION_SUCCESSOR_LIMITS_V3: [AdmissionSuccessorLimitV3; 9] = [
     AdmissionSuccessorLimitV3::SbfAdapterNotConnected,
     AdmissionSuccessorLimitV3::LiveAccountTagsNotAllocated,
     AdmissionSuccessorLimitV3::CommitmentHasherOutsideKernel,
     AdmissionSuccessorLimitV3::CandidateBundleJoinNotConnected,
+    AdmissionSuccessorLimitV3::CandidateBundleCleanupLivenessNotEstablished,
+    AdmissionSuccessorLimitV3::SelectedSettlementLivenessNotEstablished,
     AdmissionSuccessorLimitV3::VerificationBandwidthCanStillBeContended,
+    AdmissionSuccessorLimitV3::NodeIdentityTieBreakCanBeGround,
     AdmissionSuccessorLimitV3::ProposerCensorshipAndGeneralMevNotSolved,
 ];
 
@@ -135,6 +150,7 @@ pub struct CandidateAdmissionPolicyV3 {
     pub reveal_span_slots: u64,
     pub verification_span_slots: u64,
     pub bond_lamports: u64,
+    pub invalidity_penalty: u64,
     pub abandonment_penalty: u64,
     pub node_cleanup_reward: u64,
     pub flags: u8,
@@ -149,6 +165,9 @@ impl CandidateAdmissionPolicyV3 {
             || self.verification_span_slots == 0
             || self.bond_lamports == 0
             || self.node_cleanup_reward == 0
+            || self.invalidity_penalty == 0
+            || self.invalidity_penalty > self.bond_lamports
+            || self.abandonment_penalty == 0
             || self.abandonment_penalty > self.bond_lamports
             || self.flags != 0
         {
@@ -429,9 +448,12 @@ pub enum AdmissionNodeStatusV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CandidateAdmissionNodeV3 {
     pub epoch: Id,
+    pub market: Id,
+    pub relation_policy_id: Id,
     pub node: Id,
     pub previous_node: Id,
     pub admission_policy_id: Id,
+    pub score_policy_id: Id,
     pub commitment: Id,
     pub submitter_authority: Id,
     pub solver_reward_destination: Id,
@@ -441,6 +463,7 @@ pub struct CandidateAdmissionNodeV3 {
     pub rank_key: RankKey,
     pub ordinal: u64,
     pub committed_slot: u64,
+    pub window_frozen_slot: u64,
     pub revealed_slot: u64,
     pub terminal_slot: u64,
     pub node_rent_principal: u64,
@@ -455,8 +478,11 @@ impl CandidateAdmissionNodeV3 {
     pub fn validate(self) -> Result<(), Error> {
         for identity in [
             self.epoch,
+            self.market,
+            self.relation_policy_id,
             self.node,
             self.admission_policy_id,
+            self.score_policy_id,
             self.commitment,
             self.submitter_authority,
             self.solver_reward_destination,
@@ -467,11 +493,16 @@ impl CandidateAdmissionNodeV3 {
         }
         if self.ordinal == 0
             || self.committed_slot == 0
+            || self.window_frozen_slot == 0
             || self.node_rent_principal == 0
             || self.bond_lamports == 0
             || self.cleanup_reward == 0
             || self.flags != 0
             || self.node == self.previous_node
+            || self.node == self.submitter_authority
+            || self.node == self.solver_reward_destination
+            || self.node == self.payer
+            || self.node == self.refund_destination
         {
             return Err(Error::InvalidState);
         }
@@ -529,7 +560,11 @@ impl CandidateAdmissionNodeV3 {
         self.validate()?;
         window.validate()?;
         if self.epoch != window.epoch
+            || self.market != window.market
+            || self.relation_policy_id != window.relation_policy_id
             || self.admission_policy_id != window.admission_policy_id
+            || self.score_policy_id != window.score_policy_id
+            || self.window_frozen_slot != window.frozen_slot
             || self.ordinal > window.admitted_count
             || self.committed_slot < window.frozen_slot
             || self.committed_slot >= window.reveal_opens_slot
@@ -588,6 +623,9 @@ impl CandidateAdmissionNodeV3 {
         if self.admission_policy_id != admission.policy_id
             || self.bond_lamports != admission.bond_lamports
             || self.cleanup_reward != admission.node_cleanup_reward
+            || self.node == admission.neutral_sink
+            || self.payer == admission.neutral_sink
+            || self.refund_destination == admission.neutral_sink
         {
             return Err(Error::MismatchedBinding);
         }
@@ -657,9 +695,12 @@ pub fn commit_candidate_v3(
     )?;
     let node = CandidateAdmissionNodeV3 {
         epoch: window.epoch,
+        market: window.market,
+        relation_policy_id: window.relation_policy_id,
         node: input.node,
         previous_node: window.admission_head,
         admission_policy_id: admission.policy_id,
+        score_policy_id: score.policy_id,
         commitment: input.commitment,
         submitter_authority: input.submitter_authority,
         solver_reward_destination: input.solver_reward_destination,
@@ -669,6 +710,7 @@ pub fn commit_candidate_v3(
         rank_key: RankKey::EMPTY,
         ordinal,
         committed_slot: now_slot,
+        window_frozen_slot: window.frozen_slot,
         revealed_slot: 0,
         terminal_slot: 0,
         node_rent_principal: input.node_rent_principal,
@@ -679,11 +721,13 @@ pub fn commit_candidate_v3(
         flags: 0,
     };
     node.validate()?;
+    node.bind_policy(admission)?;
     let mut next_window = window;
     next_window.admission_head = node.node;
     next_window.admitted_count = ordinal;
     next_window.live_node_count = add(next_window.live_node_count, 1)?;
     next_window.validate()?;
+    node.bind_window(next_window)?;
     Ok(CommitCandidateTransitionV3 {
         window: next_window,
         node,
@@ -693,14 +737,21 @@ pub fn commit_candidate_v3(
 
 /// Adapter-attested opening of the domain-separated commitment.
 ///
-/// The adapter verifies `H(domain, epoch, policy, submitter, reward_destination,
-/// candidate_digest, secret)` against `commitment`. The secret is supplied to
-/// the instruction but is never persisted by this kernel.
+/// The adapter verifies SHA-256 over the exact concatenation `domain || epoch ||
+/// market || relation_policy_id || admission_policy_id || score_policy_id ||
+/// frozen_slot_le_u64 || submitter_authority || solver_reward_destination ||
+/// candidate_digest || secret_32` against `commitment`. The node is separately
+/// bound because its canonical PDA seeds include that commitment. The 32-byte
+/// secret is supplied to the instruction but is never persisted by this kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdapterVerifiedCommitmentOpeningV1 {
     pub epoch: Id,
+    pub market: Id,
+    pub relation_policy_id: Id,
     pub node: Id,
     pub admission_policy_id: Id,
+    pub score_policy_id: Id,
+    pub frozen_slot: u64,
     pub commitment: Id,
     pub submitter_authority: Id,
     pub solver_reward_destination: Id,
@@ -727,8 +778,12 @@ pub fn reveal_candidate_v3(
         return Err(Error::Replay);
     }
     if opening.epoch != node.epoch
+        || opening.market != node.market
+        || opening.relation_policy_id != node.relation_policy_id
         || opening.node != node.node
         || opening.admission_policy_id != node.admission_policy_id
+        || opening.score_policy_id != node.score_policy_id
+        || opening.frozen_slot != node.window_frozen_slot
         || opening.commitment != node.commitment
         || opening.submitter_authority != node.submitter_authority
         || opening.solver_reward_destination != node.solver_reward_destination
@@ -910,10 +965,22 @@ pub struct AdapterVerifiedAdmissionCleanupV3 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmissionNodeCloseDispositionV3 {
+    pub keeper_reward_destination: Id,
     pub keeper_reward: u64,
+    pub refund_destination: Id,
     pub bond_refund: u64,
+    pub neutral_sink: Id,
     pub neutral_sink_credit: u64,
     pub rent_principal_refund: u64,
+}
+
+impl AdmissionNodeCloseDispositionV3 {
+    pub fn total_lamports(self) -> Result<u64, Error> {
+        add(
+            add(self.keeper_reward, self.bond_refund)?,
+            add(self.neutral_sink_credit, self.rent_principal_refund)?,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -928,11 +995,16 @@ pub fn close_admission_head_v3(
     evidence: AdapterVerifiedAdmissionCleanupV3,
     admission: CandidateAdmissionPolicyV3,
     score: ScorePolicyBindingV1,
+    keeper_reward_destination: Id,
     observed_lamports: u64,
 ) -> Result<CloseAdmissionHeadTransitionV3, Error> {
     window.bind_policies(admission, score)?;
     node.bind_window(window)?;
     node.bind_policy(admission)?;
+    live(keeper_reward_destination)?;
+    if keeper_reward_destination == node.node {
+        return Err(Error::MismatchedBinding);
+    }
     if window.finalized_slot == 0 || !node.is_terminal() {
         return Err(Error::NotActive);
     }
@@ -957,16 +1029,31 @@ pub fn close_admission_head_v3(
     let surplus = observed_lamports
         .checked_sub(expected)
         .ok_or(Error::Underfunded)?;
-    let abandonment_penalty = if node.status == AdmissionNodeStatusV3::ExpiredCommitment {
-        admission.abandonment_penalty
-    } else {
-        0
+    let bond_penalty = match node.status {
+        AdmissionNodeStatusV3::VerifiedRefused => admission.invalidity_penalty,
+        AdmissionNodeStatusV3::ExpiredCommitment => admission.abandonment_penalty,
+        AdmissionNodeStatusV3::Committed
+        | AdmissionNodeStatusV3::Revealed
+        | AdmissionNodeStatusV3::VerifiedValid
+        | AdmissionNodeStatusV3::ExpiredUnverified => 0,
     };
     let bond_refund = node
         .bond_lamports
-        .checked_sub(abandonment_penalty)
+        .checked_sub(bond_penalty)
         .ok_or(Error::ArithmeticOverflow)?;
-    let neutral_sink_credit = add(surplus, abandonment_penalty)?;
+    let neutral_sink_credit = add(surplus, bond_penalty)?;
+    let disposition = AdmissionNodeCloseDispositionV3 {
+        keeper_reward_destination,
+        keeper_reward: node.cleanup_reward,
+        refund_destination: node.refund_destination,
+        bond_refund,
+        neutral_sink: admission.neutral_sink,
+        neutral_sink_credit,
+        rent_principal_refund: node.node_rent_principal,
+    };
+    if disposition.total_lamports()? != observed_lamports {
+        return Err(Error::MismatchedBinding);
+    }
     let mut next_window = window;
     next_window.admission_head = node.previous_node;
     next_window.live_node_count = next_window
@@ -977,11 +1064,6 @@ pub fn close_admission_head_v3(
     next_window.validate()?;
     Ok(CloseAdmissionHeadTransitionV3 {
         window: next_window,
-        disposition: AdmissionNodeCloseDispositionV3 {
-            keeper_reward: node.cleanup_reward,
-            bond_refund,
-            neutral_sink_credit,
-            rent_principal_refund: node.node_rent_principal,
-        },
+        disposition,
     })
 }

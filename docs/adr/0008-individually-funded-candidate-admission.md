@@ -68,15 +68,28 @@ The adapter verifies a commitment with the exact domain
 
 ```text
 epoch
+market
+relation_policy_id
 admission_policy_id
+score_policy_id
+frozen_slot_le_u64
 submitter_authority
 solver_reward_destination
 candidate_digest
-secret
+secret_32
 ```
+
+`over` means SHA-256 of the exact concatenation shown, with every identity and
+digest contributing its 32 raw bytes and no implicit length prefixes. The node
+is bound separately by the canonical PDA derivation below, whose seeds include
+the commitment; including the node in this hash as well would create a circular
+definition.
 
 The kernel persists the commitment, submitter, and reward destination at
 commit, then accepts only an adapter-attested opening with all fields equal.
+The node also persists and rechecks the Window's epoch, market, relation policy,
+admission policy, score policy, and frozen slot. Thus an opening or node from a
+different semantic Window refuses even if an admission policy is reused.
 Because commits have closed before any opening is accepted, learning a witness
 from a reveal does not let a copier create a new commitment for that witness.
 Replaying the reveal can only advance the original node whose reward destination
@@ -100,13 +113,22 @@ successful commit atomically:
 6. collects exactly the node rent principal, admission bond, and node cleanup
    reward from that admission's payer.
 
+The future node PDA derivation is fixed independently of append order. Its
+ordered seeds are `candidate-admission-v3`, `epoch`, `admission_policy_id`,
+`submitter_authority`, and `commitment`, under the checked program id and
+canonical bump. Neither `ordinal` nor the prior head is a seed. A fresh-account
+check therefore rejects a duplicate canonical commitment by the same submitter,
+and transaction ordering cannot change a fixed admission's identity. The pure
+kernel publishes this seed contract but cannot execute or authenticate the PDA.
+
 The epoch sponsor does not fund or own any admission-page rent. The finite
 commit interval and chain transaction throughput bound successful creations in
 one epoch. A spammer can buy many nodes and contend for transaction or later
 verification bandwidth, but cannot consume a small, shared protocol slot that
 would categorically exclude the next candidate. Every admitted node carries
-the reward needed for its own permissionless close. An unrevealed commitment
-also pays the immutable abandonment penalty from its own bond.
+the reward needed for its own permissionless close once the separately required
+bundle/settlement terminal evidence exists. An unrevealed commitment also pays
+the immutable abandonment penalty from its own bond.
 
 This removes the fixed-capacity quality denial. It does not prove that
 verification bandwidth is economically uncontentious; measurements and
@@ -149,9 +171,23 @@ Node close requires adapter-authenticated closure of the corresponding
 candidate/work bundle. If the node is selected, it additionally requires
 settlement-terminal evidence. Rent principal and the refundable bond return to
 the recorded refund destination, the cleanup reward goes to the closer, and
-the abandonment penalty plus unsolicited surplus go to the immutable neutral
-sink. Hoard principal, collateral, future fees, and future trading revenue fund
-none of these compartments.
+the applicable bond penalty plus unsolicited surplus go to the immutable
+neutral sink. Hoard principal, collateral, future fees, and future trading
+revenue fund none of these compartments.
+
+The node must be distinct from its payer, submitter authority, reward
+destination, and refund destination. The payer and refund destination must also
+be distinct from the neutral sink. Close rejects the node itself as a keeper
+reward destination and returns the three authenticated recipient identities
+alongside their exact amounts. These rules prevent a newest node from naming
+itself as its refund destination and becoming an undeletable head that strands
+every older node.
+
+An adapter-authenticated refused verdict pays the exact immutable invalidity
+penalty from the node bond. An unrevealed commitment instead pays the exact
+abandonment penalty. Valid and deadline-expired-unverified nodes refund the
+whole bond; missing a deadline is not reclassified as invalidity. The four
+close amounts are checked to sum exactly to the observed node balance.
 
 ### Selection remains deterministic
 
@@ -161,6 +197,12 @@ node identity, so otherwise equal economic scores have an injective canonical
 tie break independent of append order. Each valid verdict compares against the
 persisted best rank and replaces it only when strictly greater. Finalization
 selects that identity once.
+
+This tie break is deterministic, not strategy-proof: a participant can search
+over commitments or authorities before admission and thereby search over node
+identities. The score policy must place every economically meaningful component
+before the identity suffix. Identity grinding, like transaction bandwidth
+contention, remains an explicit promotion limit.
 
 The result is the **best valid submitted candidate**. It is not optimal
 clearing unless a separately checked optimality certificate exists.
@@ -198,7 +240,8 @@ Positive consequences:
   earlier low-quality beginnings;
 - the party creating a node funds its rent, bond, and eventual cleanup;
 - post-reveal witness copying cannot redirect the committed reward destination;
-- append order does not decide equal economic-score selection; and
+- under the specified canonical node derivation, append order does not decide
+  equal economic-score selection; and
 - enumeration and deletion remain exact, resumable, and one-node bounded.
 
 Costs and open gates:
@@ -210,9 +253,13 @@ Costs and open gates:
   funding derivation, candidate-bundle joins, and lamport movement remain in an
   unimplemented adapter trust boundary;
 - no live global tags, intents, SBF routes, linked ELF, CU/rent measurements, or
-  local-validator campaign exist for this family; and
-- verification-bandwidth contention, proposer censorship, and general MEV are
-  explicitly not solved.
+  local-validator campaign exist for this family;
+- verification-bandwidth contention, proposer censorship, identity grinding,
+  and general MEV are explicitly not solved; and
+- neither candidate-bundle cleanup liveness nor the selected settlement's
+  terminal fallback has been established. Because cleanup is reverse-linked,
+  an externally unclosable head would delay all older refunds. Host tests use
+  adapter-attested terminal evidence and therefore do not prove this liveness.
 
 ## Rejected alternatives
 
@@ -235,12 +282,16 @@ The host adversarial suite covers:
 - 80 individually funded admissions, exceeding the V2 cap of 64;
 - exact `F/R/S/V` boundary behavior;
 - copied openings, reward substitution, and reveal/verdict replay;
+- cross-Window node/opening substitution;
 - two identical candidate digests with equal economic score and canonical
   node-identity tie breaking;
 - abandoned commitment penalty/refund conservation;
+- refused-candidate invalidity penalty/refund conservation;
 - hard finalization with unfinished work;
 - reverse-order refusal, one-node cleanup, underfunding, surplus routing, and
-  selected settlement evidence; and
+  selected settlement evidence;
+- malicious self-refund/keeper aliases that would make a LIFO head unclosable;
+  and
 - final `live + closed = admitted` retirement state.
 
 Run:

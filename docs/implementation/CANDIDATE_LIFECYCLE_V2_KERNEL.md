@@ -324,6 +324,8 @@ The same crate now contains an experimental, pure successor described by
 It does not modify the V2 codecs above and allocates no live account or intent
 tag. Its host tests exercise 80 admissions, commit/reveal binding, both exact
 submission sub-boundaries, the verification close, equal economic-score ties,
-abandonment, replay, underfunding, selected-settlement evidence, reverse close,
-and complete retirement counts. Those tests are kernel evidence only, not SBF,
-CU, rent, cryptographic-hash, deployment, or mainnet evidence.
+cross-Window substitution, abandonment and invalidity penalties, replay,
+underfunding, close-recipient alias refusal, selected-settlement evidence,
+reverse close, and conditional retirement counts. Those tests are kernel
+evidence only, not candidate-bundle or settlement liveness, SBF, CU, rent,
+cryptographic-hash, deployment, or mainnet evidence.
