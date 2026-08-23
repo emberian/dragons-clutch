@@ -1,6 +1,13 @@
 # Native coefficient portfolios: audited V1 seam
 
-Status: **PURE SEMANTIC SEAM; LIVE PROMOTION STOP** (2026-08-19).
+Status: **SUPERSEDED MODEL-ONLY SEAM** (2026-08-23).
+
+> Authority supersession: the account-ready pure contract now lives in
+> `crates/clutch-batch/src/portfolio_execution_v2.rs`, with its exact ownership
+> and remaining SBF blockers in
+> `crates/clutch-batch/PORTFOLIO_EXECUTION_V2.md`. The V1 content entitlement
+> below remains historical host evidence only. It is not accepted as selected
+> candidate, Reservation, Position, Replay, or receipt authority by V2.
 
 This note records the implemented boundary in
 `programs/solana-layout/src/portfolio_settlement.rs`. It changes no Intent,
