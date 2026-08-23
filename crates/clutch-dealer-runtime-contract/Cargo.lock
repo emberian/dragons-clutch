@@ -37,6 +37,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-fee-runtime-contract",
  "clutch-liveness",
+ "clutch-retirement",
  "sha2",
 ]
 
@@ -56,6 +57,17 @@ version = "0.1.0"
 [[package]]
 name = "clutch-owner-settlement"
 version = "0.1.0"
+
+[[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-retirement"
+version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
 
 [[package]]
 name = "cpufeatures"
