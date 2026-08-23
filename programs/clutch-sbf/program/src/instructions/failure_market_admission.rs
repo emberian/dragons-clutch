@@ -271,7 +271,7 @@ fn persist_failure_market_root_v2(
             && funding.rent_principal_lamports != 0
             && funding.observed_balance_lamports == expected_balance
             && root.lamports() == expected_balance
-            && policy.recovery_state_id.bytes() == root.key.to_bytes(),
+            && policy.recovery_state_id.bytes() != root.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
     let (expected_root, bump) = seeds::failure_market_root_v2_pda(
@@ -343,7 +343,7 @@ fn initialize_prefunded_failure_market_root_v2<'a>(
             && funding.rent_principal_lamports
                 == rent.minimum_balance(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2)?
             && funding.root_account_id.bytes() == root.key.to_bytes()
-            && policy.recovery_state_id.bytes() == root.key.to_bytes(),
+            && policy.recovery_state_id.bytes() != root.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
     let (expected_root, bump) = seeds::failure_market_root_v2_pda(
@@ -472,7 +472,7 @@ pub fn authenticate_failure_market_root_v2(
     let policy = state.binding().facts();
     let root_funding = state.root_funding().facts();
     require(
-        policy.recovery_state_id.bytes() == root.key.to_bytes()
+        policy.recovery_state_id.bytes() != root.key.to_bytes()
             && policy.recovery_receipt_program_id == liveness_id(program_id)
             && root_funding.root_account_id.bytes() == root.key.to_bytes()
             && root.lamports() >= root_funding.observed_balance_lamports,

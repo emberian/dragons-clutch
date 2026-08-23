@@ -32,7 +32,7 @@ const MARKET_ADMISSION_STATE_MAGIC_V1: [u8; 8] = *b"DCFMRKT1";
 const MARKET_ADMISSION_STATE_SCHEMA_V1: u16 = 1;
 
 /// Exact canonical width of one shared-Market Failure admission state.
-pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_168;
+pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_200;
 
 /// Typed physical account identity used by the Market policy join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,7 +280,8 @@ pub struct FailureMarketRootFundingFactsV1 {
     pub failure_policy_binding_id: FailurePolicyBindingId,
     /// Product private receipt for the exact prepaid MarketCore debit.
     pub prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
-    /// Canonical shared Failure root account.
+    /// Canonical immutable shared-Market admission root, distinct from the
+    /// mutable Failure runtime state account in the policy binding.
     pub root_account_id: FailureMarketAccountIdV1,
     /// Immutable payer and eventual recipient of refundable rent principal.
     pub rent_payer: FailureMarketAccountIdV1,
@@ -493,6 +494,7 @@ impl FailureMarketAdmissionStateV1 {
         writer.u64(funding.maximum_lamports_per_call)?;
         let root_funding = self.root_funding.facts;
         writer.id(root_funding.prepaid_debit_receipt_id.bytes())?;
+        writer.id(root_funding.root_account_id.bytes())?;
         writer.id(root_funding.rent_payer.bytes())?;
         writer.u64(root_funding.rent_principal_lamports)?;
         writer.u64(root_funding.donation_floor_lamports)?;
@@ -584,7 +586,7 @@ impl FailureMarketAdmissionStateV1 {
             prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes(
                 reader.id()?,
             ),
-            root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
+            root_account_id: FailureMarketAccountIdV1::from_bytes(reader.id()?),
             rent_payer: FailureMarketAccountIdV1::from_bytes(reader.id()?),
             rent_principal_lamports: reader.u64()?,
             donation_floor_lamports: reader.u64()?,
@@ -774,7 +776,7 @@ fn validate_root_funding(
             .bytes()
             .iter()
             .all(|byte| *byte == 0)
-        || facts.root_account_id.bytes() != policy.recovery_state_id.bytes()
+        || facts.root_account_id.bytes() == policy.recovery_state_id.bytes()
         || facts.root_account_id == facts.rent_payer
         || facts.root_account_id.bytes() == policy.neutral_sink.bytes()
         || facts.rent_payer.bytes() == policy.neutral_sink.bytes()
@@ -1181,11 +1183,10 @@ mod tests {
     }
 
     fn root_funding(binding: FailureMarketPolicyBindingV1) -> FailureMarketRootFundingFactsV1 {
-        let policy = binding.facts();
         FailureMarketRootFundingFactsV1 {
             failure_policy_binding_id: binding.id(),
             prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes([92; 32]),
-            root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
+            root_account_id: FailureMarketAccountIdV1::from_bytes([94; 32]),
             rent_payer: FailureMarketAccountIdV1::from_bytes([93; 32]),
             rent_principal_lamports: 3_000,
             donation_floor_lamports: 11,
@@ -1489,6 +1490,21 @@ mod tests {
         assert_ne!(
             exact.rent_payer.bytes(),
             binding.facts().recovery_refund_owner.bytes()
+        );
+        assert_ne!(
+            exact.root_account_id.bytes(),
+            binding.facts().recovery_state_id.bytes()
+        );
+        let mut aliased_runtime = exact;
+        aliased_runtime.root_account_id =
+            FailureMarketAccountIdV1::from_bytes(binding.facts().recovery_state_id.bytes());
+        assert_eq!(
+            admit_failure_market_root_funding_v1(
+                &ExactRootFunding(aliased_runtime),
+                binding,
+                aliased_runtime,
+            ),
+            Err(Error::BindingMismatch)
         );
         let mut wrong_payer = exact;
         wrong_payer.rent_payer =
