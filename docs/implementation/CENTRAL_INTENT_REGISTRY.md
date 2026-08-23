@@ -81,6 +81,31 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
+SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
+1 through 12:
+
+1. `RegisterRelease`
+2. `InitializeHead`
+3. `OpenRawPage`
+4. `IngestBoundaryBatch`
+5. `SealRawPage`
+6. `InitializeWindowWork`
+7. `FoldWindowPages`
+8. `SealWindow`
+9. `EvaluateStatistic`
+10. `EmitFailureHandoff`
+11. `ReopenGeneration`
+12. `CloseGeneration`
+
+Recurring Series owns actions 13 through 18:
+
+13. `RegisterSeries`
+14. `ActivateFunding`
+15. `AdvanceOccurrence`
+16. `LapseOccurrence`
+17. `ObserveDonation`
+18. `CloseFunding`
+
 These registry names allocate local tags only; this document does not freeze
 payload bytes, account lists, account codecs, transition semantics, or runtime
 capabilities. Action-specific contracts may do so separately. In particular,
@@ -134,6 +159,37 @@ copy its cursor or component-balance facts.
 The Structured, Dealer, and Recovery family action spaces remain empty: every
 local action is unknown until an atomic design wave fixes its payload and
 capability contract.
+
+## Coordinated successor account block
+
+The central collision ledger is the sole allocation owner for the following
+contiguous successor block. Every row is `ReservedDisabled`; an account codec
+or pure runtime elsewhere does not make a route executable.
+
+| tag/version | owner | account |
+|---:|---|---|
+| `0x7d/1` | Dealer | staged policy |
+| `0x7e/1` | Dealer | immutable policy |
+| `0x7f/1` | Recurring Series | registry |
+| `0x80/1` | Recurring Series | present-funding compartments |
+| `0x81/1` | General V2 | owner settlement |
+| `0x82/1` | General V2 | selected fee record |
+| `0x83/1` | General V2 | owner fee carry |
+| `0x84/1` | General V2 | payer allocation |
+| `0x85/1` | General V2 | recipient allocation |
+| `0x86/1` | General V2 | treasury ledger |
+| `0x87/1` | General V2 | settlement cash pot |
+| `0x88/1` | StructuredClaim | descriptor |
+| `0x89/1` | General V2 | FinalPot |
+| `0x8a/1` | SourcePlane V3 | release |
+| `0x8b/1` | SourcePlane V3 | head |
+| `0x8c/1` | SourcePlane V3 | reopen lineage |
+| `0x8d/1` | SourcePlane V3 | open raw page |
+| `0x8e/1` | SourcePlane V3 | immutable raw page |
+| `0x8f/1` | SourcePlane V3 | window work |
+| `0x90/1` | SourcePlane V3 | window seal |
+| `0x91/1` | SourcePlane V3 | statistic result |
+| `0x92/1` | SourcePlane V3 | liveness work receipt |
 
 ## Decimal 74 is not hexadecimal `0x74`
 

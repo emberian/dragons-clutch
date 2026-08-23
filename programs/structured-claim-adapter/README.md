@@ -1,121 +1,129 @@
-# Structured-claim Solana adapter seam
+# Structured-claim SBF successor adapter
 
-Status: **isolated production-bound library and bank model; not wired into the
-live dispatcher and not deployed** (2026-08-23).
+Status: **complete disabled runtime seam; not routed, built, measured, deployed,
+or validated** (2026-08-23).
 
-This crate takes the exact algebra in `clutch-structured-claim` across the
-Solana trust boundary without creating another backing or supply ledger. It is
-`no_std`, allocation-free, safe Rust and fixed-capacity. The central dispatcher
-is deliberately untouched.
+This crate consumes `clutch-structured-claim-runtime-contract` as the only
+owner of structured-claim descriptor bytes, family-local payload codecs, and
+economic transitions. The former adapter-local descriptor (`0xd1`), request,
+wrapper-replay, route planner, backing reconstruction, and post-state DTOs were
+deleted. There is no compatibility decoder: a historical parallel-adapter
+image cannot be mistaken for the canonical descriptor.
 
-## Semantic ownership
+The canonical persisted descriptor is exactly 384 bytes at account coordinate
+`0x88/1`. It contains deployment identity, Market/Terms identity, primitive
+native-Egg coefficients, lifecycle, and PDA bumps. Actual wrapper supply is
+always the extension-free Token-2022 mint. Backing is always the dedicated
+base Position. Hoard, native supply, Market phase, and payouts remain base
+program facts.
 
-| fact | sole authority | adapter treatment |
-| --- | --- | --- |
-| wrapper supply | actual Token-2022 mint | authenticated `MintProjection`; never persisted in the descriptor |
-| wrapper holder balance | actual Token-2022 account | authenticated pre/post projection |
-| cash and residual-Egg backing | wrapper-owned base `PositionAccount` | reconstructed as `BackingVault` for each call |
-| native internal/external supply | market `SupplyLedgerAccount` | exact pre/post closure against kernel total supply |
-| Hoard collateral and payout liability | base Hoard plus Eggcrate/kernel state | reconstructed `MarketLedger`; never copied into wrapper state |
-| payoff identity | live `NativePortfolioClaimV1` plus the exact core preimage | recomputed from Market, self-certifying Terms and primitive coefficients |
-| wrapper fungibility | deployment-bound wrapper product digest | recomputed; descriptor PDA, mint PDA, vault-owner PDA and actor replay PDA verified |
+## Runtime activation is empty
 
-The 384-byte descriptor contains only deployments, Market/Terms identity,
-primitive coefficients, lifecycle, and three bumps. Complete-set floor,
-residual vector, native-claim id, product id, mint address, backing totals and
-supply are all derived.
+The structured family is `75/v1`, with eight runtime-contract actions:
 
-## Planning and execution contract
+1. create descriptor;
+2. canonical wrap;
+3. full-vector wrap;
+4. canonical unwind;
+5. full-vector unwind;
+6. beneficiary-free donation compaction;
+7. exact terminal redemption; and
+8. permanent descriptor retirement.
 
-`plan_route_into` performs all account, deployment, PDA, Token-2022 profile,
-generation, replay, reservation, closure, cap and core-semantic checks before
-the first CPI. It writes a `RoutePlan` into caller-owned `RouteScratch`:
+`ENABLED_STRUCTURED_CLAIM_ACTION_MASK` is zero. Runtime admission reads only
+the three-byte family/version/action header and refuses every allocated action
+before payload or account data is read. The pure planners are implementation
+contracts, not an execution capability.
 
-1. an ordered prefix of at most three exact `CpiStep` values;
-2. canonical empty step padding;
-3. every expected final Position, SupplyLedger, Hoard/kernel aggregate,
-   Token-2022, descriptor, and replay field.
+Activation must be atomic with all of the following:
 
-The SBF dispatcher must allocate `RouteScratch` on its requested heap (5,256
-bytes on the measured host ABI), not in a 4,096-byte SBF frame. It then invokes
-the staged programs in order, records exact successful `CpiReceipt` values,
-re-reads authoritative accounts, and calls both `reconcile_receipts` and
-`reconcile_post_state`. A successful CPI is not accepted as evidence of the
-right mutation by itself. Solana transaction rollback remains the atomicity
-mechanism if any CPI, receipt, or post-state check fails.
+- central registry allocation of the eight family-local actions and descriptor
+  account `0x88/1`;
+- an exact capability-profile tuple and new profile/release identity;
+- main-dispatcher routing to this crate;
+- concrete base CPI instructions named below;
+- a pinned Token-2022 byte parser and CPI encoder;
+- linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
+  SVM, and local-validator evidence; and
+- a checked release manifest.
 
-| route | outer CPIs |
-| --- | ---: |
-| canonical wrap / unwind | 2 |
-| full-vector wrap / unwind with positive floor | 3 |
-| zero-floor full wrap / unwind | 2 |
-| surplus compaction | 0–2 |
-| direct exact-vector redemption | 2 |
-| retirement | 0 |
+## Trust-boundary responsibilities
 
-Ordinary wrapper transfer and direct holder burn remain ordinary Token-2022
-operations. Direct burn releases no backing. Permissionless compaction donates
-all resulting cash and residual-Egg surplus, credits no caller, and is cap
-gated.
+The adapter owns only facts that cannot live in the pure runtime contract:
 
-## Reservation and replay rules
+- exact wrapper/base/Token-2022 Program and ProgramData ownership, linkage,
+  executable bits, and deployment slots;
+- SHA-256 of runtime-owned native-claim and wrapper-product preimages;
+- descriptor, mint, mint-authority, and vault-owner PDA authentication;
+- exact account-role ordering, access, program ownership, and pairwise
+  nonaliasing;
+- hostile decoding of canonical base Market, Terms, Hoard, SupplyLedger,
+  Position, and current-generation Replay accounts;
+- projection through a named base-PDA verifier;
+- projection through a named pinned Token-2022 parser; and
+- exact ordered outer CPI/write plans plus receipt reconciliation.
 
-Buy reservations are the `Position.cash_atoms - reserved_cash_atoms`
-decomposition, so only `free_cash_atoms()` may leave a holder Position. Sell
-reservations already removed their Eggs from `Position.internal`, so the
-visible vector is exactly the free vector and no order-page scan is needed.
-The vault must have zero reserved cash. The wrapper program never exposes an
-order-placement path signed by its vault-owner PDA; any hypothetical seller
-reservation would remove backing and make the exact coverage check fail.
+`Token2022DecoderV1` is deliberately a trust boundary, not a convenient mock
+codec. Its implementation must use the pinned Token-2022 layout and reject
+every mint extension, nonzero decimals, freeze authority, wrong mint authority,
+or uninitialized mint. Holder accounts must reject frozen, native, delegated,
+close-authority, wrong-mint state, and every extension except
+`ImmutableOwner`. Runtime-contract projections are accepted only after that
+parser returns them, and the runtime rechecks the fields it owns.
 
-Each wrapper instruction consumes one descriptor/actor replay sequence. Each
-base Position mutation carries exact source and/or vault generation and replay
-sequences. Writable roles are pairwise nonaliased. Wrapper replay accounts must
-not be closed and recreated while a descriptor is live.
+## Exact route staging
 
-## Remaining SBF seam
+Every route calls the canonical runtime function first, on copies, before
+returning an execution plan. The base CPI variants carry the returned runtime
+plan itself rather than an adapter copy of its post-state.
 
-The live dispatcher still needs small adapters that:
+| action | ordered outer operations |
+| --- | --- |
+| create | descriptor System allocation; mint System allocation; InitializeMint; base empty-vault creation; descriptor write |
+| canonical wrap | base atomic Position transfer; MintToChecked |
+| full wrap | base atomic full-vector custody + complete-set compression; MintToChecked |
+| canonical unwind | BurnChecked; base atomic Position return |
+| full unwind | BurnChecked; base atomic complete-set expansion + full-vector return |
+| compact donation | base atomic beneficiary-free cash/native-Egg donation |
+| terminal redemption | BurnChecked; base exact terminal aggregate redemption |
+| retirement | authenticated base vault close; Token-2022 mint-authority revocation; descriptor tombstone write |
 
-- decode upgradeable-loader Program and ProgramData accounts into
-  `RuntimeDeployments`, including the linked ProgramData identities and slots;
-- decode the exact extension-free Token-2022 mint and ordinary holder account,
-  rejecting every mint extension and every holder extension other than
-  `ImmutableOwner`;
-- authenticate the existing base Market, Terms, Hoard, kernel, SupplyLedger,
-  Position and Replay PDAs/owners before building projections;
-- expose the general base instructions staged here:
-  `AtomicPositionAssetTransferV1`, beneficiary-free collateral donation,
-  beneficiary-free internal-vector donation, and exact aggregate-vector
-  redemption; and
-- translate each `CpiStep` into frozen instruction bytes, call only the bound
-  base or Token-2022 deployment, then re-decode and reconcile post-state.
+The full-vector, compaction, and terminal routes require one atomic base
+instruction each. Splitting them into independent transfer/merge/donation calls
+would consume inconsistent Replay sequences and expose partial semantic
+authority. Solana transaction rollback remains necessary but is not accepted
+as a substitute for checking the exact final Market, Hoard, supply, Position,
+Replay, mint, token, descriptor, and tombstone fields in the dispatcher.
 
-Base Position/Replay PDA derivation stays with the base program, which must
-authenticate it again inside every CPI. The wrapper crate intentionally does
-not copy the base program's still-proposed seed module and create a second seed
-authority.
+## Rent and prefunding
 
-## Rent estimate
+Descriptor and mint construction uses the runtime contract's exact current-bank
+rent shortfall plan. Existing lamports stay locked in the permanent descriptor
+and mint identities and never become a refund, fee, bounty, reserve, treasury,
+or caller claim.
 
-Using the default historical rent arithmetic already used by the repository,
-`890,880 + 6,960 × data_bytes` lamports, rather than a live-bank query:
+The closable base Position/Replay pair is separate. A base-owned creation
+capability must bind creator-funded shortfalls, hostile/benevolent prefunds, a
+beneficiary-free neutral sink, and one `rent_transition_id`. Its later close
+capability must return only the creator-funded component to that creator and
+send all prefunding to the neutral sink. The wrapper cannot mint either
+capability from caller-authored fields.
 
-| account | bytes | estimated rent-exempt lamports |
-| --- | ---: | ---: |
-| descriptor | 384 | 3,563,520 |
-| extension-free mint | 82 | 1,461,600 |
-| vault base Position | 220 | 2,422,080 |
-| vault base Replay | 84 | 1,475,520 |
-| one actor wrapper Replay | 80 | 1,447,680 |
-| holder Token-2022 account with `ImmutableOwner` | 170 | 2,074,080 |
+## Remaining external dependencies
 
-The product-level descriptor + mint + vault Position + base Replay estimate is
-8,922,720 lamports. One actor replay raises it to 10,370,400 lamports. Existing
-Market/Hoard/kernel/SupplyLedger accounts are not wrapper rent, and Hoard
-principal or future fees fund none of these accounts. The local CLI was pointed
-at an unfunded/no-Sysvar local endpoint during this pass, so these values are
-arithmetic estimates, not bank observations.
+The adapter implementation is intentionally honest about work owned elsewhere:
 
-See `SBF_EVIDENCE.md` for build and frame measurements and `tests/routes.rs`
-for the atomic rollback model.
+- the central registry currently reserves the structured family but must still
+  allocate its eight local actions and descriptor `0x88/1`;
+- the base program does not yet expose the authenticated empty-vault creation,
+  atomic Position asset transfer, atomic full-vector wrap/unwind,
+  beneficiary-free compaction, exact terminal redemption, and close receipt
+  interfaces staged here;
+- the main SBF program's pinned Token-2022 parser/CPI helpers must be extracted
+  or exposed without creating a second Token-2022 truth;
+- the main dispatcher has no structured-claim account loader or route arm; and
+- no successor build, measurement, bank, SVM, local-validator, or rollback
+  campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
+
+These are activation dependencies, not reasons to retain the deleted duplicate
+planner or to describe this family as live.
