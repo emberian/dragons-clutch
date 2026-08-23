@@ -782,9 +782,11 @@ fn process_genesis(
         | Action::Layout(Intent::InitPriceGrid { .. })
         | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
-        | Action::Layout(Intent::Endow { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
+        }
+        Action::Layout(Intent::Endow { .. }) => {
+            collateral_cash_v3::process_endow_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
