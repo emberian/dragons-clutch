@@ -13,7 +13,7 @@
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v3-source-head";
+pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v4-source-page";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -21,7 +21,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v3-sourc
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v3-source-head";
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v4-source-page";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -48,8 +48,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x37, 0x0d, 0xbf, 0xc3, 0x9a, 0x21, 0x4b, 0x21, 0xa9, 0x28, 0x53, 0x51, 0xf4, 0x5a, 0x06, 0x9a,
-    0xb1, 0x75, 0xd8, 0xe2, 0x57, 0x90, 0x7b, 0xa3, 0x33, 0xda, 0xa7, 0x2e, 0xfa, 0x05, 0x17, 0x56,
+    0x60, 0x02, 0x0c, 0x9f, 0x26, 0xf2, 0xcc, 0xa8, 0xe0, 0xe5, 0xeb, 0x4e, 0xae, 0x4b, 0x35, 0x3f,
+    0x95, 0x16, 0xfa, 0x69, 0xba, 0xda, 0x88, 0x14, 0x43, 0x97, 0xbb, 0xbc, 0xf1, 0xd4, 0x9b, 0x1d,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -58,8 +58,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x1e, 0x06, 0xa3, 0xc8, 0xf0, 0x89, 0xd2, 0xe1, 0x6e, 0xb0, 0x5a, 0x88, 0x8e, 0x60, 0xd3, 0x3d,
-    0x02, 0x0c, 0xa7, 0x50, 0x2b, 0xe0, 0xaf, 0x40, 0x02, 0xb7, 0x8b, 0xc7, 0xe6, 0x6b, 0x4f, 0x04,
+    0xb7, 0xa2, 0x30, 0x94, 0xd2, 0x7b, 0x4b, 0x02, 0x86, 0xf0, 0x8a, 0xf6, 0xb3, 0x59, 0xe7, 0xe8,
+    0x53, 0xcf, 0x35, 0x23, 0x4e, 0x84, 0x5c, 0x13, 0x4e, 0xbd, 0x38, 0x51, 0xcc, 0x3f, 0xd9, 0xba,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -186,8 +186,8 @@ pub const fn extension_intent_action_allocated(
 /// Exact extension actions executable by this product.
 ///
 /// Full profiles execute artifact-authenticated Source release registration
-/// and the release-bound, atomic SourceHead bootstrap. Actions 3 through 12
-/// remain independently disabled.
+/// plus release-bound atomic SourceHead and OpenRawPage creation. Actions 4
+/// through 12 remain independently disabled.
 #[cfg(all(
     feature = "profile-full",
     not(any(
@@ -195,7 +195,7 @@ pub const fn extension_intent_action_allocated(
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
     ))
 ))]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2)];
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2), (77, 2, 3)];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
@@ -357,7 +357,7 @@ mod tests {
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
                         && family_version == 2
-                        && matches!(local_action, 1 | 2);
+                        && matches!(local_action, 1 | 2 | 3);
                     let expected_enabled =
                         dealer_enabled || general_enabled || source_runtime_enabled;
                     assert_eq!(
