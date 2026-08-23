@@ -196,7 +196,7 @@ pub struct SettlementRootChildCountsV1 {
     pub released_unfilled_reservations: u16,
     /// Owners whose row/Position/pot/Replay action-38 transition completed.
     pub completed_owner_finalizations: u16,
-    /// Fee-bearing `0x83/2` receipts not yet candidate-terminally consumed.
+    /// Fee-bearing rent-owned `0x83/4` receipts not yet terminally consumed.
     /// Zero-fee owners instead retain exact action-38 GEN1 Replay evidence.
     pub live_fee_finalizations: u16,
     /// Dealer children admitted by the selected route.
@@ -997,7 +997,7 @@ impl SettlementRootV1AccountV1 {
     /// Action 40 completes one distinct merge paid latch.
     /// Structural action-40 count successor. This does not authenticate the
     /// Receipt/Reservation/fee/Replay write set. Fee-bearing action 40 must
-    /// consume exact `0x83/2`; zero-fee action 40 must authenticate current
+    /// consume exact rent-owned `0x83/4`; zero-fee action 40 must authenticate current
     /// action-38 Replay evidence committing the finalized row and exact
     /// cash-pot poststate after action 38 authenticated action 37.
     pub fn complete_merge_payment(&self) -> Result<Self, CodecError> {

@@ -3,10 +3,13 @@
 //! Exact price, complete-book, and covered-Dealer join for a selected root.
 
 use clutch_batch::dealer_leg_v2::{
-    verify_economic_candidate_with_dealer_v2, DealerLegCandidateV2, DealerQuotePreconditionV2,
-    VerifiedDealerLegV2,
+    verify_economic_candidate_with_dealer_into_v2, verify_economic_candidate_with_dealer_v2,
+    DealerLegCandidateV2, DealerLegVerdictV2, DealerQuotePreconditionV2,
+    VerifiedDealerLegRefV2, VerifiedDealerLegV2,
 };
-use clutch_batch::portfolio_book_v2::AuthenticatedCompletePortfolioBookV2;
+use clutch_batch::portfolio_book_v2::{
+    AuthenticatedCompletePortfolioBookRefV2, AuthenticatedCompletePortfolioBookV2,
+};
 use clutch_batch::relation_v2::{
     price_semantics_digest_v2, EconomicCandidateV2, EconomicDomainV2, PricePreconditionV2,
 };
@@ -65,6 +68,90 @@ impl VerifiedSmoothCoveredDealerCandidateV1 {
     }
 }
 
+/// Frame-bounded covered-Dealer capability over caller-owned verdict storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSmoothCoveredDealerCandidateRefV1<'a> {
+    economic_domain_digest: Id32,
+    price_measure: VerifiedPriceMeasureV3,
+    quantized_atom_mixture: Option<VerifiedQuantizedAtomMixtureV1>,
+    dealer_leg: VerifiedDealerLegRefV2<'a>,
+}
+
+impl VerifiedSmoothCoveredDealerCandidateRefV1<'_> {
+    /// Canonical EconomicDomainV2 identity checked by the verifier.
+    pub const fn economic_domain_digest(&self) -> Id32 {
+        self.economic_domain_digest
+    }
+
+    /// Exact checked quantized price-measure capability.
+    pub const fn price_measure(&self) -> &VerifiedPriceMeasureV3 {
+        &self.price_measure
+    }
+
+    /// Stronger exact atom-mixture result for degree two or three.
+    pub const fn quantized_atom_mixture(&self) -> Option<VerifiedQuantizedAtomMixtureV1> {
+        self.quantized_atom_mixture
+    }
+
+    /// Exact private covered-Dealer relation capability in caller-owned storage.
+    pub const fn dealer_leg(&self) -> &VerifiedDealerLegRefV2<'_> {
+        &self.dealer_leg
+    }
+}
+
+trait CompletePortfolioBookViewV2 {
+    fn economic_book(&self) -> &clutch_batch::relation_v2::EconomicBookV2;
+    fn settlement_root_account_id(&self) -> [u8; 32];
+    fn retained_feed_account_id(&self) -> [u8; 32];
+    fn order_set_digest(&self) -> [u8; 32];
+    fn settlement_candidate_id(&self) -> [u8; 32];
+    fn settlement_witness_id(&self) -> [u8; 32];
+    fn order_count(&self) -> u8;
+}
+
+macro_rules! complete_book_view {
+    ($type:ty) => {
+        impl CompletePortfolioBookViewV2 for $type {
+            fn economic_book(&self) -> &clutch_batch::relation_v2::EconomicBookV2 {
+                self.economic_book()
+            }
+            fn settlement_root_account_id(&self) -> [u8; 32] {
+                self.settlement_root_account_id()
+            }
+            fn retained_feed_account_id(&self) -> [u8; 32] {
+                self.retained_feed_account_id()
+            }
+            fn order_set_digest(&self) -> [u8; 32] {
+                self.order_set_digest()
+            }
+            fn settlement_candidate_id(&self) -> [u8; 32] {
+                self.settlement_candidate_id()
+            }
+            fn settlement_witness_id(&self) -> [u8; 32] {
+                self.settlement_witness_id()
+            }
+            fn order_count(&self) -> u8 {
+                self.order_count()
+            }
+        }
+    };
+}
+
+complete_book_view!(AuthenticatedCompletePortfolioBookV2);
+complete_book_view!(AuthenticatedCompletePortfolioBookRefV2<'_>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoveredDealerVerifierPrefixV1 {
+    economic_domain_digest: Id32,
+    price_measure: VerifiedPriceMeasureV3,
+    quantized_atom_mixture: Option<VerifiedQuantizedAtomMixtureV1>,
+    relation_domain: EconomicDomainV2,
+    price_precondition: PricePreconditionV2,
+    candidate: EconomicCandidateV2,
+    upstream_economic_candidate_id: [u8; 32],
+    settlement_candidate_id: [u8; 32],
+}
+
 /// Reverify one selected CoveredDealer candidate without accepting a caller
 /// book, coefficient row, price, verdict, or allocation DTO.
 ///
@@ -75,7 +162,7 @@ impl VerifiedSmoothCoveredDealerCandidateV1 {
 /// final Dealer digest equals the root's final SettlementCandidateId; it does
 /// not repeat or replace the root's earlier best-submitted-candidate ordering.
 #[allow(clippy::too_many_arguments)]
-pub fn verify_smooth_covered_dealer_candidate_v1(
+fn verify_smooth_covered_dealer_prefix_v1<B: CompletePortfolioBookViewV2>(
     candidate_feed_identity: Id32,
     sealed_candidate_feed: &[u8],
     settlement_root_account_identity: Id32,
@@ -89,10 +176,8 @@ pub fn verify_smooth_covered_dealer_candidate_v1(
     genesis: &MarketGenesisProfileV2,
     market_instance: &MarketInstancePreimageV2,
     authenticated_edge_policy: QuantizedEdgePolicyV1,
-    book: &AuthenticatedCompletePortfolioBookV2,
-    dealer: &DealerLegCandidateV2,
-    quote: &DealerQuotePreconditionV2,
-) -> Result<VerifiedSmoothCoveredDealerCandidateV1, GeneralV2RuntimeError> {
+    book: &B,
+) -> Result<CoveredDealerVerifierPrefixV1, GeneralV2RuntimeError> {
     if candidate_feed_identity.is_zero() || settlement_root_account_identity.is_zero() {
         return Err(GeneralV2RuntimeError::BindingMismatch);
     }
@@ -308,25 +393,138 @@ pub fn verify_smooth_covered_dealer_candidate_v1(
         virtual_split: header.virtual_split,
         virtual_merge: header.virtual_merge,
     };
-    let dealer_leg = verify_economic_candidate_with_dealer_v2(
-        &relation_domain,
-        book.economic_book(),
-        &price_precondition,
-        &candidate,
-        dealer,
-        quote,
-    )?;
-    if quote.upstream_economic_candidate_digest != header.base_relation_candidate_id.bytes()
-        || dealer_leg.dealer_economic_candidate_digest()
-            != &header.settlement_candidate_id.bytes()
-        || dealer_leg.score().digest != header.settlement_candidate_id.bytes()
-    {
-        return Err(GeneralV2RuntimeError::CandidateIdentityMismatch);
-    }
-    Ok(VerifiedSmoothCoveredDealerCandidateV1 {
+    Ok(CoveredDealerVerifierPrefixV1 {
         economic_domain_digest: domain_digest,
         price_measure,
         quantized_atom_mixture,
+        relation_domain,
+        price_precondition,
+        candidate,
+        upstream_economic_candidate_id: header.base_relation_candidate_id.bytes(),
+        settlement_candidate_id: header.settlement_candidate_id.bytes(),
+    })
+}
+
+fn validate_covered_dealer_identity_v1(
+    prefix: &CoveredDealerVerifierPrefixV1,
+    quote: &DealerQuotePreconditionV2,
+    verdict: &DealerLegVerdictV2,
+) -> Result<(), GeneralV2RuntimeError> {
+    if quote.upstream_economic_candidate_digest != prefix.upstream_economic_candidate_id
+        || verdict.dealer_economic_candidate_digest != prefix.settlement_candidate_id
+        || verdict.score.digest != prefix.settlement_candidate_id
+    {
+        return Err(GeneralV2RuntimeError::CandidateIdentityMismatch);
+    }
+    Ok(())
+}
+
+/// Reverify one selected CoveredDealer candidate into the historical owning
+/// capability.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_smooth_covered_dealer_candidate_v1(
+    candidate_feed_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    settlement_root_account_identity: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV2,
+    price_grid: &PriceGridAccount,
+    product_template: &ProductTemplateV4,
+    native_basis: &NativeClaimBasisV1,
+    price_measure_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    market_instance: &MarketInstancePreimageV2,
+    authenticated_edge_policy: QuantizedEdgePolicyV1,
+    book: &AuthenticatedCompletePortfolioBookV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+) -> Result<VerifiedSmoothCoveredDealerCandidateV1, GeneralV2RuntimeError> {
+    let prefix = verify_smooth_covered_dealer_prefix_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        settlement_root_account_identity,
+        settlement_root,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        product_template,
+        native_basis,
+        price_measure_policy,
+        genesis,
+        market_instance,
+        authenticated_edge_policy,
+        book,
+    )?;
+    let dealer_leg = verify_economic_candidate_with_dealer_v2(
+        &prefix.relation_domain,
+        book.economic_book(),
+        &prefix.price_precondition,
+        &prefix.candidate,
+        dealer,
+        quote,
+    )?;
+    validate_covered_dealer_identity_v1(&prefix, quote, dealer_leg.verdict())?;
+    Ok(VerifiedSmoothCoveredDealerCandidateV1 {
+        economic_domain_digest: prefix.economic_domain_digest,
+        price_measure: prefix.price_measure,
+        quantized_atom_mixture: prefix.quantized_atom_mixture,
+        dealer_leg,
+    })
+}
+
+/// Reverify one selected CoveredDealer candidate directly into caller-owned
+/// dealer-verdict storage and return only borrowed private capabilities.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_smooth_covered_dealer_candidate_into_v1<'a>(
+    candidate_feed_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    settlement_root_account_identity: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV2,
+    price_grid: &PriceGridAccount,
+    product_template: &ProductTemplateV4,
+    native_basis: &NativeClaimBasisV1,
+    price_measure_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    market_instance: &MarketInstancePreimageV2,
+    authenticated_edge_policy: QuantizedEdgePolicyV1,
+    book: &AuthenticatedCompletePortfolioBookRefV2<'_>,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+    dealer_output: &'a mut DealerLegVerdictV2,
+) -> Result<VerifiedSmoothCoveredDealerCandidateRefV1<'a>, GeneralV2RuntimeError> {
+    let prefix = verify_smooth_covered_dealer_prefix_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        settlement_root_account_identity,
+        settlement_root,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        product_template,
+        native_basis,
+        price_measure_policy,
+        genesis,
+        market_instance,
+        authenticated_edge_policy,
+        book,
+    )?;
+    let dealer_leg = verify_economic_candidate_with_dealer_into_v2(
+        &prefix.relation_domain,
+        book.economic_book(),
+        &prefix.price_precondition,
+        &prefix.candidate,
+        dealer,
+        quote,
+        dealer_output,
+    )?;
+    validate_covered_dealer_identity_v1(&prefix, quote, dealer_leg.verdict())?;
+    Ok(VerifiedSmoothCoveredDealerCandidateRefV1 {
+        economic_domain_digest: prefix.economic_domain_digest,
+        price_measure: prefix.price_measure,
+        quantized_atom_mixture: prefix.quantized_atom_mixture,
         dealer_leg,
     })
 }

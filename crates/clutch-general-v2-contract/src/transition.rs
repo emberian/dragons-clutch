@@ -254,7 +254,7 @@ pub struct FreezeEpochTransitionV1<'a> {
     pub market_runtime_id: Id32,
     /// Current Clock slot.
     pub current_slot: u64,
-    /// Strict action-6 payload.
+    /// Strict freeze payload shared by historical action 6 and V5 action 43.
     pub payload: FreezeEpochPayloadV1,
     /// Prestate Epoch.
     pub epoch: &'a GeneralEpochV6AccountV1,
@@ -268,7 +268,65 @@ pub struct FreezeEpochTransitionV1<'a> {
     pub binding: &'a MarketBindingV1,
 }
 
-/// Exact action-6 pure poststate and funded reward.
+/// Exact nonempty OrderPage V5 facts derived by the adapter's complete
+/// authenticated freeze traversal.
+///
+/// This is not a payload and has no wire decoder. Action 43 constructs it only
+/// from program-owned V5 account bodies after exact PDA, digest, slot,
+/// Position-generation, owner, width, horizon, density, and page-set checks.
+/// The pure transition validates the closed geometry again but never accepts
+/// these values from the transaction caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezeOrderSetFactsV5 {
+    /// Canonical V5 order-set identity over all exact page bodies.
+    pub order_set: Id32,
+    /// Canonical page count, one through four.
+    pub page_count: u16,
+    /// Dense populated slots, tombstones included.
+    pub populated_order_count: u16,
+    /// Live RelationV2 orders, tombstones excluded.
+    pub live_order_count: u16,
+    /// Exact distinct live-owner count.
+    pub owner_count: u16,
+    /// Live slots carrying an authenticated nonzero Position generation.
+    pub position_generation_count: u16,
+}
+
+impl FreezeOrderSetFactsV5 {
+    /// Validate dense four-page geometry and disjoint live/count facts.
+    pub fn validate(self) -> Result<(), CodecError> {
+        require_live(self.order_set)?;
+        if !(1..=4).contains(&self.page_count) {
+            return Err(CodecError::InvalidCount);
+        }
+        let prior_pages = self
+            .page_count
+            .checked_sub(1)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let lower = prior_pages
+            .checked_mul(16)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let upper = prior_pages
+            .checked_mul(16)
+            .and_then(|count| count.checked_add(16))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        if self.populated_order_count < lower
+            || self.populated_order_count > upper
+            || self.live_order_count == 0
+            || self.live_order_count > self.populated_order_count
+            || self.owner_count == 0
+            || self.owner_count > self.live_order_count
+            || self.position_generation_count != self.live_order_count
+            || self.populated_order_count > u16::from(MAX_ORDERS_U8)
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(())
+    }
+}
+
+/// Exact freeze pure poststate and funded reward.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FreezeEpochPoststateV1 {
     /// Frozen Epoch.
@@ -286,6 +344,34 @@ pub fn freeze_epoch_poststate_v1<B: Sha256BackendV1>(
     backend: &B,
     request: FreezeEpochTransitionV1<'_>,
 ) -> Result<FreezeEpochPoststateV1, CodecError> {
+    validate_freeze_epoch_transition(backend, &request)?;
+    let economic_digest = economic_domain_digest_v2(backend, request.economic_domain.transcript)?;
+    let order_set = empty_order_set_digest_v1(backend, economic_digest)?;
+    freeze_epoch_poststate_with_order_set(request, order_set)
+}
+
+/// Freeze one exact nonempty V5 book under fresh General action 43.
+///
+/// The schedule, funded reward, and root lifecycle are the same semantic
+/// transition as action 6, but the order-set identity is the V5 traversal's
+/// nonempty commitment rather than the historical empty-book digest. No page
+/// count, owner count, or Position generation comes from the payload.
+pub fn freeze_epoch_v5_poststate_v1<B: Sha256BackendV1>(
+    backend: &B,
+    request: FreezeEpochTransitionV1<'_>,
+    book: FreezeOrderSetFactsV5,
+) -> Result<FreezeEpochPoststateV1, CodecError> {
+    book.validate()?;
+    validate_freeze_epoch_transition(backend, &request)?;
+    freeze_epoch_poststate_with_order_set(request, book.order_set)
+}
+
+/// Authenticate every root-owned freeze input shared by empty action 6 and
+/// nonempty V5 action 43.
+fn validate_freeze_epoch_transition<B: Sha256BackendV1>(
+    backend: &B,
+    request: &FreezeEpochTransitionV1<'_>,
+) -> Result<(), CodecError> {
     request.epoch.validate()?;
     request.economic_domain.validate()?;
     request.window.validate()?;
@@ -335,8 +421,16 @@ pub fn freeze_epoch_poststate_v1<B: Sha256BackendV1>(
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let economic_digest = economic_domain_digest_v2(backend, request.economic_domain.transcript)?;
-    let order_set = empty_order_set_digest_v1(backend, economic_digest)?;
+    Ok(())
+}
+
+/// Apply the already-authenticated order-set identity to the atomic root,
+/// schedule, and present-funded reward poststate.
+fn freeze_epoch_poststate_with_order_set(
+    request: FreezeEpochTransitionV1<'_>,
+    order_set: Id32,
+) -> Result<FreezeEpochPoststateV1, CodecError> {
+    require_live(order_set)?;
     let reveal_opens_slot = request
         .current_slot
         .checked_add(request.binding.commit_span_slots)
@@ -885,6 +979,7 @@ pub fn seal_empty_book_candidate_v1<B: Sha256BackendV1>(
 pub fn seal_candidate_v2<B: Sha256BackendV1>(
     backend: &B,
     candidate_feed: Id32,
+    market_binding_id: Id32,
     stage_bytes: &[u8],
     node: AdmissionNodeV3AccountV1,
     binding: MarketBindingV1,
@@ -894,7 +989,7 @@ pub fn seal_candidate_v2<B: Sha256BackendV1>(
     epoch.validate()?;
     if epoch.phase != GeneralEpochPhaseV1::Frozen
         || epoch.market_runtime != node.market
-        || epoch.market_binding != binding.binding
+        || epoch.market_binding != market_binding_id
         || epoch.economic_domain != economic_domain.domain
         || epoch.generation != node.epoch_generation
         || economic_domain.epoch != node.epoch
@@ -1151,6 +1246,8 @@ pub fn init_clear_work_poststate_v1(
 pub struct InitClearWorkV3TransitionV1<'a> {
     /// Actual Epoch PDA.
     pub epoch_id: Id32,
+    /// Actual immutable MarketBinding PDA.
+    pub market_binding_id: Id32,
     /// Actual sealed Feed PDA.
     pub feed_id: Id32,
     /// Newly derived V3 Work PDA.
@@ -1191,7 +1288,12 @@ pub fn init_clear_work_v3_poststate_v1(
     request.feed.validate(true)?;
     request.binding.validate()?;
     request.work_rent.validate()?;
-    for identity in [request.epoch_id, request.feed_id, request.work_id] {
+    for identity in [
+        request.epoch_id,
+        request.market_binding_id,
+        request.feed_id,
+        request.work_id,
+    ] {
         require_live(identity)?;
     }
     if request.epoch.phase != GeneralEpochPhaseV1::Frozen
@@ -1204,7 +1306,7 @@ pub fn init_clear_work_v3_poststate_v1(
         || request.feed.epoch_generation != request.epoch.generation
         || request.node.epoch_generation != request.epoch.generation
         || request.feed.order_set != request.epoch.order_set
-        || request.binding.binding != request.epoch.market_binding
+        || request.market_binding_id != request.epoch.market_binding
         || request.binding.market != request.epoch.market_runtime
         || request.feed.relation_policy_id != request.binding.relation_policy_id
         || request.node.relation_policy_id != request.binding.relation_policy_id
@@ -1496,6 +1598,8 @@ pub fn complete_candidate_verification_poststate_v1(
 /// after action 10 has migrated to the fresh V3 Work account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompleteEmptyBookWorkV3TransitionV1<'a> {
+    /// Actual immutable MarketBinding PDA.
+    pub market_binding_id: Id32,
     /// Current Clock slot.
     pub current_slot: u64,
     /// Private checked runtime verdict.
@@ -1525,9 +1629,9 @@ pub struct CompleteEmptyBookWorkV3PoststateV1 {
     pub keeper_reward: u64,
 }
 
-/// Preserve the bounded empty-book laboratory while action 10 moves to Work
-/// V3. Nonempty candidates instead pass action 12, the separately owned slice
-/// pass, and the future cost-bound action-14 successor.
+/// Preserve the bounded empty-book path while action 10 uses the active-width
+/// V3 Work account. Nonempty candidates instead pass actions 12 and 13 before
+/// the same action-14 terminal verdict.
 pub fn complete_empty_book_work_v3_poststate_v1(
     request: CompleteEmptyBookWorkV3TransitionV1<'_>,
 ) -> Result<CompleteEmptyBookWorkV3PoststateV1, CodecError> {
@@ -1536,6 +1640,7 @@ pub fn complete_empty_book_work_v3_poststate_v1(
     request.node.validate()?;
     request.work.validate()?;
     request.binding.validate()?;
+    require_live(request.market_binding_id)?;
     if request.epoch.phase != GeneralEpochPhaseV1::Frozen
         || request.node.status != AdmissionNodeStatusV1::Revealed
         || request.work.phase != 0
@@ -1564,7 +1669,7 @@ pub fn complete_empty_book_work_v3_poststate_v1(
         || request.work.base_relation_candidate_id != request.node.base_relation_candidate_id
         || request.work.relation_policy_id != request.node.relation_policy_id
         || request.work.score_policy_id != request.node.score_policy_id
-        || request.binding.binding != request.epoch.market_binding
+        || request.market_binding_id != request.epoch.market_binding
         || request.binding.market != request.work.market
         || request.binding.relation_policy_id != request.work.relation_policy_id
         || request.binding.score_policy_id != request.work.score_policy_id
@@ -1610,6 +1715,171 @@ pub fn complete_empty_book_work_v3_poststate_v1(
     applied.window.validate()?;
     work.validate()?;
     Ok(CompleteEmptyBookWorkV3PoststateV1 {
+        window: applied.window,
+        node,
+        work,
+        keeper_reward,
+    })
+}
+
+/// Authenticated terminal inputs for a nonempty resumable RelationV2 Work.
+///
+/// `verdict` is a private checked-runtime result, never a caller DTO.  A Work
+/// that already reached `Refused` can only be stamped refused.  A Work that
+/// completed RelationV2 and every settlement slice may still become refused
+/// when the terminal Product/price-measure checker rejects its certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteClearWorkV3TransitionV1<'a> {
+    /// Actual counted Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual two-window rank-owner PDA.
+    pub window_id: Id32,
+    /// Actual immutable MarketBinding PDA.
+    pub market_binding_id: Id32,
+    /// Actual AdmissionNode PDA.
+    pub node_id: Id32,
+    /// Actual sealed CandidateFeed PDA.
+    pub feed_id: Id32,
+    /// Actual V3 Work PDA.
+    pub work_id: Id32,
+    /// Current Clock slot.
+    pub current_slot: u64,
+    /// Checked price/RelationV2/ScoreV2-Q result or checked refusal.
+    pub verdict: EmptyBookVerificationVerdictV1,
+    /// Prestate counted Epoch.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Prestate two-window rank owner.
+    pub window: &'a CandidateWindowV4AccountV1,
+    /// Prestate revealed AdmissionNode.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Exact active-width V3 Work body, including phase-scoped remainders.
+    pub work_body: &'a [u8],
+    /// Immutable policy and funding owner.
+    pub binding: &'a MarketBindingV1,
+}
+
+/// Exact terminal nonempty-verdict poststate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteClearWorkV3PoststateV1 {
+    /// Window after one exhaustive checked verdict and possible best update.
+    pub window: CandidateWindowV4AccountV1,
+    /// Terminal valid or refused AdmissionNode.
+    pub node: AdmissionNodeV3AccountV1,
+    /// Terminal V3 Work with unused rewards retained for payer refund.
+    pub work: ClearWorkV3AccountV1,
+    /// Exact present-funded reward authorized now.
+    pub keeper_reward: u64,
+}
+
+/// Stamp one nonempty Work verdict during the verification window.
+///
+/// The Window remains the sole semantic owner of the best valid submitted
+/// candidate.  Valid Work must have consumed every real-leg remainder.  Every
+/// terminal caller authenticates and checks the same price artifacts, so the
+/// price-check plus completion reward is independent of the verdict.  Unused
+/// order and slice rewards after early refusal remain payer-owned capital.
+pub fn complete_clear_work_v3_poststate_v1(
+    request: CompleteClearWorkV3TransitionV1<'_>,
+) -> Result<CompleteClearWorkV3PoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.window.validate()?;
+    request.node.validate()?;
+    request.binding.validate()?;
+    let pre_work = ClearWorkV3AccountV1::decode_account(request.work_body)?;
+    for identity in [
+        request.epoch_id,
+        request.window_id,
+        request.market_binding_id,
+        request.node_id,
+        request.feed_id,
+        request.work_id,
+    ] {
+        require_live(identity)?;
+    }
+    if request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.epoch.work_count == 0
+        || request.node.status != AdmissionNodeStatusV1::Revealed
+        || pre_work.phase != 3
+        || pre_work.order_count == 0
+        || pre_work.page_count == 0
+        || request.epoch.window != request.window_id
+        || request.window.epoch != request.epoch_id
+        || request.node.epoch != request.epoch_id
+        || request.node.node != request.node_id
+        || pre_work.epoch != request.epoch_id
+        || pre_work.node != request.node_id
+        || pre_work.feed != request.feed_id
+        || request.work_id == request.epoch_id
+        || request.work_id == request.window_id
+        || request.work_id == request.market_binding_id
+        || request.work_id == request.node_id
+        || request.work_id == request.feed_id
+        || request.node.epoch != pre_work.epoch
+        || request.node.node != pre_work.node
+        || request.node.market != pre_work.market
+        || request.node.epoch_generation != pre_work.epoch_generation
+        || request.epoch.generation != pre_work.epoch_generation
+        || request.epoch.market_runtime != pre_work.market
+        || request.epoch.order_set != pre_work.order_set
+        || request.epoch.market_binding != request.market_binding_id
+        || request.window.epoch != pre_work.epoch
+        || request.window.epoch_generation != pre_work.epoch_generation
+        || request.current_slot < request.window.submission_closes_slot
+        || request.current_slot >= request.window.verification_closes_slot
+        || pre_work.candidate_bundle_digest != request.node.candidate_bundle_digest
+        || pre_work.settlement_candidate_id != request.node.settlement_candidate_id
+        || pre_work.base_relation_candidate_id != request.node.base_relation_candidate_id
+        || pre_work.relation_policy_id != request.node.relation_policy_id
+        || pre_work.score_policy_id != request.node.score_policy_id
+        || pre_work.candidate_kind != request.node.candidate_kind
+        || request.binding.market != pre_work.market
+        || request.binding.relation_policy_id != pre_work.relation_policy_id
+        || request.binding.score_policy_id != pre_work.score_policy_id
+        || request.binding.price_measure_policy_v1_id != pre_work.price_measure_policy_v1_id
+        || request.binding.native_claim_basis_id != pre_work.native_claim_basis_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+
+    let walked = pre_work.verification_state == ClearWorkVerificationStateV1::Valid;
+    if walked {
+        clear_work_v3_slice_remainders_complete(request.work_body)?;
+    } else if pre_work.verification_state != ClearWorkVerificationStateV1::Refused
+        || !matches!(request.verdict, EmptyBookVerificationVerdictV1::Refused)
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let keeper_reward = request
+        .binding
+        .price_check_reward
+        .checked_add(request.binding.completion_reward)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let reward_remaining = pre_work
+        .reward_remaining
+        .checked_sub(keeper_reward)
+        .ok_or(CodecError::InvalidState)?;
+    if reward_remaining < request.binding.work_close_reward {
+        return Err(CodecError::MismatchedBinding);
+    }
+    if walked && reward_remaining != request.binding.work_close_reward {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let applied = apply_candidate_verdict_v1(request.verdict, *request.node, *request.window)?;
+    let mut node = applied.node;
+    node.terminal_slot = request.current_slot;
+    let work = ClearWorkV3AccountV1 {
+        reward_remaining,
+        reward_earned: pre_work
+            .reward_earned
+            .checked_add(keeper_reward)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+        verification_state: applied.verification_state,
+        ..pre_work
+    };
+    node.validate()?;
+    applied.window.validate()?;
+    work.validate()?;
+    Ok(CompleteClearWorkV3PoststateV1 {
         window: applied.window,
         node,
         work,
@@ -2617,7 +2887,7 @@ pub fn close_clear_work_v3_poststate_v1(
         || request.work.relation_policy_id != request.node.relation_policy_id
         || request.work.score_policy_id != request.node.score_policy_id
         || request.work.candidate_kind != request.node.candidate_kind
-        || request.binding.binding != request.epoch.market_binding
+        || request.market_binding_id != request.epoch.market_binding
         || request.binding.market != request.epoch.market_runtime
         || request.binding.relation_policy_id != request.work.relation_policy_id
         || request.binding.score_policy_id != request.work.score_policy_id
@@ -2782,6 +3052,50 @@ mod tests {
     }
 
     #[test]
+    fn v5_freeze_facts_refuse_impossible_dense_owner_and_generation_shapes() {
+        let valid = FreezeOrderSetFactsV5 {
+            order_set: id(70),
+            page_count: 4,
+            populated_order_count: 64,
+            live_order_count: 60,
+            owner_count: 17,
+            position_generation_count: 60,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+
+        let faults = [
+            FreezeOrderSetFactsV5 {
+                order_set: Id32::ZERO,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                page_count: 0,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                page_count: 2,
+                populated_order_count: 16,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                live_order_count: 0,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                owner_count: 61,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                position_generation_count: 59,
+                ..valid
+            },
+        ];
+        for fault in faults {
+            assert!(fault.validate().is_err());
+        }
+    }
+
+    #[test]
     fn init_freeze_begin_and_open_have_one_exact_poststate() {
         let payer = id(30);
         let binding_id = id(20);
@@ -2861,6 +3175,39 @@ mod tests {
         assert_eq!(frozen.window.submission_closes_slot, 120);
         assert_eq!(frozen.window.verification_closes_slot, 140);
         assert_eq!(frozen.keeper_reward, binding.freeze_reward);
+
+        let v5_book = FreezeOrderSetFactsV5 {
+            order_set: id(70),
+            page_count: 2,
+            populated_order_count: 18,
+            live_order_count: 17,
+            owner_count: 4,
+            position_generation_count: 17,
+        };
+        let frozen_v5 = freeze_epoch_v5_poststate_v1(
+            &Sha,
+            FreezeEpochTransitionV1 {
+                epoch_id,
+                market_binding_id: binding_id,
+                market_runtime_id: runtime_id,
+                current_slot: 100,
+                payload: FreezeEpochPayloadV1 {
+                    epoch_semantics_id: semantics,
+                },
+                epoch: &initialized.epoch,
+                economic_domain: &initialized.economic_domain,
+                window: &initialized.window,
+                budget: &initialized.budget,
+                binding: &binding,
+            },
+            v5_book,
+        )
+        .unwrap();
+        assert_eq!(frozen_v5.epoch.order_set, v5_book.order_set);
+        assert_ne!(frozen_v5.epoch.order_set, frozen.epoch.order_set);
+        assert_eq!(frozen_v5.window, frozen.window);
+        assert_eq!(frozen_v5.budget, frozen.budget);
+        assert_eq!(frozen_v5.keeper_reward, frozen.keeper_reward);
 
         let mut candidate_feed = CandidateFeedHeaderV2 {
             epoch: epoch_id,
@@ -3132,6 +3479,175 @@ mod tests {
         assert_eq!(refused.node.status, AdmissionNodeStatusV1::VerifiedRefused);
         assert_eq!(refused.window.verdict_count, 1);
         assert_eq!(refused.window.valid_verdict_count, 0);
+
+        // The active-width V3 terminal path joins actual account identities,
+        // requires every phase-scoped filled-leg remainder to be zero, and
+        // preserves the Window as the sole best-valid-submitted owner.
+        const NONEMPTY_WORK_LEN: usize = CLEAR_WORK_V3_HEADER_BYTES + (3 * 16) + (3 * 8);
+        let terminal_v3 = ClearWorkV3AccountV1 {
+            epoch: epoch_id,
+            node: node_id,
+            market: runtime_id,
+            order_set: work.epoch.order_set,
+            feed: feed_id,
+            candidate_bundle_digest: work.node.candidate_bundle_digest,
+            settlement_candidate_id: work.node.settlement_candidate_id,
+            base_relation_candidate_id: work.node.base_relation_candidate_id,
+            relation_policy_id: work.node.relation_policy_id,
+            economic_domain_digest: candidate_feed.economic_domain_digest,
+            native_claim_basis_id: binding.native_claim_basis_id,
+            candidate_price_digest: candidate_feed.candidate_price_digest,
+            price_measure_policy_v1_id: binding.price_measure_policy_v1_id,
+            score_policy_id: work.node.score_policy_id,
+            price_body_digest: candidate_feed.price_body_digest,
+            previous_order_id: id(55),
+            epoch_generation: work.epoch.generation,
+            rent: rent(payer, 201),
+            reward_remaining: binding
+                .price_check_reward
+                .checked_add(binding.completion_reward)
+                .and_then(|value| value.checked_add(binding.work_close_reward))
+                .unwrap(),
+            reward_earned: binding.order_reward + binding.slice_reward,
+            slice_count: 1,
+            slice_cursor: 1,
+            page_count: 1,
+            page_cursor: 1,
+            outcome_count: 3,
+            order_count: 1,
+            order_cursor: 1,
+            slot_cursor: 0,
+            phase: 3,
+            candidate_kind: SettlementCandidateKindV1::Direct,
+            price_witness_schema: PRICE_MEASURE_WITNESS_SCHEMA_V3,
+            quantized_semantics_version: QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
+            stored_bump: 8,
+            verification_state: ClearWorkVerificationStateV1::Valid,
+            flags: 0,
+            sha256: Sha256CheckpointV1 {
+                state: SHA256_INITIAL_STATE_V1,
+                block: [0; 64],
+                block_len: 0,
+                total_len: 0,
+            },
+        };
+        let mut terminal_v3_body = [0u8; NONEMPTY_WORK_LEN];
+        terminal_v3
+            .encode(&mut terminal_v3_body[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        let active_score = ScoreV2QComponentsV1 {
+            certified_risk_flow_atoms: 5,
+            cash_equivalent_direct_flow_atoms: 4,
+            virtual_churn_atoms: 0,
+            settlement_candidate_id: terminal_v3.settlement_candidate_id,
+        };
+        let active_completed = complete_clear_work_v3_poststate_v1(
+            CompleteClearWorkV3TransitionV1 {
+                epoch_id,
+                window_id,
+                market_binding_id: binding_id,
+                node_id,
+                feed_id,
+                work_id,
+                current_slot: 120,
+                verdict: EmptyBookVerificationVerdictV1::Valid(active_score),
+                epoch: &work.epoch,
+                window: &opened.window,
+                node: &work.node,
+                work_body: &terminal_v3_body,
+                binding: &binding,
+            },
+        )
+        .unwrap();
+        assert_eq!(active_completed.keeper_reward, 7);
+        assert_eq!(active_completed.work.reward_remaining, binding.work_close_reward);
+        assert_eq!(active_completed.window.best_candidate_node, node_id);
+        assert_eq!(active_completed.window.valid_verdict_count, 1);
+
+        let mut incomplete_v3_body = terminal_v3_body;
+        incomplete_v3_body[NONEMPTY_WORK_LEN - 8..]
+            .copy_from_slice(&1u64.to_le_bytes());
+        assert_eq!(
+            complete_clear_work_v3_poststate_v1(CompleteClearWorkV3TransitionV1 {
+                epoch_id,
+                window_id,
+                market_binding_id: binding_id,
+                node_id,
+                feed_id,
+                work_id,
+                current_slot: 120,
+                verdict: EmptyBookVerificationVerdictV1::Valid(active_score),
+                epoch: &work.epoch,
+                window: &opened.window,
+                node: &work.node,
+                work_body: &incomplete_v3_body,
+                binding: &binding,
+            }),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            complete_clear_work_v3_poststate_v1(CompleteClearWorkV3TransitionV1 {
+                current_slot: opened.window.verification_closes_slot,
+                epoch_id,
+                window_id,
+                market_binding_id: binding_id,
+                node_id,
+                feed_id,
+                work_id,
+                verdict: EmptyBookVerificationVerdictV1::Valid(active_score),
+                epoch: &work.epoch,
+                window: &opened.window,
+                node: &work.node,
+                work_body: &terminal_v3_body,
+                binding: &binding,
+            }),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let refused_v3 = ClearWorkV3AccountV1 {
+            previous_order_id: Id32::ZERO,
+            reward_remaining: binding
+                .order_reward
+                .checked_add(binding.slice_reward)
+                .and_then(|value| value.checked_add(terminal_v3.reward_remaining))
+                .unwrap(),
+            reward_earned: 0,
+            slice_cursor: 0,
+            page_cursor: 0,
+            order_cursor: 0,
+            phase: 3,
+            verification_state: ClearWorkVerificationStateV1::Refused,
+            ..terminal_v3
+        };
+        let mut refused_v3_body = [0u8; NONEMPTY_WORK_LEN];
+        refused_v3
+            .encode(&mut refused_v3_body[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        let refused_active = complete_clear_work_v3_poststate_v1(
+            CompleteClearWorkV3TransitionV1 {
+                epoch_id,
+                window_id,
+                market_binding_id: binding_id,
+                node_id,
+                feed_id,
+                work_id,
+                current_slot: 120,
+                verdict: EmptyBookVerificationVerdictV1::Refused,
+                epoch: &work.epoch,
+                window: &opened.window,
+                node: &work.node,
+                work_body: &refused_v3_body,
+                binding: &binding,
+            },
+        )
+        .unwrap();
+        assert_eq!(refused_active.node.status, AdmissionNodeStatusV1::VerifiedRefused);
+        assert_eq!(refused_active.window.valid_verdict_count, 0);
+        assert!(refused_active.window.best_candidate_node.is_zero());
+        assert_eq!(
+            refused_active.work.reward_remaining,
+            binding.order_reward + binding.slice_reward + binding.work_close_reward
+        );
         assert_eq!(
             complete_candidate_verification_poststate_v1(
                 CompleteCandidateVerificationTransitionV1 {

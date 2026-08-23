@@ -343,7 +343,12 @@ class CapabilityProfileTests(unittest.TestCase):
             checker.validate_manifest(value, repo=ROOT)
 
     def test_model_only_profile_is_valid_planning_but_never_deployable(self) -> None:
-        summary = checker.validate_manifest(manifest(), repo=ROOT)
+        value = manifest()
+        summary = checker.validate_manifest(value, repo=ROOT)
+        self.assertEqual(
+            summary["manifest_canonical_sha256"],
+            checker.canonical_json_sha256(value),
+        )
         self.assertEqual(summary["linked_capabilities"], [])
         self.assertEqual(
             summary["planned_capabilities"], list(checker.CAPABILITY_SLOTS)
