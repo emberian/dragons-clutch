@@ -1,25 +1,25 @@
 # Dealer catalog and facility-foundation SBF vertical slice
 
 Status: **EXPLICITLY NON-PRODUCTION / SELF-HOSTED LIVENESS, BOUNDED LP FUNDING,
-ACTIVATION/STALE RECOVERY, AND BIND-EPOCH / NO ORDER OR SETTLEMENT CAPABILITY**.
+ACTIVATION/CANCELLED REFUND, AND BIND-EPOCH / NO ORDER OR SETTLEMENT CAPABILITY**.
 
 The signed resumable catalog persists exactly one typed `DealerPolicyV1`,
 `DealerLivenessScheduleV1`, or generic `RuntimeLivenessPolicyV1` body. The
 separate facility adapter owns exact Initialize, bounded LP-page creation,
 contribution, pre-activation withdrawal, activation, stale-funding cancellation,
-and BindEpoch transitions. It does not enable order admission, selection,
-settlement, claims, or retirement.
+exhaustive cancelled-sponsor refund, and BindEpoch transitions. It does not
+enable order admission, selection, settlement, claims, or ordinary retirement.
 
 The separate profile identity is:
 
 ```text
-dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-recovery-bind-lab/v5
-46528f9a54c6e43e3453944cc9e433fef69a96e8052e1eb5e8b46b44331a5a7d
+dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lab/v6
+2c780c81718949b65cdc54822a9e3039a13d664d5709faa9495593d4546ae442
 ```
 
 Every production profile rejects these Dealer coordinates before account
 inspection. The laboratory profile rejects every legacy intent and enables
-only Dealer family 76, version 1, local actions `1..=10` and `12`.
+only Dealer family 76, version 1, local actions `1..=12`.
 
 ## Wire and account contract
 
@@ -104,11 +104,11 @@ No mock-source account, feature, parser, fixture, or dependency participates
 in this route.
 
 The laboratory now has exact Initialize, `CreateLpPage`, `Contribute`,
-`WithdrawFunding`, `Activate`, `CancelFunding`, and BindEpoch handlers over
-canonical PositionV3, ReplayV3, Dealer StateV2, funded-dependency,
-action-receipt, LP-page, General Epoch, and runtime-liveness owners. The
-immutable schedule and generic runtime policy can be published through this
-same catalog rather than injected as fixture DTOs.
+`WithdrawFunding`, `Activate`, `CancelFunding`, `RefundCancelledSponsor`, and
+BindEpoch handlers over canonical PositionV3, ReplayV3, Dealer StateV2,
+funded-dependency, action-receipt, LP-page, General Epoch, and runtime-liveness
+owners. The immutable schedule and generic runtime policy can be published
+through this same catalog rather than injected as fixture DTOs.
 Initialize atomically creates all seven canonical runtime compartment PDAs from
 exact present native-lamport work and rent debits. Hostile prefunds remain
 neutral-sink donations and never discount the liveness payer.
@@ -151,6 +151,15 @@ It does not move sponsor/LP collateral, close a page, or treat the Recovery
 payment as a refund: LP owners first withdraw their exact capital units through
 the ordinary caller-funded route, and sponsor-principal return remains a
 separate typed transition after exhaustive LP/page cleanup.
+
+Cancelled sponsor refund is permissionless keeper work but its destination is
+not caller-selected: the ordinary PositionV3 owner must equal State's immutable
+sponsor-refund recipient. Only the exact recorded sponsor principal moves from
+the facility Position, and the pure transition additionally requires zero LP
+shares, zero live LP owners/pages, zero Eggs/reserved cash, and a zero facility
+Position post-balance before State can become Retiring. Recovery keeper payment,
+receipt/page rent, hostile donations, Hoard principal, and fees are disjoint
+from this collateral-atom transfer.
 
 Every other Dealer facility action remains capability-disabled, including
 selection, collection, delivery, resolution, claims, and retirement.

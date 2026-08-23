@@ -35,7 +35,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-recovery-bind-lab/v5";
+    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lab/v6";
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
@@ -79,8 +79,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x46, 0x52, 0x8f, 0x9a, 0x54, 0xc6, 0xe4, 0x3e, 0x34, 0x53, 0x94, 0x4c, 0xc9, 0xe4, 0x33, 0xfe,
-    0xf6, 0x9a, 0x96, 0xe8, 0x05, 0x2e, 0x1e, 0xb5, 0xe8, 0xb4, 0x6b, 0x44, 0x33, 0x1a, 0x5a, 0x7d,
+    0x2c, 0x78, 0x0c, 0x81, 0x71, 0x89, 0x49, 0xb6, 0x5c, 0xdc, 0x54, 0x82, 0x2a, 0x9e, 0x30, 0x39,
+    0xa1, 0x3d, 0x66, 0x4d, 0x57, 0x09, 0xfa, 0xa9, 0x49, 0x55, 0x93, 0xd4, 0x54, 0x6a, 0xe4, 0x42,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -210,7 +210,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
 /// The laboratory enables typed Dealer catalog publication plus exact facility
-/// initialization, bounded LP funding, activation/recovery, and Epoch binding.
+/// initialization, bounded LP funding, activation/recovery/refund, and Epoch binding.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (76, 1, 1),
@@ -223,6 +223,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (76, 1, 8),
     (76, 1, 9),
     (76, 1, 10),
+    (76, 1, 11),
     (76, 1, 12),
 ];
 
@@ -371,7 +372,7 @@ mod tests {
                         && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
                             .contains(&local_action)
-                            || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 12));
+                            || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = GENERAL_V2_IDENTITY_LAB
                         && family_tag == 74
                         && family_version == 1
