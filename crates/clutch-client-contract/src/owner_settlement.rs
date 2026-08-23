@@ -8,13 +8,11 @@
 use core::fmt;
 
 use clutch_owner_settlement::{
-    build_owner_settlement_book_v1, project_owner_disposition_v1, Error as SemanticError,
-    OwnerSettlementAccumulatorV1,
+    build_owner_settlement_book_v1, Error as SemanticError, OwnerSettlementAccumulatorV1,
 };
 pub use clutch_owner_settlement::{
-    CandidateSettlementTotalsV1, OwnerSettlementDispositionV1, OwnerSettlementExpectationV1,
-    SelectedOwnerFeeV1, SettlementSideV1, VerifiedSettlementOrderV1, MAX_ORDERS,
-    OWNER_SETTLEMENT_BODY_V1_BYTES,
+    CandidateSettlementTotalsV1, OwnerSettlementExpectationV1, SelectedOwnerFeeV1,
+    SettlementSideV1, VerifiedSettlementOrderV1, MAX_ORDERS, OWNER_SETTLEMENT_BODY_V1_BYTES,
 };
 
 /// Public schema for the exact chain-derived owner projection.
@@ -70,28 +68,17 @@ pub struct OwnerSettlementProjectionV1<'a> {
     pub position_len: u8,
 }
 
-/// One lexicographically sorted, open owner row and its projected terminal
-/// cash disposition.
+/// One lexicographically sorted, open owner row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectedOwnerSettlementRowV1 {
     expectation: OwnerSettlementExpectationV1,
     body: [u8; OWNER_SETTLEMENT_BODY_V1_BYTES],
-    disposition: OwnerSettlementDispositionV1,
 }
 
 impl ProjectedOwnerSettlementRowV1 {
     const EMPTY: Self = Self {
         expectation: OwnerSettlementExpectationV1::EMPTY,
         body: [0; OWNER_SETTLEMENT_BODY_V1_BYTES],
-        disposition: OwnerSettlementDispositionV1 {
-            debit_atoms: 0,
-            credit_atoms: 0,
-            selected_fee_atoms: 0,
-            released_cash_atoms: 0,
-            residue_price_units: 0,
-            position_cash_atoms: 0,
-            position_reserved_cash_atoms: 0,
-        },
     };
 
     /// Immutable owner expectation encoded by this row.
@@ -104,13 +91,6 @@ impl ProjectedOwnerSettlementRowV1 {
     #[must_use]
     pub const fn body(&self) -> &[u8; OWNER_SETTLEMENT_BODY_V1_BYTES] {
         &self.body
-    }
-
-    /// Exact terminal cash fields if every receipt later authenticates and
-    /// completes. This is not an execution receipt.
-    #[must_use]
-    pub const fn disposition(&self) -> OwnerSettlementDispositionV1 {
-        self.disposition
     }
 }
 
@@ -209,7 +189,7 @@ impl fmt::Display for OwnerSettlementProjectionRefusal {
     }
 }
 
-/// Build exact canonical owner rows and prospective terminal dispositions.
+/// Build exact canonical open owner rows.
 ///
 /// Success is a client construction result, not evidence that accounts exist,
 /// receipts completed, a transaction was admitted, or settlement executed.
@@ -246,7 +226,7 @@ pub fn project_owner_settlement_v1(
         let mut matches = positions
             .iter()
             .filter(|position| position.owner == expectation.owner);
-        let position = matches
+        matches
             .next()
             .ok_or(OwnerSettlementProjectionRefusal::MissingOwnerPosition)?;
         if matches.next().is_some() {
@@ -256,11 +236,6 @@ pub fn project_owner_settlement_v1(
         rows[index] = ProjectedOwnerSettlementRowV1 {
             expectation,
             body: open.encode_body()?,
-            disposition: project_owner_disposition_v1(
-                &expectation,
-                position.cash_atoms,
-                position.reserved_cash_atoms,
-            )?,
         };
     }
     for position in positions {
@@ -379,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn three_orders_project_to_two_sorted_owner_rows_and_exact_dispositions() {
+    fn three_orders_project_to_two_sorted_open_owner_rows() {
         let (orders, fees, positions, totals) = projection_fixture();
         let plan =
             project_owner_settlement_v1(&project(&orders, &fees, &positions, totals)).unwrap();
@@ -391,10 +366,6 @@ mod tests {
             .rows()
             .iter()
             .all(|row| row.body().len() == OWNER_SETTLEMENT_BODY_V1_BYTES));
-        assert_eq!(plan.rows()[0].disposition().credit_atoms, 2);
-        assert_eq!(plan.rows()[1].disposition().debit_atoms, 3);
-        assert_eq!(plan.rows()[1].disposition().released_cash_atoms, 1);
-        assert_eq!(plan.rows()[1].disposition().position_cash_atoms, 7);
         assert_eq!(plan.candidate_totals().owner_slice_end_count, 4);
         assert_eq!(plan.rounding_pot_price_units(), 10_000);
     }

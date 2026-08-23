@@ -11,11 +11,43 @@
 //! expected order and slice has completed. This makes the runtime boundary
 //! identical to the relation's owner-level `TerminalOwnerFloor` arithmetic.
 
+mod adapter;
 mod builder;
+mod direct;
+mod virtual_claim;
+
+pub use adapter::{
+    authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
+    prepare_create_owner_settlement_account_v1, prepare_realize_owner_cash_v1, AdapterDerivedPdaV1,
+    AuthenticatedOwnerFeeDebitV1, AuthenticatedOwnerSettlementAccountV1,
+    AuthenticatedPositionCashV1, AuthenticatedSettlementReceiptEndV1, OwnerCashRealizationPlanV1,
+    OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
+    OwnerSettlementReceiptAccountingPlanV1, SelectedOwnerRowAuthorityV1,
+    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
+    OWNER_SETTLEMENT_PDA_DOMAIN_V1, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+};
 
 pub use builder::{
     build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
     SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
+};
+
+pub use direct::{
+    prepare_direct_egg_settlement_v1, AuthenticatedDirectSettlementReceiptV1,
+    AuthenticatedOrderMembershipV1, AuthenticatedPositionV1, AuthenticatedReservationV1,
+    DirectEggSettlementInputV1, DirectEggSettlementPlanV1, DirectEggTransferAuditV1, OrderKindV1,
+    ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
+};
+
+pub use virtual_claim::{
+    prepare_virtual_merge_inventory_v1, prepare_virtual_merge_receipt_v1,
+    prepare_virtual_split_inventory_v1, prepare_virtual_split_receipt_v1,
+    AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
+    AuthenticatedVirtualInventoryBudgetV1, AuthenticatedVirtualMergeReceiptV1,
+    AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
+    VirtualInventoryPlanV1, VirtualInventoryStateV1, VirtualMergeReceiptInputV1,
+    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitReceiptInputV1,
+    VirtualSplitReceiptPlanV1,
 };
 
 /// Maximum orders in one frozen General book.
@@ -55,6 +87,12 @@ pub enum Error {
     InsufficientCash,
     /// A finalized or closed owner row was asked to mutate.
     Terminal,
+    /// An account owner, address, bump, writable bit, or rent fact is invalid.
+    InvalidAccount,
+    /// The selected-candidate, receipt, fee, or terminal authority is absent.
+    AuthorityUnavailable,
+    /// A buyer-first settlement pot cannot yet fund this owner's seller credit.
+    SettlementLiquidityUnavailable,
     /// Prospective state does not close the exact conservation equations.
     InvariantViolation,
 }
@@ -124,7 +162,13 @@ impl OwnerSettlementExpectationV1 {
 
     /// Validate identity, disjoint masks, funding shape, and nonempty work.
     pub fn validate(&self) -> Result<()> {
-        let keys = [self.market, self.epoch, self.candidate, self.owner];
+        let keys = [
+            self.market,
+            self.epoch,
+            self.candidate,
+            self.owner,
+            self.owner_order_set_digest,
+        ];
         let mut left = 0_usize;
         while left < keys.len() {
             if keys[left] == [0; 32] {
@@ -139,8 +183,7 @@ impl OwnerSettlementExpectationV1 {
             }
             left += 1;
         }
-        if self.owner_order_set_digest == [0; 32]
-            || self.price_scale == 0
+        if self.price_scale == 0
             || self.expected_slice_count == 0
             || (self.expected_buy_order_mask & self.expected_sell_order_mask) != 0
             || (self.expected_buy_order_mask == 0 && self.expected_sell_order_mask == 0)
@@ -294,20 +337,61 @@ impl OwnerSettlementAccumulatorV1 {
         {
             return Err(Error::Incomplete);
         }
-        let disposition = project_owner_disposition_v1(
-            &self.expectation,
-            position_cash_atoms,
-            position_reserved_cash_atoms,
+        if position_reserved_cash_atoms < self.expectation.reserved_cash_atoms
+            || position_cash_atoms < self.expectation.reserved_cash_atoms
+        {
+            return Err(Error::InsufficientCash);
+        }
+        let debit_atoms = owner_debit_atoms(
+            self.expectation.expected_buy_price_units,
+            self.expectation.price_scale,
+            self.expectation.selected_fee_atoms,
         )?;
+        let credit_atoms = owner_credit_atoms(
+            self.expectation.expected_sell_price_units,
+            self.expectation.price_scale,
+        )?;
+        let residue_price_units = owner_rounding_residue_price_units(
+            self.expectation.expected_buy_price_units,
+            self.expectation.expected_sell_price_units,
+            self.expectation.price_scale,
+        )?;
+        let next_cash = position_cash_atoms
+            .checked_sub(debit_atoms)
+            .and_then(|value| value.checked_add(credit_atoms))
+            .ok_or(Error::ArithmeticUnderflow)?;
+        let next_reserved = position_reserved_cash_atoms
+            .checked_sub(self.expectation.reserved_cash_atoms)
+            .ok_or(Error::ArithmeticUnderflow)?;
+        if next_reserved > next_cash {
+            return Err(Error::InvariantViolation);
+        }
+        let released_cash_atoms = self
+            .expectation
+            .reserved_cash_atoms
+            .checked_sub(debit_atoms)
+            .ok_or(Error::InsufficientCash)?;
         let mut next = *self;
         next.state = 1;
         next.validate()?;
         *self = next;
-        Ok(disposition)
+        Ok(OwnerSettlementDispositionV1 {
+            debit_atoms,
+            credit_atoms,
+            selected_fee_atoms: self.expectation.selected_fee_atoms,
+            released_cash_atoms,
+            residue_price_units,
+            position_cash_atoms: next_cash,
+            position_reserved_cash_atoms: next_reserved,
+        })
     }
 
     /// Mark a finalized, fully consumed owner row as a permanent tombstone.
-    pub fn retire(&mut self) -> Result<()> {
+    ///
+    /// This is deliberately crate-private. The General V2 FinalPot terminal
+    /// authority does not exist yet, so no public adapter may retire the row
+    /// and discard its once-only evidence independently of whole-book closure.
+    pub(crate) fn mark_retired(&mut self) -> Result<()> {
         self.validate()?;
         if self.state != 1 {
             return Err(Error::Incomplete);
@@ -483,62 +567,6 @@ pub struct OwnerSettlementDispositionV1 {
     pub position_cash_atoms: Amount,
     /// Prospective remaining Position reserved cash.
     pub position_reserved_cash_atoms: Amount,
-}
-
-/// Project the exact terminal disposition from one authenticated owner row
-/// and its current Position cash fields without mutating an accumulator.
-///
-/// This is the client/indexer twin of [`OwnerSettlementAccumulatorV1::finalize`].
-/// It does not prove receipt completion; a runtime must still authenticate and
-/// consume every expected fragment before applying the returned disposition.
-pub fn project_owner_disposition_v1(
-    expectation: &OwnerSettlementExpectationV1,
-    position_cash_atoms: Amount,
-    position_reserved_cash_atoms: Amount,
-) -> Result<OwnerSettlementDispositionV1> {
-    expectation.validate()?;
-    if position_reserved_cash_atoms < expectation.reserved_cash_atoms
-        || position_cash_atoms < expectation.reserved_cash_atoms
-    {
-        return Err(Error::InsufficientCash);
-    }
-    let debit_atoms = owner_debit_atoms(
-        expectation.expected_buy_price_units,
-        expectation.price_scale,
-        expectation.selected_fee_atoms,
-    )?;
-    let credit_atoms = owner_credit_atoms(
-        expectation.expected_sell_price_units,
-        expectation.price_scale,
-    )?;
-    let residue_price_units = owner_rounding_residue_price_units(
-        expectation.expected_buy_price_units,
-        expectation.expected_sell_price_units,
-        expectation.price_scale,
-    )?;
-    let next_cash = position_cash_atoms
-        .checked_sub(debit_atoms)
-        .and_then(|value| value.checked_add(credit_atoms))
-        .ok_or(Error::ArithmeticUnderflow)?;
-    let next_reserved = position_reserved_cash_atoms
-        .checked_sub(expectation.reserved_cash_atoms)
-        .ok_or(Error::ArithmeticUnderflow)?;
-    if next_reserved > next_cash {
-        return Err(Error::InvariantViolation);
-    }
-    let released_cash_atoms = expectation
-        .reserved_cash_atoms
-        .checked_sub(debit_atoms)
-        .ok_or(Error::InsufficientCash)?;
-    Ok(OwnerSettlementDispositionV1 {
-        debit_atoms,
-        credit_atoms,
-        selected_fee_atoms: expectation.selected_fee_atoms,
-        released_cash_atoms,
-        residue_price_units,
-        position_cash_atoms: next_cash,
-        position_reserved_cash_atoms: next_reserved,
-    })
 }
 
 /// Payer-side aggregate conversion, including a selected whole-atom fee.

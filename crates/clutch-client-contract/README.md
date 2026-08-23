@@ -22,10 +22,11 @@ This first wave centralizes four seams used by current local infrastructure:
   order rows, one explicit fee row per owner (including zero), selected
   candidate owner count, buy/sell price units, selected fee atoms, rounding
   pot, receipt-end count, and current Position cash. It emits lexicographically
-  owner-sorted 288-byte open bodies plus exact prospective debit, credit, fee,
-  released cash, residue, and Position post-state fields. Many filled orders
-  may aggregate into one owner row; owner count is not equated with filled
-  order count.
+  owner-sorted 288-byte open bodies and preserves the canonical book totals.
+  It deliberately does not reproduce a prospective terminal cash
+  disposition: that stays with the canonical authenticated receipt/pot adapter.
+  Many filled orders may aggregate into one owner row; owner count is not
+  equated with filled order count.
 
 The settlement input borrows the authoritative layout and relation types. The
 returned plan is an ephemeral instruction projection, never onchain state and
@@ -33,7 +34,7 @@ never evidence that an instruction executed. A fresh chain snapshot cannot be
 promoted to evidence of historical completion; the evidence API makes that
 specific promotion unavailable. The General V2 projection likewise does not
 claim that the current General V1 runtime created an owner row, authenticated
-every receipt, or executed its prospective disposition.
+every receipt, or executed a terminal disposition.
 
 ## Duplication audit, 2026-08-23
 
@@ -63,7 +64,7 @@ dependencies:
 
 - `clutch-batch`: authoritative V1 relation types;
 - `clutch-owner-settlement`: authoritative owner aggregation, 288-byte semantic
-  body, terminal rounding, and disposition types;
+  body, authenticated receipt/pot join, terminal rounding, and disposition;
 - `clutch-solana-layout`: authoritative persisted-layout types and central
   intent registry.
 

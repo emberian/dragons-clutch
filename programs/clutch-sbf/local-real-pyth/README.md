@@ -29,9 +29,10 @@ V2 owner-settlement projection. The latter admits only its exact Market, Epoch,
 and price scale, aggregates several filled orders under canonical
 lexicographically sorted owners, requires an explicit fee row even when zero,
 and retains selected owner count, buy/sell price units, fees, rounding pot, and
-receipt-end count. Its 288-byte open owner bodies and prospective disposition
-fields are construction results: the current General V1 campaign neither
-creates those accounts nor claims their receipt authentication or execution.
+receipt-end count. Its 288-byte open owner bodies are construction results: the
+client does not reproduce the canonical runtime's terminal cash disposition,
+and the current General V1 campaign neither creates those accounts nor claims
+their receipt authentication or execution.
 
 The builder feature now also exposes two reusable boundaries:
 

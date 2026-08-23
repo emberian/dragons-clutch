@@ -129,8 +129,9 @@ impl LocalTradingBuilder {
     /// Admit an authenticated General V2 projection only when its semantic
     /// Market, Epoch, and exact price scale belong to this real-source session.
     ///
-    /// The result contains canonical 288-byte open owner bodies and prospective
-    /// terminal dispositions. It does not construct a General V2 account
+    /// The result contains canonical 288-byte open owner bodies. Terminal cash
+    /// remains owned by the authenticated receipt/pot adapter and is not
+    /// projected here. This method does not construct a General V2 account
     /// instruction, submit a transaction, or imply that the current General V1
     /// runtime has created or settled those rows.
     pub fn project_owner_settlement(
