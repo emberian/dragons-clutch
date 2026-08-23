@@ -143,6 +143,7 @@ pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
@@ -152,9 +153,12 @@ pub(crate) mod product_general_family;
 pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod split;

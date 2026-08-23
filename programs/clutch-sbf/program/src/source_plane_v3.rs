@@ -59,12 +59,13 @@ use solana_pubkey::Pubkey;
 
 use crate::accounts::Outcome;
 use crate::error::{ClutchError, Refusal};
-use crate::source_identity::CLOCK_SYSVAR_ID;
-use crate::source_v2::auth::{decode_clock_view, AccountViewV2, AuthV2Error};
+use crate::instructions::artifact::CLOCK_SYSVAR_ID;
 
 const INSTRUCTION_DATA_DOMAIN: &[u8] = b"dragons-clutch/sbf-instruction-data/v1";
 const ACCOUNT_VECTOR_DOMAIN: &[u8] = b"dragons-clutch/sbf-account-vector/v1";
 const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
+const CLOCK_SYSVAR_BYTES_V1: usize = 40;
+const CLOCK_UNIX_TIMESTAMP_OFFSET_V1: usize = 32;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 const SOURCE_GENERATION_REQUEST_SEED_V1: &[u8] = b"dc-sp3-generation-request";
@@ -161,8 +162,6 @@ pub enum SourceV3SbfError {
     AccountBorrow,
     /// The canonical Clock account was not supplied read-only.
     WrongClockAccount,
-    /// The canonical Clock decoder or signed-to-unsigned projection refused.
-    Clock(AuthV2Error),
     /// The portable SourcePlane account/runtime contract refused.
     Runtime(clutch_source_plane_v3_runtime::Error),
     /// The canonical SourcePlane PDA recipe refused.
@@ -218,7 +217,6 @@ impl From<SourceV3SbfError> for Refusal {
         let error = match value {
             SourceV3SbfError::AccountBorrow => ClutchError::AccountBorrowFailed,
             SourceV3SbfError::WrongClockAccount => ClutchError::MismatchedState,
-            SourceV3SbfError::Clock(_) => ClutchError::SourceAdmissionFailed,
             SourceV3SbfError::Runtime(
                 clutch_source_plane_v3_runtime::Error::ArithmeticOverflow,
             ) => ClutchError::Arithmetic,
@@ -584,12 +582,36 @@ pub fn authenticate_generation_request(
     .map_err(Into::into)
 }
 
+/// Decode only the exact current Solana Clock body and reject signed time.
+fn decode_current_clock_snapshot(
+    clock_account: &AccountInfo<'_>,
+    data: &[u8],
+) -> SourceV3SbfResult<ClockSnapshotV1> {
+    if clock_account.owner.to_bytes() != crate::instructions_sysvar::SYSVAR_OWNER_ID
+        || clock_account.executable
+        || data.len() != CLOCK_SYSVAR_BYTES_V1
+    {
+        return Err(SourceV3SbfError::WrongClockAccount);
+    }
+    let mut slot = [0_u8; 8];
+    slot.copy_from_slice(&data[..8]);
+    let mut unix_timestamp = [0_u8; 8];
+    unix_timestamp.copy_from_slice(
+        &data[CLOCK_UNIX_TIMESTAMP_OFFSET_V1..CLOCK_UNIX_TIMESTAMP_OFFSET_V1 + 8],
+    );
+    Ok(ClockSnapshotV1 {
+        slot: u64::from_le_bytes(slot),
+        unix_timestamp: u64::try_from(i64::from_le_bytes(unix_timestamp))
+            .map_err(|_| SourceV3SbfError::WrongClockAccount)?,
+    })
+}
+
 /// Derive a policy-bound current bucket from the canonical Solana Clock account.
 pub fn authenticate_clock_bucket(
     release: AuthenticatedSourceReleaseV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {
@@ -598,23 +620,8 @@ pub fn authenticate_clock_bucket(
     let data = clock_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let clock = decode_clock_view(AccountViewV2::new(
-        clock_account.key.to_bytes(),
-        clock_account.owner.to_bytes(),
-        clock_account.executable,
-        &data,
-    ))
-    .map_err(SourceV3SbfError::Clock)?;
-    let unix_timestamp =
-        u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
-    AuthenticatedClockBucketV1::from_snapshot(
-        &release.clock_policy(),
-        ClockSnapshotV1 {
-            slot: clock.slot,
-            unix_timestamp,
-        },
-    )
-    .map_err(Into::into)
+    let clock = decode_current_clock_snapshot(clock_account, &data)?;
+    AuthenticatedClockBucketV1::from_snapshot(&release.clock_policy(), clock).map_err(Into::into)
 }
 
 /// Derive the current bucket from canonical Clock under the exact clock policy
@@ -623,7 +630,7 @@ pub fn authenticate_route_clock_bucket(
     route: AuthenticatedSourceRouteV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {
@@ -632,23 +639,8 @@ pub fn authenticate_route_clock_bucket(
     let data = clock_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let clock = decode_clock_view(AccountViewV2::new(
-        clock_account.key.to_bytes(),
-        clock_account.owner.to_bytes(),
-        clock_account.executable,
-        &data,
-    ))
-    .map_err(SourceV3SbfError::Clock)?;
-    let unix_timestamp =
-        u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
-    AuthenticatedClockBucketV1::from_snapshot(
-        &route.clock_policy(),
-        ClockSnapshotV1 {
-            slot: clock.slot,
-            unix_timestamp,
-        },
-    )
-    .map_err(Into::into)
+    let clock = decode_current_clock_snapshot(clock_account, &data)?;
+    AuthenticatedClockBucketV1::from_snapshot(&route.clock_policy(), clock).map_err(Into::into)
 }
 
 /// Authenticate Product's exact occurrence PDA/body and join it to Source semantics.
@@ -1131,5 +1123,91 @@ fn runtime_account_view<'a>(
         writable: account.is_writable,
         signer: account.is_signer,
         data,
+    }
+}
+
+#[cfg(test)]
+mod clock_decoder_tests {
+    use super::*;
+
+    struct ClockCell {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+        executable: bool,
+    }
+
+    impl ClockCell {
+        fn canonical() -> Self {
+            let mut data = vec![0_u8; CLOCK_SYSVAR_BYTES_V1];
+            data[..8].copy_from_slice(&37_u64.to_le_bytes());
+            data[CLOCK_UNIX_TIMESTAMP_OFFSET_V1..CLOCK_UNIX_TIMESTAMP_OFFSET_V1 + 8]
+                .copy_from_slice(&91_i64.to_le_bytes());
+            Self {
+                key: CLOCK_SYSVAR_ID,
+                owner: Pubkey::new_from_array(crate::instructions_sysvar::SYSVAR_OWNER_ID),
+                lamports: 1,
+                data,
+                executable: false,
+            }
+        }
+
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                false,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                self.executable,
+            )
+        }
+    }
+
+    #[test]
+    fn current_clock_decode_is_exact_and_refuses_negative_time() {
+        let mut good = ClockCell::canonical();
+        let info = good.info();
+        let decoded = decode_current_clock_snapshot(&info, &info.try_borrow_data().unwrap()).unwrap();
+        assert_eq!(decoded.slot, 37);
+        assert_eq!(decoded.unix_timestamp, 91);
+
+        let mut negative = ClockCell::canonical();
+        negative.data[CLOCK_UNIX_TIMESTAMP_OFFSET_V1..CLOCK_UNIX_TIMESTAMP_OFFSET_V1 + 8]
+            .copy_from_slice(&(-1_i64).to_le_bytes());
+        let info = negative.info();
+        assert_eq!(
+            decode_current_clock_snapshot(&info, &info.try_borrow_data().unwrap()),
+            Err(SourceV3SbfError::WrongClockAccount),
+        );
+    }
+
+    #[test]
+    fn current_clock_decode_refuses_foreign_shape_owner_and_executable() {
+        let mut wrong_shape = ClockCell::canonical();
+        wrong_shape.data.push(0);
+        let info = wrong_shape.info();
+        assert_eq!(
+            decode_current_clock_snapshot(&info, &info.try_borrow_data().unwrap()),
+            Err(SourceV3SbfError::WrongClockAccount),
+        );
+
+        let mut foreign = ClockCell::canonical();
+        foreign.owner = Pubkey::new_from_array([0x55; 32]);
+        let info = foreign.info();
+        assert_eq!(
+            decode_current_clock_snapshot(&info, &info.try_borrow_data().unwrap()),
+            Err(SourceV3SbfError::WrongClockAccount),
+        );
+
+        let mut executable = ClockCell::canonical();
+        executable.executable = true;
+        let info = executable.info();
+        assert_eq!(
+            decode_current_clock_snapshot(&info, &info.try_borrow_data().unwrap()),
+            Err(SourceV3SbfError::WrongClockAccount),
+        );
     }
 }

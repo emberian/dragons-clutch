@@ -224,7 +224,7 @@ pub const fn extension_intent_action_allocated(
 
 /// Exact extension actions executable by this product.
 ///
-/// Current Source profiles execute artifact-authenticated release registration
+/// Current chain-attached profiles execute artifact-authenticated release registration
 /// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
 /// authenticated parser ingestion. Actions 5 through 12 remain independently
 /// disabled.
@@ -336,6 +336,29 @@ mod tests {
         if !LEGACY_SOURCE_LAB {
             assert!(!SOURCE_V1);
             assert!(!SOURCE_V2);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn chain_attached_successor_membership_is_exact() {
+        for tag in u8::MIN..=u8::MAX {
+            let expected = matches!(
+                tag,
+                2..=5 | 7 | 10..=11 | 14..=21 | 36..=46 | 68
+            );
+            assert_eq!(
+                legacy_intent_tag_enabled(tag) || direct_v3_tag_enabled(tag),
+                expected,
+                "successor tag {tag}"
+            );
+        }
+        for action in 1..=12 {
+            assert_eq!(
+                extension_intent_action_enabled(77, 2, action),
+                action <= 4,
+                "SourceSeries action {action}",
+            );
         }
     }
 
