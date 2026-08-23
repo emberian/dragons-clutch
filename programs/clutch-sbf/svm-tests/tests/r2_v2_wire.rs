@@ -32,14 +32,8 @@
 //! seam the former no-op fixture skipped: the adjacent instruction writes the
 //! evidence Dragon consumes, and a later refusal rolls both writes back.
 //!
-//! ## Two deliberate deviations from the fixture identity, both named
+//! ## One deliberate deviation from the static fixture window
 //!
-//! * **Deployment slot 1, not `fixture::PROGRAMDATA_DEPLOYMENT_SLOT`
-//!   (8,421,504).** A program is invisible to the runtime until one slot after
-//!   its recorded deployment, and a bank whose genesis is slot 0 would need an
-//!   8.4-million-slot warp to see one deployed there. The slot is not part of
-//!   the registry match; what the join checks is that the *spec* and the
-//!   *ProgramData account* record the same one, and here they both record 1.
 //! * **Window buckets derived from the live Clock.** `CROSSING_V1` admits the
 //!   record for bucket `b` only once Clock has passed `(b+1)·60 + grace`, and
 //!   the update's publish time must sit inside the spec's freshness envelope
@@ -79,6 +73,9 @@ use {
     },
     clutch_solana_layout::{
         account_len, canonical_outcome_id,
+        native_resolution::{
+            NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
+        },
         occupation_resolution::{
             OccupationResolutionAccount, OCCUPATION_RESOLUTION_LEN,
             RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION, STAT_QUANTIZED_BASIS_OCCUPATION_EXACT_06,
@@ -130,15 +127,16 @@ const SPAN: u64 = 3;
 /// identity, and a zero confidence makes the conservative interval a point —
 /// which the occupation fold requires and refuses to invent.
 const PRICE_ATOMS: i64 = 4;
-/// Deployment slot both the spec and the fabricated ProgramData record.
-const DEPLOYMENT_SLOT: u64 = 1;
+/// Exact deployment slot pinned by both the registered complete spec and the
+/// fabricated ProgramData record.
+const DEPLOYMENT_SLOT: u64 = fixture::PROGRAMDATA_DEPLOYMENT_SLOT;
 /// Slot the campaign warps to before it does anything else.
 ///
 /// Exactly one slot past [`DEPLOYMENT_SLOT`], and that is the whole
 /// requirement, twice over. A program is invisible until one slot past its
-/// recorded deployment, so slot 2 is the first at which the laboratory receiver
-/// is effective. And the warp roots slot 1, which is what puts the cache entry
-/// on this fork: the program cache treats an entry as reachable when its
+/// recorded deployment, so this is the first slot at which the laboratory
+/// receiver is effective. And the warp roots the deployment slot, which is
+/// what puts the cache entry on this fork: the program cache treats an entry as reachable when its
 /// deployment slot is at or below the root, and a deployment slot naming a
 /// pruned, never-rooted slot makes every invocation re-load the program.
 const WARP_SLOT: u64 = DEPLOYMENT_SLOT + 1;
@@ -431,6 +429,7 @@ struct PullPlane {
 enum PullMarketKind {
     Occupation,
     Categorical { knots: [u128; 3] },
+    Point { degree: u8 },
 }
 
 /// Build a market bound to one v2 pull spec and one window, with the source
@@ -494,6 +493,21 @@ fn pull_plane(
                 terms.payout_map[usize::from(payout)] = payout;
             }
         }
+        PullMarketKind::Point { degree } => {
+            assert!((1..=3).contains(&degree), "point degree must be admitted");
+            terms.statistic_id = STAT_TERMINAL_01;
+            terms.basis_degree = degree;
+            terms.knot_count = OUTCOMES + 1 - degree;
+            terms.uniform_log2_spacing = 3;
+            for (index, knot) in terms
+                .knots
+                .iter_mut()
+                .take(usize::from(terms.knot_count))
+                .enumerate()
+            {
+                *knot = (index as u128) * 8;
+            }
+        }
     }
     terms.expected_start_bucket = start_bucket;
     terms.expected_end_bucket_exclusive = end_bucket_exclusive;
@@ -554,7 +568,9 @@ fn pull_plane(
         market: market_id,
         phase: 0,
         basis_mode: match kind {
-            PullMarketKind::Occupation => clutch_kernel::BasisMode::DerivedBasis,
+            PullMarketKind::Occupation | PullMarketKind::Point { .. } => {
+                clutch_kernel::BasisMode::DerivedBasis
+            }
             PullMarketKind::Categorical { .. } => clutch_kernel::BasisMode::FinitePreset,
         },
         resolved_payout: 0,
@@ -608,6 +624,16 @@ fn pull_plane(
             };
             account_mut(&mut plane, resolution_address).data =
                 encode(account_len::RESOLUTION, |out| unresolved.encode(out));
+        }
+        PullMarketKind::Point { .. } => {
+            let unresolved = NativeResolutionAccount::unresolved(
+                market_id,
+                terms_id,
+                feed_id,
+                plane.resolution.bump,
+            );
+            account_mut(&mut plane, resolution_address).data =
+                encode(NATIVE_RESOLUTION_LEN, |out| unresolved.encode(out));
         }
     }
 
@@ -663,6 +689,21 @@ fn pull_categorical_plane(actor: Address, spec: SourceSpecV2, start_bucket: u64)
         PullMarketKind::Categorical {
             knots: [500, 1_000, 1_500],
         },
+    )
+}
+
+fn pull_point_plane(
+    actor: Address,
+    spec: SourceSpecV2,
+    start_bucket: u64,
+    degree: u8,
+) -> PullPlane {
+    pull_plane(
+        actor,
+        spec,
+        start_bucket,
+        start_bucket + SPAN,
+        PullMarketKind::Point { degree },
     )
 }
 
@@ -734,6 +775,10 @@ impl Campaign {
             },
         )
         .await
+    }
+
+    async fn start_point(spec: SourceSpecV2, degree: u8) -> Self {
+        Self::start_with(spec, PullMarketKind::Point { degree }).await
     }
 
     async fn start_with(spec: SourceSpecV2, kind: PullMarketKind) -> Self {
@@ -932,6 +977,9 @@ impl Campaign {
                 }
                 PullMarketKind::Categorical { .. } => {
                     pull_categorical_plane(actor.pubkey(), spec, start_bucket)
+                }
+                PullMarketKind::Point { degree } => {
+                    pull_point_plane(actor.pubkey(), spec, start_bucket, degree)
                 }
             }
         };
@@ -1992,6 +2040,184 @@ async fn degree_zero_v2_rejects_legacy_buffer_shape_atomically() {
     );
 }
 
+#[tokio::test]
+async fn source_v2_point_resolves_degrees_one_through_three_without_buffer() {
+    for degree in 1..=3 {
+        let mut campaign = Campaign::start_point(registered_spec(), degree).await;
+        let (_spec_cu, _archive_cu, append_cu, seal_cu) =
+            found_ingested_sealed(&mut campaign, PRICE_ATOMS, 0).await;
+
+        let resolve = campaign.resolve();
+        assert_eq!(
+            resolve.accounts.len(),
+            observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES),
+            "degree-{degree} Source V2 point Resolve must omit the legacy buffer"
+        );
+        let (result, resolve_cu) = campaign.send(resolve).await;
+        assert_eq!(result, Ok(()), "degree-{degree} point must resolve");
+
+        let resolution = NativeResolutionAccount::decode(
+            &campaign.data(campaign.plane.resolution.address).await,
+        )
+        .expect("native resolution decodes");
+        assert_eq!(resolution.mode, RESOLUTION_MODE_DERIVED_POINT);
+        assert_eq!(resolution.resolved_value, PRICE_ATOMS as u128);
+        assert_eq!(resolution.vector.denominator, DENOMINATOR);
+        let expected = match degree {
+            1 => [32, 32, 0, 0],
+            2 => [16, 40, 8, 0],
+            3 => [8, 24, 24, 8],
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            resolution.vector.weights[..usize::from(OUTCOMES)],
+            expected,
+            "archive-direct degree-{degree} resolution must preserve the exact reference vector"
+        );
+        assert_eq!(
+            resolution.vector.weights[..usize::from(OUTCOMES)]
+                .iter()
+                .sum::<u64>(),
+            DENOMINATOR,
+            "the persisted degree-{degree} vector remains on the exact simplex"
+        );
+        assert!(
+            resolution.vector.weights[usize::from(OUTCOMES)..]
+                .iter()
+                .all(|weight| *weight == 0),
+            "the inactive payout suffix is canonical"
+        );
+        assert_eq!(resolution.feed_cursor, campaign.end_bucket_exclusive);
+        assert_eq!(resolution.repair_generation, 0);
+
+        println!(
+            "r2 v2 point CU: degree={degree} append={append_cu} seal={seal_cu} \
+             resolve={resolve_cu} resolve_accounts={}",
+            observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+        );
+    }
+}
+
+#[tokio::test]
+async fn source_v2_point_retry_reauthenticates_the_exact_archive_cursor() {
+    let mut campaign = Campaign::start_point(registered_spec(), 2).await;
+    found_ingested_sealed(&mut campaign, PRICE_ATOMS, 0).await;
+    assert_eq!(campaign.send(campaign.resolve()).await.0, Ok(()));
+
+    let before_retry = resolve_plane_images(&mut campaign).await;
+    let (retry, retry_cu) = campaign.send(campaign.resolve()).await;
+    assert_eq!(retry, Ok(()), "an exact Source V2 retry is idempotent");
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before_retry,
+        "an exact retry writes no Resolve-plane state"
+    );
+
+    /* The v3 codec structurally admits the legacy maturity cursor, but this
+     * record was produced from a Source V2 archive whose authenticated cursor
+     * is exactly the window end. A pre-existing record cannot use the other
+     * numeric arm of the codec union as its own replay authority. */
+    let resolution_address = campaign.plane.resolution.address;
+    let mut hostile_account = campaign
+        .context
+        .banks_client
+        .get_account(resolution_address)
+        .await
+        .expect("bank responds")
+        .expect("resolution exists");
+    let mut hostile =
+        NativeResolutionAccount::decode(&hostile_account.data).expect("resolved v3 record decodes");
+    assert_eq!(hostile.feed_cursor, campaign.end_bucket_exclusive);
+    hostile.feed_cursor = campaign.end_bucket_exclusive + 1;
+    hostile
+        .encode(&mut hostile_account.data)
+        .expect("the opposite-policy cursor is structurally canonical");
+    campaign
+        .context
+        .set_account(&resolution_address, &hostile_account.into());
+
+    let before_refusal = resolve_plane_images(&mut campaign).await;
+    let (refusal, refusal_cu) = campaign.send(campaign.resolve()).await;
+    assert_eq!(
+        custom(&refusal),
+        RESOLUTION_BINDING_MISMATCH,
+        "retry must compare the record with the freshly authenticated V2 seal"
+    );
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before_refusal,
+        "opposite-policy cursor refusal preserves every Resolve-plane account image"
+    );
+
+    println!(
+        "r2 v2 point CU: degree=2 exact_retry={retry_cu} \
+         opposite_cursor_refusal={refusal_cu}"
+    );
+}
+
+#[tokio::test]
+async fn source_v2_point_refuses_nonpoint_interval_atomically() {
+    let mut campaign = Campaign::start_point(registered_spec(), 2).await;
+    let (_spec_cu, _archive_cu, append_cu, seal_cu) =
+        found_ingested_sealed(&mut campaign, 400, 1).await;
+    let before = resolve_plane_images(&mut campaign).await;
+
+    let resolve = campaign.resolve();
+    assert_eq!(
+        resolve.accounts.len(),
+        observe_resolve::ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+    );
+    let (result, refuse_cu) = campaign.send(resolve).await;
+    assert_eq!(
+        custom(&result),
+        RESOLUTION_REFUSAL,
+        "a confidence interval may not be collapsed to a midpoint or an equal quantized vector"
+    );
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before,
+        "the point-only refusal atomically preserves every Resolve-plane account image"
+    );
+    let resolution =
+        NativeResolutionAccount::decode(&campaign.data(campaign.plane.resolution.address).await)
+            .expect("native resolution decodes");
+    assert_eq!(
+        resolution.mode,
+        clutch_solana_layout::native_resolution::RESOLUTION_MODE_UNRESOLVED
+    );
+
+    println!(
+        "r2 v2 point CU: degree=2 append={append_cu} seal={seal_cu} \
+         resolve_nonpoint_refusal={refuse_cu}"
+    );
+}
+
+#[tokio::test]
+async fn source_v2_point_rejects_legacy_buffer_shape_atomically() {
+    let mut campaign = Campaign::start_point(registered_spec(), 3).await;
+    let (_spec_cu, _archive_cu, append_cu, seal_cu) =
+        found_ingested_sealed(&mut campaign, PRICE_ATOMS, 0).await;
+    let before = resolve_plane_images(&mut campaign).await;
+
+    let resolve = campaign.resolve_with_payout_and_buffer(PAYOUT_INDEX_UNRESOLVED, RENT_SYSVAR);
+    let (result, refuse_cu) = campaign.send(resolve).await;
+    assert_eq!(
+        custom(&result),
+        ClutchError::AccountCount as u32,
+        "after authenticating Source V2, smooth point Resolve expects the 10+n shape"
+    );
+    assert_eq!(
+        resolve_plane_images(&mut campaign).await,
+        before,
+        "the compatibility-buffer shape refusal preserves every Resolve-plane account image"
+    );
+
+    println!(
+        "r2 v2 point CU: degree=3 append={append_cu} seal={seal_cu} \
+         resolve_legacy_buffer_shape_refusal={refuse_cu}"
+    );
+}
+
 /* ------------------------------------------------------------------------ */
 /* The hostile battery                                                       */
 /* ------------------------------------------------------------------------ */
@@ -2005,6 +2231,7 @@ const REPLAY: u32 = 0x000d;
 const WRONG_PROGRAM_OWNER: u32 = 0x0004;
 const RESOLUTION_EVIDENCE_UNAVAILABLE: u32 = 0x0010;
 const RESOLUTION_REFUSAL: u32 = 0x0051;
+const RESOLUTION_BINDING_MISMATCH: u32 = 0x0054;
 
 fn custom(result: &Result<(), TransactionError>) -> u32 {
     match result {

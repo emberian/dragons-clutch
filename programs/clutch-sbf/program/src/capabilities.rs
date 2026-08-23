@@ -10,10 +10,10 @@
 /// Full research/runtime surface retained by the historical default build.
 #[cfg(feature = "profile-full")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
-/// Direct V3, Source V2 and non-occupation resolution product.
+/// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
-/// General clearing, Source V2 and non-occupation resolution product.
+/// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
 

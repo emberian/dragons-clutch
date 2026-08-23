@@ -6,8 +6,10 @@
 //! one categorical payout index (degree zero, version-two Resolution bytes),
 //! one native B-spline point vector (degrees one through three, version-three
 //! bytes), or one native occupation vector (degrees one through three,
-//! version-four bytes). Smooth terms are never searched through the preset
-//! set. Each native vector has one persisted owner—the immutable Resolution
+//! version-four bytes). Source V2 supplies all three modes directly from its
+//! authenticated sealed archive; only Source V1 point/categorical resolution
+//! retains the legacy projection buffer. Smooth terms are never searched
+//! through the preset set. Each native vector has one persisted owner—the immutable Resolution
 //! record—and is reconstructed only into an ephemeral kernel value for
 //! redemption. It
 //! contains no economic logic — the payout algebra is [`clutch_kernel`], the
@@ -108,8 +110,8 @@
 //!
 //! Resolve authenticates the canonical SourceSpec and sealed SourceArchive.
 //! The v1 point path still accepts a redundant projection buffer only when
-//! every projected domain/value fact equals that archive; v2 degree-zero
-//! categorical and v4 occupation read the archive directly. The resulting
+//! every projected domain/value fact equals that archive; every v2 mode and
+//! v4 occupation read the archive directly. The resulting
 //! record owns the canonical window and payout/vector. After that transition,
 //! internal and bearer redemption never re-fold a caller payload or trust a
 //! second window label. Immutable Terms, the version-selected persisted
@@ -192,8 +194,8 @@
 //!   an obligation on a `FeedAccount` revision.
 //! - The v1 point projection buffer has no canonical address. Its bytes are
 //!   hostile and accepted only when they exactly project the authenticated
-//!   archive; v2 degree-zero categorical Resolve, v4 Resolve, and every
-//!   post-resolution redemption omit it.
+//!   archive; every v2 Resolve mode, v4 Resolve, and every post-resolution
+//!   redemption omit it.
 //! - The terms artifact is still read in its own small frame at each gate
 //!   step — address derivation, market binding, payout-set binding, record
 //!   binding, payout derivation — but the
@@ -380,9 +382,9 @@ pub const RESOLVE_ACCOUNT_PREFIX: usize = 11;
 /// Fixed market-global archive-direct Resolve prefix before its canonical
 /// mints.
 ///
-/// Occupation and v2 degree-zero categorical resolution consume the
-/// authenticated sealed archive directly and have no redundant
-/// caller-supplied projection account.
+/// Occupation plus v2 degree-zero categorical and degree-one through
+/// degree-three point resolution consume the authenticated sealed archive
+/// directly and have no redundant caller-supplied projection account.
 pub const ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX: usize = 10;
 /// Backwards-compatible alias for the archive-direct Resolve prefix.
 pub const OCCUPATION_RESOLVE_ACCOUNT_PREFIX: usize = ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX;
@@ -1683,30 +1685,25 @@ fn derive_categorical_from_archive(
     })
 }
 
-/// Derive one smooth-basis payout from an exact integer statistic point.
+/// Derive one smooth-basis payout from a folded authenticated window.
 ///
-/// The persisted v3 record stores the raw point before edge handling.  All
-/// smooth degrees therefore use the stricter point-only admission rule here,
-/// including degree one: an interval whose endpoint vectors happen to
-/// quantize equally is still not a point and cannot be serialized as one.
-/// No midpoint or endpoint choice exists on this path.
+/// This is the sole point-admission owner shared by the Source V1 projection
+/// transport and the Source V2 archive transport. Transport generation may
+/// change how the window is authenticated; it cannot change point-only
+/// semantics, statistic selection, spline evaluation, or rounding.
 #[inline(never)]
-fn derive_native_from_evidence(
-    market_bytes: &[u8],
-    terms_bytes: &[u8],
-    window_bytes: &[u8],
-    feed_cursor: u64,
+fn derive_native_from_window(
+    derived: &ResolutionTerms,
+    window: &WindowResult,
 ) -> Gate<NativeSealedFacts> {
-    let derived = derived_terms(market_bytes, terms_bytes)?;
     if !(1..=3).contains(&derived.basis_degree) {
         return Err(ReferenceError::Resolution(
             ResolutionRefusal::WrongResolutionMode,
         ));
     }
-    let window = fold_window_evidence(window_bytes, feed_cursor)?;
     /* The reference seam owns source identity, grid, exact window-domain,
      * edge policy, spline evaluation and largest-remainder quantization. */
-    let vector = derive_payout_vector(&derived, &window)?;
+    let vector = derive_payout_vector(derived, window)?;
     let (low, high) = match derived.statistic {
         STAT_TERMINAL_01 => {
             let interval = window
@@ -1744,6 +1741,41 @@ fn derive_native_from_evidence(
         end_bucket_exclusive: window.domain().end_bucket_exclusive(),
         repair_generation: window.domain().generation(),
     })
+}
+
+/// Derive one smooth-basis payout from an exact integer statistic point.
+///
+/// The persisted v3 record stores the raw point before edge handling.  All
+/// smooth degrees therefore use the stricter point-only admission rule here,
+/// including degree one: an interval whose endpoint vectors happen to
+/// quantize equally is still not a point and cannot be serialized as one.
+/// No midpoint or endpoint choice exists on this path.
+#[inline(never)]
+fn derive_native_from_evidence(
+    market_bytes: &[u8],
+    terms_bytes: &[u8],
+    window_bytes: &[u8],
+    feed_cursor: u64,
+) -> Gate<NativeSealedFacts> {
+    let derived = derived_terms(market_bytes, terms_bytes)?;
+    let window = fold_window_evidence(window_bytes, feed_cursor)?;
+    derive_native_from_window(&derived, &window)
+}
+
+/// Derive one smooth-basis point resolution directly from one verified V2
+/// archive, without a caller projection DTO.
+#[inline(never)]
+fn derive_native_from_archive(
+    market_bytes: &[u8],
+    terms_bytes: &[u8],
+    archive: VerifiedSealedArchive<'_>,
+) -> Gate<NativeSealedFacts> {
+    if archive.generation() != SourceGeneration::V2 {
+        return Err(ReferenceError::ResolutionEvidenceUnavailable);
+    }
+    let derived = derived_terms(market_bytes, terms_bytes)?;
+    let window = fold_v2_archive_window(archive, derived.window)?;
+    derive_native_from_window(&derived, &window)
 }
 
 /// `kernel_market`: rebuild the pure market and run its invariants.
@@ -2068,8 +2100,18 @@ mod archive_categorical_tests {
         );
         assert_eq!(
             resolve_prefix_for_authenticated_source(false, 1, SourceGeneration::V2),
+            ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
+            "v2 smooth point resolution reads its authenticated archive directly"
+        );
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(false, 3, SourceGeneration::V2),
+            ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX,
+            "every admitted v2 smooth degree has the same no-buffer shape"
+        );
+        assert_eq!(
+            resolve_prefix_for_authenticated_source(false, 1, SourceGeneration::V1),
             RESOLVE_ACCOUNT_PREFIX,
-            "unsupported smooth non-occupation stats do not gain an archive-direct shape"
+            "v1 smooth point resolution retains its projection buffer"
         );
         assert_eq!(
             resolve_prefix_for_authenticated_source(true, 1, SourceGeneration::V1),
@@ -2447,6 +2489,13 @@ impl ResolutionWrite {
     }
 }
 
+/// Mutually exclusive candidates derived from one authenticated source plane.
+struct AuthenticatedResolutionCandidates<'a> {
+    occupation: Option<&'a NativeWindowPreflightV1>,
+    categorical: Option<SealedFacts>,
+    native: Option<NativeSealedFacts>,
+}
+
 /// Apply the market-global resolution transition without an owner state plane.
 ///
 /// `Request::sequence` has a resolution-specific meaning on this action: it is
@@ -2460,17 +2509,21 @@ fn apply_market_resolution(
     state: &mut ResolveStateSlices<'_>,
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
-    occupation: Option<&NativeWindowPreflightV1>,
-    archive_categorical: Option<SealedFacts>,
+    candidates: AuthenticatedResolutionCandidates<'_>,
     signer: bool,
     sequence: u64,
     requested_payout: u8,
 ) -> Gate<ResolveOutput> {
+    let AuthenticatedResolutionCandidates {
+        occupation,
+        categorical: archive_categorical,
+        native: archive_native,
+    } = candidates;
     #[cfg(not(feature = "profile-full"))]
     let _ = occupation;
     #[cfg(feature = "profile-full")]
     if plane.resolution.len() == OCCUPATION_RESOLUTION_LEN {
-        if archive_categorical.is_some() {
+        if archive_categorical.is_some() || archive_native.is_some() {
             return Err(ReferenceError::UnexpectedEvidence);
         }
         let candidate = occupation.ok_or(ReferenceError::ResolutionEvidenceUnavailable)?;
@@ -2492,10 +2545,14 @@ fn apply_market_resolution(
             state,
             plane,
             bumps,
+            archive_native,
             signer,
             sequence,
             requested_payout,
         );
+    }
+    if archive_native.is_some() {
+        return Err(ReferenceError::UnexpectedEvidence);
     }
     apply_legacy_market_resolution(
         state,
@@ -2604,11 +2661,10 @@ fn apply_legacy_market_resolution(
         terms: terms.terms,
         feed: terms.feed,
         window: plane.window_id,
-        feed_cursor: if already_resolved {
-            record.feed_cursor
-        } else {
-            sealed.sealed_cursor
-        },
+        /* Replays must reproduce the cursor authenticated in this invocation.
+         * Copying the record's cursor here would turn any codec-admitted value
+         * into its own authority. */
+        feed_cursor: sealed.sealed_cursor,
         sealed_end_bucket_exclusive: sealed.end_bucket_exclusive,
         repair_generation: sealed.repair_generation,
         resolved_slot: if already_resolved {
@@ -2663,6 +2719,7 @@ fn apply_native_market_resolution(
     state: &mut ResolveStateSlices<'_>,
     plane: &EvidencePlane<'_>,
     bumps: &ResolveBumps,
+    archive_native: Option<NativeSealedFacts>,
     signer: bool,
     sequence: u64,
     requested_payout: u8,
@@ -2741,8 +2798,12 @@ fn apply_native_market_resolution(
         plane.resolution,
     )?;
 
-    let sealed =
-        derive_native_from_evidence(state.market, plane.terms, plane.window, plane.feed_cursor)?;
+    let sealed = match archive_native {
+        Some(sealed) => sealed,
+        None => {
+            derive_native_from_evidence(state.market, plane.terms, plane.window, plane.feed_cursor)?
+        }
+    };
     if sequence != terms.repair_generation || sequence != sealed.repair_generation {
         return Err(ReferenceError::Replay);
     }
@@ -2753,11 +2814,11 @@ fn apply_native_market_resolution(
         terms: terms.terms,
         feed: terms.feed,
         window: plane.window_id,
-        feed_cursor: if already_resolved {
-            record.feed_cursor
-        } else {
-            sealed.sealed_cursor
-        },
+        /* The v3 codec admits the numeric cursor sets used by both source
+         * generations, but it does not persist a generation discriminator.
+         * Exact replay therefore comes from the freshly authenticated archive,
+         * never from the pre-existing record. */
+        feed_cursor: sealed.sealed_cursor,
         sealed_end_bucket_exclusive: sealed.end_bucket_exclusive,
         repair_generation: sealed.repair_generation,
         resolved_slot: if already_resolved {
@@ -3208,7 +3269,7 @@ fn resolve_prefix_for_authenticated_source(
     basis_degree: u8,
     generation: SourceGeneration,
 ) -> usize {
-    if occupation || (basis_degree == 0 && generation == SourceGeneration::V2) {
+    if occupation || (basis_degree <= 3 && generation == SourceGeneration::V2) {
         ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX
     } else {
         RESOLVE_ACCOUNT_PREFIX
@@ -3368,6 +3429,9 @@ fn resolve_global(
     let archive_direct = resolve_prefix == ARCHIVE_DIRECT_RESOLVE_ACCOUNT_PREFIX;
     let archive_direct_categorical =
         !occupation && terms.basis_degree == 0 && source_generation == SourceGeneration::V2;
+    let archive_direct_native = !occupation
+        && (1..=3).contains(&terms.basis_degree)
+        && source_generation == SourceGeneration::V2;
     require(
         accounts.len() == resolve_prefix + usize::from(market.outcome_count),
         ClutchError::AccountCount,
@@ -3410,6 +3474,16 @@ fn resolve_global(
     } else {
         None
     };
+    let archive_native = if archive_direct_native {
+        let market_data = accounts[IX_RESOLVE_MARKET].data.borrow();
+        Some(derive_native_from_archive(
+            &market_data,
+            &terms_data,
+            verified_archive,
+        )?)
+    } else {
+        None
+    };
     let buffer = if archive_direct {
         None
     } else {
@@ -3423,9 +3497,9 @@ fn resolve_global(
         /* The caller-supplied window blob is a **V1-only** transport
          * compatibility shape: it predates the pull profile, has no v2
          * projection, and inventing one would mean writing a second reader for
-         * evidence the archive already commits.  A v2 finite-preset page must
-         * use the no-buffer archive projection above; v4 occupation also reads
-         * the page itself.  This is a named absence, not a silent one. */
+         * evidence the archive already commits. Every v2 resolution mode and
+         * v4 occupation read the page itself. This is a named compatibility
+         * boundary, not a second semantic source. */
         match verified_archive {
             #[cfg(feature = "profile-full")]
             VerifiedSealedArchive::V1(view) => require_archive_projection(
@@ -3485,8 +3559,11 @@ fn resolve_global(
                 terms: terms_pda.1,
                 resolution: resolution_pda.1,
             },
-            occupation_candidate.as_deref(),
-            archive_categorical,
+            AuthenticatedResolutionCandidates {
+                occupation: occupation_candidate.as_deref(),
+                categorical: archive_categorical,
+                native: archive_native,
+            },
             accounts[IX_RESOLVE_ACTOR].is_signer,
             sequence,
             payout_index,

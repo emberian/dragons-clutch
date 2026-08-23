@@ -207,9 +207,18 @@ impl NativeResolutionAccount {
                 .expected_start_bucket
                 .checked_add(terms.maturity_horizon_buckets)
                 .ok_or(CodecError::ArithmeticOverflow)?;
+            /* This record has no source-generation discriminator. Its
+             * structural join therefore admits the numeric cursor sets the
+             * two current source policies can produce: exact window end, or
+             * maturity-or-later. The union is intentionally non-convex. The
+             * live resolution adapter must additionally compare the stored
+             * cursor with the freshly authenticated generation-selected seal
+             * on every write and replay. */
+            let source_v2_cursor = self.feed_cursor == terms.expected_end_bucket_exclusive;
+            let source_v1_cursor = self.feed_cursor >= maturity;
             if self.sealed_end_bucket_exclusive != terms.expected_end_bucket_exclusive
                 || self.repair_generation != terms.repair_generation
-                || self.feed_cursor < maturity
+                || !(source_v2_cursor || source_v1_cursor)
             {
                 return Err(CodecError::MismatchedBinding);
             }
@@ -457,6 +466,20 @@ mod tests {
         }
     }
 
+    fn binding_terms() -> TermsAccount {
+        let mut terms = TermsAccount::ZEROED;
+        terms.terms = hash(2);
+        terms.feed = hash(3);
+        terms.expected_start_bucket = 100;
+        terms.expected_end_bucket_exclusive = 130;
+        terms.maturity_horizon_buckets = 40;
+        terms.repair_generation = 7;
+        terms.basis_degree = 1;
+        terms.outcome_count = 4;
+        terms.payouts[0].denominator = 64;
+        terms
+    }
+
     #[test]
     fn all_three_modes_round_trip_exactly() {
         let cases = [
@@ -550,6 +573,38 @@ mod tests {
         value = derived();
         value.feed_cursor = value.sealed_end_bucket_exclusive - 1;
         assert_eq!(value.validate(), Err(CodecError::MismatchedBinding));
+    }
+
+    #[test]
+    fn accepted_source_cursor_numbers_are_a_nonconvex_union_not_an_interval() {
+        let terms = binding_terms();
+        let mut value = derived();
+
+        value.feed_cursor = terms.expected_end_bucket_exclusive;
+        assert_eq!(
+            value.binds_terms_fields(&terms),
+            Ok(()),
+            "exact window end belongs to the structurally admitted set"
+        );
+
+        let maturity = terms.expected_start_bucket + terms.maturity_horizon_buckets;
+        value.feed_cursor = maturity;
+        assert_eq!(
+            value.binds_terms_fields(&terms),
+            Ok(()),
+            "maturity preserves the legacy structurally admitted set"
+        );
+        value.feed_cursor = maturity + 1;
+        assert_eq!(value.binds_terms_fields(&terms), Ok(()));
+
+        for cursor in (terms.expected_end_bucket_exclusive + 1)..maturity {
+            value.feed_cursor = cursor;
+            assert_eq!(
+                value.binds_terms_fields(&terms),
+                Err(CodecError::MismatchedBinding),
+                "cursor {cursor} belongs to neither structurally admitted set"
+            );
+        }
     }
 
     #[test]

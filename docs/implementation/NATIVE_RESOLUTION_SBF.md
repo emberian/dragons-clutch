@@ -27,15 +27,25 @@ a fallback around a missing production constructor.
 
 The native path authenticates the same market, Hoard, kernel aggregate,
 market-wide supply ledger, immutable Terms, Resolution PDA, Feed head,
-canonical SourceSpec, sealed SourceArchive, compatibility evidence projection,
-and complete outcome-mint vector as categorical resolution. Terms derive the
+canonical SourceSpec, sealed SourceArchive, and complete outcome-mint vector
+as categorical resolution. Terms derive the
 exact source-adapter identity and versions, statistic, ambiguity and edge
 policies, grid, window domain, degree, knots, denominator, and generation. The
 SourceSpec and archive must be exact program-owned PDAs; the archive receipt
 binds its bump, feed, canonical window, sealed cursor, page commitment, and
-publish lineage. The compatibility blob must project every archived bucket and
-interval exactly before its folded `WindowResult` is checked against the same
-domain. A caller-supplied window label is no longer authority.
+publish lineage. Source V2 folds those authenticated archive records directly
+for categorical, point, and occupation resolution and accepts no compatibility
+buffer. Source V1 retains its historical projection buffer, whose every bucket
+and interval must exactly match the authenticated archive before folding. A
+caller-supplied window label is no longer authority in either generation.
+
+The v3 codec has no source-generation discriminator. It structurally admits
+the non-convex numeric union produced by the two current policies: exact window
+end, or maturity-or-later, while refusing every cursor in the open interval.
+The live adapter supplies the missing provenance check: Source V2 writes
+exactly the authenticated window-end cursor, Source V1 keeps its authenticated
+legacy cursor, and every retry must reproduce that cursor from the verified
+archive rather than copying it from the stored record.
 
 Every native persisted resolution requires raw point evidence for every smooth
 degree, including degree one. A non-point interval refuses even if its two
@@ -80,8 +90,8 @@ Immutable Terms select v2, v3, or v4 record bytes; the selected record plus
 kernel mode/vector/index are the sole payout authority. In native mode it:
 
 1. decodes the v3 record and binds it to the exact market, terms, feed, bump,
-   mode, outcome count, denominator, maturity cursor, end bucket, and repair
-   generation;
+   mode, outcome count, denominator, exact persisted cursor contract, end
+   bucket, and repair generation;
 2. requires the record's window identity to equal the canonical identity
    recomputed from the immutable market Terms;
 3. reconstructs a temporary resolved `MarketState` in `DerivedBasis` mode from
@@ -210,3 +220,11 @@ and occupation resolution, and exact record-only internal plus positionless
 bearer redemption are implemented with an explicit v2/v3/v4 split and execute in the real SBF program;
 the shared program artifact is not promoted while its remaining final-LTO
 stack diagnostics and whole-lifecycle integration gate remain open.
+
+The Source V2 point join is covered separately by the local-bank
+`r2_v2_wire` campaign for successful degree-one through degree-three
+archive-direct resolution with exact vectors, exact idempotent retry,
+opposite-policy cursor refusal, atomic non-point refusal, and rejection of the
+legacy buffer account shape. Its fixture receiver is a synthetic account
+writer; that evidence covers the Clutch transaction/archive boundary, not
+provider cryptographic verification or a production oracle release.

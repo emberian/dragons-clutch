@@ -83,11 +83,17 @@ Canonical padding is mode-specific:
   nonzero; every active weight is at most the denominator; active weights sum
   exactly to the denominator.
 
-The codec also requires `feed_cursor >= sealed_end_bucket_exclusive`. Its
-terms join strengthens that to the frozen maturity boundary, requires exact
-window end and repair generation, and checks mode, outcome count, and common
-denominator against the terms. Its market join checks market/terms/feed
-identities and active/resolved lifecycle agreement.
+The codec also requires `feed_cursor >= sealed_end_bucket_exclusive`. Its terms
+join requires exact window end and repair generation and admits the numeric
+union used by the two current source policies: exact window end, or
+maturity-or-later. The v3 bytes do not persist a source-generation
+discriminator, so this structural check does not identify which policy
+produced the number. It refuses every cursor in the open interval `(end,
+maturity)`, and the live adapter separately requires the stored cursor to equal
+the freshly authenticated generation-selected archive cursor on both the
+initial transition and every retry. The join also checks mode, outcome count,
+and common denominator against the terms. Its market join checks
+market/terms/feed identities and active/resolved lifecycle agreement.
 
 ## Resolution transition
 
