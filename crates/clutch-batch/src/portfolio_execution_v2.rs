@@ -41,9 +41,19 @@ pub const PORTFOLIO_PAIR_RECEIPT_V2_BYTES: usize = 680;
 
 const SELECTED_ORDER_MAGIC_V2: [u8; 8] = *b"DCPSEL2\0";
 const PAIR_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCPRCP2\0";
-const PAIR_TRANSITION_DOMAIN_V2: &[u8] = b"dragons-clutch/portfolio-pair-transition/v2\0";
+/// Byte-for-byte mirror of the domain owned by
+/// `solana_layout::settlement_receipt_v5`.
+///
+/// `solana-layout` already depends on this kernel crate, so this crate cannot
+/// import the layout constant without a dependency cycle. The layout adapter
+/// must compare its owner constant with this exact fixed-width value before it
+/// can implement [`PortfolioAdapterV2`].
+pub const PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2: &[u8; 44] =
+    b"dragons-clutch/portfolio-pair-transition/v2\0";
 const PAIR_EFFECTS_TRANSITION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/portfolio-pair-effects/v2\0";
+
+const SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5: u8 = 0b0000_0011;
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
@@ -1239,7 +1249,7 @@ pub fn portfolio_pair_transition_commitment_v2(
     let mut bytes = [0u8; PORTFOLIO_PAIR_RECEIPT_V2_BYTES];
     receipt.encode_into(&mut bytes)?;
     let mut hash = Sha256V2::new();
-    hash.update(PAIR_TRANSITION_DOMAIN_V2)
+    hash.update(PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&bytes)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -1396,7 +1406,7 @@ fn validate_settlement_receipt_v5_prestate(
         || receipt.sequence != u64::from(receipt.slice_index) + 1
         || receipt.accounted_end_mask != receipt.expected_end_mask
         || receipt.delivered_end_mask != 0
-        || receipt.expected_end_mask != 3
+        || receipt.expected_end_mask != SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5
         || receipt.transition_kind != SettlementReceiptTransitionKindV2::PortfolioPairV2
         || !is_zero_identity(&receipt.transition_commitment)
     {
@@ -1717,15 +1727,31 @@ fn portfolio_transition_id_v2(
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&input.settlement_receipt.pre_data_id)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&[
-        input.settlement_receipt.accounted_end_mask,
-        input.settlement_receipt.delivered_end_mask,
-        input.settlement_receipt.expected_end_mask,
-        receipt_transition_kind_byte(input.settlement_receipt.transition_kind),
-        input.settlement_receipt.expected_end_mask,
-        input.settlement_receipt.expected_end_mask,
-        receipt_transition_kind_byte(SettlementReceiptTransitionKindV2::PortfolioPairV2),
-    ])
+    let receipt_pre_accounted_end_mask = input.settlement_receipt.accounted_end_mask;
+    let receipt_pre_delivered_end_mask = input.settlement_receipt.delivered_end_mask;
+    let receipt_pre_expected_end_mask = input.settlement_receipt.expected_end_mask;
+    let receipt_pre_transition_kind =
+        receipt_transition_kind_byte(input.settlement_receipt.transition_kind);
+    // General V5's canonical `commit_portfolio_pair_delivery` preserves both
+    // accounted ends, delivers both direct ends, and preserves the direct
+    // expected-end mask. These are three distinct semantic fields even though
+    // their canonical post-transition byte values are equal.
+    let receipt_post_accounted_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
+    let receipt_post_delivered_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
+    let receipt_post_expected_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
+    let receipt_post_transition_kind =
+        receipt_transition_kind_byte(SettlementReceiptTransitionKindV2::PortfolioPairV2);
+    let receipt_lifecycle_transcript = [
+        receipt_pre_accounted_end_mask,
+        receipt_pre_delivered_end_mask,
+        receipt_pre_expected_end_mask,
+        receipt_pre_transition_kind,
+        receipt_post_accounted_end_mask,
+        receipt_post_delivered_end_mask,
+        receipt_post_expected_end_mask,
+        receipt_post_transition_kind,
+    ];
+    hash.update(&receipt_lifecycle_transcript)
     .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&input.settlement_receipt.transition_commitment)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
