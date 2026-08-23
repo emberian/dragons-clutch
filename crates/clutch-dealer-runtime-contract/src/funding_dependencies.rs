@@ -431,45 +431,46 @@ fn compartment_from_index(index: usize) -> Result<DealerLivenessCompartmentV1> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerRuntimeLivenessBindingV1 {
     /// Exact external runtime-liveness policy identity.
-    pub runtime_policy_id: Id,
+    pub(crate) runtime_policy_id: Id,
     /// Exact Realm identity selected by the runtime policy.
-    pub realm_id: Id,
+    pub(crate) realm_id: Id,
     /// Exact lifecycle identity; Dealer requires its facility identity.
-    pub lifecycle_id: Id,
+    pub(crate) lifecycle_id: Id,
     /// Exact shared neutral sink.
-    pub neutral_sink: Id,
+    pub(crate) neutral_sink: Id,
     /// Seven distinct physical compartment account/vault identities.
-    pub account_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) account_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Seven semantic owners; Dealer requires its State authority.
-    pub owners: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) owners: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Seven exact present-funding payers.
-    pub payers: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) payers: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Per-compartment quote-schedule identities owned by liveness policy.
-    pub quote_schedule_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) quote_schedule_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Programs admitted to authenticate typed successful-work receipts.
-    pub receipt_program_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) receipt_program_ids: [Id; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Exact admission generations.
-    pub generations: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) generations: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Exact admitted present-funding classes.
-    pub funding_sources:
+    pub(crate) funding_sources:
         [DealerLivenessFundingSourceV1; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Exact work principal, excluding rent, by compartment.
-    pub work_principal_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) work_principal_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Exact refundable rent principal by compartment.
-    pub rent_principal_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) rent_principal_lamports: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Aggregate maximum successful calls by compartment.
-    pub maximum_calls: [u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) maximum_calls: [u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Largest admitted reward for one successful call by compartment.
-    pub maximum_lamports_per_call: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) maximum_lamports_per_call: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Account balance observed before present admission funding.
-    pub account_balance_before: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) account_balance_before: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Account balance observed after present admission funding.
-    pub account_balance_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    pub(crate) account_balance_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Four canonical terminal-path call vectors in external path order.
-    pub terminal_path_calls: [[u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+    pub(crate) terminal_path_calls: [[u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
         DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
     /// Exact work-lamport vectors for the same four terminal paths.
-    pub terminal_path_work_lamports: [[u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+    pub(crate) terminal_path_work_lamports: [[u64;
+        DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
         DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
 }
 
@@ -562,6 +563,96 @@ impl DealerRuntimeLivenessBindingV1 {
         }
         value.validate()?;
         Ok(value)
+    }
+
+    /// Exact external runtime policy identity.
+    pub const fn runtime_policy_id(self) -> Id {
+        self.runtime_policy_id
+    }
+
+    /// Realm selected by the external runtime policy.
+    pub const fn realm_id(self) -> Id {
+        self.realm_id
+    }
+
+    /// Exact facility lifecycle identity.
+    pub const fn lifecycle_id(self) -> Id {
+        self.lifecycle_id
+    }
+
+    /// Canonical neutral lamport sink.
+    pub const fn neutral_sink(self) -> Id {
+        self.neutral_sink
+    }
+
+    /// Exact physical account for one canonical compartment.
+    pub const fn account_id(self, compartment: DealerLivenessCompartmentV1) -> Id {
+        self.account_ids[compartment.index()]
+    }
+
+    /// Exact semantic owner for one canonical compartment.
+    pub const fn owner(self, compartment: DealerLivenessCompartmentV1) -> Id {
+        self.owners[compartment.index()]
+    }
+
+    /// Exact present-funding payer for one canonical compartment.
+    pub const fn payer(self, compartment: DealerLivenessCompartmentV1) -> Id {
+        self.payers[compartment.index()]
+    }
+
+    /// Exact quote schedule for one canonical compartment.
+    pub const fn quote_schedule_id(self, compartment: DealerLivenessCompartmentV1) -> Id {
+        self.quote_schedule_ids[compartment.index()]
+    }
+
+    /// Exact receipt-authentication program for one canonical compartment.
+    pub const fn receipt_program_id(self, compartment: DealerLivenessCompartmentV1) -> Id {
+        self.receipt_program_ids[compartment.index()]
+    }
+
+    /// Immutable admission generation for one canonical compartment.
+    pub const fn generation(self, compartment: DealerLivenessCompartmentV1) -> u64 {
+        self.generations[compartment.index()]
+    }
+
+    /// Exact present-funding class for one canonical compartment.
+    pub const fn funding_source(
+        self,
+        compartment: DealerLivenessCompartmentV1,
+    ) -> DealerLivenessFundingSourceV1 {
+        self.funding_sources[compartment.index()]
+    }
+
+    /// Work principal funded now for one canonical compartment.
+    pub const fn work_principal_lamports(
+        self,
+        compartment: DealerLivenessCompartmentV1,
+    ) -> u64 {
+        self.work_principal_lamports[compartment.index()]
+    }
+
+    /// Refundable rent principal funded now for one canonical compartment.
+    pub const fn rent_principal_lamports(
+        self,
+        compartment: DealerLivenessCompartmentV1,
+    ) -> u64 {
+        self.rent_principal_lamports[compartment.index()]
+    }
+
+    /// Exact admitted account balance immediately before present funding.
+    pub const fn account_balance_before(
+        self,
+        compartment: DealerLivenessCompartmentV1,
+    ) -> u64 {
+        self.account_balance_before[compartment.index()]
+    }
+
+    /// Exact admitted account balance immediately after present funding.
+    pub const fn account_balance_after(
+        self,
+        compartment: DealerLivenessCompartmentV1,
+    ) -> u64 {
+        self.account_balance_after[compartment.index()]
     }
 
     /// Validate identities, account uniqueness, funding arithmetic, and bounds.
