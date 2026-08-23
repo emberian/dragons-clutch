@@ -12,8 +12,9 @@
 //! no lamports move and no prefunding becomes an economic asset.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4Id, ContentId,
-    NativeClaimBasisV1, SeriesAttachmentPlanV4Id,
+    CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId, FixedCodec,
+    NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
+    SeriesAttachmentPlanV4Id,
 };
 use clutch_collateral_adapter_v2::{
     admit_collateral_account_v2, admit_collateral_mint_v2, RuntimeAccountViewV2,
@@ -30,7 +31,7 @@ use clutch_solana_layout::product_series::SeriesMarketLinkAccountV1;
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     authenticate_wrapper_recipe_membership_v1, structured_descriptor_admission_receipt_v1,
-    structured_owner_release_id_v1,
+    structured_owner_release_id_v2,
     DescriptorBasisV1, PositionAssetTransferPayloadV1, StructuredClaimActionV1,
     StructuredClaimDescriptorV2, StructuredClaimPayloadV1, StructuredClaimReplayExtensionV1,
     StructuredClaimRuntimeAddressesV1, StructuredMarketRootBindingV1, StructuredMarketRootV1,
@@ -42,12 +43,16 @@ use clutch_structured_claim_adapter::{
     authenticate_structured_custody_call_v1, bind_descriptor_v1,
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
-    prepare_current_structured_position_poststate_v1, prepare_current_unwrap_full_v1,
-    prepare_current_wrap_full_v1, AccountRoleV1, BasePositionPdaVerifierV1,
+    prepare_current_redeem_terminal_v1, prepare_current_structured_position_poststate_v1,
+    prepare_current_unwrap_full_v1, prepare_current_wrap_full_v1, AccountRoleV1,
+    BasePositionPdaVerifierV1,
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     Error as StructuredAdapterError, PdaVerifierV1, RawAccountV1, RuntimeDeploymentsV1,
     StructuredCustodyPdaVerifierV1, StructuredCustodyScratchV1,
     STRUCTURED_CUSTODY_ACCOUNT_COUNT, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
+    STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -56,13 +61,19 @@ use solana_pubkey::Pubkey;
 
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1, UPGRADEABLE_LOADER_ID};
+use crate::loader_state::{
+    decode_loader_pair_v1, decode_synthesized_genesis_loader_pair_v1, LoaderAccountViewV1,
+    UPGRADEABLE_LOADER_ID,
+};
 use crate::seeds;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, RuntimeSha256,
+    authenticate_general_market_liabilities_v1, authenticate_resolution_v5, RuntimeSha256,
 };
 use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_artifact::{
+    authenticate_registry_capability_v3, authenticate_series_registry_capability_refs_v2,
+};
 use super::product_market::{
     admit_series_wrapper_obligation_v1, authenticate_series_market_link_v1,
     authenticate_series_wrapper_authorization_v1, AuthenticatedSeriesWrapperAuthorizationV1,
@@ -100,9 +111,22 @@ const IX_WRAPPER_HOLDER: usize = 24;
 const IX_WRAPPER_MINT_AUTHORITY: usize = 25;
 const IX_COLLATERAL_MINT: usize = 26;
 const IX_HOARD_TOKEN: usize = 27;
+const IX_WRAPPER_RELEASE_V2: usize = 28;
+const IX_BASE_RELEASE_V2: usize = 29;
+const IX_TOKEN_RELEASE_V2: usize = 30;
+const IX_RESOLUTION_V5: usize = 31;
+const IX_CANONICAL_WRAPPER_RELEASE_V2: usize = 23;
+const IX_CANONICAL_BASE_RELEASE_V2: usize = 24;
+const IX_CANONICAL_TOKEN_RELEASE_V2: usize = 25;
 
-/// Exact account count for current full-vector wrap and unwind.
-pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 28;
+const STRUCTURED_CANONICAL_ACCOUNT_COUNT: usize = 26;
+
+const STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 28;
+/// Exact account count for current full-vector wrap and unwind, including
+/// three disjoint loader-release artifacts.
+pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 31;
+/// Exact account count for current terminal wrapper redemption.
+pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 32;
 
 const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::VaultAuthority,
@@ -130,7 +154,7 @@ const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::ClaimLedgerV3,
 ];
 
-const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 28;
+const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 33;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const CV_VAULT_AUTHORITY: usize = 0;
 const CV_PAYER: usize = 1;
@@ -160,6 +184,23 @@ const CV_STRUCTURED_ROOT: usize = 24;
 const CV_SERIES_LINK: usize = 25;
 const CV_COMPILER_BUNDLE: usize = 26;
 const CV_ATTACHMENT: usize = 27;
+const CV_SERIES_REGISTRY_V2: usize = 28;
+const CV_REGISTRY_RELEASE_V2: usize = 29;
+const CV_CAPABILITY_PROFILE_V4: usize = 30;
+const CV_WRAPPER_RELEASE_V2: usize = 31;
+const CV_TOKEN_RELEASE_V2: usize = 32;
+
+/// Private locus-aware deployment authority. Every field is derived from a
+/// hostile-decoded release artifact plus the complete current ProgramData
+/// bytes; callers cannot construct this receipt from descriptor slots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedStructuredDeploymentsV2 {
+    runtime: RuntimeDeploymentsV1,
+    wrapper_release_id: ContentId,
+    base_release_id: ContentId,
+    token_release_id: ContentId,
+    owner_release_id: ContentId,
+}
 
 /// Found one funded, empty Structured PositionV3 and SCV1 Replay pair.
 ///
@@ -233,7 +274,7 @@ pub fn process_create(
     let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
         &descriptor,
         descriptor_basis,
-        deployments.binding,
+        deployments.runtime.binding,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let native_claim_id = canonical_native_claim_id_v1(&identity).map_err(map_adapter_error)?;
@@ -273,7 +314,7 @@ pub fn process_create(
     let _bound = bind_descriptor_v1(
         descriptor,
         descriptor_basis,
-        deployments,
+        deployments.runtime,
         native_claim_id,
         product_id,
         addresses,
@@ -298,12 +339,12 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     let signer = [
         true, true, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     let mut writable = [
         false, true, false, false, false, false, false, false, false, false, true, true, false,
         false, false, false, false, false, false, false, false, false, false, false, true, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     writable[CV_SERIES_LINK] = structured_root_requires_product_write_v1(
         accounts[CV_STRUCTURED_ROOT].owner,
@@ -312,7 +353,7 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
         false, true, false, true, false, true, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     let mut index = 0_usize;
     while index < accounts.len() {
@@ -353,7 +394,7 @@ fn admit_structured_descriptor_root_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     liabilities: super::collateral_position_v3::GeneralMarketLiabilityAuthorityV1,
-    deployments: RuntimeDeploymentsV1,
+    deployments: AuthenticatedStructuredDeploymentsV2,
     descriptor: StructuredClaimDescriptorV2,
     native_claim_id: [u8; 32],
     recipe_membership: clutch_structured_claim_adapter::runtime_contract::WrapperRecipeMembershipV1,
@@ -396,6 +437,23 @@ fn admit_structured_descriptor_root_v1(
         &accounts[CV_COMPILER_BUNDLE],
         &accounts[CV_ATTACHMENT],
     )?;
+    let registry_refs = authenticate_series_registry_capability_refs_v2(
+        program_id,
+        &accounts[CV_SERIES_REGISTRY_V2],
+        authorization.series_plan_id(),
+    )?;
+    require(
+        registry_refs.compiler_bundle_id() == authorization.compiler_bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let registry = authenticate_registry_capability_v3(
+        program_id,
+        registry_refs,
+        &accounts[CV_BASE_PROGRAM],
+        &accounts[CV_BASE_PROGRAM_DATA],
+        &accounts[CV_REGISTRY_RELEASE_V2],
+        &accounts[CV_CAPABILITY_PROFILE_V4],
+    )?;
     require(
         authorization.market_instance_id().bytes()
                 == liabilities.market_binding.market_instance_v2_id.bytes()
@@ -404,13 +462,17 @@ fn admit_structured_descriptor_root_v1(
             && authorization.rent_refund_owner().bytes() == accounts[CV_PAYER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV4>(
+    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
         program_id,
         &accounts[CV_COMPILER_BUNDLE],
         authorization.compiler_bundle_id(),
     )?;
     require(
         compiler_bundle.semantic_id() == authorization.compiler_bundle_id()
+            && compiler_bundle.value().registry_release_id == registry.registry_release_id()
+            && compiler_bundle.value().capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && registry.series_plan_id() == authorization.series_plan_id()
             && compiler_bundle.value().native_claim_basis_id.bytes()
                 == liabilities.market_binding.native_claim_basis_id.bytes()
             && compiler_bundle.value().product_template_id
@@ -432,6 +494,7 @@ fn admit_structured_descriptor_root_v1(
         deployments,
         authorization,
         compiler_release_id,
+        registry.registry_release_id(),
     )?;
     let root_id = root_binding
         .id(&RuntimeSha256)
@@ -511,6 +574,7 @@ fn admit_structured_descriptor_root_v1(
                     deployments,
                     rebound_authorization,
                     compiler_release_id,
+                    registry.registry_release_id(),
                 )? == root_binding,
             ClutchError::MismatchedState,
         )?;
@@ -613,9 +677,10 @@ fn admit_structured_descriptor_root_v1(
 
 fn structured_root_binding_v1(
     accounts: &[AccountInfo<'_>],
-    deployments: RuntimeDeploymentsV1,
+    deployments: AuthenticatedStructuredDeploymentsV2,
     authorization: AuthenticatedSeriesWrapperAuthorizationV1,
     compiler_release_id: ContentId,
+    registry_release_id: ContentId,
 ) -> Outcome<StructuredMarketRootBindingV1> {
     Ok(StructuredMarketRootBindingV1 {
         link_account: accounts[CV_SERIES_LINK].key.to_bytes(),
@@ -626,14 +691,14 @@ fn structured_root_binding_v1(
         attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(
             authorization.attachment_plan_id().bytes(),
         ),
-        compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes(
+        compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes(
             authorization.compiler_bundle_id().bytes(),
         ),
         compiler_release_id,
+        registry_release_id,
         capability_profile_id: authorization.capability_profile_id(),
         wrapper_recipe_set_id: authorization.wrapper_recipe_set_id(),
-        owner_release_id: structured_owner_release_id_v1(deployments.binding, &RuntimeSha256)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        owner_release_id: deployments.owner_release_id,
         rent_refund_owner: authorization.rent_refund_owner(),
         neutral_lamport_sink: authorization.neutral_lamport_sink(),
     })
@@ -699,7 +764,7 @@ pub fn process(
     sequence: u64,
     payload: &[u8],
 ) -> Outcome<()> {
-    require_count(accounts, STRUCTURED_CUSTODY_ACCOUNT_COUNT)?;
+    require_count(accounts, STRUCTURED_CANONICAL_ACCOUNT_COUNT)?;
     require(sequence == 0, ClutchError::Replay)?;
     require(
         *accounts[IX_BASE_PROGRAM].key == *program_id,
@@ -745,7 +810,16 @@ pub fn process(
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(descriptor_data);
 
-    let deployments = authenticate_deployments(accounts, descriptor)?;
+    let deployments = authenticate_deployments(
+        program_id,
+        accounts,
+        descriptor,
+        [
+            IX_CANONICAL_WRAPPER_RELEASE_V2,
+            IX_CANONICAL_BASE_RELEASE_V2,
+            IX_CANONICAL_TOKEN_RELEASE_V2,
+        ],
+    )?;
     let product_id = structured_replay_product(accounts)?;
     let market_instance_id = liabilities
         .market_instance
@@ -763,7 +837,7 @@ pub fn process(
     let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
         &descriptor,
         descriptor_basis,
-        deployments.binding,
+        deployments.runtime.binding,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let native_claim_id = canonical_native_claim_id_v1(&identity).map_err(map_adapter_error)?;
@@ -790,7 +864,7 @@ pub fn process(
     let bound_descriptor = bind_descriptor_v1(
         descriptor,
         descriptor_basis,
-        deployments,
+        deployments.runtime,
         native_claim_id,
         canonical_product_id,
         addresses,
@@ -809,7 +883,7 @@ pub fn process(
             .collect::<Outcome<Vec<_>>>()?;
         let mut raw = Vec::with_capacity(STRUCTURED_CUSTODY_ACCOUNT_COUNT);
         let mut index = 0_usize;
-        while index < accounts.len() {
+        while index < STRUCTURED_CUSTODY_ACCOUNT_COUNT {
             raw.push(RawAccountV1 {
                 role: ACCOUNT_ROLES[index],
                 key: accounts[index].key.to_bytes(),
@@ -826,7 +900,7 @@ pub fn process(
         authenticate_structured_custody_call_v1(
             &raw,
             &bound_descriptor,
-            deployments,
+            deployments.runtime,
             liabilities.bound,
             transfer,
             &mut scratch,
@@ -882,7 +956,8 @@ pub fn process(
     Ok(())
 }
 
-/// Execute current full-vector wrap or unwind under the wrapper-only vault signer.
+/// Execute current full-vector wrap, unwind, or terminal redemption under the
+/// wrapper-only vault signer.
 ///
 /// This is compiled only into the explicitly selected Structured laboratory
 /// artifact by `instructions::mod`; central capability admission remains a
@@ -897,12 +972,19 @@ pub fn process_full_vector(
     action: StructuredClaimActionV1,
     payload: &[u8],
 ) -> Outcome<()> {
-    require_count(accounts, STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT)?;
+    let expected_count = if action == StructuredClaimActionV1::RedeemTerminal {
+        STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT
+    } else {
+        STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT
+    };
+    require_count(accounts, expected_count)?;
     require(sequence == 0, ClutchError::Replay)?;
     require(
         matches!(
             action,
-            StructuredClaimActionV1::WrapFull | StructuredClaimActionV1::UnwrapFull
+            StructuredClaimActionV1::WrapFull
+                | StructuredClaimActionV1::UnwrapFull
+                | StructuredClaimActionV1::RedeemTerminal
         ),
         ClutchError::UnsupportedInstruction,
     )?;
@@ -914,7 +996,8 @@ pub fn process_full_vector(
     .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
     {
         StructuredClaimPayloadV1::WrapFull(value)
-        | StructuredClaimPayloadV1::UnwrapFull(value) => value,
+        | StructuredClaimPayloadV1::UnwrapFull(value)
+        | StructuredClaimPayloadV1::RedeemTerminal(value) => value,
         _ => return Err(ClutchError::NonCanonical.into()),
     };
 
@@ -948,7 +1031,16 @@ pub fn process_full_vector(
     let descriptor = StructuredClaimDescriptorV2::decode(&descriptor_data)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(descriptor_data);
-    let deployments = authenticate_deployments(accounts, descriptor)?;
+    let deployments = authenticate_deployments(
+        program_id,
+        accounts,
+        descriptor,
+        [
+            IX_WRAPPER_RELEASE_V2,
+            IX_BASE_RELEASE_V2,
+            IX_TOKEN_RELEASE_V2,
+        ],
+    )?;
     let market_instance_id = liabilities
         .market_instance
         .id()
@@ -964,7 +1056,7 @@ pub fn process_full_vector(
     let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
         &descriptor,
         descriptor_basis,
-        deployments.binding,
+        deployments.runtime.binding,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let native_claim_id = canonical_native_claim_id_v1(&identity).map_err(map_adapter_error)?;
@@ -996,7 +1088,7 @@ pub fn process_full_vector(
     let bound_descriptor = bind_descriptor_v1(
         descriptor,
         descriptor_basis,
-        deployments,
+        deployments.runtime,
         native_claim_id,
         product_id,
         addresses,
@@ -1051,7 +1143,8 @@ pub fn process_full_vector(
                     accounts[IX_DESTINATION_POSITION].key.to_bytes(),
                     accounts[IX_DESTINATION_REPLAY].key.to_bytes(),
                 ),
-                StructuredClaimActionV1::UnwrapFull => (
+                StructuredClaimActionV1::UnwrapFull
+                | StructuredClaimActionV1::RedeemTerminal => (
                     destination,
                     destination_replay,
                     source,
@@ -1080,7 +1173,7 @@ pub fn process_full_vector(
         .map_err(map_adapter_error)?;
         let (mint_before, holder_before) = match action {
             StructuredClaimActionV1::WrapFull => (mint_observed, holder_observed),
-            StructuredClaimActionV1::UnwrapFull => {
+            StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => {
                 let mut mint_before = mint_observed;
                 mint_before.supply = mint_before
                     .supply
@@ -1135,6 +1228,27 @@ pub fn process_full_vector(
                 request,
                 &RuntimeSha256,
             ),
+            StructuredClaimActionV1::RedeemTerminal => {
+                let resolution = authenticate_resolution_v5(
+                    program_id,
+                    &accounts[IX_RESOLUTION_V5],
+                    liabilities,
+                )?;
+                prepare_current_redeem_terminal_v1(
+                    &bound_descriptor,
+                    liabilities.bound,
+                    route_accounts,
+                    liability_prestate,
+                    resolution.account_id.bytes(),
+                    resolution.resolution,
+                    mint_before,
+                    holder_before,
+                    current_position_projection(user, &user_replay),
+                    current_position_projection(vault, &vault_replay),
+                    request,
+                    &RuntimeSha256,
+                )
+            }
             _ => return Err(ClutchError::UnsupportedInstruction.into()),
         }
         .map_err(map_adapter_error)?;
@@ -1182,7 +1296,7 @@ fn validate_full_vector_privileges(
         false, false,
     ];
     let mut index = 0usize;
-    while index < accounts.len() {
+    while index < STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT {
         require(
             accounts[index].is_signer == signer[index]
                 && accounts[index].is_writable == writable[index]
@@ -1190,6 +1304,28 @@ fn validate_full_vector_privileges(
             ClutchError::MismatchedState,
         )?;
         index += 1;
+    }
+    for release_index in [
+        IX_WRAPPER_RELEASE_V2,
+        IX_BASE_RELEASE_V2,
+        IX_TOKEN_RELEASE_V2,
+    ] {
+        require(
+            !accounts[release_index].is_signer
+                && !accounts[release_index].is_writable
+                && !accounts[release_index].executable
+                && accounts[release_index].owner == program_id,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    if accounts.len() == STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT {
+        require(
+            !accounts[IX_RESOLUTION_V5].is_signer
+                && !accounts[IX_RESOLUTION_V5].is_writable
+                && !accounts[IX_RESOLUTION_V5].executable
+                && accounts[IX_RESOLUTION_V5].owner == program_id,
+            ClutchError::MismatchedState,
+        )?;
     }
     require(
         *accounts[IX_BASE_PROGRAM].key == *program_id
@@ -1374,46 +1510,21 @@ fn structured_replay_product(accounts: &[AccountInfo<'_>]) -> Outcome<[u8; 32]> 
 fn authenticate_create_deployments(
     accounts: &[AccountInfo<'_>],
     descriptor: StructuredClaimDescriptorV2,
-) -> Outcome<RuntimeDeploymentsV1> {
-    let wrapper = loader_pair(
-        &accounts[CV_WRAPPER_PROGRAM],
-        &accounts[CV_WRAPPER_PROGRAM_DATA],
-    )?;
-    let base = loader_pair(&accounts[CV_BASE_PROGRAM], &accounts[CV_BASE_PROGRAM_DATA])?;
-    let token = loader_pair(&accounts[CV_TOKEN_PROGRAM], &accounts[CV_TOKEN_PROGRAM_DATA])?;
-    require(
-        descriptor.wrapper_program_data == wrapper.state.linked_programdata
-            && descriptor.wrapper_deployment_slot == wrapper.state.deployment_slot
-            && descriptor.base_program == accounts[CV_BASE_PROGRAM].key.to_bytes()
-            && descriptor.base_program_data == base.state.linked_programdata
-            && descriptor.base_deployment_slot == base.state.deployment_slot
-            && descriptor.token_2022_program == accounts[CV_TOKEN_PROGRAM].key.to_bytes()
-            && descriptor.token_2022_program_data == token.state.linked_programdata
-            && descriptor.token_2022_deployment_slot == token.state.deployment_slot,
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    Ok(RuntimeDeploymentsV1 {
-        binding: DeploymentBinding {
-            wrapper_program: accounts[CV_WRAPPER_PROGRAM].key.to_bytes(),
-            wrapper_program_data: wrapper.state.linked_programdata,
-            wrapper_deployment_slot: wrapper.state.deployment_slot,
-            base_program: accounts[CV_BASE_PROGRAM].key.to_bytes(),
-            base_program_data: base.state.linked_programdata,
-            base_deployment_slot: base.state.deployment_slot,
-            token_2022_program: accounts[CV_TOKEN_PROGRAM].key.to_bytes(),
-            token_2022_program_data: token.state.linked_programdata,
-            token_2022_deployment_slot: token.state.deployment_slot,
-        },
-        upgradeable_loader: UPGRADEABLE_LOADER_ID,
-        program_owners: [UPGRADEABLE_LOADER_ID; 3],
-        program_data_owners: [UPGRADEABLE_LOADER_ID; 3],
-        linked_program_data: [
-            wrapper.state.linked_programdata,
-            base.state.linked_programdata,
-            token.state.linked_programdata,
+) -> Outcome<AuthenticatedStructuredDeploymentsV2> {
+    authenticate_structured_release_set_v2(
+        accounts[CV_BASE_PROGRAM].key,
+        descriptor,
+        [
+            (&accounts[CV_WRAPPER_PROGRAM], &accounts[CV_WRAPPER_PROGRAM_DATA]),
+            (&accounts[CV_BASE_PROGRAM], &accounts[CV_BASE_PROGRAM_DATA]),
+            (&accounts[CV_TOKEN_PROGRAM], &accounts[CV_TOKEN_PROGRAM_DATA]),
         ],
-        executable_mask: 0b111,
-    })
+        [
+            &accounts[CV_WRAPPER_RELEASE_V2],
+            &accounts[CV_REGISTRY_RELEASE_V2],
+            &accounts[CV_TOKEN_RELEASE_V2],
+        ],
+    )
 }
 
 fn id(bytes: [u8; 32]) -> Outcome<Identity32V1> {
@@ -1680,88 +1791,198 @@ fn create_full_principal_account<'a>(
 }
 
 fn authenticate_deployments(
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     descriptor: StructuredClaimDescriptorV2,
-) -> Outcome<RuntimeDeploymentsV1> {
-    let wrapper = loader_pair(
-        &accounts[IX_WRAPPER_PROGRAM],
-        &accounts[IX_WRAPPER_PROGRAM_DATA],
-    )?;
-    let base = loader_pair(
-        &accounts[IX_BASE_PROGRAM],
-        &accounts[IX_BASE_PROGRAM_DATA],
-    )?;
-    let token = loader_pair(
-        &accounts[IX_TOKEN_2022_PROGRAM],
-        &accounts[IX_TOKEN_2022_PROGRAM_DATA],
-    )?;
+    release_indices: [usize; 3],
+) -> Outcome<AuthenticatedStructuredDeploymentsV2> {
+    authenticate_structured_release_set_v2(
+        program_id,
+        descriptor,
+        [
+            (&accounts[IX_WRAPPER_PROGRAM], &accounts[IX_WRAPPER_PROGRAM_DATA]),
+            (&accounts[IX_BASE_PROGRAM], &accounts[IX_BASE_PROGRAM_DATA]),
+            (&accounts[IX_TOKEN_2022_PROGRAM], &accounts[IX_TOKEN_2022_PROGRAM_DATA]),
+        ],
+        [
+            &accounts[release_indices[0]],
+            &accounts[release_indices[1]],
+            &accounts[release_indices[2]],
+        ],
+    )
+}
+
+fn authenticate_structured_release_set_v2(
+    artifact_owner: &Pubkey,
+    descriptor: StructuredClaimDescriptorV2,
+    programs: [(&AccountInfo<'_>, &AccountInfo<'_>); 3],
+    release_artifacts: [&AccountInfo<'_>; 3],
+) -> Outcome<AuthenticatedStructuredDeploymentsV2> {
     require(
-        descriptor.wrapper_program_data == wrapper.state.linked_programdata
-            && descriptor.wrapper_deployment_slot == wrapper.state.deployment_slot
-            && descriptor.base_program == accounts[IX_BASE_PROGRAM].key.to_bytes()
-            && descriptor.base_program_data == base.state.linked_programdata
-            && descriptor.base_deployment_slot == base.state.deployment_slot
-            && descriptor.token_2022_program == accounts[IX_TOKEN_2022_PROGRAM].key.to_bytes()
-            && descriptor.token_2022_program_data == token.state.linked_programdata
-            && descriptor.token_2022_deployment_slot == token.state.deployment_slot,
+        STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1 == crate::capabilities::PROFILE_ID,
         ClutchError::AuthorizationUnavailable,
     )?;
-    Ok(RuntimeDeploymentsV1 {
-        binding: DeploymentBinding {
-            wrapper_program: accounts[IX_WRAPPER_PROGRAM].key.to_bytes(),
-            wrapper_program_data: wrapper.state.linked_programdata,
-            wrapper_deployment_slot: wrapper.state.deployment_slot,
-            base_program: accounts[IX_BASE_PROGRAM].key.to_bytes(),
-            base_program_data: base.state.linked_programdata,
-            base_deployment_slot: base.state.deployment_slot,
-            token_2022_program: accounts[IX_TOKEN_2022_PROGRAM].key.to_bytes(),
-            token_2022_program_data: token.state.linked_programdata,
-            token_2022_deployment_slot: token.state.deployment_slot,
+    let manifests = [
+        ContentId::from_bytes(STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1),
+        ContentId::from_bytes(STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1),
+        ContentId::from_bytes(STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1),
+    ];
+    let wrapper = authenticate_structured_program_release_v2(
+        artifact_owner,
+        programs[0].0,
+        programs[0].1,
+        release_artifacts[0],
+        manifests[0],
+    )?;
+    let base = authenticate_structured_program_release_v2(
+        artifact_owner,
+        programs[1].0,
+        programs[1].1,
+        release_artifacts[1],
+        manifests[1],
+    )?;
+    let token = authenticate_structured_program_release_v2(
+        artifact_owner,
+        programs[2].0,
+        programs[2].1,
+        release_artifacts[2],
+        manifests[2],
+    )?;
+    require(
+        descriptor.wrapper_program_data == programs[0].1.key.to_bytes()
+            && descriptor.wrapper_deployment_slot == wrapper.1.deployment_slot
+            && descriptor.base_program == programs[1].0.key.to_bytes()
+            && descriptor.base_program_data == programs[1].1.key.to_bytes()
+            && descriptor.base_deployment_slot == base.1.deployment_slot
+            && descriptor.token_2022_program == programs[2].0.key.to_bytes()
+            && descriptor.token_2022_program_data == programs[2].1.key.to_bytes()
+            && descriptor.token_2022_deployment_slot == token.1.deployment_slot,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    let binding = DeploymentBinding {
+        wrapper_program: programs[0].0.key.to_bytes(),
+        wrapper_program_data: programs[0].1.key.to_bytes(),
+        wrapper_deployment_slot: wrapper.1.deployment_slot,
+        base_program: programs[1].0.key.to_bytes(),
+        base_program_data: programs[1].1.key.to_bytes(),
+        base_deployment_slot: base.1.deployment_slot,
+        token_2022_program: programs[2].0.key.to_bytes(),
+        token_2022_program_data: programs[2].1.key.to_bytes(),
+        token_2022_deployment_slot: token.1.deployment_slot,
+    };
+    let owner_release_id = structured_owner_release_id_v2(
+        binding,
+        wrapper.0,
+        base.0,
+        token.0,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedStructuredDeploymentsV2 {
+        runtime: RuntimeDeploymentsV1 {
+            binding,
+            upgradeable_loader: UPGRADEABLE_LOADER_ID,
+            program_owners: [UPGRADEABLE_LOADER_ID; 3],
+            program_data_owners: [UPGRADEABLE_LOADER_ID; 3],
+            linked_program_data: [
+                programs[0].1.key.to_bytes(),
+                programs[1].1.key.to_bytes(),
+                programs[2].1.key.to_bytes(),
+            ],
+            executable_mask: 0b111,
         },
-        upgradeable_loader: UPGRADEABLE_LOADER_ID,
-        program_owners: [UPGRADEABLE_LOADER_ID; 3],
-        program_data_owners: [UPGRADEABLE_LOADER_ID; 3],
-        linked_program_data: [
-            wrapper.state.linked_programdata,
-            base.state.linked_programdata,
-            token.state.linked_programdata,
-        ],
-        executable_mask: 0b111,
+        wrapper_release_id: wrapper.0,
+        base_release_id: base.0,
+        token_release_id: token.0,
+        owner_release_id,
     })
 }
 
-fn loader_pair(
+fn authenticate_structured_program_release_v2(
+    artifact_owner: &Pubkey,
     program: &AccountInfo<'_>,
     program_data: &AccountInfo<'_>,
-) -> Outcome<crate::loader_state::DecodedLoaderPairV1> {
+    release_artifact: &AccountInfo<'_>,
+    expected_manifest_id: ContentId,
+) -> Outcome<(ContentId, RegistryProgramReleaseV2)> {
     require(
-        !program.is_writable
+        program.key != program_data.key
+            && program.key != release_artifact.key
+            && program_data.key != release_artifact.key
             && !program.is_signer
+            && !program.is_writable
+            && program.executable
+            && !program_data.is_signer
             && !program_data.is_writable
-            && !program_data.is_signer,
+            && !program_data.executable,
         ClutchError::MismatchedState,
     )?;
+    let release_data = release_artifact
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let untrusted_release = RegistryProgramReleaseV2::decode(&release_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(release_data);
+    let release_id = untrusted_release
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let authenticated = authenticate_product_artifact_v1::<RegistryProgramReleaseV2>(
+        artifact_owner,
+        release_artifact,
+        release_id,
+    )?;
+    let release = *authenticated.value();
     let program_body = program
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let program_data_body = program_data
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    decode_loader_pair_v1(
-        LoaderAccountViewV1::new(
-            program.key.to_bytes(),
-            program.owner.to_bytes(),
-            program.executable,
-            &program_body,
-        ),
-        LoaderAccountViewV1::new(
-            program_data.key.to_bytes(),
-            program_data.owner.to_bytes(),
-            program_data.executable,
-            &program_data_body,
-        ),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    let program_view = LoaderAccountViewV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        &program_body,
+    );
+    let programdata_view = LoaderAccountViewV1::new(
+        program_data.key.to_bytes(),
+        program_data.owner.to_bytes(),
+        program_data.executable,
+        &program_data_body,
+    );
+    let deployment_slot = match release.locus {
+        RegistryReleaseLocusV2::SynthesizedGenesisZero => {
+            decode_synthesized_genesis_loader_pair_v1(program_view, programdata_view)
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+                .deployment_slot
+        }
+        RegistryReleaseLocusV2::ObservedPositive => decode_loader_pair_v1(
+            program_view,
+            programdata_view,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+        .state
+        .deployment_slot,
+    };
+    require(
+        authenticated.semantic_id() == release_id
+            && release.program.bytes() == program.key.to_bytes()
+            && release.programdata.bytes() == program_data.key.to_bytes()
+            && release.programdata_sha256.bytes()
+                == solana_sha256_hasher::hashv(&[&program_data_body]).to_bytes()
+            && release.capability_manifest_id == expected_manifest_id
+            && release.deployment_slot == deployment_slot
+            && (matches!(
+                (release.locus, deployment_slot),
+                (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
+            ) || matches!(
+                (release.locus, deployment_slot),
+                (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
+            )),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    Ok((release_id, release))
 }
 
 fn derive_runtime_addresses(

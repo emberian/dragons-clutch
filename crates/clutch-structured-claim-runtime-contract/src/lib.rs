@@ -44,6 +44,7 @@ pub use descriptor::{
 };
 pub use market_root::{
     structured_descriptor_admission_receipt_v1, structured_owner_release_id_v1,
+    structured_owner_release_id_v2,
     StructuredMarketRootBindingV1, StructuredMarketRootV1, StructuredProductLineageV1,
     STRUCTURED_DESCRIPTOR_ADMISSION_DOMAIN_V1, STRUCTURED_DESCRIPTOR_TERMINAL_DOMAIN_V1,
     STRUCTURED_MARKET_TERMINAL_DOMAIN_V1, STRUCTURED_MARKET_TERMINAL_PREIMAGE_BYTES_V1,

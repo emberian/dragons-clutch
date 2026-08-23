@@ -1,13 +1,13 @@
 # Structured Claim SBF wrapper
 
-This is the separately deployed, explicitly non-production executable that
-owns the Token-2022 half of StructuredClaim actions 1 through 5. It calls the
-base program's signer-gated vault-founding, action-35 canonical-custody, and
-Structured action-3/5 full-vector endpoints, then reconciles authoritative
-Token-2022 mint and holder bytes in the same SVM transaction.
+This is the separately deployed, explicitly non-production executable seam
+for StructuredClaim. Its capability mask is currently zero: no action is
+admitted while the Product, deployment-release, and collateral value-route
+authorities are still being joined.
 
-Create uses an exact 28-account frame. The base side authenticates the Product
-SeriesMarketLink, current BundleV4, and current AttachmentV4, verifies
+The disabled create seam uses an exact 33-account frame. The base side
+authenticates the Product SeriesRegistryV2, SeriesMarketLink, current BundleV5,
+ReleaseV2/ProfileV4, and current AttachmentV4, verifies
 fixed-depth recipe-set membership, atomically records Product's first Wrapper
 admission, funds the
 `0xaf/1` Structured root with explicit refundable principal/donation
@@ -17,8 +17,9 @@ evidence of the claimed Product/root transition. The Series link is writable
 only for first root admission; later descriptors must present it read-only and
 cannot advance Product state.
 
-The artifact still does not enable compaction, redemption, or retirement
-coordinates. Descriptor v1 is decode-only; live state is descriptor v2.
+Full-vector wrap/unwind and exact terminal redemption are implemented behind
+the zero mask. Compaction and retirement remain incomplete. Descriptor v1 is
+decode-only; live state is descriptor v2.
 
 This crate contains no fixtures, mock Source provider, wallet, deployment, or
 client signing path. Building it does not authorize deployment.

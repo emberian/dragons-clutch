@@ -221,17 +221,17 @@ donation to the sink. The wrapper cannot mint this authority from caller fields.
 
 The adapter implementation is intentionally honest about work owned elsewhere:
 
-- any release must keep the exact base tuples and account counts without
-  widening the laboratory profile: Structured `(75,1,1)` uses 28 accounts,
-  General `(74,1,35)` uses 23, and Structured `(75,1,3|5)` uses 28;
-- Product semantic commit `16b50c46` (integrated by `c531524a`) supplies the
-  current BundleV4/AttachmentV4 and frame-bounded Series-link authority this
-  lane consumes. The base uses Product's private authenticated wrapper
+- every Structured tuple and the separate wrapper action mask remain disabled;
+  the current compiled frames are create 33, base canonical 26 / wrapper
+  canonical 29, full-vector 31, and terminal redemption 32 accounts;
+- Product supplies the current RegistryV2-to-BundleV5/ReleaseV2/ProfileV4/
+  AttachmentV4 and frame-bounded Series-link authority this lane consumes.
+  The base uses Product's private authenticated wrapper
   authorization and first-admission mutation rather than a caller DTO;
   withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
   creation;
-- compaction, terminal redemption, Product terminal promotion, and
-  root/Position close remain deliberately disabled; and
+- compaction, Product terminal promotion, and root/Position close remain
+  incomplete; exact terminal redemption is compiled but not admitted; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
 

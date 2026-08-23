@@ -1,10 +1,13 @@
 //! Exact account loading, CPI execution, and authoritative post-reconciliation.
 
-use clutch_collateral_adapter_v2::{ClaimLedgerV3, HoardV2};
+use clutch_collateral_adapter_v2::{
+    ClaimLedgerV3, HoardV2, MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5,
+};
 use clutch_product_series::{
-    CompiledProductSeriesBundleV4, ContentId, FixedCodec, MarketInstancePreimageV2,
-    NativeClaimBasisV1, SeriesAttachmentPlanV4, SeriesLinkObligationStatusV1,
-    SeriesLinkObligationV1, SeriesMarketLinkPhaseV1,
+    CompiledProductSeriesBundleV5, ContentId, FixedCodec, MarketInstancePreimageV2,
+    NativeClaimBasisV1, RegistryCapabilityProfileV4,
+    SeriesAttachmentPlanV4, SeriesLinkObligationStatusV1, SeriesLinkObligationV1,
+    SeriesMarketLinkPhaseV1,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
@@ -13,7 +16,8 @@ use clutch_retirement::{
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v1, SeriesMarketLinkAccountV1,
-    SERIES_MARKET_LINK_ACCOUNT_BYTES_V1,
+    SeriesRegistryAccountV2, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, GeneralV2Action, StructuredClaimAction,
@@ -31,7 +35,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
     DESCRIPTOR_ACCOUNT_VERSION, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
     STRUCTURED_CUSTODY_CALL_V1_DOMAIN, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
     WRAPPER_MINT_ACCOUNT_BYTES, structured_descriptor_admission_receipt_v1,
-    structured_owner_release_id_v1,
+    structured_owner_release_id_v2,
 };
 use clutch_structured_claim_adapter::{
     admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
@@ -39,10 +43,13 @@ use clutch_structured_claim_adapter::{
     decode_canonical_wrapper_token_v1, plan_token_2022_cpi_v1,
     PdaVerifierV1, RuntimeDeploymentsV1, Token2022CpiV1, Token2022InstructionPlanV1,
     DESCRIPTOR_SEED, MINT_AUTHORITY_SEED, MINT_SEED, VAULT_OWNER_SEED,
+    STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
     STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
+    STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -52,12 +59,14 @@ use solana_sdk_ids::system_program;
 use solana_sha256_hasher::hashv;
 
 use crate::error::{Result, WrapperError};
-use crate::loader::{authenticate as authenticate_loader, UPGRADEABLE_LOADER_ID};
+use crate::loader::{authenticate_release_v2, AuthenticatedReleaseV2, UPGRADEABLE_LOADER_ID};
 use crate::system::{create_permanent_pda, rent};
 
-const CREATE_ACCOUNT_COUNT: usize = 28;
-const CANONICAL_ACCOUNT_COUNT: usize = 26;
-const FULL_VECTOR_ACCOUNT_COUNT: usize = 28;
+const CREATE_ACCOUNT_COUNT: usize = 33;
+const CANONICAL_ACCOUNT_COUNT: usize = 29;
+const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 28;
+const FULL_VECTOR_ACCOUNT_COUNT: usize = 31;
+const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 32;
 
 const VAULT_AUTHORITY: usize = 0;
 const PAYER: usize = 1;
@@ -85,6 +94,11 @@ const CREATE_STRUCTURED_ROOT: usize = 24;
 const CREATE_SERIES_LINK: usize = 25;
 const CREATE_COMPILER_BUNDLE: usize = 26;
 const CREATE_ATTACHMENT: usize = 27;
+const CREATE_SERIES_REGISTRY_V2: usize = 28;
+const CREATE_REGISTRY_RELEASE_V2: usize = 29;
+const CREATE_CAPABILITY_PROFILE_V4: usize = 30;
+const CREATE_WRAPPER_RELEASE_V2: usize = 31;
+const CREATE_TOKEN_RELEASE_V2: usize = 32;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 
 const C_DESCRIPTOR: usize = 12;
@@ -101,9 +115,28 @@ const C_LEDGER: usize = 22;
 const C_MINT: usize = 23;
 const C_HOLDER: usize = 24;
 const C_MINT_AUTHORITY: usize = 25;
+const CANONICAL_WRAPPER_RELEASE_V2: usize = 23;
+const CANONICAL_BASE_RELEASE_V2: usize = 24;
+const CANONICAL_TOKEN_RELEASE_V2: usize = 25;
+const CANONICAL_MINT: usize = 26;
+const CANONICAL_HOLDER: usize = 27;
+const CANONICAL_MINT_AUTHORITY: usize = 28;
 const C_ACTOR: usize = 11;
 const C_COLLATERAL_MINT: usize = 26;
 const C_HOARD_TOKEN: usize = 27;
+const C_WRAPPER_RELEASE_V2: usize = 28;
+const C_BASE_RELEASE_V2: usize = 29;
+const C_TOKEN_RELEASE_V2: usize = 30;
+const C_RESOLUTION_V5: usize = 31;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedStructuredDeploymentsV2 {
+    runtime: RuntimeDeploymentsV1,
+    wrapper_release_id: ContentId,
+    base_release_id: ContentId,
+    token_release_id: ContentId,
+    owner_release_id: ContentId,
+}
 
 /// Process the exact enabled wrapper profile.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) -> Result<()> {
@@ -131,6 +164,12 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
             program_id,
             accounts,
             StructuredClaimActionV1::UnwrapFull,
+            value,
+        ),
+        StructuredClaimPayloadV1::RedeemTerminal(value) => full_vector(
+            program_id,
+            accounts,
+            StructuredClaimActionV1::RedeemTerminal,
             value,
         ),
         _ => Err(WrapperError::Instruction),
@@ -173,14 +212,14 @@ fn create(
         tag: DESCRIPTOR_ACCOUNT_TAG,
         version: DESCRIPTOR_ACCOUNT_VERSION,
         flags: 0,
-        base_program: deployments.binding.base_program,
-        base_program_data: deployments.binding.base_program_data,
-        base_deployment_slot: deployments.binding.base_deployment_slot,
-        wrapper_program_data: deployments.binding.wrapper_program_data,
-        wrapper_deployment_slot: deployments.binding.wrapper_deployment_slot,
-        token_2022_program: deployments.binding.token_2022_program,
-        token_2022_program_data: deployments.binding.token_2022_program_data,
-        token_2022_deployment_slot: deployments.binding.token_2022_deployment_slot,
+        base_program: deployments.runtime.binding.base_program,
+        base_program_data: deployments.runtime.binding.base_program_data,
+        base_deployment_slot: deployments.runtime.binding.base_deployment_slot,
+        wrapper_program_data: deployments.runtime.binding.wrapper_program_data,
+        wrapper_deployment_slot: deployments.runtime.binding.wrapper_deployment_slot,
+        token_2022_program: deployments.runtime.binding.token_2022_program,
+        token_2022_program_data: deployments.runtime.binding.token_2022_program_data,
+        token_2022_deployment_slot: deployments.runtime.binding.token_2022_deployment_slot,
         market: market_id,
         terms_digest: basis_id,
         structured_root_id: payload.structured_root_id,
@@ -195,7 +234,7 @@ fn create(
     let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
         &descriptor,
         binding,
-        deployments.binding,
+        deployments.runtime.binding,
     )
     .map_err(|_| WrapperError::Identity)?;
     let native_claim_id = canonical_native_claim_id_v1(&identity)
@@ -233,7 +272,7 @@ fn create(
     let bound = bind_descriptor_v1(
         descriptor,
         binding,
-        deployments,
+        deployments.runtime,
         native_claim_id,
         product_id,
         StructuredClaimRuntimeAddressesV1 {
@@ -293,7 +332,7 @@ fn create(
         product_id,
         market,
         root_before,
-        deployments.binding,
+        deployments,
     )?;
     Ok(())
 }
@@ -305,6 +344,7 @@ fn canonical(
     payload: WrapperQuantityPayloadV1,
 ) -> Result<()> {
     validate_canonical_accounts(program_id, accounts)?;
+    let (mint_index, holder_index, mint_authority_index) = wrapper_token_indices(accounts)?;
     let (bound, descriptor) = load_bound_descriptor(program_id, accounts, payload.wrapper_product_id)?;
     let source_before = decode_position(&accounts[7])?;
     let destination_before = decode_position(&accounts[9])?;
@@ -408,9 +448,9 @@ fn canonical(
     };
     let token_operation = match action {
         StructuredClaimActionV1::WrapCanonical => Token2022CpiV1::MintChecked {
-            mint: accounts[C_MINT].key.to_bytes(),
-            token: accounts[C_HOLDER].key.to_bytes(),
-            authority: accounts[C_MINT_AUTHORITY].key.to_bytes(),
+            mint: accounts[mint_index].key.to_bytes(),
+            token: accounts[holder_index].key.to_bytes(),
+            authority: accounts[mint_authority_index].key.to_bytes(),
             quantity: payload.quantity,
             supply_before: mint_before.supply,
             supply_after,
@@ -418,8 +458,8 @@ fn canonical(
             holder_after,
         },
         StructuredClaimActionV1::UnwrapCanonical => Token2022CpiV1::BurnChecked {
-            mint: accounts[C_MINT].key.to_bytes(),
-            token: accounts[C_HOLDER].key.to_bytes(),
+            mint: accounts[mint_index].key.to_bytes(),
+            token: accounts[holder_index].key.to_bytes(),
             authority: accounts[C_ACTOR].key.to_bytes(),
             quantity: payload.quantity,
             supply_before: mint_before.supply,
@@ -482,10 +522,12 @@ fn full_vector(
     action: StructuredClaimActionV1,
     payload: WrapperQuantityPayloadV1,
 ) -> Result<()> {
-    validate_full_vector_accounts(program_id, accounts)?;
+    validate_full_vector_accounts(program_id, accounts, action)?;
     if !matches!(
         action,
-        StructuredClaimActionV1::WrapFull | StructuredClaimActionV1::UnwrapFull
+        StructuredClaimActionV1::WrapFull
+            | StructuredClaimActionV1::UnwrapFull
+            | StructuredClaimActionV1::RedeemTerminal
     ) {
         return Err(WrapperError::Instruction);
     }
@@ -502,7 +544,7 @@ fn full_vector(
             destination_before,
             destination_replay_before,
         ),
-        StructuredClaimActionV1::UnwrapFull => (
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => (
             destination_before,
             destination_replay_before,
             source_before,
@@ -550,6 +592,11 @@ fn full_vector(
     }
     let hoard_before = decode_hoard(accounts)?;
     let claim_ledger_before = decode_claim_ledger(accounts)?;
+    let resolution = if action == StructuredClaimActionV1::RedeemTerminal {
+        Some(decode_resolution(accounts, hoard_before, claim_ledger_before)?)
+    } else {
+        None
+    };
     let (expected_user, expected_vault, expected_hoard, expected_claim_ledger) =
         expected_full_vector_successors(
             action,
@@ -560,6 +607,7 @@ fn full_vector(
             complete_set_atoms,
             full,
             residual,
+            resolution,
         )?;
     let mint_before = decode_mint(accounts, &bound)?;
     let holder_before = decode_holder(accounts, &bound)?;
@@ -568,7 +616,7 @@ fn full_vector(
             .supply
             .checked_add(payload.quantity)
             .ok_or(WrapperError::Arithmetic)?,
-        StructuredClaimActionV1::UnwrapFull => mint_before
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => mint_before
             .supply
             .checked_sub(payload.quantity)
             .ok_or(WrapperError::Arithmetic)?,
@@ -579,7 +627,7 @@ fn full_vector(
             .amount
             .checked_add(payload.quantity)
             .ok_or(WrapperError::Arithmetic)?,
-        StructuredClaimActionV1::UnwrapFull => holder_before
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => holder_before
             .amount
             .checked_sub(payload.quantity)
             .ok_or(WrapperError::Arithmetic)?,
@@ -596,7 +644,7 @@ fn full_vector(
             holder_before: holder_before.amount,
             holder_after,
         },
-        StructuredClaimActionV1::UnwrapFull => Token2022CpiV1::BurnChecked {
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => Token2022CpiV1::BurnChecked {
             mint: accounts[C_MINT].key.to_bytes(),
             token: accounts[C_HOLDER].key.to_bytes(),
             authority: accounts[C_ACTOR].key.to_bytes(),
@@ -632,7 +680,7 @@ fn full_vector(
             let signer: [&[u8]; 3] = [MINT_AUTHORITY_SEED, &payload.wrapper_product_id, &bump];
             invoke_token_plan(&token_plan, accounts, &[&signer])?;
         }
-        StructuredClaimActionV1::UnwrapFull => {
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => {
             invoke_token_plan(&token_plan, accounts, &[])?;
             invoke_base_full_vector(accounts, action, payload)?;
             reconcile_full_vector_base(
@@ -673,6 +721,7 @@ fn expected_full_vector_successors(
     complete_set_atoms: u64,
     full: [u64; clutch_structured_claim::MAX_OUTCOMES],
     residual: [u64; clutch_structured_claim::MAX_OUTCOMES],
+    resolution: Option<ResolutionV5>,
 ) -> Result<(PositionAccountV3, PositionAccountV3, HoardV2, ClaimLedgerV3)> {
     let mut user_fields = user_before.fields();
     let mut vault_fields = vault_before.fields();
@@ -701,6 +750,14 @@ fn expected_full_vector_successors(
                 aggregate_internal_supply[index] = aggregate_internal_supply[index]
                     .checked_add(complete_set_atoms)
                     .ok_or(WrapperError::Arithmetic)?;
+            }
+            StructuredClaimActionV1::RedeemTerminal => {
+                vault_fields.native_eggs[index] = vault_fields.native_eggs[index]
+                    .checked_sub(residual[index])
+                    .ok_or(WrapperError::BaseCustody)?;
+                aggregate_internal_supply[index] = aggregate_internal_supply[index]
+                    .checked_sub(residual[index])
+                    .ok_or(WrapperError::BaseCustody)?;
             }
             _ => return Err(WrapperError::Instruction),
         }
@@ -739,6 +796,49 @@ fn expected_full_vector_successors(
                     .ok_or(WrapperError::Arithmetic)?,
             )
         }
+        StructuredClaimActionV1::RedeemTerminal => {
+            let resolution = resolution.ok_or(WrapperError::BaseCustody)?;
+            let mut numerator = 0_u128;
+            let mut outcome = 0usize;
+            while outcome < usize::from(resolution.facts.outcome_count) {
+                numerator = numerator
+                    .checked_add(
+                        u128::from(residual[outcome])
+                            .checked_mul(u128::from(resolution.facts.payout_weights[outcome]))
+                            .ok_or(WrapperError::Arithmetic)?,
+                    )
+                    .ok_or(WrapperError::Arithmetic)?;
+                outcome += 1;
+            }
+            let denominator = u128::from(resolution.facts.payout_denominator);
+            if numerator % denominator != 0 {
+                return Err(WrapperError::BaseCustody);
+            }
+            let residual_payout = u64::try_from(numerator / denominator)
+                .map_err(|_| WrapperError::Arithmetic)?;
+            vault_fields.cash_atoms = vault_fields
+                .cash_atoms
+                .checked_sub(complete_set_atoms)
+                .ok_or(WrapperError::BaseCustody)?;
+            user_fields.cash_atoms = user_fields
+                .cash_atoms
+                .checked_add(
+                    complete_set_atoms
+                        .checked_add(residual_payout)
+                        .ok_or(WrapperError::Arithmetic)?,
+                )
+                .ok_or(WrapperError::Arithmetic)?;
+            (
+                hoard_before
+                    .cash_liability_atoms
+                    .checked_add(residual_payout)
+                    .ok_or(WrapperError::Arithmetic)?,
+                hoard_before
+                    .locked_claim_principal_atoms
+                    .checked_sub(residual_payout)
+                    .ok_or(WrapperError::BaseCustody)?,
+            )
+        }
         _ => return Err(WrapperError::Instruction),
     };
     let user_after = PositionAccountV3::new(user_fields).map_err(|_| WrapperError::BaseCustody)?;
@@ -769,12 +869,12 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     let signer = [
         false, true, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     let mut writable = [
         false, true, false, false, false, false, false, false, false, false, true, true, true,
         true, false, false, false, false, false, false, false, false, false, false, true, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     writable[CREATE_SERIES_LINK] = structured_root_requires_product_write(
         accounts[CREATE_STRUCTURED_ROOT].owner,
@@ -783,7 +883,7 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
         false, true, false, true, false, true, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false, false, false, false, false,
     ];
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[CREATE_WRAPPER_PROGRAM].key != *program_id
@@ -813,20 +913,28 @@ fn validate_canonical_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]
     if accounts.len() != CANONICAL_ACCOUNT_COUNT {
         return Err(WrapperError::Accounts);
     }
-    let signer = [false, false, false, false, false, false, false, false, false, false, false,
-        true, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false];
-    let writable = [false, false, false, false, false, false, false, true, true, true, true,
-        false, false, false, false, false, false, false, false, false, false, false, false,
-        true, true, false];
-    let executable = [false, false, false, false, true, false, false, false, false, false, false,
-        false, false, true, false, true, false, true, false, false, false, false, false,
-        false, false, false];
+    let signer = [
+        false, false, false, false, false, false, false, false, false, false, false, true, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false,
+    ];
+    let writable = [
+        false, false, false, false, false, false, false, true, true, true, true, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false,
+        true, true, false,
+    ];
+    let executable = [
+        false, false, false, false, true, false, false, false, false, false, false, false, false,
+        true, false, true, false, true, false, false, false, false, false, false, false, false,
+        false, false, false,
+    ];
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[C_WRAPPER_PROGRAM].key != *program_id
-        || accounts[C_MINT].key == accounts[C_HOLDER].key
+        || accounts[CANONICAL_MINT].owner != accounts[C_TOKEN_PROGRAM].key
+        || accounts[CANONICAL_HOLDER].owner != accounts[C_TOKEN_PROGRAM].key
+        || accounts[CANONICAL_MINT].key == accounts[CANONICAL_HOLDER].key
         || accounts[VAULT_AUTHORITY].key == accounts[C_ACTOR].key
-        || accounts[C_MINT_AUTHORITY].key == accounts[VAULT_AUTHORITY].key
+        || accounts[CANONICAL_MINT_AUTHORITY].key == accounts[VAULT_AUTHORITY].key
     {
         return Err(WrapperError::Accounts);
     }
@@ -848,8 +956,14 @@ fn validate_canonical_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]
 fn validate_full_vector_accounts(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
+    action: StructuredClaimActionV1,
 ) -> Result<()> {
-    if accounts.len() != FULL_VECTOR_ACCOUNT_COUNT {
+    let expected_count = if action == StructuredClaimActionV1::RedeemTerminal {
+        TERMINAL_REDEMPTION_ACCOUNT_COUNT
+    } else {
+        FULL_VECTOR_ACCOUNT_COUNT
+    };
+    if accounts.len() != expected_count {
         return Err(WrapperError::Accounts);
     }
     let signer = [
@@ -867,7 +981,33 @@ fn validate_full_vector_accounts(
         true, false, true, false, true, false, false, false, false, false, false, false, false,
         false, false,
     ];
-    validate_privileges(accounts, &signer, &writable, &executable)?;
+    let mut privilege_index = 0usize;
+    while privilege_index < FULL_VECTOR_CORE_ACCOUNT_COUNT {
+        if accounts[privilege_index].is_signer != signer[privilege_index]
+            || accounts[privilege_index].is_writable != writable[privilege_index]
+            || accounts[privilege_index].executable != executable[privilege_index]
+        {
+            return Err(WrapperError::Accounts);
+        }
+        privilege_index += 1;
+    }
+    for release_index in [C_WRAPPER_RELEASE_V2, C_BASE_RELEASE_V2, C_TOKEN_RELEASE_V2] {
+        if accounts[release_index].is_signer
+            || accounts[release_index].is_writable
+            || accounts[release_index].executable
+            || accounts[release_index].owner != accounts[C_BASE_PROGRAM].key
+        {
+            return Err(WrapperError::Accounts);
+        }
+    }
+    if action == StructuredClaimActionV1::RedeemTerminal
+        && (accounts[C_RESOLUTION_V5].is_signer
+            || accounts[C_RESOLUTION_V5].is_writable
+            || accounts[C_RESOLUTION_V5].executable
+            || accounts[C_RESOLUTION_V5].owner != accounts[C_BASE_PROGRAM].key)
+    {
+        return Err(WrapperError::Accounts);
+    }
     if *accounts[C_WRAPPER_PROGRAM].key != *program_id
         || accounts[C_MINT].owner != accounts[C_TOKEN_PROGRAM].key
         || accounts[C_HOLDER].owner != accounts[C_TOKEN_PROGRAM].key
@@ -918,15 +1058,27 @@ fn validate_privileges<const N: usize>(
 fn create_deployments(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-) -> Result<RuntimeDeploymentsV1> {
-    let wrapper = authenticate_loader(
+) -> Result<AuthenticatedStructuredDeploymentsV2> {
+    let wrapper = authenticate_release_v2(
+        accounts[CREATE_BASE_PROGRAM].key,
         &accounts[CREATE_WRAPPER_PROGRAM],
         &accounts[CREATE_WRAPPER_DATA],
+        &accounts[CREATE_WRAPPER_RELEASE_V2],
+        ContentId::from_bytes(STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1),
     )?;
-    let base = authenticate_loader(&accounts[CREATE_BASE_PROGRAM], &accounts[CREATE_BASE_DATA])?;
-    let token = authenticate_loader(
+    let base = authenticate_release_v2(
+        accounts[CREATE_BASE_PROGRAM].key,
+        &accounts[CREATE_BASE_PROGRAM],
+        &accounts[CREATE_BASE_DATA],
+        &accounts[CREATE_REGISTRY_RELEASE_V2],
+        ContentId::from_bytes(STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    let token = authenticate_release_v2(
+        accounts[CREATE_BASE_PROGRAM].key,
         &accounts[CREATE_TOKEN_PROGRAM],
         &accounts[CREATE_TOKEN_DATA],
+        &accounts[CREATE_TOKEN_RELEASE_V2],
+        ContentId::from_bytes(STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1),
     )?;
     if *accounts[CREATE_WRAPPER_PROGRAM].key != *program_id {
         return Err(WrapperError::Deployment);
@@ -944,10 +1096,42 @@ fn create_deployments(
 fn canonical_deployments(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-) -> Result<RuntimeDeploymentsV1> {
-    let wrapper = authenticate_loader(&accounts[C_WRAPPER_PROGRAM], &accounts[C_WRAPPER_DATA])?;
-    let base = authenticate_loader(&accounts[C_BASE_PROGRAM], &accounts[C_BASE_DATA])?;
-    let token = authenticate_loader(&accounts[C_TOKEN_PROGRAM], &accounts[C_TOKEN_DATA])?;
+) -> Result<AuthenticatedStructuredDeploymentsV2> {
+    let releases = if accounts.len() == CANONICAL_ACCOUNT_COUNT {
+        [
+            CANONICAL_WRAPPER_RELEASE_V2,
+            CANONICAL_BASE_RELEASE_V2,
+            CANONICAL_TOKEN_RELEASE_V2,
+        ]
+    } else if matches!(
+        accounts.len(),
+        FULL_VECTOR_ACCOUNT_COUNT | TERMINAL_REDEMPTION_ACCOUNT_COUNT
+    ) {
+        [C_WRAPPER_RELEASE_V2, C_BASE_RELEASE_V2, C_TOKEN_RELEASE_V2]
+    } else {
+        return Err(WrapperError::Accounts);
+    };
+    let wrapper = authenticate_release_v2(
+        accounts[C_BASE_PROGRAM].key,
+        &accounts[C_WRAPPER_PROGRAM],
+        &accounts[C_WRAPPER_DATA],
+        &accounts[releases[0]],
+        ContentId::from_bytes(STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    let base = authenticate_release_v2(
+        accounts[C_BASE_PROGRAM].key,
+        &accounts[C_BASE_PROGRAM],
+        &accounts[C_BASE_DATA],
+        &accounts[releases[1]],
+        ContentId::from_bytes(STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    let token = authenticate_release_v2(
+        accounts[C_BASE_PROGRAM].key,
+        &accounts[C_TOKEN_PROGRAM],
+        &accounts[C_TOKEN_DATA],
+        &accounts[releases[2]],
+        ContentId::from_bytes(STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1),
+    )?;
     if *accounts[C_WRAPPER_PROGRAM].key != *program_id {
         return Err(WrapperError::Deployment);
     }
@@ -963,14 +1147,13 @@ fn canonical_deployments(
 
 fn runtime_deployments(
     wrapper_program: &Pubkey,
-    wrapper: crate::loader::DeploymentV1,
+    wrapper: AuthenticatedReleaseV2,
     base_program: &Pubkey,
-    base: crate::loader::DeploymentV1,
+    base: AuthenticatedReleaseV2,
     token_program: &Pubkey,
-    token: crate::loader::DeploymentV1,
-) -> Result<RuntimeDeploymentsV1> {
-    let value = RuntimeDeploymentsV1 {
-        binding: DeploymentBinding {
+    token: AuthenticatedReleaseV2,
+) -> Result<AuthenticatedStructuredDeploymentsV2> {
+    let binding = DeploymentBinding {
             wrapper_program: wrapper_program.to_bytes(),
             wrapper_program_data: wrapper.program_data,
             wrapper_deployment_slot: wrapper.slot,
@@ -980,7 +1163,9 @@ fn runtime_deployments(
             token_2022_program: token_program.to_bytes(),
             token_2022_program_data: token.program_data,
             token_2022_deployment_slot: token.slot,
-        },
+        };
+    let value = RuntimeDeploymentsV1 {
+        binding,
         upgradeable_loader: UPGRADEABLE_LOADER_ID,
         program_owners: [UPGRADEABLE_LOADER_ID; 3],
         program_data_owners: [UPGRADEABLE_LOADER_ID; 3],
@@ -988,7 +1173,34 @@ fn runtime_deployments(
         executable_mask: 0b111,
     };
     value.validate().map_err(|_| WrapperError::Deployment)?;
-    Ok(value)
+    let owner_release_id = structured_owner_release_id_v2(
+        binding,
+        wrapper.release_id,
+        base.release_id,
+        token.release_id,
+        &RuntimeSha,
+    )
+    .map_err(|_| WrapperError::Deployment)?;
+    Ok(AuthenticatedStructuredDeploymentsV2 {
+        runtime: value,
+        wrapper_release_id: wrapper.release_id,
+        base_release_id: base.release_id,
+        token_release_id: token.release_id,
+        owner_release_id,
+    })
+}
+
+fn wrapper_token_indices(accounts: &[AccountInfo<'_>]) -> Result<(usize, usize, usize)> {
+    if accounts.len() == CANONICAL_ACCOUNT_COUNT {
+        Ok((CANONICAL_MINT, CANONICAL_HOLDER, CANONICAL_MINT_AUTHORITY))
+    } else if matches!(
+        accounts.len(),
+        FULL_VECTOR_ACCOUNT_COUNT | TERMINAL_REDEMPTION_ACCOUNT_COUNT
+    ) {
+        Ok((C_MINT, C_HOLDER, C_MINT_AUTHORITY))
+    } else {
+        Err(WrapperError::Accounts)
+    }
 }
 
 fn load_bound_descriptor(
@@ -1040,7 +1252,7 @@ fn load_bound_descriptor(
     let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
         &descriptor,
         basis_projection,
-        deployments.binding,
+        deployments.runtime.binding,
     )
     .map_err(|_| WrapperError::Identity)?;
     let native_claim = canonical_native_claim_id_v1(&identity).map_err(|_| WrapperError::Identity)?;
@@ -1056,8 +1268,8 @@ fn load_bound_descriptor(
     }
     let addresses = derive_addresses(program_id, product);
     if addresses.descriptor.0 != *accounts[C_DESCRIPTOR].key
-        || addresses.mint.0 != *accounts[C_MINT].key
-        || addresses.mint_authority.0 != *accounts[C_MINT_AUTHORITY].key
+        || addresses.mint.0 != *accounts[wrapper_token_indices(accounts)?.0].key
+        || addresses.mint_authority.0 != *accounts[wrapper_token_indices(accounts)?.2].key
         || addresses.vault_owner.0 != *accounts[VAULT_AUTHORITY].key
     {
         return Err(WrapperError::Identity);
@@ -1065,7 +1277,7 @@ fn load_bound_descriptor(
     let bound = bind_descriptor_v1(
         descriptor,
         basis_projection,
-        deployments,
+        deployments.runtime,
         native_claim,
         product,
         StructuredClaimRuntimeAddressesV1 {
@@ -1210,6 +1422,39 @@ fn decode_claim_ledger(accounts: &[AccountInfo<'_>]) -> Result<ClaimLedgerV3> {
     ClaimLedgerV3::decode(&data).map_err(|_| WrapperError::BaseCustody)
 }
 
+fn decode_resolution(
+    accounts: &[AccountInfo<'_>],
+    hoard: HoardV2,
+    claim_ledger: ClaimLedgerV3,
+) -> Result<ResolutionV5> {
+    if accounts[C_RESOLUTION_V5].owner != accounts[C_BASE_PROGRAM].key {
+        return Err(WrapperError::BaseCustody);
+    }
+    let data = accounts[C_RESOLUTION_V5]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let resolution = ResolutionV5::decode(&data).map_err(|_| WrapperError::BaseCustody)?;
+    drop(data);
+    let expected = Pubkey::find_program_address(
+        &[b"dc:resolution:v5", &hoard.market_instance_id.bytes()],
+        accounts[C_BASE_PROGRAM].key,
+    );
+    if resolution.validate().is_err()
+        || resolution.state != ResolutionStateV5::Finalized
+        || hoard.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.resolution_account.bytes() != accounts[C_RESOLUTION_V5].key.to_bytes()
+        || *accounts[C_RESOLUTION_V5].key != expected.0
+        || resolution.stored_bump != expected.1
+        || resolution.facts.market_instance_id != hoard.market_instance_id
+        || resolution.facts.native_claim_basis_id != claim_ledger.native_claim_basis_id
+        || resolution.facts.outcome_count != hoard.outcome_count
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    Ok(resolution)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplaySnapshot {
     header: clutch_retirement::ReplayV3EnvelopeHeader,
@@ -1233,15 +1478,16 @@ fn decode_mint(
     accounts: &[AccountInfo<'_>],
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
 ) -> Result<clutch_structured_claim_adapter::runtime_contract::WrapperMintProjectionV1> {
-    if accounts[C_MINT].owner != accounts[C_TOKEN_PROGRAM].key {
+    let (mint_index, _, _) = wrapper_token_indices(accounts)?;
+    if accounts[mint_index].owner != accounts[C_TOKEN_PROGRAM].key {
         return Err(WrapperError::Token2022);
     }
-    let data = accounts[C_MINT]
+    let data = accounts[mint_index]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     decode_canonical_wrapper_mint_v1(
         accounts[C_TOKEN_PROGRAM].key.to_bytes(),
-        accounts[C_MINT].key.to_bytes(),
+        accounts[mint_index].key.to_bytes(),
         bound.addresses().mint_authority,
         &data,
     )
@@ -1252,16 +1498,17 @@ fn decode_holder(
     accounts: &[AccountInfo<'_>],
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
 ) -> Result<clutch_structured_claim_adapter::runtime_contract::WrapperTokenProjectionV1> {
-    if accounts[C_HOLDER].owner != accounts[C_TOKEN_PROGRAM].key {
+    let (_, holder_index, _) = wrapper_token_indices(accounts)?;
+    if accounts[holder_index].owner != accounts[C_TOKEN_PROGRAM].key {
         return Err(WrapperError::Token2022);
     }
-    let data = accounts[C_HOLDER]
+    let data = accounts[holder_index]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     decode_canonical_wrapper_token_v1(
         accounts[C_TOKEN_PROGRAM].key.to_bytes(),
         bound.addresses().mint,
-        accounts[C_HOLDER].key.to_bytes(),
+        accounts[holder_index].key.to_bytes(),
         accounts[C_ACTOR].key.to_bytes(),
         &data,
     )
@@ -1453,7 +1700,9 @@ fn reconcile_full_vector_base(
     let claim_ledger_after = decode_claim_ledger(accounts)?;
     let (expected_source, expected_destination) = match action {
         StructuredClaimActionV1::WrapFull => (expected_user, expected_vault),
-        StructuredClaimActionV1::UnwrapFull => (expected_vault, expected_user),
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => {
+            (expected_vault, expected_user)
+        }
         _ => return Err(WrapperError::Instruction),
     };
     if source_after != expected_source
@@ -1590,10 +1839,10 @@ fn invoke_base_transfer(
     if written != data.len() {
         return Err(WrapperError::Instruction);
     }
-    let mut metas = Vec::with_capacity(23);
-    let mut infos = Vec::with_capacity(24);
+    let mut metas = Vec::with_capacity(26);
+    let mut infos = Vec::with_capacity(27);
     let mut index = 0_usize;
-    while index < 23 {
+    while index < 26 {
         metas.push(AccountMeta {
             pubkey: *accounts[index].key,
             is_signer: index == VAULT_AUTHORITY || index == C_ACTOR,
@@ -1622,6 +1871,7 @@ fn invoke_base_full_vector(
     let base_action = match action {
         StructuredClaimActionV1::WrapFull => StructuredClaimAction::WrapFull,
         StructuredClaimActionV1::UnwrapFull => StructuredClaimAction::UnwrapFull,
+        StructuredClaimActionV1::RedeemTerminal => StructuredClaimAction::RedeemTerminal,
         _ => return Err(WrapperError::Instruction),
     };
     let request = ExtensionRequest {
@@ -1639,10 +1889,15 @@ fn invoke_base_full_vector(
     if written != data.len() {
         return Err(WrapperError::Instruction);
     }
-    let mut metas = Vec::with_capacity(FULL_VECTOR_ACCOUNT_COUNT);
-    let mut infos = Vec::with_capacity(FULL_VECTOR_ACCOUNT_COUNT + 1);
+    let account_count = if action == StructuredClaimActionV1::RedeemTerminal {
+        TERMINAL_REDEMPTION_ACCOUNT_COUNT
+    } else {
+        FULL_VECTOR_ACCOUNT_COUNT
+    };
+    let mut metas = Vec::with_capacity(account_count);
+    let mut infos = Vec::with_capacity(account_count + 1);
     let mut index = 0usize;
-    while index < FULL_VECTOR_ACCOUNT_COUNT {
+    while index < account_count {
         metas.push(AccountMeta {
             pubkey: *accounts[index].key,
             is_signer: index == VAULT_AUTHORITY || index == C_ACTOR,
@@ -1771,7 +2026,7 @@ fn reconcile_create(
     product: [u8; 32],
     market: MarketInstancePreimageV2,
     root_before: StructuredRootPrestateV1,
-    deployment: DeploymentBinding,
+    deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<()> {
     let descriptor_data = accounts[CREATE_DESCRIPTOR]
         .try_borrow_data()
@@ -1787,7 +2042,7 @@ fn reconcile_create(
         observed_descriptor,
         market,
         root_before,
-        deployment,
+        deployments,
     )?;
     let position = decode_position(&accounts[CREATE_POSITION])?;
     let replay = decode_replay(&accounts[CREATE_REPLAY])?;
@@ -1851,7 +2106,7 @@ fn reconcile_structured_root(
     descriptor: StructuredClaimDescriptorV2,
     market: MarketInstancePreimageV2,
     before: StructuredRootPrestateV1,
-    deployment: DeploymentBinding,
+    deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<()> {
     if accounts[CREATE_STRUCTURED_ROOT].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_STRUCTURED_ROOT].data_len() != STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
@@ -1878,7 +2133,8 @@ fn reconcile_structured_root(
         .to_bytes(),
     );
     let recipe_id = ContentId::from_bytes(descriptor.wrapper_recipe_id);
-    let (bundle, attachment) = decode_structured_product_artifacts(accounts)?;
+    let (bundle, attachment, registry, profile) =
+        decode_structured_product_artifacts(accounts, deployments)?;
     if *accounts[CREATE_STRUCTURED_ROOT].key != expected_pda.0
         || root.root_bump != expected_pda.1
         || root
@@ -1891,8 +2147,8 @@ fn reconcile_structured_root(
         || root.binding.market_instance_id.bytes() != descriptor.market
         || root.binding.rent_refund_owner.bytes() != accounts[PAYER].key.to_bytes()
         || root.binding.owner_release_id
-            != structured_owner_release_id_v1(deployment, &RuntimeSha)
-                .map_err(|_| WrapperError::Identity)?
+            != deployments.owner_release_id
+        || root.binding.registry_release_id != deployments.base_release_id
         || root.binding.compiler_output_id
             != bundle.id().map_err(|_| WrapperError::Identity)?
         || root.binding.attachment_plan_id
@@ -1900,6 +2156,14 @@ fn reconcile_structured_root(
         || root.binding.series_plan_id != bundle.series_plan_id
         || root.binding.attachment_plan_id != bundle.attachment_plan_id
         || root.binding.capability_profile_id != bundle.capability_profile_id.content_id()
+        || root.binding.registry_release_id != bundle.registry_release_id
+        || root.binding.registry_release_id != registry.registry_release_id
+        || root.binding.capability_profile_id != registry.capability_profile_id
+        || root.binding.capability_profile_id
+            != profile.id().map_err(|_| WrapperError::Identity)?.content_id()
+        || profile.registry_release_id().content_id() != root.binding.registry_release_id
+        || registry.compiler_bundle_id != bundle.id().map_err(|_| WrapperError::Identity)?
+        || registry.series_plan_id != bundle.series_plan_id
         || root.binding.compiler_release_id != bundle.product_compiler_release_id
         || root.binding.wrapper_recipe_set_id != attachment.wrapper_recipe_set_id
         || attachment.funding_quote_id != bundle.funding_quote_id
@@ -2080,12 +2344,18 @@ fn reconcile_product_series_link(
 
 fn decode_structured_product_artifacts(
     accounts: &[AccountInfo<'_>],
+    deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<(
-    Box<CompiledProductSeriesBundleV4>,
+    Box<CompiledProductSeriesBundleV5>,
     Box<SeriesAttachmentPlanV4>,
+    SeriesRegistryAccountV2,
+    Box<RegistryCapabilityProfileV4>,
 )> {
     if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_SERIES_REGISTRY_V2].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_CAPABILITY_PROFILE_V4].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_SERIES_REGISTRY_V2].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V2
     {
         return Err(WrapperError::Identity);
     }
@@ -2093,7 +2363,7 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let bundle = Box::new(
-        CompiledProductSeriesBundleV4::decode(&bundle_data)
+        CompiledProductSeriesBundleV5::decode(&bundle_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(bundle_data);
@@ -2105,6 +2375,20 @@ fn decode_structured_product_artifacts(
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(attachment_data);
+    let registry_data = accounts[CREATE_SERIES_REGISTRY_V2]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let registry = SeriesRegistryAccountV2::decode(&registry_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(registry_data);
+    let profile_data = accounts[CREATE_CAPABILITY_PROFILE_V4]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let profile = Box::new(
+        RegistryCapabilityProfileV4::decode(&profile_data)
+            .map_err(|_| WrapperError::Identity)?,
+    );
+    drop(profile_data);
     let bundle_id = bundle.id().map_err(|_| WrapperError::Identity)?.bytes();
     let attachment_id = attachment
         .id()
@@ -2113,7 +2397,7 @@ fn decode_structured_product_artifacts(
     if *accounts[CREATE_COMPILER_BUNDLE].key
         != product_artifact_pda(
             accounts[CREATE_BASE_PROGRAM].key,
-            ArtifactKind::CompiledProductSeriesBundleV4.byte(),
+            ArtifactKind::CompiledProductSeriesBundleV5.byte(),
             bundle_id,
         )
         || *accounts[CREATE_ATTACHMENT].key
@@ -2122,10 +2406,34 @@ fn decode_structured_product_artifacts(
                 ArtifactKind::SeriesAttachmentPlanV4.byte(),
                 attachment_id,
             )
+        || *accounts[CREATE_CAPABILITY_PROFILE_V4].key
+            != product_artifact_pda(
+                accounts[CREATE_BASE_PROGRAM].key,
+                ArtifactKind::RegistryCapabilityProfileV4.byte(),
+                profile
+                    .id()
+                    .map_err(|_| WrapperError::Identity)?
+                    .bytes(),
+            )
+        || {
+            let expected_registry = Pubkey::find_program_address(
+                &[b"dc:series-registry:v1", &registry.series_plan_id.bytes()],
+                accounts[CREATE_BASE_PROGRAM].key,
+            );
+            *accounts[CREATE_SERIES_REGISTRY_V2].key != expected_registry.0
+                || registry.stored_bump != expected_registry.1
+        }
+        || accounts[CREATE_SERIES_REGISTRY_V2].lamports() < registry.rent_principal_lamports
+        || registry.registry_release_id != deployments.base_release_id
+        || registry.capability_profile_id
+            != profile.id().map_err(|_| WrapperError::Identity)?.content_id()
+        || profile.registry_release_id().content_id() != deployments.base_release_id
+        || registry.compiler_bundle_id
+            != bundle.id().map_err(|_| WrapperError::Identity)?
     {
         return Err(WrapperError::Identity);
     }
-    Ok((bundle, attachment))
+    Ok((bundle, attachment, registry, profile))
 }
 
 fn product_artifact_pda(program_id: &Pubkey, kind: u8, id: [u8; 32]) -> Pubkey {
