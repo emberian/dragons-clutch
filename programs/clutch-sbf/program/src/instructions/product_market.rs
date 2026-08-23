@@ -1433,6 +1433,7 @@ pub(crate) fn authenticate_market_foundation_preallocation_v2(
             MarketFoundationSlotV2::FailureReplay
                 | MarketFoundationSlotV2::FailureIntervalWork
                 | MarketFoundationSlotV2::FailureIntervalHistory
+                | MarketFoundationSlotV2::ResolutionV5
                 | MarketFoundationSlotV2::FractionalPolicy
                 | MarketFoundationSlotV2::FractionalLedger
                 | MarketFoundationSlotV2::ProductReplayAnchor
