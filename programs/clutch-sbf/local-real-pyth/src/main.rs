@@ -1166,13 +1166,30 @@ fn receiver_post(
     )
 }
 
-fn assert_clock(rpc: &Rpc, publish_time: i64) -> Result<Clock> {
+fn read_clock(rpc: &Rpc) -> Result<Clock> {
     let view = account(rpc, "Clock sysvar", address(CLOCK_SYSVAR_ID))?;
+    require(
+        view.owner == address(clutch_sbf::instructions_sysvar::SYSVAR_OWNER_ID).to_string(),
+        "Clock account is not owned by the Sysvar program",
+    )?;
+    require(!view.executable, "Clock account is unexpectedly executable")?;
     let clock: Clock = bincode::deserialize(&view.data)?;
     require(
         clock.slot >= WARP_SLOT,
         format!("Clock slot {} is below {WARP_SLOT}", clock.slot),
     )?;
+    let rpc_slot = rpc.slot()?;
+    require(
+        clock.slot <= rpc_slot,
+        format!(
+            "Clock slot {} is ahead of current RPC slot {rpc_slot}",
+            clock.slot
+        ),
+    )?;
+    Ok(clock)
+}
+
+fn require_append_freshness(clock: &Clock, publish_time: i64) -> Result<i64> {
     require(
         clock.unix_timestamp >= publish_time + 60,
         format!(
@@ -1181,14 +1198,51 @@ fn assert_clock(rpc: &Rpc, publish_time: i64) -> Result<Clock> {
             publish_time + 60
         ),
     )?;
+    let age = clock
+        .unix_timestamp
+        .checked_sub(publish_time)
+        .ok_or("append Clock age underflow")?;
     require(
-        clock.unix_timestamp - publish_time <= 300,
+        age <= 300,
         format!(
             "laboratory observation is more than five minutes old: Clock {}, publish {publish_time}",
             clock.unix_timestamp
         ),
     )?;
+    Ok(age)
+}
+
+fn assert_clock(rpc: &Rpc, publish_time: i64) -> Result<Clock> {
+    let clock = read_clock(rpc)?;
+    require_append_freshness(&clock, publish_time)?;
     Ok(clock)
+}
+
+fn source_freshness_evidence(
+    append_clock: &Clock,
+    final_clock: &Clock,
+    publish_time: i64,
+) -> Result<Value> {
+    let append_age_seconds = require_append_freshness(append_clock, publish_time)?;
+    require(
+        final_clock.slot >= append_clock.slot,
+        "final Clock slot precedes append-time Clock",
+    )?;
+    require(
+        final_clock.unix_timestamp >= append_clock.unix_timestamp,
+        "final Clock timestamp precedes append-time Clock",
+    )?;
+    let final_age_seconds = final_clock
+        .unix_timestamp
+        .checked_sub(publish_time)
+        .ok_or("final Clock age underflow")?;
+    Ok(json!({
+        "scope": "freshness authenticated at adjacent PostUpdate plus AppendSourceArchiveV2; final lifecycle consumes the sealed archive",
+        "append_clock": append_clock,
+        "append_age_seconds": append_age_seconds,
+        "final_clock": final_clock,
+        "final_age_seconds": final_age_seconds,
+    }))
 }
 
 fn print_clock(url: &str) -> Result<()> {
@@ -2221,7 +2275,7 @@ fn run(
         "wrong feed changed registered archive or treasury",
     )?;
 
-    assert_clock(&rpc, publish_time)?;
+    let append_clock = assert_clock(&rpc, publish_time)?;
     let update = Keypair::new();
     let (joined_signature, status) = sign_submit(
         &rpc,
@@ -2583,13 +2637,16 @@ fn run(
             steps.len()
         ),
     )?;
+    let final_clock = read_clock(&rpc)?;
+    let source_freshness = source_freshness_evidence(&append_clock, &final_clock, publish_time)?;
     let result = json!({
         "claim": CLAIM,
         "transcript_schema": transcript_schema(campaign_mode),
         "campaign_mode": campaign_mode,
         "network": "loopback validator only",
         "genesis_hash": rpc.genesis_hash()?,
-        "clock": assert_clock(&rpc, publish_time)?,
+        "clock": final_clock,
+        "source_freshness": source_freshness,
         "publish_time": publish_time,
         "provider_feed_id": Hash32::from_bytes(provider::FEED_ID).bytes(),
         "price": provider::PRICE,
@@ -2738,5 +2795,31 @@ mod argument_tests {
         .err()
         .unwrap();
         assert!(error.contains("unknown campaign mode mocked-trade"));
+    }
+
+    #[test]
+    fn sealed_lifecycle_accepts_a_final_clock_beyond_live_update_freshness() {
+        let publish_time = 1_787_540_520;
+        let append_clock = Clock {
+            slot: WARP_SLOT + 42,
+            unix_timestamp: publish_time + 120,
+            ..Clock::default()
+        };
+        let final_clock = Clock {
+            slot: append_clock.slot + 1_000,
+            unix_timestamp: publish_time + 561,
+            ..Clock::default()
+        };
+
+        let evidence =
+            source_freshness_evidence(&append_clock, &final_clock, publish_time).unwrap();
+        assert_eq!(evidence["append_age_seconds"], 120);
+        assert_eq!(evidence["final_age_seconds"], 561);
+
+        let stale_append = Clock {
+            unix_timestamp: publish_time + 301,
+            ..append_clock
+        };
+        assert!(source_freshness_evidence(&stale_append, &final_clock, publish_time).is_err());
     }
 }

@@ -66,6 +66,14 @@ This 52-step producer contract is
 `dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4`; the historical
 joined v2/v3 transcripts retain their original meanings.
 
+Live-update maturity and freshness are checked immediately before both refused
+receiver-plus-append probes and the accepted receiver-plus-append transaction.
+The accepted append-time Clock and exact observation age are retained in the
+result. The final Clock may be later than that live-update window because the
+1,000-slot candidate window consumes already sealed source evidence; final
+transcript assembly requires the Clock to remain authentic and monotone, but
+does not pretend that the original update was posted again.
+
 The public-safe transcript from the first, pre-trading run of this mode is
 retained at
 `docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22`. It carries
