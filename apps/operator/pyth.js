@@ -7,7 +7,11 @@
 import { digest, el, fields, numeric, row } from "./dom.js";
 import { chip } from "./evidence.js";
 
-const SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const SOURCE_SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const JOINED_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const SOURCE_ONLY_MODE = "source-only-v1";
+const JOINED_LIFECYCLE_MODE = "joined-user-lifecycle-v1";
+const TRADE_BLOCKER = "missing-sealed-price-grid-and-epoch-plane";
 const CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 
 const boundary = () => {
@@ -46,7 +50,15 @@ const pending = () => {
 
 const valid = (campaign) => Boolean(
   campaign
-  && campaign.schema === SCHEMA
+  && (
+    (campaign.schema === SOURCE_SCHEMA && campaign.campaign_mode === SOURCE_ONLY_MODE)
+    || (
+      campaign.schema === JOINED_SCHEMA
+      && campaign.campaign_mode === JOINED_LIFECYCLE_MODE
+      && campaign.lifecycle
+      && typeof campaign.lifecycle === "object"
+    )
+  )
   && campaign.claim === CLAIM
   && campaign.retained_transcript === true
   && Array.isArray(campaign.provider)
@@ -194,6 +206,78 @@ const rollbackCard = (campaign) => {
   return card;
 };
 
+const lifecycleCard = (campaign) => {
+  const lifecycle = campaign.lifecycle;
+  if (!lifecycle) return null;
+  const terminal = lifecycle.terminal;
+  const trade = lifecycle.trade;
+  const card = el("section", "card");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Signed user lifecycle"), chip("SBF_EXECUTED"));
+  card.append(
+    heading,
+    row(
+      "callout callout-warn",
+      el("strong", null, "NON-PRODUCTION · LOCAL ONLY"),
+      el("span", null, "Ephemeral local signer and synthetic source; no wallet, browser transaction building, or value.")
+    ),
+    fields("", [
+      ["Campaign mode", campaign.campaign_mode],
+      ["Market genesis-assisted", lifecycle.market_genesis_assisted ? "yes" : "no — signed CreateMarket"],
+      ["Market", digest(lifecycle.market)],
+      ["Ephemeral user", digest(lifecycle.ephemeral_user)],
+      ["User collateral token", digest(lifecycle.user_collateral_token)],
+      ["Exact collateral atoms", numeric(lifecycle.collateral_atoms)],
+      ["CreateMarket signature", digest(lifecycle.create_market_signature)],
+      ["Endow signature", digest(lifecycle.endow_signature)],
+      ["Split signature", digest(lifecycle.split_signature)],
+      ["WithdrawCash signature", digest(lifecycle.withdraw_signature)]
+    ]),
+    el("h3", null, "RedeemInternal by outcome")
+  );
+  const redemptionTable = el("table", "provider-table");
+  const redemptionHead = el("thead");
+  const redemptionHeadRow = el("tr");
+  ["outcome", "quantity", "payout atoms", "signature"].forEach((label) => {
+    const cell = el("th", null, label);
+    cell.scope = "col";
+    redemptionHeadRow.append(cell);
+  });
+  redemptionHead.append(redemptionHeadRow);
+  const redemptionBody = el("tbody");
+  lifecycle.redeem_internal.forEach((redeem) => {
+    const line = el("tr");
+    const signature = el("td");
+    signature.append(digest(redeem.signature));
+    line.append(
+      el("td", null, numeric(redeem.outcome)),
+      el("td", null, numeric(redeem.quantity)),
+      el("td", null, numeric(redeem.payout_atoms)),
+      signature
+    );
+    redemptionBody.append(line);
+  });
+  redemptionTable.append(redemptionHead, redemptionBody);
+  card.append(
+    redemptionTable,
+    el("h3", null, "Terminal exact conservation"),
+    fields("", [
+      ["Position cash atoms", numeric(terminal.position_cash_atoms)],
+      ["Position internal outcomes", terminal.position_internal.map(numeric).join(" · ")],
+      ["Supply internal outcomes", terminal.supply_internal.map(numeric).join(" · ")],
+      ["Hoard collateral obligation atoms", numeric(terminal.hoard_collateral_atoms)],
+      ["Hoard token atoms", numeric(terminal.hoard_token_atoms)],
+      ["User token atoms returned", numeric(terminal.user_token_atoms)]
+    ]),
+    row(
+      "callout callout-warn",
+      el("strong", null, "TRADE BLOCKED / NOT SUBSTITUTED"),
+      el("span", null, `${TRADE_BLOCKER}: ${trade.detail}`)
+    )
+  );
+  return card;
+};
+
 const transactionCard = (campaign) => {
   const card = el("section", "card log");
   const heading = el("div", "card-heading");
@@ -251,12 +335,9 @@ export const renderPyth = (state) => {
     cards.push(unavailable(state.pyth));
     return cards;
   }
-  cards.push(
-    identityCard(state.pyth),
-    providerCard(state.pyth),
-    rollbackCard(state.pyth),
-    sourceCard(state.pyth),
-    transactionCard(state.pyth)
-  );
+  cards.push(identityCard(state.pyth), providerCard(state.pyth));
+  const lifecycle = lifecycleCard(state.pyth);
+  if (lifecycle) cards.push(lifecycle);
+  cards.push(rollbackCard(state.pyth), sourceCard(state.pyth), transactionCard(state.pyth));
   return cards;
 };

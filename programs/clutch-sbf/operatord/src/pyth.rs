@@ -18,7 +18,10 @@ use std::time::Duration;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
-const SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const SOURCE_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const JOINED_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const SOURCE_ONLY_MODE: &str = "source-only-v1";
+const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
 const PROVIDER_ROLES: [(&str, bool); 4] = [
     ("receiver-program", true),
@@ -26,7 +29,7 @@ const PROVIDER_ROLES: [(&str, bool); 4] = [
     ("router-program", true),
     ("router-programdata", false),
 ];
-const STEP_LABELS: [&str; 13] = [
+const SOURCE_STEP_LABELS: [&str; 13] = [
     "router-initialize",
     "router-init-and-write-encoded-vaa",
     "router-write-and-verify-encoded-vaa",
@@ -40,6 +43,29 @@ const STEP_LABELS: [&str; 13] = [
     "real-post-update-plus-clutch-append-atomic",
     "seal-source-archive-v2",
     "categorical-resolve-cell-1",
+];
+const JOINED_STEP_LABELS: [&str; 21] = [
+    "router-initialize",
+    "router-init-and-write-encoded-vaa",
+    "router-write-and-verify-encoded-vaa",
+    "receiver-initialize",
+    "correct-init-source-spec-v2",
+    "correct-init-source-archive-v2",
+    "wrong-feed-init-source-spec-v2",
+    "wrong-feed-init-source-archive-v2",
+    "joined-create-market",
+    "joined-endow-collateral",
+    "joined-split-complete-sets",
+    "wrong-config-post-update-plus-append-rollback",
+    "wrong-feed-post-update-plus-append-rollback",
+    "real-post-update-plus-clutch-append-atomic",
+    "seal-source-archive-v2",
+    "categorical-resolve-cell-1",
+    "joined-redeem-internal-outcome-0",
+    "joined-redeem-internal-outcome-1",
+    "joined-redeem-internal-outcome-2",
+    "joined-redeem-internal-outcome-3",
+    "joined-withdraw-redeemed-collateral",
 ];
 
 pub struct Options {
@@ -224,21 +250,35 @@ fn source_admission_refusal(error: &Value) -> bool {
         })
 }
 
-fn steps(result: &Value) -> Result<Vec<Value>> {
+fn campaign_mode(manifest: &Value, result: &Value) -> Result<&'static str> {
+    let manifest_mode = manifest.get("campaign_mode");
+    let result_mode = result.get("campaign_mode");
+    match (manifest_mode, result_mode) {
+        (None, None) => Ok(SOURCE_ONLY_MODE),
+        (Some(left), Some(right)) if left == right => match left.as_str() {
+            Some(SOURCE_ONLY_MODE) => Ok(SOURCE_ONLY_MODE),
+            Some(JOINED_LIFECYCLE_MODE) => Ok(JOINED_LIFECYCLE_MODE),
+            _ => Err("campaign_mode is not recognized".into()),
+        },
+        _ => Err("manifest/result campaign_mode differs or is absent on one side".into()),
+    }
+}
+
+fn steps(result: &Value, labels: &[&str]) -> Result<Vec<Value>> {
     let rows = array(result, "steps")?;
-    if rows.len() != STEP_LABELS.len() {
+    if rows.len() != labels.len() {
         return Err(format!(
             "expected {} campaign steps, saw {}",
-            STEP_LABELS.len(),
+            labels.len(),
             rows.len()
         )
         .into());
     }
     let mut signatures = BTreeSet::new();
     let mut out = Vec::new();
-    for (index, (row, expected_label)) in rows.iter().zip(STEP_LABELS).enumerate() {
+    for (index, (row, expected_label)) in rows.iter().zip(labels).enumerate() {
         let label = string(row, "label")?;
-        if label != expected_label {
+        if label != *expected_label {
             return Err(format!(
                 "campaign step {} is {label:?}, expected {expected_label:?}",
                 index + 1
@@ -247,7 +287,11 @@ fn steps(result: &Value) -> Result<Vec<Value>> {
         }
         let error = row.get("error").ok_or("campaign step has no error field")?;
         let refused = !error.is_null();
-        let expected_refusal = matches!(index, 8 | 9);
+        let expected_refusal = matches!(
+            label,
+            "wrong-config-post-update-plus-append-rollback"
+                | "wrong-feed-post-update-plus-append-rollback"
+        );
         if refused != expected_refusal {
             return Err(format!(
                 "campaign step {label} has an unexpected acceptance/refusal state"
@@ -295,6 +339,187 @@ fn signature_for<'a>(steps: &'a [Value], label: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("no signature retained for {label}").into())
 }
 
+fn all_exact_decimal(values: &[Value], expected: &str, role: &str) -> Result<Vec<Value>> {
+    if values.len() != 4 {
+        return Err(format!("{role} must contain exactly four outcomes").into());
+    }
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let text = value
+                .as_str()
+                .ok_or_else(|| format!("{role}[{index}] is not a decimal string"))?;
+            if text != expected {
+                return Err(format!("{role}[{index}] is {text}, expected {expected}").into());
+            }
+            Ok(json!(text))
+        })
+        .collect()
+}
+
+fn joined_lifecycle(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
+    let correct = object(manifest, "correct")?;
+    if correct
+        .get("market_genesis_assisted")
+        .and_then(Value::as_bool)
+        .ok_or("correct.market_genesis_assisted is absent or not boolean")?
+    {
+        return Err("joined market is marked genesis-assisted".into());
+    }
+    let lifecycle_value = result
+        .get("lifecycle")
+        .ok_or("result.lifecycle is absent")?;
+    let lifecycle = lifecycle_value
+        .as_object()
+        .ok_or("result.lifecycle is not an object")?;
+    if lifecycle
+        .get("market_genesis_assisted")
+        .and_then(Value::as_bool)
+        .ok_or("lifecycle.market_genesis_assisted is absent or not boolean")?
+    {
+        return Err("joined lifecycle is marked genesis-assisted".into());
+    }
+    let market = string(lifecycle_value, "market")?;
+    if correct.get("market").and_then(Value::as_str) != Some(market) {
+        return Err("joined lifecycle market differs from the prepared manifest".into());
+    }
+    let user_token = string(lifecycle_value, "user_collateral_token")?;
+    if correct.get("user_collateral_token").and_then(Value::as_str) != Some(user_token) {
+        return Err("joined lifecycle user token differs from the prepared manifest".into());
+    }
+    if canonical_unsigned_decimal(lifecycle, "collateral_atoms")? != "64" {
+        return Err("joined collateral quantity is not the exact 64 atoms".into());
+    }
+
+    for (field, label) in [
+        ("create_market_signature", "joined-create-market"),
+        ("endow_signature", "joined-endow-collateral"),
+        ("split_signature", "joined-split-complete-sets"),
+        ("withdraw_signature", "joined-withdraw-redeemed-collateral"),
+    ] {
+        if string(lifecycle_value, field)? != signature_for(steps, label)? {
+            return Err(format!("lifecycle {field} differs from the signed step").into());
+        }
+    }
+
+    let redeem = array(lifecycle_value, "redeem_internal")?;
+    if redeem.len() != 4 {
+        return Err("joined lifecycle must retain four RedeemInternal rows".into());
+    }
+    let mut projected_redeem = Vec::with_capacity(4);
+    for (outcome, row) in redeem.iter().enumerate() {
+        if unsigned(row, "outcome")? != u64::try_from(outcome)? {
+            return Err(format!("RedeemInternal row {outcome} has the wrong outcome").into());
+        }
+        let quantity = canonical_unsigned_decimal(
+            row.as_object()
+                .ok_or("RedeemInternal row is not an object")?,
+            "quantity",
+        )?;
+        let payout = canonical_unsigned_decimal(
+            row.as_object()
+                .ok_or("RedeemInternal row is not an object")?,
+            "payout_atoms",
+        )?;
+        let expected_payout = if outcome == 1 { "64" } else { "0" };
+        if quantity != "64" || payout != expected_payout {
+            return Err(format!(
+                "RedeemInternal row {outcome} has the wrong exact quantity/payout"
+            )
+            .into());
+        }
+        let label = format!("joined-redeem-internal-outcome-{outcome}");
+        let signature = string(row, "signature")?;
+        if signature != signature_for(steps, &label)? {
+            return Err(
+                format!("RedeemInternal row {outcome} differs from the signed step").into(),
+            );
+        }
+        projected_redeem.push(json!({
+            "outcome": decimal(u64::try_from(outcome)?),
+            "quantity": quantity,
+            "payout_atoms": payout,
+            "signature": signature,
+        }));
+    }
+
+    let terminal = lifecycle
+        .get("terminal")
+        .and_then(Value::as_object)
+        .ok_or("lifecycle.terminal is absent or is not an object")?;
+    for field in [
+        "position_cash_atoms",
+        "hoard_collateral_atoms",
+        "hoard_token_atoms",
+    ] {
+        if canonical_unsigned_decimal(terminal, field)? != "0" {
+            return Err(format!("terminal {field} is not zero").into());
+        }
+    }
+    if canonical_unsigned_decimal(terminal, "user_token_atoms")? != "64" {
+        return Err("terminal user token balance is not 64".into());
+    }
+    let position_internal = all_exact_decimal(
+        terminal
+            .get("position_internal")
+            .and_then(Value::as_array)
+            .ok_or("terminal.position_internal is absent or is not an array")?,
+        "0",
+        "terminal.position_internal",
+    )?;
+    let supply_internal = all_exact_decimal(
+        terminal
+            .get("supply_internal")
+            .and_then(Value::as_array)
+            .ok_or("terminal.supply_internal is absent or is not an array")?,
+        "0",
+        "terminal.supply_internal",
+    )?;
+
+    let trade = lifecycle
+        .get("trade")
+        .and_then(Value::as_object)
+        .ok_or("lifecycle.trade is absent or is not an object")?;
+    if trade.get("status").and_then(Value::as_str) != Some("blocked")
+        || trade.get("reason_code").and_then(Value::as_str)
+            != Some("missing-sealed-price-grid-and-epoch-plane")
+    {
+        return Err("joined trading blocker is absent or differs".into());
+    }
+    let trade_detail = trade
+        .get("detail")
+        .and_then(Value::as_str)
+        .filter(|detail| !detail.is_empty())
+        .ok_or("joined trading blocker detail is absent")?;
+
+    Ok(json!({
+        "market_genesis_assisted": false,
+        "market": market,
+        "ephemeral_user": string(lifecycle_value, "ephemeral_user")?,
+        "user_collateral_token": user_token,
+        "collateral_atoms": "64",
+        "create_market_signature": string(lifecycle_value, "create_market_signature")?,
+        "endow_signature": string(lifecycle_value, "endow_signature")?,
+        "split_signature": string(lifecycle_value, "split_signature")?,
+        "redeem_internal": projected_redeem,
+        "withdraw_signature": string(lifecycle_value, "withdraw_signature")?,
+        "terminal": {
+            "position_cash_atoms": "0",
+            "position_internal": position_internal,
+            "supply_internal": supply_internal,
+            "hoard_collateral_atoms": "0",
+            "hoard_token_atoms": "0",
+            "user_token_atoms": "64",
+        },
+        "trade": {
+            "status": "blocked",
+            "reason_code": "missing-sealed-price-grid-and-epoch-plane",
+            "detail": trade_detail,
+        },
+    }))
+}
+
 fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
     exact_claim(manifest, "campaign.json")?;
     exact_claim(result, "result.json")?;
@@ -319,7 +544,13 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
         return Err("listener probe and campaign validator identities differ".into());
     }
 
-    let steps = steps(result)?;
+    let campaign_mode = campaign_mode(manifest, result)?;
+    let (schema, expected_labels): (&str, &[&str]) = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        (JOINED_SCHEMA, &JOINED_STEP_LABELS)
+    } else {
+        (SOURCE_SCHEMA, &SOURCE_STEP_LABELS)
+    };
+    let steps = steps(result, expected_labels)?;
     for (field, label) in [
         (
             "joined_post_append_signature",
@@ -340,6 +571,20 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
         return Err("source interval lower exceeds upper".into());
     }
 
+    let lifecycle = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        joined_lifecycle(manifest, result, &steps)?
+    } else {
+        if result
+            .get("lifecycle")
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err(
+                "source-only transcript unexpectedly carries a lifecycle projection".into(),
+            );
+        }
+        Value::Null
+    };
+
     let source_profile = object(manifest, "source_profile_snapshot")?;
     let validator_provenance = object(manifest, "validator_build_provenance")?;
     let identity = json!({
@@ -357,11 +602,13 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
         "value": "no value",
         "observation": "SYNTHETIC OBSERVATION",
         "retained_transcript": true,
+        "campaign_mode": campaign_mode,
     });
     let campaign = json!({
         "type": "pyth-campaign",
-        "schema": SCHEMA,
+        "schema": schema,
         "claim": CLAIM,
+        "campaign_mode": campaign_mode,
         "retained_transcript": true,
         "identity": {
             "upstream_pyth_crosschain_commit": lowercase_hex(
@@ -434,6 +681,7 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
             "seal_signature": string(result, "seal_signature")?,
             "resolve_signature": string(result, "resolve_signature")?,
         },
+        "lifecycle": lifecycle,
         "steps": steps,
     });
     Ok(View { identity, campaign })
@@ -482,7 +730,10 @@ pub fn serve(options: Options) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_view, CLAIM, STEP_LABELS};
+    use super::{
+        build_view, CLAIM, JOINED_LIFECYCLE_MODE, JOINED_SCHEMA, JOINED_STEP_LABELS, SOURCE_SCHEMA,
+        SOURCE_STEP_LABELS,
+    };
     use serde_json::{json, Value};
 
     fn hash(byte: char) -> String {
@@ -504,7 +755,7 @@ mod tests {
             })
         })
         .collect::<Vec<_>>();
-        let steps = STEP_LABELS
+        let steps = SOURCE_STEP_LABELS
             .iter()
             .enumerate()
             .map(|(index, label)| {
@@ -574,15 +825,110 @@ mod tests {
         (manifest, result, probe)
     }
 
+    fn joined_fixtures() -> (Value, Value, Value) {
+        let (mut manifest, mut result, probe) = fixtures();
+        let steps = JOINED_STEP_LABELS
+            .iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let refused = label.contains("-rollback");
+                json!({
+                    "label": label,
+                    "signature": format!("joined-signature-{index}"),
+                    "slot": 460_336_312_u64 + u64::try_from(index).unwrap(),
+                    "compute_units_consumed": 200_u64 + u64::try_from(index).unwrap(),
+                    "fee_lamports": 5000,
+                    "signed_wire_sha256": hash('b'),
+                    "program_order": ["ComputeBudget111", "Program111"],
+                    "error": if refused {
+                        json!({"InstructionError": [2, {"Custom": 122}]})
+                    } else {
+                        Value::Null
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        manifest["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
+        manifest["correct"] = json!({
+            "market": "market111",
+            "market_genesis_assisted": false,
+            "user_collateral_token": "user-token111",
+        });
+        result["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
+        result["joined_post_append_signature"] = json!("joined-signature-13");
+        result["seal_signature"] = json!("joined-signature-14");
+        result["resolve_signature"] = json!("joined-signature-15");
+        result["lifecycle"] = json!({
+            "market_genesis_assisted": false,
+            "market": "market111",
+            "ephemeral_user": "ephemeral-user111",
+            "user_collateral_token": "user-token111",
+            "collateral_atoms": "64",
+            "create_market_signature": "joined-signature-8",
+            "endow_signature": "joined-signature-9",
+            "split_signature": "joined-signature-10",
+            "redeem_internal": [
+                {"outcome": 0, "quantity": "64", "payout_atoms": "0", "signature": "joined-signature-16"},
+                {"outcome": 1, "quantity": "64", "payout_atoms": "64", "signature": "joined-signature-17"},
+                {"outcome": 2, "quantity": "64", "payout_atoms": "0", "signature": "joined-signature-18"},
+                {"outcome": 3, "quantity": "64", "payout_atoms": "0", "signature": "joined-signature-19"},
+            ],
+            "withdraw_signature": "joined-signature-20",
+            "terminal": {
+                "position_cash_atoms": "0",
+                "position_internal": ["0", "0", "0", "0"],
+                "supply_internal": ["0", "0", "0", "0"],
+                "hoard_collateral_atoms": "0",
+                "hoard_token_atoms": "0",
+                "user_token_atoms": "64",
+            },
+            "trade": {
+                "status": "blocked",
+                "reason_code": "missing-sealed-price-grid-and-epoch-plane",
+                "detail": "InitEpoch requires the immutable Terms' exact sealed PriceGrid; no mock is substituted.",
+            },
+        });
+        result["steps"] = json!(steps);
+        (manifest, result, probe)
+    }
+
     #[test]
     fn public_transcripts_become_exact_decimal_display_events() {
         let (manifest, result, probe) = fixtures();
         let view = build_view(&manifest, &result, &probe).unwrap();
         assert_eq!(view.identity["mode"], "pyth-local");
-        assert_eq!(view.campaign["schema"], super::SCHEMA);
+        assert_eq!(view.campaign["schema"], SOURCE_SCHEMA);
         assert_eq!(view.campaign["source"]["interval_lower"], "99980929");
         assert_eq!(view.campaign["steps"][0]["slot"], "460336312");
         assert_eq!(view.campaign["steps"][8]["state"], "refused-as-expected");
+    }
+
+    #[test]
+    fn joined_transcript_projects_signed_lifecycle_and_blocker() {
+        let (manifest, result, probe) = joined_fixtures();
+        let view = build_view(&manifest, &result, &probe).unwrap();
+        assert_eq!(view.campaign["schema"], JOINED_SCHEMA);
+        assert_eq!(view.campaign["campaign_mode"], JOINED_LIFECYCLE_MODE);
+        assert_eq!(view.campaign["steps"].as_array().unwrap().len(), 21);
+        assert_eq!(view.campaign["lifecycle"]["collateral_atoms"], "64");
+        assert_eq!(
+            view.campaign["lifecycle"]["trade"]["reason_code"],
+            "missing-sealed-price-grid-and-epoch-plane"
+        );
+    }
+
+    #[test]
+    fn joined_transcript_refuses_false_terminal_conservation() {
+        let (manifest, mut result, probe) = joined_fixtures();
+        result["lifecycle"]["terminal"]["user_token_atoms"] = json!("63");
+        assert!(build_view(&manifest, &result, &probe).is_err());
+    }
+
+    #[test]
+    fn joined_transcript_refuses_substituted_trade_status() {
+        let (manifest, mut result, probe) = joined_fixtures();
+        result["lifecycle"]["trade"]["status"] = json!("mocked");
+        assert!(build_view(&manifest, &result, &probe).is_err());
     }
 
     #[test]

@@ -33,6 +33,7 @@ done
 
 source_paths=(
   programs/clutch-sbf/local-real-pyth
+  programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
   programs/clutch-sbf/scripts/run_local_real_pyth.sh
   programs/clutch-sbf/program
   programs/clutch-sbf/svm-tests
@@ -113,6 +114,11 @@ rpc_port="${CLUTCH_LOCAL_REAL_PYTH_RPC_PORT:-18537}"
 faucet_port="${CLUTCH_LOCAL_REAL_PYTH_FAUCET_PORT:-18539}"
 gossip_port="${CLUTCH_LOCAL_REAL_PYTH_GOSSIP_PORT:-18540}"
 dynamic_port_range="${CLUTCH_LOCAL_REAL_PYTH_DYNAMIC_PORT_RANGE:-18541-18640}"
+campaign_mode="${CLUTCH_LOCAL_REAL_PYTH_CAMPAIGN_MODE:-source-only-v1}"
+case "$campaign_mode" in
+  source-only-v1|joined-user-lifecycle-v1) ;;
+  *) echo "FAIL: unknown CLUTCH_LOCAL_REAL_PYTH_CAMPAIGN_MODE=$campaign_mode" >&2; exit 1 ;;
+esac
 for named in "$rpc_port" "$faucet_port" "$gossip_port"; do
   case "$named" in
     ''|*[!0-9]*) echo "FAIL: every configured port must be decimal" >&2; exit 1 ;;
@@ -227,6 +233,7 @@ for port in "$rpc_port" "$ws_port" "$faucet_port" "$gossip_port"; do
 done
 
 echo "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE"
+echo "campaign_mode=$campaign_mode"
 vendor="$repo/.cache/clutch-local-real-pyth/vendor"
 if [ ! -d "$vendor" ]; then
   echo "== seed exact locked dependency source offline =="
@@ -291,7 +298,8 @@ stop_validator
 
 "$driver" prepare --work "$work" --repository-head "$repository_head" \
   --clock-probe-time "$clock_probe_time" \
-  --publish-time "$publish_time" --clutch-elf "$elf" --validator "$validator"
+  --publish-time "$publish_time" --clutch-elf "$elf" --validator "$validator" \
+  --campaign-mode "$campaign_mode"
 payer="$(tr -d '\n' < "$work/payer.pubkey")"
 
 validator_args=(
@@ -324,7 +332,7 @@ wait_ready "$work/validator.log"
 
 echo "== real provider / joined Clutch campaign =="
 "$driver" run --work "$work" --repository-head "$repository_head" \
-  --url "$url" --validator "$validator"
+  --url "$url" --validator "$validator" --campaign-mode "$campaign_mode"
 # Some validator client pools create UDP/QUIC sockets lazily only after the
 # bank processes traffic. Re-run the exact strong isolation proof before a
 # successful transcript can leave the temporary directory.

@@ -27,6 +27,34 @@ CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
   programs/clutch-sbf/scripts/run_local_real_pyth.sh
 ```
 
+The default `source-only-v1` mode preserves the original thirteen-transaction
+source campaign. The explicit joined lifecycle is:
+
+```sh
+CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
+  CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/new/empty/retained-directory \
+  programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
+```
+
+`joined-user-lifecycle-v1` keeps Realm, Profile, policy, immutable Terms, one
+collateral mint, and one ephemeral user's ordinary collateral token account as
+disclosed genesis prerequisites. The market state PDAs, Hoard token account,
+and four outcome mints must be absent before submission. The campaign then
+retains twenty-one signed transactions in exact order: provider/router setup;
+source-spec and archive admission; `CreateMarket`, `Endow`, and `Split`; the two
+atomic rollback negatives; real receiver `PostUpdate` joined to Clutch append;
+seal and categorical resolve; four `RedeemInternal` calls; and `WithdrawCash`.
+It checks that 64 collateral atoms return to the ephemeral local user while
+position cash, all internal positions and supply, the Hoard obligation, and
+Hoard token balance end at exact zero.
+
+Trading is deliberately reported as **BLOCKED / NOT SUBSTITUTED** with reason
+`missing-sealed-price-grid-and-epoch-plane`. The immutable real-Pyth-bound Terms
+name a PriceGrid digest, while this campaign currently constructs no matching
+sealed PriceGrid artifact, Epoch, order page, or candidate plane. `InitEpoch`
+authenticates the exact grid, so the runner does not replace those missing
+signed lifecycle steps with mocked or genesis-injected trading state.
+
 The selected validator must bind RPC, WebSocket (`RPC+1`), and faucet
 listeners exclusively to `127.0.0.1`. The runner inspects the child process's
 live listeners and aborts before signing if any is wildcard/non-loopback.

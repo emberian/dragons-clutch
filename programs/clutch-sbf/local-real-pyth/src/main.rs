@@ -13,8 +13,8 @@ use clutch_sbf::{
 };
 use clutch_solana_layout::Hash32;
 use clutch_svm_fixture::{
-    compute_unit_limit_data, outcome_mint_bytes, COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR,
-    SYSTEM_PROGRAM,
+    compute_unit_limit_data, outcome_mint_bytes, token_account_bytes, COMPUTE_BUDGET, PROGRAM_ID,
+    RENT_SYSVAR, SYSTEM_PROGRAM,
 };
 use rpc::{AccountView, Rpc};
 use serde_json::{json, Value};
@@ -40,6 +40,8 @@ use std::{
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
+const SOURCE_ONLY_MODE: &str = "source-only-v1";
+const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
 const UPSTREAM_COMMIT: &str = "f50a3faf9fc5a223a22889799b2f778900f186b3";
 const WARP_SLOT: u64 = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT + 1;
 const CLOCK_SETTLED_SLOT: u64 = WARP_SLOT + 16;
@@ -65,6 +67,7 @@ struct Args {
     publish_time: Option<i64>,
     clock_probe_time: Option<i64>,
     repository_head: Option<String>,
+    campaign_mode: String,
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Args, String> {
@@ -76,6 +79,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Arg
     let mut publish_time = None;
     let mut clock_probe_time = None;
     let mut repository_head = None;
+    let mut campaign_mode = SOURCE_ONLY_MODE.to_string();
     while let Some(flag) = args.next() {
         let value = args
             .next()
@@ -100,11 +104,15 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Arg
                 )
             }
             "--repository-head" => repository_head = Some(value),
+            "--campaign-mode" => campaign_mode = value,
             other => return Err(format!("unknown flag {other}")),
         }
     }
     if command != "prepare" && command != "run" && command != "clock" {
         return Err(format!("unknown command {command}"));
+    }
+    if campaign_mode != SOURCE_ONLY_MODE && campaign_mode != JOINED_LIFECYCLE_MODE {
+        return Err(format!("unknown campaign mode {campaign_mode}"));
     }
     Ok(Args {
         command,
@@ -115,14 +123,15 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> std::result::Result<Arg
         publish_time,
         clock_probe_time,
         repository_head,
+        campaign_mode,
     })
 }
 
 fn usage() -> ! {
     eprintln!(
         "usage:\n  clutch-local-real-pyth clock --work DIR --url http://127.0.0.1:PORT\n  \
-         clutch-local-real-pyth prepare --work DIR --repository-head COMMIT --clock-probe-time UNIX --publish-time UNIX --clutch-elf FILE --validator FILE\n  \
-         clutch-local-real-pyth run --work DIR --repository-head COMMIT --url http://127.0.0.1:PORT --validator FILE"
+         clutch-local-real-pyth prepare --work DIR --repository-head COMMIT --clock-probe-time UNIX --publish-time UNIX --clutch-elf FILE --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1]\n  \
+         clutch-local-real-pyth run --work DIR --repository-head COMMIT --url http://127.0.0.1:PORT --validator FILE [--campaign-mode source-only-v1|joined-user-lifecycle-v1]"
     );
     process::exit(2)
 }
@@ -152,6 +161,32 @@ fn address(bytes: [u8; 32]) -> Address {
 fn account(rpc: &Rpc, role: &str, key: Address) -> Result<AccountView> {
     rpc.account(&key.to_string())?
         .ok_or_else(|| format!("{role} {key} is absent").into())
+}
+
+fn token_amount(rpc: &Rpc, role: &str, key: Address) -> Result<u64> {
+    let view = account(rpc, role, key)?;
+    require(
+        view.owner == plane::token_program().to_string(),
+        format!("{role} is not Token-2022-owned"),
+    )?;
+    let bytes = view
+        .data
+        .get(64..72)
+        .ok_or_else(|| format!("{role} is too short for a token amount"))?;
+    Ok(u64::from_le_bytes(bytes.try_into()?))
+}
+
+fn mint_supply(rpc: &Rpc, role: &str, key: Address) -> Result<u64> {
+    let view = account(rpc, role, key)?;
+    require(
+        view.owner == plane::token_program().to_string(),
+        format!("{role} is not Token-2022-owned"),
+    )?;
+    let bytes = view
+        .data
+        .get(36..44)
+        .ok_or_else(|| format!("{role} is too short for a mint supply"))?;
+    Ok(u64::from_le_bytes(bytes.try_into()?))
 }
 
 fn compute_budget() -> Instruction {
@@ -350,19 +385,29 @@ fn add_plane_rows(
             },
         )?;
     }
-    for (index, mint) in lab.plane.outcome_mints.iter().enumerate() {
-        insert_row(
-            rows,
-            GenesisRow {
-                role: format!("{prefix}-outcome-mint-{index}"),
-                address: mint.address,
-                owner: plane::token_program(),
-                data: outcome_mint_bytes(lab.plane.market.address, 0),
-                executable: false,
-            },
-        )?;
+    if lab.market_prestate == plane::MarketPrestate::GenesisFunded {
+        for (index, mint) in lab.plane.outcome_mints.iter().enumerate() {
+            insert_row(
+                rows,
+                GenesisRow {
+                    role: format!("{prefix}-outcome-mint-{index}"),
+                    address: mint.address,
+                    owner: plane::token_program(),
+                    data: outcome_mint_bytes(lab.plane.market.address, 0),
+                    executable: false,
+                },
+            )?;
+        }
     }
     Ok(())
+}
+
+fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
+    let mut out = vec![0_u8; 82];
+    out[36..44].copy_from_slice(&supply.to_le_bytes());
+    out[44] = 6;
+    out[45] = 1;
+    out
 }
 
 fn expected_genesis_rows(
@@ -407,6 +452,32 @@ fn expected_genesis_rows(
     )?;
     add_plane_rows(&mut rows, "correct", correct)?;
     add_plane_rows(&mut rows, "wrong-feed", wrong_feed)?;
+    if correct.market_prestate == plane::MarketPrestate::SignedCreate {
+        insert_row(
+            &mut rows,
+            GenesisRow {
+                role: "joined-collateral-mint".to_string(),
+                address: plane::COLLATERAL_MINT,
+                owner: plane::token_program(),
+                data: collateral_mint_bytes(plane::USER_COLLATERAL_ATOMS),
+                executable: false,
+            },
+        )?;
+        insert_row(
+            &mut rows,
+            GenesisRow {
+                role: "joined-user-collateral-token".to_string(),
+                address: plane::actor_collateral(correct.plane.actor),
+                owner: plane::token_program(),
+                data: token_account_bytes(
+                    plane::COLLATERAL_MINT,
+                    correct.plane.actor,
+                    plane::USER_COLLATERAL_ATOMS,
+                ),
+                executable: false,
+            },
+        )?;
+    }
     Ok(rows)
 }
 
@@ -491,6 +562,7 @@ fn prepare(
     repository_head: &str,
     clock_probe_time: i64,
     publish_time: i64,
+    campaign_mode: &str,
 ) -> Result<()> {
     require_repository_head(repository_head)?;
     require(
@@ -542,12 +614,18 @@ fn prepare(
     )?;
     let end_bucket = u64::try_from(publish_time)?.div_euclid(60);
     let start_bucket = end_bucket.checked_sub(1).ok_or("bucket underflow")?;
+    let market_prestate = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        plane::MarketPrestate::SignedCreate
+    } else {
+        plane::MarketPrestate::GenesisFunded
+    };
     let correct = plane::build(
         payer.pubkey(),
         plane::real_spec(provider::FEED_ID)?,
         start_bucket,
         end_bucket,
         clutch_svm_fixture::MARKET_NONCE,
+        market_prestate,
     );
     let wrong_feed = plane::build(
         payer.pubkey(),
@@ -555,6 +633,7 @@ fn prepare(
         start_bucket,
         end_bucket,
         plane::WRONG_MARKET_NONCE,
+        market_prestate,
     );
     require(
         correct.start_bucket == start_bucket
@@ -578,6 +657,7 @@ fn prepare(
 
     let manifest = json!({
         "claim": CLAIM,
+        "campaign_mode": campaign_mode,
         "network": "127.0.0.1 loopback only",
         "observation": "synthetic deterministic local guardian quorum; not devnet price evidence",
         "value": "none",
@@ -656,6 +736,12 @@ fn prepare(
             "source_spec": correct.plane.source_spec.address.to_string(),
             "archive": correct.plane.source_archive.address.to_string(),
             "market": correct.plane.market.address.to_string(),
+            "market_genesis_assisted": market_prestate == plane::MarketPrestate::GenesisFunded,
+            "user_collateral_token": if market_prestate == plane::MarketPrestate::SignedCreate {
+                Some(plane::actor_collateral(payer.pubkey()).to_string())
+            } else {
+                None
+            },
         },
         "wrong_feed": {
             "feed_id_hex": WRONG_FEED_ID.iter().map(|b| format!("{b:02x}")).collect::<String>(),
@@ -976,13 +1062,23 @@ fn snapshot(rpc: &Rpc, keys: &[Address]) -> Result<Vec<Option<AccountView>>> {
         .collect()
 }
 
-fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Result<()> {
+fn run(
+    work: &Path,
+    url: &str,
+    validator: &Path,
+    repository_head: &str,
+    campaign_mode: &str,
+) -> Result<()> {
     require_repository_head(repository_head)?;
     let rpc = Rpc::new(url)?;
     let public = manifest(work)?;
     require(
         public.get("claim").and_then(Value::as_str) == Some(CLAIM),
         "campaign truth label differs",
+    )?;
+    require(
+        public.get("campaign_mode").and_then(Value::as_str) == Some(campaign_mode),
+        "prepared and requested campaign modes differ",
     )?;
     require(
         public
@@ -1040,12 +1136,18 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
     )?;
     let payer = read_keypair_file(work.join("lab-secrets/payer.json"))
         .map_err(|error| format!("explicit ephemeral payer: {error}"))?;
+    let market_prestate = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        plane::MarketPrestate::SignedCreate
+    } else {
+        plane::MarketPrestate::GenesisFunded
+    };
     let correct = plane::build(
         payer.pubkey(),
         plane::real_spec(provider::FEED_ID)?,
         start_bucket,
         end_bucket,
         clutch_svm_fixture::MARKET_NONCE,
+        market_prestate,
     );
     let wrong_feed = plane::build(
         payer.pubkey(),
@@ -1053,6 +1155,7 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
         start_bucket,
         end_bucket,
         plane::WRONG_MARKET_NONCE,
+        market_prestate,
     );
     let observation = provider::observation(publish_time)?;
     require(
@@ -1085,6 +1188,7 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
     verify_genesis_manifest(&rpc, &public, &correct, &wrong_feed, &clutch_elf)?;
     assert_clock(&rpc, publish_time)?;
     let mut steps = Vec::new();
+    let mut lifecycle_signatures = BTreeMap::new();
 
     let (signature, status) = sign_submit(
         &rpc,
@@ -1233,6 +1337,138 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
             &format!("{label}-init-source-archive-v2"),
             signature,
             &status,
+        )?;
+    }
+
+    if campaign_mode == JOINED_LIFECYCLE_MODE {
+        let mut absent = correct.plane.market_state_addresses().to_vec();
+        absent.push(correct.plane.hoard_token.address);
+        absent.extend(correct.plane.outcome_mints.iter().map(|mint| mint.address));
+        for key in &absent {
+            require(
+                rpc.account(&key.to_string())?.is_none(),
+                format!("joined market target {key} was genesis-assisted"),
+            )?;
+        }
+
+        let (signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[],
+            &[
+                compute_budget(),
+                plane::create_market(payer.pubkey(), &correct),
+            ],
+        )?;
+        require_accepted("signed CreateMarket", &status)?;
+        record_step(
+            &rpc,
+            &mut steps,
+            "joined-create-market",
+            signature.clone(),
+            &status,
+        )?;
+        lifecycle_signatures.insert("create_market", signature);
+        let market = plane::decode_market(
+            &account(&rpc, "created market", correct.plane.market.address)?.data,
+        )?;
+        require(
+            market.lifecycle == 0
+                && market.terms == correct.plane.terms_id
+                && market.feed == correct.plane.feed_id
+                && market.outcome_count == 4,
+            "created market identity differs from the real-Pyth-bound Terms",
+        )?;
+        require(
+            token_amount(
+                &rpc,
+                "created Hoard token account",
+                correct.plane.hoard_token.address,
+            )? == 0,
+            "created Hoard token account is not empty",
+        )?;
+        for (index, mint) in correct.plane.outcome_mints.iter().enumerate() {
+            require(
+                mint_supply(&rpc, &format!("created outcome mint {index}"), mint.address)? == 0,
+                format!("created outcome mint {index} has nonzero supply"),
+            )?;
+        }
+
+        let (signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[],
+            &[
+                compute_budget(),
+                plane::endow(payer.pubkey(), &correct, 0, plane::USER_COLLATERAL_ATOMS),
+            ],
+        )?;
+        require_accepted("signed Endow", &status)?;
+        record_step(
+            &rpc,
+            &mut steps,
+            "joined-endow-collateral",
+            signature.clone(),
+            &status,
+        )?;
+        lifecycle_signatures.insert("endow", signature);
+        require(
+            token_amount(
+                &rpc,
+                "user collateral token",
+                plane::actor_collateral(payer.pubkey()),
+            )? == 0
+                && token_amount(
+                    &rpc,
+                    "Hoard token account",
+                    correct.plane.hoard_token.address,
+                )? == plane::USER_COLLATERAL_ATOMS,
+            "Endow did not move the exact collateral into pooled custody",
+        )?;
+        let position = plane::decode_position(
+            &account(&rpc, "endowed position", correct.plane.position.address)?.data,
+        )?;
+        require(
+            position.cash_atoms == plane::USER_COLLATERAL_ATOMS,
+            "Endow did not credit exact internal cash",
+        )?;
+
+        let (signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[],
+            &[
+                compute_budget(),
+                plane::split(payer.pubkey(), &correct, 1, plane::USER_COLLATERAL_ATOMS),
+            ],
+        )?;
+        require_accepted("signed Split", &status)?;
+        record_step(
+            &rpc,
+            &mut steps,
+            "joined-split-complete-sets",
+            signature.clone(),
+            &status,
+        )?;
+        lifecycle_signatures.insert("split", signature);
+        let position = plane::decode_position(
+            &account(&rpc, "split position", correct.plane.position.address)?.data,
+        )?;
+        let supply = plane::decode_supply(
+            &account(&rpc, "split supply", correct.plane.supply.address)?.data,
+        )?;
+        let hoard =
+            plane::decode_hoard(&account(&rpc, "split Hoard", correct.plane.hoard.address)?.data)?;
+        require(
+            position.cash_atoms == 0
+                && position.internal[..4]
+                    .iter()
+                    .all(|quantity| *quantity == plane::USER_COLLATERAL_ATOMS)
+                && supply.internal_supply[..4]
+                    .iter()
+                    .all(|quantity| *quantity == plane::USER_COLLATERAL_ATOMS)
+                && hoard.collateral_atoms == plane::USER_COLLATERAL_ATOMS,
+            "Split did not create the exact backed four-outcome complete sets",
         )?;
     }
 
@@ -1463,8 +1699,138 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
     )?;
     require(market.lifecycle == 1, "market is not resolved")?;
 
+    let lifecycle = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        let mut redeem_signatures = Vec::new();
+        for outcome in 0..4_u8 {
+            let sequence = 2 + u64::from(outcome);
+            let label = format!("joined-redeem-internal-outcome-{outcome}");
+            let (signature, status) = sign_submit(
+                &rpc,
+                &payer,
+                &[],
+                &[
+                    compute_budget(),
+                    plane::redeem_internal(
+                        payer.pubkey(),
+                        &correct,
+                        sequence,
+                        outcome,
+                        plane::USER_COLLATERAL_ATOMS,
+                    ),
+                ],
+            )?;
+            require_accepted(&format!("RedeemInternal outcome {outcome}"), &status)?;
+            record_step(&rpc, &mut steps, &label, signature.clone(), &status)?;
+            redeem_signatures.push(json!({
+                "outcome": outcome,
+                "quantity": plane::USER_COLLATERAL_ATOMS.to_string(),
+                "payout_atoms": if outcome == 1 {
+                    plane::USER_COLLATERAL_ATOMS.to_string()
+                } else {
+                    "0".to_string()
+                },
+                "signature": signature,
+            }));
+        }
+        let position = plane::decode_position(
+            &account(
+                &rpc,
+                "fully redeemed position",
+                correct.plane.position.address,
+            )?
+            .data,
+        )?;
+        let supply = plane::decode_supply(
+            &account(&rpc, "fully redeemed supply", correct.plane.supply.address)?.data,
+        )?;
+        let hoard = plane::decode_hoard(
+            &account(&rpc, "fully redeemed Hoard", correct.plane.hoard.address)?.data,
+        )?;
+        require(
+            position.cash_atoms == plane::USER_COLLATERAL_ATOMS
+                && position.internal[..4].iter().all(|quantity| *quantity == 0)
+                && supply.internal_supply[..4]
+                    .iter()
+                    .all(|quantity| *quantity == 0)
+                && hoard.collateral_atoms == 0,
+            "RedeemInternal did not extinguish every internal claim and credit exact cash",
+        )?;
+        let (withdraw_signature, status) = sign_submit(
+            &rpc,
+            &payer,
+            &[],
+            &[
+                compute_budget(),
+                plane::withdraw(payer.pubkey(), &correct, 6, plane::USER_COLLATERAL_ATOMS),
+            ],
+        )?;
+        require_accepted("WithdrawCash after redemption", &status)?;
+        record_step(
+            &rpc,
+            &mut steps,
+            "joined-withdraw-redeemed-collateral",
+            withdraw_signature.clone(),
+            &status,
+        )?;
+        lifecycle_signatures.insert("withdraw", withdraw_signature.clone());
+        let terminal_position = plane::decode_position(
+            &account(&rpc, "terminal position", correct.plane.position.address)?.data,
+        )?;
+        require(
+            terminal_position.cash_atoms == 0
+                && token_amount(
+                    &rpc,
+                    "terminal user collateral token",
+                    plane::actor_collateral(payer.pubkey()),
+                )? == plane::USER_COLLATERAL_ATOMS
+                && token_amount(
+                    &rpc,
+                    "terminal Hoard token account",
+                    correct.plane.hoard_token.address,
+                )? == 0,
+            "WithdrawCash did not return exact redeemed collateral to the ephemeral user",
+        )?;
+        let create_market_signature = lifecycle_signatures
+            .get("create_market")
+            .ok_or("joined campaign lost its CreateMarket signature")?;
+        let endow_signature = lifecycle_signatures
+            .get("endow")
+            .ok_or("joined campaign lost its Endow signature")?;
+        let split_signature = lifecycle_signatures
+            .get("split")
+            .ok_or("joined campaign lost its Split signature")?;
+        json!({
+            "market_genesis_assisted": false,
+            "market": correct.plane.market.address.to_string(),
+            "ephemeral_user": payer.pubkey().to_string(),
+            "user_collateral_token": plane::actor_collateral(payer.pubkey()).to_string(),
+            "collateral_atoms": plane::USER_COLLATERAL_ATOMS.to_string(),
+            "create_market_signature": create_market_signature,
+            "endow_signature": endow_signature,
+            "split_signature": split_signature,
+            "redeem_internal": redeem_signatures,
+            "withdraw_signature": withdraw_signature,
+            "terminal": {
+                "position_cash_atoms": "0",
+                "position_internal": ["0", "0", "0", "0"],
+                "supply_internal": ["0", "0", "0", "0"],
+                "hoard_collateral_atoms": "0",
+                "hoard_token_atoms": "0",
+                "user_token_atoms": plane::USER_COLLATERAL_ATOMS.to_string(),
+            },
+            "trade": {
+                "status": "blocked",
+                "reason_code": "missing-sealed-price-grid-and-epoch-plane",
+                "detail": "the immutable real-Pyth-bound Terms name a PriceGrid digest, but this campaign has no matching sealed PriceGrid artifact, Epoch, order page, or candidate plane; InitEpoch authenticates that exact grid, so placing or settling orders would require additional signed artifact/epoch construction and is not replaced with genesis or mock trading state",
+            },
+        })
+    } else {
+        Value::Null
+    };
+
     let result = json!({
         "claim": CLAIM,
+        "campaign_mode": campaign_mode,
         "network": "loopback validator only",
         "genesis_hash": rpc.genesis_hash()?,
         "clock": assert_clock(&rpc, publish_time)?,
@@ -1483,13 +1849,18 @@ fn run(work: &Path, url: &str, validator: &Path, repository_head: &str) -> Resul
         "wrong_feed_rollback": true,
         "sealed": true,
         "resolved_payout": 1,
+        "lifecycle": lifecycle,
         "steps": steps,
     });
     fs::write(
         work.join("result.json"),
         serde_json::to_vec_pretty(&result)?,
     )?;
-    println!("PASS: real router verify -> persisted VAA -> atomic PostUpdate+Append -> Seal -> Resolve(1)");
+    if campaign_mode == JOINED_LIFECYCLE_MODE {
+        println!("PASS: signed CreateMarket -> Endow -> Split -> real router/receiver source -> Seal -> Resolve(1) -> RedeemInternal(all outcomes) -> WithdrawCash");
+    } else {
+        println!("PASS: real router verify -> persisted VAA -> atomic PostUpdate+Append -> Seal -> Resolve(1)");
+    }
     Ok(())
 }
 
@@ -1530,6 +1901,7 @@ fn main() {
                                                     repository_head,
                                                     clock_probe_time,
                                                     publish_time,
+                                                    &args.campaign_mode,
                                                 )
                                             })
                                     })
@@ -1549,7 +1921,13 @@ fn main() {
                             .as_deref()
                             .ok_or_else(|| "run requires --repository-head".into())
                             .and_then(|repository_head| {
-                                run(&args.work, url, validator, repository_head)
+                                run(
+                                    &args.work,
+                                    url,
+                                    validator,
+                                    repository_head,
+                                    &args.campaign_mode,
+                                )
                             })
                     })
             }),
@@ -1563,5 +1941,45 @@ fn main() {
     if let Err(error) = result {
         eprintln!("FAIL: {error}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+
+    #[test]
+    fn joined_campaign_mode_is_explicitly_accepted() {
+        let args = parse_args(
+            [
+                "prepare",
+                "--work",
+                "/tmp/unused-local-real-pyth-test",
+                "--campaign-mode",
+                JOINED_LIFECYCLE_MODE,
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(args.campaign_mode, JOINED_LIFECYCLE_MODE);
+    }
+
+    #[test]
+    fn unknown_campaign_mode_is_refused_before_any_io() {
+        let error = parse_args(
+            [
+                "prepare",
+                "--work",
+                "/tmp/unused-local-real-pyth-test",
+                "--campaign-mode",
+                "mocked-trade",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("unknown campaign mode mocked-trade"));
     }
 }

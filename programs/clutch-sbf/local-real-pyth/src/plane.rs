@@ -3,7 +3,7 @@
 use crate::provider;
 use clutch_kernel::{PayoutSet, PayoutVector};
 use clutch_sbf::{
-    instructions::observe_resolve,
+    instructions::{cash_exit, genesis, market_init, observe_resolve, split as seam},
     seeds, source_archive_v2,
     source_identity::real_pyth_lab,
     source_v2::{
@@ -30,14 +30,30 @@ use solana_instruction::{AccountMeta, Instruction};
 const OUTCOMES: u8 = 4;
 const DENOMINATOR: u64 = 64;
 const SETS: u64 = 64;
+pub const USER_COLLATERAL_ATOMS: u64 = SETS;
 pub const COLLATERAL_MINT: Address = Address::new_from_array([0x6c; 32]);
 pub const WRONG_MARKET_NONCE: u64 = MARKET_NONCE + 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarketPrestate {
+    GenesisFunded,
+    SignedCreate,
+}
 
 pub struct LabPlane {
     pub plane: Plane,
     pub spec: SourceSpecV2,
     pub start_bucket: u64,
     pub end_bucket_exclusive: u64,
+    pub market_prestate: MarketPrestate,
+}
+
+pub fn actor_collateral(actor: Address) -> Address {
+    Address::find_program_address(
+        &[b"local-real-pyth-user-collateral", actor.as_ref()],
+        &PROGRAM_ID,
+    )
+    .0
 }
 
 fn pda(seeds: &[&[u8]]) -> Pda {
@@ -144,18 +160,17 @@ pub fn build(
     start_bucket: u64,
     end_bucket_exclusive: u64,
     market_nonce: u64,
+    market_prestate: MarketPrestate,
 ) -> LabPlane {
     assert_eq!(end_bucket_exclusive, start_bucket + 1);
     let feed_id = Hash32::from_bytes(spec.feed_id());
-    let mut plane = build_plane(actor, COLLATERAL_MINT, market_nonce, Mode::Funded);
+    let mode = match market_prestate {
+        MarketPrestate::GenesisFunded => Mode::Funded,
+        MarketPrestate::SignedCreate => Mode::Empty,
+    };
+    let mut plane = build_plane(actor, COLLATERAL_MINT, market_nonce, mode);
     let old_terms_address = plane.terms.address;
-    let market_address = plane.market.address;
-    let position_address = plane.position.address;
-    let kernel_address = plane.kernel.address;
-    let supply_address = plane.supply.address;
-    let hoard_address = plane.hoard.address;
-    let resolution_address = plane.resolution.address;
-    let (payout_bytes, payout_set) = one_hot_payouts();
+    let (payout_bytes, _) = one_hot_payouts();
 
     let mut terms = fixture_terms(plane.realm_id, plane.profile_id, feed_id);
     terms.source_adapter_id = Hash32::from_bytes(real_pyth_lab::RELEASE.source_adapter_id);
@@ -203,64 +218,73 @@ pub fn build(
             .outcome_mints
             .push(pda(&[seeds::SEED_OUTCOME_MINT, &market_seed, &[outcome]]));
     }
-    let mut market = MarketAccount::decode(&account_mut(&mut plane, market_address).data)
-        .expect("market decodes");
-    market.terms = terms_id;
-    market.feed = feed_id;
-    market.outcome_count = OUTCOMES;
-    market.outcomes = outcomes;
-    account_mut(&mut plane, market_address).data =
-        encode(account_len::MARKET, |out| market.encode(out));
+    if market_prestate == MarketPrestate::GenesisFunded {
+        let market_address = plane.market.address;
+        let mut market = MarketAccount::decode(&account_mut(&mut plane, market_address).data)
+            .expect("market decodes");
+        market.terms = terms_id;
+        market.feed = feed_id;
+        market.outcome_count = OUTCOMES;
+        market.outcomes = outcomes;
+        account_mut(&mut plane, market_address).data =
+            encode(account_len::MARKET, |out| market.encode(out));
 
-    let mut internal = [0_u64; MAX_OUTCOMES];
-    internal[..usize::from(OUTCOMES)].fill(SETS);
-    let mut position = PositionAccount::decode(&account_mut(&mut plane, position_address).data)
-        .expect("position decodes");
-    position.internal = internal;
-    account_mut(&mut plane, position_address).data =
-        encode(account_len::POSITION, |out| position.encode(out));
+        let mut internal = [0_u64; MAX_OUTCOMES];
+        internal[..usize::from(OUTCOMES)].fill(SETS);
+        let position_address = plane.position.address;
+        let mut position = PositionAccount::decode(&account_mut(&mut plane, position_address).data)
+            .expect("position decodes");
+        position.internal = internal;
+        account_mut(&mut plane, position_address).data =
+            encode(account_len::POSITION, |out| position.encode(out));
 
-    let kernel = KernelAccount {
-        market: market_id,
-        phase: 0,
-        basis_mode: clutch_kernel::BasisMode::FinitePreset,
-        resolved_payout: 0,
-        payouts: payout_set,
-        total_supply: internal,
-    };
-    account_mut(&mut plane, kernel_address).data =
-        encode(clutch_solana_reference::KERNEL_ACCOUNT_LEN, |out| {
-            kernel.encode(out)
-        });
-    let mut supply = SupplyLedgerAccount::decode(&account_mut(&mut plane, supply_address).data)
-        .expect("supply decodes");
-    supply.outcome_count = OUTCOMES;
-    supply.internal_supply = internal;
-    supply.external_supply = [0; MAX_OUTCOMES];
-    account_mut(&mut plane, supply_address).data =
-        encode(account_len::SUPPLY_LEDGER, |out| supply.encode(out));
-    let mut hoard =
-        HoardAccount::decode(&account_mut(&mut plane, hoard_address).data).expect("hoard decodes");
-    hoard.collateral_atoms = SETS;
-    account_mut(&mut plane, hoard_address).data =
-        encode(account_len::HOARD, |out| hoard.encode(out));
-    plane.hoard_atoms = SETS;
+        let (_, payout_set) = one_hot_payouts();
+        let kernel = KernelAccount {
+            market: market_id,
+            phase: 0,
+            basis_mode: clutch_kernel::BasisMode::FinitePreset,
+            resolved_payout: 0,
+            payouts: payout_set,
+            total_supply: internal,
+        };
+        let kernel_address = plane.kernel.address;
+        account_mut(&mut plane, kernel_address).data =
+            encode(clutch_solana_reference::KERNEL_ACCOUNT_LEN, |out| {
+                kernel.encode(out)
+            });
+        let supply_address = plane.supply.address;
+        let mut supply = SupplyLedgerAccount::decode(&account_mut(&mut plane, supply_address).data)
+            .expect("supply decodes");
+        supply.outcome_count = OUTCOMES;
+        supply.internal_supply = internal;
+        supply.external_supply = [0; MAX_OUTCOMES];
+        account_mut(&mut plane, supply_address).data =
+            encode(account_len::SUPPLY_LEDGER, |out| supply.encode(out));
+        let hoard_address = plane.hoard.address;
+        let mut hoard = HoardAccount::decode(&account_mut(&mut plane, hoard_address).data)
+            .expect("hoard decodes");
+        hoard.collateral_atoms = SETS;
+        account_mut(&mut plane, hoard_address).data =
+            encode(account_len::HOARD, |out| hoard.encode(out));
+        plane.hoard_atoms = SETS;
 
-    let unresolved = ResolutionAccount {
-        market: market_id,
-        terms: terms_id,
-        feed: feed_id,
-        window: Hash32::ZERO,
-        feed_cursor: 0,
-        sealed_end_bucket_exclusive: 0,
-        repair_generation: 0,
-        resolved_slot: 0,
-        payout_index: PAYOUT_INDEX_UNRESOLVED,
-        stored_bump: plane.resolution.bump,
-        flags: 0,
-    };
-    account_mut(&mut plane, resolution_address).data =
-        encode(account_len::RESOLUTION, |out| unresolved.encode(out));
+        let unresolved = ResolutionAccount {
+            market: market_id,
+            terms: terms_id,
+            feed: feed_id,
+            window: Hash32::ZERO,
+            feed_cursor: 0,
+            sealed_end_bucket_exclusive: 0,
+            repair_generation: 0,
+            resolved_slot: 0,
+            payout_index: PAYOUT_INDEX_UNRESOLVED,
+            stored_bump: plane.resolution.bump,
+            flags: 0,
+        };
+        let resolution_address = plane.resolution.address;
+        account_mut(&mut plane, resolution_address).data =
+            encode(account_len::RESOLUTION, |out| unresolved.encode(out));
+    }
 
     let spec_pda = pda(&[seeds::SEED_SOURCE_SPEC, &feed_id.bytes()]);
     let feed_pda = pda(&[seeds::SEED_FEED, &feed_id.bytes()]);
@@ -289,6 +313,7 @@ pub fn build(
         spec,
         start_bucket,
         end_bucket_exclusive,
+        market_prestate,
     }
 }
 
@@ -331,6 +356,127 @@ pub fn init_archive(actor: Address, lab: &LabPlane) -> Instruction {
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
             AccountMeta::new_readonly(RENT_SYSVAR, false),
         ],
+    )
+}
+
+pub fn create_market(actor: Address, lab: &LabPlane) -> Instruction {
+    assert_eq!(lab.market_prestate, MarketPrestate::SignedCreate);
+    let mut metas = vec![
+        AccountMeta::new(actor, true),
+        AccountMeta::new_readonly(lab.plane.realm.address, false),
+        AccountMeta::new_readonly(lab.plane.profile.address, false),
+        AccountMeta::new_readonly(lab.plane.terms.address, false),
+        AccountMeta::new(lab.plane.market.address, false),
+        AccountMeta::new(lab.plane.hoard.address, false),
+        AccountMeta::new(lab.plane.position.address, false),
+        AccountMeta::new(lab.plane.kernel.address, false),
+        AccountMeta::new(lab.plane.replay.address, false),
+        AccountMeta::new(lab.plane.supply.address, false),
+        AccountMeta::new(lab.plane.resolution.address, false),
+        AccountMeta::new_readonly(lab.plane.policy_account, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+        AccountMeta::new_readonly(RENT_SYSVAR, false),
+        AccountMeta::new_readonly(lab.plane.hoard_authority.address, false),
+        AccountMeta::new(lab.plane.hoard_token.address, false),
+    ];
+    metas.extend(
+        lab.plane
+            .outcome_mints
+            .iter()
+            .map(|mint| AccountMeta::new(mint.address, false)),
+    );
+    assert_eq!(metas.len(), market_init::account_count(OUTCOMES));
+    Instruction::new_with_bytes(
+        PROGRAM_ID,
+        &layout_request(
+            0,
+            Intent::CreateMarket {
+                realm: lab.plane.realm_id,
+                profile: lab.plane.profile_id,
+                market_nonce: MARKET_NONCE,
+                outcome_count: OUTCOMES,
+                terms: lab.plane.terms_id,
+                feed: lab.plane.feed_id,
+            },
+        ),
+        metas,
+    )
+}
+
+pub fn endow(actor: Address, lab: &LabPlane, sequence: u64, amount: u64) -> Instruction {
+    let metas = vec![
+        AccountMeta::new(actor, true),
+        AccountMeta::new_readonly(lab.plane.market.address, false),
+        AccountMeta::new_readonly(lab.plane.hoard.address, false),
+        AccountMeta::new(lab.plane.position.address, false),
+        AccountMeta::new(lab.plane.replay.address, false),
+        AccountMeta::new_readonly(lab.plane.profile.address, false),
+        AccountMeta::new_readonly(lab.plane.policy_account, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new(actor_collateral(actor), false),
+        AccountMeta::new(lab.plane.hoard_token.address, false),
+        AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+        AccountMeta::new_readonly(RENT_SYSVAR, false),
+        AccountMeta::new_readonly(lab.plane.terms.address, false),
+        AccountMeta::new_readonly(lab.plane.source_spec.address, false),
+    ];
+    assert_eq!(metas.len(), genesis::ENDOW_ACCOUNT_COUNT);
+    Instruction::new_with_bytes(
+        PROGRAM_ID,
+        &layout_request(
+            sequence,
+            Intent::Endow {
+                market: lab.plane.market_id,
+                owner: Hash32::from_bytes(actor.to_bytes()),
+                amount,
+            },
+        ),
+        metas,
+    )
+}
+
+pub fn split(actor: Address, lab: &LabPlane, sequence: u64, quantity: u64) -> Instruction {
+    let mut metas = vec![
+        AccountMeta::new_readonly(actor, true),
+        AccountMeta::new_readonly(lab.plane.realm.address, false),
+        AccountMeta::new_readonly(lab.plane.profile.address, false),
+        AccountMeta::new(lab.plane.market.address, false),
+        AccountMeta::new(lab.plane.hoard.address, false),
+        AccountMeta::new(lab.plane.position.address, false),
+        AccountMeta::new(lab.plane.kernel.address, false),
+        AccountMeta::new(lab.plane.replay.address, false),
+        AccountMeta::new(lab.plane.supply.address, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
+        AccountMeta::new_readonly(lab.plane.policy_account, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new(actor_collateral(actor), false),
+        AccountMeta::new_readonly(lab.plane.hoard_authority.address, false),
+        AccountMeta::new(lab.plane.hoard_token.address, false),
+    ];
+    metas.extend(
+        lab.plane
+            .outcome_mints
+            .iter()
+            .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+    );
+    assert_eq!(
+        metas.len(),
+        seam::ACCOUNT_PREFIX_COLLATERAL + usize::from(OUTCOMES)
+    );
+    Instruction::new_with_bytes(
+        PROGRAM_ID,
+        &layout_request(
+            sequence,
+            Intent::Split {
+                market: lab.plane.market_id,
+                owner: Hash32::from_bytes(actor.to_bytes()),
+                quantity,
+            },
+        ),
+        metas,
     )
 }
 
@@ -418,6 +564,80 @@ pub fn resolve(actor: Address, lab: &LabPlane, payout_index: u8) -> Instruction 
     Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
 }
 
+pub fn redeem_internal(
+    actor: Address,
+    lab: &LabPlane,
+    sequence: u64,
+    outcome: u8,
+    quantity: u64,
+) -> Instruction {
+    let mut data = vec![0xd1, 1];
+    data.extend_from_slice(&sequence.to_le_bytes());
+    data.push(2);
+    data.push(outcome);
+    data.extend_from_slice(&quantity.to_le_bytes());
+    let mut metas = vec![
+        AccountMeta::new_readonly(actor, true),
+        AccountMeta::new(lab.plane.market.address, false),
+        AccountMeta::new(lab.plane.hoard.address, false),
+        AccountMeta::new(lab.plane.position.address, false),
+        AccountMeta::new(lab.plane.kernel.address, false),
+        AccountMeta::new(lab.plane.replay.address, false),
+        AccountMeta::new(lab.plane.supply.address, false),
+        AccountMeta::new_readonly(lab.plane.terms.address, false),
+        AccountMeta::new_readonly(lab.plane.resolution.address, false),
+        AccountMeta::new_readonly(lab.plane.profile.address, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
+        AccountMeta::new_readonly(lab.plane.policy_account, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new(actor_collateral(actor), false),
+        AccountMeta::new_readonly(lab.plane.hoard_authority.address, false),
+        AccountMeta::new(lab.plane.hoard_token.address, false),
+    ];
+    metas.extend(
+        lab.plane
+            .outcome_mints
+            .iter()
+            .map(|mint| AccountMeta::new_readonly(mint.address, false)),
+    );
+    assert_eq!(
+        metas.len(),
+        observe_resolve::REDEEM_ACCOUNT_PREFIX + usize::from(OUTCOMES)
+    );
+    Instruction::new_with_bytes(PROGRAM_ID, &data, metas)
+}
+
+pub fn withdraw(actor: Address, lab: &LabPlane, sequence: u64, amount: u64) -> Instruction {
+    let metas = vec![
+        AccountMeta::new_readonly(actor, true),
+        AccountMeta::new_readonly(lab.plane.market.address, false),
+        AccountMeta::new_readonly(lab.plane.hoard.address, false),
+        AccountMeta::new(lab.plane.position.address, false),
+        AccountMeta::new(lab.plane.replay.address, false),
+        AccountMeta::new_readonly(lab.plane.profile.address, false),
+        AccountMeta::new_readonly(lab.plane.policy_account, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
+        AccountMeta::new_readonly(COLLATERAL_MINT, false),
+        AccountMeta::new(actor_collateral(actor), false),
+        AccountMeta::new_readonly(lab.plane.hoard_authority.address, false),
+        AccountMeta::new(lab.plane.hoard_token.address, false),
+    ];
+    assert_eq!(metas.len(), cash_exit::ACCOUNT_COUNT);
+    Instruction::new_with_bytes(
+        PROGRAM_ID,
+        &layout_request(
+            sequence,
+            Intent::WithdrawCash {
+                market: lab.plane.market_id,
+                owner: Hash32::from_bytes(actor.to_bytes()),
+                destination: Hash32::from_bytes(actor_collateral(actor).to_bytes()),
+                amount,
+            },
+        ),
+        metas,
+    )
+}
+
 pub fn decode_feed(data: &[u8]) -> Result<FeedAccount, Box<dyn std::error::Error>> {
     FeedAccount::decode(data).map_err(|error| format!("feed does not decode: {error:?}").into())
 }
@@ -431,6 +651,88 @@ pub fn decode_market(data: &[u8]) -> Result<MarketAccount, Box<dyn std::error::E
     MarketAccount::decode(data).map_err(|error| format!("market does not decode: {error:?}").into())
 }
 
+pub fn decode_position(data: &[u8]) -> Result<PositionAccount, Box<dyn std::error::Error>> {
+    PositionAccount::decode(data).map_err(|error| format!("position: {error:?}").into())
+}
+
+pub fn decode_hoard(data: &[u8]) -> Result<HoardAccount, Box<dyn std::error::Error>> {
+    HoardAccount::decode(data).map_err(|error| format!("hoard: {error:?}").into())
+}
+
+pub fn decode_supply(data: &[u8]) -> Result<SupplyLedgerAccount, Box<dyn std::error::Error>> {
+    SupplyLedgerAccount::decode(data).map_err(|error| format!("supply: {error:?}").into())
+}
+
 pub fn token_program() -> Address {
     TOKEN_2022
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signed_plane(actor: Address) -> LabPlane {
+        build(
+            actor,
+            real_spec(provider::FEED_ID).unwrap(),
+            29_790_527,
+            29_790_528,
+            MARKET_NONCE,
+            MarketPrestate::SignedCreate,
+        )
+    }
+
+    #[test]
+    fn joined_plane_keeps_prerequisites_but_not_market_targets() {
+        let actor = Address::new_from_array([0xa1; 32]);
+        let lab = signed_plane(actor);
+        let addresses = lab
+            .plane
+            .accounts
+            .iter()
+            .map(|account| account.address)
+            .collect::<Vec<_>>();
+        assert!(addresses.contains(&lab.plane.realm.address));
+        assert!(addresses.contains(&lab.plane.profile.address));
+        assert!(addresses.contains(&lab.plane.terms.address));
+        for target in lab
+            .plane
+            .market_state_addresses()
+            .iter()
+            .chain(core::iter::once(&lab.plane.hoard_token.address))
+            .chain(lab.plane.outcome_mints.iter().map(|mint| &mint.address))
+        {
+            assert!(!addresses.contains(target), "{target} was genesis-assisted");
+        }
+    }
+
+    #[test]
+    fn joined_instruction_family_is_signed_only_by_ephemeral_actor() {
+        let actor = Address::new_from_array([0xa2; 32]);
+        let lab = signed_plane(actor);
+        for instruction in [
+            create_market(actor, &lab),
+            endow(actor, &lab, 0, USER_COLLATERAL_ATOMS),
+            split(actor, &lab, 1, USER_COLLATERAL_ATOMS),
+            redeem_internal(actor, &lab, 2, 0, USER_COLLATERAL_ATOMS),
+            withdraw(actor, &lab, 6, USER_COLLATERAL_ATOMS),
+        ] {
+            assert_eq!(instruction.program_id, PROGRAM_ID);
+            let signers = instruction
+                .accounts
+                .iter()
+                .filter(|meta| meta.is_signer)
+                .map(|meta| meta.pubkey)
+                .collect::<Vec<_>>();
+            assert_eq!(signers, [actor]);
+        }
+    }
+
+    #[test]
+    fn joined_user_token_address_is_deterministic_and_actor_scoped() {
+        let first = Address::new_from_array([0xa3; 32]);
+        let second = Address::new_from_array([0xa4; 32]);
+        assert_eq!(actor_collateral(first), actor_collateral(first));
+        assert_ne!(actor_collateral(first), actor_collateral(second));
+    }
 }

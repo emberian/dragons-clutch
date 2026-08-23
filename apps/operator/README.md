@@ -46,11 +46,13 @@ CARGO_NET_OFFLINE=true cargo run --offline \
 # then open 127.0.0.1:9130 in a browser
 ```
 
-To retain a new campaign instead, choose a new empty directory with
+To retain a new source-only campaign, choose a new empty directory with
 `CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR` when running
-`programs/clutch-sbf/scripts/run_local_real_pyth.sh`, then pass that directory
-to `--transcript`. The display reads only `campaign.json`, `result.json`, and
-`probe-evidence.json`; it does not replay or extend the campaign.
+`programs/clutch-sbf/scripts/run_local_real_pyth.sh`. For the joined signed-user
+lifecycle, use `programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh`
+with the same variable. Then pass that directory to `--transcript`. The display
+reads only `campaign.json`, `result.json`, and `probe-evidence.json`; it does not
+replay or extend the campaign.
 
 Watch/trade runtime prerequisites are Rust/Cargo, `cargo-build-sbf`,
 `solana-keygen`, and `solana-test-validator`; the scripted gate also uses
@@ -103,13 +105,16 @@ the same way a browser does.
 | screen | what it reads |
 | --- | --- |
 | **Campaign** | exact captured receiver/router Program and ProgramData identities; campaign, validator, ELF, source-profile, VAA, and update hashes; loopback listener evidence; synthetic source value and conservative interval; both atomic rollback negatives; seal and categorical resolution; all signed transactions in retained order with signature, signed-wire hash, slot, compute units, fee, top-level program order, and exact error |
+| **Signed user lifecycle** | in `joined-user-lifecycle-v1`: explicit non-genesis market creation; ephemeral user and collateral identities; exact `CreateMarket`, `Endow`, `Split`, four `RedeemInternal`, and `WithdrawCash` signatures; final zero position/supply/Hoard obligations and the exact 64 atoms returned; trading marked **BLOCKED / NOT SUBSTITUTED** at `missing-sealed-price-grid-and-epoch-plane` |
 
 All integers cross the daemon/browser boundary as decimal strings. The daemon
 refuses the presentation unless the three inputs carry the exact boundary,
-provider role set, thirteen-step order, instruction-2 `SourceAdmissionFailed`
-rollback errors, matching terminal signatures, closed rollback checks, seal,
-and payout cell 1. The static page remains an untrusted projection of that
-retained evidence.
+provider role set, mode-specific thirteen- or twenty-one-step order,
+instruction-2 `SourceAdmissionFailed` rollback errors, matching terminal
+signatures, closed rollback checks, seal, and payout cell 1. Joined mode also
+requires exact four-outcome redemption arithmetic, terminal conservation, and
+the named un-substituted trading blocker. The static page remains an untrusted
+projection of that retained evidence.
 
 ### Watch mode
 
