@@ -8,6 +8,27 @@ and component-by-component funding transitions. It has no account tags,
 instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account memory,
 allocator, floats, or caller-selected market nonce.
 
+## Exhaustive quantized interval consensus
+
+`QuantizedIntervalConsensusWorkV1` is the fixed 592-byte, allocation-free work
+contract for lifting smooth point-only evidence without guessing a point. It
+binds the full-width Market V2, Product template, Genesis, native basis,
+SourceOccurrence, immutable SourcePlane interval result, price-measure policy,
+capability profile, evaluator release, and canonical `WEIGHT-ROUND-01` identity.
+Each bounded advance evaluates the next integer coordinate with the Product
+basis evaluator, latches the first exact payout vector, and refuses immediately
+if any later vector differs. A certificate exists only after the inclusive
+upper endpoint has been evaluated.
+
+The fixed work codec is structural and non-authorizing. The pure in-memory
+session can mint a private verified payout capability because its history starts
+at the checked Begin constructor. Restoring that capability from a persisted
+work record is intentionally absent, and
+`require_quantized_interval_consensus_runtime_capability_v1` always refuses.
+A future SBF integration must authenticate the dedicated work PDA, owner,
+lifecycle, transcript succession, and Replay transition before a Failure
+relation successor may consume the certificate and install a resolution.
+
 The crucial identity split is:
 
 ```text
