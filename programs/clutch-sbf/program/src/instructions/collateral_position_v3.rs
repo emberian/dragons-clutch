@@ -14,8 +14,8 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketRuntimeV3AccountV1, MARKET_BINDING_ACCOUNT_BYTES,
-    MARKET_RUNTIME_ACCOUNT_BYTES,
+    MarketBindingV1, MarketBindingV2, MarketRuntimeV3AccountV1, MARKET_BINDING_ACCOUNT_BYTES,
+    MARKET_BINDING_ACCOUNT_BYTES_V2, MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::MarketInstancePreimageV2;
@@ -83,6 +83,17 @@ pub(crate) struct GeneralPositionReplayAuthorityV1 {
     pub(crate) projection: GeneralPositionProjectionV3,
     pub(crate) replay: GeneralPositionReplayPrestateV1,
     pub(crate) market_binding: MarketBindingV1,
+    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
+}
+
+/// Complete authenticated ordinary-Position and GEN1 Replay prestate under
+/// the sole live MarketBinding V2 account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralPositionReplayAuthorityV2 {
+    pub(crate) position: AuthenticatedPositionV3,
+    pub(crate) projection: GeneralPositionProjectionV3,
+    pub(crate) replay: GeneralPositionReplayPrestateV1,
+    pub(crate) market_binding: MarketBindingV2,
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
 }
 
@@ -244,6 +255,47 @@ pub(crate) fn authenticate_general_market_v1(
         binding.market.bytes() == market_runtime_account.key.to_bytes()
             && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
             && runtime.market_instance_v2_id == binding.market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok((binding, runtime))
+}
+
+/// Authenticate only the live immutable General MarketBinding V2 and its
+/// stable runtime. Historical 540-byte V1 accounts are not accepted here.
+pub(crate) fn authenticate_general_market_v2(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+) -> Outcome<(MarketBindingV2, MarketRuntimeV3AccountV1)> {
+    require_program_account(
+        program_id,
+        market_binding_account,
+        false,
+        MARKET_BINDING_ACCOUNT_BYTES_V2,
+    )?;
+    require_program_account(
+        program_id,
+        market_runtime_account,
+        false,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+    )?;
+    let binding = MarketBindingV2::decode(&market_binding_account.data.borrow())?;
+    let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
+    let base = binding.base();
+    expect_pda(
+        market_binding_account.key,
+        seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),
+        Some(base.stored_bump),
+    )?;
+    expect_pda(
+        market_runtime_account.key,
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.key.to_bytes()),
+        Some(runtime.stored_bump),
+    )?;
+    require(
+        base.market.bytes() == market_runtime_account.key.to_bytes()
+            && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
+            && runtime.market_instance_v2_id == base.market_instance_v2_id,
         ClutchError::MismatchedState,
     )?;
     Ok((binding, runtime))
@@ -524,6 +576,135 @@ pub(crate) fn authenticate_general_position_replay_v1(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
     Ok(GeneralPositionReplayAuthorityV1 {
+        position: authenticated,
+        projection,
+        replay,
+        market_binding,
+        market_runtime,
+    })
+}
+
+/// Authenticate one existing canonical ordinary Position and exact GEN1
+/// Replay against the live MarketBinding V2 account. The pure settlement
+/// runtime receives only `relation_projection()` after this adapter has
+/// authenticated the full V2 body and immutable batch-policy identity.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_v2(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV2> {
+    let (market_binding, market_runtime) =
+        authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
+    let relation_market = market_binding.relation_projection();
+    require_program_account(program_id, position_account, true, POSITION_V3_BYTES)?;
+    require_program_account(
+        program_id,
+        replay_account,
+        true,
+        clutch_general_v2_contract::GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    )?;
+    require(
+        bound.market().market
+            == CollateralId::from_bytes(relation_market.market_instance_v2_id.bytes())
+            && bound.market().realm
+                == CollateralId::from_bytes(bound.realm_bound().realm().realm.bytes())
+            && bound.market().profile
+                == CollateralId::from_bytes(bound.realm_bound().realm().profile.bytes()),
+        ClutchError::MismatchedState,
+    )?;
+
+    let position = PositionAccountV3::decode(&position_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fields = position.fields();
+    let purpose_binding = Identity32V1::new(market_runtime_account.key.to_bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let owner = Identity32V1::new(expected_owner)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_identity = Identity32V1::new(relation_market.market_instance_v2_id.bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_position = seeds::position_v3_pda(
+        program_id,
+        &market_identity.bytes(),
+        &expected_owner,
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    expect_pda(
+        position_account.key,
+        expected_position,
+        Some(position.stored_bump()),
+    )?;
+    let expected_replay = seeds::purpose_replay_v3_pda(
+        program_id,
+        &position_account.key.to_bytes(),
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    expect_pda(replay_account.key, expected_replay, None)?;
+    require(
+        fields.replay_account.bytes() == replay_account.key.to_bytes()
+            && fields.owner == owner
+            && fields.controller == owner
+            && fields.purpose_binding_id == purpose_binding,
+        ClutchError::MismatchedState,
+    )?;
+
+    let projection = project_general_position_v3(
+        position,
+        AdapterPositionMarketBindingV3 {
+            market_instance_id: market_identity,
+            outcome_count: relation_market.outcome_count,
+            realm_id: Identity32V1::new(bound.market().realm.bytes())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            collateral_policy_id: Identity32V1::new(bound.policy_id().bytes())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            collateral_release_id: Identity32V1::new(
+                bound
+                    .release()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes(),
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        },
+        AdapterPositionPurposeBindingV3 {
+            owner,
+            controller: owner,
+            purpose_binding_id: purpose_binding,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_id = position
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .bytes();
+    let authenticated = AuthenticatedPositionV3 {
+        account: position_account.key.to_bytes(),
+        general_market_runtime: market_runtime_account.key.to_bytes(),
+        semantic: position,
+        semantic_id,
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: true,
+    };
+    let replay = project_general_position_replay_prestate_v1(
+        Id32::new(replay_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        expected_replay.1,
+        expected_sequence,
+        &replay_account.data.borrow(),
+        authenticated,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    Ok(GeneralPositionReplayAuthorityV2 {
         position: authenticated,
         projection,
         replay,
