@@ -18,6 +18,7 @@ use crate::instructions::series_failure_funding::{
 };
 use crate::instructions_sysvar::SYSVAR_OWNER_ID;
 use crate::seeds;
+use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock};
 use clutch_failure_policy_adapter::external_v2::{
     authenticate_external_root_v2, initialize_external_root_v2, project_external_recovery_close_v2,
@@ -55,10 +56,8 @@ use clutch_solana_layout::failure_recovery::{
 };
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedSourceReleaseV1, AuthenticatedSourceWorkReceiptV1,
-    AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1, ClockSnapshotV1,
-    FailurePolicySourceHandoffV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
-    SourceReceiptDispositionV1, SuccessfulEvaluationHandoffV1,
+    AuthenticatedSourceReleaseV1, ClockSnapshotV1, FailurePolicySourceHandoffV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -87,43 +86,12 @@ pub fn process(
     Err(ClutchError::UnsupportedInstruction.into())
 }
 
-/// Source-owned occurrence-account join. The Source adapter constructs this
-/// only from the exact physical account it used to mint the private-field
-/// occurrence receipt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSourceOccurrenceJoinV1 {
-    account: Pubkey,
-    receipt: OccurrenceSourceReceiptV1,
-}
-
-impl AuthenticatedSourceOccurrenceJoinV1 {
-    /// Bind the physical Product/Series occurrence to Source authentication.
-    pub fn from_source_adapter(
-        account: Pubkey,
-        receipt: OccurrenceSourceReceiptV1,
-    ) -> Outcome<Self> {
-        require(!is_zero_pubkey(&account), ClutchError::MismatchedState)?;
-        Ok(Self { account, receipt })
-    }
-}
-
-/// Exact persisted Source fact underlying a failure handoff.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthenticatedSourceFailureFactV1 {
-    /// Predictable never-created result PDA plus authenticated lineage.
-    ResultAbsence(AuthenticatedStatisticResultAbsenceV1),
-    /// Immutable refused result account with complete authentication identity.
-    RefusedResult(AuthenticatedStatisticResultAccountV1),
-}
-
 /// Source-owned maturity-failure join. Private fields prevent ID-only use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceFailureJoinV1 {
     release: AuthenticatedSourceReleaseV1,
     handoff: FailurePolicySourceHandoffV1,
-    occurrence_account: Pubkey,
-    result_or_absence_account: Pubkey,
-    work_receipt_account: Pubkey,
+    source: SourcePolicyHandoffJoinV1,
 }
 
 impl AuthenticatedSourceFailureJoinV1 {
@@ -133,53 +101,37 @@ impl AuthenticatedSourceFailureJoinV1 {
         release: AuthenticatedSourceReleaseV1,
         handoff: FailurePolicySourceHandoffV1,
         expected_handoff_id: [u8; 32],
-        occurrence: AuthenticatedSourceOccurrenceJoinV1,
-        fact: AuthenticatedSourceFailureFactV1,
-        work_receipt: AuthenticatedSourceWorkReceiptV1,
+        expected_common: RecoveryCommonV1,
+        source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
-        let (result_or_absence_account, fact_matches) = match (handoff.kind(), fact) {
-            (
-                SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution,
-                AuthenticatedSourceFailureFactV1::ResultAbsence(absence),
-            ) => (
-                Pubkey::new_from_array(absence.result_account().bytes()),
-                handoff.source_fact_receipt_id() == absence.id(),
-            ),
-            (
-                SourceFailureKindV1::SourceEvaluationRefused,
-                AuthenticatedSourceFailureFactV1::RefusedResult(result),
-            ) => (
-                Pubkey::new_from_array(result.account().bytes()),
-                handoff.source_fact_receipt_id() == result.id()
-                    && handoff.statistic_result_id().bytes()
-                        == result
-                            .result()
-                            .id()
-                            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                            .bytes()
-                    && handoff.refusal_code() == result.result().refusal_code(),
-            ),
-            _ => return Err(ClutchError::MismatchedState.into()),
-        };
-        let persisted_work = work_receipt.receipt();
-        let work_receipt_account = Pubkey::new_from_array(work_receipt.account().bytes());
+        let occurrence = handoff.occurrence();
+        let clock_policy_id = release
+            .clock_policy()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
             handoff.id().bytes() == expected_handoff_id
-                && handoff.occurrence() == occurrence.receipt
-                && fact_matches
-                && persisted_work.disposition() == SourceReceiptDispositionV1::Work
-                && persisted_work.semantic_receipt_id() == handoff.id()
-                && occurrence.account != result_or_absence_account
-                && occurrence.account != work_receipt_account
-                && result_or_absence_account != work_receipt_account,
+                && source.handoff_id() == handoff.id()
+                && source.release_authentication_id() == release.id()
+                && source.route_id() == occurrence.route_id()
+                && source.occurrence_account() == occurrence.occurrence_account()
+                && source.source_fact_authentication_id() == handoff.source_fact_receipt_id()
+                && source.clock_policy_id() == clock_policy_id
+                && source.clock_policy_id() == occurrence.clock_policy_id()
+                && source.clock() == handoff.clock()
+                && source.generation() == expected_common.generation
+                && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
+                && source.failure_policy_binding_id().bytes() == expected_common.binding_id
+                && occurrence.market_instance_id().bytes() == expected_common.market_instance_v2_id
+                && source.source_spec_id() == occurrence.source_spec_id()
+                && source.window_id() == occurrence.window_id()
+                && source.statistic_key_id() == occurrence.statistic_key_id(),
             ClutchError::MismatchedState,
         )?;
         Ok(Self {
             release,
             handoff,
-            occurrence_account: occurrence.account,
-            result_or_absence_account,
-            work_receipt_account,
+            source,
         })
     }
 }
@@ -189,9 +141,7 @@ impl AuthenticatedSourceFailureJoinV1 {
 pub struct AuthenticatedSourceSuccessJoinV1 {
     release: AuthenticatedSourceReleaseV1,
     handoff: SuccessfulEvaluationHandoffV1,
-    occurrence_account: Pubkey,
-    result_account: Pubkey,
-    work_receipt_account: Pubkey,
+    source: SourcePolicyHandoffJoinV1,
 }
 
 impl AuthenticatedSourceSuccessJoinV1 {
@@ -201,30 +151,38 @@ impl AuthenticatedSourceSuccessJoinV1 {
         release: AuthenticatedSourceReleaseV1,
         handoff: SuccessfulEvaluationHandoffV1,
         expected_handoff_id: [u8; 32],
-        occurrence: AuthenticatedSourceOccurrenceJoinV1,
-        result: AuthenticatedStatisticResultAccountV1,
-        work_receipt: AuthenticatedSourceWorkReceiptV1,
+        expected_common: RecoveryCommonV1,
+        source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
-        let result_account = Pubkey::new_from_array(result.account().bytes());
-        let work_receipt_account = Pubkey::new_from_array(work_receipt.account().bytes());
-        let persisted_work = work_receipt.receipt();
+        let occurrence = handoff.occurrence();
+        let clock_policy_id = release
+            .clock_policy()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
             handoff.id().bytes() == expected_handoff_id
-                && handoff.occurrence() == occurrence.receipt
-                && handoff.result_account_authentication_id() == result.id()
-                && persisted_work.disposition() == SourceReceiptDispositionV1::Work
-                && persisted_work.semantic_receipt_id() == handoff.id()
-                && occurrence.account != result_account
-                && occurrence.account != work_receipt_account
-                && result_account != work_receipt_account,
+                && source.handoff_id() == handoff.id()
+                && source.release_authentication_id() == release.id()
+                && source.route_id() == occurrence.route_id()
+                && source.occurrence_account() == occurrence.occurrence_account()
+                && source.source_fact_authentication_id()
+                    == handoff.result_account_authentication_id()
+                && source.clock_policy_id() == clock_policy_id
+                && source.clock_policy_id() == occurrence.clock_policy_id()
+                && source.clock() == handoff.clock()
+                && source.generation() == expected_common.generation
+                && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
+                && source.failure_policy_binding_id().bytes() == expected_common.binding_id
+                && occurrence.market_instance_id().bytes() == expected_common.market_instance_v2_id
+                && source.source_spec_id() == occurrence.source_spec_id()
+                && source.window_id() == occurrence.window_id()
+                && source.statistic_key_id() == occurrence.statistic_key_id(),
             ClutchError::MismatchedState,
         )?;
         Ok(Self {
             release,
             handoff,
-            occurrence_account: occurrence.account,
-            result_account,
-            work_receipt_account,
+            source,
         })
     }
 }
@@ -1653,9 +1611,9 @@ fn require_failure_source_accounts(
     require(accounts.len() >= 4, ClutchError::AccountCount)?;
     require_source_release_account(source.release, &accounts[0])?;
     require(
-        *accounts[1].key == source.occurrence_account
-            && *accounts[2].key == source.result_or_absence_account
-            && *accounts[3].key == source.work_receipt_account,
+        accounts[1].key.to_bytes() == source.source.occurrence_account().bytes()
+            && accounts[2].key.to_bytes() == source.source.result_or_absence_account().bytes()
+            && accounts[3].key.to_bytes() == source.source.work_receipt_account().bytes(),
         ClutchError::MismatchedState,
     )
 }
@@ -1667,9 +1625,9 @@ fn require_success_source_accounts(
     require(accounts.len() >= 4, ClutchError::AccountCount)?;
     require_source_release_account(source.release, &accounts[0])?;
     require(
-        *accounts[1].key == source.occurrence_account
-            && *accounts[2].key == source.result_account
-            && *accounts[3].key == source.work_receipt_account,
+        accounts[1].key.to_bytes() == source.source.occurrence_account().bytes()
+            && accounts[2].key.to_bytes() == source.source.result_or_absence_account().bytes()
+            && accounts[3].key.to_bytes() == source.source.work_receipt_account().bytes(),
         ClutchError::MismatchedState,
     )
 }
