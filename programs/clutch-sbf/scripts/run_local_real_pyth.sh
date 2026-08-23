@@ -353,41 +353,35 @@ echo "== real provider / joined Clutch campaign =="
 "$repo/tools/agave-loopback-validator/probe-listeners.sh" \
   "$validator_pid" "$rpc_port" "$faucet_port" "$validator" \
   | tee "$work/probe-after.txt"
-probe_before_sha="$(shasum -a 256 "$work/probe-before.txt" | awk '{print $1}')"
-probe_after_sha="$(shasum -a 256 "$work/probe-after.txt" | awk '{print $1}')"
 validator_log_sha="$(shasum -a 256 "$work/validator.log" | awk '{print $1}')"
 validator_sha="$(shasum -a 256 "$validator" | awk '{print $1}')"
-cat >"$work/probe-evidence.json" <<EOF
-{
-  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
-  "selected_validator_sha256": "$validator_sha",
-  "rpc": "127.0.0.1:$rpc_port",
-  "websocket": "127.0.0.1:$ws_port",
-  "faucet": "127.0.0.1:$faucet_port",
-  "gossip": "127.0.0.1:$gossip_port",
-  "configured_dynamic_port_range": "$dynamic_port_range",
-  "probe_before_sha256": "$probe_before_sha",
-  "probe_after_sha256": "$probe_after_sha",
-  "validator_log_sha256": "$validator_log_sha",
-  "scope": "proves all child TCP listeners and UDP sockets observed by lsof were loopback-bound; does not claim every loopback socket fell inside the configurable service ranges"
-}
-EOF
+public_transcript="$work/public-transcript"
+mkdir "$public_transcript"
+python3 "$crate/public_transcript.py" build \
+  --work "$work" --output "$public_transcript" \
+  --validator-sha256 "$validator_sha" --validator-log-sha256 "$validator_log_sha" \
+  --rpc-port "$rpc_port" --websocket-port "$ws_port" \
+  --faucet-port "$faucet_port" --gossip-port "$gossip_port" \
+  --dynamic-port-range "$dynamic_port_range"
+# This is deliberately a second, independent pass over all five final bytes.
+# Unsafe raw process/socket rows and validator logs never leave $work.
+python3 "$crate/public_transcript.py" check --directory "$public_transcript"
 transcript_dir="${CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR:-}"
 if [ -n "$transcript_dir" ]; then
   mkdir -p "$transcript_dir"
-  if [ -e "$transcript_dir/campaign.json" ] || [ -e "$transcript_dir/result.json" ] || \
-     [ -e "$transcript_dir/probe-evidence.json" ] || \
-     [ -e "$transcript_dir/probe-before.txt" ] || [ -e "$transcript_dir/probe-after.txt" ]; then
-    echo "FAIL: refusing to overwrite an existing retained transcript" >&2
-    exit 1
-  fi
-  cp "$work/campaign.json" "$transcript_dir/campaign.json"
-  cp "$work/result.json" "$transcript_dir/result.json"
-  cp "$work/probe-evidence.json" "$transcript_dir/probe-evidence.json"
-  cp "$work/probe-before.txt" "$transcript_dir/probe-before.txt"
-  cp "$work/probe-after.txt" "$transcript_dir/probe-after.txt"
+  for retained_name in campaign.json result.json probe-evidence.json probe-before.txt probe-after.txt; do
+    if [ -e "$transcript_dir/$retained_name" ] || [ -L "$transcript_dir/$retained_name" ]; then
+      echo "FAIL: refusing to overwrite existing retained target $retained_name" >&2
+      exit 1
+    fi
+  done
+  cp "$public_transcript/campaign.json" "$transcript_dir/campaign.json"
+  cp "$public_transcript/result.json" "$transcript_dir/result.json"
+  cp "$public_transcript/probe-evidence.json" "$transcript_dir/probe-evidence.json"
+  cp "$public_transcript/probe-before.txt" "$transcript_dir/probe-before.txt"
+  cp "$public_transcript/probe-after.txt" "$transcript_dir/probe-after.txt"
   echo "PASS; public truth-labeled transcripts copied to $transcript_dir"
 else
   echo "PASS; result transcript (set CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR to retain):"
-  sed -n '1,240p' "$work/result.json"
+  sed -n '1,240p' "$public_transcript/result.json"
 fi

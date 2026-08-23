@@ -69,8 +69,18 @@ execution evidence; see
 `docs/implementation/LOCAL_REAL_PYTH_MULTIBOUNDARY_V1.md`.
 The v1 result retains both canonical archive records as exact decimal strings,
 the sealed archive account key/owner/length/body SHA-256 and commitment, and
-the refused later-boundary update address plus explicit absence and equal
-domain-separated before/after hashes over the archive and receiver treasury.
+all three refused updates as the same structured evidence shape: closed
+attempt kind and identity, ephemeral update address plus explicit absence,
+step-linked signature/error, watched archive/receiver-treasury identities, and
+equal domain-separated before/after hashes. Historical one-boundary schemas
+keep their boolean rollback fields unchanged.
+After both withdrawals, the multi-boundary result also reloads the complete
+SupplyLedger and every authoritative Token-2022 outcome mint. Its terminal
+liability object retains internal, external-ledger, aggregate, and actual mint
+supplies as canonical decimal strings and is emitted only when every value is
+exactly zero. Historical joined-v4 output keeps its existing field shape while
+the current producer executes the same terminal zero-supply checks for that
+mode.
 
 `joined-user-lifecycle-v1` keeps Realm, Profile, policy, immutable Terms, one
 collateral mint, and two ephemeral users' ordinary collateral token accounts as
@@ -105,13 +115,16 @@ result. The final Clock may be later than that live-update window because the
 transcript assembly requires the Clock to remain authentic and monotone, but
 does not pretend that the original update was posted again.
 
-The current public-safe 52-step transcript is retained at
+The historical 52-step transcript is retained at
 `docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23`. It pins
 repository HEAD `4e83648479db33ca8f50798126141ab2fa262d8b`; retaining the evidence itself
 is necessarily a later repository commit. The strict Operator reader consumes
 only its `campaign.json`, `result.json`, and `probe-evidence.json` files. It
 accepts the artifact as joined-v4 and renders the settled trade, authenticated
-source resolution, redemptions, and exact terminal conservation.
+source resolution, redemptions, and exact terminal conservation. That
+historical directory predates the public-safety gate below and its raw probe
+files retain local process/path/interface metadata; it is not the publication
+format for a new transcript.
 
 The historical predecessor at
 `docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22` truthfully
@@ -133,6 +146,13 @@ and dynamic service ports are collision-checked and can be set with the
 paths remain loopback-only but retain upstream's fixed validator-client port
 range; the retained probe transcript therefore claims loopback isolation, not
 that every client socket is inside the configurable service ranges.
+Raw listener probes remain only in the private temporary campaign directory.
+Before retention, `public_transcript.py` converts them to deterministic
+summaries containing the exact loopback endpoints, per-endpoint observation
+counts, selected-validator hash, and hashes of the ephemeral raw probes. It
+then audits all five final files and refuses absolute home paths, the local
+username, non-loopback literal IPs, PID/FD rows or fields, and
+keypair/private-key/secret markers.
 
 The host and SBF builds are offline and locked, reject lockfile drift, unset
 compiler wrappers and Rust flags, and use a private campaign `CARGO_HOME` plus
@@ -158,7 +178,19 @@ the temporary tree with `CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/chosen/path`.
 That directory may already exist, but the runner refuses it if any of the five
 targets `campaign.json`, `result.json`, `probe-evidence.json`,
 `probe-before.txt`, or `probe-after.txt` already exists; unrelated files are
-left untouched.
+left untouched. The runner builds and checks a public-safe five-file staging
+set before copying any target. Raw `lsof` rows and validator logs are never
+copied; only their SHA-256 provenance survives the temporary-directory cleanup.
+The cheap public-safety unit gate is reproducible with:
+
+```sh
+python3 -m unittest discover \
+  -s programs/clutch-sbf/local-real-pyth/tests -p 'test_*.py' -v
+```
+
+Any retained directory can be rechecked without network access using
+`python3 programs/clutch-sbf/local-real-pyth/public_transcript.py check
+--directory /path/to/the/five-file-transcript`.
 
 The VAA generator is derived from `pythnet/pythnet_sdk/src/test_utils/mod.rs`
 at `pyth-network/pyth-crosschain` commit

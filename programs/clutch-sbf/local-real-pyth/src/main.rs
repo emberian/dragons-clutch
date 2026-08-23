@@ -18,8 +18,8 @@ use clutch_sbf::{
 use clutch_solana_layout::clearing::{EpochWindowAccount, CANDIDATE_WINDOW_SLOTS};
 use clutch_solana_layout::{
     account_len, reservation::RESERVATION_ACCOUNT_BYTES, CandidateRecord, EpochAccount, Hash32,
-    PriceGridAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED,
-    EPOCH_PHASE_FROZEN,
+    PriceGridAccount, SupplyLedgerAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_VERIFIED,
+    EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
 };
 use clutch_solana_reference::REPLAY_ACCOUNT_LEN;
 use clutch_svm_fixture::{
@@ -36,7 +36,7 @@ use solana_keypair::{read_keypair_file, write_keypair_file, Keypair};
 use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_system_interface::instruction as system_instruction;
-use solana_transaction::Transaction;
+use solana_transaction::{Signature, Transaction};
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -78,6 +78,9 @@ const OPERATOR_EVENT_ENV: &str = "CLUTCH_LOCAL_REAL_PYTH_OPERATOR_EVENTS";
 const OPERATOR_EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
 const OPERATOR_MANIFEST_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-manifest/v1";
 const OPERATOR_RESULT_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-result/v1";
+const WRONG_CONFIG_ROLLBACK_STEP: &str = "wrong-config-post-update-plus-append-rollback";
+const WRONG_FEED_ROLLBACK_STEP: &str = "wrong-feed-post-update-plus-append-rollback";
+const OUT_OF_ORDER_ROLLBACK_STEP: &str = "out-of-order-boundary-post-update-plus-append-rollback";
 
 struct Args {
     command: String,
@@ -411,17 +414,112 @@ fn token_amount(rpc: &Rpc, role: &str, key: Address) -> Result<u64> {
     Ok(u64::from_le_bytes(bytes.try_into()?))
 }
 
-fn mint_supply(rpc: &Rpc, role: &str, key: Address) -> Result<u64> {
+fn outcome_mint_supply(
+    rpc: &Rpc,
+    role: &str,
+    key: Address,
+    expected_authority: Address,
+) -> Result<u64> {
     let view = account(rpc, role, key)?;
     require(
         view.owner == plane::token_program().to_string(),
         format!("{role} is not Token-2022-owned"),
     )?;
-    let bytes = view
-        .data
-        .get(36..44)
-        .ok_or_else(|| format!("{role} is too short for a mint supply"))?;
-    Ok(u64::from_le_bytes(bytes.try_into()?))
+    let observation = clutch_sbf::token::observe_mint(&view.data)
+        .map_err(|error| format!("{role} is not a canonical outcome mint: {error:?}"))?;
+    require(
+        observation.decimals == 0
+            && observation.mint_authority == Some(expected_authority.to_bytes())
+            && observation.freeze_authority.is_none()
+            && observation.extensions == 0,
+        format!("{role} does not retain the canonical outcome-mint policy"),
+    )?;
+    Ok(observation.supply)
+}
+
+fn terminal_liability_evidence(
+    supply_address: Address,
+    supply: &SupplyLedgerAccount,
+    outcome_mints: &[(Address, u64)],
+) -> Result<Value> {
+    supply
+        .validate()
+        .map_err(|error| format!("terminal SupplyLedger is invalid: {error:?}"))?;
+    let outcome_count = usize::from(supply.outcome_count);
+    require(
+        outcome_mints.len() == outcome_count,
+        "terminal outcome-mint vector does not match SupplyLedger outcome_count",
+    )?;
+    require(
+        supply_address.as_ref().iter().any(|byte| *byte != 0),
+        "terminal SupplyLedger address is zero",
+    )?;
+    let mut seen_mints = BTreeMap::new();
+    for (index, (mint, _)) in outcome_mints.iter().enumerate() {
+        require(
+            mint.as_ref().iter().any(|byte| *byte != 0)
+                && seen_mints.insert(mint.to_string(), index).is_none(),
+            "terminal outcome-mint addresses are zero or aliased",
+        )?;
+    }
+    let internal_supply = supply.internal_supply[..outcome_count]
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let external_supply = supply.external_supply[..outcome_count]
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut aggregate_supply = Vec::with_capacity(outcome_count);
+    for index in 0..outcome_count {
+        aggregate_supply.push(
+            supply
+                .aggregate_supply(u8::try_from(index)?)
+                .map_err(|error| format!("terminal aggregate supply is invalid: {error:?}"))?,
+        );
+    }
+    require(
+        supply.internal_supply[..outcome_count]
+            .iter()
+            .chain(&supply.external_supply[..outcome_count])
+            .chain(aggregate_supply.iter())
+            .chain(outcome_mints.iter().map(|(_, amount)| amount))
+            .all(|amount| *amount == 0),
+        "terminal market retains an internal, external-ledger, aggregate, or minted liability",
+    )?;
+    Ok(json!({
+        "all_zero": true,
+        "supply_ledger": {
+            "address": supply_address.to_string(),
+            "outcome_count": supply.outcome_count,
+            "internal_supply": internal_supply,
+            "external_supply": external_supply,
+            "aggregate_supply": aggregate_supply.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        },
+        "outcome_mints": outcome_mints.iter().enumerate().map(|(index, (mint, amount))| json!({
+            "outcome_index": index,
+            "address": mint.to_string(),
+            "supply": amount.to_string(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn retain_terminal_liability_evidence(
+    campaign_mode: &str,
+    terminal: &mut Value,
+    liabilities: Value,
+) -> Result<()> {
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        let fields = terminal
+            .as_object_mut()
+            .ok_or("terminal evidence is not a JSON object")?;
+        require(
+            !fields.contains_key("liabilities"),
+            "terminal evidence already contains a liabilities field",
+        )?;
+        fields.insert("liabilities".to_string(), liabilities);
+    }
+    Ok(())
 }
 
 fn compute_budget() -> Instruction {
@@ -1602,36 +1700,225 @@ fn source_archive_evidence(
     })
 }
 
-fn out_of_order_rollback_evidence(
-    skipped_boundary_index: usize,
-    skipped_update_account: Address,
-    refusal_signature: &str,
-    before_snapshot_sha256: &str,
-    after_snapshot_sha256: &str,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RollbackAttempt {
+    WrongConfig {
+        attempted_config: Address,
+        registered_config: Address,
+    },
+    WrongFeed {
+        attempted_provider_feed: [u8; 32],
+        registered_provider_feed: [u8; 32],
+        verified_vaa_account: Address,
+    },
+    OutOfOrderBoundary {
+        attempted_boundary_index: usize,
+        expected_next_boundary_index: usize,
+        attempted_publish_time: i64,
+        expected_next_publish_time: i64,
+    },
+}
+
+impl RollbackAttempt {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::WrongConfig { .. } => "wrong_config",
+            Self::WrongFeed { .. } => "wrong_feed",
+            Self::OutOfOrderBoundary { .. } => "out_of_order_boundary",
+        }
+    }
+
+    fn step_label(self) -> &'static str {
+        match self {
+            Self::WrongConfig { .. } => WRONG_CONFIG_ROLLBACK_STEP,
+            Self::WrongFeed { .. } => WRONG_FEED_ROLLBACK_STEP,
+            Self::OutOfOrderBoundary { .. } => OUT_OF_ORDER_ROLLBACK_STEP,
+        }
+    }
+
+    fn identity(self) -> Result<Value> {
+        match self {
+            Self::WrongConfig {
+                attempted_config,
+                registered_config,
+            } => {
+                require(
+                    attempted_config != registered_config,
+                    "wrong-Config rollback evidence does not name a wrong Config",
+                )?;
+                Ok(json!({
+                    "attempted_config_account": attempted_config.to_string(),
+                    "registered_config_account": registered_config.to_string(),
+                }))
+            }
+            Self::WrongFeed {
+                attempted_provider_feed,
+                registered_provider_feed,
+                verified_vaa_account,
+            } => {
+                require(
+                    attempted_provider_feed != registered_provider_feed,
+                    "wrong-feed rollback evidence does not name a wrong feed",
+                )?;
+                require(
+                    verified_vaa_account.as_ref().iter().any(|byte| *byte != 0),
+                    "wrong-feed rollback evidence names a zero verified-VAA account",
+                )?;
+                Ok(json!({
+                    "attempted_provider_feed_id": hex32(attempted_provider_feed),
+                    "registered_provider_feed_id": hex32(registered_provider_feed),
+                    "verified_vaa_account": verified_vaa_account.to_string(),
+                }))
+            }
+            Self::OutOfOrderBoundary {
+                attempted_boundary_index,
+                expected_next_boundary_index,
+                attempted_publish_time,
+                expected_next_publish_time,
+            } => {
+                let boundary_delta = attempted_boundary_index
+                    .checked_sub(expected_next_boundary_index)
+                    .filter(|delta| *delta > 0)
+                    .ok_or("out-of-order boundary is not later than the expected boundary")?;
+                let scheduled_time_delta = i64::try_from(boundary_delta)?
+                    .checked_mul(60)
+                    .ok_or("out-of-order publish-time delta overflow")?;
+                require(
+                    attempted_publish_time
+                        == expected_next_publish_time
+                            .checked_add(scheduled_time_delta)
+                            .ok_or("expected publish time overflow")?,
+                    "out-of-order rollback evidence does not match the campaign schedule",
+                )?;
+                Ok(json!({
+                    "attempted_boundary_index": attempted_boundary_index,
+                    "expected_next_boundary_index": expected_next_boundary_index,
+                    "attempted_publish_time": attempted_publish_time.to_string(),
+                    "expected_next_publish_time": expected_next_publish_time.to_string(),
+                }))
+            }
+        }
+    }
+}
+
+struct RollbackEvidence<'a> {
+    attempt: RollbackAttempt,
+    ephemeral_update_account: Address,
+    refusal_step: &'a Value,
+    before_snapshot_sha256: &'a str,
+    after_snapshot_sha256: &'a str,
     archive: Address,
     treasury: Address,
-) -> Value {
-    json!({
-        "ok": before_snapshot_sha256 == after_snapshot_sha256,
-        "skipped_boundary_index": skipped_boundary_index,
-        "skipped_update_account": skipped_update_account.to_string(),
-        "skipped_update_absent_after_refusal": true,
+}
+
+fn is_lower_hex_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn rollback_evidence(input: RollbackEvidence<'_>) -> Result<Value> {
+    let refusal_step_label = input
+        .refusal_step
+        .get("label")
+        .and_then(Value::as_str)
+        .ok_or("rollback evidence refusal step has no string label")?;
+    require(
+        refusal_step_label == input.attempt.step_label(),
+        "rollback evidence refusal step label does not match its attempt kind",
+    )?;
+    let refusal_signature = input
+        .refusal_step
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or("rollback evidence refusal step has no string signature")?;
+    let parsed_signature = Signature::from_str(refusal_signature)
+        .map_err(|error| format!("rollback evidence refusal signature is malformed: {error}"))?;
+    require(
+        parsed_signature.to_string() == refusal_signature,
+        "rollback evidence refusal signature is not canonical base58",
+    )?;
+    let refusal_error = input
+        .refusal_step
+        .get("error")
+        .ok_or("rollback evidence refusal step has no error")?;
+    require(
+        refusal_error == &json!({"InstructionError": [2, {"Custom": 122}]}),
+        "rollback evidence refusal step is not the exact SourceAdmissionFailed error",
+    )?;
+    let refusal_parts = refusal_error
+        .get("InstructionError")
+        .and_then(Value::as_array)
+        .ok_or("rollback evidence refusal step has no InstructionError")?;
+    let refusal_instruction_index = refusal_parts
+        .first()
+        .and_then(Value::as_u64)
+        .ok_or("rollback evidence refusal step has no instruction index")?;
+    let refusal_custom_code = refusal_parts
+        .get(1)
+        .and_then(|detail| detail.get("Custom"))
+        .and_then(Value::as_u64)
+        .ok_or("rollback evidence refusal step has no custom code")?;
+    require(
+        (refusal_instruction_index, refusal_custom_code) == (2, 0x007a),
+        "rollback evidence refusal step is not SourceAdmissionFailed at instruction 2",
+    )?;
+    require(
+        input
+            .ephemeral_update_account
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0),
+        "rollback evidence names a zero ephemeral update account",
+    )?;
+    require(
+        input.archive != input.treasury
+            && input.archive.as_ref().iter().any(|byte| *byte != 0)
+            && input.treasury.as_ref().iter().any(|byte| *byte != 0),
+        "rollback evidence watched accounts are zero or aliased",
+    )?;
+    require(
+        is_lower_hex_sha256(input.before_snapshot_sha256)
+            && is_lower_hex_sha256(input.after_snapshot_sha256),
+        "rollback evidence snapshot digest is not lowercase SHA-256 hex",
+    )?;
+    require(
+        input.before_snapshot_sha256 == input.after_snapshot_sha256,
+        "rollback evidence before/after snapshots differ",
+    )?;
+    let attempt_identity = input.attempt.identity()?;
+    Ok(json!({
+        "ok": true,
+        "attempt_kind": input.attempt.kind(),
+        "attempt_identity": attempt_identity,
+        "ephemeral_update_account": input.ephemeral_update_account.to_string(),
+        "ephemeral_update_absent_after_refusal": true,
+        "refusal_step_label": refusal_step_label,
         "refusal_signature": refusal_signature,
         "instruction_error": {
-            "instruction_index": 2,
-            "custom_code": 122,
+            "instruction_index": refusal_instruction_index,
+            "custom_code": refusal_custom_code,
             "custom_code_hex": "0x7a",
         },
         "snapshot_encoding": "domain || target_count:u64-le || repeated(key:32 || present:u8 || if-present(lamports:u64-le || owner:32 || executable:u8 || data_len:u64-le || data))",
         "snapshot_domain": String::from_utf8_lossy(ROLLBACK_SNAPSHOT_DOMAIN),
         "watched_accounts": [
-            {"role": "source_archive", "address": archive.to_string()},
-            {"role": "receiver_treasury", "address": treasury.to_string()},
+            {"role": "source_archive", "address": input.archive.to_string()},
+            {"role": "receiver_treasury", "address": input.treasury.to_string()},
         ],
-        "before_snapshot_sha256": before_snapshot_sha256,
-        "after_snapshot_sha256": after_snapshot_sha256,
-        "snapshots_equal": before_snapshot_sha256 == after_snapshot_sha256,
-    })
+        "before_snapshot_sha256": input.before_snapshot_sha256,
+        "after_snapshot_sha256": input.after_snapshot_sha256,
+        "snapshots_equal": true,
+    }))
+}
+
+fn rollback_result_value(campaign_mode: &str, evidence: &Value) -> Value {
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        evidence.clone()
+    } else {
+        Value::Bool(true)
+    }
 }
 
 fn upload_artifact(
@@ -2146,7 +2433,12 @@ fn run(
         )?;
         for (index, mint) in correct.plane.outcome_mints.iter().enumerate() {
             require(
-                mint_supply(&rpc, &format!("created outcome mint {index}"), mint.address)? == 0,
+                outcome_mint_supply(
+                    &rpc,
+                    &format!("created outcome mint {index}"),
+                    mint.address,
+                    correct.plane.market.address,
+                )? == 0,
                 format!("created outcome mint {index} has nonzero supply"),
             )?;
         }
@@ -2610,6 +2902,7 @@ fn run(
     let bad_config_update = Keypair::new();
     let watched = [correct.plane.source_archive.address, treasury];
     let before = snapshot(&rpc, &watched)?;
+    let before_snapshot_sha256 = rollback_snapshot_sha256(&watched, &before)?;
     assert_clock(&rpc, publish_times[0])?;
     let (signature, status) = sign_submit(
         &rpc,
@@ -2630,22 +2923,38 @@ fn run(
     record_step(
         &rpc,
         &mut steps,
-        "wrong-config-post-update-plus-append-rollback",
-        signature,
+        WRONG_CONFIG_ROLLBACK_STEP,
+        signature.clone(),
         &status,
     )?;
+    let ephemeral_update_absent = rpc
+        .account(&bad_config_update.pubkey().to_string())?
+        .is_none();
     require(
-        rpc.account(&bad_config_update.pubkey().to_string())?
-            .is_none(),
+        ephemeral_update_absent,
         "wrong Config did not roll back receiver update",
     )?;
-    require(
-        snapshot(&rpc, &watched)? == before,
-        "wrong Config changed archive or treasury",
-    )?;
+    let after = snapshot(&rpc, &watched)?;
+    require(after == before, "wrong Config changed archive or treasury")?;
+    let after_snapshot_sha256 = rollback_snapshot_sha256(&watched, &after)?;
+    let wrong_config_rollback = rollback_evidence(RollbackEvidence {
+        attempt: RollbackAttempt::WrongConfig {
+            attempted_config: WRONG_CONFIG,
+            registered_config: address(real_pyth_lab::RECEIVER_CONFIG),
+        },
+        ephemeral_update_account: bad_config_update.pubkey(),
+        refusal_step: steps
+            .last()
+            .ok_or("wrong-Config refusal step was not retained")?,
+        before_snapshot_sha256: &before_snapshot_sha256,
+        after_snapshot_sha256: &after_snapshot_sha256,
+        archive: correct.plane.source_archive.address,
+        treasury,
+    })?;
 
     let bad_feed_update = Keypair::new();
     let before = snapshot(&rpc, &watched)?;
+    let before_snapshot_sha256 = rollback_snapshot_sha256(&watched, &before)?;
     assert_clock(&rpc, publish_time)?;
     let (signature, status) = sign_submit(
         &rpc,
@@ -2671,19 +2980,38 @@ fn run(
     record_step(
         &rpc,
         &mut steps,
-        "wrong-feed-post-update-plus-append-rollback",
-        signature,
+        WRONG_FEED_ROLLBACK_STEP,
+        signature.clone(),
         &status,
     )?;
+    let ephemeral_update_absent = rpc
+        .account(&bad_feed_update.pubkey().to_string())?
+        .is_none();
     require(
-        rpc.account(&bad_feed_update.pubkey().to_string())?
-            .is_none(),
+        ephemeral_update_absent,
         "wrong feed did not roll back receiver update",
     )?;
+    let after = snapshot(&rpc, &watched)?;
     require(
-        snapshot(&rpc, &watched)? == before,
+        after == before,
         "wrong feed changed registered archive or treasury",
     )?;
+    let after_snapshot_sha256 = rollback_snapshot_sha256(&watched, &after)?;
+    let wrong_feed_rollback = rollback_evidence(RollbackEvidence {
+        attempt: RollbackAttempt::WrongFeed {
+            attempted_provider_feed: WRONG_FEED_ID,
+            registered_provider_feed: provider::FEED_ID,
+            verified_vaa_account: wrong_feed_encoded.pubkey(),
+        },
+        ephemeral_update_account: bad_feed_update.pubkey(),
+        refusal_step: steps
+            .last()
+            .ok_or("wrong-feed refusal step was not retained")?,
+        before_snapshot_sha256: &before_snapshot_sha256,
+        after_snapshot_sha256: &after_snapshot_sha256,
+        archive: correct.plane.source_archive.address,
+        treasury,
+    })?;
 
     let out_of_order_rollback = if observations.len() > 1 {
         let index = observations.len() - 1;
@@ -2715,7 +3043,7 @@ fn run(
         record_step(
             &rpc,
             &mut steps,
-            "out-of-order-boundary-post-update-plus-append-rollback",
+            OUT_OF_ORDER_ROLLBACK_STEP,
             signature.clone(),
             &status,
         )?;
@@ -2734,15 +3062,22 @@ fn run(
             after_snapshot_sha256 == before_snapshot_sha256,
             "equal rollback account snapshots produced different canonical digests",
         )?;
-        Some(out_of_order_rollback_evidence(
-            index,
-            skipped_update.pubkey(),
-            &signature,
-            &before_snapshot_sha256,
-            &after_snapshot_sha256,
-            correct.plane.source_archive.address,
+        Some(rollback_evidence(RollbackEvidence {
+            attempt: RollbackAttempt::OutOfOrderBoundary {
+                attempted_boundary_index: index,
+                expected_next_boundary_index: 0,
+                attempted_publish_time: publish_times[index],
+                expected_next_publish_time: publish_times[0],
+            },
+            ephemeral_update_account: skipped_update.pubkey(),
+            refusal_step: steps
+                .last()
+                .ok_or("out-of-order refusal step was not retained")?,
+            before_snapshot_sha256: &before_snapshot_sha256,
+            after_snapshot_sha256: &after_snapshot_sha256,
+            archive: correct.plane.source_archive.address,
             treasury,
-        ))
+        })?)
     } else {
         None
     };
@@ -3132,25 +3467,67 @@ fn run(
             )?
             .data,
         )?;
+        let terminal_supply = plane::decode_supply(
+            &account(&rpc, "terminal SupplyLedger", correct.plane.supply.address)?.data,
+        )?;
+        require(
+            terminal_supply.binds_market(&market).is_ok(),
+            "terminal SupplyLedger does not bind the resolved market",
+        )?;
+        let terminal_outcome_mints = correct
+            .plane
+            .outcome_mints
+            .iter()
+            .enumerate()
+            .map(|(index, mint)| {
+                Ok((
+                    mint.address,
+                    outcome_mint_supply(
+                        &rpc,
+                        &format!("terminal outcome mint {index}"),
+                        mint.address,
+                        correct.plane.market.address,
+                    )?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let terminal_liabilities = terminal_liability_evidence(
+            correct.plane.supply.address,
+            &terminal_supply,
+            &terminal_outcome_mints,
+        )?;
+        let terminal_hoard = plane::decode_hoard(
+            &account(&rpc, "terminal Hoard", correct.plane.hoard.address)?.data,
+        )?;
+        let terminal_buyer_token_atoms = token_amount(
+            &rpc,
+            "terminal buyer collateral token",
+            plane::actor_collateral(payer.pubkey()),
+        )?;
+        let terminal_seller_token_atoms = token_amount(
+            &rpc,
+            "terminal seller collateral token",
+            plane::actor_collateral(second_owner.pubkey()),
+        )?;
+        let terminal_hoard_token_atoms = token_amount(
+            &rpc,
+            "terminal Hoard token account",
+            correct.plane.hoard_token.address,
+        )?;
         require(
             terminal_buyer.cash_atoms == 0
                 && terminal_seller.cash_atoms == 0
-                && token_amount(
-                    &rpc,
-                    "terminal buyer collateral token",
-                    plane::actor_collateral(payer.pubkey()),
-                )? == 76
-                && token_amount(
-                    &rpc,
-                    "terminal seller collateral token",
-                    plane::actor_collateral(second_owner.pubkey()),
-                )? == 52
-                && token_amount(
-                    &rpc,
-                    "terminal Hoard token account",
-                    correct.plane.hoard_token.address,
-                )? == 0,
-            "WithdrawCash did not return the exact conserved collateral to both ephemeral owners",
+                && terminal_buyer.internal[..4]
+                    .iter()
+                    .all(|quantity| *quantity == 0)
+                && terminal_seller.internal[..4]
+                    .iter()
+                    .all(|quantity| *quantity == 0)
+                && terminal_hoard.collateral_atoms == 0
+                && terminal_buyer_token_atoms == 76
+                && terminal_seller_token_atoms == 52
+                && terminal_hoard_token_atoms == 0,
+            "terminal accounts do not retain exact zero claims and conserved owner collateral",
         )?;
         let create_market_signature = lifecycle_signatures
             .get("create_market")
@@ -3164,6 +3541,18 @@ fn run(
         let split_signature = lifecycle_signatures
             .get("split")
             .ok_or("joined campaign lost its Split signature")?;
+        let mut terminal = json!({
+            "buyer_position_cash_atoms": terminal_buyer.cash_atoms.to_string(),
+            "buyer_position_internal": terminal_buyer.internal[..4].iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "seller_position_cash_atoms": terminal_seller.cash_atoms.to_string(),
+            "seller_position_internal": terminal_seller.internal[..4].iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "supply_internal": terminal_supply.internal_supply[..4].iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "hoard_collateral_atoms": terminal_hoard.collateral_atoms.to_string(),
+            "hoard_token_atoms": terminal_hoard_token_atoms.to_string(),
+            "buyer_token_atoms": terminal_buyer_token_atoms.to_string(),
+            "seller_token_atoms": terminal_seller_token_atoms.to_string(),
+        });
+        retain_terminal_liability_evidence(campaign_mode, &mut terminal, terminal_liabilities)?;
         json!({
             "market_genesis_assisted": false,
             "market": correct.plane.market.address.to_string(),
@@ -3180,17 +3569,7 @@ fn run(
             "redeem_internal": redeem_signatures,
             "buyer_withdraw_signature": buyer_withdraw_signature,
             "seller_withdraw_signature": seller_withdraw_signature,
-            "terminal": {
-                "buyer_position_cash_atoms": "0",
-                "buyer_position_internal": ["0", "0", "0", "0"],
-                "seller_position_cash_atoms": "0",
-                "seller_position_internal": ["0", "0", "0", "0"],
-                "supply_internal": ["0", "0", "0", "0"],
-                "hoard_collateral_atoms": "0",
-                "hoard_token_atoms": "0",
-                "buyer_token_atoms": "76",
-                "seller_token_atoms": "52",
-            },
+            "terminal": terminal,
             "trade": joined_trade,
         })
     } else {
@@ -3253,8 +3632,8 @@ fn run(
         "joined_post_append_signature": joined_signature,
         "seal_signature": seal_signature,
         "resolve_signature": resolve_signature,
-        "wrong_config_rollback": true,
-        "wrong_feed_rollback": true,
+        "wrong_config_rollback": rollback_result_value(campaign_mode, &wrong_config_rollback),
+        "wrong_feed_rollback": rollback_result_value(campaign_mode, &wrong_feed_rollback),
         "sealed": true,
         "resolved_payout": 1,
         "lifecycle": lifecycle,
@@ -3664,34 +4043,419 @@ mod argument_tests {
         }
 
         let snapshot_digest = "ab".repeat(32);
-        let rollback = out_of_order_rollback_evidence(
-            1,
-            skipped,
-            "local-signature",
-            &snapshot_digest,
-            &snapshot_digest,
+        let signature = Keypair::new()
+            .sign_message(b"rollback-schema-test")
+            .to_string();
+        let build = |attempt: RollbackAttempt| {
+            let refusal_step = json!({
+                "label": attempt.step_label(),
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 122}]},
+            });
+            rollback_evidence(RollbackEvidence {
+                attempt,
+                ephemeral_update_account: skipped,
+                refusal_step: &refusal_step,
+                before_snapshot_sha256: &snapshot_digest,
+                after_snapshot_sha256: &snapshot_digest,
+                archive,
+                treasury,
+            })
+        };
+        let attempts = [
+            (
+                "wrong_config",
+                WRONG_CONFIG_ROLLBACK_STEP,
+                RollbackAttempt::WrongConfig {
+                    attempted_config: address([21; 32]),
+                    registered_config: address([22; 32]),
+                },
+            ),
+            (
+                "wrong_feed",
+                WRONG_FEED_ROLLBACK_STEP,
+                RollbackAttempt::WrongFeed {
+                    attempted_provider_feed: [23; 32],
+                    registered_provider_feed: [24; 32],
+                    verified_vaa_account: address([25; 32]),
+                },
+            ),
+            (
+                "out_of_order_boundary",
+                OUT_OF_ORDER_ROLLBACK_STEP,
+                RollbackAttempt::OutOfOrderBoundary {
+                    attempted_boundary_index: 3,
+                    expected_next_boundary_index: 0,
+                    attempted_publish_time: 1_787_540_580,
+                    expected_next_publish_time: 1_787_540_400,
+                },
+            ),
+        ];
+        let exact_common_keys = std::collections::BTreeSet::from([
+            "after_snapshot_sha256",
+            "attempt_identity",
+            "attempt_kind",
+            "before_snapshot_sha256",
+            "ephemeral_update_absent_after_refusal",
+            "ephemeral_update_account",
+            "instruction_error",
+            "ok",
+            "refusal_signature",
+            "refusal_step_label",
+            "snapshot_domain",
+            "snapshot_encoding",
+            "snapshots_equal",
+            "watched_accounts",
+        ]);
+        for (expected_kind, expected_step, attempt) in attempts {
+            let rollback = build(attempt).unwrap();
+            let keys = rollback
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(keys, exact_common_keys);
+            assert_eq!(rollback["ok"], true);
+            assert_eq!(rollback["attempt_kind"], expected_kind);
+            assert_eq!(rollback["refusal_step_label"], expected_step);
+            assert_eq!(rollback["refusal_signature"], signature);
+            assert_eq!(rollback["ephemeral_update_account"], skipped.to_string());
+            assert_eq!(rollback["ephemeral_update_absent_after_refusal"], true);
+            assert_eq!(
+                rollback["instruction_error"],
+                json!({
+                    "instruction_index": 2,
+                    "custom_code": 122,
+                    "custom_code_hex": "0x7a",
+                })
+            );
+            assert_eq!(rollback["before_snapshot_sha256"], snapshot_digest);
+            assert_eq!(rollback["after_snapshot_sha256"], snapshot_digest);
+            assert_eq!(rollback["snapshots_equal"], true);
+            assert_eq!(
+                rollback["watched_accounts"][0],
+                json!({"role": "source_archive", "address": archive.to_string()})
+            );
+            assert_eq!(
+                rollback["watched_accounts"][1],
+                json!({"role": "receiver_treasury", "address": treasury.to_string()})
+            );
+        }
+        let wrong_config = build(attempts[0].2).unwrap();
+        assert_eq!(
+            rollback_result_value(MULTIBOUNDARY_JOINED_MODE, &wrong_config),
+            wrong_config
+        );
+        assert_eq!(
+            rollback_result_value(SOURCE_ONLY_MODE, &wrong_config),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            rollback_result_value(JOINED_LIFECYCLE_MODE, &wrong_config),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            wrong_config["attempt_identity"],
+            json!({
+                "attempted_config_account": address([21; 32]).to_string(),
+                "registered_config_account": address([22; 32]).to_string(),
+            })
+        );
+        let wrong_feed = build(attempts[1].2).unwrap();
+        assert_eq!(
+            wrong_feed["attempt_identity"],
+            json!({
+                "attempted_provider_feed_id": hex32([23; 32]),
+                "registered_provider_feed_id": hex32([24; 32]),
+                "verified_vaa_account": address([25; 32]).to_string(),
+            })
+        );
+        let out_of_order = build(attempts[2].2).unwrap();
+        assert_eq!(
+            out_of_order["attempt_identity"],
+            json!({
+                "attempted_boundary_index": 3,
+                "expected_next_boundary_index": 0,
+                "attempted_publish_time": "1787540580",
+                "expected_next_publish_time": "1787540400",
+            })
+        );
+    }
+
+    #[test]
+    fn rollback_schema_refuses_ambiguous_or_false_evidence() {
+        let archive = address([31; 32]);
+        let treasury = address([32; 32]);
+        let update = address([33; 32]);
+        let digest = "ab".repeat(32);
+        let other_digest = "cd".repeat(32);
+        let signature = Keypair::new()
+            .sign_message(b"hostile-rollback-schema-test")
+            .to_string();
+        let refusal_step = json!({
+            "label": WRONG_CONFIG_ROLLBACK_STEP,
+            "signature": signature,
+            "error": {"InstructionError": [2, {"Custom": 122}]},
+        });
+        let attempt = RollbackAttempt::WrongConfig {
+            attempted_config: address([34; 32]),
+            registered_config: address([35; 32]),
+        };
+        let evidence =
+            |attempt, step: &Value, before: &str, after: &str, update, archive, treasury| {
+                rollback_evidence(RollbackEvidence {
+                    attempt,
+                    ephemeral_update_account: update,
+                    refusal_step: step,
+                    before_snapshot_sha256: before,
+                    after_snapshot_sha256: after,
+                    archive,
+                    treasury,
+                })
+            };
+        assert!(evidence(
+            attempt,
+            &refusal_step,
+            "short",
+            "short",
+            update,
             archive,
             treasury,
-        );
-        assert_eq!(rollback["ok"], true);
-        assert_eq!(rollback["skipped_update_account"], skipped.to_string());
-        assert_eq!(rollback["skipped_update_absent_after_refusal"], true);
-        assert_eq!(rollback["instruction_error"]["instruction_index"], 2);
-        assert_eq!(rollback["instruction_error"]["custom_code"], 122);
-        assert_eq!(rollback["before_snapshot_sha256"], snapshot_digest);
-        assert_eq!(rollback["after_snapshot_sha256"], snapshot_digest);
+        )
+        .is_err());
+        assert!(evidence(
+            attempt,
+            &refusal_step,
+            &digest,
+            &other_digest,
+            update,
+            archive,
+            treasury,
+        )
+        .is_err());
+        assert!(evidence(
+            attempt,
+            &refusal_step,
+            &digest,
+            &digest,
+            update,
+            archive,
+            archive,
+        )
+        .is_err());
+        assert!(evidence(
+            attempt,
+            &refusal_step,
+            &digest,
+            &digest,
+            Address::default(),
+            archive,
+            treasury,
+        )
+        .is_err());
+        assert!(evidence(
+            RollbackAttempt::WrongConfig {
+                attempted_config: address([34; 32]),
+                registered_config: address([34; 32]),
+            },
+            &refusal_step,
+            &digest,
+            &digest,
+            update,
+            archive,
+            treasury,
+        )
+        .is_err());
+        assert!(evidence(
+            RollbackAttempt::WrongFeed {
+                attempted_provider_feed: [36; 32],
+                registered_provider_feed: [36; 32],
+                verified_vaa_account: address([37; 32]),
+            },
+            &json!({
+                "label": WRONG_FEED_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 122}]},
+            }),
+            &digest,
+            &digest,
+            update,
+            archive,
+            treasury,
+        )
+        .is_err());
+        assert!(evidence(
+            RollbackAttempt::OutOfOrderBoundary {
+                attempted_boundary_index: 2,
+                expected_next_boundary_index: 0,
+                attempted_publish_time: 1_787_540_460,
+                expected_next_publish_time: 1_787_540_400,
+            },
+            &json!({
+                "label": OUT_OF_ORDER_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 122}]},
+            }),
+            &digest,
+            &digest,
+            update,
+            archive,
+            treasury,
+        )
+        .is_err());
+        for hostile_step in [
+            json!({
+                "label": WRONG_FEED_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 122}]},
+            }),
+            json!({
+                "label": WRONG_CONFIG_ROLLBACK_STEP,
+                "signature": "not-a-signature",
+                "error": {"InstructionError": [2, {"Custom": 122}]},
+            }),
+            json!({
+                "label": WRONG_CONFIG_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [1, {"Custom": 122}]},
+            }),
+            json!({
+                "label": WRONG_CONFIG_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 121}]},
+            }),
+            json!({
+                "label": WRONG_CONFIG_ROLLBACK_STEP,
+                "signature": signature,
+                "error": {"InstructionError": [2, {"Custom": 122}, "extra"]},
+            }),
+        ] {
+            assert!(evidence(
+                attempt,
+                &hostile_step,
+                &digest,
+                &digest,
+                update,
+                archive,
+                treasury,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn out_of_order_rollback_identity_accepts_a_nonadjacent_scheduled_boundary() {
+        let identity = RollbackAttempt::OutOfOrderBoundary {
+            attempted_boundary_index: 4,
+            expected_next_boundary_index: 1,
+            attempted_publish_time: 1_787_540_580,
+            expected_next_publish_time: 1_787_540_400,
+        }
+        .identity()
+        .unwrap();
+        assert_eq!(identity["attempted_boundary_index"], 4);
+        assert_eq!(identity["expected_next_boundary_index"], 1);
+        assert_eq!(identity["attempted_publish_time"], "1787540580");
+        assert_eq!(identity["expected_next_publish_time"], "1787540400");
+    }
+
+    #[test]
+    fn terminal_liability_schema_retains_every_zero_supply_as_decimal_text() {
+        let supply_address = address([51; 32]);
+        let supply = SupplyLedgerAccount {
+            market: Hash32::from_bytes([52; 32]),
+            realm: Hash32::from_bytes([53; 32]),
+            generation: 7,
+            outcome_count: 4,
+            internal_supply: [0; clutch_solana_layout::MAX_OUTCOMES],
+            external_supply: [0; clutch_solana_layout::MAX_OUTCOMES],
+            stored_bump: 1,
+            flags: 0,
+        };
+        let mints = (0_u8..4)
+            .map(|index| (address([60 + index; 32]), 0))
+            .collect::<Vec<_>>();
+        let liabilities = terminal_liability_evidence(supply_address, &supply, &mints).unwrap();
         assert_eq!(
-            rollback["before_snapshot_sha256"].as_str().unwrap().len(),
-            64
+            liabilities,
+            json!({
+                "all_zero": true,
+                "supply_ledger": {
+                    "address": supply_address.to_string(),
+                    "outcome_count": 4,
+                    "internal_supply": ["0", "0", "0", "0"],
+                    "external_supply": ["0", "0", "0", "0"],
+                    "aggregate_supply": ["0", "0", "0", "0"],
+                },
+                "outcome_mints": mints.iter().enumerate().map(|(index, (mint, _))| json!({
+                    "outcome_index": index,
+                    "address": mint.to_string(),
+                    "supply": "0",
+                })).collect::<Vec<_>>(),
+            })
         );
-        assert_eq!(rollback["snapshots_equal"], true);
-        assert_eq!(
-            rollback["watched_accounts"][0]["address"],
-            archive.to_string()
-        );
-        assert_eq!(
-            rollback["watched_accounts"][1]["address"],
-            treasury.to_string()
-        );
+
+        let mut multiboundary_terminal = json!({"supply_internal": ["0", "0", "0", "0"]});
+        retain_terminal_liability_evidence(
+            MULTIBOUNDARY_JOINED_MODE,
+            &mut multiboundary_terminal,
+            liabilities.clone(),
+        )
+        .unwrap();
+        assert_eq!(multiboundary_terminal["liabilities"], liabilities);
+        let mut legacy_terminal = json!({"supply_internal": ["0", "0", "0", "0"]});
+        let legacy_before = legacy_terminal.clone();
+        retain_terminal_liability_evidence(
+            JOINED_LIFECYCLE_MODE,
+            &mut legacy_terminal,
+            liabilities,
+        )
+        .unwrap();
+        assert_eq!(legacy_terminal, legacy_before);
+    }
+
+    #[test]
+    fn terminal_liability_schema_refuses_any_residual_or_ambiguous_supply() {
+        let supply_address = address([71; 32]);
+        let supply = SupplyLedgerAccount {
+            market: Hash32::from_bytes([72; 32]),
+            realm: Hash32::from_bytes([73; 32]),
+            generation: 7,
+            outcome_count: 4,
+            internal_supply: [0; clutch_solana_layout::MAX_OUTCOMES],
+            external_supply: [0; clutch_solana_layout::MAX_OUTCOMES],
+            stored_bump: 1,
+            flags: 0,
+        };
+        let mints = (0_u8..4)
+            .map(|index| (address([80 + index; 32]), 0))
+            .collect::<Vec<_>>();
+
+        let mut internal = supply;
+        internal.internal_supply[0] = 1;
+        assert!(terminal_liability_evidence(supply_address, &internal, &mints).is_err());
+        let mut external = supply;
+        external.external_supply[1] = 1;
+        assert!(terminal_liability_evidence(supply_address, &external, &mints).is_err());
+        let mut padded = supply;
+        padded.external_supply[4] = 1;
+        assert!(terminal_liability_evidence(supply_address, &padded, &mints).is_err());
+        let mut minted = mints.clone();
+        minted[2].1 = 1;
+        assert!(terminal_liability_evidence(supply_address, &supply, &minted).is_err());
+        assert!(terminal_liability_evidence(supply_address, &supply, &mints[..3]).is_err());
+        let mut aliased = mints.clone();
+        aliased[3].0 = aliased[2].0;
+        assert!(terminal_liability_evidence(supply_address, &supply, &aliased).is_err());
+        assert!(terminal_liability_evidence(Address::default(), &supply, &mints).is_err());
+
+        let mut already_bound = json!({"liabilities": {}});
+        assert!(retain_terminal_liability_evidence(
+            MULTIBOUNDARY_JOINED_MODE,
+            &mut already_bound,
+            json!({"all_zero": true}),
+        )
+        .is_err());
     }
 }
