@@ -425,10 +425,12 @@ fn process_lapse_occurrence(
         &accounts[IX_LAPSE_CLOCK],
     )?;
     let (_, ordinal) = lapse_series_occurrence_v2(
+        program_id,
         &accounts[IX_LAPSE_FUNDING],
         funding,
         &artifacts,
         &clock,
+        &rent,
     )?;
     require(ordinal == request.ordinal, ClutchError::Replay)?;
     Ok(())
@@ -536,12 +538,14 @@ fn process_observe_donation(
         amount,
     };
     observe_series_donation_v2(
+        program_id,
         &accounts[IX_OBSERVE_FUNDING],
         funding,
         &artifacts,
         &authority,
         request.component,
         amount,
+        &rent,
     )?;
     Ok(())
 }
@@ -3525,8 +3529,16 @@ pub fn activate_series_funding_account_v2<
     AuthenticatedSeriesRegistryAccountV2,
     AuthenticatedSeriesFundingAccountV2,
 )> {
+    let live_registry = read_series_registry_account_v2_with_role(
+        program_id,
+        registry_account,
+        registry.value().series_plan_id,
+        rent,
+        true,
+    )?;
     require(
-        registry.account() == *registry_account.key
+        live_registry == registry
+            && registry.account() == *registry_account.key
             && !registry.activation_consumed()
             && registry.value().compiler_bundle_id == compiler_bundle.bundle_id()
             && compiler_bundle.bundle().series_plan_id == registry.value().series_plan_id
@@ -3564,6 +3576,13 @@ pub fn activate_series_funding_account_v2<
         rent,
         value,
     )?;
+    let funding = authenticate_live_series_funding_value_v2(
+        program_id,
+        funding_account,
+        value,
+        artifacts,
+        rent,
+    )?;
     let consumed = consume_series_activation_v2(
         program_id,
         registry_account,
@@ -3572,10 +3591,7 @@ pub fn activate_series_funding_account_v2<
     )?;
     Ok((
         consumed,
-        AuthenticatedSeriesFundingAccountV2 {
-            account: *funding_account.key,
-            value,
-        },
+        funding,
     ))
 }
 
@@ -3832,10 +3848,16 @@ pub fn consume_series_activation_v2(
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     next.encode(&mut data)?;
-    Ok(AuthenticatedSeriesRegistryAccountV2 {
-        account: *account.key,
-        value: next,
-    })
+    drop(data);
+    let rebound = read_series_registry_account_v2_with_role(
+        program_id,
+        account,
+        expected_series,
+        rent,
+        true,
+    )?;
+    require(rebound.value() == next, ClutchError::MismatchedState)?;
+    Ok(rebound)
 }
 
 /// Authenticate a mutable current funding account against RegistryV2 and the
@@ -3878,13 +3900,23 @@ pub fn read_series_funding_account_v2(
 
 /// Write one validated current successor without changing framing/rent facts.
 pub fn write_series_funding_state_v2(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     next: SeriesFundingStateV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
+    rent: &RentParameters,
 ) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
+    let live = authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        current.value(),
+        artifacts,
+        rent,
+    )?;
     require(
-        current.account() == *account.key
+        live == current
+            && current.account() == *account.key
             && current.value().state.series_plan_id == next.series_plan_id
             && current.value().state.funding_terms_id == next.funding_terms_id
             && current.value().state.funding_quote_id == next.funding_quote_id
@@ -3903,15 +3935,49 @@ pub fn write_series_funding_state_v2(
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     updated.encode(&mut data)?;
+    drop(data);
+    authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        updated,
+        artifacts,
+        rent,
+    )
+}
+
+fn authenticate_live_series_funding_value_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected: SeriesFundingAccountV2,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
+    require_program_account(program_id, account, SERIES_FUNDING_ACCOUNT_BYTES_V2, true)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesFundingAccountV2::decode(&data)?;
+    require(value == expected, ClutchError::MismatchedState)?;
+    value
+        .state
+        .validate_against(&artifacts.series, &artifacts.quote, &artifacts.attachment)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        account.key,
+        seeds::series_funding_pda(program_id, &value.state.series_plan_id.bytes()),
+        Some(value.stored_bump),
+    )?;
+    require_rent_coverage(account, value.rent_principal_lamports, rent)?;
     Ok(AuthenticatedSeriesFundingAccountV2 {
         account: *account.key,
-        value: updated,
+        value,
     })
 }
 
 /// Reserve the next current ordinal without advancing its cursor.
 #[allow(clippy::too_many_arguments)]
 pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
@@ -3922,6 +3988,7 @@ pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?
     disposition: clutch_product_series::SeriesMarketDispositionV1,
     debits: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     reservation_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -3938,17 +4005,21 @@ pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?
             reservation_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Commit the exact pending ordinal after its link/Market transition succeeds.
 pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     completion_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -3960,17 +4031,21 @@ pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + 
             completion_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Restore exact pending principal only after authenticated inert reverse-close.
 pub fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     abort_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -3982,16 +4057,20 @@ pub fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
             abort_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Apply a free lapse from the authenticated Clock owner.
 pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -4002,18 +4081,22 @@ pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
             &artifacts.attachment,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Fold physical surplus into exactly one current donation compartment.
 pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     component: SeriesFundingComponentV2,
     amount: ComponentDebitV1,
+    rent: &RentParameters,
 ) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
     let mut next = current.value().state;
     next.add_donation(
@@ -4025,7 +4108,7 @@ pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
         amount,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    write_series_funding_state_v2(account, current, next, artifacts)
+    write_series_funding_state_v2(program_id, account, current, next, artifacts, rent)
 }
 
 /// Derive the exact current terminal principal/donation projection.
