@@ -166,6 +166,10 @@ fn disabled_and_enabled_unfounded_require_authenticated_absence() {
 #[test]
 fn hostile_active_failure_session_cannot_erase_transcript() {
     let pinned = active_link().pin_failure_session(id(27)).unwrap();
+    assert_eq!(
+        pinned.pin_failure_session(id(28)),
+        Err(Error::WorkStateMismatch)
+    );
     let mut body = [0_u8; SERIES_MARKET_LINK_BYTES_V1];
     pinned.encode_into(&mut body).unwrap();
     body[SERIES_MARKET_LINK_BYTES_V1 - 32..].fill(0);

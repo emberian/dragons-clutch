@@ -2522,7 +2522,7 @@ impl SeriesMarketLinkV1 {
     pub fn pin_failure_session(self, failure_begin_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_begin_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 0 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2556,7 +2556,7 @@ impl SeriesMarketLinkV1 {
     pub fn release_failure_session(self, failure_terminal_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_terminal_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions == 0 {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 1 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2856,7 +2856,8 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkStateMismatch);
         }
-        if self.active_failure_sessions > self.failure_sessions_started
+        if self.active_failure_sessions > 1
+            || self.active_failure_sessions > self.failure_sessions_started
             || (self.failure_sessions_started == 0)
                 != (self.failure_session_transcript_id == ContentId::ZERO)
         {
