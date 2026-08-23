@@ -442,6 +442,22 @@ fn claim_ledger_and_fractional_sequences_cannot_advance_independently() {
 }
 
 #[test]
+fn claims_exhausted_phase_cannot_hide_live_canonical_supply() {
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
+    let false_terminal = FractionalLedgerV1 {
+        phase: FractionalLedgerPhaseV1::ClaimsExhausted,
+        ..context.ledger()
+    };
+    assert_eq!(
+        context.with_ledgers(false_terminal, context.claim_ledger(), context.hoard()),
+        Err(Error::LiabilityOutstanding)
+    );
+}
+
+#[test]
 fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
     let (context, _policy, _ledger) =
         external_context(0, 0, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 0);

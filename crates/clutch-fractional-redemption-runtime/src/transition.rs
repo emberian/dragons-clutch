@@ -165,6 +165,11 @@ fn validate_canonical_ledgers(
     {
         return Err(Error::MismatchedBinding);
     }
+    if ledger.phase == FractionalLedgerPhaseV1::ClaimsExhausted
+        && canonical_supply(claim_ledger)? != [0; MAX_OUTCOMES]
+    {
+        return Err(Error::LiabilityOutstanding);
+    }
     Ok(())
 }
 
