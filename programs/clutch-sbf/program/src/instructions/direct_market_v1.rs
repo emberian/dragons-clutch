@@ -5,10 +5,16 @@
 //! `0xb1..=0xb4/v1` family while economic state and transition identities stay
 //! exclusively in `clutch-direct-market-runtime`.
 
-use crate::accounts::{expect_pda, require, require_count, require_distinct, Outcome};
+use crate::accounts::{
+    expect_pda, require, require_count, require_distinct, require_signer, Outcome,
+};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
+use crate::instructions::genesis::{
+    allocate_data, assign_data, read_rent, require_creatable, require_system_program,
+    transfer_data, RentParameters, MAX_PERMITTED_DATA_INCREASE,
+};
 use clutch_direct_market_runtime::codec_v1::{
     decode_direct_action_replay_body_v1, decode_direct_market_root_body_v1,
     decode_direct_reservation_body_v1, decode_direct_selection_body_v1,
@@ -23,11 +29,12 @@ use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
 use clutch_direct_market_runtime::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
-    submit_direct_candidate_v1, verify_next_direct_candidate_v1,
+    prepare_direct_selection_freeze_v1, submit_direct_candidate_v1,
+    verify_next_direct_candidate_v1, AuthenticatedDirectSelectionFreezeV1,
 };
 use clutch_direct_market_runtime::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
-    DirectRootReplayPostV1,
+    DirectRentOwnerV1, DirectRootReplayPostV1,
 };
 use clutch_batch::relation_v2::{
     price_semantics_digest_v2, EconomicDomainV2, PricePreconditionV2,
@@ -43,7 +50,7 @@ use clutch_solana_layout::direct_market_v1::{
     DirectSelectionAccountV1, DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     DIRECT_MARKET_ROOT_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
     DIRECT_SELECTION_BODY_BYTES_V1, decode_direct_empty_payload_v1,
-    DirectSubmitCandidatePayloadV1,
+    DirectFreezeBookPayloadV1, DirectSubmitCandidatePayloadV1,
 };
 use clutch_solana_layout::registry::DirectMarketAction;
 use clutch_solana_layout::{account_len, PriceGridAccount};
@@ -52,6 +59,8 @@ use clutch_solana_layout::registry::{
     DIRECT_RESERVATION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_BYTES,
 };
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::product_artifact::authenticate_product_artifact_v1;
@@ -402,6 +411,206 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DirectSelectionFreezeAuthoritySbfV1 {
+    root: DirectMarketRootV1,
+    selection_account: [u8; 32],
+    rent: DirectRentOwnerV1,
+    reservation_accounts: [[u8; 32]; 2],
+    reservation_semantic_ids: [[u8; 32]; 2],
+    reservation_count: u8,
+    price: AuthenticatedDirectPricePreconditionV1,
+}
+
+impl AuthenticatedDirectSelectionFreezeV1 for DirectSelectionFreezeAuthoritySbfV1 {
+    fn authenticate_freeze(
+        &self,
+        root: DirectMarketRootV1,
+        selection_account: [u8; 32],
+        rent: DirectRentOwnerV1,
+        reservations: &[Option<DirectReservationV1>; 2],
+        reservation_semantic_ids: &[[u8; 32]; 2],
+        domain: &EconomicDomainV2,
+        price: &PricePreconditionV2,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if root != self.root
+            || selection_account != self.selection_account
+            || rent != self.rent
+            || *domain != self.price.domain()
+            || *price != self.price.price()
+            || self.price.authentication_id() == [0; 32]
+            || *reservation_semantic_ids != self.reservation_semantic_ids
+        {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        let mut index = 0usize;
+        while index < 2 {
+            if index < usize::from(self.reservation_count) {
+                let reservation = reservations[index]
+                    .ok_or(DirectMarketErrorV1::UnauthenticatedAuthority)?;
+                if reservation.account() != self.reservation_accounts[index] {
+                    return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+                }
+            } else if reservations[index].is_some()
+                || self.reservation_accounts[index] != [0; 32]
+                || self.reservation_semantic_ids[index] != [0; 32]
+            {
+                return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+}
+
+/// Execute action 4 with an exhaustive account-derived Reservation prefix.
+///
+/// Fixed accounts 0..=11 are root, replay, fresh Selection, payer, System,
+/// Rent, Clock, BundleV5, NativeClaimBasis, PriceMeasurePolicy, GenesisV2, and
+/// PriceGrid. Exactly `root.live_reservations` read-only b4 accounts follow.
+/// No packet count or order index is accepted.
+pub(crate) fn process_direct_freeze_book_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(accounts.len() >= 12, ClutchError::AccountCount)?;
+    require_distinct(accounts)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    let reservation_count = usize::from(root.value().live_reservations());
+    let expected_count = 12usize
+        .checked_add(reservation_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    let replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[1],
+        root,
+    )?;
+    require_signer(&accounts[3])?;
+    require(accounts[3].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[4])?;
+    let rent_parameters = read_rent(&accounts[5])?;
+    let observed_slot = read_clock_slot(&accounts[6])?;
+    let payload = DirectFreezeBookPayloadV1::decode(payload)?;
+    let (selection_pda, selection_bump) =
+        seeds::direct_selection_v1_pda(program_id, &root.account());
+    let (_, donation_floor_lamports) = authenticate_fresh_direct_pda_v1(
+        &accounts[2],
+        (selection_pda, selection_bump),
+    )?;
+    let principal_lamports = rent_parameters.minimum_balance(DIRECT_SELECTION_ACCOUNT_BYTES)?;
+    let selection_rent = DirectRentOwnerV1 {
+        payer: accounts[3].key.to_bytes(),
+        principal_lamports,
+        donation_floor_lamports,
+    };
+    selection_rent.validate().map_err(map_direct_error_v1)?;
+
+    let price = authenticate_direct_price_precondition_v1(
+        program_id,
+        root,
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        payload.prices,
+    )?;
+
+    let mut authenticated = [None; 2];
+    let mut index = 0usize;
+    while index < reservation_count {
+        authenticated[index] = Some(authenticate_direct_reservation_readonly_v1(
+            program_id,
+            &accounts[12 + index],
+            root,
+        )?);
+        index += 1;
+    }
+    if reservation_count == 2 {
+        let left = authenticated[0]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let right = authenticated[1]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        if right.value().order_id() < left.value().order_id() {
+            authenticated = [Some(right), Some(left)];
+        }
+    }
+    let mut reservations = [None; 2];
+    let mut reservation_accounts = [[0u8; 32]; 2];
+    let mut reservation_semantic_ids = [[0u8; 32]; 2];
+    index = 0;
+    while index < reservation_count {
+        let current = authenticated[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        reservations[index] = Some(current.value());
+        reservation_accounts[index] = current.account().to_bytes();
+        reservation_semantic_ids[index] = current.semantic_id();
+        index += 1;
+    }
+    let reservation_count_u8 = u8::try_from(reservation_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let authority = DirectSelectionFreezeAuthoritySbfV1 {
+        root: root.value(),
+        selection_account: accounts[2].key.to_bytes(),
+        rent: selection_rent,
+        reservation_accounts,
+        reservation_semantic_ids,
+        reservation_count: reservation_count_u8,
+        price,
+    };
+    let plan = prepare_direct_selection_freeze_v1(
+        &authority,
+        DirectRootReplayPostV1 {
+            root: root.value(),
+            replay: replay.value(),
+        },
+        sequence,
+        observed_slot,
+        accounts[2].key.to_bytes(),
+        selection_rent,
+        reservations,
+        price.domain(),
+        price.price(),
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+
+    let root_bytes = root.account().to_bytes();
+    let bump_seed = [selection_bump];
+    let signer_seeds: [&[u8]; 3] = [
+        seeds::SEED_DIRECT_SELECTION_V1,
+        &root_bytes,
+        &bump_seed,
+    ];
+    create_current_direct_account_v1(
+        program_id,
+        &accounts[3],
+        &accounts[2],
+        &accounts[4],
+        &rent_parameters,
+        DIRECT_SELECTION_ACCOUNT_BYTES,
+        principal_lamports,
+        donation_floor_lamports,
+        &signer_seeds,
+    )?;
+    write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[1],
+        replay.bump(),
+        plan.state.replay,
+        plan.state.root,
+    )?;
+    write_direct_selection_v1(
+        &accounts[2],
+        selection_bump,
+        plan.selection,
+        plan.state.root,
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectAccountAccessV1 { ReadOnly, Writable }
 
@@ -745,6 +954,88 @@ fn write_exact_v1<const N: usize>(account: &AccountInfo<'_>, value: &[u8; N]) ->
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     data.copy_from_slice(value);
     Ok(())
+}
+
+/// Fund the exact persisted principal in full even when a hostile caller
+/// prefunded the PDA, then allocate and assign without changing that donation.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn create_current_direct_account_v1<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    principal_lamports: u64,
+    donation_floor_lamports: u64,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_creatable(target)?;
+    require_system_program(system_program)?;
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require(
+        space <= MAX_PERMITTED_DATA_INCREASE
+            && principal_lamports == rent.minimum_balance(space)?
+            && target.lamports() == donation_floor_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let expected_balance = donation_floor_lamports
+        .checked_add(principal_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let transfer = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(principal_lamports),
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*target.key, false),
+        ],
+    );
+    invoke_signed(
+        &transfer,
+        &[payer.clone(), target.clone(), system_program.clone()],
+        &[],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == expected_balance,
+        ClutchError::AccountCreationFailed,
+    )?;
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(space),
+        vec![AccountMeta::new(*target.key, false)],
+    );
+    invoke_signed(
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.data_len() == space
+            && target.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && target.lamports() == expected_balance,
+        ClutchError::AccountCreationFailed,
+    )?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*target.key, false)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.data_len() == space
+            && target.owner == program_id
+            && target.lamports() == expected_balance,
+        ClutchError::AccountCreationFailed,
+    )
 }
 
 fn map_direct_error_v1(error: DirectMarketErrorV1) -> Refusal {
