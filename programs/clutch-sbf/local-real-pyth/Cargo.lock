@@ -504,6 +504,18 @@ name = "clutch-bspline"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-collateral-adapter-v2"
+version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "clutch-bspline-accumulator"
 version = "0.1.0"
 dependencies = [
@@ -568,6 +580,13 @@ name = "clutch-owner-settlement"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-retirement"
+version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
+
+[[package]]
 name = "clutch-sbf"
 version = "0.1.0"
 dependencies = [
@@ -576,6 +595,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-collateral-adapter-v2",
  "clutch-kernel",
  "clutch-liveness",
  "clutch-solana-layout",
@@ -597,6 +617,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
  "clutch-kernel",
  "clutch-sbf",
  "clutch-solana-layout",
@@ -613,6 +634,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
  "solana-sha256-hasher",
 ]
 

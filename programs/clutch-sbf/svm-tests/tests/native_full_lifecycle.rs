@@ -28,7 +28,6 @@ use {
         account_len,
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
         canonical_market_id, canonical_realm_id,
-        collateral::ParentProfile,
         native_resolution::{
             NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
         },
@@ -39,9 +38,10 @@ use {
     },
     clutch_solana_reference::{KernelAccount, ReplayAccount, KERNEL_ACCOUNT_LEN},
     clutch_svm_fixture::{
-        build_plane, compute_unit_limit_data, fixture_policy, fixture_terms, layout_request,
-        rewrite_plane_source_archive, source_resolution_evidence_buffer, token_account_bytes, Mode,
-        PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
+        build_plane, compute_unit_limit_data, fixture_policy, fixture_policy_identity,
+        fixture_terms, layout_request, rewrite_plane_source_archive,
+        source_resolution_evidence_buffer, token_account_bytes, Mode, PROGRAM_ID, RENT_SYSVAR,
+        SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::{Account, AccountSharedData},
     solana_address::Address,
@@ -1024,16 +1024,13 @@ async fn prepare_founding(
     degree: u8,
 ) -> Founding {
     let policy_value = fixture_policy(collateral_mint.to_bytes());
-    let policy_digest = policy_value.digest().unwrap();
-    let profile_id = ParentProfile::from_policy(&policy_value)
-        .and_then(|parent| parent.identity())
-        .unwrap();
+    let (policy_digest, release_id, profile_id) = fixture_policy_identity(policy_value);
     let policy = upload(
         bank,
         ArtifactKind::CollateralPolicy,
         profile_id,
         policy_digest,
-        &policy_value.canonical_bytes().unwrap(),
+        &policy_value.encode().unwrap(),
     )
     .await;
 
@@ -1083,7 +1080,7 @@ async fn prepare_founding(
                     Intent::InitProfileV2 {
                         realm: realm_id,
                         collateral_policy_id: policy_digest,
-                        adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                        adapter_release_id: release_id,
                         profile_version: 2,
                     },
                 ),

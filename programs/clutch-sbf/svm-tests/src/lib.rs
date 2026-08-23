@@ -32,7 +32,11 @@
 
 #![deny(missing_docs)]
 
+use clutch_collateral_adapter_v2::{
+    CollateralPolicyV2, Id as CollateralId, EXTENSION_IMMUTABLE_OWNER,
+};
 use clutch_kernel::{BasisMode, PayoutSet, PayoutVector};
+use clutch_sbf::collateral_release::LOCAL_REAL_TOKEN_2022_RELEASE_V2;
 use clutch_sbf::instructions::observe_resolve::{
     BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG,
 };
@@ -49,11 +53,12 @@ use clutch_sbf::source_archive::{
     SOURCE_ARCHIVE_MAX_RECORDS_V1, SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
 use clutch_solana_layout::{
-    account_len, canonical_market_id, canonical_outcome_id, canonical_realm_id, collateral,
-    FeedAccount, FeedId, Hash32, HoardAccount, Intent, MarketAccount, PayoutVectorBytes,
-    PositionAccount, ProfileAccount, RealmAccount, ResolutionAccount, SupplyLedgerAccount,
-    TermsAccount, MAX_INTENT_BYTES, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED,
-    PAYOUT_MAP_UNUSED, PROFILE_FLAG_POLICY_FROZEN, UNIFORM_SPACING_NONE,
+    account_len, canonical_market_id, canonical_outcome_id, canonical_profile_v2_id,
+    canonical_realm_id, collateral, FeedAccount, FeedId, Hash32, HoardAccount, Intent,
+    MarketAccount, PayoutVectorBytes, PositionAccount, ProfileAccount, RealmAccount,
+    ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_INTENT_BYTES, MAX_KNOTS,
+    MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PAYOUT_MAP_UNUSED,
+    PROFILE_FLAG_POLICY_FROZEN, UNIFORM_SPACING_NONE,
 };
 use clutch_solana_reference::{
     ExternalAccount, KernelAccount, ReplayAccount, EXTERNAL_ACCOUNT_LEN, KERNEL_ACCOUNT_LEN,
@@ -236,7 +241,7 @@ pub struct Plane {
     /// One outcome mint per active outcome.
     pub outcome_mints: Vec<Pda>,
     /// The Realm's frozen collateral policy.
-    pub policy: collateral::CollateralPolicy,
+    pub policy: CollateralPolicyV2,
     /// Canonical sealed policy PDA, derived from Profile and policy digest.
     pub policy_account: Address,
     /// The collateral mint the policy names.
@@ -340,27 +345,35 @@ fn fixture_source_record(
     out
 }
 
-/// The Realm's frozen collateral policy: a real, decodable 266-byte policy.
+/// The Realm's frozen collateral policy: a real, canonical V2 policy.
 ///
 /// The collateral mint it names is a **live** mint the real Token-2022 program
 /// created — the whole collateral leg reads it, and the Profile identity every
 /// address in the plane descends from is the parent hash over this policy's
 /// digest, so a fixture whose policy did not name the mint that exists would
 /// not merely fail a check, it would derive different addresses.
-pub fn fixture_policy(collateral_mint: [u8; 32]) -> collateral::CollateralPolicy {
-    let backing = collateral::CurrencyRef::spl(collateral::TOKEN_2022_PROGRAM, collateral_mint, 6);
-    collateral::CollateralPolicy {
-        schema_version: collateral::COLLATERAL_POLICY_SCHEMA,
-        flags: collateral::COLLATERAL_POLICY_STRICT_FLAGS,
-        collateral: backing,
-        fee: collateral::CurrencyRef::NATIVE_SOL,
-        liveness: collateral::CurrencyRef::NATIVE_SOL,
-        max_supply_atoms: 1_000_000_000_000_000,
-        allowed_mint_extensions: 0,
-        required_mint_extensions: 0,
-        allowed_account_extensions: collateral::EXTENSION_IMMUTABLE_OWNER,
-        required_account_extensions: 0,
-    }
+pub fn fixture_policy(collateral_mint: [u8; 32]) -> CollateralPolicyV2 {
+    CollateralPolicyV2::for_release(
+        LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        CollateralId::from_bytes(collateral_mint),
+        6,
+        1_000_000_000_000_000,
+        1_000_000_000_000_000,
+        0,
+        0,
+        EXTENSION_IMMUTABLE_OWNER,
+        0,
+    )
+    .expect("the fixture collateral policy must bind the compiled release")
+}
+
+/// Return the canonical `(policy, release, ProfileV2)` identity join for one
+/// fixture policy.
+pub fn fixture_policy_identity(policy: CollateralPolicyV2) -> (Hash32, Hash32, Hash32) {
+    let policy_id = Hash32::from_bytes(policy.id().expect("fixture policy identity").bytes());
+    let release_id = Hash32::from_bytes(policy.adapter_release.bytes());
+    let profile_id = canonical_profile_v2_id(policy_id, release_id);
+    (policy_id, release_id, profile_id)
 }
 
 /// Build the fixture plane, pre-funded with [`FUNDED_SETS`] complete sets.
@@ -375,15 +388,7 @@ pub fn fixture_policy(collateral_mint: [u8; 32]) -> collateral::CollateralPolicy
 /// not a false pass.
 pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: Mode) -> Plane {
     let policy = fixture_policy(collateral_mint.to_bytes());
-    /* The Profile identity is the parent hash over the policy's own digest,
-     * recomputed rather than chosen: `verify_profile_identity` refuses any
-     * other pairing, which is what makes the 266 bytes bindable from an
-     * arbitrary account. */
-    let profile_id = collateral::ParentProfile::from_policy(&policy)
-        .expect("the fixture policy composes a parent profile")
-        .identity()
-        .expect("the parent profile derives an identity");
-    let policy_digest = policy.digest().expect("the fixture policy must digest");
+    let (policy_digest, release_id, profile_id) = fixture_policy_identity(policy);
     let policy_artifact = derive(&[
         seeds::SEED_POLICY,
         &profile_id.bytes(),
@@ -572,7 +577,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                     profile: profile_id,
                     realm: realm_id,
                     collateral_policy_id: policy_digest,
-                    adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                    adapter_release_id: release_id,
                     version: 2,
                     flags: PROFILE_FLAG_POLICY_FROZEN,
                 }
@@ -582,10 +587,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         GenesisAccount {
             address: policy_artifact.address,
             owner: PROGRAM_ID,
-            data: policy
-                .canonical_bytes()
-                .expect("the fixture policy must encode")
-                .to_vec(),
+            data: policy.encode().expect("the fixture policy must encode").to_vec(),
         },
         GenesisAccount {
             address: terms.address,

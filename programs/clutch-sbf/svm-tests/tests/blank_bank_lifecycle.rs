@@ -14,7 +14,6 @@ use {
         account_len,
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
         canonical_market_id, canonical_realm_id,
-        collateral::ParentProfile,
         native_resolution::{NativeResolutionAccount, NATIVE_RESOLUTION_LEN},
         occupation_resolution::{
             OccupationResolutionAccount, OCCUPATION_RESOLUTION_LEN,
@@ -24,8 +23,8 @@ use {
         TermsAccount, MAX_GRID_TICKS, MAX_OUTCOMES, PAYOUT_MAP_UNUSED,
     },
     clutch_svm_fixture::{
-        compute_unit_limit_data, fixture_policy, fixture_terms, layout_request, COMPUTE_BUDGET,
-        PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
+        compute_unit_limit_data, fixture_policy, fixture_policy_identity, fixture_terms,
+        layout_request, COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::{Account, AccountSharedData},
     solana_address::Address,
@@ -420,11 +419,8 @@ async fn prepare(
     create_collateral_mint(bank, &mint).await;
 
     let policy_value = fixture_policy(mint.pubkey().to_bytes());
-    let policy_digest = policy_value.digest().unwrap();
-    let profile_id = ParentProfile::from_policy(&policy_value)
-        .and_then(|parent| parent.identity())
-        .unwrap();
-    let policy_body = policy_value.canonical_bytes().unwrap();
+    let (policy_digest, release_id, profile_id) = fixture_policy_identity(policy_value);
+    let policy_body = policy_value.encode().unwrap();
     let policy = upload(
         bank,
         ArtifactKind::CollateralPolicy,
@@ -477,7 +473,7 @@ async fn prepare(
                     Intent::InitProfileV2 {
                         realm: realm_id,
                         collateral_policy_id: policy_digest,
-                        adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                        adapter_release_id: release_id,
                         profile_version: 2,
                     },
                 ),

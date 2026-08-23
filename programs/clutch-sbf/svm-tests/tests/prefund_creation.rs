@@ -430,7 +430,7 @@ impl OrderWorld {
             book: Hash32::from_bytes([0x73; 32]),
             terms: fixture.terms_id,
             price_grid: grid.grid,
-            policy: fixture.policy.digest().unwrap(),
+            policy: Hash32::from_bytes(fixture.policy.id().unwrap().bytes()),
             order_set: Hash32::ZERO,
             first_order_id: Hash32::ZERO,
             last_order_id: Hash32::ZERO,

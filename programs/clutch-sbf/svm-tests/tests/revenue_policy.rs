@@ -55,14 +55,13 @@ use {
         clearing::{
             GeneralFundingLedgerV1, FUNDING_COVERS_REVENUE_RECORD, GENERAL_FUNDING_LEDGER_BYTES,
         },
-        collateral::ParentProfile,
         revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES},
         Hash32, Intent, MarketAccount, PriceGridAccount, TermsAccount, MAX_GRID_TICKS,
         MAX_OUTCOMES, MAX_PAYOUTS, PAYOUT_MAP_UNUSED,
     },
     clutch_svm_fixture::{
-        compute_unit_limit_data, fixture_policy, fixture_terms, layout_request, COMPUTE_BUDGET,
-        PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM,
+        compute_unit_limit_data, fixture_policy, fixture_policy_identity, fixture_terms,
+        layout_request, COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM,
     },
     solana_account::Account,
     solana_address::Address,
@@ -279,11 +278,8 @@ async fn start() -> (ProgramTestContext, Fixture) {
     // The Realm identity is honest: recomputed from the actual collateral
     // policy exactly as `InitRealm` recomputes it.
     let policy_value = fixture_policy([0x42; 32]);
-    let policy_digest = policy_value.digest().unwrap();
-    let profile_id = ParentProfile::from_policy(&policy_value)
-        .and_then(|parent| parent.identity())
-        .unwrap();
-    let policy_body = policy_value.canonical_bytes().unwrap();
+    let (policy_digest, _, profile_id) = fixture_policy_identity(policy_value);
+    let policy_body = policy_value.encode().unwrap();
     let (collateral_policy, _) = pda(
         seeds::SEED_POLICY,
         &[&profile_id.bytes(), &policy_digest.bytes()],

@@ -70,6 +70,7 @@ non-production-product-series-lab = [
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
+clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-sbf = { path = "../program", default-features = false, features = ["custom-heap", "laboratory-fixtures"] }
 # The checkpoint's owning crate: the idle body the final grow writes on-chain
 # is compared byte-for-byte against `ClearWorkV1::encode_idle_into` here, so

@@ -40,12 +40,20 @@ pub const LOCAL_REAL_TOKEN_2022_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2:
     COLLATERAL_PARSER_CPI_CODE_ID_V2,
 );
 
+#[cfg(feature = "laboratory-fixtures")]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 1] = [LOCAL_REAL_TOKEN_2022_RELEASE_V2];
+#[cfg(not(feature = "laboratory-fixtures"))]
+static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 0] = [];
 
 const _: () = assert!(ADAPTER_RELEASE_V2_BYTES == 192);
 
-/// Return the nonempty closed release catalog compiled into this program.
-pub(crate) fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
+/// Return the closed release catalog compiled into this program.
+///
+/// The local-real laboratory ELF has one binary-pinned Token-2022 row. Default
+/// and public-cluster artifacts deliberately have no rows and therefore deny
+/// collateral admission until a separately reviewed deployment manifest is
+/// compiled into that exact ELF.
+pub fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
     AdapterCatalogV2::new(&COMPILED_COLLATERAL_RELEASES_V2)
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
