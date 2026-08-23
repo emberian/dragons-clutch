@@ -19,7 +19,7 @@ use clutch_failure_policy_runtime::market_policy_v1::{
     AuthenticatedFailureMarketRecoveryFundingV1, FailureMarketAdmissionStateV1,
     FailureMarketPolicyBindingV1, FailureMarketPrepaidDebitReceiptIdV1,
     FailureMarketRecoveryFundingFactsV1, FailureMarketRecoveryFundingReceiptV1,
-    FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
+    FailureMarketRootFundingReceiptV1, FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
@@ -88,6 +88,31 @@ impl AuthenticatedFailureMarketRootV2 {
     /// Complete policy and initial funding semantic state.
     pub const fn state(self) -> FailureMarketAdmissionStateV1 {
         self.state
+    }
+}
+
+/// Atomic semantic postimage of one fully joined Market Failure admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketAdmissionPostimageV1 {
+    root: AuthenticatedFailureMarketRootV2,
+    liveness: AuthenticatedFailureMarketLivenessV1,
+    recovery_funding: FailureMarketRecoveryFundingReceiptV1,
+}
+
+impl FailureMarketAdmissionPostimageV1 {
+    /// Newly persisted authenticated shared root.
+    pub const fn root(self) -> AuthenticatedFailureMarketRootV2 {
+        self.root
+    }
+
+    /// Exact full-body liveness authentication used by admission.
+    pub const fn liveness(self) -> AuthenticatedFailureMarketLivenessV1 {
+        self.liveness
+    }
+
+    /// Exact sole-custody Recovery funding receipt persisted in the root.
+    pub const fn recovery_funding(self) -> FailureMarketRecoveryFundingReceiptV1 {
+        self.recovery_funding
     }
 }
 
@@ -254,7 +279,7 @@ fn persist_failure_market_root_v2(
 /// cannot source rent from a signer, Recovery custody, Hoard, or future fees.
 /// The supplied canonical Rent sysvar fixes the exact refundable principal for
 /// the current 2,172-byte account width; prior lamports remain donations.
-pub fn initialize_prefunded_failure_market_root_v2<'a>(
+fn initialize_prefunded_failure_market_root_v2<'a>(
     program_id: &Pubkey,
     root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
@@ -328,6 +353,55 @@ pub fn initialize_prefunded_failure_market_root_v2<'a>(
         ClutchError::AccountCreationFailed,
     )?;
     persist_failure_market_root_v2(program_id, root, state)
+}
+
+/// Execute the complete non-routable shared-Market admission join.
+///
+/// This remains crate-private until Product's account adapter supplies both
+/// private debit authorities. The root write cannot be reached through this
+/// seam without authenticating the full liveness bodies and exact current
+/// Recovery balance first.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn initialize_failure_market_admission_v1<'a>(
+    program_id: &Pubkey,
+    root: &AccountInfo<'a>,
+    liveness_policy_account: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    binding: FailureMarketPolicyBindingV1,
+    root_funding: FailureMarketRootFundingReceiptV1,
+    recovery_prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
+) -> Outcome<FailureMarketAdmissionPostimageV1> {
+    require_distinct(&[
+        root.clone(),
+        liveness_policy_account.clone(),
+        recovery_account.clone(),
+        rent_sysvar.clone(),
+        system_program.clone(),
+    ])?;
+    let (liveness, recovery_funding) = authenticate_initial_market_recovery_funding_v1(
+        program_id,
+        liveness_policy_account,
+        recovery_account,
+        binding,
+        recovery_prepaid_debit_receipt_id,
+    )?;
+    let state =
+        FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding, root_funding)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root = initialize_prefunded_failure_market_root_v2(
+        program_id,
+        root,
+        rent_sysvar,
+        system_program,
+        state,
+    )?;
+    Ok(FailureMarketAdmissionPostimageV1 {
+        root,
+        liveness,
+        recovery_funding,
+    })
 }
 
 /// Authenticate an existing shared-Market policy/funding root.
