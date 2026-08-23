@@ -93,6 +93,25 @@ pub struct NativeClaimBasisV1 {
 }
 
 impl NativeClaimBasisV1 {
+    /// Canonical all-zero decode target.
+    ///
+    /// This is not a valid live basis. It exists so allocation-owning adapters
+    /// can place the 2,352-byte value outside the 4-KiB SBF stack before hostile
+    /// decoding fills and validates it.
+    pub const ZEROED: Self = Self {
+        basis_degree: 0,
+        outcome_count: 0,
+        payout_count: 0,
+        knot_count: 0,
+        uniform_log2_spacing: 0,
+        ambiguity_policy_registry_value: 0,
+        edge_policy_registry_value: 0,
+        denominator: 0,
+        payout_weights: [[0; MAX_OUTCOMES]; MAX_PAYOUTS],
+        payout_map: [0; MAX_OUTCOMES],
+        knots: [0; MAX_OUTCOMES],
+    };
+
     /// Validate simplex rows, basis shape, liveness mapping, and arithmetic bounds.
     pub fn validate(&self) -> Result<()> {
         let max_outcomes = u8::try_from(MAX_OUTCOMES).map_err(|_| Error::InvalidParameter)?;
@@ -285,6 +304,49 @@ impl NativeClaimBasisV1 {
             content_id(NATIVE_CLAIM_BASIS_DOMAIN, &body).bytes(),
         ))
     }
+
+    /// Decode hostile canonical bytes into caller-owned storage.
+    ///
+    /// The ordinary [`FixedCodec::decode`] delegates here. This form exists for
+    /// the SBF adapter, which first puts [`Self::ZEROED`] on its requestable heap
+    /// and therefore never needs a 2,352-byte return value in one call frame.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
+        reject_legacy_numeric_fallback(input)?;
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&BASIS_MAGIC)?;
+        if reader.u16() != SCHEMA_V1 {
+            return Err(Error::BadVersion);
+        }
+        output.basis_degree = reader.u8();
+        output.outcome_count = reader.u8();
+        output.payout_count = reader.u8();
+        output.knot_count = reader.u8();
+        output.uniform_log2_spacing = reader.u8();
+        output.ambiguity_policy_registry_value = reader.u8();
+        output.edge_policy_registry_value = reader.u8();
+        if reader.u8() != 0 {
+            return Err(Error::NonCanonicalReserved);
+        }
+        reader.reserved(6)?;
+        output.denominator = reader.u64();
+        let mut row = 0_usize;
+        while row < MAX_PAYOUTS {
+            let mut column = 0_usize;
+            while column < MAX_OUTCOMES {
+                output.payout_weights[row][column] = reader.u64();
+                column += 1;
+            }
+            row += 1;
+        }
+        output.payout_map = reader.bytes();
+        let mut index = 0_usize;
+        while index < MAX_OUTCOMES {
+            output.knots[index] = reader.u128();
+            index += 1;
+        }
+        reader.finish()?;
+        output.validate()
+    }
 }
 
 impl FixedCodec for NativeClaimBasisV1 {
@@ -318,56 +380,8 @@ impl FixedCodec for NativeClaimBasisV1 {
     }
 
     fn decode(input: &[u8]) -> Result<Self> {
-        reject_legacy_numeric_fallback(input)?;
-        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.magic(&BASIS_MAGIC)?;
-        if reader.u16() != SCHEMA_V1 {
-            return Err(Error::BadVersion);
-        }
-        let basis_degree = reader.u8();
-        let outcome_count = reader.u8();
-        let payout_count = reader.u8();
-        let knot_count = reader.u8();
-        let uniform_log2_spacing = reader.u8();
-        let ambiguity_policy_registry_value = reader.u8();
-        let edge_policy_registry_value = reader.u8();
-        if reader.u8() != 0 {
-            return Err(Error::NonCanonicalReserved);
-        }
-        reader.reserved(6)?;
-        let denominator = reader.u64();
-        let mut payout_weights = [[0; MAX_OUTCOMES]; MAX_PAYOUTS];
-        let mut row = 0_usize;
-        while row < MAX_PAYOUTS {
-            let mut column = 0_usize;
-            while column < MAX_OUTCOMES {
-                payout_weights[row][column] = reader.u64();
-                column += 1;
-            }
-            row += 1;
-        }
-        let payout_map = reader.bytes();
-        let mut knots = [0; MAX_OUTCOMES];
-        let mut index = 0_usize;
-        while index < MAX_OUTCOMES {
-            knots[index] = reader.u128();
-            index += 1;
-        }
-        reader.finish()?;
-        let value = Self {
-            basis_degree,
-            outcome_count,
-            payout_count,
-            knot_count,
-            uniform_log2_spacing,
-            ambiguity_policy_registry_value,
-            edge_policy_registry_value,
-            denominator,
-            payout_weights,
-            payout_map,
-            knots,
-        };
-        value.validate()?;
+        let mut value = Self::ZEROED;
+        Self::decode_into(input, &mut value)?;
         Ok(value)
     }
 }

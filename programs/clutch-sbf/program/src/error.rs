@@ -16,6 +16,7 @@
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
+//! | `0x00a0..=0x00af` | disabled Source/Series SBF adapter account and custody boundaries |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -236,6 +237,12 @@ pub enum ClutchError {
     /// A registered source release refused provider deployment, source bytes,
     /// freshness, lineage, confidence, window, or archive provenance.
     SourceAdmissionFailed = 0x007a,
+    /// A Series component custody transfer did not produce the exact expected
+    /// source and destination balance deltas, or its System CPI refused.
+    ///
+    /// Series lamport custody is not token custody, so reusing
+    /// [`ClutchError::TokenDeltaMismatch`] would misname the trust boundary.
+    SeriesCustodyDeltaMismatch = 0x00a0,
     /// The checkpoint account's body bytes are not a `ClearWorkV1` encoding.
     ///
     /// `clutch_batch::relation_v1_stream::CodecFaultV1`, collapsed: the bytes

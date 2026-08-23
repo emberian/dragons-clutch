@@ -1,6 +1,6 @@
 # Product compiler and recurring Series V1
 
-Status: **PROPOSED / EXECUTABLE HOST MODEL / NO SBF ROUTES** (2026-08-22)
+Status: **PROPOSED / EXECUTABLE HOST + ALLOCATION-FREE SUCCESSOR CORE / FROZEN NON-PRODUCTION SBF ABI, RUNTIME DISABLED** (2026-08-23)
 
 Executable model: [`research/product-compiler-v1`](../../research/product-compiler-v1)
 
@@ -13,8 +13,53 @@ the canonical finite payout table, including repeated cell mappings and
 non-one-hot rows. `MarketGenesisProfileV2`,
 `MarketInstancePreimageV2`, `SeriesPlanV5`, and `SeriesFundingTermsV2` use fresh
 typed IDs, magics, domains, and schemas while preserving every V1 byte. No SBF
-route selects these artifacts yet, and runtime price-witness activation remains
-blocked on an authenticated registry-selector and exact-price adapter join.
+production route selects these artifacts. A separately identified
+non-production SBF profile now publishes the nine frozen Product/Series bodies
+through the existing resumable artifact transport. This is a typed immutable
+catalog only: it does not register or activate a Series, authenticate registry
+selectors, capitalize a funding account, compile an occurrence, or create a
+Market. Runtime price-witness activation remains blocked on an authenticated
+registry-selector and exact-price adapter join.
+
+The allocation-free successor core now goes beyond that SBF catalog without
+pretending the catalog route is an activation route. It derives canonical
+SourcePlane V3 Window and Statistic identities through a default-deny adapter
+authority, emits an immutable source-occurrence provenance record, derives
+exact whole-Series funding requirements, and defines one 324-byte mutable
+funding/lifecycle state with five segregated quote compartments. The state is
+the sole owner of the next ordinal; created count and active/closed phase are
+derived rather than persisted twice. Its transitions require adapter-authenticated
+Clock, registry/collateral binding, custody, exact-existing component state,
+and donation transfers. No concrete SBF adapter implements that authority yet,
+so these are executable pure transition contracts, not evidence of live account
+mutation. The first Source/Series V2 action payloads, registry/funding account
+wrappers, and custody PDA schema are now frozen in
+[`SERIES_SBF_ABI_V1.md`](./SERIES_SBF_ABI_V1.md). Their runtime capability set
+remains empty: fixing bytes is not registry, source, collateral, failure, or
+funding authentication.
+
+The laboratory artifact ABI is exact:
+
+- artifact kinds `32..=40` correspond, in order, to
+  `NativeClaimBasisV1`, `EvidenceOnlyRecoveryPolicyV1`, `ProductTemplateV4`,
+  `PriceMeasurePolicyV1`, `MarketGenesisProfileV2`, `SeriesFundingQuoteV1`,
+  `SeriesAttachmentPlanV1`, `SeriesPlanV5`, and `SeriesFundingTermsV2`;
+- Begin/Write/Seal/Abort remain layout tags `18/19/20/21`, version `3`;
+- the stage PDA remains
+  `["dragons-clutch:upload:v1", funder, kind, zero-context, typed-digest]`;
+- the final PDA is
+  `["dc:product-artifact:v1", kind, typed-digest]`; and
+- the final account is the exact canonical codec body, owned by the program
+  and rent-funded by the uploader, with no wrapper, duplicate bump, or mutable
+  registry projection.
+
+Product artifact transport context is canonically zero because these typed
+bodies are reusable content, not Realm children. Realm/Profile collateral
+binding remains immutable inside `MarketGenesisProfileV2`; a future activation
+route must authenticate that body against the actual Realm/Profile and central
+registry before it may create liabilities. Ordinary profiles refuse kinds
+`32..=40`; only `non-production-product-series-lab` admits them, under its own
+capability-profile identity.
 
 ## Result first
 
@@ -25,7 +70,8 @@ The host model now defines deterministic canonical artifacts, exact recurring
 window arithmetic, finite prepayment, deterministic Instance convergence,
 shared raw-window identities, current Terms/Market compatibility lowering, a
 liquidity-policy bridge, and an associative conservative maximum-drawdown
-summary. It deliberately does not add SBF dispatcher routes.
+summary. The laboratory route above transports those artifacts without
+claiming that the host compiler has become an onchain activation boundary.
 
 Current source ingestion is a hard recurrence blocker:
 
@@ -130,9 +176,11 @@ TemplateId + MarketGenesisProfileV2Id + AttachmentPlanId + finite recurrence/cap
 The current V1 Genesis lacks `PriceMeasurePolicyV1Id` and cannot authorize a
 RelationV2 price-coherence route. It remains frozen rather than gaining a field
 under the same 352-byte codec. The V2 Genesis accepts only the typed first
-quantized policy, which covers Product degrees zero through three. A future
-continuous/unquantized checker requires its own typed policy and another Genesis
-successor; transparent 32-byte wrappers must never be cast across those
+quantized policy. That policy selects any nonempty degree subrange within the
+checker release's true `0..=3` bound, independently caps atom count at or below
+its selected outcome bound, and rejects bodies outside those immutable limits.
+A future continuous/unquantized checker requires its own typed policy and
+another Genesis successor; transparent 32-byte wrappers must never be cast across those
 meanings. `NativeClaimBasisV1` owns the payout body and exact ambiguity/edge
 registry selectors. Genesis V2 owns the closed coordinate minimum and maximum,
 so `MarketInstanceV2Id` commits them transitively and no Epoch may choose a
@@ -182,16 +230,33 @@ Series. Lapse spends nothing and leaves its allocation explicitly refundable.
 Activation requires exact present funding for:
 
 ```text
-instance_count * creation/rent allocation
-instance_count * mandatory work/keeper allocation
-instance_count * liquidity-blueprint tranche cap
+instance_count * market-core allocation
+instance_count * evidence-recovery reserve
+instance_count * source/archive/window/evaluator work
+instance_count * liquidity-facility allocation
+instance_count * canonical wrapper-set allocation
 ```
 
-The mutable state stores these as three segregated compartments. Instance
-creation atomically debits one item from each. There is no future-fee input,
-Hoard principal input, volume forecast, or implicit borrowing. A production
-account design should split the work envelope further into source/archive,
-auction, and resolution reserves when their exact route quotes are frozen.
+`SeriesFundingQuoteV1` remains the sole immutable owner of those five
+per-occurrence amounts. The mutable funding state stores only remaining payer
+principal, donation residue, and absent-component allocation-consumption counts
+for each component; it joins every transition back to the quote instead of
+copying the quote into a second persisted truth. Exact-existing components
+debit zero. Market core and its
+mandatory recovery state share one authenticated present/absent branch. Lapse
+debits nothing. Unused payer principal remains refundable, while unsolicited
+donations remain separately owned terminal residue. There is no future-fee
+input, Hoard principal input, volume forecast, or implicit borrowing. A future
+production account design may split the source-work envelope further only when
+the exact route quotes and custody owners are frozen.
+
+FundingTerms V2 also treats its five external account roles as pairwise
+distinct: lamport-principal refund, collateral-principal refund token account,
+neutral donation sink, collateral mint, and token program. In particular,
+payer-owned refundable principal can never alias the neutral donation sink.
+This is semantic validation of the existing 208-byte V2 preimage, not a parallel
+adapter policy; an aliased body is now refused before it can mint a valid typed
+artifact ID.
 
 Series collateral is passive-liquidity capital, not claimant backing. User
 split/endowment collateral enters the market-local Hoard separately and remains
@@ -260,8 +325,14 @@ child counters, and exact runtime account widths do not exist yet.
 
 1. Design and land SourcePlane V3: source-only FeedHead, reusable raw pages,
    immutable WindowResult, statistic-result children, retention/lease rules.
-2. Add fixed hostile-byte codecs for HatcheryProgram, SummaryProgram,
-   Template, SeriesPlan/SeriesFunding, and compact Instance.
+2. Add fixed hostile-byte codecs for HatcheryProgram, SummaryProgram, and a
+   compact persisted Instance. Product Template, basis, price policy, Genesis,
+   Series Plan, attachment, quote, and funding-terms codecs now have a
+   non-production immutable SBF publication path. The pure successor now has a
+   hostile funding-state codec and authenticated-authority transition seam. The
+   non-production SBF registry/funding payloads, account wrappers, and custody
+   PDA ABI are frozen but runtime-disabled; the concrete adapter implementing
+   every receipt join is still missing.
 3. Bind the full InstanceId in Market identity and add a monotone market epoch
    cursor; do not retain caller-chosen market or epoch identities.
 4. Give every Series compartment payer-principal/donation/terminal ownership
