@@ -8,7 +8,7 @@
 
 use crate::{chain_server, repo_path, Result};
 use clutch_local_real_pyth::account_index::CANONICAL_ACCOUNT_DECODER_SET;
-use clutch_local_real_pyth::rpc_index::CanonicalFamily;
+use clutch_local_real_pyth::rpc_index::{CanonicalFamily, CompiledSourceProfile};
 use serde_json::{json, Value};
 use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
@@ -276,6 +276,7 @@ pub(crate) struct CheckedCapabilityRelease {
     pub(crate) profile_identity: [u8; 32],
     pub(crate) source_commit: String,
     pub(crate) elf_sha256: [u8; 32],
+    pub(crate) source_profile: CompiledSourceProfile,
 }
 
 pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilityRelease> {
@@ -332,12 +333,15 @@ pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilit
         summary_string(&summary, &["measurement", "elf_sha256"] )?,
         "checked profile ELF digest",
     )?;
+    let source_profile = CompiledSourceProfile::parse(summary_string(&summary, &["source_identity"] )?)
+        .map_err(|_| "checked profile source_identity is not a supported compiled identity")?;
     Ok(CheckedCapabilityRelease {
         summary,
         manifest_sha256,
         profile_identity,
         source_commit: source_commit.to_string(),
         elf_sha256,
+        source_profile,
     })
 }
 
@@ -381,6 +385,7 @@ fn selected_families(summary: &Value) -> Result<Vec<CanonicalFamily>> {
                 families.insert(CanonicalFamily::Source);
             }
             "series-products" => {
+                families.insert(CanonicalFamily::Product);
                 families.insert(CanonicalFamily::Series);
             }
             "recovery" => {
@@ -576,7 +581,7 @@ pub(crate) fn compose_checked_chain_config(
         program.as_ref(),
     ]);
     let value = json!({
-        "schema": "dragons-clutch/operatord-chain-config/v2",
+        "schema": "dragons-clutch/operatord-chain-config/v3",
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
         "cluster": {
             "name": cluster_name,
@@ -592,6 +597,8 @@ pub(crate) fn compose_checked_chain_config(
             "releaseManifestSha256": hex(checked.manifest_sha256),
             "capabilityProfileId": hex(checked.profile_identity),
             "sourceCommit": checked.source_commit.as_str(),
+            "sourceProfile": checked.source_profile.name(),
+            "registeredSourceReleaseCount": checked.source_profile.registered_release_count().to_string(),
             "enabledIntents": intents.iter().map(|triple| json!({
                 "familyTag": triple[0].to_string(),
                 "familyVersion": triple[1].to_string(),
@@ -632,6 +639,7 @@ mod tests {
             "central_registry": {"enabled_intent_triples": [[74, 1, 26], [76, 1, 1], [78, 1, 1], [79, 1, 1]]},
             "capabilities": [
                 {"slot": "source-plane", "linkage": "linked"},
+                {"slot": "series-products", "linkage": "linked"},
                 {"slot": "liquidity-dealer", "linkage": "linked"},
                 {"slot": "recovery", "linkage": "linked"}
             ]
@@ -639,6 +647,7 @@ mod tests {
         assert_eq!(enabled_intents(&summary).unwrap()[0], [74, 1, 26]);
         let families = selected_families(&summary).unwrap();
         assert!(families.contains(&CanonicalFamily::Source));
+        assert!(families.contains(&CanonicalFamily::Product));
         assert!(families.contains(&CanonicalFamily::Dealer));
         assert!(families.contains(&CanonicalFamily::Failure));
         assert!(families.contains(&CanonicalFamily::Fractional));

@@ -14,7 +14,12 @@
   const HASH32 = /^[0-9a-f]{64}$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v2-product-current";
+  const SOURCE_PROFILE_RELEASE_COUNTS = Object.freeze({
+    "production-inert": "0",
+    "non-production-mock-source-lab": "1",
+    "non-production-real-pyth-lab": "1"
+  });
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -57,7 +62,7 @@
     "general-settlement-root-v1": kind("general", "settlement"),
     "general-settlement-cash-pot": kind("general", "settlement"),
     "general-final-pot": kind("general", "settlement"),
-    "product-market-lifecycle-root-v1": kind("series", "product"),
+    "product-market-lifecycle-root-v1": kind("product", "product"),
     "product-series-market-link-v1": kind("series", "series"),
     "series-registry": kind("series", "product"),
     "series-funding": kind("series", "series"),
@@ -72,9 +77,13 @@
     "source-work-receipt": kind("source", "source"),
     "fee-selected-record": kind("fees", "settlement"),
     "fee-owner-carry": kind("fees", "settlement"),
+    "fee-owner-carry-v3": kind("fees", "settlement"),
     "fee-owner-finalization": kind("fees", "settlement"),
+    "fee-owner-finalization-v4": kind("fees", "settlement"),
     "fee-payer-allocation": kind("fees", "settlement"),
+    "fee-payer-allocation-v2": kind("fees", "settlement"),
     "fee-recipient-allocation": kind("fees", "settlement"),
+    "fee-recipient-allocation-v2": kind("fees", "settlement"),
     "fee-treasury-ledger": kind("fees", "settlement"),
     "liveness-policy": kind("liveness", "settlement"),
     "liveness-compartment": kind("liveness", "settlement"),
@@ -170,6 +179,14 @@
       }
       return coordinate;
     }));
+  };
+
+  const validateSourceProfile = (profile, count, name) => {
+    const sourceProfile = text(profile, `${name}.sourceProfile`, 64);
+    if (!Object.prototype.hasOwnProperty.call(SOURCE_PROFILE_RELEASE_COUNTS, sourceProfile)) throw new Error(`${name}.sourceProfile is not a checked compiled Source identity.`);
+    const registeredSourceReleaseCount = decimal(count, `${name}.registeredSourceReleaseCount`, 1n).toString();
+    if (registeredSourceReleaseCount !== SOURCE_PROFILE_RELEASE_COUNTS[sourceProfile]) throw new Error(`${name}.registeredSourceReleaseCount differs from its compiled Source identity.`);
+    return Object.freeze({ sourceProfile, registeredSourceReleaseCount });
   };
 
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
@@ -346,7 +363,7 @@
     };
     const rpcHttpEndpoint = endpoint(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
     const rpcWebsocketEndpoint = endpoint(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
-    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v3"
+    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v4"
         || binding.verificationDisposition !== "last-complete-untrusted-http-release-bracket"
         || binding.authorityEligible !== false
         || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== clusterKey
@@ -365,9 +382,10 @@
     if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
     const families = validateFamilies(boundRelease.families, "transportBinding.release.families");
     const enabledIntents = validateEnabledIntents(boundRelease.enabledIntents, "transportBinding.release.enabledIntents");
+    const source = validateSourceProfile(boundRelease.sourceProfile, boundRelease.registeredSourceReleaseCount, "transportBinding.release");
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
-    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, sourceProfile: source.sourceProfile, registeredSourceReleaseCount: source.registeredSourceReleaseCount, enabledIntents, families, releaseKey: expectedReleaseKey });
     const configuration = Object.freeze({
       ...target,
       schema: "dragons-clutch/browser-daemon-chain-projection/v3",
@@ -458,6 +476,7 @@
         releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
+        ...validateSourceProfile(release.sourceProfile, release.registeredSourceReleaseCount, `releases[${index}]`),
         enabledIntents: validateEnabledIntents(release.enabledIntents, `releases[${index}].enabledIntents`),
         families: validateFamilies(release.families, `releases[${index}].families`)
       });
@@ -465,7 +484,7 @@
     if (new Set(releases.map((release) => release.releaseKey)).size !== releases.length) throw new Error("operatord release endpoint repeats a release key.");
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || selected.sourceProfile !== configuration.release.sourceProfile || selected.registeredSourceReleaseCount !== configuration.release.registeredSourceReleaseCount || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
@@ -614,19 +633,22 @@
     const familyTags = Object.freeze({ general: "74", "structured-claim": "75", dealer: "76", source: "77", series: "77", failure: "78", fractional: "79" });
     const successorCapabilities = releases.selected.families.map((familyName) => {
       const coordinates = configuration.release.enabledIntents.filter((intent) => intent.familyTag === familyTags[familyName]);
+      const compiledSourceUnavailable = familyName === "source" && configuration.release.registeredSourceReleaseCount === "0";
       return Object.freeze({
         surface: "successor-family",
         family: familyName,
         label: familyName,
         indexedByRelease: true,
-        allocationStatus: coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
+        allocationStatus: compiledSourceUnavailable ? "compiled with zero Source releases" : coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
         enabled: false,
-        reason: coordinates.length === 0
+        reason: compiledSourceUnavailable
+          ? "This exact checked ELF is production-inert and has zero registered Source identities. Source value routes refuse; fixture and laboratory identities are not fallbacks."
+          : coordinates.length === 0
           ? "The checked release exposes this current decoder family but no enabled central-registry action coordinate. It is non-actionable."
           : `The checked release exposes ${coordinates.length} enabled coordinate(s), but this projection has no authoritative current-account runtime admission verdict. Execution remains disabled; only an explicitly labeled unsigned proposal can be constructed.`
       });
     });
-    const productIndexed = familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
+    const productIndexed = familySet.has("product") || familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
     const ownerV3Indexed = familySet.has("position-v3") || familySet.has("replay-v3") || annotated.some((accountValue) => accountValue.kind === "position-v3" || accountValue.kind === "replay-v3" || accountValue.kind.startsWith("general-owner-settlement"));
     const capabilities = Object.freeze([
       ...successorCapabilities,

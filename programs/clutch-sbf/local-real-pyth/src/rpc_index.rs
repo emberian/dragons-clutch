@@ -52,6 +52,7 @@ pub enum CanonicalFamily {
     Collateral,
     Fractional,
     General,
+    Product,
     Source,
     Series,
     Fees,
@@ -70,6 +71,7 @@ impl CanonicalFamily {
             Self::Collateral => "collateral",
             Self::Fractional => "fractional",
             Self::General => "general",
+            Self::Product => "product",
             Self::Source => "source",
             Self::Series => "series",
             Self::Fees => "fees",
@@ -79,6 +81,46 @@ impl CanonicalFamily {
             Self::StructuredClaim => "structured-claim",
             Self::Dealer => "dealer",
             Self::Failure => "failure",
+        }
+    }
+}
+
+/// Exact compiled Source identity class from the checked capability profile.
+///
+/// This is release identity, not an operator or browser-selected mode. In
+/// particular, `ProductionInert` means the ELF has no registered Source
+/// release and every Source-value route must remain unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompiledSourceProfile {
+    ProductionInert,
+    NonProductionMockSourceLab,
+    NonProductionRealPythLab,
+}
+
+impl CompiledSourceProfile {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ProductionInert => "production-inert",
+            Self::NonProductionMockSourceLab => "non-production-mock-source-lab",
+            Self::NonProductionRealPythLab => "non-production-real-pyth-lab",
+        }
+    }
+
+    #[must_use]
+    pub const fn registered_release_count(self) -> u8 {
+        match self {
+            Self::ProductionInert => 0,
+            Self::NonProductionMockSourceLab | Self::NonProductionRealPythLab => 1,
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Self> {
+        match name {
+            "production-inert" => Ok(Self::ProductionInert),
+            "non-production-mock-source-lab" => Ok(Self::NonProductionMockSourceLab),
+            "non-production-real-pyth-lab" => Ok(Self::NonProductionRealPythLab),
+            _ => Err(RpcIndexError::InvalidRelease),
         }
     }
 }
@@ -193,6 +235,8 @@ pub struct IndexedProgramRelease {
     pub release_manifest_sha256: [u8; 32],
     pub capability_profile_id: [u8; 32],
     pub source_commit: String,
+    /// Checked compile-time Source identity class for this exact ELF.
+    pub source_profile: CompiledSourceProfile,
     /// Only centrally registered coordinates present in the checked manifest.
     /// A decoded family without a coordinate remains non-actionable.
     pub enabled_intents: Vec<CanonicalIntentCoordinate>,
@@ -1053,6 +1097,7 @@ mod tests {
             release_manifest_sha256: [0x34; 32],
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
+            source_profile: CompiledSourceProfile::ProductionInert,
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         }
@@ -1088,6 +1133,30 @@ mod tests {
         let mut value = release();
         value.source_commit = "0".repeat(40);
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+    }
+
+    #[test]
+    fn compiled_source_profiles_are_exact_and_have_no_fallback_class() {
+        assert_eq!(
+            CompiledSourceProfile::parse("production-inert").unwrap(),
+            CompiledSourceProfile::ProductionInert
+        );
+        assert_eq!(
+            CompiledSourceProfile::ProductionInert.registered_release_count(),
+            0
+        );
+        assert_eq!(
+            CompiledSourceProfile::NonProductionMockSourceLab.registered_release_count(),
+            1
+        );
+        assert_eq!(
+            CompiledSourceProfile::NonProductionRealPythLab.registered_release_count(),
+            1
+        );
+        assert_eq!(
+            CompiledSourceProfile::parse("fixture-fallback"),
+            Err(RpcIndexError::InvalidRelease)
+        );
     }
 
     #[test]

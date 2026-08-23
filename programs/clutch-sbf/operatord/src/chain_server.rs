@@ -19,8 +19,8 @@ use clutch_local_real_pyth::account_index::{
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
-    CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, PlannedRpcRequest,
-    RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
+    CanonicalFamily, CanonicalIntentCoordinate, CompiledSourceProfile, IndexedProgramRelease,
+    PlannedRpcRequest, RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
 };
 use clutch_sbf::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_METADATA_LEN,
@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
-const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v2";
+const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v3";
 const MAX_CONFIG_BYTES: usize = 262_144;
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +76,8 @@ struct ReleaseWire {
     release_manifest_sha256: String,
     capability_profile_id: String,
     source_commit: String,
+    source_profile: String,
+    registered_source_release_count: String,
     enabled_intents: Vec<IntentWire>,
     families: Vec<String>,
 }
@@ -177,6 +179,7 @@ fn family(text: &str) -> Result<CanonicalFamily> {
         "collateral" => CanonicalFamily::Collateral,
         "fractional" => CanonicalFamily::Fractional,
         "general" => CanonicalFamily::General,
+        "product" => CanonicalFamily::Product,
         "source" => CanonicalFamily::Source,
         "series" => CanonicalFamily::Series,
         "fees" => CanonicalFamily::Fees,
@@ -205,7 +208,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
     }
     let wire: ChainConfigWire = serde_json::from_slice(&bytes)?;
     if wire.schema != CONFIG_SCHEMA {
-        return Err("chain config schema is not operatord-chain-config/v2".into());
+        return Err("chain config schema is not operatord-chain-config/v3".into());
     }
     if wire.decoder_set != CANONICAL_ACCOUNT_DECODER_SET {
         return Err(format!(
@@ -263,6 +266,19 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                 &format!("releases[{index}].capabilityProfileId"),
             )?,
             source_commit: release.source_commit,
+            source_profile: {
+                let profile = CompiledSourceProfile::parse(&release.source_profile)
+                    .map_err(|_| format!("releases[{index}].sourceProfile is unsupported"))?;
+                if release.registered_source_release_count
+                    != profile.registered_release_count().to_string()
+                {
+                    return Err(format!(
+                        "releases[{index}].registeredSourceReleaseCount differs from the compiled Source profile"
+                    )
+                    .into());
+                }
+                profile
+            },
             enabled_intents,
             families,
         });

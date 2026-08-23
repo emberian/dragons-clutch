@@ -34,7 +34,11 @@ test("current_projection_catalog_has_real_product_series_and_dealer_accounts_onl
     "product-series-market-link-v1",
     "series-registry",
     "series-funding",
-    "dealer-covered-selection-v1"
+    "dealer-covered-selection-v1",
+    "fee-owner-carry-v3",
+    "fee-owner-finalization-v4",
+    "fee-payer-allocation-v2",
+    "fee-recipient-allocation-v2"
   ]) assert.match(chain, new RegExp(`"${current}"`));
   for (const placeholder of [
     "product-capability-registry",
@@ -46,6 +50,7 @@ test("current_projection_catalog_has_real_product_series_and_dealer_accounts_onl
   ]) assert.doesNotMatch(chain, new RegExp(`"${placeholder}"`));
   assert.match(chain, /unknown or cross-family canonical decoder kind/);
   assert.match(chain, /selected-release projection repeats an account address/);
+  assert.match(chain, /"product-market-lifecycle-root-v1": kind\("product", "product"\)/);
   assert.match(chain, /JSON\.stringify\(selected\.families\).*JSON\.stringify\(configuration\.release\.families\)/s);
 });
 
@@ -60,7 +65,10 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
+  assert.match(chain, /registeredSourceReleaseCount differs from its compiled Source identity/);
+  for (const profile of ["production-inert", "non-production-mock-source-lab", "non-production-real-pyth-lab"]) assert.match(chain, new RegExp(`"${profile}"`));
   assert.match(app, /Enabled registry coordinates/);
+  assert.match(app, /Source value routes refuse; no fixture or fallback identity is admitted/);
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {
@@ -94,7 +102,7 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
         accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
       }]
     }, {
-      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
+      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32), sourceProfile: "production-inert", registeredSourceReleaseCount: "0" }
     }, "1232");
   })()`, context);
   assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v4");
@@ -103,6 +111,8 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
   assert.equal(output.signed, false);
   assert.equal(output.submitted, false);
   assert.equal(output.runtimeCapability, "not-authenticated");
+  assert.equal(output.release.sourceProfile, "production-inert");
+  assert.equal(output.release.registeredSourceReleaseCount, "0");
   assert.equal(output.instructionCoordinates[0].source, "explicit-semantic-owner-draft; not runtime capability admission");
   assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);
   assert.equal(output.exactEquations[0].left, "340282366920938463463374607431768211455");
@@ -113,6 +123,8 @@ test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
   assert.match(builder, /Unbalanced exact equation/);
   assert.match(builder, /No release-authenticated runtime capability verdict/);
   assert.match(app, /disabled capabilities are non-actionable/);
+  assert.match(app, /fixture and mock fallbacks are forbidden/);
+  assert.match(app, /BigInt\(instruction\.localAction\).*12n/s);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {

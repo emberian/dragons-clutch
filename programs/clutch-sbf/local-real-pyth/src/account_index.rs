@@ -4,9 +4,9 @@
 //! operator choose work, but never replace onchain account authentication.
 
 use crate::rpc_index::{
-    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedRpcAccountRemoval,
-    ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind, RpcAccountRemovalKind, RpcCommitment,
-    RpcIndexPlan,
+    CanonicalFamily, CompiledSourceProfile, IndexedProgramRelease, ObservedRpcAccount,
+    ObservedRpcAccountRemoval, ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind,
+    RpcAccountRemovalKind, RpcCommitment, RpcIndexPlan,
 };
 use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
 use clutch_collateral_adapter_v2::{
@@ -35,21 +35,27 @@ use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeStatusV1, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
     EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
-    OwnerSettlementV5AccountV1, SelectedCandidateV1AccountV1, SettlementCashPotV1AccountV1,
-    SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
+    OwnerFeeFinalizationV4AccountV1, OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1,
+    RecipientAllocationV2AccountV1, SelectedCandidateV1AccountV1,
+    SettlementCashPotV1AccountV1, SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG,
+    ADMISSION_NODE_ACCOUNT_VERSION_V2,
     CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION, CANDIDATE_FEED_STAGE_ACCOUNT_TAG,
     CANDIDATE_FEED_STAGE_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_TAG, CLEAR_WORK_ACCOUNT_VERSION_V3,
     ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG,
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
     MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2, MARKET_RUNTIME_ACCOUNT_TAG,
-    MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
-    OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
-    OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_TAG,
+    MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
+    OWNER_FEE_CARRY_ACCOUNT_TAG, OWNER_FEE_CARRY_ACCOUNT_VERSION,
+    OWNER_FEE_CARRY_ACCOUNT_VERSION_V3, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+    OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4, OWNER_SETTLEMENT_ACCOUNT_TAG,
     OWNER_SETTLEMENT_ACCOUNT_VERSION_V5, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
-    RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_CANDIDATE_ACCOUNT_TAG,
+    PAYER_ALLOCATION_ACCOUNT_BYTES_V2, PAYER_ALLOCATION_ACCOUNT_TAG,
+    PAYER_ALLOCATION_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
+    RECIPIENT_ALLOCATION_ACCOUNT_TAG, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2, SELECTED_CANDIDATE_ACCOUNT_TAG,
     SELECTED_CANDIDATE_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     SETTLEMENT_CASH_POT_ACCOUNT_TAG, SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
@@ -111,7 +117,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+    "dragons-clutch/canonical-account-decoders/v2-product-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -194,9 +200,13 @@ pub enum CanonicalAccountKind {
     SourceWorkReceipt,
     FeeSelectedRecord,
     FeeOwnerCarry,
+    FeeOwnerCarryV3,
     FeeOwnerFinalization,
+    FeeOwnerFinalizationV4,
     FeePayerAllocation,
+    FeePayerAllocationV2,
     FeeRecipientAllocation,
+    FeeRecipientAllocationV2,
     FeeTreasuryLedger,
     LivenessPolicy,
     LivenessCompartment,
@@ -271,9 +281,13 @@ impl CanonicalAccountKind {
             Self::SourceWorkReceipt => "source-work-receipt",
             Self::FeeSelectedRecord => "fee-selected-record",
             Self::FeeOwnerCarry => "fee-owner-carry",
+            Self::FeeOwnerCarryV3 => "fee-owner-carry-v3",
             Self::FeeOwnerFinalization => "fee-owner-finalization",
+            Self::FeeOwnerFinalizationV4 => "fee-owner-finalization-v4",
             Self::FeePayerAllocation => "fee-payer-allocation",
+            Self::FeePayerAllocationV2 => "fee-payer-allocation-v2",
             Self::FeeRecipientAllocation => "fee-recipient-allocation",
+            Self::FeeRecipientAllocationV2 => "fee-recipient-allocation-v2",
             Self::FeeTreasuryLedger => "fee-treasury-ledger",
             Self::LivenessPolicy => "liveness-policy",
             Self::LivenessCompartment => "liveness-compartment",
@@ -408,6 +422,7 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::Collateral => decode_collateral(&account.data),
             CanonicalFamily::Fractional => decode_fractional(&account.data),
             CanonicalFamily::General => decode_general(&account.data),
+            CanonicalFamily::Product => decode_product(&account.data),
             CanonicalFamily::Source => decode_source(&account.data, self.context),
             CanonicalFamily::Series => decode_series(&account.data),
             CanonicalFamily::Fees => decode_fee(&account.data),
@@ -874,7 +889,7 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     Ok(Some(projection))
 }
 
-fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+fn decode_product(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
         data,
         registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
@@ -884,7 +899,7 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let binding = value.state.binding();
         let mut projection = CanonicalAccountProjection::canonical(
-            CanonicalFamily::Series,
+            CanonicalFamily::Product,
             CanonicalAccountKind::ProductMarketLifecycleRootV1,
         );
         projection.generation = Some(binding.generation);
@@ -896,7 +911,13 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
                 .bytes(),
         );
         Ok(Some(projection))
-    } else if tag_version(
+    } else {
+        Ok(None)
+    }
+}
+
+fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    if tag_version(
         data,
         registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
         registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
@@ -1111,6 +1132,51 @@ fn decode_source(
 }
 
 fn decode_fee(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    if tag_version(
+        data,
+        OWNER_FEE_CARRY_ACCOUNT_TAG,
+        OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4,
+    ) {
+        if data.len() != OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4 {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        OwnerFeeFinalizationV4AccountV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        return Ok(Some(CanonicalAccountProjection::canonical(
+            CanonicalFamily::Fees,
+            CanonicalAccountKind::FeeOwnerFinalizationV4,
+        )));
+    }
+    if tag_version(
+        data,
+        PAYER_ALLOCATION_ACCOUNT_TAG,
+        PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
+    ) {
+        if data.len() != PAYER_ALLOCATION_ACCOUNT_BYTES_V2 {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        PayerAllocationV2AccountV1::decode_persisted(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        return Ok(Some(CanonicalAccountProjection::canonical(
+            CanonicalFamily::Fees,
+            CanonicalAccountKind::FeePayerAllocationV2,
+        )));
+    }
+    if tag_version(
+        data,
+        RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+        RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+    ) {
+        if data.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        RecipientAllocationV2AccountV1::decode_persisted(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        return Ok(Some(CanonicalAccountProjection::canonical(
+            CanonicalFamily::Fees,
+            CanonicalAccountKind::FeeRecipientAllocationV2,
+        )));
+    }
     let contextual = if tag_version(
         data,
         SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -1130,6 +1196,18 @@ fn decode_fee(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         Some((
             CanonicalAccountKind::FeeOwnerCarry,
             "authenticated selected fee record",
+        ))
+    } else if tag_version(
+        data,
+        OWNER_FEE_CARRY_ACCOUNT_TAG,
+        OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
+    ) {
+        if data.len() != OWNER_FEE_CARRY_ACCOUNT_BYTES_V3 {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        Some((
+            CanonicalAccountKind::FeeOwnerCarryV3,
+            "canonical carry PDA plus authenticated selected fee record",
         ))
     } else if tag_version(
         data,
@@ -2577,18 +2655,41 @@ mod current_decoder_tests {
             Err(AccountIndexError::CanonicalDecodeRefused)
         );
 
-        for (tag, version) in [
-            (
+        assert_eq!(
+            decode_product(&[
                 registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
                 registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
-            ),
-            (
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+        assert_eq!(
+            decode_series(&[
                 registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
                 registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+
+        for (tag, version) in [
+            (
+                OWNER_FEE_CARRY_ACCOUNT_TAG,
+                OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
+            ),
+            (
+                OWNER_FEE_CARRY_ACCOUNT_TAG,
+                OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4,
+            ),
+            (
+                PAYER_ALLOCATION_ACCOUNT_TAG,
+                PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
+            ),
+            (
+                RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
             ),
         ] {
             assert_eq!(
-                decode_series(&[tag, version]),
+                decode_fee(&[tag, version]),
                 Err(AccountIndexError::CanonicalDecodeRefused)
             );
         }
@@ -2886,6 +2987,7 @@ mod processed_fork_tests {
             release_manifest_sha256: [0x34; 32],
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
+            source_profile: CompiledSourceProfile::ProductionInert,
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         };

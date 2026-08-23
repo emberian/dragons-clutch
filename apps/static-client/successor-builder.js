@@ -350,7 +350,9 @@
       elfSha256: configuration.release.elfSha256,
       releaseManifestSha256: configuration.release.releaseManifestSha256,
       sourceCommit: configuration.release.sourceCommit,
-      capabilityProfileId: configuration.release.capabilityProfileId
+      capabilityProfileId: configuration.release.capabilityProfileId,
+      sourceProfile: configuration.release.sourceProfile,
+      registeredSourceReleaseCount: configuration.release.registeredSourceReleaseCount
     });
     return Object.freeze({
       schema: "dragons-clutch/operator/unsigned-protocol-transaction/v4",

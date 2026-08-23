@@ -430,6 +430,8 @@ impl<'index> OperatorJsonApi<'index> {
                     "releaseManifestSha256": hex32(release.release_manifest_sha256),
                     "capabilityProfileId": hex32(release.capability_profile_id),
                     "sourceCommit": release.source_commit,
+                    "sourceProfile": release.source_profile.name(),
+                    "registeredSourceReleaseCount": release.source_profile.registered_release_count().to_string(),
                     "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
                         "familyTag": intent.family_tag.to_string(),
                         "familyVersion": intent.family_version.to_string(),

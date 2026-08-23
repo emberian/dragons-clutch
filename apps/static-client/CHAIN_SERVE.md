@@ -28,8 +28,8 @@ See [`REAL_INFRA_CHAIN_LAUNCH.md`](../../docs/implementation/REAL_INFRA_CHAIN_LA
 `chain.json` is output, not caller-authored input. The offline composer invokes
 the existing capability-profile v2 checker with deployability required and
 cross-checks its checker-emitted SHA-256 of sorted-key compact ASCII JSON,
-profile identity, measured source
-commit, and measured ELF digest against the v6 local-session seal. It hashes the
+profile identity, measured source commit, measured ELF digest, and exact
+compiled Source identity class against the v6 local-session seal. It hashes the
 actual ELF file, requires the session ownership marker and exact HTTP/WebSocket
 pair, validates Program/ProgramData/slot coordinates, fixes bounded runtime
 policy, and derives the workflow identity. Missing, planning, historical,
@@ -66,6 +66,21 @@ SeriesFunding. Dealer discovery includes the exact `0xae/1`
 CoveredDealerSelection body. The browser admits only the corresponding current
 Rust-emitted family/kind catalog; unknown, historical, cross-family, or
 placeholder labels fail closed.
+
+The checked release also publishes the exact `source_identity` compiled into
+that ELF. The ordinary `production-inert` build reports zero registered Source
+releases. Glass labels that state explicitly and refuses Source actions 1–12;
+it never substitutes the mock or real-Pyth laboratory identity. Those two lab
+profiles are distinct release identities and each reports exactly one compiled
+registration. This count is derived from the checked identity class rather
+than accepted from an operator or browser.
+
+Current General fee discovery distinguishes the rent-owned carry V3,
+finalization V4, payer allocation V2, and certified recipient allocation V2
+from their historical frames. The immutable V4/V2 snapshots enter through
+their semantic owners' hostile decoders. A live carry V3 remains explicitly
+`requires-context` until its selected-fee record and canonical carry PDA are
+authenticated; its raw bytes never become fee authority.
 
 ## What is checked before serving
 

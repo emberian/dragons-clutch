@@ -120,6 +120,10 @@
       definition("Release-manifest SHA-256", snapshot.release.declaredManifestSha256),
       definition("Source commit", snapshot.release.declaredSourceCommit),
       definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
+      definition("Compiled Source profile", release.sourceProfile),
+      definition("Registered Source releases", release.registeredSourceReleaseCount === "0"
+        ? "0 — Source value routes refuse; no fixture or fallback identity is admitted"
+        : `${release.registeredSourceReleaseCount} — exact identities remain release-bound and untrusted as projections`),
       definition("Decoded families", release.families.join(", ")),
       definition("Enabled registry coordinates", release.enabledIntents.length === 0
         ? "none — transaction construction refuses every successor coordinate"
@@ -357,6 +361,13 @@
     for (const instruction of transaction.instructionCoordinates) {
       const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
       if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
+      if (state.configuration.release.registeredSourceReleaseCount === "0"
+          && instruction.familyTag === "77"
+          && instruction.familyVersion === "2"
+          && BigInt(instruction.localAction) >= 1n
+          && BigInt(instruction.localAction) <= 12n) {
+        throw new Error(`Source coordinate ${key} is unavailable because this exact checked ELF compiled zero registered Source releases; fixture and mock fallbacks are forbidden.`);
+      }
     }
     const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
     const output = Object.freeze({
