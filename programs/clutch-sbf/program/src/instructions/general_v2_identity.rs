@@ -1563,6 +1563,7 @@ fn runtime_error_is_checked_refusal(error: GeneralV2RuntimeError) -> bool {
         error,
         GeneralV2RuntimeError::PriceGrid(_)
             | GeneralV2RuntimeError::PriceMeasure(_)
+            | GeneralV2RuntimeError::AtomMixture(_)
             | GeneralV2RuntimeError::Relation(_)
             | GeneralV2RuntimeError::UnsupportedCandidateKind
             | GeneralV2RuntimeError::UnsupportedSmoothDegree

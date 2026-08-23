@@ -985,7 +985,10 @@ struct PreparedBuilderContextV1<'a> {
     order_set: Id32,
     domain: EconomicDomainV2,
     domain_digest: Id32,
+    terms_id: [u8; 32],
     basis_digest: Id32,
+    coordinate_domain_min: u128,
+    coordinate_domain_max: u128,
     price_measure_policy_id: Id32,
     basis: QuantizedBasisProjectionV1,
     native_basis: &'a NativeClaimBasisV1,
@@ -1096,6 +1099,8 @@ impl<'a> PreparedBuilderContextV1<'a> {
             || transcript.coordinate_domain_max != inputs.genesis.coordinate_domain_max
             || inputs.price_grid.grid.bytes() != inputs.genesis.price_grid_id.bytes()
             || inputs.price_grid.realm.bytes() != inputs.genesis.realm_id.bytes()
+            || ((2..=3).contains(&basis.degree())
+                && inputs.market_binding.price_scale != basis.payout_denominator())
         {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
@@ -1108,7 +1113,10 @@ impl<'a> PreparedBuilderContextV1<'a> {
             order_set: inputs.book_projection.order_set,
             domain,
             domain_digest,
+            terms_id: genesis_id,
             basis_digest,
+            coordinate_domain_min: inputs.genesis.coordinate_domain_min,
+            coordinate_domain_max: inputs.genesis.coordinate_domain_max,
             price_measure_policy_id,
             basis,
             native_basis: inputs.native_basis,
@@ -1322,6 +1330,24 @@ fn consider_atom_measure(
             verify_quantized_price_measure_v3_smooth(&bindings, basis, &price, &witness)?
         }
     };
+    if let QuantizedBasisProjectionV1::Smooth(basis) = context.basis {
+        if (2..=3).contains(&basis.degree) {
+            crate::verify_exact_smooth_atom_mixture_v1(
+                context.market,
+                context.terms_id,
+                context.basis_digest,
+                candidate_price_digest,
+                context.coordinate_domain_min,
+                context.coordinate_domain_max,
+                basis,
+                price.prices,
+                atoms.atom_count,
+                atoms.common_denominator,
+                atoms.atom_coordinates,
+                atoms.atom_masses,
+            )?;
+        }
+    }
     search_fills(
         context,
         price,
