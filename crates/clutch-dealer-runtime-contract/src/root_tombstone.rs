@@ -302,8 +302,6 @@ impl DealerRootTombstoneV2 {
             || self.terminal_state_id != closed_state.state_content_id()?
             || self.dealer_state_account_id != binding.dealer_state_account_id
             || self.facility_id != closed_state.facility_id
-            || closed_state.facility_position_account_id != binding.facility_position_account_id
-            || closed_state.facility_replay_account_id != binding.facility_replay_account_id
             || position_fields.purpose != PositionPurposeV3::DealerFacility
             || Id::from_bytes(position_fields.market_instance_id.bytes())
                 != policy.market_instance_v2_id
