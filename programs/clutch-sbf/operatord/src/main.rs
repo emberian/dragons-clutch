@@ -72,7 +72,7 @@ fn usage() -> ! {
          operatord emit <plan-dir>\n  \
          operatord replay <plan-dir>\n  \
          operatord compiler-serve --compiler-release-sha256 HASH [--port N] [--static DIR]\n  \
-         operatord compile-payoff --compiler-release-sha256 HASH < request.json\n  \
+         operatord compile-product-exact-market --compiler-release-sha256 HASH < request.json\n  \
          operatord chain-serve --config FILE [--port N] [--static DIR]\n  \
          operatord compose-chain-config --local-release-manifest FILE --capability-manifest FILE \
          --cluster-name NAME --expected-genesis HASH --rpc-http-url URL --rpc-websocket-url URL\n  \
@@ -163,16 +163,18 @@ fn parse_compiler_serve(mut args: impl Iterator<Item = String>) -> Result<Compil
 
 fn parse_compiler_release(mut args: impl Iterator<Item = String>) -> Result<String> {
     let Some(flag) = args.next() else {
-        return Err("compile-payoff requires --compiler-release-sha256 HASH".into());
+        return Err(
+            "compile-product-exact-market requires --compiler-release-sha256 HASH".into(),
+        );
     };
     if flag != "--compiler-release-sha256" {
-        return Err(format!("unknown compile-payoff flag {flag}").into());
+        return Err(format!("unknown compile-product-exact-market flag {flag}").into());
     }
     let release = args
         .next()
         .ok_or("--compiler-release-sha256 needs a value")?;
     if let Some(extra) = args.next() {
-        return Err(format!("unexpected compile-payoff argument {extra}").into());
+        return Err(format!("unexpected compile-product-exact-market argument {extra}").into());
     }
     Ok(release)
 }
@@ -620,7 +622,9 @@ fn main() {
                 options.compiler_release_sha256,
             )
         }),
-        "compile-payoff" => parse_compiler_release(args).and_then(payoff_compiler::compile_cli),
+        "compile-product-exact-market" => {
+            parse_compiler_release(args).and_then(payoff_compiler::compile_cli)
+        }
         "chain-serve" => parse_chain_serve(args).and_then(|options| {
             chain_server::serve(options.port, options.statics, &options.config)
         }),

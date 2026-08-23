@@ -1,64 +1,129 @@
-# Production payoff compiler transport v1
+# Product exact-market compiler transport v1
 
-This is the JSON seam between Glass and operatord's pure Rust CLI/loopback
-adapter. It does not define compiler math. The adapter calls
-`compile_production_payoff_v1`, encodes its canonical artifacts through their
-Rust codecs, calls `assemble_compiled_product_series_bundle_v1`, and serializes
-the result below. Glass treats every result as an untrusted proposal.
+This is the sole current JSON seam between Glass and operatord's pure Rust
+Product compiler. It transports an exact payoff definition, the complete
+ProfileV4/BundleV5 input graph, and an optional bounded exact-market search. It
+does not define compiler math and it does not create registration authority.
 
-Start the same-origin static client and compiler endpoint with an explicit
-compiler build/release digest:
+Start the same-origin static client and loopback compiler endpoint with an
+explicit compiler build/release digest:
 
 ```text
 operatord compiler-serve --compiler-release-sha256 HASH [--port N] [--static DIR]
 ```
 
-Or pipe the request through the identical pure implementation:
+Or pipe one request through the identical pure implementation:
 
 ```text
-operatord compile-payoff --compiler-release-sha256 HASH < request.json
+operatord compile-product-exact-market --compiler-release-sha256 HASH < request.json
 ```
 
 Neither command reads RPC, a wallet, or a browser session; neither signs,
-submits, registers, or persists anything.
+submits, registers, or persists anything. The configured compiler hash is a
+fail-closed transport join, not a measurement of the running binary and not a
+checked release manifest.
 
-## Exact definition
+## Request
 
-Every integer is a canonical unsigned decimal string. Every rational is reduced
-and encoded as:
+Both transports accept one closed-schema request no larger than 327,680 bytes.
+Unknown fields, JSON numbers, noncanonical decimal strings, invalid fixed body
+widths, zero semantic identities, and malformed addresses are refused.
+
+```json
+{
+  "schema": "dragons-clutch/compiler/product-exact-market-request/v1",
+  "expectedCompilerReleaseSha256": "<configured 32-byte lowercase hex>",
+  "programId": "<canonical nonzero Product program address>",
+  "definition": {},
+  "bundleInputs": {
+    "registryProgramReleaseV2BytesHex": "<160 canonical bytes>",
+    "registryCapabilityProfileV4BytesHex": "<816 canonical bytes>",
+    "sourceReleaseManifestId": "<nonzero 32-byte lowercase hex>",
+    "evidenceOnlyRecoveryPolicyV1BytesHex": "<208 canonical bytes>",
+    "productTemplateV4BytesHex": "<256 canonical bytes>",
+    "priceMeasurePolicyV1BytesHex": "<96 canonical bytes>",
+    "marketGenesisProfileV2BytesHex": "<416 canonical bytes>",
+    "seriesFundingQuoteV4BytesHex": "<592 canonical bytes>",
+    "seriesAttachmentPlanV4BytesHex": "<112 canonical bytes>",
+    "seriesPlanV5BytesHex": "<152 canonical bytes>",
+    "seriesFundingTermsV2BytesHex": "<240 canonical bytes>"
+  },
+  "exactMarketSearch": {
+    "marketId": "<nonzero 32-byte lowercase hex>",
+    "priceId": "<nonzero 32-byte lowercase hex>",
+    "prices": ["250000", "750000"],
+    "coordinates": ["0", "1", "2"],
+    "maximumSubsetEvaluationsPerSupport": "10000"
+  }
+}
+```
+
+`exactMarketSearch` is optional. If it is absent, the proposal still contains
+the `exactMarket` key with a null value. Active prices contain 1 through 16
+exact `u64` integers. Coordinates contain 1 through 64 strictly increasing
+exact `u128` integers. The Rust semantic owner checks the Product outcome width,
+the payout-denominator simplex, Terms domain, basis profile, and deterministic
+work budget.
+
+The browser obtains `programId` from the acquired checked-release projection;
+it is not a free-form compiler field. Operatord decodes it as an exact canonical
+Solana address, refuses the all-zero/default address, and requires its 32 bytes
+to equal `RegistryProgramReleaseV2.program`. This join happens before any
+BundleV5 artifact PDA is derived.
+
+Every fixed body is hostile-decoded by its owning Rust codec. Operatord:
+
+- recomputes the RegistryProgramReleaseV2 identity and requires ProfileV4 to
+  name it;
+- projects the current capability rules only from ProfileV4;
+- compiles the native basis from `definition`, never from a caller-supplied
+  basis body;
+- requires the definition's Product Terms identity to equal the supplied
+  MarketGenesisProfileV2 identity;
+- reopens the SeriesPlanV5, FundingTermsV2, QuoteV4, and AttachmentV4 joins;
+  and
+- assembles the sole current `CompiledProductSeriesBundleV5` graph.
+
+The proposed Source release is represented here only by its nonzero manifest
+identity. The offline compiler cannot authenticate chain accounts or loader
+state. Registration must supply and authenticate the exact Source release body
+named by that identity.
+
+## Exact payoff definition
+
+Every integer is a canonical decimal string. Every rational is reduced and
+encoded as:
 
 ```json
 { "numerator": "-1", "denominator": "3" }
 ```
 
-The common envelope is:
+The common definition envelope is:
 
 ```json
 {
   "schema": "dragons-clutch/compiler/production-payoff-definition/v1",
-  "productTermsId": "<32-byte lowercase hex>",
+  "productTermsId": "<MarketGenesisProfileV2 identity as lowercase hex>",
   "kind": "exact-categorical | exact-smooth | analytic-smooth",
   "definition": {}
 }
 ```
 
-`exact-categorical` has `coordinateDomainMin`, `coordinateDomainMax`, `knots`,
-`cellPayouts`, `ambiguityPolicyRegistryValue`, and
-`edgePolicyRegistryValue`. `cellPayouts` is a rectangular array of rationals;
-`knots` has exactly one fewer entry than payout rows. Rust remains responsible
-for domain ordering, simplex sums, least-denominator integerization, and every
-semantic refusal.
+`exact-categorical` contains `coordinateDomainMin`, `coordinateDomainMax`,
+`knots`, `cellPayouts`, `ambiguityPolicyRegistryValue`, and
+`edgePolicyRegistryValue`. `cellPayouts` is a rectangular array of exact
+rationals and `knots` has exactly one fewer entry than payout rows.
 
-`exact-smooth` has `basis`, `controlValues`, and `maximumLiability`.
-`analytic-smooth` has `basis` and `shape`. A smooth `basis` contains:
+`exact-smooth` contains `basis`, `controlValues`, and `maximumLiability`.
+`analytic-smooth` contains `basis` and `shape`. A smooth `basis` contains:
 
 ```json
 {
-  "degree": "1",
+  "degree": "2",
   "coordinateDomainMin": "0",
   "coordinateDomainMax": "100",
   "payoutDenominator": "1000000",
-  "knots": ["0", "100"],
+  "knots": ["0", "50", "100"],
   "resolvedEdgePolicy": "clamp",
   "ambiguityPolicyRegistryValue": "1",
   "edgePolicyRegistryValue": "1"
@@ -75,44 +140,60 @@ The bounded analytic shape kinds and exact fields are:
 | `capped-call` / `capped-put` | `low`, `high`, `height` |
 | `gaussian` | `center`, `sigma`, `height` |
 
+Rust remains responsible for domain ordering, exact simplex sums,
+least-denominator integerization, spline compilation, error certification, and
+every semantic refusal.
+
 ## Untrusted proposal
 
-The adapter canonicalizes the validated definition exactly as Glass does:
-object keys sorted recursively, array order retained, compact JSON, UTF-8. It
-places SHA-256 of those bytes in `inputCanonicalSha256`.
-It also canonicalizes the complete validated request—including every hostile-
-decoded bundle input—and places that SHA-256 in `requestCanonicalSha256`.
+Operatord canonicalizes the validated definition exactly as Glass does: object
+keys sorted recursively, array order retained, compact JSON, and UTF-8. It
+places SHA-256 of those bytes in `inputCanonicalSha256`. It canonicalizes the
+complete validated request in the same way and places that SHA-256 in
+`requestCanonicalSha256`.
+
+The response has this closed top-level shape:
 
 ```json
 {
-  "schema": "dragons-clutch/compiler/production-payoff-proposal/v1",
+  "schema": "dragons-clutch/compiler/product-exact-market-proposal/v1",
   "authority": "untrusted-compiler-proposal",
   "registrationAuthority": false,
-  "compilerReleaseSha256": "<32-byte lowercase hex>",
-  "requestCanonicalSha256": "<32-byte lowercase hex>",
-  "inputCanonicalSha256": "<32-byte lowercase hex>",
-  "productTermsId": "<same ID as definition>",
+  "compilerReleaseSha256": "<configured 32-byte lowercase hex>",
+  "programId": "<same Product program as the request and ReleaseV2>",
+  "requestCanonicalSha256": "<SHA-256 of the complete canonical request>",
+  "inputCanonicalSha256": "<SHA-256 of the canonical definition>",
+  "productTermsId": "<same identity as the definition and Genesis>",
   "classification": "exact-categorical | exact-smooth | analytic-smooth",
   "spanStatus": "exact-in-span | certified-approximation",
   "nativeClaimBasis": {
-    "id": "<typed content ID as lowercase hex>",
-    "bytesHex": "<exactly 2352 canonical bytes>"
+    "id": "<typed content identity>",
+    "bytesHex": "<2352 canonical bytes>"
   },
   "certificate": null,
   "bounds": [],
   "subdivisionDepth": null,
-  "compiledProductSeriesBundle": {
-    "id": "<typed bundle ID as lowercase hex>",
-    "bytesHex": "<exactly 528 canonical bytes>",
+  "compiledProductSeriesBundleV5": {
+    "id": "<typed BundleV5 identity>",
+    "bytesHex": "<528 canonical bytes>",
+    "artifact": {
+      "kind": "60",
+      "context": "<64 zeroes>",
+      "exactBodyBytes": "528",
+      "programId": "<same Product program>",
+      "pda": "<derived content-addressed account>",
+      "bump": "<canonical u8 decimal>"
+    },
     "identities": {}
-  }
+  },
+  "exactMarket": null
 }
 ```
 
-Categorical evidence uses `certificate: null`, no bounds, and null subdivision
-depth. Exact smooth evidence requires nonempty certificate `id`/`bytesHex`, no
-bounds, and null depth. Analytic evidence requires the certificate, a decimal
-`subdivisionDepth`, and all eight rational metrics in this exact vocabulary:
+Categorical evidence has no separate certificate, bounds, or subdivision
+depth. Exact smooth evidence requires its recompilable certificate and no
+bounds. Analytic evidence requires a certificate, an exact subdivision depth,
+and these eight exact rational metrics:
 
 ```text
 spline-sup-lower
@@ -125,11 +206,7 @@ consensus-l1-upper
 coefficient-sample-sup-upper
 ```
 
-Each bound is `{"name":"...","value":{"numerator":"...","denominator":"..."}}`.
-Only analytic requests may be `certified-approximation`.
-
-`identities` must contain exactly the sixteen `CompiledProductSeriesBundleV1`
-fields, in camel case:
+`compiledProductSeriesBundleV5.identities` contains exactly:
 
 ```text
 registryReleaseId
@@ -150,53 +227,72 @@ seriesPlanId
 fundingTermsId
 ```
 
-Glass joins `nativeClaimBasisId` to the basis proposal and
-`capabilityProfileId` to the daemon-projected checked release. It does not recompute typed IDs
-from bytes; doing so in JavaScript would create a second semantic owner. Onchain
-registration must reopen the registry, Source release, all canonical artifacts,
-and the bundle and recompute every ID and binding.
+The artifact coordinate is exactly the Product artifact seed, kind `60`, and
+the recomputed BundleV5 identity under the ReleaseV2-owned Product program.
+Global Product artifacts use the all-zero context. The browser requires the
+bundle capability-profile identity to equal the acquired checked-release
+profile and requires the bundle's Genesis identity to equal `productTermsId`.
 
-## Compiler request
+## Optional exact-market result
 
-Both transports accept one request no larger than 327,680 bytes. All fields are
-closed: unknown fields are refused. The compiler release is configured on the
-process command line; `expectedCompilerReleaseSha256` is only a fail-closed
-join to that configuration, never a caller-selected assertion. The configured
-hash is not a measurement of the running binary or a checked release manifest.
+When requested, `exactMarket` contains:
 
-```json
-{
-  "schema": "dragons-clutch/compiler/production-payoff-request/v1",
-  "expectedCompilerReleaseSha256": "<configured 32-byte lowercase hex>",
-  "definition": {},
-  "bundleInputs": {
-    "registryCapabilityProfileV2BytesHex": "<800 canonical bytes>",
-    "sourceReleaseManifestId": "<32-byte lowercase hex>",
-    "evidenceOnlyRecoveryPolicyV1BytesHex": "<208 canonical bytes>",
-    "productTemplateV4BytesHex": "<256 canonical bytes>",
-    "priceMeasurePolicyV1BytesHex": "<96 canonical bytes>",
-    "marketGenesisProfileV2BytesHex": "<416 canonical bytes>",
-    "seriesFundingQuoteV1BytesHex": "<280 canonical bytes>",
-    "seriesAttachmentPlanV1BytesHex": "<112 canonical bytes>",
-    "seriesPlanV5BytesHex": "<152 canonical bytes>",
-    "seriesFundingTermsV2BytesHex": "<240 canonical bytes>"
-  }
-}
+- `authority: "untrusted-compiler-sidecar"` and
+  `registrationAuthority: false`;
+- `outcome`: `solved`, `unsupported`, `out-of-profile`, or `work-truncated`;
+- `coverage`: `full-integer-domain` or `declared-coordinate-subset`;
+- `completeFullDomainNegative`, true only for an unsupported search that
+  exhausts every support over every integer in the complete Terms domain;
+- `claims` with `uniquePrice`, `fairValue`, and `optimalClearing` all exactly
+  false;
+- exact Market, Product Terms, native basis, price, and BundleV5 bindings;
+- exact target prices and payout denominator;
+- the coordinate declaration, per-support work counts, exhaustion boundary,
+  truncation boundary, and work budget;
+- a 1,640-byte canonical work manifest;
+- a 544-byte hostile-verifier certificate only for `solved`; and
+- a 176-byte sidecar bound to the kind-60, global-context BundleV5 identity.
+
+This search returns an exact certificate found by its deterministic finite
+traversal. It does not claim a unique market price, fair value, or optimal
+clearing. A declared-coordinate negative is not a complete Product domain
+negative, and a work-truncated result is not exhaustion evidence.
+
+## Authority boundary
+
+Every response is a proposal. The browser checks closed transport shapes,
+fixed widths, exact request hashes, the configured compiler hash, the selected
+program address, the sixteen exposed identities, the native-basis/BundleV5
+join, the Genesis/Terms join, and the exact-market request/output bindings. It
+does not reinterpret Rust fixed codecs or mint registration capability.
+
+Neither a compiler response, a BundleV5 PDA string, nor an operatord index row
+is onchain truth. Registration must reload and authenticate:
+
+- the executing Program and ProgramData loader pair, deployment locus, slot,
+  and complete ProgramData/ELF hash;
+- RegistryProgramReleaseV2 and RegistryCapabilityProfileV4;
+- the exact Source release;
+- every content-addressed Product and Series artifact;
+- the recomputed BundleV5 body, typed identity, kind-60 PDA, and bump; and
+- every exact-market manifest, certificate, and sidecar consumed by an enabled
+  onchain route.
+
+The program must recompute all identities and joins from hostile bytes. A
+successful offline compile, browser display, fixture, simulation, or devnet
+execution is not registration authority or mainnet evidence.
+
+## HTTP boundary
+
+The HTTP route is exactly:
+
+```text
+POST /v1/compiler/product-exact-market
 ```
 
-`definition` is the complete definition envelope documented above. Only its
-recursively key-sorted, compact, normalized UTF-8 JSON is hashed into
-`inputCanonicalSha256`. The same canonicalization over the whole validated
-request produces `requestCanonicalSha256`, preventing definition-equivalent
-requests with different bundle inputs from sharing a proposal binding. Every
-fixed body is hostile-decoded by its one Rust codec. The basis is deliberately
-absent from `bundleInputs`: it comes only from the payoff compiler, and the
-canonical assembler refuses supplied artifacts that name a different basis.
-
-The HTTP route is exactly `POST /v1/compiler/production-payoff`. It binds only
-on IPv4 loopback, requires an exact loopback `Host`, requires
-`application/json`, rejects transfer encoding and oversized bodies, and accepts
-either no `Origin` (CLI clients) or exactly `http://{Host}`. It emits no wildcard
-CORS policy. Consequently a browser uses it from the Glass files served by the
-same `compiler-serve` origin; static files can still be hosted elsewhere for
-read-only inspection and CLI-proposal import.
+The pure compiler server binds IPv4 loopback, requires an exact loopback
+`Host`, requires `application/json`, rejects transfer encoding and oversized
+bodies, and accepts either no `Origin` or exactly `http://{Host}`. It emits no
+wildcard CORS policy. A browser can therefore use the endpoint from Glass files
+served by the same `compiler-serve` origin. Static files hosted elsewhere remain
+usable for read-only inspection and CLI-proposal import.
