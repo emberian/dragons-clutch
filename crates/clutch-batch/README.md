@@ -67,6 +67,28 @@ admission, never person-neutral or wash-proof. Price quality, fees, bonds, and
 solver compensation remain separate policies. See
 [`docs/design/SCORE_V2_Q.md`](../../docs/design/SCORE_V2_Q.md).
 
+## Owner-blind economic relation (`relation_v2`)
+
+`src/relation_v2.rs` is the first registry-independent RelationV2 core. Its
+fixed-width order language uses one nonnegative coefficient vector for both
+single-Egg and portfolio orders. No input type contains an owner, signer,
+account, fee group, dealer, or settlement binding, so changing those external
+labels cannot change the economic verdict.
+
+The verifier checks canonical book/order/fill padding, expiry, exact price-unit
+limits, all-or-none and minimum fills, checked coefficient expansion, one
+canonical virtual split-or-merge, per-outcome conservation, and both
+`d_i = B_i - sigma = E_i - mu` derivations. It SHA-256 commits every canonical
+economic input using a local safe, allocation-free FIPS-180 implementation and
+feeds the full digest into ScoreV2-Q.
+
+Price coherence remains an upstream semantic precondition. RelationV2 binds a
+nonzero evidence digest to the immutable price-policy digest and independently
+checks the exact integer simplex, but it does not copy V1b or claim that an
+arbitrary evidence digest is authenticated. Candidate allocation, fees,
+dealer transitions, account codecs, settlement authorization, lifecycle/SBF
+dispatch, and beneficial-controller identity are not implemented by this core.
+
 Not implemented, and refused rather than guessed: portfolio marginal lot
 rationing (`P-b` returns `PolicyVariantUnimplemented`), the `N-c` owner-aware
 decreasing-fixed-point capping rule (infeasible candidates are refused, not

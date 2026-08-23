@@ -9,7 +9,7 @@
 //! Nothing here is an optimality claim: an accepted candidate is only ever the
 //! best valid submitted candidate under the frozen, explicit tie rule.
 //!
-//! The crate holds two relations, and they are not the same object:
+//! The crate holds three relations, and they are not the same object:
 //!
 //! * the **scalar** relation in this module ([`FixedBook`]) clears one grid tick
 //!   over side totals with owner and outcome erased.  It is retained unchanged
@@ -20,6 +20,9 @@
 //!   `(owner, outcome, side)`, closes per-outcome conservation through one
 //!   global virtual split/merge pair, and proves from the witness alone that the
 //!   accepted fills admit a complete executable pairing.
+//! * the owner-blind economic core in [`relation_v2`] accepts only coefficient-
+//!   vector orders and aggregate economic deltas. Owner, signer, account, fee,
+//!   dealer, and settlement bindings are deliberately outside its type system.
 //!
 //! Both are IMPLEMENTED host-model code.  Neither is verified, and neither is
 //! the SVM relation.
@@ -27,9 +30,12 @@
 pub mod relation_v1;
 pub mod relation_v1_stream;
 pub mod relation_v1_stream_v2;
+pub mod relation_v2;
 
 #[cfg(test)]
 mod relation_v1_stream_v2_tests;
+#[cfg(test)]
+mod relation_v2_tests;
 pub mod score_v2;
 
 #[cfg(test)]
