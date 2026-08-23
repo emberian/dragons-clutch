@@ -36,7 +36,7 @@ pub const DEALER_QUOTE_ADMISSION_MAGIC_V1: [u8; 8] = *b"DCQADMV1";
 pub const DEALER_QUOTE_ADMISSION_VERSION_V1: u16 = 1;
 /// Exact signed quote-admission body bytes.
 pub const DEALER_QUOTE_ADMISSION_BYTES_V1: usize =
-    HEADER_BYTES + (9 * 32) + (3 * 8) + 2_568 + 4_040;
+    HEADER_BYTES + (9 * 32) + (5 * 8) + 2_568 + 4_040;
 
 /// Local semantic-body magic for the counted Dealer selection attachment.
 pub const DEALER_COVERED_SELECTION_MAGIC_V1: [u8; 8] = *b"DCCOVDV1";
@@ -44,7 +44,7 @@ pub const DEALER_COVERED_SELECTION_MAGIC_V1: [u8; 8] = *b"DCCOVDV1";
 pub const DEALER_COVERED_SELECTION_VERSION_V1: u16 = 1;
 /// Exact fixed account body bytes, excluding the eight-byte global envelope.
 pub const DEALER_COVERED_SELECTION_BYTES_V1: usize =
-    HEADER_BYTES + (28 * 32) + (5 * 8) + 16 + (2 * MAX_OUTCOMES * 8)
+    HEADER_BYTES + (28 * 32) + (7 * 8) + 16 + (2 * MAX_OUTCOMES * 8)
         + (MAX_DEALER_ROWS_V2 * 64)
         + 16
         + 8
@@ -80,6 +80,10 @@ pub struct DealerQuoteAdmissionV1 {
     pub issued_slot: u64,
     /// First slot at which this admission is stale.
     pub expires_slot: u64,
+    /// First slot at which collection may no longer begin or advance.
+    pub collect_deadline_slot: u64,
+    /// First slot at which delivery/finalization may no longer advance.
+    pub deliver_deadline_slot: u64,
     /// Active native outcome width.
     pub outcome_count: u8,
     /// Submitted Dealer fills.
@@ -106,6 +110,8 @@ impl DealerQuoteAdmissionV1 {
         }
         if self.issued_slot == 0
             || self.issued_slot >= self.expires_slot
+            || self.expires_slot > self.collect_deadline_slot
+            || self.collect_deadline_slot >= self.deliver_deadline_slot
             || self.outcome_count < 2
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.dealer.row_count == 0
@@ -285,6 +291,10 @@ pub struct CoveredDealerSelectionV1 {
     pub created_slot: u64,
     /// Quote expiry copied from signed evidence.
     pub quote_expires_slot: u64,
+    /// Signed collection deadline copied into Lease.
+    pub collect_deadline_slot: u64,
+    /// Signed delivery/finalization deadline copied into Lease.
+    pub deliver_deadline_slot: u64,
     /// Uniquely derived Dealer net-cash receipt.
     pub receipt: DealerReceiptV2,
     /// Uniquely derived aggregate Dealer Egg trade.
@@ -347,6 +357,7 @@ impl CoveredDealerSelectionV1 {
         if context.current_slot == 0
             || context.current_slot < quote_admission.issued_slot
             || context.current_slot >= quote_admission.expires_slot
+            || quote_admission.deliver_deadline_slot > policy.maturity_slot
             || context.rent.neutral_sink != policy.neutral_sink
             || root.phase() != SettlementRootPhaseV1::Materializing
             || counts.expected_dealer_children != 1
@@ -459,6 +470,8 @@ impl CoveredDealerSelectionV1 {
             selected_ordinal: root.selected_ordinal(),
             created_slot: context.current_slot,
             quote_expires_slot: quote_admission.expires_slot,
+            collect_deadline_slot: quote_admission.collect_deadline_slot,
+            deliver_deadline_slot: quote_admission.deliver_deadline_slot,
             receipt,
             trade: *dealer.trade(),
             allocations: *dealer.allocations(),
@@ -484,6 +497,8 @@ impl CoveredDealerSelectionV1 {
             || self.selected_ordinal == 0
             || self.created_slot == 0
             || self.created_slot >= self.quote_expires_slot
+            || self.quote_expires_slot > self.collect_deadline_slot
+            || self.collect_deadline_slot >= self.deliver_deadline_slot
             || self.outcome_count < 2
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.allocation_count == 0
@@ -608,6 +623,8 @@ impl CoveredDealerSelectionV1 {
             || lease.fee_revenue_policy_id != self.fee_revenue_policy_id
             || lease.pre_generation != self.dealer_generation
             || lease.created_slot != self.created_slot
+            || lease.collect_deadline_slot != self.collect_deadline_slot
+            || lease.deliver_deadline_slot != self.deliver_deadline_slot
             || lease.outcome_count != self.outcome_count
             || lease.row_count != u16::from(self.allocation_count)
             || epoch.epoch_binding_account_id != self.epoch_binding_account_id
@@ -704,6 +721,8 @@ fn write_quote_admission(value: &DealerQuoteAdmissionV1, writer: &mut Writer<'_>
     }
     writer.u64(value.issued_slot);
     writer.u64(value.expires_slot);
+    writer.u64(value.collect_deadline_slot);
+    writer.u64(value.deliver_deadline_slot);
     writer.u8(value.outcome_count);
     writer.reserved(7);
     write_dealer_candidate(&value.dealer, writer);
@@ -722,6 +741,8 @@ fn read_quote_admission(reader: &mut Reader<'_>) -> Result<DealerQuoteAdmissionV
     let selected_fee_binding_digest = reader.id();
     let issued_slot = reader.u64();
     let expires_slot = reader.u64();
+    let collect_deadline_slot = reader.u64();
+    let deliver_deadline_slot = reader.u64();
     let outcome_count = reader.u8();
     reader.reserved(7)?;
     Ok(DealerQuoteAdmissionV1 {
@@ -736,6 +757,8 @@ fn read_quote_admission(reader: &mut Reader<'_>) -> Result<DealerQuoteAdmissionV
         selected_fee_binding_digest,
         issued_slot,
         expires_slot,
+        collect_deadline_slot,
+        deliver_deadline_slot,
         outcome_count,
         dealer: read_dealer_candidate(reader)?,
         quote: read_dealer_quote(reader)?,
@@ -868,6 +891,8 @@ fn write_covered_selection(value: &CoveredDealerSelectionV1, writer: &mut Writer
     writer.u64(value.selected_ordinal);
     writer.u64(value.created_slot);
     writer.u64(value.quote_expires_slot);
+    writer.u64(value.collect_deadline_slot);
+    writer.u64(value.deliver_deadline_slot);
     writer.u64(value.receipt.dealer_net_cash_in_atoms);
     writer.u64(value.receipt.dealer_net_cash_out_atoms);
     let mut outcome = 0usize;
@@ -910,6 +935,8 @@ fn read_covered_selection(reader: &mut Reader<'_>) -> Result<CoveredDealerSelect
     let selected_ordinal = reader.u64();
     let created_slot = reader.u64();
     let quote_expires_slot = reader.u64();
+    let collect_deadline_slot = reader.u64();
+    let deliver_deadline_slot = reader.u64();
     let receipt = DealerReceiptV2 {
         dealer_net_cash_in_atoms: reader.u64(),
         dealer_net_cash_out_atoms: reader.u64(),
@@ -979,6 +1006,8 @@ fn read_covered_selection(reader: &mut Reader<'_>) -> Result<CoveredDealerSelect
         selected_ordinal,
         created_slot,
         quote_expires_slot,
+        collect_deadline_slot,
+        deliver_deadline_slot,
         receipt,
         trade,
         allocations,
@@ -1010,6 +1039,8 @@ fn hash_quote_admission(value: &DealerQuoteAdmissionV1, hasher: &mut Sha256) {
     }
     hasher.update(value.issued_slot.to_le_bytes());
     hasher.update(value.expires_slot.to_le_bytes());
+    hasher.update(value.collect_deadline_slot.to_le_bytes());
+    hasher.update(value.deliver_deadline_slot.to_le_bytes());
     hasher.update([value.outcome_count]);
     hasher.update([0; 7]);
     hash_dealer_candidate(&value.dealer, hasher);
@@ -1075,6 +1106,8 @@ fn hash_covered_selection(value: &CoveredDealerSelectionV1, hasher: &mut Sha256)
         value.selected_ordinal,
         value.created_slot,
         value.quote_expires_slot,
+        value.collect_deadline_slot,
+        value.deliver_deadline_slot,
         value.receipt.dealer_net_cash_in_atoms,
         value.receipt.dealer_net_cash_out_atoms,
     ] {
@@ -1109,6 +1142,6 @@ fn hash_covered_selection(value: &CoveredDealerSelectionV1, hasher: &mut Sha256)
     hasher.update(value.rent.donation_floor.to_le_bytes());
 }
 
-const _: () = assert!(DEALER_QUOTE_ADMISSION_BYTES_V1 == 6_932);
-const _: () = assert!(DEALER_COVERED_SELECTION_BYTES_V1 == 5_420);
+const _: () = assert!(DEALER_QUOTE_ADMISSION_BYTES_V1 == 6_948);
+const _: () = assert!(DEALER_COVERED_SELECTION_BYTES_V1 == 5_436);
 const _: () = assert!(DEALER_COVERED_SELECTION_BYTES_V1 < 10_240);

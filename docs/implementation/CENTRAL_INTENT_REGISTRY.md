@@ -403,7 +403,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | reserved occurrence-scoped terminal root |
 | `0xad/1` | Product | canonical per-Series MarketLink |
-| `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,428 bytes) |
+| `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

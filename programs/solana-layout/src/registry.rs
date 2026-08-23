@@ -464,7 +464,7 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_420;
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.

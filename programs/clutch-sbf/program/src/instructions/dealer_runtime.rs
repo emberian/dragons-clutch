@@ -274,6 +274,8 @@ pub struct DealerRuntimePayloadV1 {
     pub row_start: u16,
     /// Positive bounded row count for Collect/Deliver.
     pub row_count: u16,
+    /// Exact active OrderPage V5 prefix for CoveredDealer selection.
+    pub book_page_count: u8,
 }
 
 impl DealerRuntimePayloadV1 {
@@ -290,7 +292,8 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::CancelFunding
             | DealerFacilityAction::RefundCancelledSponsor
             | DealerFacilityAction::BindEpoch
-            | DealerFacilityAction::LapseEpoch => 16,
+            | DealerFacilityAction::LapseEpoch
+            | DealerFacilityAction::SelectLeaseAndBegin => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 4,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
@@ -324,6 +327,7 @@ impl DealerRuntimePayloadV1 {
             keeper_payment_lamports: 0,
             row_start: 0,
             row_count: 0,
+            book_page_count: 0,
         };
         match action {
             DealerFacilityAction::Initialize => {
@@ -364,6 +368,19 @@ impl DealerRuntimePayloadV1 {
                 }
                 value.keeper_payment_lamports = read_u64(input, 28);
                 if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::SelectLeaseAndBegin => {
+                value.book_page_count = input[16];
+                if input[17..20].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.liveness_call_ordinal = read_u32(input, 20);
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if !(1..=4).contains(&value.book_page_count)
+                    || value.liveness_call_ordinal == 0
+                {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
                 }
             }
