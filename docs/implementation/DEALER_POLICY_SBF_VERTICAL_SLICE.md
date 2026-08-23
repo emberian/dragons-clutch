@@ -106,10 +106,10 @@ The laboratory now has exact Initialize and BindEpoch handlers over canonical
 PositionV3, ReplayV3, Dealer StateV2, funded-dependency, action-receipt,
 General Epoch, and runtime-liveness owners. The immutable schedule and generic
 runtime policy can be published through this same catalog rather than injected
-as fixture DTOs. Initialize still requires the seven canonical runtime
-compartment accounts to have been admitted under the generic liveness runtime;
-atomically self-hosting that admission is the next adapter boundary. Every
-other Dealer facility action remains capability-disabled, including
+as fixture DTOs. Initialize atomically creates all seven canonical runtime
+compartment PDAs from exact present native-lamport work and rent debits. Hostile
+prefunds remain neutral-sink donations and never discount the liveness payer.
+Every other Dealer facility action remains capability-disabled, including
 contribution, activation, selection, collection, delivery, resolution,
 claims, and retirement.
 

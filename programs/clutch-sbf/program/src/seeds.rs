@@ -112,6 +112,8 @@ pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
 /// Immutable generic runtime-liveness policy selected by one Dealer facility.
 pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] =
     b"dc-dealer-runtime-liveness-policy-v1";
+/// One facility- and compartment-scoped generic runtime-liveness account.
+pub const SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT: &[u8] = b"dc-dealer-live-account-v1";
 /// Authoritative Dealer StateV2.
 pub const SEED_DEALER_STATE_V2: &[u8] = clutch_dealer_runtime_contract::DEALER_STATE_PDA_DOMAIN_V2;
 /// Counted Dealer funded-dependency child.
@@ -794,6 +796,18 @@ pub fn dealer_runtime_liveness_policy_pda(
     policy_id: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id])
+}
+
+/// Canonical facility-scoped runtime-liveness compartment address.
+pub fn dealer_runtime_liveness_account_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    compartment: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT, facility_id, &[compartment]],
+    )
 }
 
 /// Canonical authoritative Dealer StateV2 address.

@@ -111,7 +111,9 @@ to `0x93/1`; runtime policy seals as its exact raw 1,132-byte canonical codec
 under a disjoint content-addressed Dealer PDA because the generic liveness
 adapter consumes that exact codec. The local action values do not reuse the
 pure Dealer runtime enum's zero-based representation. Catalog publication
-does not by itself initialize liquidity.
+does not by itself initialize liquidity. Dealer Initialize separately consumes
+the published policy and schedule and atomically admits its seven segregated
+runtime-liveness compartment accounts from present native lamports.
 
 StructuredClaim `75/1` reserves actions 1 through 8:
 

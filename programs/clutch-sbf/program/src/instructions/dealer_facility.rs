@@ -31,8 +31,11 @@ use clutch_liveness::runtime_adapter_v1::{
     plan_runtime_transition_v1, RuntimePersistedAccountViewV1, RuntimeTransferRoleV1,
 };
 use clutch_liveness::runtime_v1::{
-    RuntimeCompartmentV1, RuntimeLivenessPolicyV1, RUNTIME_COMPARTMENT_COUNT_V1,
-    RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
+    PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
+    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
+    RuntimeLivenessBundleV1, RuntimeLivenessPolicyV1, RUNTIME_COMPARTMENT_COUNT_V1,
+    RUNTIME_COMPARTMENT_ORDER_V1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+    RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_retirement::{
     project_dealer_position_v3, project_general_position_v3, AdapterPositionMarketBindingV3,
@@ -55,7 +58,10 @@ use solana_pubkey::Pubkey;
 
 use super::artifact::read_clock_slot;
 use super::collateral_position_v3::RuntimeSha256;
-use super::dealer_policy::{authenticate_catalog_policy, create_full_principal_pda, dealer_fault};
+use super::dealer_policy::{
+    authenticate_catalog_policy, create_exact_payer_debit_pda, create_full_principal_pda,
+    dealer_fault,
+};
 use super::dealer_runtime::{
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
@@ -70,6 +76,88 @@ fn id(key: &Pubkey) -> Id {
 
 fn retirement_id(value: Id) -> Outcome<Identity32V1> {
     Identity32V1::new(value.bytes()).map_err(|_| ClutchError::MismatchedState.into())
+}
+
+fn liveness_id(value: Id) -> clutch_liveness::Id {
+    clutch_liveness::Id::from_bytes(value.bytes())
+}
+
+const fn runtime_kind_seed(kind: RuntimeCompartmentKindV1) -> u8 {
+    match kind {
+        RuntimeCompartmentKindV1::Source => 0,
+        RuntimeCompartmentKindV1::Candidate => 1,
+        RuntimeCompartmentKindV1::Clearing => 2,
+        RuntimeCompartmentKindV1::Settlement => 3,
+        RuntimeCompartmentKindV1::Resolution => 4,
+        RuntimeCompartmentKindV1::Retirement => 5,
+        RuntimeCompartmentKindV1::Recovery => 6,
+    }
+}
+
+#[inline(never)]
+fn prepare_runtime_compartment_admission(
+    program_id: &Pubkey,
+    facility_id: Id,
+    state_account_id: Id,
+    payer: &AccountInfo<'_>,
+    account: &AccountInfo<'_>,
+    policy: RuntimeLivenessPolicyV1,
+    kind: RuntimeCompartmentKindV1,
+    required_rent_principal: u64,
+) -> Outcome<(RuntimeCompartmentV1, u8)> {
+    require_creatable(account)?;
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(
+        !account.is_signer && !account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let compartment_policy = policy.compartment(kind);
+    require(
+        compartment_policy.account_rent_principal_lamports == required_rent_principal,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    let (address, bump) = seeds::dealer_runtime_liveness_account_pda(
+        program_id,
+        &facility_id.bytes(),
+        runtime_kind_seed(kind),
+    );
+    expect_pda(account.key, (address, bump), None)?;
+    let payer_debit = compartment_policy
+        .total_payer_debit_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let balance_before = account.lamports();
+    let balance_after = balance_before
+        .checked_add(payer_debit)
+        .ok_or(ClutchError::Arithmetic)?;
+    let semantic_owner = if kind == RuntimeCompartmentKindV1::Source {
+        compartment_policy.receipt_program_id
+    } else {
+        liveness_id(state_account_id)
+    };
+    let state = RuntimeCompartmentV1::admit(
+        policy,
+        RuntimeCompartmentAdmissionV1 {
+            kind,
+            identity: RuntimeCompartmentIdentityV1 {
+                policy_id: policy.policy_id,
+                lifecycle_id: liveness_id(facility_id),
+                account_id: clutch_liveness::Id::from_bytes(account.key.to_bytes()),
+                owner: semantic_owner,
+                payer: clutch_liveness::Id::from_bytes(payer.key.to_bytes()),
+                neutral_sink: policy.neutral_sink,
+                generation: 0,
+            },
+            funding: PresentFundingV1 {
+                payer: clutch_liveness::Id::from_bytes(payer.key.to_bytes()),
+                source: PresentFundingSourceV1::ExternalSignerNativeLamports,
+                payer_debit_lamports: payer_debit,
+                account_balance_before: balance_before,
+                account_balance_after: balance_after,
+            },
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((state, bump))
 }
 
 #[inline(never)]
@@ -736,60 +824,96 @@ fn initialize_facility(
         accounts[9].data_len() == RUNTIME_LIVENESS_POLICY_BYTES_V1,
         ClutchError::WrongDataLength,
     )?;
-    let preliminary_runtime_policy = RuntimeLivenessPolicyV1::decode(&accounts[9].data.borrow())
+    require(
+        !accounts[9].is_writable && !accounts[9].is_signer && !accounts[9].executable,
+        ClutchError::MismatchedState,
+    )?;
+    require_signer(&accounts[18])?;
+    require(accounts[18].is_writable, ClutchError::NotWritable)?;
+    let rent = read_rent(&accounts[20])?;
+    require_system_program(&accounts[21])?;
+    let runtime_policy = RuntimeLivenessPolicyV1::decode(&accounts[9].data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(preliminary_runtime_policy)
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(runtime_policy)
         .map_err(dealer_fault)?;
     expect_pda(
         accounts[9].key,
         seeds::dealer_runtime_liveness_policy_pda(program_id, &runtime_policy_id.bytes()),
         None,
     )?;
-    let provisional_dependency = DealerFundedDependenciesV2 {
-        bindings: DealerFundedBudgetDependenciesV1 {
-            policy_id: Id::from_bytes(policy_id),
-            facility_id,
-            liveness_schedule_id: policy.liveness_policy_id,
-            runtime_liveness_policy_id: Id::from_bytes(
-                preliminary_runtime_policy.policy_id.bytes(),
-            ),
-            runtime_liveness_program_id: id(program_id),
-            runtime_liveness_policy_account_id: id(accounts[9].key),
-            runtime_liveness_binding_digest: Id::from_bytes([1; 32]),
-            fee_policy_id: policy.fee_policy_id,
-            collateral_mint: policy.collateral_mint,
-            token_program: policy.token_program,
-            asset_vault_authority_account_id: id(accounts[4].key),
-            neutral_sink: policy.neutral_sink,
-            counted_generation: 0,
-            dealer_liveness_work_principal_lamports: schedule
-                .dealer_runtime_work_principal_lamports()
-                .map_err(dealer_fault)?,
-        },
-        facility_position_binding_id: binding_id,
-        initialize_receipt_account_id: id(accounts[17].key),
-        initialize_receipt_semantic_id: Id::from_bytes([2; 32]),
-        rent: DeletableRentOwnerV1 {
-            payer: id(accounts[0].key),
-            neutral_sink: policy.neutral_sink,
-            refundable_principal: 1,
-            donation_floor: accounts[7].lamports(),
-        },
-    };
-    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
-        program_id,
-        &provisional_dependency,
-        &accounts[9],
-        &accounts[10..17],
-        DealerLivenessCompartmentV1::Clearing.index(),
+    require(
+        accounts[9].lamports() >= rent.minimum_balance(RUNTIME_LIVENESS_POLICY_BYTES_V1)?,
+        ClutchError::DealerPolicyRentMismatch,
     )?;
+    let runtime_account_rent = rent.minimum_balance(RUNTIME_LIVENESS_ACCOUNT_BYTES_V1)?;
+    let (first_runtime_state, first_runtime_bump) = prepare_runtime_compartment_admission(
+        program_id,
+        facility_id,
+        id(accounts[4].key),
+        &accounts[18],
+        &accounts[10],
+        runtime_policy,
+        RUNTIME_COMPARTMENT_ORDER_V1[0],
+        runtime_account_rent,
+    )?;
+    let mut runtime_states = [first_runtime_state; RUNTIME_COMPARTMENT_COUNT_V1];
+    let mut runtime_bumps = [first_runtime_bump; RUNTIME_COMPARTMENT_COUNT_V1];
+    let mut total_runtime_debit = runtime_policy
+        .compartment(RUNTIME_COMPARTMENT_ORDER_V1[0])
+        .total_payer_debit_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut runtime_index = 1usize;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let kind = RUNTIME_COMPARTMENT_ORDER_V1[runtime_index];
+        let (state, bump) = prepare_runtime_compartment_admission(
+            program_id,
+            facility_id,
+            id(accounts[4].key),
+            &accounts[18],
+            &accounts[10 + runtime_index],
+            runtime_policy,
+            kind,
+            runtime_account_rent,
+        )?;
+        runtime_states[runtime_index] = state;
+        runtime_bumps[runtime_index] = bump;
+        total_runtime_debit = total_runtime_debit
+            .checked_add(
+                runtime_policy
+                    .compartment(kind)
+                    .total_payer_debit_lamports()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            )
+            .ok_or(ClutchError::Arithmetic)?;
+        runtime_index += 1;
+    }
+    let runtime_bundle = RuntimeLivenessBundleV1 {
+        policy_id: runtime_policy.policy_id,
+        lifecycle_id: liveness_id(facility_id),
+        compartments: runtime_states,
+    };
+    runtime_bundle
+        .validate(runtime_policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        total_runtime_debit
+            == runtime_policy
+                .total_payer_debit_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    let runtime_binding = DealerRuntimeLivenessBindingV1::from_canonical(
+        &runtime_policy,
+        &runtime_states,
+    )
+    .map_err(dealer_fault)?;
     require(
         runtime_binding.realm_id() == policy.realm_id
             && runtime_binding.lifecycle_id() == facility_id
             && runtime_binding.neutral_sink() == policy.neutral_sink,
         ClutchError::MismatchedState,
     )?;
-    let mut runtime_index = 1usize;
+    runtime_index = 1;
     while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
         let compartment = match runtime_index {
             1 => DealerLivenessCompartmentV1::Candidate,
@@ -808,8 +932,6 @@ fn initialize_facility(
         runtime_index += 1;
     }
 
-    let rent = read_rent(&accounts[20])?;
-    require_system_program(&accounts[21])?;
     require(
         accounts[8].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
         ClutchError::DealerPolicyRentMismatch,
@@ -1059,10 +1181,16 @@ fn initialize_facility(
     let liveness_observation = receipt
         .runtime_receipt_observation()
         .map_err(dealer_fault)?;
-    let clearing_after_balance = accounts[12]
-        .lamports()
+    let clearing_before_balance = clearing
+        .expected_account_balance_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let clearing_after_balance = clearing_before_balance
         .checked_sub(receipt.call_ceiling_lamports)
         .ok_or(ClutchError::Arithmetic)?;
+    let mut clearing_pre_data = [0u8; RUNTIME_LIVENESS_ACCOUNT_BYTES_V1];
+    clearing
+        .encode(&mut clearing_pre_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let liveness_transition = plan_runtime_transition_v1(
         clutch_liveness::Id::from_bytes(program_id.to_bytes()),
         clutch_liveness::Id::from_bytes(accounts[9].key.to_bytes()),
@@ -1076,8 +1204,8 @@ fn initialize_facility(
         RuntimePersistedAccountViewV1 {
             account_id: clutch_liveness::Id::from_bytes(accounts[12].key.to_bytes()),
             owner_program_id: clutch_liveness::Id::from_bytes(program_id.to_bytes()),
-            lamports: accounts[12].lamports(),
-            data: &accounts[12].data.borrow(),
+            lamports: clearing_before_balance,
+            data: &clearing_pre_data,
             writable: true,
         },
         liveness_intent,
@@ -1187,6 +1315,40 @@ fn initialize_facility(
             &[receipt_bump],
         ],
     )?;
+    runtime_index = 0;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let kind = RUNTIME_COMPARTMENT_ORDER_V1[runtime_index];
+        let kind_seed = [runtime_kind_seed(kind)];
+        let payer_debit = runtime_policy
+            .compartment(kind)
+            .total_payer_debit_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let donation = create_exact_payer_debit_pda(
+            program_id,
+            &accounts[18],
+            &accounts[10 + runtime_index],
+            &accounts[21],
+            payer_debit,
+            RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+            &[
+                seeds::SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT,
+                &facility_id.bytes(),
+                &kind_seed,
+                &[runtime_bumps[runtime_index]],
+            ],
+        )?;
+        require(
+            donation == runtime_states[runtime_index].donation_received_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let mut runtime_data = accounts[10 + runtime_index]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        runtime_states[runtime_index]
+            .encode(&mut runtime_data[..])
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        runtime_index += 1;
+    }
     apply_liveness_transition(
         &accounts[12],
         &accounts[0],

@@ -290,23 +290,47 @@ pub(super) fn create_full_principal_pda<'a>(
     space: usize,
     signer_seeds: &[&[u8]],
 ) -> Outcome<(u64, u64)> {
+    let principal = rent.minimum_balance(space)?;
+    require(principal != 0, ClutchError::DealerPolicyRentMismatch)?;
+    let donation = create_exact_payer_debit_pda(
+        program_id,
+        payer,
+        target,
+        system_program,
+        principal,
+        space,
+        signer_seeds,
+    )?;
+    Ok((principal, donation))
+}
+
+/// Allocate one predictable program account while debiting the named payer by
+/// the exact independently checked principal. Existing lamports remain a
+/// donation in the account and never discount that debit.
+pub(super) fn create_exact_payer_debit_pda<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    payer_debit: u64,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<u64> {
     require_creatable(target)?;
     require_signer(payer)?;
     require(payer.is_writable, ClutchError::NotWritable)?;
     require_system_program(system_program)?;
     require(
-        space <= MAX_PERMITTED_DATA_INCREASE,
+        payer_debit != 0 && space <= MAX_PERMITTED_DATA_INCREASE,
         ClutchError::AccountCreationFailed,
     )?;
     let donation = target.lamports();
-    let principal = rent.minimum_balance(space)?;
-    require(principal != 0, ClutchError::DealerPolicyRentMismatch)?;
     let after = donation
-        .checked_add(principal)
+        .checked_add(payer_debit)
         .ok_or(ClutchError::Arithmetic)?;
     let transfer = Instruction::new_with_bytes(
         SYSTEM_PROGRAM_ID,
-        &transfer_data(principal),
+        &transfer_data(payer_debit),
         vec![
             AccountMeta::new(*payer.key, true),
             AccountMeta::new(*target.key, false),
@@ -348,7 +372,7 @@ pub(super) fn create_full_principal_pda<'a>(
         target.lamports() == after && target.data_len() == space && target.owner == program_id,
         ClutchError::AccountCreationFailed,
     )?;
-    Ok((principal, donation))
+    Ok(donation)
 }
 
 fn route_final_prefund<'a>(
