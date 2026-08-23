@@ -174,22 +174,6 @@ pub fn authenticate_claim_issuance_v1(
     Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-/// Authenticate the claim plane against exact current Token-2022
-/// ProgramData before joining it to an independently authenticated collateral
-/// release.
-pub fn authenticate_claim_issuance_with_programdata_v1(
-    collateral: BoundCollateralProfileV2,
-    token_program: &AccountInfo<'_>,
-    token_programdata: &AccountInfo<'_>,
-) -> Outcome<BoundClaimIssuanceV1> {
-    Ok(authenticate_claim_issuance_release_with_programdata_v1(
-        collateral,
-        token_program,
-        token_programdata,
-    )?
-    .bound())
-}
-
 /// Mint a private Product-consumable release proof while returning no
 /// caller-shaped deployment fields.
 pub(crate) fn authenticate_claim_issuance_release_with_programdata_v1(
@@ -233,25 +217,13 @@ pub(crate) fn authenticate_claim_issuance_release_with_programdata_v1(
 }
 
 /// Withdrawn program-account-only runtime admission. Current routes must use
-/// [`authenticate_claim_issuance_runtime_with_programdata_v1`].
+/// [`authenticate_claim_issuance_release_with_programdata_v1`] and retain its
+/// private loader receipt.
 pub fn authenticate_claim_issuance_runtime_v1(
     token_program: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
     let _ = token_program;
     Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
-}
-
-/// Authenticate the independently selected claim release against current
-/// Upgradeable Loader state and exact deployed ELF bytes.
-pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
-    token_program: &AccountInfo<'_>,
-    token_programdata: &AccountInfo<'_>,
-) -> Outcome<BoundClaimIssuanceV1> {
-    Ok(authenticate_claim_issuance_runtime_release_with_programdata_v1(
-        token_program,
-        token_programdata,
-    )?
-    .0)
 }
 
 fn authenticate_claim_issuance_runtime_release_with_programdata_v1(
