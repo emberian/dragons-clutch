@@ -1,82 +1,104 @@
-//! Live SBF composition for General V2 action 26 direct Egg delivery.
+//! Staged-disabled SBF composition for General V2 action 26 direct Egg delivery.
 //!
-//! Account order is fixed and exhaustive:
-//! 0 SettlementRoot, 1 retained Feed, 2 ReceiptV5, 3 MarketBindingV2,
-//! 4 MarketRuntimeV3, 5 Realm, 6 ProfileV2, 7 collateral policy,
-//! 8 Token-2022 program, 9 MarketInstanceV2 artifact,
-//! 10 MarketGenesisProfileV2 artifact, 11 Rent sysvar,
-//! then buyer and seller groups of five accounts each: read-only OwnerRowV5,
-//! read-only OrderPageV5, writable ReservationV9, writable PositionV3, and
-//! writable GEN1 ReplayV3.
+//! The positional frame starts with the single shared settlement traversal:
+//! read-only SettlementRoot, retained Feed, Market/Domain/Grid/Realm/Product
+//! facts, and the complete one-to-four PageV5 suffix. The action-specific
+//! suffix is one writable ReceiptV5, Rent, and buyer/seller groups containing
+//! a read-only OwnerRowV5 plus writable ReservationV9, PositionV3, and GEN1
+//! ReplayV3 accounts. Selected pages are references into the canonical shared
+//! page suffix; they are never repeated as caller-selected endpoint accounts.
 //!
-//! This action performs no CPI, lamport movement, account creation, or close.
-//! It authenticates every prestate first, derives the indivisible pure plan,
-//! and writes only its Receipt/Reservation/Position/Replay successors.
+//! Direct delivery is custody- and supply-neutral. It transfers already-backed
+//! internal inventory from the seller Reservation to the buyer Position and
+//! mutates only Receipt/Reservation/Position/Replay terminal bytes. Root,
+//! Hoard, and Token-2022 custody are not rewritten. All seven mutable data
+//! destinations are borrowed before the first byte changes.
 
-use core::cell::Ref;
+use core::cell::{Ref, RefMut};
+use std::boxed::Box;
 
-use clutch_collateral_adapter_v2::{
-    refine_market_collateral_v2, Id as CollateralId, MarketCollateralBindingV2,
-};
+use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    decode_direct_settlement_payload_v1, DirectSettlementPayloadV1, GeneralOrderPageSeedTupleV5,
-    GeneralReservationSeedTupleV9, Id32, MarketBindingV2, OwnerSettlementSeedTupleV5,
-    OwnerSettlementV5AccountV1,
+    decode_direct_settlement_payload_v1, DirectSettlementPayloadV1,
+    GeneralOrderPageSeedTupleV5, GeneralReservationSeedTupleV9, Id32,
+    OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
+    GENERAL_REPLAY_ACCOUNT_V1_BYTES,
 };
 use clutch_general_v2_runtime::{
     prepare_consume_direct_receipt_eggs_v5, project_owner_settlement_account_v5_readonly,
-    ConsumeDirectReceiptEggsInputV5, DirectEggDeliveryEndpointInputV5,
-    OwnerSettlementAccountProjectionV5, OwnerSettlementAccountViewV5, PositionAccountInputV3,
+    ConsumeDirectReceiptEggsInputV5, ConsumeDirectReceiptEggsPlanV5,
+    DirectEggDeliveryEndpointInputV5, OwnerSettlementAccountProjectionV5,
+    OwnerSettlementAccountViewV5, PositionAccountInputV3, SettlementTraversalProjectionV4,
 };
-use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
 use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
+use clutch_solana_layout::settlement_receipt_v5::SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5;
+use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-use crate::accounts::{expect_pda, require, require_count, Outcome};
+use crate::accounts::{expect_pda, require, Outcome};
 use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::read_rent;
 use crate::seeds;
 
-use super::collateral_position_v3::{
-    authenticate_general_market_v2, GeneralPositionReplayAuthorityV2,
-};
+use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
 use super::general_v2_receipt_v5::{
-    authenticate_general_receipt_v5_readonly_root, AuthenticatedGeneralReceiptV5,
-    RECEIPT_V5_AUTH_ACCOUNT_COUNT,
+    authenticate_general_receipt_v5_root_traversal,
 };
-use super::product_artifact::authenticate_product_artifact_v1;
+use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
+use super::general_v2_settlement_traversal_v5::{
+    authenticate_readonly_root_settlement_traversal_v5, authenticate_settlement_traversal_v5,
+    AuthenticatedRootSettlementTraversalV5, SettlementTraversalAccountFrameV5,
+};
 
-/// Exact action-26 account count.
-pub const ACCOUNT_COUNT: usize = 22;
-pub const IX_ROOT: usize = 0;
-pub const IX_FEED: usize = 1;
-pub const IX_RECEIPT: usize = 2;
-pub const IX_MARKET_BINDING: usize = 3;
-pub const IX_MARKET_RUNTIME: usize = 4;
-pub const IX_REALM: usize = 5;
-pub const IX_PROFILE: usize = 6;
-pub const IX_COLLATERAL_POLICY: usize = 7;
-pub const IX_TOKEN_PROGRAM: usize = 8;
-pub const IX_MARKET_INSTANCE: usize = 9;
-pub const IX_MARKET_GENESIS: usize = 10;
-pub const IX_RENT_SYSVAR: usize = 11;
-pub const IX_BUYER_ROW: usize = 12;
-pub const IX_BUYER_PAGE: usize = 13;
-pub const IX_BUYER_RESERVATION: usize = 14;
-pub const IX_BUYER_POSITION: usize = 15;
-pub const IX_BUYER_REPLAY: usize = 16;
-pub const IX_SELLER_ROW: usize = 17;
-pub const IX_SELLER_PAGE: usize = 18;
-pub const IX_SELLER_RESERVATION: usize = 19;
-pub const IX_SELLER_POSITION: usize = 20;
-pub const IX_SELLER_REPLAY: usize = 21;
+/// Fixed shared traversal roles before its one-to-four PageV5 suffix.
+pub const ACTION26_TRAVERSAL_PREFIX_ACCOUNTS: usize = 12;
+/// Exact action-26 roles after the complete PageV5 suffix.
+pub const ACTION26_DIRECT_SUFFIX_ACCOUNTS: usize = 10;
+
+const IX_ROOT: usize = 0;
+const IX_FEED: usize = 1;
+const IX_MARKET_BINDING: usize = 2;
+const IX_MARKET_RUNTIME: usize = 3;
+const IX_ECONOMIC_DOMAIN: usize = 4;
+const IX_PRICE_GRID: usize = 5;
+const IX_REALM: usize = 6;
+const IX_PROFILE: usize = 7;
+const IX_COLLATERAL_POLICY: usize = 8;
+const IX_TOKEN_PROGRAM: usize = 9;
+const IX_MARKET_INSTANCE: usize = 10;
+const IX_MARKET_GENESIS: usize = 11;
+
+#[derive(Clone, Copy, Debug)]
+pub struct DirectEndpointAccountFrameV5<'a, 'info> {
+    /// Read-only finalized rent-owned owner row.
+    pub owner_row: &'a AccountInfo<'info>,
+    /// Writable canonical ReservationV9 endpoint.
+    pub reservation: &'a AccountInfo<'info>,
+    /// Writable canonical General PositionV3.
+    pub position: &'a AccountInfo<'info>,
+    /// Writable purpose-owned GEN1 ReplayV3.
+    pub replay: &'a AccountInfo<'info>,
+}
+
+/// Exact action-specific suffix following the complete canonical page set.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectDeliveryAccountFrameV5<'a, 'info> {
+    /// Writable current rent-owned ReceiptV5.
+    pub receipt: &'a AccountInfo<'info>,
+    /// Read-only canonical Rent sysvar.
+    pub rent_sysvar: &'a AccountInfo<'info>,
+    /// Real buyer endpoint.
+    pub buyer: DirectEndpointAccountFrameV5<'a, 'info>,
+    /// Real seller endpoint.
+    pub seller: DirectEndpointAccountFrameV5<'a, 'info>,
+}
 
 #[derive(Debug)]
 struct EndpointData<'a> {
@@ -99,11 +121,18 @@ fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
 }
 
-fn borrow_data<'a, 'b>(account: &'a AccountInfo<'b>) -> Outcome<Ref<'a, [u8]>> {
+fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     Ok(Ref::map(data, |bytes| &**bytes))
+}
+
+fn borrow_mut_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<RefMut<'a, [u8]>> {
+    let data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    Ok(RefMut::map(data, |bytes| &mut **bytes))
 }
 
 fn require_program_state(
@@ -123,21 +152,17 @@ fn require_program_state(
             ClutchError::UnexpectedWritable
         },
     )?;
-    require(
-        account.data_len() == exact_len,
-        ClutchError::WrongDataLength,
-    )
+    require(account.data_len() == exact_len, ClutchError::WrongDataLength)
 }
 
-fn require_canonical_alias_partition(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+fn require_all_distinct(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
     let mut left = 0usize;
     while left < accounts.len() {
         require(!accounts[left].is_signer, ClutchError::MismatchedState)?;
         let mut right = left + 1;
         while right < accounts.len() {
-            let shared_page = left == IX_BUYER_PAGE && right == IX_SELLER_PAGE;
             require(
-                accounts[left].key != accounts[right].key || shared_page,
+                accounts[left].key != accounts[right].key,
                 ClutchError::AccountAlias,
             )?;
             right += 1;
@@ -147,163 +172,100 @@ fn require_canonical_alias_partition(accounts: &[AccountInfo<'_>]) -> Outcome<()
     Ok(())
 }
 
-pub(crate) fn authenticate_market_collateral_v2(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    receipt: &AuthenticatedGeneralReceiptV5,
-) -> Outcome<(
-    clutch_collateral_adapter_v2::BoundCollateralProfileV2,
-    MarketBindingV2,
-)> {
-    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
-        program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_COLLATERAL_POLICY],
-        &accounts[IX_TOKEN_PROGRAM],
-    )?;
-    let (market, runtime) = authenticate_general_market_v2(
-        program_id,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-    )?;
-    let base = market.base();
-    let root = receipt.root();
-    require(
-        root.market_binding().bytes() == accounts[IX_MARKET_BINDING].key.to_bytes()
-            && root.market().bytes() == accounts[IX_MARKET_RUNTIME].key.to_bytes()
-            && root.market_instance_v2_id() == base.market_instance_v2_id
-            && runtime.market_instance_v2_id == base.market_instance_v2_id,
-        ClutchError::MismatchedState,
-    )?;
-    let artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        &accounts[IX_MARKET_INSTANCE],
-        ContentId::from_bytes(root.market_instance_v2_id().bytes()),
-    )?;
-    let instance = *artifact.value();
-    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
-        &accounts[IX_MARKET_GENESIS],
-        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
-    )?;
-    let genesis = *genesis.value();
-    require(
-        instance
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .bytes()
-            == root.market_instance_v2_id().bytes()
-            && instance.market_genesis_profile_id.content_id().bytes()
-                == base.market_genesis_profile_v2_id.bytes()
-            && genesis.realm_id.bytes() == realm.realm().realm.bytes()
-            && genesis.profile_id.bytes() == realm.realm().profile.bytes()
-            && genesis.price_measure_policy_id.content_id().bytes()
-                == base.price_measure_policy_v1_id.bytes()
-            && genesis.relation_policy_id.bytes() == base.relation_policy_id.bytes()
-            && genesis.score_policy_id.bytes() == base.score_policy_id.bytes()
-            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
-        ClutchError::MismatchedState,
-    )?;
-    let market_id = CollateralId::from_bytes(root.market_instance_v2_id().bytes());
-    let market_bytes = root.market_instance_v2_id().bytes();
-    let bound = refine_market_collateral_v2(
-        realm,
-        MarketCollateralBindingV2 {
-            market: market_id,
-            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
-            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
-            collateral_cap_atoms: instance.collateral_cap,
-            hoard_authority: CollateralId::from_bytes(
-                seeds::hoard_authority_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-            hoard_token_account: CollateralId::from_bytes(
-                seeds::hoard_token_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok((bound, market))
+fn action26_page_count_from_account_len(total: usize) -> Result<usize, ClutchError> {
+    let fixed = ACTION26_TRAVERSAL_PREFIX_ACCOUNTS
+        .checked_add(ACTION26_DIRECT_SUFFIX_ACCOUNTS)
+        .ok_or(ClutchError::Arithmetic)?;
+    let page_count = total
+        .checked_sub(fixed)
+        .ok_or(ClutchError::WrongAccountCount)?;
+    if (1..=MAX_ORDER_PAGES).contains(&page_count) {
+        Ok(page_count)
+    } else {
+        Err(ClutchError::WrongAccountCount)
+    }
+}
+
+fn endpoint_page_index(frame: DirectEndpointAccountFrameV5<'_, '_>) -> Outcome<usize> {
+    let reservation_data = borrow_data(frame.reservation)?;
+    let reservation = ReservationAccountV9::decode(&reservation_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(usize::from(reservation.body().page_index))
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_endpoint_v5(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    receipt: &AuthenticatedGeneralReceiptV5,
-    bound: clutch_collateral_adapter_v2::BoundCollateralProfileV2,
+    root: &AuthenticatedGeneralSettlementRootV1,
+    traversal: &SettlementTraversalProjectionV4,
+    collateral: BoundCollateralProfileV2,
+    market_binding: &AccountInfo<'_>,
+    market_runtime: &AccountInfo<'_>,
+    selected_page: &AccountInfo<'_>,
+    frame: DirectEndpointAccountFrameV5<'_, '_>,
     rent_minimum: u64,
-    row_index: usize,
-    page_index: usize,
-    reservation_index: usize,
-    position_index: usize,
-    replay_index: usize,
     data: &EndpointData<'_>,
 ) -> Outcome<AuthenticatedEndpointV5> {
     require_program_state(
         program_id,
-        &accounts[row_index],
+        frame.owner_row,
         false,
         contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
     )?;
     let row = OwnerSettlementV5AccountV1::decode(&data.owner_row)?;
     let expectation = row.semantic.expectation();
     let owner = Id32::new(expectation.owner())?;
-    let root = receipt.root();
-    let row_seed =
-        OwnerSettlementSeedTupleV5::new(root.epoch(), root.settlement_candidate_id(), owner)?;
+    let row_seed = OwnerSettlementSeedTupleV5::new(
+        root.root().epoch(),
+        root.root().settlement_candidate_id(),
+        owner,
+    )?;
     let row_pda = seeds::general_v2_owner_settlement_v5_pda(
         program_id,
         row_seed.epoch(),
         row_seed.settlement_candidate(),
         row_seed.owner(),
     );
-    expect_pda(accounts[row_index].key, row_pda, Some(row.stored_bump))?;
+    expect_pda(frame.owner_row.key, row_pda, Some(row.stored_bump))?;
     let owner_row = project_owner_settlement_account_v5_readonly(
         OwnerSettlementAccountViewV5 {
-            account: id(accounts[row_index].key),
-            program_owner: id(accounts[row_index].owner),
+            account: id(frame.owner_row.key),
+            program_owner: id(frame.owner_row.owner),
             exact_body: &data.owner_row,
-            lamports: accounts[row_index].lamports(),
+            lamports: frame.owner_row.lamports(),
             rent_minimum,
             canonical_bump: row_pda.1,
-            writable: accounts[row_index].is_writable,
+            writable: frame.owner_row.is_writable,
         },
         id(program_id),
         row_seed,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
-    require_program_state(
-        program_id,
-        &accounts[page_index],
-        false,
-        ORDER_PAGE_V5_BYTES,
-    )?;
-    let page =
-        verify_page_v5(&data.page).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let page_seed = GeneralOrderPageSeedTupleV5::new(root.epoch(), page.page_index)?;
+    require_program_state(program_id, selected_page, false, ORDER_PAGE_V5_BYTES)?;
+    let page = verify_page_v5(&data.page)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let page_seed = GeneralOrderPageSeedTupleV5::new(root.root().epoch(), page.page_index)?;
     let page_pda = seeds::general_v2_order_page_v5_pda(
         program_id,
         page_seed.epoch(),
         u16::from_le_bytes(*page_seed.page_index_le()),
     );
-    expect_pda(accounts[page_index].key, page_pda, Some(page.stored_bump))?;
+    expect_pda(selected_page.key, page_pda, Some(page.stored_bump))?;
     require(
         page.frozen == 1
-            && page.market.0 == root.market().bytes()
-            && page.epoch.0 == root.epoch().bytes()
-            && page.order_set.0 == root.order_set().bytes(),
+            && page.market.0 == root.root().market().bytes()
+            && page.epoch.0 == root.root().epoch().bytes()
+            && page.order_set.0 == root.root().order_set().bytes()
+            && traversal.order_projection().page_account(page.page_index)
+                == Some(id(selected_page.key)),
         ClutchError::MismatchedState,
     )?;
 
     require_program_state(
         program_id,
-        &accounts[reservation_index],
+        frame.reservation,
         true,
         RESERVATION_ACCOUNT_BYTES_V9,
     )?;
@@ -314,25 +276,29 @@ fn authenticate_endpoint_v5(
     let reservation_pda =
         seeds::general_v2_reservation_v9_pda(program_id, reservation_seed.reservation_id());
     expect_pda(
-        accounts[reservation_index].key,
+        frame.reservation.key,
         reservation_pda,
         Some(reservation.body().stored_bump),
+    )?;
+    require(
+        reservation.body().page_index == page.page_index,
+        ClutchError::MismatchedState,
     )?;
 
     let replay = authenticate_current_general_position_replay_v2(
         program_id,
-        bound,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[position_index],
-        &accounts[replay_index],
+        collateral,
+        market_binding,
+        market_runtime,
+        frame.position,
+        frame.replay,
         owner.bytes(),
     )?;
     let replay_pda = seeds::purpose_replay_v3_pda(
         program_id,
-        &accounts[position_index].key.to_bytes(),
+        &frame.position.key.to_bytes(),
         PositionPurposeV3::General,
-        &accounts[IX_MARKET_RUNTIME].key.to_bytes(),
+        &market_runtime.key.to_bytes(),
     );
     Ok(AuthenticatedEndpointV5 {
         owner,
@@ -342,47 +308,93 @@ fn authenticate_endpoint_v5(
     })
 }
 
-fn endpoint_input<'a, 'b>(
-    accounts: &[AccountInfo<'_>],
-    auth: AuthenticatedEndpointV5,
-    data: &'a EndpointData<'b>,
-    page_index: usize,
-    reservation_index: usize,
-    position_index: usize,
-    replay_index: usize,
+fn endpoint_input<'a>(
+    frame: DirectEndpointAccountFrameV5<'_, '_>,
+    selected_page: &AccountInfo<'_>,
+    authenticated: AuthenticatedEndpointV5,
+    data: &'a EndpointData<'_>,
 ) -> DirectEggDeliveryEndpointInputV5<'a> {
     DirectEggDeliveryEndpointInputV5 {
-        owner_row: auth.owner_row,
-        order_page_account: id(accounts[page_index].key),
+        owner_row: authenticated.owner_row,
+        order_page_account: id(selected_page.key),
         order_page_body: &data.page,
-        reservation_account: id(accounts[reservation_index].key),
+        reservation_account: id(frame.reservation.key),
         reservation_body: &data.reservation,
         position: PositionAccountInputV3 {
-            account: id(accounts[position_index].key),
+            account: id(frame.position.key),
             encoded_body: &data.position,
         },
-        replay_account: id(accounts[replay_index].key),
-        replay_bump: auth.replay_bump,
-        replay_next_sequence: auth.replay.replay.next_sequence(),
+        replay_account: id(frame.replay.key),
+        replay_bump: authenticated.replay_bump,
+        replay_next_sequence: authenticated.replay.replay.next_sequence(),
         replay_body: &data.replay,
     }
 }
 
-fn write_exact(account: &AccountInfo<'_>, expected: Id32, body: &[u8]) -> Outcome<()> {
-    require(id(account.key) == expected, ClutchError::MismatchedState)?;
-    require(account.is_writable, ClutchError::NotWritable)?;
+#[inline(never)]
+fn prepare_plan_boxed(
+    input: ConsumeDirectReceiptEggsInputV5<'_>,
+) -> Outcome<Box<ConsumeDirectReceiptEggsPlanV5>> {
+    prepare_consume_direct_receipt_eggs_v5(input)
+        .map(Box::new)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+#[inline(never)]
+fn apply_direct_delivery_bundle_v5(
+    retained_feed: &AccountInfo<'_>,
+    frame: DirectDeliveryAccountFrameV5<'_, '_>,
+    buyer_page: &AccountInfo<'_>,
+    seller_page: &AccountInfo<'_>,
+    plan: &ConsumeDirectReceiptEggsPlanV5,
+) -> Outcome<()> {
     require(
-        account.data_len() == body.len(),
+        plan.retained_feed_account() == id(retained_feed.key)
+            && plan.receipt_account() == id(frame.receipt.key)
+            && plan.buyer().owner_settlement_account() == id(frame.buyer.owner_row.key)
+            && plan.buyer().order_page_account() == id(buyer_page.key)
+            && plan.buyer().reservation_account() == id(frame.buyer.reservation.key)
+            && plan.buyer().position_account() == id(frame.buyer.position.key)
+            && plan.buyer().replay().replay_account() == id(frame.buyer.replay.key)
+            && plan.seller().owner_settlement_account() == id(frame.seller.owner_row.key)
+            && plan.seller().order_page_account() == id(seller_page.key)
+            && plan.seller().reservation_account() == id(frame.seller.reservation.key)
+            && plan.seller().position_account() == id(frame.seller.position.key)
+            && plan.seller().replay().replay_account() == id(frame.seller.replay.key),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        frame.receipt.data_len() == SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5
+            && frame.buyer.reservation.data_len() == RESERVATION_ACCOUNT_BYTES_V9
+            && frame.buyer.position.data_len() == POSITION_V3_BYTES
+            && frame.buyer.replay.data_len() == GENERAL_REPLAY_ACCOUNT_V1_BYTES
+            && frame.seller.reservation.data_len() == RESERVATION_ACCOUNT_BYTES_V9
+            && frame.seller.position.data_len() == POSITION_V3_BYTES
+            && frame.seller.replay.data_len() == GENERAL_REPLAY_ACCOUNT_V1_BYTES,
         ClutchError::WrongDataLength,
     )?;
-    let mut data = account
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    data.copy_from_slice(body);
+
+    // Acquire every fallible mutable borrow before the first poststate byte is
+    // installed. No CPI, allocation, or other fallible step follows.
+    let mut receipt_out = borrow_mut_data(frame.receipt)?;
+    let mut buyer_reservation_out = borrow_mut_data(frame.buyer.reservation)?;
+    let mut buyer_position_out = borrow_mut_data(frame.buyer.position)?;
+    let mut buyer_replay_out = borrow_mut_data(frame.buyer.replay)?;
+    let mut seller_reservation_out = borrow_mut_data(frame.seller.reservation)?;
+    let mut seller_position_out = borrow_mut_data(frame.seller.position)?;
+    let mut seller_replay_out = borrow_mut_data(frame.seller.replay)?;
+
+    receipt_out.copy_from_slice(plan.receipt_poststate_body());
+    buyer_reservation_out.copy_from_slice(plan.buyer().reservation_poststate_body());
+    buyer_position_out.copy_from_slice(plan.buyer().position_poststate_body());
+    buyer_replay_out.copy_from_slice(plan.buyer().replay().replay_poststate_body());
+    seller_reservation_out.copy_from_slice(plan.seller().reservation_poststate_body());
+    seller_position_out.copy_from_slice(plan.seller().position_poststate_body());
+    seller_replay_out.copy_from_slice(plan.seller().replay().replay_poststate_body());
     Ok(())
 }
 
-/// Decode and execute exactly one current action-26 request.
+/// Decode and execute exactly one staged-disabled current action-26 request.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -396,155 +408,214 @@ pub fn process(
             && capabilities::extension_intent_action_enabled(74, 1, action.tag()),
         ClutchError::UnsupportedInstruction,
     )?;
-    require_count(accounts, ACCOUNT_COUNT)?;
-    require_canonical_alias_partition(accounts)?;
     let request = match decode_direct_settlement_payload_v1(action.tag(), payload)? {
         DirectSettlementPayloadV1::ConsumeDirectReceiptEggs(request) => request,
     };
-    let receipt = authenticate_general_receipt_v5_readonly_root(
-        program_id,
-        &accounts[..RECEIPT_V5_AUTH_ACCOUNT_COUNT],
-    )?;
+    consume_direct_receipt_eggs_v5(program_id, accounts, request)
+}
+
+#[inline(never)]
+fn consume_direct_receipt_eggs_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: contract::ConsumeDirectReceiptEggsPayloadV1,
+) -> Outcome<()> {
     require(
-        request.epoch == receipt.root().epoch() && request.receipt == receipt.receipt_account(),
+        accounts.len()
+            >= ACTION26_TRAVERSAL_PREFIX_ACCOUNTS + 1 + ACTION26_DIRECT_SUFFIX_ACCOUNTS
+            && accounts.len()
+                <= ACTION26_TRAVERSAL_PREFIX_ACCOUNTS
+                    + MAX_ORDER_PAGES
+                    + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+        ClutchError::WrongAccountCount,
+    )?;
+    require_all_distinct(accounts)?;
+    let page_count = action26_page_count_from_account_len(accounts.len())?;
+    let suffix_at = ACTION26_TRAVERSAL_PREFIX_ACCOUNTS
+        .checked_add(page_count)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        accounts.len() == suffix_at + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+        ClutchError::WrongAccountCount,
+    )?;
+    let frame = DirectDeliveryAccountFrameV5 {
+        receipt: &accounts[suffix_at],
+        rent_sysvar: &accounts[suffix_at + 1],
+        buyer: DirectEndpointAccountFrameV5 {
+            owner_row: &accounts[suffix_at + 2],
+            reservation: &accounts[suffix_at + 3],
+            position: &accounts[suffix_at + 4],
+            replay: &accounts[suffix_at + 5],
+        },
+        seller: DirectEndpointAccountFrameV5 {
+            owner_row: &accounts[suffix_at + 6],
+            reservation: &accounts[suffix_at + 7],
+            position: &accounts[suffix_at + 8],
+            replay: &accounts[suffix_at + 9],
+        },
+    };
+    require_program_state(
+        program_id,
+        frame.receipt,
+        true,
+        SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
+    )?;
+    require_program_state(
+        program_id,
+        frame.buyer.reservation,
+        true,
+        RESERVATION_ACCOUNT_BYTES_V9,
+    )?;
+    require_program_state(
+        program_id,
+        frame.seller.reservation,
+        true,
+        RESERVATION_ACCOUNT_BYTES_V9,
+    )?;
+    let buyer_page_index = endpoint_page_index(frame.buyer)?;
+    let seller_page_index = endpoint_page_index(frame.seller)?;
+    require(
+        buyer_page_index < page_count && seller_page_index < page_count,
         ClutchError::MismatchedState,
     )?;
-    let (bound, market_v2) = authenticate_market_collateral_v2(program_id, accounts, &receipt)?;
-    let rent = read_rent(&accounts[IX_RENT_SYSVAR])?;
+
+    let pages = &accounts[ACTION26_TRAVERSAL_PREFIX_ACCOUNTS..suffix_at];
+    let traversal_frame = SettlementTraversalAccountFrameV5 {
+        retained_feed: &accounts[IX_FEED],
+        market_binding: &accounts[IX_MARKET_BINDING],
+        market_runtime: &accounts[IX_MARKET_RUNTIME],
+        economic_domain: &accounts[IX_ECONOMIC_DOMAIN],
+        price_grid: &accounts[IX_PRICE_GRID],
+        realm: &accounts[IX_REALM],
+        profile: &accounts[IX_PROFILE],
+        collateral_policy: &accounts[IX_COLLATERAL_POLICY],
+        token_program: &accounts[IX_TOKEN_PROGRAM],
+        market_instance: &accounts[IX_MARKET_INSTANCE],
+        market_genesis: &accounts[IX_MARKET_GENESIS],
+        pages,
+    };
+    let authenticated_traversal =
+        authenticate_settlement_traversal_v5(program_id, traversal_frame)?;
+    let authenticated = authenticate_readonly_root_settlement_traversal_v5(
+        program_id,
+        &accounts[IX_ROOT],
+        &authenticated_traversal,
+    )?;
+    compose_and_apply_direct_delivery_v5(
+        program_id,
+        request,
+        authenticated,
+        traversal_frame,
+        frame,
+        &pages[buyer_page_index],
+        &pages[seller_page_index],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn compose_and_apply_direct_delivery_v5(
+    program_id: &Pubkey,
+    request: contract::ConsumeDirectReceiptEggsPayloadV1,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    traversal_frame: SettlementTraversalAccountFrameV5<'_, '_>,
+    frame: DirectDeliveryAccountFrameV5<'_, '_>,
+    buyer_page: &AccountInfo<'_>,
+    seller_page: &AccountInfo<'_>,
+) -> Outcome<()> {
+    let receipt = authenticate_general_receipt_v5_root_traversal(
+        program_id,
+        authenticated,
+        frame.receipt,
+    )?;
+    let authenticated_root = authenticated.root();
+    let authenticated_traversal = authenticated.traversal();
+    let traversal = authenticated_traversal.traversal();
+    let collateral = authenticated_traversal.collateral();
+    require(
+        request.epoch == authenticated_root.root().epoch()
+            && request.receipt == receipt.receipt_account()
+            && receipt.settlement_root_account() == authenticated_root.account()
+            && receipt.retained_feed_account() == authenticated_traversal.feed_account(),
+        ClutchError::MismatchedState,
+    )?;
+    let rent = read_rent(frame.rent_sysvar)?;
     let owner_row_rent = rent.minimum_balance(contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5)?;
 
     let buyer_data = EndpointData {
-        owner_row: borrow_data(&accounts[IX_BUYER_ROW])?,
-        page: borrow_data(&accounts[IX_BUYER_PAGE])?,
-        reservation: borrow_data(&accounts[IX_BUYER_RESERVATION])?,
-        position: borrow_data(&accounts[IX_BUYER_POSITION])?,
-        replay: borrow_data(&accounts[IX_BUYER_REPLAY])?,
+        owner_row: borrow_data(frame.buyer.owner_row)?,
+        page: borrow_data(buyer_page)?,
+        reservation: borrow_data(frame.buyer.reservation)?,
+        position: borrow_data(frame.buyer.position)?,
+        replay: borrow_data(frame.buyer.replay)?,
     };
     let seller_data = EndpointData {
-        owner_row: borrow_data(&accounts[IX_SELLER_ROW])?,
-        page: borrow_data(&accounts[IX_SELLER_PAGE])?,
-        reservation: borrow_data(&accounts[IX_SELLER_RESERVATION])?,
-        position: borrow_data(&accounts[IX_SELLER_POSITION])?,
-        replay: borrow_data(&accounts[IX_SELLER_REPLAY])?,
+        owner_row: borrow_data(frame.seller.owner_row)?,
+        page: borrow_data(seller_page)?,
+        reservation: borrow_data(frame.seller.reservation)?,
+        position: borrow_data(frame.seller.position)?,
+        replay: borrow_data(frame.seller.replay)?,
     };
-    let buyer_auth = authenticate_endpoint_v5(
+    let buyer = authenticate_endpoint_v5(
         program_id,
-        accounts,
-        &receipt,
-        bound,
+        authenticated_root,
+        traversal,
+        collateral,
+        traversal_frame.market_binding,
+        traversal_frame.market_runtime,
+        buyer_page,
+        frame.buyer,
         owner_row_rent,
-        IX_BUYER_ROW,
-        IX_BUYER_PAGE,
-        IX_BUYER_RESERVATION,
-        IX_BUYER_POSITION,
-        IX_BUYER_REPLAY,
         &buyer_data,
     )?;
-    let seller_auth = authenticate_endpoint_v5(
+    let seller = authenticate_endpoint_v5(
         program_id,
-        accounts,
-        &receipt,
-        bound,
+        authenticated_root,
+        traversal,
+        collateral,
+        traversal_frame.market_binding,
+        traversal_frame.market_runtime,
+        seller_page,
+        frame.seller,
         owner_row_rent,
-        IX_SELLER_ROW,
-        IX_SELLER_PAGE,
-        IX_SELLER_RESERVATION,
-        IX_SELLER_POSITION,
-        IX_SELLER_REPLAY,
         &seller_data,
     )?;
-    require(
-        buyer_auth.owner != seller_auth.owner,
-        ClutchError::AccountAlias,
-    )?;
-    let feed_data = borrow_data(&accounts[IX_FEED])?;
-    let relation_market = market_v2.relation_projection();
-    let plan = prepare_consume_direct_receipt_eggs_v5(ConsumeDirectReceiptEggsInputV5 {
+    require(buyer.owner != seller.owner, ClutchError::AccountAlias)?;
+
+    let feed_data = borrow_data(traversal_frame.retained_feed)?;
+    let relation_market = authenticated_traversal.market().relation_projection();
+    let plan = prepare_plan_boxed(ConsumeDirectReceiptEggsInputV5 {
         payload: request,
-        settlement_root_account: receipt.settlement_root_account(),
-        settlement_root: receipt.root(),
-        retained_feed_account: receipt.retained_feed_account(),
+        settlement_root_account: authenticated_root.account(),
+        settlement_root: authenticated_root.root(),
+        retained_feed_account: authenticated_traversal.feed_account(),
         retained_feed_body: &feed_data,
         receipt: receipt.receipt(),
         receipt_evidence: receipt.evidence(),
-        market_binding_account: id(accounts[IX_MARKET_BINDING].key),
+        market_binding_account: id(traversal_frame.market_binding.key),
         market_binding: &relation_market,
-        collateral: bound,
-        buyer: endpoint_input(
-            accounts,
-            buyer_auth,
-            &buyer_data,
-            IX_BUYER_PAGE,
-            IX_BUYER_RESERVATION,
-            IX_BUYER_POSITION,
-            IX_BUYER_REPLAY,
-        ),
-        seller: endpoint_input(
-            accounts,
-            seller_auth,
-            &seller_data,
-            IX_SELLER_PAGE,
-            IX_SELLER_RESERVATION,
-            IX_SELLER_POSITION,
-            IX_SELLER_REPLAY,
-        ),
-    })
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-
+        collateral,
+        buyer: endpoint_input(frame.buyer, buyer_page, buyer, &buyer_data),
+        seller: endpoint_input(frame.seller, seller_page, seller, &seller_data),
+    })?;
     require(
-        plan.settlement_root_account() == receipt.settlement_root_account()
-            && plan.retained_feed_account() == receipt.retained_feed_account()
-            && plan.receipt_account() == receipt.receipt_account()
-            && plan.buyer().owner_settlement_account() == id(accounts[IX_BUYER_ROW].key)
-            && plan.buyer().order_page_account() == id(accounts[IX_BUYER_PAGE].key)
-            && plan.buyer().reservation_account() == id(accounts[IX_BUYER_RESERVATION].key)
-            && plan.buyer().position_account() == id(accounts[IX_BUYER_POSITION].key)
-            && plan.buyer().replay().replay_account() == id(accounts[IX_BUYER_REPLAY].key)
-            && plan.seller().owner_settlement_account() == id(accounts[IX_SELLER_ROW].key)
-            && plan.seller().order_page_account() == id(accounts[IX_SELLER_PAGE].key)
-            && plan.seller().reservation_account() == id(accounts[IX_SELLER_RESERVATION].key)
-            && plan.seller().position_account() == id(accounts[IX_SELLER_POSITION].key)
-            && plan.seller().replay().replay_account() == id(accounts[IX_SELLER_REPLAY].key),
+        plan.settlement_root_account() == authenticated_root.account()
+            && plan.buyer().position_prestate_semantic_id()
+                == Id32::from_bytes(buyer.replay.position.semantic_id)
+            && plan.seller().position_prestate_semantic_id()
+                == Id32::from_bytes(seller.replay.position.semantic_id),
         ClutchError::MismatchedState,
     )?;
 
     drop(feed_data);
     drop(buyer_data);
     drop(seller_data);
-    write_exact(
-        &accounts[IX_RECEIPT],
-        plan.receipt_account(),
-        plan.receipt_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_BUYER_RESERVATION],
-        plan.buyer().reservation_account(),
-        plan.buyer().reservation_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_BUYER_POSITION],
-        plan.buyer().position_account(),
-        plan.buyer().position_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_BUYER_REPLAY],
-        plan.buyer().replay().replay_account(),
-        plan.buyer().replay().replay_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_SELLER_RESERVATION],
-        plan.seller().reservation_account(),
-        plan.seller().reservation_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_SELLER_POSITION],
-        plan.seller().position_account(),
-        plan.seller().position_poststate_body(),
-    )?;
-    write_exact(
-        &accounts[IX_SELLER_REPLAY],
-        plan.seller().replay().replay_account(),
-        plan.seller().replay().replay_poststate_body(),
+    apply_direct_delivery_bundle_v5(
+        traversal_frame.retained_feed,
+        frame,
+        buyer_page,
+        seller_page,
+        &plan,
     )
 }
 
@@ -553,35 +624,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_v5_account_roles_are_exhaustive() {
-        let roles = [
-            IX_ROOT,
-            IX_FEED,
-            IX_RECEIPT,
-            IX_MARKET_BINDING,
-            IX_MARKET_RUNTIME,
-            IX_REALM,
-            IX_PROFILE,
-            IX_COLLATERAL_POLICY,
-            IX_TOKEN_PROGRAM,
-            IX_MARKET_INSTANCE,
-            IX_MARKET_GENESIS,
-            IX_RENT_SYSVAR,
-            IX_BUYER_ROW,
-            IX_BUYER_PAGE,
-            IX_BUYER_RESERVATION,
-            IX_BUYER_POSITION,
-            IX_BUYER_REPLAY,
-            IX_SELLER_ROW,
-            IX_SELLER_PAGE,
-            IX_SELLER_RESERVATION,
-            IX_SELLER_POSITION,
-            IX_SELLER_REPLAY,
-        ];
-        assert_eq!(roles.len(), ACCOUNT_COUNT);
-        for (expected, observed) in roles.into_iter().enumerate() {
-            assert_eq!(observed, expected);
-        }
-        assert_eq!(RECEIPT_V5_AUTH_ACCOUNT_COUNT, 3);
+    fn direct_v5_frame_is_current_successors_only() {
+        assert_eq!(SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5, 298);
+        assert_eq!(contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5, 340);
+        assert_eq!(RESERVATION_ACCOUNT_BYTES_V9, 666);
+        assert_eq!(POSITION_V3_BYTES, 480);
+        assert_eq!(GENERAL_REPLAY_ACCOUNT_V1_BYTES, 344);
+        assert_eq!(ACTION26_TRAVERSAL_PREFIX_ACCOUNTS, 12);
+        assert_eq!(ACTION26_DIRECT_SUFFIX_ACCOUNTS, 10);
+    }
+
+    #[test]
+    fn sparse_and_churned_page_sets_keep_the_account_delimiter() {
+        assert_eq!(
+            action26_page_count_from_account_len(
+                ACTION26_TRAVERSAL_PREFIX_ACCOUNTS + 3 + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+            ),
+            Ok(3),
+        );
+        assert_eq!(
+            action26_page_count_from_account_len(
+                ACTION26_TRAVERSAL_PREFIX_ACCOUNTS + 4 + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+            ),
+            Ok(4),
+        );
+    }
+
+    #[test]
+    fn direct_page_delimiter_refuses_missing_and_fifth_pages() {
+        assert_eq!(
+            action26_page_count_from_account_len(
+                ACTION26_TRAVERSAL_PREFIX_ACCOUNTS + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+            ),
+            Err(ClutchError::WrongAccountCount),
+        );
+        assert_eq!(
+            action26_page_count_from_account_len(
+                ACTION26_TRAVERSAL_PREFIX_ACCOUNTS + 5 + ACTION26_DIRECT_SUFFIX_ACCOUNTS,
+            ),
+            Err(ClutchError::WrongAccountCount),
+        );
+    }
+
+    #[test]
+    fn endpoint_suffix_order_is_exact() {
+        let receipt = 0usize;
+        let rent = receipt + 1;
+        let buyer_row = rent + 1;
+        let buyer_reservation = buyer_row + 1;
+        let buyer_position = buyer_reservation + 1;
+        let buyer_replay = buyer_position + 1;
+        let seller_row = buyer_replay + 1;
+        let seller_reservation = seller_row + 1;
+        let seller_position = seller_reservation + 1;
+        let seller_replay = seller_position + 1;
+        assert_eq!(seller_replay + 1, ACTION26_DIRECT_SUFFIX_ACCOUNTS);
     }
 }
