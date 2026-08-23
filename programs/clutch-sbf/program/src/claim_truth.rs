@@ -55,6 +55,32 @@ pub fn observe_outcome_mints(
     )
 }
 
+/// Admit the canonical full-width MarketInstanceV2 outcome-mint suffix.
+///
+/// This successor uses a fresh mint seed domain and the authenticated stable
+/// MarketRuntime PDA as mint authority. It never treats the full content ID as
+/// a legacy lowered Market coordinate or asks a Product artifact account to
+/// sign claim issuance.
+#[inline(never)]
+pub fn observe_outcome_mints_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    first: usize,
+    market_runtime_authority: Pubkey,
+    market_instance_v2_id: [u8; 32],
+    outcome_count: u8,
+    writable_outcome: Option<u8>,
+) -> Outcome<ObservedMintSupplies> {
+    observe_outcome_mints_with(
+        accounts,
+        first,
+        market_runtime_authority,
+        outcome_count,
+        writable_outcome,
+        |outcome| seeds::outcome_mint_v2_pda(program_id, &market_instance_v2_id, outcome),
+    )
+}
+
 /// Boxed [`observe_outcome_mints`]: the observed vector lives in this helper's
 /// frame and only a heap pointer crosses back into the caller's bounded SBF
 /// frame (the `direct_selection_v3::common` discipline).
