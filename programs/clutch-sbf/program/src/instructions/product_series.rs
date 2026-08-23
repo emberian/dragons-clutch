@@ -4132,13 +4132,24 @@ pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
 }
 
 /// Derive the exact current terminal principal/donation projection.
-pub fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+pub(crate) fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     terminal_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<SeriesFundingTerminalProjectionV2> {
-    current
+    let live = authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        current.value(),
+        artifacts,
+        rent,
+    )?;
+    require(live == current, ClutchError::MismatchedState)?;
+    live
         .value()
         .state
         .close(
