@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 /// Marker proving a directory was created by this lifecycle owner.
 pub const SESSION_MARKER: &str = "dragons-clutch/local-validator-session/v1\n";
 /// Public, secret-free configuration artifact written into every session.
-pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v1";
+pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v2";
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -196,17 +196,26 @@ impl RealSourceConfigV3 {
     }
 }
 
-/// Exact program release loaded by the local validator.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Expected program release loaded by the local validator. Construction records
+/// the digest; the process launcher remains responsible for checking the ELF
+/// bytes before using the argv.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalProgramRelease {
     pub program_id: Address,
     pub elf_sha256: [u8; 32],
+    pub elf_path: PathBuf,
 }
 
 impl LocalProgramRelease {
-    pub fn validate(self) -> Result<()> {
-        if self.program_id == Address::default() {
-            return Err(SessionError::InvalidRelease("program identity is zero"));
+    pub fn validate(&self) -> Result<()> {
+        if self.program_id == Address::default()
+            || !self.elf_path.is_absolute()
+            || self.elf_path == Path::new("/")
+            || self.elf_path.extension().and_then(|value| value.to_str()) != Some("so")
+        {
+            return Err(SessionError::InvalidRelease(
+                "program identity or absolute ELF path is invalid",
+            ));
         }
         if self.elf_sha256 == [0; 32] {
             return Err(SessionError::InvalidRelease("program ELF digest is zero"));
@@ -221,6 +230,8 @@ pub struct LocalSessionConfig {
     pub root: PathBuf,
     pub ports: LocalValidatorPorts,
     pub clutch_release: LocalProgramRelease,
+    /// Separately released adapters loaded alongside the main Clutch program.
+    pub adapter_releases: Vec<LocalProgramRelease>,
     pub source: RealSourceConfigV3,
 }
 
@@ -229,7 +240,33 @@ impl LocalSessionConfig {
         validate_root(&self.root)?;
         self.ports.validate()?;
         self.clutch_release.validate()?;
-        self.source.validate()
+        self.source.validate()?;
+        let mut programs = BTreeSet::from([self.clutch_release.program_id]);
+        let mut previous_program = None;
+        for release in &self.adapter_releases {
+            release.validate()?;
+            if previous_program.is_some_and(|previous| previous >= release.program_id) {
+                return Err(SessionError::InvalidRelease(
+                    "local adapter releases are not in canonical program-ID order",
+                ));
+            }
+            if !programs.insert(release.program_id) {
+                return Err(SessionError::InvalidRelease(
+                    "local program release identity is duplicated",
+                ));
+            }
+            previous_program = Some(release.program_id);
+        }
+        let source_adapter_is_loaded = self.adapter_releases.iter().any(|release| {
+            release.program_id == self.source.source_adapter_program
+                && release.elf_sha256 == self.source.source_adapter_release_sha256
+        });
+        if !source_adapter_is_loaded {
+            return Err(SessionError::InvalidRelease(
+                "source adapter release is not present in local validator programs",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -320,6 +357,30 @@ impl SessionLayout {
             hex(&config.clutch_release.elf_sha256)
         )
         .expect("String write is infallible");
+        writeln!(
+            body,
+            "clutch_elf_path={}",
+            config.clutch_release.elf_path.display()
+        )
+        .expect("String write is infallible");
+        writeln!(body, "adapter_count={}", config.adapter_releases.len())
+            .expect("String write is infallible");
+        for (index, release) in config.adapter_releases.iter().enumerate() {
+            writeln!(body, "adapter_{index}_program={}", release.program_id)
+                .expect("String write is infallible");
+            writeln!(
+                body,
+                "adapter_{index}_elf_sha256={}",
+                hex(&release.elf_sha256)
+            )
+            .expect("String write is infallible");
+            writeln!(
+                body,
+                "adapter_{index}_elf_path={}",
+                release.elf_path.display()
+            )
+            .expect("String write is infallible");
+        }
         writeln!(body, "provider_program={}", config.source.provider_program)
             .expect("String write is infallible");
         writeln!(body, "provider_config={}", config.source.provider_config)
@@ -509,6 +570,11 @@ impl LocalValidatorInvocation {
             OsString::from("--warp-slot"),
             OsString::from(warp_slot.to_string()),
         ];
+        for release in core::iter::once(&config.clutch_release).chain(&config.adapter_releases) {
+            arguments.push(OsString::from("--bpf-program"));
+            arguments.push(OsString::from(release.program_id.to_string()));
+            arguments.push(release.elf_path.as_os_str().to_owned());
+        }
         for account in genesis_accounts {
             arguments.push(OsString::from("--account"));
             arguments.push(OsString::from(account.address.to_string()));
