@@ -1190,7 +1190,7 @@ pub fn plan_close_failure_interval_consensus_work_v1(
     after.replay_preserved_lamports = actual_replay_balance_lamports;
     after.check()?;
     let replay = replay_from_state(after);
-    let terminal_receipt = terminal_receipt(after, replay);
+    let terminal_receipt = project_failure_interval_consensus_terminal_receipt_v1(after, replay)?;
     Ok(FailureIntervalConsensusClosePlanV1 {
         state_plan: FailureIntervalConsensusStatePlanV1 {
             before: *state,
@@ -1451,10 +1451,19 @@ fn resolution_receipt_from_authenticated_facts(
     }
 }
 
-fn terminal_receipt(
+/// Reconstruct the exact terminal receipt from a checked closed state and its
+/// canonical permanent replay postimage. This is deterministic projection,
+/// not account authority; the SBF adapter must authenticate the persisted
+/// replay account before consuming the result.
+pub fn project_failure_interval_consensus_terminal_receipt_v1(
     state: FailureIntervalConsensusStateV1,
     replay: FailureIntervalConsensusReplayV1,
-) -> FailureIntervalConsensusTerminalReceiptV1 {
+) -> Result<FailureIntervalConsensusTerminalReceiptV1> {
+    state.check()?;
+    if state.phase != FailureIntervalConsensusPhaseV1::Closed || replay != replay_from_state(state)
+    {
+        return Err(Error::BindingMismatch);
+    }
     let mut hasher = Sha256::new();
     hasher.update(TERMINAL_DOMAIN);
     hasher.update(state.binding_id.bytes());
@@ -1467,7 +1476,7 @@ fn terminal_receipt(
     hasher.update(state.resolution_receipt_id.bytes());
     hasher.update(state.close_authorization_id.bytes());
     hasher.update(replay.id.bytes());
-    FailureIntervalConsensusTerminalReceiptV1 {
+    Ok(FailureIntervalConsensusTerminalReceiptV1 {
         id: FailureIntervalConsensusTerminalReceiptIdV1::from_bytes(hasher.finalize().into()),
         interval_binding_id: state.binding_id,
         market_instance_id: state.market_instance_id,
@@ -1479,7 +1488,7 @@ fn terminal_receipt(
         failure_resolution_receipt_id: state.resolution_receipt_id,
         work_close_authorization_id: state.close_authorization_id,
         permanent_replay_receipt_id: replay.id,
-    }
+    })
 }
 
 fn hash_funding_facts(hasher: &mut Sha256, facts: FailureIntervalConsensusFundingFactsV1) {
