@@ -248,16 +248,32 @@ The additive `solve_quantized_atom_support3_hull_v1` continues through
 lexicographic coordinate triples under a separate triple work bound. It solves
 an affine-independent triple by exact barycentric 2-by-2 determinants, checks
 every payout equation, reduces the whole mass vector by an exact common gcd,
-and then invokes the same production verifier. A fixed two-`u128`-limb
-substrate holds signed determinant magnitudes and reconstruction products; its
-binary gcd and fixed-iteration division use no allocation, unchecked cast,
-float, or rounding.
+and then invokes the same production verifier. A fixed 512-bit substrate holds
+signed determinant magnitudes and reconstruction products; its binary gcd and
+exact division use no allocation, unchecked cast, float, or rounding.
 
 An exhaustive support-three result distinguishes absence of an exact positive
 singleton/pair/triple from existence of exact triples whose reduced masses or
 denominator exceed the V1 `u64` certificate profile. A work-limited result
 claims only its deterministic search prefix. None of these outcomes decides
 representability with support four through `outcome_count`.
+
+The additive `solve_quantized_atom_support4_hull_v1` continues through a
+separately bounded lexicographic quartet family. It solves affine-independent
+quartets with a fixed 3-by-3 row-pivoted Bareiss fraction-free matrix over
+checked signed 512-bit magnitudes, checks every original payout equation,
+reduces the complete primitive mass vector, and submits the result to the same
+production verifier. The width covers full-`u64` determinant and
+determinant-times-payout bounds without allocation, floats, or unchecked
+casts.
+
+Its total result deliberately separates `Solved`, `WorkTruncated`,
+`OutOfProfile`, and `Unsupported`. The last means only that the declared
+coordinate set was exhausted through support four without a V1-representable
+certificate. It is not an incoherence decision: support five through
+`outcome_count` remains unimplemented, and omitted integer coordinates remain
+outside any non-full-domain report. The result makes no fair-value, uniqueness,
+or optimality claim and introduces no additional rounding boundary.
 
 ## 4. Adapter certificate interface
 

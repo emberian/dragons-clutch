@@ -65,14 +65,43 @@ checked signed 2-by-2 determinants, checks the reconstruction in every active
 outcome, reduces all masses and their denominator by their exact common gcd,
 and independently invokes the same production verifier.
 
-The determinant substrate uses two fixed `u128` limbs so the difference of two
-full `u64` products and subsequent exact reconstruction remain representable
-without signed overflow. It uses fixed-iteration exact division and binary gcd;
-there are no casts, allocations, floats, or rounding. Exhaustive outcomes
+The determinant substrate uses a fixed 512-bit magnitude so the difference of
+two full `u64` products, the support-four determinants, and subsequent exact
+reconstruction remain representable without signed overflow. It uses exact
+division and binary gcd;
+there are no unchecked casts, allocations, floats, or rounding. Exhaustive outcomes
 separate no rational singleton/pair/triple, exact triples whose primitive
 masses exceed V1's `u64` encoding, and work truncation. The support-three API
 makes no statement about representations requiring four through
 `outcome_count` atoms.
+
+`solve_quantized_atom_support4_hull_v1` adds a separately bounded
+lexicographic quartet search. For each affine-independent quartet it selects
+three independent payout equations, derives the four exact barycentric masses,
+checks every active payout equation, reduces the complete mass vector, and
+passes the constructed certificate through `verify_quantized_atom_mixture_v1`.
+The search and verifier continue to share the one named production
+largest-remainder/lowest-index-tie payout boundary; the inverse solve adds no
+rounding or approximation.
+
+The quartet path uses a crate-internal fixed 3-by-3 matrix and row-pivoted
+Bareiss fraction-free elimination over signed 512-bit magnitudes. The fixed
+width covers full-`u64` 3-by-3 determinants and determinant-times-payout
+reconstruction; overflow and non-exact divisions refuse explicitly. This is
+safe, `no_std`, allocation-free arithmetic rather than a general dynamic
+linear-algebra surface.
+
+The support-four outcome keeps four facts distinct: `Solved` means the emitted
+certificate passed the independent production verifier; `WorkTruncated` means
+one declared family budget ended; `OutOfProfile` means an exact positive
+solution needed primitive integers outside the certificate's `u64` encoding;
+and `Unsupported` means the declared coordinates were exhausted through
+support four without a representable certificate. In particular,
+`Unsupported` is not a price-incoherence claim: support five through
+`outcome_count` remains unimplemented, and the coordinate report separately
+records whether the declared set covered the complete integer Terms domain.
+The deterministic first certificate is neither a fair-value nor an optimality
+claim.
 
 ## Continuous exact profile
 
