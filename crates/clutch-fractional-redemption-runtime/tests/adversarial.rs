@@ -723,6 +723,106 @@ fn exact_bearer_request_is_hidden_until_the_bound_claim_burn_is_accepted() {
 }
 
 #[test]
+fn credited_bearer_request_is_hidden_until_its_exact_burn_is_accepted() {
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[1] = 1;
+    let mut materialized = [0; MAX_OUTCOMES];
+    materialized[0] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, internal, materialized, 1);
+    let source = BearerClaimPrestateV1 {
+        claimant: rid(50),
+        claim_token_account: rid(51),
+        claim_mint: rid(52),
+        collateral_destination: rid(53),
+        claim_issuance_binding: context.policy().claim_issuance_binding,
+        source_claim_atoms: 1,
+        observed_materialized_supply: materialized,
+    };
+    let prepared = prepare_bearer_credit_v1(
+        context,
+        1,
+        1,
+        CreditPrestateV1::Create(CreditCreationV1::Fresh {
+            claimant: rid(50),
+            stored_bump: 9,
+            rent: split_rent(50),
+        }),
+        source,
+        0,
+        1,
+    )
+    .unwrap();
+    assert_eq!(prepared.claimant(), rid(50));
+    assert_eq!(prepared.outcome(), 0);
+    assert_eq!(prepared.quantity(), 1);
+    assert_eq!(prepared.observed_materialized_supply(), materialized);
+
+    let token_before = AdapterBearerClaimObservationV3 {
+        mint: cid(52),
+        mint_authority: cid(60),
+        source_token_account: cid(51),
+        source_owner: cid(50),
+        mint_supply_atoms: 1,
+        source_atoms: 1,
+    };
+    let prepared_burn = prepare_fractional_bearer_claim_burn_v3(
+        context.claims().unwrap(),
+        cid(60),
+        cid(50),
+        0,
+        1,
+        materialized,
+        token_before,
+        prepared.fractional_claim_ledger(),
+    )
+    .unwrap();
+    let accepted_burn = accept_fractional_bearer_claim_burn_v3(
+        prepared_burn,
+        [0; MAX_OUTCOMES],
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..token_before
+        },
+    )
+    .unwrap();
+    let wrong_token_before = AdapterBearerClaimObservationV3 {
+        source_owner: cid(61),
+        ..token_before
+    };
+    let wrong_prepared_burn = prepare_fractional_bearer_claim_burn_v3(
+        context.claims().unwrap(),
+        cid(60),
+        cid(61),
+        0,
+        1,
+        materialized,
+        wrong_token_before,
+        prepared.fractional_claim_ledger(),
+    )
+    .unwrap();
+    let wrong_burn = accept_fractional_bearer_claim_burn_v3(
+        wrong_prepared_burn,
+        [0; MAX_OUTCOMES],
+        AdapterBearerClaimObservationV3 {
+            mint_supply_atoms: 0,
+            source_atoms: 0,
+            ..wrong_token_before
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        accept_bearer_credit_burn_v1(prepared, wrong_burn),
+        Err(Error::ClaimPlaneRefused)
+    );
+    let burned = accept_bearer_credit_burn_v1(prepared, accepted_burn).unwrap();
+    let request = burned.collateral_request();
+    assert_eq!(request.payout_atoms, 0);
+    assert_eq!(request.claim_semantic_owner, cid(50));
+    assert_eq!(request.destination_token_account, cid(53));
+}
+
+#[test]
 fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     let mut internal = [0; MAX_OUTCOMES];
     internal[1] = 1;
