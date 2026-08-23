@@ -721,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
                     "identity_manifest_sha256": manifest["identity_manifest_sha256"],
                     "semantic_owners": manifest["capabilities"],
                     "central_registry": manifest["central_registry"],
+                    "wire_surface": manifest["wire_surface"],
+                    "wire_surface_sha256": manifest["wire_surface_sha256"],
                     "reproducible": True,
                     "measurements": [first, second],
                     "default_feature_equivalence": default_equivalence,

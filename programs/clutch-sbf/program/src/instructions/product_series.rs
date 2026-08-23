@@ -1,7 +1,7 @@
 //! Concrete SBF account and lamport-custody boundary for recurring Series.
 //!
-//! This module is compiled only by the non-production Product/Series
-//! laboratory. It authenticates the account forms that already have frozen
+//! This module is always compiled so private Product/Failure/Source joins use
+//! one current authority. It authenticates the account forms that already have frozen
 //! semantics: registered-Series and funding-state PDAs, exact stored/current
 //! rent coverage, and six physically distinct zero-data System-owned lamport
 //! vaults. It also supplies exact-delta System transfers into and out of those
@@ -23,7 +23,8 @@ use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
     authenticate_registry_capability_v3, authenticate_series_registry_capability_refs_v2,
     authenticate_series_registry_capability_refs_v2_for_mutation,
-    AuthenticatedRegistryCapabilityReleaseV3, AuthenticatedRegistryCapabilityV3,
+    AuthenticatedProductArtifactV1, AuthenticatedRegistryCapabilityReleaseV3,
+    AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
@@ -45,8 +46,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_product_series::{
     assemble_compiled_product_series_bundle_v5, compile_source_occurrence_v3,
-    compile_source_occurrence_v4, AuthenticatedSeriesFundingAuthorityV1,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
+    compile_source_occurrence_v4, compile_source_semantic_inputs_v1,
+    AuthenticatedSeriesFundingAuthorityV1, AuthenticatedSourceSeriesAuthorityV3,
+    CompiledProductSeriesBundleV1,
     CompiledProductSeriesBundleV1Id, CompiledProductSeriesBundleV5,
     CompiledProductSeriesBundleV5Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
@@ -74,10 +76,14 @@ use clutch_solana_layout::product_series::{
     SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::registry::RecurringSeriesAction;
-use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgramV3};
+use clutch_source_plane_v3::{
+    SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3, SummaryProgramV3, WindowSpecV3,
+};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, ClockSnapshotV1,
-    OccurrenceSourceReceiptV1,
+    AuthenticatedClockBucketV1, AuthenticatedPersistedSourcePolicyHandoffV1,
+    AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
+    ClockSnapshotV1, OccurrenceSourceReceiptV1, SourcePolicyHandoffJoinV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -86,6 +92,10 @@ use solana_pubkey::Pubkey;
 
 /// Closed number of physical Series funding compartments.
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
+const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/source-product-route-authentication/v3";
+const SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/source-semantic-publication-authentication/v1";
 /// Canonical generation of the sole funding activation permitted by V1.
 pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
@@ -757,6 +767,488 @@ impl AuthenticatedCompiledProductSeriesBundleV5 {
     pub const fn bundle_id(self) -> CompiledProductSeriesBundleV5Id {
         self.bundle_id
     }
+}
+
+/// Private current Source/ProfileV4/BundleV5 route authority.
+///
+/// The Source route receipts prove the exact adapter/parser/receiver
+/// Program/ProgramData, deployment-slot and Config bodies selected by
+/// `SourceReleaseManifestV2`. The Product receipts prove hostile decoding,
+/// content-addressed accounts, current ProfileV4 registry authority, BundleV5,
+/// and the Realm/Profile collateral selection. There is no byte decoder or
+/// public constructor for this capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceProductRouteV3 {
+    id: ContentId,
+    source_route_id: ContentId,
+    receiver_route_id: ContentId,
+    source_release_manifest_id: ContentId,
+    source_release_authentication_id: ContentId,
+    source_plane_contract_id: ContentId,
+    source_spec_id: ContentId,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    market_genesis_profile_id: clutch_product_series::MarketGenesisProfileV2Id,
+    realm_id: ContentId,
+    profile_id: ContentId,
+    collateral_mint: ContentId,
+    collateral_token_program: ContentId,
+}
+
+impl AuthenticatedSourceProductRouteV3 {
+    /// Authentication identity of the complete current route.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Exact Source release selected by current BundleV5.
+    pub const fn source_release_manifest_id(self) -> ContentId {
+        self.source_release_manifest_id
+    }
+
+    /// Exact owner/PDA/body authentication of the Source release account.
+    pub const fn source_release_authentication_id(self) -> ContentId {
+        self.source_release_authentication_id
+    }
+
+    /// Exact fully authenticated Source adapter/parser/receiver route.
+    pub const fn source_route_id(self) -> ContentId {
+        self.source_route_id
+    }
+
+    /// Exact reviewed SourcePlane semantic program selected by the release.
+    pub const fn source_plane_contract_id(self) -> ContentId {
+        self.source_plane_contract_id
+    }
+
+    /// Exact SourceSpec selected by current BundleV5.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Exact current compiler graph.
+    pub const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV5Id {
+        self.compiler_bundle_id
+    }
+
+    /// Immutable Realm selected by ProfileV4 and GenesisV2.
+    pub const fn realm_id(self) -> ContentId {
+        self.realm_id
+    }
+
+    /// Immutable collateral Profile selected by ProfileV4 and GenesisV2.
+    pub const fn profile_id(self) -> ContentId {
+        self.profile_id
+    }
+}
+
+/// Mint the sole private current Source/Product route from authenticated SBF
+/// receipts. Caller-shaped IDs or decoded-but-unauthenticated bodies cannot
+/// enter this join.
+pub fn authenticate_source_product_route_v3(
+    route: AuthenticatedSourceRouteV1,
+    receiver: AuthenticatedReceiverRouteV2,
+    registry: AuthenticatedRegistryCapabilityV3,
+    bundle: &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
+    genesis: &AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
+) -> Outcome<AuthenticatedSourceProductRouteV3> {
+    let bundle_value = bundle.value();
+    let genesis_value = genesis.value();
+    let bundle_id = bundle_value
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let genesis_id = genesis_value
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection = registry.projection();
+    let owners = registry.semantic_owners();
+    let collateral = registry.realm_collateral();
+    require(
+        receiver.route_id() == route.route_id()
+            && bundle.semantic_id() == bundle_id.content_id()
+            && genesis.semantic_id() == genesis_id.content_id()
+            && bundle_value.source_release_manifest_id.bytes()
+                == route.release_manifest_id().bytes()
+            && bundle_value.source_plane_contract_id.bytes()
+                == route.source_plane_contract_id().bytes()
+            && bundle_value.source_spec_id.bytes() == route.source_spec_id().bytes()
+            && bundle_value.registry_release_id == registry.registry_release_id()
+            && bundle_value.capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && bundle_value.source_plane_contract_id == owners.source_plane_contract_id
+            && bundle_value.source_spec_id == owners.source_spec_id
+            && bundle_value.market_genesis_profile_id == genesis_id
+            && genesis_value.capability_profile_id == registry.capability_profile_id()
+            && genesis_value.realm_id == collateral.realm_id
+            && genesis_value.profile_id == collateral.profile_id
+            && projection.realm_collateral == collateral,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3,
+            &route.route_id().bytes(),
+            &receiver.id().bytes(),
+            &route.release_manifest_id().bytes(),
+            &route.release_authentication_id().bytes(),
+            &route.source_plane_contract_id().bytes(),
+            &route.source_spec_id().bytes(),
+            &registry.registry_release_id().bytes(),
+            &registry.capability_profile_id().bytes(),
+            &bundle_id.bytes(),
+            &genesis_id.bytes(),
+            &collateral.realm_id.bytes(),
+            &collateral.profile_id.bytes(),
+            &collateral.collateral_mint.bytes(),
+            &collateral.token_program.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceProductRouteV3 {
+        id,
+        source_route_id: route.route_id(),
+        receiver_route_id: receiver.id(),
+        source_release_manifest_id: route.release_manifest_id(),
+        source_release_authentication_id: route.release_authentication_id(),
+        source_plane_contract_id: route.source_plane_contract_id(),
+        source_spec_id: route.source_spec_id(),
+        registry_release_id: registry.registry_release_id(),
+        capability_profile_id: registry.capability_profile_id(),
+        compiler_bundle_id: bundle_id,
+        market_genesis_profile_id: genesis_id,
+        realm_id: collateral.realm_id,
+        profile_id: collateral.profile_id,
+        collateral_mint: collateral.collateral_mint,
+        collateral_token_program: collateral.token_program,
+    })
+}
+
+/// Private current authority to publish one exact ordinal's immutable Source
+/// semantic input accounts.
+///
+/// This capability has no decoder or public field constructor. It is minted
+/// only by recompiling the ordinal through the authenticated ProfileV4,
+/// BundleV5, Source release, registry, Realm, and attachment graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceSemanticPublicationV1 {
+    id: ContentId,
+    route: AuthenticatedSourceProductRouteV3,
+    occurrence: CompiledSourceOccurrenceV3,
+    window: WindowSpecV3,
+    statistic_key: StatisticKeyV3,
+    summary_program: SummaryProgramV3,
+}
+
+impl AuthenticatedSourceSemanticPublicationV1 {
+    /// Authentication identity of this exact publication capability.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Complete current Source/Product route.
+    pub const fn route(self) -> AuthenticatedSourceProductRouteV3 {
+        self.route
+    }
+
+    /// Exact Product/Series occurrence compiled for this ordinal.
+    pub const fn occurrence(self) -> CompiledSourceOccurrenceV3 {
+        self.occurrence
+    }
+
+    /// Canonical immutable WindowSpec body.
+    pub const fn window(self) -> WindowSpecV3 {
+        self.window
+    }
+
+    /// Canonical immutable StatisticKey body.
+    pub const fn statistic_key(self) -> StatisticKeyV3 {
+        self.statistic_key
+    }
+
+    /// Exact reviewed SummaryProgram selected by ProfileV4.
+    pub const fn summary_program(self) -> SummaryProgramV3 {
+        self.summary_program
+    }
+}
+
+/// Recompile and authenticate the only immutable Source inputs publishable for
+/// one current Series ordinal.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_source_semantic_publication_v1(
+    route: AuthenticatedSourceProductRouteV3,
+    authority: &AuthenticatedProductSourceAuthorityV1,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    projection: &RegistryCapabilityProjectionV2,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    ordinal: u32,
+) -> Outcome<AuthenticatedSourceSemanticPublicationV1> {
+    let compiled = compile_source_semantic_inputs_v1(
+        authority,
+        &artifacts.series,
+        &artifacts.template,
+        &artifacts.basis,
+        &artifacts.recovery,
+        &artifacts.price_policy,
+        &artifacts.genesis,
+        &artifacts.attachment,
+        projection,
+        ordinal,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let occurrence_id = compiled
+        .occurrence
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let window_id = compiled
+        .window
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let statistic_key_id = compiled
+        .statistic_key
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let summary_program_id = compiled
+        .summary_program
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        compiler_bundle.bundle_id() == route.compiler_bundle_id
+            && compiler_bundle.bundle().capability_profile_id.content_id()
+                == route.capability_profile_id
+            && compiler_bundle.bundle().source_release_manifest_id.bytes()
+                == route.source_release_manifest_id.bytes()
+            && compiler_bundle.bundle().source_plane_contract_id.bytes()
+                == route.source_plane_contract_id.bytes()
+            && compiler_bundle.bundle().source_spec_id.bytes() == route.source_spec_id.bytes()
+            && artifacts.genesis.realm_id == route.realm_id
+            && artifacts.genesis.profile_id == route.profile_id
+            && compiled.window.source_plane_program_id.bytes()
+                == route.source_plane_contract_id.bytes()
+            && compiled.window.source_spec_id.bytes() == route.source_spec_id.bytes()
+            && compiled.occurrence.source_window_id.bytes() == window_id.bytes()
+            && compiled.occurrence.statistic_key_id.bytes() == statistic_key_id.bytes()
+            && compiled.statistic_key.window_id == window_id
+            && compiled.statistic_key.summary_program_id == summary_program_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V1,
+            &route.id.bytes(),
+            &occurrence_id.bytes(),
+            &window_id.bytes(),
+            &statistic_key_id.bytes(),
+            &summary_program_id.bytes(),
+            &ordinal.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceSemanticPublicationV1 {
+        id,
+        route,
+        occurrence: compiled.occurrence,
+        window: compiled.window,
+        statistic_key: compiled.statistic_key,
+        summary_program: compiled.summary_program,
+    })
+}
+
+/// Consume one private current publication authority and create or
+/// authenticate the exact content-addressed WindowSpec, SummaryProgram, and
+/// StatisticKey accounts. The returned receipt is postwrite-only and carries
+/// no caller-selected semantic coordinates.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_source_semantic_inputs_v1(
+    program_id: &Pubkey,
+    publication: AuthenticatedSourceSemanticPublicationV1,
+    payer: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    summary_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<crate::source_plane_v3_actions::PublishedSourceSemanticInputsV1> {
+    crate::source_plane_v3_actions::publish_authenticated_source_semantic_inputs(
+        program_id,
+        publication.id,
+        publication.window,
+        publication.summary_program,
+        publication.statistic_key,
+        payer,
+        window_account,
+        summary_account,
+        statistic_key_account,
+        system_program,
+        rent_sysvar,
+    )
+}
+
+/// Private successful Source handoff selected by the current Product route.
+///
+/// This contains no payout or relation DTO. It only makes Source's exact
+/// release/deployment/result/work-receipt authority available to the future
+/// shared Product ResolutionV5 writer, which must separately consume
+/// Failure's private resolved-cell receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceResolutionInputV3 {
+    id: ContentId,
+    route: AuthenticatedSourceProductRouteV3,
+    source_handoff_authentication_id: ContentId,
+    persisted_handoff_authentication_id: ContentId,
+    persisted_handoff_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    successful_evaluation_handoff_id: ContentId,
+    occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    result_account_authentication_id: ContentId,
+    work_receipt_authentication_id: ContentId,
+    failure_policy_binding_id: ContentId,
+    market_instance_id: ContentId,
+    source_repair_generation: u64,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
+}
+
+impl AuthenticatedSourceResolutionInputV3 {
+    /// Authentication identity of the exact current Source resolution input.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Current Source/ProfileV4/BundleV5 route selected by this handoff.
+    pub const fn route(self) -> AuthenticatedSourceProductRouteV3 {
+        self.route
+    }
+
+    /// Exact semantic successful-evaluation handoff.
+    pub const fn successful_evaluation_handoff_id(self) -> ContentId {
+        self.successful_evaluation_handoff_id
+    }
+
+    /// Exact Source-owned physical handoff authentication.
+    pub const fn source_handoff_authentication_id(self) -> ContentId {
+        self.source_handoff_authentication_id
+    }
+
+    /// Exact owner/PDA/body authentication of the durable action-10 record.
+    pub const fn persisted_handoff_authentication_id(self) -> ContentId {
+        self.persisted_handoff_authentication_id
+    }
+
+    /// Physical immutable action-10 handoff account.
+    pub const fn persisted_handoff_account(
+        self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.persisted_handoff_account
+    }
+
+    /// Exact Product/Series occurrence account selected before evaluation.
+    pub const fn occurrence_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.occurrence_account
+    }
+
+    /// Exact owner/PDA/body authentication of the successful result account.
+    pub const fn result_account_authentication_id(self) -> ContentId {
+        self.result_account_authentication_id
+    }
+
+    /// Exact immutable Source work-receipt authentication.
+    pub const fn work_receipt_authentication_id(self) -> ContentId {
+        self.work_receipt_authentication_id
+    }
+
+    /// Exact downstream Failure policy selected before Source evaluation.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Exact Product Market instance selected by the compiled occurrence.
+    pub const fn market_instance_id(self) -> ContentId {
+        self.market_instance_id
+    }
+
+    /// Exact Source repair generation retained by the successful occurrence.
+    pub const fn source_repair_generation(self) -> u64 {
+        self.source_repair_generation
+    }
+
+    /// Exact canonical Window selected by the successful occurrence.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Exact predictable StatisticKey selected by the successful occurrence.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+}
+
+/// Bind Source's successful action-10 handoff to the current authenticated
+/// Product route without classifying a relation or constructing a payout.
+pub fn authenticate_source_resolution_input_v3(
+    route: AuthenticatedSourceProductRouteV3,
+    handoff: SuccessfulEvaluationHandoffV1,
+    source: SourcePolicyHandoffJoinV1,
+    persisted: AuthenticatedPersistedSourcePolicyHandoffV1,
+) -> Outcome<AuthenticatedSourceResolutionInputV3> {
+    let occurrence = handoff.occurrence();
+    require(
+        source.handoff_id() == handoff.id()
+            && source.release_authentication_id() == route.source_release_authentication_id
+            && source.route_id() == route.source_route_id
+            && source.source_spec_id() == route.source_spec_id
+            && occurrence.route_id() == route.source_route_id
+            && occurrence.source_plane_contract_id() == route.source_plane_contract_id
+            && occurrence.source_spec_id() == route.source_spec_id
+            && source.occurrence_account() == occurrence.occurrence_account()
+            && source.source_fact_authentication_id()
+                == handoff.result_account_authentication_id()
+            && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
+            && source.window_id() == occurrence.window_id()
+            && source.statistic_key_id() == occurrence.statistic_key_id()
+            && source.clock_policy_id() == handoff.clock_policy_id()
+            && source.clock() == handoff.clock()
+            && persisted.source_policy_handoff_join_id() == source.id(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/source-resolution-input/v3",
+            &route.id.bytes(),
+            &source.id().bytes(),
+            &persisted.id().bytes(),
+            &persisted.account().bytes(),
+            &handoff.id().bytes(),
+            &occurrence.id().bytes(),
+            &source.occurrence_account().bytes(),
+            &handoff.result_account_authentication_id().bytes(),
+            &source.work_receipt_authentication_id().bytes(),
+            &handoff.failure_policy_binding_id().bytes(),
+            &occurrence.market_instance_id().bytes(),
+            &occurrence.repair_generation().to_le_bytes(),
+            &occurrence.window_id().bytes(),
+            &occurrence.statistic_key_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceResolutionInputV3 {
+        id,
+        route,
+        source_handoff_authentication_id: source.id(),
+        persisted_handoff_authentication_id: persisted.id(),
+        persisted_handoff_account: persisted.account(),
+        successful_evaluation_handoff_id: handoff.id(),
+        occurrence_account: source.occurrence_account(),
+        result_account_authentication_id: handoff.result_account_authentication_id(),
+        work_receipt_authentication_id: source.work_receipt_authentication_id(),
+        failure_policy_binding_id: handoff.failure_policy_binding_id(),
+        market_instance_id: ContentId::from_bytes(occurrence.market_instance_id().bytes()),
+        source_repair_generation: occurrence.repair_generation(),
+        window_id: occurrence.window_id(),
+        statistic_key_id: occurrence.statistic_key_id(),
+    })
 }
 
 #[cfg(test)]

@@ -55,7 +55,6 @@ non-production-product-series-lab = [
 non-production-failure-recovery-lab = [
     "dep:clutch-evidence-recovery",
     "dep:clutch-failure-policy-adapter",
-    "dep:clutch-failure-policy-runtime",
 ]
 # Mutually exclusive deployable products. Each forwards the same identity to
 # both hostile wire crates so a narrow SBF cannot accidentally link the full
@@ -111,7 +110,7 @@ clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity
 clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-evidence-recovery = { path = "../../../crates/clutch-evidence-recovery", optional = true }
 clutch-failure-policy-adapter = { path = "../../../crates/clutch-failure-policy-adapter", optional = true }
-clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime", optional = true }
+clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime" }
 clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }

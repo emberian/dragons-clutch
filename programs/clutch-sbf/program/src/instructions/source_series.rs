@@ -79,11 +79,56 @@ pub fn process(
         (SourceSeriesAction::IngestBoundaryBatch, SourceSeriesPayloadV2::Transition(intent)) => {
             process_ingest_boundary(program_id, accounts, sequence, intent)
         }
+        (SourceSeriesAction::SealRawPage, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_raw_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::InitializeWindowWork, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_initialize_window_work(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::FoldWindowPages, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_fold_window_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::SealWindow, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_window(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (SourceSeriesAction::EvaluateStatistic, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_evaluate_statistic(
+                program_id, accounts, sequence, intent,
+            )
+        }
+        (
+            SourceSeriesAction::EmitFailureHandoff,
+            SourceSeriesPayloadV2::EmitFailureHandoff(intent),
+        ) => super::source_series_successor::process_emit_successful_handoff(
+            program_id, accounts, sequence, intent,
+        ),
+        (
+            SourceSeriesAction::ReopenGeneration,
+            SourceSeriesPayloadV2::ReopenGeneration(intent),
+        ) => super::source_series_successor::process_reopen_generation(
+            program_id, accounts, sequence, intent,
+        ),
+        (
+            SourceSeriesAction::CloseGeneration,
+            SourceSeriesPayloadV2::CloseGeneration(intent),
+        ) => super::source_series_successor::process_close_generation(
+            program_id, accounts, sequence, intent,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
-fn require_live_intent(
+/// Require the exact current adapter program, submitting keeper, and an
+/// unexpired Clock-slot bound before any successor state transition.
+pub(super) fn require_live_intent(
     program_id: &Pubkey,
     keeper: &AccountInfo<'_>,
     intent: IntentPreimageV3,

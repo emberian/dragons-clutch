@@ -202,6 +202,24 @@ impl FixedCodec for CompiledSourceOccurrenceV3 {
     }
 }
 
+/// Canonical current Source semantic inputs derived under one authenticated
+/// ProfileV4/BundleV5 authority.
+///
+/// These are liability-free pure bodies. Account publication remains an SBF
+/// responsibility and must bind this output to its private authenticated
+/// Product/Source route before creating any content-addressed PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompiledSourceSemanticInputsV1 {
+    /// Product/Series provenance record for the exact ordinal.
+    pub occurrence: CompiledSourceOccurrenceV3,
+    /// Canonical SourcePlane WindowSpec body.
+    pub window: WindowSpecV3,
+    /// Predictable StatisticKey fixed before evaluation.
+    pub statistic_key: StatisticKeyV3,
+    /// Exact registry-selected reviewed evaluator semantics.
+    pub summary_program: SummaryProgramV3,
+}
+
 /// Compile one V5 ordinal only after the adapter authenticates all source and
 /// registry facts required to construct SourcePlane V3 identities.
 #[allow(clippy::too_many_arguments)]
@@ -289,9 +307,10 @@ pub fn compile_source_occurrence_v3<A: AuthenticatedSourceSeriesAuthorityV3 + ?S
     Ok(value)
 }
 
-/// Compile one current QuoteV4/AttachmentV4 occurrence after exact authority checks.
+/// Compile one current QuoteV4/AttachmentV4 occurrence and all immutable
+/// Source semantic inputs after exact authority checks.
 #[allow(clippy::too_many_arguments)]
-pub fn compile_source_occurrence_v4<A: AuthenticatedSourceSeriesAuthorityV3 + ?Sized>(
+pub fn compile_source_semantic_inputs_v1<A: AuthenticatedSourceSeriesAuthorityV3 + ?Sized>(
     authority: &A,
     series: &SeriesPlanV5,
     template: &ProductTemplateV4,
@@ -302,7 +321,7 @@ pub fn compile_source_occurrence_v4<A: AuthenticatedSourceSeriesAuthorityV3 + ?S
     attachment: &SeriesAttachmentPlanV4,
     registry: &RegistryCapabilityProjectionV2,
     ordinal: u32,
-) -> Result<CompiledSourceOccurrenceV3> {
+) -> Result<CompiledSourceSemanticInputsV1> {
     authority.authenticate_registry_projection(registry)?;
     authority.authenticate_source_spec(template.source_spec_id)?;
 
@@ -362,7 +381,7 @@ pub fn compile_source_occurrence_v4<A: AuthenticatedSourceSeriesAuthorityV3 + ?S
         statistic,
     };
     statistic_key.validate().map_err(source_error)?;
-    let value = CompiledSourceOccurrenceV3 {
+    let occurrence = CompiledSourceOccurrenceV3 {
         series_plan_id: compiled.series_plan_id,
         ordinal,
         market_instance_id: compiled.market_instance_id,
@@ -370,8 +389,42 @@ pub fn compile_source_occurrence_v4<A: AuthenticatedSourceSeriesAuthorityV3 + ?S
         source_window_id: local_id(window.id().map_err(source_error)?),
         statistic_key_id: local_id(statistic_key.id().map_err(source_error)?),
     };
-    value.validate_shape()?;
-    Ok(value)
+    occurrence.validate_shape()?;
+    Ok(CompiledSourceSemanticInputsV1 {
+        occurrence,
+        window,
+        statistic_key,
+        summary_program: summary,
+    })
+}
+
+/// Compile one current QuoteV4/AttachmentV4 occurrence after exact authority checks.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_source_occurrence_v4<A: AuthenticatedSourceSeriesAuthorityV3 + ?Sized>(
+    authority: &A,
+    series: &SeriesPlanV5,
+    template: &ProductTemplateV4,
+    basis: &NativeClaimBasisV1,
+    recovery: &EvidenceOnlyRecoveryPolicyV1,
+    price_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    attachment: &SeriesAttachmentPlanV4,
+    registry: &RegistryCapabilityProjectionV2,
+    ordinal: u32,
+) -> Result<CompiledSourceOccurrenceV3> {
+    Ok(compile_source_semantic_inputs_v1(
+        authority,
+        series,
+        template,
+        basis,
+        recovery,
+        price_policy,
+        genesis,
+        attachment,
+        registry,
+        ordinal,
+    )?
+    .occurrence)
 }
 
 #[cfg(test)]

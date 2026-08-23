@@ -34,6 +34,9 @@ UTF-8 JSON containing:
 - all eleven semantic-owner rows;
 - the central-registry version, digest, exact enabled intent triples, and exact
   linked account coordinates; and
+- the exhaustive `dragons-clutch/wire-surface/v1` projection of legacy intent
+  pairs, dedicated Direct intent pairs, outer Request actions, and Source
+  generation discriminants; and
 - ELF, `.text`, chosen ProgramData `max_len`, and persistent-loader-rent limits.
 
 The eleven semantic-owner slots, in canonical order, are `relation`, `score`,
@@ -45,8 +48,26 @@ state, required intent triples, and required account coordinates.
 Intent coordinates are `[outer_tag, version, local_action]`. Legacy two-byte
 intents use local action zero; successor envelopes use their nonzero
 family-local action. Account coordinates are `[tag, version]`. The manifest
-pins the central registry's own semantic digest rather than teaching the Python
-checker another copy of Rust's allocation ranges.
+pins the central registry's own semantic digest; the Python checker retains
+only the decoder partition and retired Source-generation boundaries needed to
+prove that this exhaustive projection does not reopen a legacy authority.
+
+`wire_surface` has exactly five fields: `schema`, `legacy_intent_pairs`,
+`dedicated_direct_intent_pairs`, `outer_request_actions`, and
+`source_generation_discriminants`. The two intent-pair arrays are canonical,
+sorted, disjoint projections of every enabled central-registry triple whose
+local action is zero. Tags `36..=46` belong only to the dedicated Direct
+decoder; all other pairs belong to the hostile current Request/Intent decoder.
+The outer Request action surface is exactly `[0, 1, 2]`. Source generation
+discriminants are derived from reachable legacy Source pairs: generation 1 for
+tags `23..=26` and generation 2 for tags `70..=73`.
+
+The checker returns the validated object as `wire_surface` and also computes
+`wire_surface_sha256` over a canonical object domain-separated by
+`dragons-clutch/wire-surface-identity/v1`. Both the exact object and this digest
+are repeated in linked measurement evidence. The profile identity and the
+normalized producer-input manifest digest separately bind the same object; a
+client projection cannot substitute its own wire table or digest.
 
 For all `linked` owners, required intent and account coordinates must equal the
 top-level enabled/linked coverage exactly. A missing required coordinate and an
@@ -67,6 +88,7 @@ profile.
 | Identity | Additional Cargo feature | Meaning |
 | --- | --- | --- |
 | `production-inert` | none | Ordinary artifact identity; this name does not claim a production source release. |
+| `runtime-real-pyth-release` | none | Checked full-profile identity for a separately authenticated SourceReleaseManifestV2/real-Pyth route; it compiles no fixture row. |
 | `non-production-mock-source-lab` | `non-production-mock-source` | Fabricated-provider laboratory ELF. |
 | `non-production-real-pyth-lab` | `non-production-real-pyth-lab` | Captured real-program/local-synthetic-observation laboratory ELF. |
 
@@ -74,6 +96,20 @@ The source class and exact Cargo features are in the profile identity. A mock
 ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
+
+`runtime-real-pyth-release` is admitted only with `profile-full`, whose current
+SourceSeries authority is the `77/v2` Source V3 family. The checked-profile
+gate refuses both laboratory identities as deployable; the runtime also gates
+legacy Source V1 tags `23..=26` and Source V2 tags `70..=73` on those explicit
+non-production features. A release-class ELF therefore has no fixture or
+legacy Source fallback.
+
+For a full successor profile the Source semantic-owner requirements are
+exactly `(77,2,1)` through `(77,2,4)`. When that owner is linked, the enabled
+central-registry Source subset must be exactly the same four triples. Reserved
+actions 5 through 12 refuse; narrow profiles must expose no Source V3 action.
+Every release-class wire surface has no legacy Source pair and an empty
+`source_generation_discriminants` array.
 
 The separately named
 `profile-non-production-dealer-policy-catalog-lab` is a capability profile,
@@ -150,8 +186,8 @@ uniformly SHA-256 (64). Mixed object formats refuse.
 The evidence also records a digest of the producer's canonical planning
 manifest. When a checker later reads a deployable manifest, it normalizes only
 the classification and evidence-pointer fields back to their planning values
-and requires that digest to match. Semantic, registry, build, or budget changes
-therefore cannot be hidden behind a new evidence pointer.
+and requires that digest to match. Semantic, registry, wire-surface, build, or
+budget changes therefore cannot be hidden behind a new evidence pointer.
 
 ## Final artifact evidence
 

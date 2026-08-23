@@ -621,7 +621,8 @@ impl SourceReleaseManifestV2 {
         self.receiver_config.validate()?;
         self.receiver_config_owner.validate()?;
         live_id(self.receiver_config_data_id)?;
-        if self.base.feed_owner != self.receiver.program
+        if self.base.generation_authority_program != self.base.adapter.program
+            || self.base.feed_owner != self.receiver.program
             || self.receiver_config_owner != self.receiver.program
             || self.receiver.program == self.base.adapter.program
             || self.receiver.program == self.base.parser.program
