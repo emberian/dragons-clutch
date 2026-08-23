@@ -206,13 +206,15 @@ fn heap_frame() -> Instruction {
 }
 
 fn wait_for_slot(rpc: &Rpc, target: u64, reason: &str) -> Result<()> {
-    for _attempt in 0..4_800 {
+    let mut last_reported = 0_u64;
+    for _attempt in 0..28_800 {
         let current = rpc.slot()?;
         if current >= target {
             return Ok(());
         }
-        if current % 64 == 0 {
+        if current >= last_reported.saturating_add(64) {
             println!("waiting reason={reason} slot={current} target={target}");
+            last_reported = current;
         }
         thread::sleep(Duration::from_millis(250));
     }
