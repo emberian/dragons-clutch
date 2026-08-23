@@ -793,6 +793,27 @@ impl ExtensionFamily {
             _ => None,
         }
     }
+
+    /// Return this family's status from the central collision ledger.
+    ///
+    /// Runtime adapters must not infer enablement merely because a family or
+    /// action has a typed coordinate. The ledger remains the single owner of
+    /// allocation status.
+    pub fn allocation_status(self) -> Option<AllocationStatus> {
+        for entry in CENTRAL_COLLISION_LEDGER {
+            if let AllocationCoordinates::Exact {
+                namespace: WireNamespace::MainIntent,
+                tag,
+                version,
+            } = entry.coordinates
+            {
+                if tag == self.tag() && version == self.version() {
+                    return Some(entry.status);
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Classification of one exact intent tag/version pair.
@@ -1177,6 +1198,14 @@ pub enum ExtensionAction {
 }
 
 impl ExtensionAction {
+    /// Return the centrally allocated family containing this action.
+    pub const fn family(self) -> ExtensionFamily {
+        match self {
+            Self::GeneralV2(_) => ExtensionFamily::GeneralV2,
+            Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
+        }
+    }
+
     /// Return the action's local tag.
     pub const fn local_tag(self) -> u8 {
         match self {
