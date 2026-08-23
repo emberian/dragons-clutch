@@ -212,15 +212,12 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// The laboratory enables typed Dealer catalog publication plus exact facility
-/// initialization, bounded LP funding, activation/recovery/refund, and bounded
-/// Epoch binding/lapse.
+/// The laboratory admits only the indexed Dealer facility actions whose exact
+/// runtime contracts are current.  Legacy staged catalog publication actions
+/// 1 through 4 use the private, unindexed `0x7d/v1` upload schema and therefore
+/// remain capability-disabled even in this non-production profile.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
-    (76, 1, 1),
-    (76, 1, 2),
-    (76, 1, 3),
-    (76, 1, 4),
     (76, 1, 5),
     (76, 1, 6),
     (76, 1, 7),
@@ -310,6 +307,20 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    #[test]
+    fn dealer_lab_never_reenables_private_unindexed_policy_uploads() {
+        for action in clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG
+        {
+            assert!(!extension_intent_action_enabled(
+                clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+                clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+                action,
+            ));
+        }
+    }
+
     #[test]
     fn extension_membership_is_exact_and_capability_bound() {
         for family_tag in u8::MIN..=u8::MAX {
@@ -375,10 +386,7 @@ mod tests {
                     let dealer_enabled = DEALER_POLICY_CATALOG_LAB
                         && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
                         && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
-                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                            .contains(&local_action)
-                            || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
+                        && matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13);
                     let general_enabled = GENERAL_V2_IDENTITY_LAB
                         && family_tag == 74
                         && family_version == 1
