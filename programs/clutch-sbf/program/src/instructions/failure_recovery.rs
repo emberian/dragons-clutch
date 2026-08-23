@@ -13,6 +13,10 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::product_artifact::{
+    authenticate_product_artifact_v1, authenticate_registry_capability_v2,
+    authenticate_series_registry_capability_refs_v1, AuthenticatedRegistryCapabilityV2,
+};
 use crate::instructions::series_failure_funding::{
     fund_series_failure_accounts_v1, SeriesMarketCoreFundingReceiptV1,
 };
@@ -34,7 +38,8 @@ use clutch_failure_policy_runtime::external_v2::{
     FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2,
 };
 use clutch_failure_policy_runtime::relation_execution_v1::{
-    ExecutedFailureRelationV1, FailureRelationDispositionV1,
+    execute_failure_relation_v1, ExecutedFailureRelationV1, FailureRelationDispositionV1,
+    FailureRelationPolicyV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_compartment_account_v1, decode_runtime_policy_account_v1,
@@ -43,6 +48,10 @@ use clutch_liveness::runtime_adapter_v1::{
 };
 use clutch_liveness::runtime_v1::{RuntimeCompartmentKindV1, RuntimeCompartmentV1};
 use clutch_liveness::Id as LivenessId;
+use clutch_product_series::{
+    ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, SeriesPlanV5,
+};
 use clutch_solana_layout::failure_recovery::{
     account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
@@ -57,8 +66,9 @@ use clutch_solana_layout::failure_recovery::{
     INITIALIZE_FAILURE_ROOT_METAS_V1, RESOLVE_PAID_RECOVERY_METAS_V1,
 };
 use clutch_solana_layout::registry::{self, RecoveryAction};
+use clutch_source_plane_v3::{ContentId as SourceContentId, StatisticKeyV3};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedSourceReleaseV1, ClockSnapshotV1, FailurePolicySourceHandoffV1,
+    AuthenticatedSourceReleaseV1, ClockSnapshotV1, FailurePolicySourceHandoffV1, RuntimeKey,
     SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
@@ -239,6 +249,118 @@ impl AuthenticatedFailureRelationExecutionV1 {
         }
         Ok(())
     }
+}
+
+/// Freshly authenticate and execute the complete Product/Source relation over
+/// the ten immutable accounts carried by every Recovery relation action.
+///
+/// The returned capability has no byte codec or account representation. It is
+/// bound to these exact account keys and can only be consumed by a handler in
+/// this instruction. Current ProgramData and both registry artifacts are
+/// reopened on every call; the persistent SeriesRegistry supplies their
+/// immutable expected identities.
+pub fn authenticate_failure_relation_execution_v1(
+    program_id: &Pubkey,
+    root: AuthenticatedExternalRootV2,
+    source: AuthenticatedSourceSuccessJoinV1,
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<AuthenticatedFailureRelationExecutionV1> {
+    require_count(accounts, 10)?;
+    let binding = root.runtime().binding();
+    let registry_refs = authenticate_series_registry_capability_refs_v1(
+        program_id,
+        &accounts[0],
+        binding.series_plan_id(),
+    )?;
+    let registry = authenticate_registry_capability_v2(
+        program_id,
+        registry_refs,
+        &accounts[1],
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+    )?;
+    let series = authenticate_product_artifact_v1::<SeriesPlanV5>(
+        program_id,
+        &accounts[5],
+        binding.series_plan_id().content_id(),
+    )?;
+    let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
+        program_id,
+        &accounts[6],
+        binding.product_template_id().content_id(),
+    )?;
+    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        &accounts[7],
+        template.value().native_claim_basis_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[9],
+        series.value().market_genesis_profile_id.content_id(),
+    )?;
+    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        &accounts[8],
+        genesis.value().price_measure_policy_id.content_id(),
+    )?;
+
+    let market = MarketInstancePreimageV2 {
+        product_template_id: series.value().product_template_id,
+        market_genesis_profile_id: series.value().market_genesis_profile_id,
+        start_bucket: series
+            .value()
+            .start_bucket(binding.ordinal())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        collateral_cap: series.value().market_collateral_cap,
+    };
+    let statistic_key = StatisticKeyV3 {
+        window_id: source.source.window_id(),
+        summary_program_id: SourceContentId::from_bytes(
+            template.value().summary_program_id.bytes(),
+        ),
+        statistic: registry.resolved_statistic(),
+    };
+    let policy = FailureRelationPolicyV1::new(
+        RuntimeKey::from_bytes(program_id.to_bytes()),
+        ProductContentId::from_bytes(FAILURE_RELATION_EXECUTOR_RELEASE_ID_V1),
+        registry.registry_release_id(),
+        registry.statistic_registry_value(),
+        registry.ambiguity_policy_registry_value(),
+        registry.edge_policy_registry_value(),
+        registry.resolved_edge_policy(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let relation = execute_failure_relation_v1(
+        &policy,
+        binding,
+        source.source,
+        source.handoff,
+        &market,
+        template.value(),
+        basis.value(),
+        price_policy.value(),
+        genesis.value(),
+        &statistic_key,
+        &registry.projection(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedFailureRelationExecutionV1 {
+        relation,
+        relation_accounts: [
+            registry.series_registry_account(),
+            registry.program_account(),
+            registry.programdata_account(),
+            registry.release_artifact_account(),
+            registry.profile_artifact_account(),
+            series.account(),
+            template.account(),
+            basis.account(),
+            price_policy.account(),
+            genesis.account(),
+        ],
+    })
 }
 
 /// Decode the hostile payload and enforce the exact account count/privileges.
@@ -456,12 +578,22 @@ pub fn handle_initialize_failure_root_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
     payload: &clutch_solana_layout::failure_recovery::InitializeFailureRootV1,
+    registry_capability: AuthenticatedRegistryCapabilityV2,
     source_release: AuthenticatedSourceReleaseV1,
     runtime: FailureRuntimeExternalV2,
     receipt: FailureExternalAdmissionReceiptV2,
     market_core_funding: SeriesMarketCoreFundingReceiptV1,
 ) -> Outcome<FailureRootActivationV1> {
     authenticate_ordered_metas_v1(RecoveryAction::InitializeFailureRoot, accounts)?;
+    require(
+        registry_capability.series_registry_account() == *accounts[5].key
+            && registry_capability.series_plan_id() == runtime.binding().series_plan_id()
+            && registry_capability.program_account() == *accounts[7].key
+            && registry_capability.programdata_account() == *accounts[8].key
+            && registry_capability.release_artifact_account() == *accounts[9].key
+            && registry_capability.profile_artifact_account() == *accounts[10].key,
+        ClutchError::MismatchedState,
+    )?;
     require_source_release_account(source_release, &accounts[20])?;
     runtime
         .authenticate_source_release(source_release)
@@ -875,9 +1007,11 @@ pub fn handle_relation_refusal_v1<'a>(
     accounts: &'a [AccountInfo<'a>],
     payload: TriggerRelationRefusalV1,
     source: AuthenticatedSourceSuccessJoinV1,
-    execution: AuthenticatedFailureRelationExecutionV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::TriggerRelationRefusal, accounts)?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let execution =
+        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[1..11])?;
     require_relation_commitments(
         source,
         execution,
@@ -896,7 +1030,6 @@ pub fn handle_relation_refusal_v1<'a>(
     )?;
     require_success_source_accounts(source, &accounts[11..15])?;
     require_current_after(accounts, 15, source.handoff.clock())?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_relation_refusal_v1(root, source, execution)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
 }
@@ -907,9 +1040,11 @@ pub fn handle_caller_funded_resolution_v1<'a>(
     accounts: &'a [AccountInfo<'a>],
     payload: ResolveCallerFundedV1,
     source: AuthenticatedSourceSuccessJoinV1,
-    execution: AuthenticatedFailureRelationExecutionV1,
 ) -> Outcome<ExternalSemanticMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::ResolveCallerFunded, accounts)?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let execution =
+        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[1..11])?;
     require_relation_commitments(
         source,
         execution,
@@ -928,7 +1063,6 @@ pub fn handle_caller_funded_resolution_v1<'a>(
     )?;
     require_success_source_accounts(source, &accounts[11..15])?;
     require_current_after(accounts, 15, source.handoff.clock())?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_caller_funded_resolution_v1(root, source, execution)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
 }
@@ -939,9 +1073,11 @@ pub fn handle_paid_resolution_v1<'a>(
     accounts: &'a [AccountInfo<'a>],
     payload: ResolvePaidRecoveryV1,
     source: AuthenticatedSourceSuccessJoinV1,
-    execution: AuthenticatedFailureRelationExecutionV1,
 ) -> Outcome<ExternalWorkMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::ResolvePaidRecovery, accounts)?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let execution =
+        authenticate_failure_relation_execution_v1(program_id, root, source, &accounts[3..13])?;
     require_relation_commitments(
         source,
         execution,
@@ -964,7 +1100,6 @@ pub fn handle_paid_resolution_v1<'a>(
         accounts[17].key.to_bytes() == payload.reward_recipient,
         ClutchError::MismatchedState,
     )?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_paid_resolution_v1(
         root,
         source,
