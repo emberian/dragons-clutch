@@ -9,6 +9,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 clutch-accumulator = { path = "../../crates/clutch-accumulator" }
 clutch-bspline = { path = "../../crates/clutch-bspline" }
+clutch-price-measure = { path = "../../crates/clutch-price-measure" }
 clutch-product-series = { path = "../../crates/clutch-product-series" }
 clutch-solana-layout = { path = "../../programs/solana-layout" }
 clutch-structured-claim = { path = "../../crates/clutch-structured-claim" }
