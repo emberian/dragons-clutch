@@ -482,6 +482,48 @@ pub fn general_v2_owner_settlement_pda(
     )
 }
 
+/// Canonical global Position V3 address for one General owner.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn position_v3_pda(
+    program_id: &Pubkey,
+    market_instance: &[u8; 32],
+    owner: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::POSITION_V3_PDA_PREFIX,
+            market_instance,
+            owner,
+            &purpose_seed,
+            purpose_binding,
+        ],
+    )
+}
+
+/// Canonical purpose-owned Replay V3 address paired with one Position.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn purpose_replay_v3_pda(
+    program_id: &Pubkey,
+    position: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::PURPOSE_REPLAY_V3_PDA_PREFIX,
+            position,
+            &purpose_seed,
+            purpose_binding,
+        ],
+    )
+}
+
 /// Canonical disabled selected fee-record address for one SelectedCandidate.
 pub fn general_v2_selected_fee_record_pda(
     program_id: &Pubkey,
