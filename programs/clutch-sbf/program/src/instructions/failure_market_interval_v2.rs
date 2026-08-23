@@ -31,6 +31,7 @@ use clutch_failure_policy_runtime::market_interval_history_v2::{
     FailureMarketIntervalHistoryStateIdV2, FailureMarketIntervalHistoryV2,
     FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
 };
+use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateIdV1;
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use clutch_product_series::ContentId as ProductContentId;
 use clutch_solana_layout::failure_market_interval_v2::{
@@ -78,6 +79,7 @@ pub(crate) struct AuthenticatedFailureMarketIntervalAccountsV2 {
     history_authentication_id: ProductContentId,
     history_observed_lamports: u64,
     admission_root_account: Pubkey,
+    admission_state_id: FailureMarketAdmissionStateIdV1,
     funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
 }
@@ -126,6 +128,11 @@ impl AuthenticatedFailureMarketIntervalAccountsV2 {
     /// Exact immutable Failure admission account used for both body joins.
     pub(crate) const fn admission_root_account(self) -> Pubkey {
         self.admission_root_account
+    }
+
+    /// Complete immutable Failure admission state used for hostile decoding.
+    pub(crate) const fn admission_state_id(self) -> FailureMarketAdmissionStateIdV1 {
+        self.admission_state_id
     }
 
     /// Product-authenticated reusable-account capitalization.
@@ -313,17 +320,23 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
     let history_state_id = history
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let admission_state_id = admission
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     let cell_authentication_id = account_authentication_id(
         CELL_AUTHENTICATION_DOMAIN_V2,
         cell_account,
         cell_data_id,
         cell_state_id.bytes(),
+        admission_state_id.bytes(),
     );
     let history_authentication_id = account_authentication_id(
         HISTORY_AUTHENTICATION_DOMAIN_V2,
         history_account,
         history_data_id,
         history_state_id.bytes(),
+        admission_state_id.bytes(),
     );
     require_live_data_id(cell_authentication_id)?;
     require_live_data_id(history_authentication_id)?;
@@ -343,6 +356,7 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
         history_authentication_id,
         history_observed_lamports: history_account.lamports(),
         admission_root_account: admission.account(),
+        admission_state_id,
         funding,
         quote,
     })
@@ -409,6 +423,7 @@ pub(crate) fn write_failure_market_interval_cell_plan_v2(
         cell_account,
         cell_data_id,
         cell_state_id.bytes(),
+        authenticated.admission_state_id.bytes(),
     );
     require_live_data_id(cell_authentication_id)?;
     Ok(AuthenticatedFailureMarketIntervalAccountsV2 {
@@ -491,12 +506,14 @@ pub(crate) fn write_failure_market_interval_archive_v2<'a>(
         cell_account,
         cell_data_id,
         next_cell_id.bytes(),
+        authenticated.admission_state_id.bytes(),
     );
     let history_authentication_id = account_authentication_id(
         HISTORY_AUTHENTICATION_DOMAIN_V2,
         history_account,
         history_data_id,
         next_history_id.bytes(),
+        authenticated.admission_state_id.bytes(),
     );
     require_live_data_id(cell_authentication_id)?;
     require_live_data_id(history_authentication_id)?;
@@ -568,6 +585,7 @@ pub(crate) fn write_failure_market_interval_family_seal_v2(
         history_account,
         history_data_id,
         history_state_id.bytes(),
+        authenticated.admission_state_id.bytes(),
     );
     require_live_data_id(history_authentication_id)?;
     Ok(AuthenticatedFailureMarketIntervalAccountsV2 {
@@ -613,8 +631,11 @@ pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
     )?;
     require(
         live_admission.account() == authenticated.admission_root_account
-            && live_admission.state().binding().id()
-                == authenticated.cell.failure_policy_binding_id()
+            && live_admission
+                .state()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+                == authenticated.admission_state_id
             && live_market_terminal == market_terminal
             && market_terminal.root_account() == *market_root_account.key
             && authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Idle
@@ -894,6 +915,7 @@ fn account_authentication_id(
     account: &AccountInfo<'_>,
     data_id: ProductContentId,
     state_id: [u8; 32],
+    admission_state_id: [u8; 32],
 ) -> ProductContentId {
     ProductContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -902,6 +924,7 @@ fn account_authentication_id(
             account.owner.as_ref(),
             &data_id.bytes(),
             &state_id,
+            &admission_state_id,
             &account.lamports().to_le_bytes(),
         ])
         .to_bytes(),
