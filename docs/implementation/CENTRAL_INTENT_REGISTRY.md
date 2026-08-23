@@ -177,6 +177,21 @@ contract domains; neither ID is accepted from a caller or persisted. The
 receipt data ID instead hashes the authenticated PDA plus the exact current
 217-byte prestate, so both mutable latch families are committed.
 
+## General OrderPage V5 allocation
+
+The central collision ledger reserves main-account coordinate `8/5` as
+`ReservedDisabled`. It is exactly 4,140 bytes: the complete historical V4
+4,012-byte semantic prefix and slot array followed by sixteen little-endian
+Position generations. Live single and portfolio slots require a nonzero
+same-index generation; empty and tombstone slots require zero. V5 and V4
+hostile decoders refuse each other.
+
+The page commitment uses `dragons-clutch/order-page/v5` and commits the exact
+slot sequence plus the complete generation tail. The ordered page-set fold uses
+`dragons-clutch/order-set/v5`, so neither a V4 leaf nor a V4 set can be silently
+reinterpreted. Position and Reservation identities are authenticated adapter
+joins and are not persisted in the page.
+
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following

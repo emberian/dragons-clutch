@@ -40,6 +40,7 @@ pub mod direct_selection_v3;
 pub mod failure_recovery;
 pub mod native_resolution;
 pub mod occupation_resolution;
+pub mod order_page_v5;
 pub mod portfolio_settlement;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
@@ -861,6 +862,9 @@ pub mod account_version {
     /// 2 held bare [`super::ORDER_RECORD_BYTES`] single-Egg records with no kind
     /// discriminator and no portfolio family.
     pub const ORDER_PAGE: u8 = 4;
+    /// General OrderPage successor with one Position generation per slot.
+    /// Version 4 bytes are deliberately not reinterpreted.
+    pub const ORDER_PAGE_V5: u8 = 5;
     /// Supply ledger account.
     pub const SUPPLY_LEDGER: u8 = 2;
     /// Immutable terms account.
@@ -931,6 +935,9 @@ pub mod account_len {
     /// Dense order page account bytes.
     pub const ORDER_PAGE: usize =
         2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
+    /// General OrderPage successor bytes: the exact V4 semantic prefix and
+    /// slots followed by one little-endian Position generation per slot.
+    pub const ORDER_PAGE_V5: usize = ORDER_PAGE + (MAX_ORDERS_PER_PAGE * 8);
     /// Supply ledger account bytes.
     pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
     /// Immutable terms account bytes.
