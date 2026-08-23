@@ -325,6 +325,7 @@ pub fn summarize_canonical_buckets(
 /// exact source spec/window lineage, seal, record order, and page commitment.
 /// This function rechecks the Terms-facing feed/window/range/maturity join and
 /// rechecks account key/owner/content on every record read.
+#[cfg(any(feature = "profile-full", test))]
 #[inline(never)]
 pub fn preflight_sealed_archive(
     terms: &TermsAccount,
@@ -419,6 +420,7 @@ fn finalize_preflight(
     })
 }
 
+#[cfg(any(feature = "profile-full", test))]
 #[inline(never)]
 fn summarize_archive(
     domain: BasisDomain,

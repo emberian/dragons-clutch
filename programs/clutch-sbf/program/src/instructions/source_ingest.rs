@@ -29,6 +29,8 @@ use crate::source_archive::{
 };
 #[cfg(feature = "non-production-mock-source")]
 use crate::source_archive::{DeploymentAuthenticatorV1, RuntimeAccountViewV1};
+#[cfg(not(feature = "profile-full"))]
+use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
 use crate::source_archive_v2::{
     self, AccountViewV2 as SourceSpecV2AccountView, VerifiedSourceSpecV2,
 };
@@ -308,6 +310,7 @@ pub(crate) fn require_registered_source_for_market(
         terms.realm == expected_realm && terms.feed == expected_feed,
         ClutchError::MismatchedState,
     )?;
+    #[cfg(feature = "profile-full")]
     if source_spec_account.data_len() == SOURCE_SPEC_ACCOUNT_V1_BYTES {
         let verified = verify_spec(program_id, source_spec_account, terms)?;
         return require(
@@ -315,6 +318,11 @@ pub(crate) fn require_registered_source_for_market(
             ClutchError::SourceReleaseUnavailable,
         );
     }
+    #[cfg(not(feature = "profile-full"))]
+    require(
+        source_spec_account.data_len() == SOURCE_SPEC_ACCOUNT_V2_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
     let verified = verify_spec_v2(program_id, source_spec_account, terms)?;
     require(
         crate::source_identity::select_release(verified.spec()).is_some(),

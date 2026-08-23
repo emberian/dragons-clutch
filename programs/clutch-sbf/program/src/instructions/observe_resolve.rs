@@ -530,8 +530,11 @@ const RESOLVE_STATE_ROLES: [StateRole; 6] = [
 ///
 /// Not a range and not a minimum: each entry is one generation's whole account,
 /// and a length that is neither is refused before any byte is read.
+#[cfg(feature = "profile-full")]
 const ADMITTED_SOURCE_SPEC_LENGTHS: [usize; 2] =
     [SOURCE_SPEC_ACCOUNT_V1_BYTES, SOURCE_SPEC_ACCOUNT_V2_BYTES];
+#[cfg(not(feature = "profile-full"))]
+const ADMITTED_SOURCE_SPEC_LENGTHS: [usize; 1] = [SOURCE_SPEC_ACCOUNT_V2_BYTES];
 
 /// Program-owned roles of `FeedAdvance`.
 const ADVANCE_STATE_ROLES: [StateRole; 1] =
@@ -1307,6 +1310,7 @@ pub(crate) fn bound_native_resolution(
             ResolutionRefusal::WrongResolutionMode,
         ));
     }
+    #[cfg(feature = "profile-full")]
     if is_occupation_statistic(terms.statistic_id) {
         let record = OccupationResolutionAccount::decode(resolution_bytes)?;
         if record.stored_bump != resolution_bump {
@@ -1325,6 +1329,12 @@ pub(crate) fn bound_native_resolution(
             window: record.window,
             vector: record.vector,
         });
+    }
+    #[cfg(not(feature = "profile-full"))]
+    if is_occupation_statistic(terms.statistic_id) {
+        return Err(ReferenceError::Resolution(
+            ResolutionRefusal::WrongResolutionMode,
+        ));
     }
     let mut record = NativeResolutionAccount::ZEROED;
     load_native_resolution(resolution_bytes, &mut record)?;
@@ -1392,6 +1402,7 @@ fn payout_set_binds_terms(kernel_bytes: &[u8], terms_bytes: &[u8]) -> Gate<()> {
 /// comparisons with the payout-set check in the frame that already owns the
 /// sole full Terms decode, avoiding three redundant 1,656-byte loads during
 /// Finalize.
+#[cfg(feature = "profile-full")]
 #[inline(never)]
 fn resolution_work_terms_and_payouts(
     kernel_bytes: &[u8],
@@ -1493,9 +1504,12 @@ fn resolution_binds(
             native_vector: PayoutVectorBytes::ZERO,
         });
     }
-    if resolution_bytes.len() != NATIVE_RESOLUTION_LEN
-        && resolution_bytes.len() != OCCUPATION_RESOLUTION_LEN
-    {
+    #[cfg(feature = "profile-full")]
+    let valid_native_len = resolution_bytes.len() == NATIVE_RESOLUTION_LEN
+        || resolution_bytes.len() == OCCUPATION_RESOLUTION_LEN;
+    #[cfg(not(feature = "profile-full"))]
+    let valid_native_len = resolution_bytes.len() == NATIVE_RESOLUTION_LEN;
+    if !valid_native_len {
         return Err(ReferenceError::WrongLength);
     }
     let record = bound_native_resolution(resolution_bytes, terms_bytes, resolution_bump, market)?;
@@ -1755,7 +1769,8 @@ fn native_kernel_invariants(
         } else {
             PayoutVector::ZERO
         }
-    } else if resolution_bytes.len() == OCCUPATION_RESOLUTION_LEN {
+    } else if cfg!(feature = "profile-full") && resolution_bytes.len() == OCCUPATION_RESOLUTION_LEN
+    {
         let record = OccupationResolutionAccount::decode(resolution_bytes)?;
         if record.mode == RESOLUTION_MODE_DERIVED_QUANTIZED_OCCUPATION {
             PayoutVector::new(record.vector.denominator, record.vector.weights)
@@ -2278,9 +2293,12 @@ fn apply_recorded_redemption(
         .ok_or(ReferenceError::Replay)?;
 
     /* 6. `kernel_market`: the pure invariants, before any evidence is read. */
-    if plane.resolution.len() == NATIVE_RESOLUTION_LEN
-        || plane.resolution.len() == OCCUPATION_RESOLUTION_LEN
-    {
+    #[cfg(feature = "profile-full")]
+    let native_resolution = plane.resolution.len() == NATIVE_RESOLUTION_LEN
+        || plane.resolution.len() == OCCUPATION_RESOLUTION_LEN;
+    #[cfg(not(feature = "profile-full"))]
+    let native_resolution = plane.resolution.len() == NATIVE_RESOLUTION_LEN;
+    if native_resolution {
         native_kernel_invariants(
             state.kernel,
             market.outcome_count,
@@ -2414,6 +2432,7 @@ struct ResolveOutput {
 enum ResolutionWrite {
     Legacy([u8; account_len::RESOLUTION]),
     Native([u8; NATIVE_RESOLUTION_LEN]),
+    #[cfg(feature = "profile-full")]
     Occupation([u8; OCCUPATION_RESOLUTION_LEN]),
 }
 
@@ -2422,6 +2441,7 @@ impl ResolutionWrite {
         match self {
             Self::Legacy(bytes) => bytes,
             Self::Native(bytes) => bytes,
+            #[cfg(feature = "profile-full")]
             Self::Occupation(bytes) => bytes,
         }
     }
@@ -2446,6 +2466,9 @@ fn apply_market_resolution(
     sequence: u64,
     requested_payout: u8,
 ) -> Gate<ResolveOutput> {
+    #[cfg(not(feature = "profile-full"))]
+    let _ = occupation;
+    #[cfg(feature = "profile-full")]
     if plane.resolution.len() == OCCUPATION_RESOLUTION_LEN {
         if archive_categorical.is_some() {
             return Err(ReferenceError::UnexpectedEvidence);
@@ -2790,6 +2813,7 @@ fn apply_native_market_resolution(
 /// The candidate is derived only from the once-verified canonical archive in
 /// the account plane.  No caller projection, midpoint, preset lookup, or point
 /// statistic enters this transition.
+#[cfg(feature = "profile-full")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OccupationCandidate {
     /// Current monolithic archive preflight.
@@ -2801,6 +2825,7 @@ enum OccupationCandidate {
 /// Recheck a v4 candidate against the complete immutable Terms bytes in a
 /// frame that owns neither Market/kernel state nor another resolution image.
 #[inline(never)]
+#[cfg(feature = "profile-full")]
 fn occupation_record_binds_terms(
     record: &OccupationResolutionAccount,
     terms_bytes: &[u8],
@@ -2812,6 +2837,7 @@ fn occupation_record_binds_terms(
         .map_err(|_| ReferenceError::ResolutionBindingMismatch)
 }
 
+#[cfg(feature = "profile-full")]
 #[inline(never)]
 fn apply_occupation_market_resolution(
     state: &mut ResolveStateSlices<'_>,
@@ -3222,7 +3248,16 @@ fn resolve_global(
     )?;
     let market = accounts::read_market(&accounts[IX_RESOLVE_MARKET].data.borrow())?;
     let terms = accounts::read_terms(&accounts[IX_RESOLVE_TERMS].data.borrow())?;
+    #[cfg(feature = "profile-full")]
     let occupation = is_occupation_statistic(terms.statistic_id);
+    #[cfg(not(feature = "profile-full"))]
+    let occupation = {
+        require(
+            !is_occupation_statistic(terms.statistic_id),
+            ClutchError::UnsupportedInstruction,
+        )?;
+        false
+    };
     require(
         !occupation || (1..=3).contains(&terms.basis_degree),
         ClutchError::NonCanonical,
@@ -3356,11 +3391,14 @@ fn resolve_global(
         None,
     )?;
     let terms_data = accounts[IX_RESOLVE_TERMS].data.borrow();
+    #[cfg(feature = "profile-full")]
     let occupation_candidate = if occupation {
         Some(derive_occupation_candidate(&terms_data, verified_archive)?)
     } else {
         None
     };
+    #[cfg(not(feature = "profile-full"))]
+    let occupation_candidate: Option<Box<NativeWindowPreflightV1>> = None;
     let archive_categorical = if archive_direct_categorical {
         let market_data = accounts[IX_RESOLVE_MARKET].data.borrow();
         Some(derive_categorical_from_archive(
@@ -3389,6 +3427,7 @@ fn resolve_global(
          * use the no-buffer archive projection above; v4 occupation also reads
          * the page itself.  This is a named absence, not a silent one. */
         match verified_archive {
+            #[cfg(feature = "profile-full")]
             VerifiedSealedArchive::V1(view) => require_archive_projection(
                 view.receipt(),
                 ArchiveAccountViewV1::new(
@@ -3400,6 +3439,10 @@ fn resolve_global(
                 evidence.window,
                 expected_window,
             )?,
+            #[cfg(all(not(feature = "profile-full"), test))]
+            VerifiedSealedArchive::V1(_) => {
+                return Err(ReferenceError::ResolutionEvidenceUnavailable.into())
+            }
             VerifiedSealedArchive::V2(_) => {
                 return Err(ReferenceError::ResolutionEvidenceUnavailable.into())
             }
@@ -3513,6 +3556,7 @@ fn resolve_global(
 /// [`apply_occupation_market_resolution`] with the monolithic path. Repeats are
 /// forbidden here because successful Finalize closes Work; a surviving Work
 /// must never become a second resolution authority.
+#[cfg(feature = "profile-full")]
 #[inline(never)]
 pub(crate) fn apply_resumable_occupation_candidate(
     program_id: &Pubkey,
@@ -3739,6 +3783,7 @@ fn redeem_addresses(
 /// SBF frame discipline, not a relaxation of any binding check.  Boxed: the
 /// preflight candidate crosses back into `resolve_global`'s bounded SBF frame
 /// as one heap pointer, and the 1.6 KiB terms copy stays here.
+#[cfg(feature = "profile-full")]
 #[inline(never)]
 fn derive_occupation_candidate(
     terms_data: &[u8],
@@ -3774,9 +3819,12 @@ fn recorded_redeem(
         }],
     )?;
     let terms = accounts::read_terms_boxed(&accounts[IX_TERMS].data.borrow())?;
+    let occupation = is_occupation_statistic(terms.statistic_id);
+    #[cfg(not(feature = "profile-full"))]
+    require(!occupation, ClutchError::UnsupportedInstruction)?;
     let resolution_len = if terms.basis_degree == 0 {
         account_len::RESOLUTION
-    } else if is_occupation_statistic(terms.statistic_id) {
+    } else if occupation {
         OCCUPATION_RESOLUTION_LEN
     } else {
         NATIVE_RESOLUTION_LEN

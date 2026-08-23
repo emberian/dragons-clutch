@@ -1134,6 +1134,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *max_fee_atoms,
             slot,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CancelOrder {
             market,
             epoch,
@@ -1152,6 +1153,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 generation: *generation,
             },
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::SettlePage {
             market,
             epoch,
@@ -1164,6 +1166,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
+        #[cfg(feature = "profile-full")]
         Action::Layout(Intent::SubmitDirectPage {
             market,
             epoch,
@@ -1176,6 +1179,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::InitClearWork {
             market,
             epoch,
@@ -1188,6 +1192,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::GrowClearWork {
             market,
             epoch,
@@ -1200,6 +1205,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::InitEpoch {
             market,
             epoch_index,
@@ -1214,9 +1220,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             policy,
             *freeze_deadline_slot,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::FreezeEpoch { market, epoch }) => {
             general_epoch::freeze_epoch(program_id, accounts, request.sequence, market, epoch)
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::AdvanceClearWork {
             market,
             epoch,
@@ -1231,6 +1239,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_orders,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::AdvanceClearSlices {
             market,
             epoch,
@@ -1245,6 +1254,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_slices,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CompleteClearWork {
             market,
             epoch,
@@ -1257,6 +1267,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::SubmitCandidate {
             market,
             epoch,
@@ -1283,6 +1294,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *limit_surplus_price_units,
             *distinct_owners,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::WriteCandidateFeed {
             market,
             epoch,
@@ -1297,6 +1309,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             chunk,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::SealCandidate {
             market,
             epoch,
@@ -1309,9 +1322,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::FinalizeSelection { market, epoch }) => {
             selection::finalize_selection(program_id, accounts, request.sequence, market, epoch)
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::FreezeEntitlement {
             market,
             epoch,
@@ -1324,6 +1339,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::EntitleSlice {
             market,
             epoch,
@@ -1338,6 +1354,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::ReleaseTerminalReservation { market, epoch }) => {
             terminal_closure::release_terminal_reservation(
                 program_id,
@@ -1347,6 +1364,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralReceipt {
             market,
             epoch,
@@ -1361,6 +1379,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralReservation { market, epoch }) => {
             terminal_closure::close_general_reservation(
                 program_id,
@@ -1370,9 +1389,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::ClosePosition { market, owner }) => {
             terminal_closure::close_position(program_id, accounts, request.sequence, market, owner)
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralPage {
             market,
             epoch,
@@ -1385,6 +1406,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralPot { market, epoch }) => {
             terminal_closure::close_general_pot(
                 program_id,
@@ -1394,6 +1416,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralCandidate {
             market,
             epoch,
@@ -1406,6 +1429,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralClearWork {
             market,
             epoch,
@@ -1418,6 +1442,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         Action::Layout(Intent::CloseGeneralEpoch { market, epoch }) => {
             terminal_closure::close_general_epoch(
                 program_id,
@@ -2029,6 +2054,23 @@ fn place_order(
     max_fee_atoms: u64,
     slot: &OrderSlot,
 ) -> Outcome<()> {
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    {
+        require(
+            accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES),
+            ClutchError::UnsupportedInstruction,
+        )?;
+        return place_direct_v4_order(
+            program_id,
+            accounts,
+            sequence,
+            *intent_market,
+            *intent_epoch,
+            max_fee_atoms,
+            *slot,
+        );
+    }
+    #[cfg(feature = "profile-full")]
     if accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES) {
         return place_direct_v4_order(
             program_id,
@@ -2040,18 +2082,45 @@ fn place_order(
             *slot,
         );
     }
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    return place_legacy_order(
+        program_id,
+        accounts,
+        sequence,
+        intent_market,
+        intent_epoch,
+        max_fee_atoms,
+        slot,
+    );
+}
+
+#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+#[inline(never)]
+fn place_legacy_order(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent_market: &Hash32,
+    intent_epoch: &Hash32,
+    max_fee_atoms: u64,
+    slot: &OrderSlot,
+) -> Outcome<()> {
     require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
+    #[cfg(feature = "profile-full")]
+    let admitted_epoch_lengths = [
+        account_len::EPOCH,
+        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+    ];
+    #[cfg(feature = "profile-general-source-v2-point")]
+    let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
         &accounts[IX_EPOCH],
         false,
-        &[
-            account_len::EPOCH,
-            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-        ],
+        &admitted_epoch_lengths,
     )?;
     require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
     require_system_program(&accounts[IX_SYSTEM])?;
@@ -2480,6 +2549,7 @@ fn stage_direct_v4_existing(
 /// Cancellation reads no grid account: its reservation has already frozen the
 /// grid and the Epoch still authenticates that identity.
 #[inline(never)]
+#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
 fn cancel_order(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -2490,14 +2560,18 @@ fn cancel_order(
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &CANCEL_ORDER_STATE_ROLES)?;
+    #[cfg(feature = "profile-full")]
+    let admitted_epoch_lengths = [
+        account_len::EPOCH,
+        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+    ];
+    #[cfg(feature = "profile-general-source-v2-point")]
+    let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
         &accounts[IX_EPOCH],
         false,
-        &[
-            account_len::EPOCH,
-            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-        ],
+        &admitted_epoch_lengths,
     )?;
 
     let epoch = accounts::read_epoch(&accounts[IX_EPOCH].data.borrow())?;

@@ -44,6 +44,25 @@
 //! or unusable evidence still returns [`Error::ResolutionEvidenceUnavailable`],
 //! byte-identically to the previous unconditional refusal.
 
+#[cfg(not(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-general-source-v2-point"
+)))]
+compile_error!("select exactly one Dragon's Clutch capability profile");
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ),
+    all(feature = "profile-full", feature = "profile-general-source-v2-point"),
+    all(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-general-source-v2-point"
+    )
+))]
+compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+
 use clutch_accumulator::{
     CoveragePolicy, FeedIdentity, Grid, Observation, WindowAccumulator, WindowDomain, WindowResult,
     IDENTITY_BYTES, WINDOW_DOMAIN_BYTES,
@@ -52,10 +71,15 @@ use clutch_kernel::{
     BasisMode, Error as KernelError, MarketState, PayoutSet, PayoutVector, Phase, Position,
     MAX_OUTCOMES as KERNEL_MAX_OUTCOMES, MAX_PAYOUTS,
 };
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
+use clutch_solana_layout::direct_selection_v3::DirectV3Intent;
 use clutch_solana_layout::{
-    account_len, canonical_market_id, collateral, direct_selection_v3::DirectV3Intent, CodecError,
-    Hash32, HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
-    ResolutionAccount, SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
+    account_len, canonical_market_id, collateral, CodecError, Hash32, HoardAccount, Intent,
+    MarketAccount, PositionAccount, ProfileAccount, RealmAccount, ResolutionAccount,
+    SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES, PROFILE_FLAG_POLICY_FROZEN,
 };
 
 mod resolution;
@@ -562,6 +586,10 @@ pub struct Request {
 /// tag from falling into a legacy direct handler with different account
 /// versions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
 pub struct DirectV3Request {
     /// Exact replay sequence supplied to the routed lifecycle action.
     pub sequence: u64,
@@ -929,6 +957,10 @@ impl Request {
     }
 }
 
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
 impl DirectV3Request {
     /// Encode the strict reference envelope and exact Direct V3 inner wire.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
@@ -2896,6 +2928,10 @@ mod tests {
         13 + usize::from(u16::from_le_bytes([request[11], request[12]]))
     }
 
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ))]
     fn direct_v3_intents() -> [DirectV3Intent; 11] {
         let rewards = clutch_solana_layout::direct_selection_v3::DirectKeeperRewardsV3 {
             begin_verification: 1,
@@ -2963,6 +2999,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ))]
     fn dedicated_direct_v3_request_envelope_is_exact_and_legacy_refuses() {
         for (sequence, intent) in direct_v3_intents().into_iter().enumerate() {
             let request = DirectV3Request {

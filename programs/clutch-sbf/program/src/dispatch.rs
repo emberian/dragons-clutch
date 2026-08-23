@@ -39,14 +39,26 @@
 //! refuses. Nothing anywhere returns success it did not earn.
 
 use crate::accounts::Outcome;
+use crate::capabilities;
 use crate::error::ClutchError;
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
+use crate::instructions::direct_selection_v3;
 use crate::instructions::{
-    artifact, cash_exit, direct_selection, direct_selection_v3, external_exit, genesis,
-    market_init, merge_materialize, observe_resolve, orders_batch, resolution_work, source_ingest,
-    source_ingest_v2, split,
+    artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
+    orders_batch, source_ingest_v2, split,
 };
+#[cfg(feature = "profile-full")]
+use crate::instructions::{direct_selection, resolution_work, source_ingest};
 use clutch_solana_layout::Intent;
-use clutch_solana_reference::{Action, DirectV3Request, Request};
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
+use clutch_solana_reference::DirectV3Request;
+use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -69,10 +81,17 @@ enum Route {
     Artifact,
     OrdersBatch,
     Genesis,
+    #[cfg(feature = "profile-full")]
     SourceIngest,
     SourceIngestV2,
+    #[cfg(feature = "profile-full")]
     DirectSelection,
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ))]
     DirectSelectionV3,
+    #[cfg(feature = "profile-full")]
     ResolutionWork,
     DecodeOnly,
 }
@@ -157,6 +176,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 Route::MergeMaterialize
             }
             Some(INTENT_CREATE_MARKET_HINT) => Route::MarketInit,
+            #[cfg(feature = "profile-full")]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
             Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
             Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
@@ -166,11 +186,12 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SEAL_ARTIFACT_HINT
                 | INTENT_ABORT_ARTIFACT_HINT,
             ) => Route::Artifact,
+            Some(INTENT_PLACE_ORDER_HINT) => Route::OrdersBatch,
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+            Some(INTENT_CANCEL_ORDER_HINT) => Route::OrdersBatch,
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             Some(
-                INTENT_PLACE_ORDER_HINT
-                | INTENT_CANCEL_ORDER_HINT
-                | INTENT_SETTLE_PAGE_HINT
-                | INTENT_SUBMIT_DIRECT_PAGE_HINT
+                INTENT_SETTLE_PAGE_HINT
                 | INTENT_INIT_CLEAR_WORK_HINT
                 | INTENT_GROW_CLEAR_WORK_HINT
                 | INTENT_INIT_EPOCH_HINT
@@ -194,6 +215,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_CLOSE_GENERAL_EPOCH_HINT
                 | INTENT_CLOSE_POSITION_HINT,
             ) => Route::OrdersBatch,
+            #[cfg(feature = "profile-full")]
+            Some(INTENT_SUBMIT_DIRECT_PAGE_HINT) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
                 | INTENT_INIT_PROFILE_HINT
@@ -203,6 +226,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
+            #[cfg(feature = "profile-full")]
             Some(
                 INTENT_INIT_SOURCE_SPEC_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_HINT
@@ -219,6 +243,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT,
             ) => Route::SourceIngestV2,
+            #[cfg(feature = "profile-full")]
             Some(
                 INTENT_INIT_DIRECT_EPOCH_V3_HINT
                 | INTENT_FREEZE_DIRECT_EPOCH_V3_HINT
@@ -226,6 +251,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SELECT_DIRECT_WINDOW_V1_HINT
                 | INTENT_SETTLE_DIRECT_V2_HINT,
             ) => Route::DirectSelection,
+            #[cfg(feature = "profile-full")]
             Some(
                 INTENT_BEGIN_RESOLUTION_WORK_HINT
                 | INTENT_FOLD_RESOLUTION_WORK_HINT
@@ -235,6 +261,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             // Tags 36 through 46 are one all-or-nothing family: the dedicated
             // Direct V3 request decoder is the only decoder that accepts them,
             // and its handler match is exhaustive with no unimplemented arm.
+            #[cfg(any(
+                feature = "profile-full",
+                feature = "profile-direct-v3-source-v2-point"
+            ))]
             Some(INTENT_INIT_DIRECT_EPOCH_V4_HINT..=INTENT_LAPSE_SELECTED_DIRECT_V3_HINT) => {
                 Route::DirectSelectionV3
             }
@@ -256,6 +286,9 @@ pub fn process(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> Outcome<()> {
+    if disabled_canonical_tag(instruction_data) {
+        return Err(ClutchError::UnsupportedInstruction.into());
+    }
     match route_hint(instruction_data) {
         Route::Split => process_split(program_id, accounts, instruction_data),
         Route::MergeMaterialize => {
@@ -268,15 +301,40 @@ pub fn process(
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-full")]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-full")]
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
+        #[cfg(any(
+            feature = "profile-full",
+            feature = "profile-direct-v3-source-v2-point"
+        ))]
         Route::DirectSelectionV3 => {
             process_direct_selection_v3(program_id, accounts, instruction_data)
         }
+        #[cfg(feature = "profile-full")]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
     }
+}
+
+/// Recognize only a structurally identified canonical layout tag and decide
+/// whether the compiled product omitted it. This happens before decoding and
+/// therefore before any account is inspected.
+fn disabled_canonical_tag(instruction_data: &[u8]) -> bool {
+    if instruction_data.len() < 14
+        || instruction_data[0] != 0xd1
+        || instruction_data[1] != 1
+        || instruction_data[10] != ACTION_LAYOUT_HINT
+    {
+        return false;
+    }
+    let tag = instruction_data[13];
+    let known = (1..=73).contains(&tag);
+    known
+        && !capabilities::legacy_intent_tag_enabled(tag)
+        && !capabilities::direct_v3_tag_enabled(tag)
 }
 
 #[inline(never)]
@@ -345,9 +403,13 @@ fn process_observe_resolve(
 ) -> Outcome<()> {
     let request = Request::decode(instruction_data)?;
     match request.action {
-        Action::Layout(Intent::FeedAdvance { .. })
-        | Action::Resolve { .. }
-        | Action::RedeemInternal { .. } => observe_resolve::process(program_id, accounts, &request),
+        #[cfg(feature = "profile-full")]
+        Action::Layout(Intent::FeedAdvance { .. }) => {
+            observe_resolve::process(program_id, accounts, &request)
+        }
+        Action::Resolve { .. } | Action::RedeemInternal { .. } => {
+            observe_resolve::process(program_id, accounts, &request)
+        }
         _ => unexpected_route(),
     }
 }
@@ -408,10 +470,19 @@ fn process_orders_batch(
 ) -> Outcome<()> {
     let request = Request::decode(instruction_data)?;
     match request.action {
-        Action::Layout(Intent::PlaceOrder { .. })
-        | Action::Layout(Intent::CancelOrder { .. })
-        | Action::Layout(Intent::SubmitDirectPage { .. })
-        | Action::Layout(Intent::SettlePage { .. })
+        Action::Layout(Intent::PlaceOrder { .. }) => {
+            orders_batch::process(program_id, accounts, &request)
+        }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        Action::Layout(Intent::CancelOrder { .. }) => {
+            orders_batch::process(program_id, accounts, &request)
+        }
+        #[cfg(feature = "profile-full")]
+        Action::Layout(Intent::SubmitDirectPage { .. }) => {
+            orders_batch::process(program_id, accounts, &request)
+        }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        Action::Layout(Intent::SettlePage { .. })
         | Action::Layout(Intent::InitClearWork { .. })
         | Action::Layout(Intent::GrowClearWork { .. })
         | Action::Layout(Intent::InitEpoch { .. })
@@ -462,6 +533,7 @@ fn process_genesis(
 }
 
 #[inline(never)]
+#[cfg(feature = "profile-full")]
 fn process_source_ingest(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -498,6 +570,7 @@ fn process_source_ingest_v2(
 }
 
 #[inline(never)]
+#[cfg(feature = "profile-full")]
 fn process_direct_selection(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -522,6 +595,10 @@ fn process_direct_selection(
 /// [`DirectV3Request::decode`] refuses every legacy tag, so a partially added
 /// tag can never fall into a handler with different account versions.
 #[inline(never)]
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
 fn process_direct_selection_v3(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -532,6 +609,7 @@ fn process_direct_selection_v3(
 }
 
 #[inline(never)]
+#[cfg(feature = "profile-full")]
 fn process_resolution_work(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -572,7 +650,7 @@ pub fn not_yet_implemented() -> Outcome<()> {
     Err(ClutchError::NotYetImplemented.into())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "profile-full"))]
 mod tests {
     use super::*;
     use crate::error::Refusal;
@@ -1391,5 +1469,55 @@ mod tests {
                 clutch_solana_layout::CodecError::ZeroIdentity
             )))
         );
+    }
+}
+
+#[cfg(all(test, not(feature = "profile-full")))]
+mod profile_tests {
+    use super::*;
+    use solana_program_error::ProgramError;
+
+    fn canonical_tag_request(tag: u8) -> [u8; 15] {
+        let mut bytes = [0u8; 15];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[10] = ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&2u16.to_le_bytes());
+        bytes[13] = tag;
+        bytes[14] = clutch_solana_layout::INTENT_VERSION;
+        bytes
+    }
+
+    #[test]
+    fn disabled_canonical_tags_refuse_before_accounts() {
+        let disabled: &[u8] = if cfg!(feature = "profile-direct-v3-source-v2-point") {
+            &[8, 23, 27, 32, 47, 69]
+        } else {
+            &[6, 22, 23, 27, 32, 36]
+        };
+        for tag in disabled {
+            let bytes = canonical_tag_request(*tag);
+            assert!(disabled_canonical_tag(&bytes), "tag {tag}");
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            assert_eq!(
+                actual,
+                Err(ProgramError::Custom(
+                    ClutchError::UnsupportedInstruction as u32
+                )),
+                "tag {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_envelopes_are_not_misclassified_as_disabled_tags() {
+        let mut bytes = canonical_tag_request(23);
+        bytes[0] ^= 1;
+        assert!(!disabled_canonical_tag(&bytes));
+        bytes[0] = 0xd1;
+        bytes[1] ^= 1;
+        assert!(!disabled_canonical_tag(&bytes));
+        assert!(!disabled_canonical_tag(&bytes[..13]));
     }
 }

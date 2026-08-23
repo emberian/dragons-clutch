@@ -1,5 +1,9 @@
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
+#![cfg_attr(
+    not(feature = "profile-full"),
+    allow(dead_code, unreachable_code, unused_imports)
+)]
 
 //! Bring-up native SBF program for Dragon's Clutch.
 //!
@@ -77,7 +81,27 @@
 //! Neither has a rustdoc page: `bpf` is private and compiled only under
 //! `target_os = "solana"`, so no host doc build sees it.
 
+#[cfg(not(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-general-source-v2-point"
+)))]
+compile_error!("select exactly one Dragon's Clutch capability profile");
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ),
+    all(feature = "profile-full", feature = "profile-general-source-v2-point"),
+    all(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-general-source-v2-point"
+    )
+))]
+compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+
 pub mod accounts;
+pub mod capabilities;
 pub mod claim_truth;
 pub mod dispatch;
 pub mod error;

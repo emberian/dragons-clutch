@@ -376,9 +376,12 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     )?;
     let terms = accounts::read_terms(&accounts[IX_TERMS].data.borrow())?;
     let basis_degree = terms_basis_degree(&accounts[IX_TERMS].data.borrow())?;
+    let occupation = is_occupation_statistic(terms.statistic_id);
+    #[cfg(not(feature = "profile-full"))]
+    require(!occupation, ClutchError::UnsupportedInstruction)?;
     let resolution_len = if basis_degree == 0 {
         account_len::RESOLUTION
-    } else if is_occupation_statistic(terms.statistic_id) {
+    } else if occupation {
         OCCUPATION_RESOLUTION_LEN
     } else {
         NATIVE_RESOLUTION_LEN

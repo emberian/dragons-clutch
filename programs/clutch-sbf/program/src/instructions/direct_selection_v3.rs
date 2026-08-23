@@ -29,6 +29,10 @@ use clutch_solana_layout::{
     },
     Hash32,
 };
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
 use clutch_solana_reference::DirectV3Request;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -92,6 +96,10 @@ macro_rules! borrow_mut {
 /// The match is exhaustive with no fallback arm: a new lifecycle intent
 /// cannot compile without a handler, which is what lets [`crate::dispatch`]
 /// admit tags 36 through 46 as one all-or-nothing family.
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -630,6 +638,10 @@ mod tests {
     /// fail-closes on account shape or replay sequence before touching state.
     /// Nothing anywhere in the family returns `NotYetImplemented`.
     #[test]
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ))]
     fn every_routed_v3_action_fail_closes_before_reading_state() {
         let market = h(1);
         let epoch = h(2);

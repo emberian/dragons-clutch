@@ -13,7 +13,14 @@ path = "src/lib.rs"
 clutch-accumulator = { path = "../../crates/clutch-accumulator" }
 clutch-bspline = { path = "../../crates/clutch-bspline" }
 clutch-kernel = { path = "../../crates/clutch-kernel" }
-clutch-solana-layout = { path = "../solana-layout" }
+clutch-solana-layout = { path = "../solana-layout", default-features = false }
 
 [features]
-default = []
+default = ["profile-full"]
+profile-full = ["clutch-solana-layout/profile-full"]
+profile-direct-v3-source-v2-point = [
+    "clutch-solana-layout/profile-direct-v3-source-v2-point",
+]
+profile-general-source-v2-point = [
+    "clutch-solana-layout/profile-general-source-v2-point",
+]

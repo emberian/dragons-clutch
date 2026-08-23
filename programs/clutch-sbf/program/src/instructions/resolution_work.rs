@@ -1375,7 +1375,17 @@ fn finalize(
         reserve_index,
         slot,
     )?;
+    #[cfg(feature = "profile-full")]
     super::observe_resolve::apply_resumable_occupation_candidate(
+        program_id,
+        &accounts[..extras],
+        prepared.resolution,
+        prepared.market,
+        prepared.terms_bump,
+        prepared.resolution_bump,
+    )?;
+    #[cfg(not(feature = "profile-full"))]
+    apply_resumable_occupation_candidate_unavailable(
         program_id,
         &accounts[..extras],
         prepared.resolution,
@@ -1391,6 +1401,19 @@ fn finalize(
         &accounts[IX_ACTOR],
         prepared.transfers,
     )
+}
+
+#[cfg(not(feature = "profile-full"))]
+#[inline(never)]
+fn apply_resumable_occupation_candidate_unavailable(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+    _candidate: OccupationResolutionAccount,
+    _market: accounts::MarketFacts,
+    _terms_bump: u8,
+    _resolution_bump: u8,
+) -> Outcome<()> {
+    Err(ClutchError::UnsupportedInstruction.into())
 }
 
 #[inline(never)]

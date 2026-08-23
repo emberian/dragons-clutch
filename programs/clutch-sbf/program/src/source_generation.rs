@@ -41,9 +41,10 @@
 use clutch_accumulator::WindowDomain;
 use clutch_solana_layout::Hash32;
 
+use crate::source_archive::{ArchivedObservationV1, SOURCE_SPEC_ACCOUNT_V1_BYTES};
+#[cfg(any(feature = "profile-full", test))]
 use crate::source_archive::{
-    ArchivedObservationV1, SealedArchiveReceiptV1, SourceArchiveError, VerifiedSealedArchiveViewV1,
-    SOURCE_SPEC_ACCOUNT_V1_BYTES,
+    SealedArchiveReceiptV1, SourceArchiveError, VerifiedSealedArchiveViewV1,
 };
 use crate::source_archive_v2::{
     ArchiveV2Error, SealedArchiveReceiptV2, VerifiedSealedArchiveViewV2,
@@ -54,6 +55,7 @@ use crate::source_archive_v2::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceGeneration {
     /// The V1 provider-neutral plane: an immutable price data account.
+    #[cfg(any(feature = "profile-full", test))]
     V1,
     /// The v2 pull profile: an ephemeral, receiver-posted price update.
     V2,
@@ -90,6 +92,7 @@ pub struct SealedArchiveBindingV1 {
 
 impl SealedArchiveBindingV1 {
     /// Project one verified V1 receipt.
+    #[cfg(any(feature = "profile-full", test))]
     pub const fn from_v1(receipt: SealedArchiveReceiptV1) -> Self {
         Self {
             generation: SourceGeneration::V1,
@@ -146,6 +149,7 @@ impl SealedArchiveBindingV1 {
     /// travels with the generation tag instead of with the number.
     pub fn window_has_matured(&self, window: WindowDomain) -> bool {
         match self.generation {
+            #[cfg(any(feature = "profile-full", test))]
             SourceGeneration::V1 => self.sealed_feed_cursor >= window.maturity_bucket_exclusive(),
             SourceGeneration::V2 => self.sealed_feed_cursor >= window.end_bucket_exclusive(),
         }
@@ -160,6 +164,7 @@ impl SealedArchiveBindingV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerifiedSealedArchive<'a> {
     /// A verified V1 page.
+    #[cfg(any(feature = "profile-full", test))]
     V1(VerifiedSealedArchiveViewV1<'a>),
     /// A verified v2 page.
     V2(VerifiedSealedArchiveViewV2<'a>),
@@ -169,6 +174,7 @@ impl VerifiedSealedArchive<'_> {
     /// Which generation this page belongs to.
     pub const fn generation(self) -> SourceGeneration {
         match self {
+            #[cfg(any(feature = "profile-full", test))]
             Self::V1(_) => SourceGeneration::V1,
             Self::V2(_) => SourceGeneration::V2,
         }
@@ -177,6 +183,7 @@ impl VerifiedSealedArchive<'_> {
     /// The generation-agnostic provenance of the verified page.
     pub fn binding(self) -> SealedArchiveBindingV1 {
         match self {
+            #[cfg(any(feature = "profile-full", test))]
             Self::V1(view) => SealedArchiveBindingV1::from_v1(view.receipt()),
             Self::V2(view) => SealedArchiveBindingV1::from_v2(view.receipt()),
         }
@@ -194,6 +201,7 @@ impl VerifiedSealedArchive<'_> {
         index: usize,
     ) -> Result<ArchivedObservationV1, ArchiveJoinError> {
         match self {
+            #[cfg(any(feature = "profile-full", test))]
             Self::V1(view) => view
                 .archived_observation(index)
                 .map_err(ArchiveJoinError::V1),
@@ -220,6 +228,7 @@ impl VerifiedSealedArchive<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArchiveJoinError {
     /// The V1 page reader refused.
+    #[cfg(any(feature = "profile-full", test))]
     V1(SourceArchiveError),
     /// The v2 page reader refused.
     V2(ArchiveV2Error),
@@ -317,6 +326,7 @@ pub fn verify_recorded_sealed_source<'a>(
         window,
     } = presented;
     match spec.data.len() {
+        #[cfg(feature = "profile-full")]
         SOURCE_SPEC_ACCOUNT_V1_BYTES => {
             let verified = crate::source_archive::verify_source_spec_account(
                 clutch_program,

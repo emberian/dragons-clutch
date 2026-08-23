@@ -700,6 +700,7 @@ fn read_initial_resolution(
                 stored_bump: value.stored_bump,
             })
         }
+        #[cfg(feature = "profile-full")]
         OCCUPATION_RESOLUTION_LEN => {
             let value = OccupationResolutionAccount::decode(resolution_data)?;
             Ok(InitialResolutionFacts {
@@ -846,7 +847,10 @@ fn resolution_account_len(terms_data: &[u8]) -> Outcome<usize> {
         return Ok(account_len::RESOLUTION);
     }
     if is_occupation_statistic(terms_statistic(terms_data)?) {
-        Ok(OCCUPATION_RESOLUTION_LEN)
+        #[cfg(feature = "profile-full")]
+        return Ok(OCCUPATION_RESOLUTION_LEN);
+        #[cfg(not(feature = "profile-full"))]
+        return Err(ClutchError::UnsupportedInstruction.into());
     } else {
         Ok(NATIVE_RESOLUTION_LEN)
     }
@@ -1143,6 +1147,7 @@ fn write_resolution(
             NativeResolutionAccount::unresolved(market, intent.terms, intent.feed, bump)
                 .encode(data)?;
         }
+        #[cfg(feature = "profile-full")]
         OCCUPATION_RESOLUTION_LEN => {
             require(
                 data.len() == OCCUPATION_RESOLUTION_LEN,

@@ -804,11 +804,19 @@ pub fn read_resolution(data: &[u8]) -> Outcome<ResolutionFacts> {
 /// Decode an epoch/book-domain account.
 #[inline(never)]
 pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
+    #[cfg(feature = "profile-full")]
     if data.len() == DIRECT_EPOCH_BYTES {
         let value = DirectEpochV3Account::decode(data)?;
         return Ok(epoch_facts(&value.common));
     }
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    {
+        let value = DirectEpochV3Account::decode(data)?;
+        return Ok(epoch_facts(&value.common));
+    }
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     let value = EpochAccount::decode(data)?;
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     Ok(epoch_facts(&value))
 }
 

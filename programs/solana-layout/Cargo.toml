@@ -10,7 +10,14 @@ description = "Offline fixed-layout and deterministic intent codec for the trans
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["profile-full"]
+# Exactly one deployable capability profile must be selected.  The profiles
+# gate the hostile intent decoder as well as the account-codec modules that are
+# not part of the selected product.  `profile-full` preserves the historical
+# host/default surface.
+profile-full = []
+profile-direct-v3-source-v2-point = []
+profile-general-source-v2-point = []
 
 [dependencies]
 # The relation whose order types the page→order projection maps onto.  Both

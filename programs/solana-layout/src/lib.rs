@@ -13,6 +13,25 @@
 //! the transaction compute ceiling.  The adapter must still authenticate
 //! account metadata and hand these checked values to the semantic kernel.
 
+#[cfg(not(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-general-source-v2-point"
+)))]
+compile_error!("select exactly one Dragon's Clutch capability profile");
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ),
+    all(feature = "profile-full", feature = "profile-general-source-v2-point"),
+    all(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-general-source-v2-point"
+    )
+))]
+compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+
 pub mod artifact;
 pub mod clearing;
 pub mod collateral;
@@ -291,6 +310,45 @@ impl Hash32 {
     /// Return the raw bytes.
     pub const fn bytes(self) -> [u8; HASH_BYTES] {
         self.0
+    }
+}
+
+#[cfg(all(test, not(feature = "profile-full")))]
+mod capability_profile_tests {
+    use super::{CodecError, Intent, INTENT_VERSION};
+
+    fn assert_disabled(tags: &[u8]) {
+        for tag in tags {
+            assert_eq!(
+                Intent::decode(&[*tag, INTENT_VERSION]),
+                Err(CodecError::WrongTag),
+                "disabled tag {tag} reached a payload decoder"
+            );
+        }
+    }
+
+    fn assert_enabled(tags: &[u8]) {
+        for tag in tags {
+            assert_ne!(
+                Intent::decode(&[*tag, INTENT_VERSION]),
+                Err(CodecError::WrongTag),
+                "enabled tag {tag} was removed from Intent::decode"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    fn direct_profile_intent_decoder_excludes_other_families() {
+        assert_disabled(&[6, 8, 9, 22, 23, 27, 32, 47, 69]);
+        assert_enabled(&[1, 7, 10, 18, 68, 70, 73]);
+    }
+
+    #[test]
+    #[cfg(feature = "profile-general-source-v2-point")]
+    fn general_profile_intent_decoder_excludes_other_families() {
+        assert_disabled(&[6, 22, 23, 27, 32]);
+        assert_enabled(&[1, 7, 8, 9, 10, 18, 47, 69, 70, 73]);
     }
 }
 
@@ -6289,21 +6347,25 @@ impl Intent {
         };
         let tag = input[0];
         match tag {
+            #[cfg(feature = "profile-full")]
             resolution_work::BEGIN_RESOLUTION_WORK_TAG => {
                 return resolution_work::BeginResolutionWorkV1::decode(input)
                     .map(Self::BeginResolutionWork)
                     .map_err(resolution_work_codec)
             }
+            #[cfg(feature = "profile-full")]
             resolution_work::FOLD_RESOLUTION_WORK_TAG => {
                 return resolution_work::FoldResolutionWorkV1::decode(input)
                     .map(Self::FoldResolutionWork)
                     .map_err(resolution_work_codec)
             }
+            #[cfg(feature = "profile-full")]
             resolution_work::FINALIZE_RESOLUTION_WORK_TAG => {
                 return resolution_work::FinalizeResolutionWorkV1::decode(input)
                     .map(Self::FinalizeResolutionWork)
                     .map_err(resolution_work_codec)
             }
+            #[cfg(feature = "profile-full")]
             resolution_work::ABORT_RESOLUTION_WORK_TAG => {
                 return resolution_work::AbortResolutionWorkV1::decode(input)
                     .map(Self::AbortResolutionWork)
@@ -6413,6 +6475,7 @@ impl Intent {
                     quantity,
                 })
             }
+            #[cfg(feature = "profile-full")]
             FEED_ADVANCE_TAG => {
                 let feed = r.hash()?;
                 let cursor = r.u64()?;
@@ -6427,6 +6490,7 @@ impl Intent {
                 r.done()?;
                 Ok(v)
             }
+            #[cfg(feature = "profile-full")]
             INIT_SOURCE_SPEC_TAG => {
                 let terms = r.hash()?;
                 let spec_body = r.bytes::<SOURCE_SPEC_BODY_V1_BYTES>()?;
@@ -6434,6 +6498,7 @@ impl Intent {
                 check_hash(terms)?;
                 Ok(Self::InitSourceSpec { terms, spec_body })
             }
+            #[cfg(feature = "profile-full")]
             INIT_SOURCE_ARCHIVE_TAG | APPEND_SOURCE_ARCHIVE_TAG | SEAL_SOURCE_ARCHIVE_TAG => {
                 let terms = r.hash()?;
                 r.done()?;
@@ -6489,6 +6554,7 @@ impl Intent {
                     slot,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             CANCEL_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6509,6 +6575,7 @@ impl Intent {
                 r.done()?;
                 Ok(v)
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             SETTLE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6523,6 +6590,7 @@ impl Intent {
                 r.done()?;
                 Ok(v)
             }
+            #[cfg(feature = "profile-full")]
             SUBMIT_DIRECT_PAGE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6537,6 +6605,7 @@ impl Intent {
                 r.done()?;
                 Ok(v)
             }
+            #[cfg(feature = "profile-full")]
             INIT_DIRECT_EPOCH_V3_TAG => {
                 let market = r.hash()?;
                 let epoch_index = r.u64()?;
@@ -6557,6 +6626,7 @@ impl Intent {
                     submission_closes_slot,
                 })
             }
+            #[cfg(feature = "profile-full")]
             FREEZE_DIRECT_EPOCH_V3_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6565,6 +6635,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::FreezeDirectEpochV3 { market, epoch })
             }
+            #[cfg(feature = "profile-full")]
             SUBMIT_DIRECT_CANDIDATE_V2_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6581,6 +6652,7 @@ impl Intent {
                     outcome_price,
                 })
             }
+            #[cfg(feature = "profile-full")]
             SELECT_DIRECT_WINDOW_V1_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6589,6 +6661,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::SelectDirectWindowV1 { market, epoch })
             }
+            #[cfg(feature = "profile-full")]
             SETTLE_DIRECT_V2_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6791,6 +6864,7 @@ impl Intent {
                     digest,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             INIT_CLEAR_WORK_TAG | GROW_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6813,6 +6887,7 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             INIT_EPOCH_TAG => {
                 let market = r.hash()?;
                 let epoch_index = r.u64()?;
@@ -6831,6 +6906,7 @@ impl Intent {
                     freeze_deadline_slot,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             FREEZE_EPOCH_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6839,6 +6915,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::FreezeEpoch { market, epoch })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             ADVANCE_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6858,6 +6935,7 @@ impl Intent {
                     max_orders,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             ADVANCE_CLEAR_SLICES_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6877,6 +6955,7 @@ impl Intent {
                     max_slices,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             COMPLETE_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6891,6 +6970,7 @@ impl Intent {
                     candidate,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             SUBMIT_CANDIDATE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6937,6 +7017,7 @@ impl Intent {
                     distinct_owners,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             WRITE_CANDIDATE_FEED_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6993,6 +7074,7 @@ impl Intent {
                     chunk,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             SEAL_CANDIDATE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7007,6 +7089,7 @@ impl Intent {
                     candidate,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             FINALIZE_SELECTION_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7015,6 +7098,7 @@ impl Intent {
                 check_hash(epoch)?;
                 Ok(Self::FinalizeSelection { market, epoch })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             FREEZE_ENTITLEMENT_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7029,6 +7113,7 @@ impl Intent {
                     candidate,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             ENTITLE_SLICE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7045,6 +7130,7 @@ impl Intent {
                     slice_index,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             RELEASE_TERMINAL_RESERVATION_TAG
             | CLOSE_GENERAL_RESERVATION_TAG
             | CLOSE_GENERAL_POT_TAG
@@ -7065,6 +7151,7 @@ impl Intent {
                     _ => Self::CloseGeneralEpoch { market, epoch },
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             CLOSE_GENERAL_PAGE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7078,6 +7165,7 @@ impl Intent {
                     page_index,
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             CLOSE_GENERAL_CANDIDATE_TAG | CLOSE_GENERAL_CLEAR_WORK_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7100,6 +7188,7 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             CLOSE_GENERAL_RECEIPT_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -7122,6 +7211,7 @@ impl Intent {
                 check_hash(realm)?;
                 Ok(Self::CloseRevenuePolicyRecord { realm })
             }
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             CLOSE_POSITION_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;

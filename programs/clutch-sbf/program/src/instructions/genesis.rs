@@ -1075,6 +1075,18 @@ fn init_order_page(
     sequence: u64,
     intent: &PageInit,
 ) -> Outcome<()> {
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    {
+        require(
+            accounts
+                .get(IX_PAGE_EPOCH)
+                .map(|account| account.data_len())
+                == Some(DIRECT_EPOCH_V4_BYTES),
+            ClutchError::UnsupportedInstruction,
+        )?;
+        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
+    }
+    #[cfg(feature = "profile-full")]
     if accounts
         .get(IX_PAGE_EPOCH)
         .map(|account| account.data_len())
@@ -1082,6 +1094,18 @@ fn init_order_page(
     {
         return init_direct_v4_order_page(program_id, accounts, sequence, intent);
     }
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    return init_legacy_order_page(program_id, accounts, sequence, intent);
+}
+
+#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+#[inline(never)]
+fn init_legacy_order_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    intent: &PageInit,
+) -> Outcome<()> {
     require(
         accounts.len() == INIT_PAGE_ACCOUNT_COUNT
             || accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT,
@@ -1090,14 +1114,18 @@ fn init_order_page(
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
+    #[cfg(feature = "profile-full")]
+    let admitted_epoch_lengths = [
+        account_len::EPOCH,
+        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
+    ];
+    #[cfg(feature = "profile-general-source-v2-point")]
+    let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
         &accounts[IX_PAGE_EPOCH],
         false,
-        &[
-            account_len::EPOCH,
-            clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-        ],
+        &admitted_epoch_lengths,
     )?;
     require_creation_sequence(sequence)?;
     require_system_program(&accounts[IX_PAGE_SYSTEM])?;

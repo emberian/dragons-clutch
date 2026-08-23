@@ -14,11 +14,19 @@
 //! adding its owning codec here first; callers cannot make an untyped upload
 //! become consensus truth by choosing a new discriminant.
 
+#[cfg(any(
+    feature = "profile-full",
+    feature = "profile-direct-v3-source-v2-point"
+))]
+use super::direct_selection_v3::DirectBatchPolicyV3;
+use super::direct_selection_v3::DIRECT_BATCH_POLICY_V3_BYTES;
 use super::{
-    account_len, collateral,
-    direct_selection_v3::{DirectBatchPolicyV3, DIRECT_BATCH_POLICY_V3_BYTES},
-    is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount, HASH_BYTES,
+    account_len, collateral, is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount,
+    HASH_BYTES,
 };
+#[cfg(feature = "profile-direct-v3-source-v2-point")]
+use clutch_batch_policy_identity::BATCH_POLICY_BYTES;
+#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
 use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, Identity32V1, BATCH_POLICY_BYTES,
 };
@@ -72,7 +80,12 @@ impl ArtifactKind {
             1 => Ok(Self::CollateralPolicy),
             2 => Ok(Self::PriceGrid),
             3 => Ok(Self::Terms),
+            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
             4 => Ok(Self::BatchPolicy),
+            #[cfg(any(
+                feature = "profile-full",
+                feature = "profile-direct-v3-source-v2-point"
+            ))]
             5 => Ok(Self::DirectBatchPolicyV3),
             _ => Err(CodecError::InvalidEnum),
         }
@@ -391,6 +404,7 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(terms.stored_bump)
         }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
         ArtifactKind::BatchPolicy => {
             let policy = decode_batch_policy(body).map_err(|_| CodecError::MismatchedBinding)?;
             let digest = batch_policy_digest(&policy).map_err(|_| CodecError::MismatchedBinding)?;
@@ -399,6 +413,12 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        #[cfg(feature = "profile-direct-v3-source-v2-point")]
+        ArtifactKind::BatchPolicy => Err(CodecError::InvalidEnum),
+        #[cfg(any(
+            feature = "profile-full",
+            feature = "profile-direct-v3-source-v2-point"
+        ))]
         ArtifactKind::DirectBatchPolicyV3 => {
             let policy = DirectBatchPolicyV3::decode(body)?;
             if policy.digest_for_epoch(binding.context)? != binding.digest {
@@ -406,12 +426,15 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        #[cfg(feature = "profile-general-source-v2-point")]
+        ArtifactKind::DirectBatchPolicyV3 => Err(CodecError::InvalidEnum),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     use clutch_batch_policy_identity::{
         batch_policy_digest, direct_window_v1::DIRECT_POLICY_V1, encode_batch_policy,
     };
@@ -439,13 +462,7 @@ mod tests {
 
     #[test]
     fn stage_lengths_and_round_trip_are_exact() {
-        for kind in [
-            ArtifactKind::CollateralPolicy,
-            ArtifactKind::PriceGrid,
-            ArtifactKind::Terms,
-            ArtifactKind::BatchPolicy,
-            ArtifactKind::DirectBatchPolicyV3,
-        ] {
+        fn round_trip(kind: ArtifactKind) {
             let h = header(kind);
             let mut bytes = std::vec![0xa5; h.account_len().unwrap()];
             initialize_stage(&mut bytes, &h).unwrap();
@@ -458,6 +475,20 @@ mod tests {
                 .iter()
                 .all(|byte| *byte == 0));
         }
+        for kind in [
+            ArtifactKind::CollateralPolicy,
+            ArtifactKind::PriceGrid,
+            ArtifactKind::Terms,
+        ] {
+            round_trip(kind);
+        }
+        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        round_trip(ArtifactKind::BatchPolicy);
+        #[cfg(any(
+            feature = "profile-full",
+            feature = "profile-direct-v3-source-v2-point"
+        ))]
+        round_trip(ArtifactKind::DirectBatchPolicyV3);
     }
 
     #[test]
@@ -549,6 +580,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn batch_policy_artifact_uses_the_canonical_policy_codec() {
         let mut bytes = [0u8; BATCH_POLICY_BYTES];
         assert_eq!(
@@ -580,6 +612,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    ))]
     fn direct_batch_policy_artifact_binds_kind_context_release_and_all_bytes() {
         let context = Hash32::from_bytes([0x44; 32]);
         let value = DirectBatchPolicyV3::direct(Hash32::from_bytes([0x77; 32])).unwrap();
@@ -598,9 +634,15 @@ mod tests {
             exact_len: BATCH_POLICY_BYTES as u16,
             ..binding
         };
+        #[cfg(feature = "profile-full")]
         assert_eq!(
             validate_artifact(old_kind, &bytes[..BATCH_POLICY_BYTES]),
             Err(CodecError::MismatchedBinding)
+        );
+        #[cfg(feature = "profile-direct-v3-source-v2-point")]
+        assert_eq!(
+            validate_artifact(old_kind, &bytes[..BATCH_POLICY_BYTES]),
+            Err(CodecError::InvalidEnum)
         );
         let substituted_context = ArtifactBinding {
             context: Hash32::from_bytes([0x45; 32]),
@@ -620,5 +662,17 @@ mod tests {
             validate_artifact(binding, &bytes[..DIRECT_BATCH_POLICY_V3_BYTES - 1]),
             Err(CodecError::Truncated)
         );
+    }
+
+    #[test]
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    fn direct_profile_refuses_general_artifact_kind() {
+        assert_eq!(ArtifactKind::from_byte(4), Err(CodecError::InvalidEnum));
+    }
+
+    #[test]
+    #[cfg(feature = "profile-general-source-v2-point")]
+    fn general_profile_refuses_direct_artifact_kind() {
+        assert_eq!(ArtifactKind::from_byte(5), Err(CodecError::InvalidEnum));
     }
 }

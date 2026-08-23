@@ -12,7 +12,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = ["custom-heap"]
+default = ["custom-heap", "profile-full"]
 # Suppresses the Anza `entrypoint!` macro's 32-KiB downward bump allocator so
 # the `bpf` module can install the upward allocator that reaches a
 # transaction-requested heap frame (up to 256 KiB).  A feature only because
@@ -34,6 +34,21 @@ non-production-real-pyth-lab = []
 # that can only read one. The builders exist so a bank campaign exercises the
 # real decoders at the real offsets instead of a convenient parallel encoding.
 laboratory-fixtures = []
+# Mutually exclusive deployable products. Each forwards the same identity to
+# both hostile wire crates so a narrow SBF cannot accidentally link the full
+# Intent decoder through a dependency's default features.
+profile-full = [
+    "clutch-solana-layout/profile-full",
+    "clutch-solana-reference/profile-full",
+]
+profile-direct-v3-source-v2-point = [
+    "clutch-solana-layout/profile-direct-v3-source-v2-point",
+    "clutch-solana-reference/profile-direct-v3-source-v2-point",
+]
+profile-general-source-v2-point = [
+    "clutch-solana-layout/profile-general-source-v2-point",
+    "clutch-solana-reference/profile-general-source-v2-point",
+]
 
 [dependencies]
 # The window/summary algebra the observation and resolution plane folds
@@ -53,8 +68,8 @@ clutch-kernel = { path = "../../../crates/clutch-kernel" }
 # `orders_batch::terminal_closure` drive the ledger's begin/settle/close
 # transitions from the Position close route instead of restating them.
 clutch-liveness = { path = "../../../crates/clutch-liveness" }
-clutch-solana-layout = { path = "../../solana-layout" }
-clutch-solana-reference = { path = "../../solana-reference" }
+clutch-solana-layout = { path = "../../solana-layout", default-features = false }
+clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"
 
 # Cross-program invocation, added by the Token-2022 lane.  Both resolve from
