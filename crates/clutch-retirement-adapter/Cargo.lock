@@ -68,6 +68,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch-policy-identity",
  "clutch-general-v2-contract",
+ "clutch-liveness",
  "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",

@@ -13,6 +13,7 @@
 
 mod adapter;
 mod builder;
+mod final_pot;
 
 pub use adapter::{
     authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
@@ -29,9 +30,12 @@ pub use builder::{
     build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
     SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
 };
+pub use final_pot::*;
 
 /// Maximum orders in one frozen General book.
 pub const MAX_ORDERS: usize = 64;
+/// Maximum active General V2 outcomes retained by virtual-claim compartments.
+pub const MAX_OUTCOMES: usize = 16;
 /// Exact persisted owner-settlement semantic body width.
 ///
 /// General V2's central account registry owns the eventual outer tag/version;

@@ -11,14 +11,18 @@
 //! lamport movement remain adapter obligations.
 
 mod codec;
+mod epoch_retirement;
 mod rank;
+mod settlement_accounts;
 mod state;
 
 pub use codec::{CodecError, Reader, Writer};
+pub use epoch_retirement::*;
 pub use rank::{
     encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
     SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
+pub use settlement_accounts::*;
 pub use state::*;
 
 /// Number of bytes in every persisted identity or digest.
@@ -114,6 +118,33 @@ pub const RESERVATION_SEED_DOMAIN_V1: &[u8] = b"general-reservation:v2";
 pub const RECEIPT_SEED_DOMAIN_V1: &[u8] = b"general-receipt:v2";
 /// Fresh General V2 final-pot PDA seed domain.
 pub const FINAL_POT_SEED_DOMAIN_V1: &[u8] = b"general-final-pot:v2";
+/// Fresh owner-settlement row seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
+
+/// Existing Epoch semantic tag, fresh counted General V2 version.
+pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
+/// Settlement-complete counted General V2 Epoch version.
+pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
+/// Permanent General V2 Epoch tombstone discriminator.
+pub const GENERAL_EPOCH_TOMBSTONE_ACCOUNT_TAG: u8 = 0x76;
+/// Rent-owner-complete General V2 Epoch tombstone version.
+pub const GENERAL_EPOCH_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
+/// Existing Market semantic tag, fresh General V2 runtime version.
+pub const MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
+/// First monotone General V2 Market-runtime version.
+pub const MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
+/// Corrected globally disjoint General V2 owner-settlement discriminator.
+pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
+/// First exact owner-settlement outer version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Allocation-complete General V2 settlement cash-pot discriminator.
+pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
+/// First exact settlement cash-pot outer version.
+pub const SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
+/// Terminal General V2 FinalPot discriminator.
+pub const FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
+/// First exact FinalPot outer version.
+pub const FINAL_POT_ACCOUNT_VERSION: u8 = 1;
 
 /// Existing semantic account tag, fresh successor version: Window.
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
@@ -174,7 +205,37 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this dependency-free crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 10] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 16] = [
+    AccountAllocationV1 {
+        tag: MARKET_RUNTIME_ACCOUNT_TAG,
+        version: MARKET_RUNTIME_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/MarketRuntimeV3AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: GENERAL_EPOCH_ACCOUNT_TAG,
+        version: GENERAL_EPOCH_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/GeneralEpochV6AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: GENERAL_EPOCH_TOMBSTONE_ACCOUNT_TAG,
+        version: GENERAL_EPOCH_TOMBSTONE_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/GeneralEpochTombstoneV2",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerSettlementV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+        version: SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/SettlementCashPotV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: FINAL_POT_ACCOUNT_TAG,
+        version: FINAL_POT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/GeneralV2FinalPotV1AccountV1",
+    },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,
         version: WINDOW_ACCOUNT_VERSION,

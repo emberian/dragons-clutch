@@ -47,6 +47,18 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
+/// General V2 monotone Market-runtime account discriminator.
+pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
+/// First General V2 monotone Market-runtime version.
+pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
+/// Settlement-complete counted General V2 Epoch discriminator.
+pub const GENERAL_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
+/// Settlement-complete counted General V2 Epoch version.
+pub const GENERAL_V2_EPOCH_ACCOUNT_VERSION: u8 = 6;
+/// Permanent General V2 Epoch tombstone discriminator.
+pub const GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG: u8 = 0x76;
+/// Rent-owner-complete permanent Epoch tombstone version.
+pub const GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 /// General V2 active-width ClearWork successor account discriminator.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
@@ -103,6 +115,18 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
+/// General V2 owner-aggregated settlement account discriminator.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
+/// First exact owner-settlement outer version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// General V2 allocation-complete settlement cash-pot discriminator.
+pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
+/// First exact settlement cash-pot outer version.
+pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
+/// General V2 explicit-liability FinalPot discriminator.
+pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
+/// First exact FinalPot outer version.
+pub const GENERAL_V2_FINAL_POT_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -273,6 +297,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG,
+            version: GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-epoch-tombstone-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-runtime-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_EPOCH_ACCOUNT_TAG,
+            version: GENERAL_V2_EPOCH_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-counted-epoch-v6-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: RETIREMENT_V2_MARKET_ACCOUNT_TAG,
             version: RETIREMENT_V2_MARKET_ACCOUNT_VERSION,
         },
@@ -386,6 +437,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-selected-candidate-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-settlement-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+            version: GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-settlement-cash-pot-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
+            version: GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-final-pot-v1-account",
     },
 ];
 
@@ -829,6 +907,18 @@ mod tests {
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
+                GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_EPOCH_ACCOUNT_TAG,
+                GENERAL_V2_EPOCH_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG,
+                GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
             ),
@@ -864,6 +954,18 @@ mod tests {
             (
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG,
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
+                GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
