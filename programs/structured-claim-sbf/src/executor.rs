@@ -1,10 +1,14 @@
 //! Exact account loading, CPI execution, and authoritative post-reconciliation.
 
-use clutch_product_series::{ContentId, FixedCodec, MarketInstancePreimageV2, NativeClaimBasisV1};
+use clutch_product_series::{
+    CompiledProductSeriesBundleV2, ContentId, FixedCodec, MarketInstancePreimageV2,
+    NativeClaimBasisV1, SeriesAttachmentPlanV2,
+};
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
     ReplayV3HashBackend,
 };
+use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, GeneralV2Action, StructuredClaimAction,
 };
@@ -16,13 +20,16 @@ use clutch_structured_claim_adapter::runtime_contract::{
     PositionAssetTransferPayloadV1, StructuredClaimActionV1, StructuredClaimDescriptorV2,
     StructuredClaimPayloadV1, StructuredClaimRuntimeAddressesV1,
     StructuredClaimReplayExtensionStateV1, StructuredClaimReplayExtensionV1,
-    StructuredCustodyCallProjectionV1, WrapperQuantityPayloadV1, DESCRIPTOR_ACCOUNT_BYTES,
-    DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
-    STRUCTURED_CUSTODY_CALL_V1_DOMAIN, WRAPPER_MINT_ACCOUNT_BYTES,
+    StructuredCustodyCallProjectionV1, StructuredMarketRootV1, WrapperQuantityPayloadV1,
+    WrapperRecipeHashV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
+    DESCRIPTOR_ACCOUNT_VERSION, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
+    STRUCTURED_CUSTODY_CALL_V1_DOMAIN, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
+    WRAPPER_MINT_ACCOUNT_BYTES, structured_descriptor_admission_receipt_v1,
+    structured_owner_release_id_v1,
 };
 use clutch_structured_claim_adapter::{
     admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
-    canonical_wrapper_product_id_v1, decode_canonical_wrapper_mint_v1,
+    canonical_series_scoped_wrapper_product_id_v2, decode_canonical_wrapper_mint_v1,
     decode_canonical_wrapper_token_v1, plan_token_2022_cpi_v1,
     PdaVerifierV1, RuntimeDeploymentsV1, Token2022CpiV1, Token2022InstructionPlanV1,
     DESCRIPTOR_SEED, MINT_AUTHORITY_SEED, MINT_SEED, VAULT_OWNER_SEED,
@@ -35,13 +42,14 @@ use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+use solana_sdk_ids::system_program;
 use solana_sha256_hasher::hashv;
 
 use crate::error::{Result, WrapperError};
 use crate::loader::{authenticate as authenticate_loader, UPGRADEABLE_LOADER_ID};
 use crate::system::{create_permanent_pda, rent};
 
-const CREATE_ACCOUNT_COUNT: usize = 24;
+const CREATE_ACCOUNT_COUNT: usize = 28;
 const CANONICAL_ACCOUNT_COUNT: usize = 26;
 
 const VAULT_AUTHORITY: usize = 0;
@@ -66,6 +74,11 @@ const CREATE_TOKEN_PROGRAM: usize = 18;
 const CREATE_TOKEN_DATA: usize = 19;
 const CREATE_BASIS: usize = 20;
 const CREATE_MARKET: usize = 21;
+const CREATE_STRUCTURED_ROOT: usize = 24;
+const CREATE_SERIES_LINK: usize = 25;
+const CREATE_COMPILER_BUNDLE: usize = 26;
+const CREATE_ATTACHMENT: usize = 27;
+const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 
 const C_DESCRIPTOR: usize = 12;
 const C_WRAPPER_PROGRAM: usize = 13;
@@ -152,6 +165,8 @@ fn create(
         token_2022_deployment_slot: deployments.binding.token_2022_deployment_slot,
         market: market_id,
         terms_digest: basis_id,
+        structured_root_id: payload.structured_root_id,
+        wrapper_recipe_id: payload.wrapper_recipe_id,
         primitive: payload.primitive,
         state: DescriptorStateV1::Active,
         descriptor_bump: 0,
@@ -167,8 +182,13 @@ fn create(
     .map_err(|_| WrapperError::Identity)?;
     let native_claim_id = canonical_native_claim_id_v1(&identity)
         .map_err(|_| WrapperError::Identity)?;
-    let product_id = canonical_wrapper_product_id_v1(&identity, native_claim_id)
-        .map_err(|_| WrapperError::Identity)?;
+    let product_id = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native_claim_id,
+        descriptor.structured_root_id,
+        descriptor.wrapper_recipe_id,
+    )
+    .map_err(|_| WrapperError::Identity)?;
     if native_claim_id != payload.native_claim_id || product_id != payload.wrapper_product_id {
         return Err(WrapperError::Identity);
     }
@@ -247,8 +267,15 @@ fn create(
         .try_borrow_mut_data()
         .map_err(|_| WrapperError::Borrow)?
         .copy_from_slice(&descriptor_body);
+    let root_before = structured_root_prestate(accounts, descriptor)?;
     invoke_base_create(accounts, &payload)?;
-    reconcile_create(accounts, &bound, product_id)?;
+    reconcile_create(
+        accounts,
+        &bound,
+        product_id,
+        root_before,
+        deployments.binding,
+    )?;
     Ok(())
 }
 
@@ -434,12 +461,21 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     if accounts.len() != CREATE_ACCOUNT_COUNT {
         return Err(WrapperError::Accounts);
     }
-    let signer = [false, true, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false, false, false, false, false, false];
-    let writable = [false, true, false, false, false, false, false, false, false, false, true,
-        true, true, true, false, false, false, false, false, false, false, false, false, false];
-    let executable = [false, false, true, false, false, false, false, true, false, false, false,
-        false, false, false, true, false, true, false, true, false, false, false, false, false];
+    let signer = [
+        false, true, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false,
+    ];
+    let writable = [
+        false, true, false, false, false, false, false, false, false, false, true, true, true,
+        true, false, false, false, false, false, false, false, false, false, false, true, true,
+        false, false,
+    ];
+    let executable = [
+        false, false, true, false, false, false, false, true, false, false, false, false, false,
+        false, true, false, true, false, true, false, false, false, false, false, false, false,
+        false, false,
+    ];
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[CREATE_WRAPPER_PROGRAM].key != *program_id
         || accounts[CREATE_DESCRIPTOR].key == accounts[CREATE_MINT].key
@@ -447,6 +483,19 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
         || accounts[PAYER].key == accounts[VAULT_AUTHORITY].key
     {
         return Err(WrapperError::Accounts);
+    }
+    let mut left = 0_usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let collateral_token_alias =
+                left == CREATE_COLLATERAL_TOKEN && right == CREATE_TOKEN_PROGRAM;
+            if accounts[left].key == accounts[right].key && !collateral_token_alias {
+                return Err(WrapperError::Accounts);
+            }
+            right += 1;
+        }
+        left += 1;
     }
     Ok(())
 }
@@ -638,8 +687,13 @@ fn load_bound_descriptor(
     )
     .map_err(|_| WrapperError::Identity)?;
     let native_claim = canonical_native_claim_id_v1(&identity).map_err(|_| WrapperError::Identity)?;
-    let product = canonical_wrapper_product_id_v1(&identity, native_claim)
-        .map_err(|_| WrapperError::Identity)?;
+    let product = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native_claim,
+        descriptor.structured_root_id,
+        descriptor.wrapper_recipe_id,
+    )
+    .map_err(|_| WrapperError::Identity)?;
     if product != expected_product {
         return Err(WrapperError::Identity);
     }
@@ -767,6 +821,12 @@ impl PositionV3Sha256Backend for RuntimeSha {
 impl ReplayV3HashBackend for RuntimeSha {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
         hashv(parts).to_bytes()
+    }
+}
+
+impl WrapperRecipeHashV1 for RuntimeSha {
+    fn hashv(&self, slices: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(slices).to_bytes()
     }
 }
 
@@ -1061,7 +1121,14 @@ fn invoke_base_create(
         metas.push(AccountMeta {
             pubkey: *accounts[index].key,
             is_signer: index == VAULT_AUTHORITY || index == PAYER,
-            is_writable: matches!(index, PAYER | CREATE_POSITION | CREATE_REPLAY),
+            is_writable: matches!(
+                index,
+                PAYER
+                    | CREATE_POSITION
+                    | CREATE_REPLAY
+                    | CREATE_STRUCTURED_ROOT
+                    | CREATE_SERIES_LINK
+            ),
         });
         infos.push(accounts[index].clone());
         index += 1;
@@ -1163,10 +1230,75 @@ fn invoke_token_plan<'a>(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StructuredRootPrestateV1 {
+    Empty {
+        hostile_prefund_lamports: u64,
+    },
+    Live {
+        root: Box<StructuredMarketRootV1>,
+        observed_donation_lamports: u64,
+    },
+}
+
+fn structured_root_prestate(
+    accounts: &[AccountInfo<'_>],
+    descriptor: StructuredClaimDescriptorV2,
+) -> Result<StructuredRootPrestateV1> {
+    let expected = Pubkey::find_program_address(
+        &[STRUCTURED_ROOT_SEED_V1, &descriptor.structured_root_id],
+        accounts[CREATE_BASE_PROGRAM].key,
+    );
+    if *accounts[CREATE_STRUCTURED_ROOT].key != expected.0 {
+        return Err(WrapperError::Identity);
+    }
+    if accounts[CREATE_STRUCTURED_ROOT].owner == &system_program::ID
+        && accounts[CREATE_STRUCTURED_ROOT].data_len() == 0
+    {
+        return Ok(StructuredRootPrestateV1::Empty {
+            hostile_prefund_lamports: accounts[CREATE_STRUCTURED_ROOT].lamports(),
+        });
+    }
+    if accounts[CREATE_STRUCTURED_ROOT].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_STRUCTURED_ROOT].data_len() != STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    let data = accounts[CREATE_STRUCTURED_ROOT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let root = Box::new(
+        StructuredMarketRootV1::decode(&data).map_err(|_| WrapperError::Identity)?,
+    );
+    drop(data);
+    let observed_donation_lamports = accounts[CREATE_STRUCTURED_ROOT]
+        .lamports()
+        .checked_sub(root.rent_principal_lamports)
+        .ok_or(WrapperError::BaseCustody)?;
+    if root.root_bump != expected.1
+        || root
+            .binding
+            .id(&RuntimeSha)
+            .map_err(|_| WrapperError::Identity)?
+            .bytes()
+            != descriptor.structured_root_id
+        || observed_donation_lamports < root.current_donation_lamports
+        || observed_donation_lamports < root.donation_floor_lamports
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    Ok(StructuredRootPrestateV1::Live {
+        root,
+        observed_donation_lamports,
+    })
+}
+
 fn reconcile_create(
     accounts: &[AccountInfo<'_>],
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
     product: [u8; 32],
+    root_before: StructuredRootPrestateV1,
+    deployment: DeploymentBinding,
 ) -> Result<()> {
     let descriptor_data = accounts[CREATE_DESCRIPTOR]
         .try_borrow_data()
@@ -1177,6 +1309,7 @@ fn reconcile_create(
         return Err(WrapperError::Identity);
     }
     drop(descriptor_data);
+    reconcile_structured_root(accounts, observed_descriptor, root_before, deployment)?;
     let position = decode_position(&accounts[CREATE_POSITION])?;
     let replay = decode_replay(&accounts[CREATE_REPLAY])?;
     let replay_data = accounts[CREATE_REPLAY]
@@ -1232,4 +1365,203 @@ fn reconcile_create(
         return Err(WrapperError::Token2022);
     }
     Ok(())
+}
+
+fn reconcile_structured_root(
+    accounts: &[AccountInfo<'_>],
+    descriptor: StructuredClaimDescriptorV2,
+    before: StructuredRootPrestateV1,
+    deployment: DeploymentBinding,
+) -> Result<()> {
+    if accounts[CREATE_STRUCTURED_ROOT].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_STRUCTURED_ROOT].data_len() != STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    let root_data = accounts[CREATE_STRUCTURED_ROOT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let root = Box::new(
+        StructuredMarketRootV1::decode(&root_data).map_err(|_| WrapperError::Identity)?,
+    );
+    drop(root_data);
+    let expected_pda = Pubkey::find_program_address(
+        &[STRUCTURED_ROOT_SEED_V1, &descriptor.structured_root_id],
+        accounts[CREATE_BASE_PROGRAM].key,
+    );
+    let descriptor_body = descriptor.encode().map_err(|_| WrapperError::Identity)?;
+    let descriptor_id = ContentId::from_bytes(
+        hashv(&[
+            STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
+            &descriptor_body,
+        ])
+        .to_bytes(),
+    );
+    let recipe_id = ContentId::from_bytes(descriptor.wrapper_recipe_id);
+    let (bundle, attachment) = decode_structured_product_artifacts(accounts)?;
+    if *accounts[CREATE_STRUCTURED_ROOT].key != expected_pda.0
+        || root.root_bump != expected_pda.1
+        || root
+            .binding
+            .id(&RuntimeSha)
+            .map_err(|_| WrapperError::Identity)?
+            .bytes()
+            != descriptor.structured_root_id
+        || root.binding.link_account != accounts[CREATE_SERIES_LINK].key.to_bytes()
+        || root.binding.rent_refund_owner.bytes() != accounts[PAYER].key.to_bytes()
+        || root.binding.owner_release_id
+            != structured_owner_release_id_v1(deployment, &RuntimeSha)
+                .map_err(|_| WrapperError::Identity)?
+        || root.binding.compiler_output_id
+            != bundle.id().map_err(|_| WrapperError::Identity)?
+        || root.binding.attachment_plan_id
+            != attachment.id().map_err(|_| WrapperError::Identity)?
+        || root.binding.series_plan_id != bundle.series_plan_id
+        || root.binding.attachment_plan_id != bundle.attachment_plan_id
+        || root.binding.capability_profile_id != bundle.capability_profile_id
+        || root.binding.compiler_release_id != bundle.product_compiler_release_id
+        || root.binding.wrapper_recipe_set_id != attachment.wrapper_recipe_set_id
+        || attachment.funding_quote_id != bundle.funding_quote_id
+        || root.live_descriptor_count == 0
+        || accounts[CREATE_STRUCTURED_ROOT].lamports()
+            != root
+                .rent_principal_lamports
+                .checked_add(root.current_donation_lamports)
+                .ok_or(WrapperError::Arithmetic)?
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    match before {
+        StructuredRootPrestateV1::Empty {
+            hostile_prefund_lamports,
+        } => {
+            let expected_receipt = structured_descriptor_admission_receipt_v1(
+                ContentId::ZERO,
+                descriptor_id,
+                recipe_id,
+                1,
+                &RuntimeSha,
+            )
+            .map_err(|_| WrapperError::Identity)?;
+            let minimum = rent(&accounts[RENT])?
+                .minimum_balance(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES);
+            if minimum == 0
+                || root.transition_sequence != 1
+                || root.admitted_descriptor_count != 1
+                || root.live_descriptor_count != 1
+                || root.terminal_descriptor_count != 0
+                || root.admission_transcript_id != expected_receipt
+                || !root.terminal_transcript_id.is_zero()
+                || !root.aggregate_terminal_receipt_id.is_zero()
+                || root.rent_principal_lamports != minimum
+                || root.donation_floor_lamports != hostile_prefund_lamports
+                || root.current_donation_lamports != hostile_prefund_lamports
+                || root.product_lineage.product_admission_receipt_id != expected_receipt
+            {
+                return Err(WrapperError::BaseCustody);
+            }
+        }
+        StructuredRootPrestateV1::Live {
+            root: previous,
+            observed_donation_lamports,
+        } => {
+            let next_sequence = previous
+                .transition_sequence
+                .checked_add(1)
+                .ok_or(WrapperError::Arithmetic)?;
+            let expected_receipt = structured_descriptor_admission_receipt_v1(
+                previous.admission_transcript_id,
+                descriptor_id,
+                recipe_id,
+                next_sequence,
+                &RuntimeSha,
+            )
+            .map_err(|_| WrapperError::Identity)?;
+            if root.binding != previous.binding
+                || root.transition_sequence != next_sequence
+                || root.admitted_descriptor_count
+                    != previous
+                        .admitted_descriptor_count
+                        .checked_add(1)
+                        .ok_or(WrapperError::Arithmetic)?
+                || root.live_descriptor_count
+                    != previous
+                        .live_descriptor_count
+                        .checked_add(1)
+                        .ok_or(WrapperError::Arithmetic)?
+                || root.terminal_descriptor_count != previous.terminal_descriptor_count
+                || root.admission_transcript_id != expected_receipt
+                || root.terminal_transcript_id != previous.terminal_transcript_id
+                || root.aggregate_terminal_receipt_id
+                    != previous.aggregate_terminal_receipt_id
+                || root.rent_principal_lamports != previous.rent_principal_lamports
+                || root.donation_floor_lamports != previous.donation_floor_lamports
+                || root.current_donation_lamports != observed_donation_lamports
+                || root.product_lineage.product_admission_receipt_id
+                    != previous.product_lineage.product_admission_receipt_id
+            {
+                return Err(WrapperError::BaseCustody);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_structured_product_artifacts(
+    accounts: &[AccountInfo<'_>],
+) -> Result<(
+    Box<CompiledProductSeriesBundleV2>,
+    Box<SeriesAttachmentPlanV2>,
+)> {
+    if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
+    {
+        return Err(WrapperError::Identity);
+    }
+    let bundle_data = accounts[CREATE_COMPILER_BUNDLE]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let bundle = Box::new(
+        CompiledProductSeriesBundleV2::decode(&bundle_data)
+            .map_err(|_| WrapperError::Identity)?,
+    );
+    drop(bundle_data);
+    let attachment_data = accounts[CREATE_ATTACHMENT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let attachment = Box::new(
+        SeriesAttachmentPlanV2::decode(&attachment_data)
+            .map_err(|_| WrapperError::Identity)?,
+    );
+    drop(attachment_data);
+    let bundle_id = bundle.id().map_err(|_| WrapperError::Identity)?.bytes();
+    let attachment_id = attachment
+        .id()
+        .map_err(|_| WrapperError::Identity)?
+        .bytes();
+    if *accounts[CREATE_COMPILER_BUNDLE].key
+        != product_artifact_pda(
+            accounts[CREATE_BASE_PROGRAM].key,
+            ArtifactKind::CompiledProductSeriesBundleV2.byte(),
+            bundle_id,
+        )
+        || *accounts[CREATE_ATTACHMENT].key
+            != product_artifact_pda(
+                accounts[CREATE_BASE_PROGRAM].key,
+                ArtifactKind::SeriesAttachmentPlanV2.byte(),
+                attachment_id,
+            )
+    {
+        return Err(WrapperError::Identity);
+    }
+    Ok((bundle, attachment))
+}
+
+fn product_artifact_pda(program_id: &Pubkey, kind: u8, id: [u8; 32]) -> Pubkey {
+    let kind_seed = [kind];
+    Pubkey::find_program_address(
+        &[b"dc:product-artifact:v1", &kind_seed, &id],
+        program_id,
+    )
+    .0
 }

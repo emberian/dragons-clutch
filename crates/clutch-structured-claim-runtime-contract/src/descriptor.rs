@@ -17,10 +17,10 @@ pub const DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
 pub const HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1: u8 = 1;
 /// Exact historical descriptor-v1 account width.
 pub const HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1: usize = 384;
-/// Live structured-claim descriptor account version.
+/// Sole future structured-claim descriptor account version.
 pub const DESCRIPTOR_ACCOUNT_VERSION: u8 = 2;
-/// Exact live descriptor-v2 account width.
-pub const DESCRIPTOR_ACCOUNT_BYTES: usize = 385;
+/// Exact sole-future descriptor-v2 account width.
+pub const DESCRIPTOR_ACCOUNT_BYTES: usize = 449;
 
 /// Descriptor lifecycle. Supply and backing remain outside this account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +49,7 @@ impl DescriptorStateV1 {
     }
 }
 
-/// Exact 384-byte descriptor image.
+/// Exact 449-byte descriptor-v2 image.
 ///
 /// The wrapper program is the account owner and PDA derivation program, so it
 /// is intentionally reconstructed from authenticated account context rather
@@ -62,7 +62,7 @@ pub struct StructuredClaimDescriptorV2 {
     pub tag: u8,
     /// Must equal [`DESCRIPTOR_ACCOUNT_VERSION`].
     pub version: u8,
-    /// Reserved flags; version one requires zero.
+    /// Reserved flags; version two requires zero.
     pub flags: u16,
     /// Exact base Dragon's Clutch program.
     pub base_program: [u8; 32],
@@ -84,6 +84,10 @@ pub struct StructuredClaimDescriptorV2 {
     pub market: [u8; 32],
     /// Complete immutable Terms digest.
     pub terms_digest: [u8; 32],
+    /// Exact Series-link-scoped Structured root binding.
+    pub structured_root_id: [u8; 32],
+    /// Exact authenticated wrapper-recipe identity within that root's set.
+    pub wrapper_recipe_id: [u8; 32],
     /// Primitive GCD-one native-Egg coefficient vector.
     pub primitive: [u64; MAX_OUTCOMES],
     /// Active or permanently retired.
@@ -129,6 +133,8 @@ impl StructuredClaimDescriptorV2 {
         )?;
         put(&mut output, &mut cursor, &self.market)?;
         put(&mut output, &mut cursor, &self.terms_digest)?;
+        put(&mut output, &mut cursor, &self.structured_root_id)?;
+        put(&mut output, &mut cursor, &self.wrapper_recipe_id)?;
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
             put(
@@ -168,6 +174,8 @@ impl StructuredClaimDescriptorV2 {
         let token_2022_deployment_slot = read_u64(input, &mut cursor)?;
         let market = read_key(input, &mut cursor)?;
         let terms_digest = read_key(input, &mut cursor)?;
+        let structured_root_id = read_key(input, &mut cursor)?;
+        let wrapper_recipe_id = read_key(input, &mut cursor)?;
         let mut primitive = [0_u64; MAX_OUTCOMES];
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
@@ -196,6 +204,8 @@ impl StructuredClaimDescriptorV2 {
             token_2022_deployment_slot,
             market,
             terms_digest,
+            structured_root_id,
+            wrapper_recipe_id,
             primitive,
             state,
             descriptor_bump,
@@ -222,9 +232,14 @@ impl StructuredClaimDescriptorV2 {
             self.token_2022_program,
             self.token_2022_program_data,
             self.market,
+            self.structured_root_id,
+            self.wrapper_recipe_id,
         ];
         require_distinct_nonzero(&keys)?;
-        if self.terms_digest == [0; 32] {
+        if self.terms_digest == [0; 32]
+            || self.terms_digest == self.structured_root_id
+            || self.terms_digest == self.wrapper_recipe_id
+        {
             return Err(Error::InvalidIdentity);
         }
         Ok(())

@@ -59,9 +59,10 @@ pub use handler::{
 #[cfg(target_os = "solana")]
 pub use identity::SolanaPdaVerifierV1;
 pub use identity::{
-    bind_descriptor_v1, canonical_native_claim_id_v1, canonical_wrapper_product_id_v1,
+    bind_descriptor_v1, canonical_native_claim_id_v1,
+    canonical_series_scoped_wrapper_product_id_v2, canonical_wrapper_product_id_v1,
     BoundDescriptorV1, PdaVerifierV1, RuntimeDeploymentsV1, DESCRIPTOR_SEED, MINT_AUTHORITY_SEED,
-    MINT_SEED, VAULT_OWNER_SEED,
+    MINT_SEED, SERIES_SCOPED_WRAPPER_PRODUCT_DOMAIN_V2, VAULT_OWNER_SEED,
 };
 pub use token2022_wire::{
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,

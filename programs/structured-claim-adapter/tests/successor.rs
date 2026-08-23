@@ -8,9 +8,10 @@ use clutch_structured_claim_adapter::runtime_contract::{
 };
 use clutch_structured_claim_adapter::{
     admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
-    canonical_wrapper_product_id_v1, decode_instruction_v1, dispatch_structured_claim_v1,
-    AccountFrameV1, Error, PdaVerifierV1, PreparedStructuredClaimRouteV1, Result,
-    RuntimeDeploymentsV1, StructuredClaimAccountLoaderV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
+    canonical_series_scoped_wrapper_product_id_v2, decode_instruction_v1,
+    dispatch_structured_claim_v1, AccountFrameV1, Error, PdaVerifierV1,
+    PreparedStructuredClaimRouteV1, Result, RuntimeDeploymentsV1,
+    StructuredClaimAccountLoaderV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
 };
 
 fn key(marker: u8) -> [u8; 32] {
@@ -65,6 +66,8 @@ fn descriptor() -> StructuredClaimDescriptorV2 {
         token_2022_deployment_slot: 8,
         market: key(9),
         terms_digest: key(10),
+        structured_root_id: key(15),
+        wrapper_recipe_id: key(16),
         primitive,
         state: DescriptorStateV1::Active,
         descriptor_bump: 11,
@@ -115,9 +118,12 @@ fn canonical_descriptor_is_exactly_0x88_v2_and_old_adapter_tag_refuses() {
 fn descriptor_v1_is_archivally_decodable_but_cannot_promote_live() {
     let v2 = descriptor().encode().unwrap();
     let mut v1 = [0_u8; 384];
-    v1[..383].copy_from_slice(&v2[..383]);
+    v1[..252].copy_from_slice(&v2[..252]);
+    v1[252..381].copy_from_slice(&v2[316..445]);
     v1[1] = 1;
-    v1[383] = v2[384];
+    v1[381] = v2[445];
+    v1[382] = v2[446];
+    v1[383] = v2[448];
     assert_eq!(decode_historical_descriptor_v1(&v1), Ok(()));
     assert!(StructuredClaimDescriptorV2::decode(&v1).is_err());
 }
@@ -176,7 +182,13 @@ fn descriptor_binding_hashes_only_the_runtime_owned_preimages() {
         )
         .unwrap();
     let native = canonical_native_claim_id_v1(&identity).unwrap();
-    let product = canonical_wrapper_product_id_v1(&identity, native).unwrap();
+    let product = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native,
+        descriptor.structured_root_id,
+        descriptor.wrapper_recipe_id,
+    )
+    .unwrap();
     let addresses = StructuredClaimRuntimeAddressesV1 {
         descriptor: key(20),
         mint: key(21),

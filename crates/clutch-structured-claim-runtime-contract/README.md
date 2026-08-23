@@ -1,11 +1,14 @@
 # `clutch-structured-claim-runtime-contract`
 
 This crate is the allocation-free runtime contract between the pure
-`clutch-structured-claim` economics and a future small SBF/Token-2022 adapter.
-It freezes the exact 384-byte descriptor, reconstructs native-claim and
-deployment-bound product identity from authenticated basis/deployment facts,
-and stages the one required atomic Position cash/native-Egg transfer without
-touching global supply or Hoard collateral.
+`clutch-structured-claim` economics and the small SBF/Token-2022 adapters. It
+keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
+future 449-byte descriptor v2, and owns the exact 624-byte Series-scoped
+Structured root plus fixed-depth wrapper-recipe membership. The descriptor
+reconstructs native-claim and deployment/root/recipe-bound product identity
+from authenticated Product, basis, and deployment facts. Custody stages the
+required atomic Position cash/native-Egg transfer without touching global
+supply or Hoard collateral.
 
 It does not parse Solana accounts, derive PDAs, hash, invoke CPI, or claim that
 structured claims are live. The SBF adapter remains responsible for exact
@@ -44,9 +47,8 @@ The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
 
-The crate currently proposes descriptor coordinate `0x88/1`; the earlier
-`0x7f/1` proposal was withdrawn after the global Dealer/Series/General block
-was allocated through `0x87`. This is not a live
-allocation until the central collision registry adopts the exact coordinate
-alongside the SBF capability that consumes it; allocation alone will not make
-the structured-claim family executable.
+Descriptor coordinate `0x88/1` is permanently historical and decode-only;
+`0x88/2` is the sole future descriptor. The mutable Structured market root is
+`0xaf/1`; `0xad/1` belongs to Product SeriesMarketLink and `0xae/1` belongs to
+Dealer CoveredDealerSelection. Central allocation alone does not make any
+Structured route executable.

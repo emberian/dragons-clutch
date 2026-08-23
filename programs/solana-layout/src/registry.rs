@@ -281,7 +281,7 @@ pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
 /// Withdrawn StructuredClaim descriptor version with one ambiguous authority bump.
 pub const HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1: u8 = 1;
-/// Live StructuredClaim descriptor version with distinct authority bumps.
+/// Sole future StructuredClaim descriptor version with distinct authority bumps.
 pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 2;
 /// General V2 final settlement-pot account discriminator.
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
@@ -469,6 +469,12 @@ pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION: u8 = 1;
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent Market interval-history bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
+/// Series-link-scoped mutable Structured descriptor-family root.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xaf;
+/// First Structured root account version.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact Structured root account width.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 624;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
@@ -611,6 +617,7 @@ const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 const _: () = assert!(PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
+const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_TAG == 0xaf);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1723,6 +1730,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-series-market-link-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+            version: STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::NonProductionLab,
+        name: "structured-market-root-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

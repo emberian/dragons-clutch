@@ -2,7 +2,8 @@
 
 use crate::runtime_contract::{
     decode_structured_claim_payload_v1, StructuredClaimActionV1, StructuredClaimPayloadV1,
-    STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
+    STRUCTURED_CLAIM_FAMILY_VERSION,
 };
 use crate::{Error, Result};
 
@@ -37,6 +38,10 @@ const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0b1_0110);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+const _: () = assert!(
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES
+        <= clutch_solana_layout::registry::MAX_EXTENSION_PAYLOAD_BYTES
+);
 
 /// Borrowed exact structured-claim family envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
