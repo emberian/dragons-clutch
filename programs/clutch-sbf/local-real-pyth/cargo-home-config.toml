@@ -1,0 +1,7 @@
+# Installed verbatim into .cache/clutch-local-real-pyth/cargo-home/config.toml.
+# Cargo resolves this path relative to the private Cargo home's parent.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
