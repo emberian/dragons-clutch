@@ -366,8 +366,10 @@ pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
 /// Immutable exact fractional-redemption policy discriminator.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG: u8 = 0xa4;
-/// Immutable exact fractional-redemption policy version.
-pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn policy version whose offset 80 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound policy version.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 2;
 /// Exact immutable fractional-redemption policy bytes.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES: usize = 296;
 /// Sole aggregate numerator-credit ledger discriminator.
@@ -378,14 +380,18 @@ pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION: u8 = 1;
 pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_BYTES: usize = 224;
 /// Owner-scoped exact numerator-credit discriminator.
 pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG: u8 = 0xa6;
-/// Owner-scoped exact numerator-credit version.
-pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn credit version whose offset 176 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound owner-credit version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION: u8 = 2;
 /// Exact owner-scoped numerator-credit bytes.
 pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES: usize = 296;
 /// Permanent zero-credit replay tombstone discriminator.
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa7;
-/// Permanent zero-credit replay tombstone version.
-pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn tombstone version whose offset 160 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound replay tombstone version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent zero-credit replay tombstone bytes.
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
@@ -439,6 +445,13 @@ const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5:
 const _: () =
     assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION == 2);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG == 0x95);
@@ -475,6 +488,9 @@ pub enum AllocationStatus {
     /// Executable only in one explicitly named non-production laboratory
     /// profile; every production profile remains disabled.
     NonProductionLab,
+    /// Coordinates remain permanently occupied but no decoder, constructor,
+    /// migration, or executable route may treat them as current state.
+    Withdrawn,
 }
 
 /// Coordinates occupied by one collision-ledger entry.
@@ -507,7 +523,7 @@ pub enum AllocationCoordinates {
 pub struct CollisionLedgerEntry {
     /// Occupied wire coordinates.
     pub coordinates: AllocationCoordinates,
-    /// Whether the coordinates are frozen or merely reserved and disabled.
+    /// Whether the coordinates are frozen, disabled, laboratory-only, or withdrawn.
     pub status: AllocationStatus,
     /// Stable human-readable allocation name.
     pub name: &'static str,
@@ -1245,10 +1261,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-policy-v1-withdrawn-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-policy-v1-account",
+        name: "fractional-redemption-policy-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1263,10 +1288,28 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-credit-v1-withdrawn-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-credit-v1-account",
+        name: "fractional-redemption-credit-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-credit-tombstone-v1-withdrawn-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1275,7 +1318,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-credit-tombstone-v1-account",
+        name: "fractional-redemption-credit-tombstone-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2708,6 +2751,38 @@ mod tests {
             assert!(
                 matching.next().is_none(),
                 "duplicate account {tag}/{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn fractional_redemption_reinterpreted_v1_accounts_are_withdrawn() {
+        let withdrawn = [
+            (
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION,
+            ),
+        ];
+        for (tag, version) in withdrawn {
+            let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.next().map(|entry| entry.status),
+                Some(AllocationStatus::Withdrawn),
+                "withdrawn account {tag}/{version}"
+            );
+            assert!(
+                matching.next().is_none(),
+                "duplicate withdrawn account {tag}/{version}"
             );
         }
     }

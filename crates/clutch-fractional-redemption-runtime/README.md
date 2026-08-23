@@ -3,16 +3,23 @@
 This crate promotes `research/fractional-redemption` into a safe, `no_std`,
 allocation-free, fixed-layout runtime contract. It does **not** enable a Solana
 route. Intent family `79/v1`, actions `1..=10`, and account coordinates
-`0xa4..=0xa7` are centrally reserved as `ReservedDisabled`.
+`0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
+`ReservedDisabled`.
 
 The new persisted facts have one owner each:
 
 | account | owner | exact body |
 | --- | --- | ---: |
-| `0xa4/v1` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot | 296 |
+| `0xa4/v2` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot | 296 |
 | `0xa5/v1` | ClaimLedger account binding, aggregate numerator `K`, live-credit count, and global replay sequence | 224 |
-| `0xa6/v1` | one claimant's canonical numerator `<D`, generation, replay, and rent | 296 |
-| `0xa7/v1` | permanent zero-credit close/reopen identity | 232 |
+| `0xa6/v2` | one claimant's canonical numerator `<D`, generation, replay, and rent | 296 |
+| `0xa7/v2` | permanent zero-credit close/reopen identity | 232 |
+
+The never-activated `0xa4/v1`, `0xa6/v1`, and `0xa7/v1` coordinates are
+explicitly withdrawn. Their identity slots were allocated as payout-vector
+digests, so no V2 decoder accepts them and no migration or fallback aliases
+them. V2 uses fresh policy/credit PDA domains; unchanged `0xa5/v1` continues to
+own only aggregate credit, live-credit count, and its cross-account sequence.
 
 Resolution V5 remains the sole vector owner. The policy and every owner credit
 persist its exact PDA-bound Resolution data ID, while each transition also

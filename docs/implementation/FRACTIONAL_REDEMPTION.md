@@ -3,8 +3,9 @@
 Status: **RUNTIME CONTRACT PROMOTED / SBF DISABLED** (2026-08-23).
 `crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
 no-allocation, fixed-layout transition and account contract. Intent family
-79/v1 and account tags `0xa4..=0xa7` remain `ReservedDisabled`; no Solana route
-or release capability is enabled. `research/fractional-redemption` remains the
+79/v1 and current accounts `0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
+remain `ReservedDisabled`; no Solana route or release capability is enabled.
+`research/fractional-redemption` remains the
 derivation and exhaustive small-domain model, not a second runtime truth.
 
 ## 1. The obligation
@@ -42,6 +43,14 @@ projection binds the exact outcome and burn quantity to `q*w = D*whole + r`;
 the direct route exact-refuses `r != 0`, while the credited Fractional route
 retains `r` atomically rather than flooring it or making it a permanent amount
 restriction.
+
+The canonical persisted schemas are policy `0xa4/v2`, aggregate ledger
+`0xa5/v1`, owner credit `0xa6/v2`, and credit tombstone `0xa7/v2`. The
+never-activated V1 policy, credit, and tombstone coordinates are explicitly
+withdrawn because their corresponding identity slots meant payout-vector
+digests. Current decoders refuse those versions; V2 uses fresh policy/credit
+PDA domains and a fresh policy-state identity domain. The unchanged aggregate
+ledger had no reinterpreted field and remains `0xa5/v1`.
 
 ## 2. Exact lots
 

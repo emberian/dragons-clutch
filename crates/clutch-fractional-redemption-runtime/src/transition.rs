@@ -21,8 +21,8 @@ use clutch_retirement::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Error, FractionalCreditTombstoneV1, FractionalCreditV1, FractionalLedgerPhaseV1,
-    FractionalLedgerV1, FractionalPolicyV1, PayoutVectorV1, Result, MAX_OUTCOMES,
+    Error, FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerPhaseV1,
+    FractionalLedgerV1, FractionalPolicyV2, PayoutVectorV1, Result, MAX_OUTCOMES,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -67,7 +67,7 @@ fn map_collateral<T>(result: clutch_collateral_adapter_v2::Result<T>) -> Result<
 #[derive(Clone, Copy, Debug)]
 pub struct BoundFractionalContextV1 {
     policy_account: Identity32V1,
-    policy: FractionalPolicyV1,
+    policy: FractionalPolicyV2,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -87,7 +87,7 @@ impl BoundFractionalContextV1 {
         self.policy_account
     }
     /// Validated immutable policy.
-    pub const fn policy(self) -> FractionalPolicyV1 {
+    pub const fn policy(self) -> FractionalPolicyV2 {
         self.policy
     }
     /// Exact aggregate ledger PDA.
@@ -166,7 +166,7 @@ impl BoundFractionalContextV1 {
 #[allow(clippy::too_many_arguments)]
 fn validate_canonical_ledgers(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV1,
+    policy: FractionalPolicyV2,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -207,7 +207,7 @@ fn validate_canonical_ledgers(
 /// Bind every semantic owner needed by one fractional action.
 pub fn bind_fractional_context_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV1,
+    policy: FractionalPolicyV2,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -282,7 +282,7 @@ pub struct FractionalInitializationPlanV1 {
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_fractional_ledger_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV1,
+    policy: FractionalPolicyV2,
     ledger_account: Identity32V1,
     claim_ledger_account: Identity32V1,
     claim_ledger: ClaimLedgerV3,
@@ -469,7 +469,7 @@ pub struct RedemptionPlanV1 {
     /// Atomic canonical ClaimLedger/Hoard successor and cross-account IDs.
     pub custody_after: FractionalClaimRedemptionPlanV3,
     /// Live credit successor; absent only for the zero-state exact-lot path.
-    pub credit_after: Option<FractionalCreditV1>,
+    pub credit_after: Option<FractionalCreditV2>,
     /// Whole collateral payout now.
     pub paid_atoms: u64,
     /// Canonical claimant numerator after the action.
@@ -587,7 +587,7 @@ pub enum CreditCreationV1 {
     /// Reopen atop the permanent tombstone at the same canonical PDA.
     Reopen {
         /// Exact authenticated tombstone.
-        tombstone: FractionalCreditTombstoneV1,
+        tombstone: FractionalCreditTombstoneV2,
         /// Reopen-admitted rent preserving the retained principal.
         rent: RentSplitV2,
     },
@@ -597,7 +597,7 @@ pub enum CreditCreationV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreditPrestateV1 {
     /// Existing exact owner credit.
-    Live(FractionalCreditV1),
+    Live(FractionalCreditV2),
     /// Fresh or tombstone-backed creation in this same transaction.
     Create(CreditCreationV1),
 }
@@ -607,7 +607,7 @@ fn open_credit(
     prestate: CreditPrestateV1,
     claimant: Identity32V1,
     expected_sequence: u64,
-) -> Result<(FractionalCreditV1, u64)> {
+) -> Result<(FractionalCreditV2, u64)> {
     match prestate {
         CreditPrestateV1::Live(credit) => {
             credit.validate_with(
@@ -632,7 +632,7 @@ fn open_credit(
             }
             rent.validate().map_err(|_| Error::RentRefused)?;
             Ok((
-                FractionalCreditV1 {
+                FractionalCreditV2 {
                     policy_account: context.policy_account,
                     ledger_account: context.ledger_account,
                     market_instance: context.policy.market_instance,
@@ -665,7 +665,7 @@ fn open_credit(
                 return Err(Error::TombstoneRequired);
             }
             Ok((
-                FractionalCreditV1 {
+                FractionalCreditV2 {
                     policy_account: context.policy_account,
                     ledger_account: context.ledger_account,
                     market_instance: context.policy.market_instance,
@@ -1173,9 +1173,9 @@ pub enum CreditPayoutPoststateV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreditTransferPlanV1 {
     /// Source credit successor.
-    pub source_after: FractionalCreditV1,
+    pub source_after: FractionalCreditV2,
     /// Destination credit successor.
-    pub destination_after: FractionalCreditV1,
+    pub destination_after: FractionalCreditV2,
     /// Sole aggregate-credit owner successor.
     pub ledger_after: FractionalLedgerV1,
     /// Atomic canonical ClaimLedger/Hoard successor and cross-account IDs.
@@ -1194,7 +1194,7 @@ pub struct CreditTransferPlanV1 {
 pub fn transfer_credit_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
-    source: FractionalCreditV1,
+    source: FractionalCreditV2,
     expected_source_sequence: u64,
     destination: CreditPrestateV1,
     destination_claimant: Identity32V1,
@@ -1220,7 +1220,7 @@ pub fn transfer_credit_v1(
 fn transfer_credit_with_kind_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
-    source: FractionalCreditV1,
+    source: FractionalCreditV2,
     expected_source_sequence: u64,
     destination: CreditPrestateV1,
     destination_claimant: Identity32V1,
@@ -1323,7 +1323,7 @@ fn transfer_credit_with_kind_v1(
 pub fn merge_credit_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
-    source: FractionalCreditV1,
+    source: FractionalCreditV2,
     expected_source_sequence: u64,
     destination: CreditPrestateV1,
     destination_claimant: Identity32V1,
@@ -1364,7 +1364,7 @@ pub struct CreditCloseFundingPlanV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreditClosePlanV1 {
     /// Permanent replay-prevention successor at the same PDA.
-    pub tombstone: FractionalCreditTombstoneV1,
+    pub tombstone: FractionalCreditTombstoneV2,
     /// Sole aggregate-credit owner successor.
     pub ledger_after: FractionalLedgerV1,
     /// Canonical unchanged-supply ClaimLedger successor and cross-account IDs.
@@ -1377,7 +1377,7 @@ pub struct CreditClosePlanV1 {
 pub fn close_zero_credit_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
-    credit: FractionalCreditV1,
+    credit: FractionalCreditV2,
     expected_credit_sequence: u64,
     actual_lamports: u64,
     neutral_sink: Identity32V1,
@@ -1417,7 +1417,7 @@ pub fn close_zero_credit_v1(
     let claim_ledger_after =
         prepare_canonical_claim_latch(context, ledger_after, expected_ledger_sequence)?;
     Ok(CreditClosePlanV1 {
-        tombstone: FractionalCreditTombstoneV1 {
+        tombstone: FractionalCreditTombstoneV2 {
             policy_account: credit.policy_account,
             ledger_account: credit.ledger_account,
             market_instance: credit.market_instance,
@@ -1642,7 +1642,7 @@ impl FractionalDomainTerminalRequirementV1 {
         self.native_claim_basis_id
     }
 
-    /// Physical immutable `0xa4/v1` account to delete.
+    /// Physical immutable `0xa4/v2` account to delete.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
@@ -1710,7 +1710,7 @@ impl EmptyLedgerClosePlanV1 {
         self.terminal_requirement
     }
 
-    /// Independent rent-only disposition for immutable `0xa4/v1`.
+    /// Independent rent-only disposition for immutable `0xa4/v2`.
     pub const fn policy_funding(self) -> FractionalAccountCloseFundingV1 {
         self.policy_funding
     }
