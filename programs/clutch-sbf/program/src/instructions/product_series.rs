@@ -1101,6 +1101,7 @@ pub struct AuthenticatedSourceResolutionInputV3 {
     persisted_handoff_account: clutch_source_plane_v3_runtime::RuntimeKey,
     successful_evaluation_handoff_id: ContentId,
     occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    result_account: clutch_source_plane_v3_runtime::RuntimeKey,
     result_account_authentication_id: ContentId,
     work_receipt_authentication_id: ContentId,
     failure_policy_binding_id: ContentId,
@@ -1146,6 +1147,12 @@ impl AuthenticatedSourceResolutionInputV3 {
     /// Exact Product/Series occurrence account selected before evaluation.
     pub const fn occurrence_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
         self.occurrence_account
+    }
+
+    /// Exact physical StatisticResult account selected by the successful
+    /// handoff and its durable Source lineage.
+    pub const fn result_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.result_account
     }
 
     /// Exact owner/PDA/body authentication of the successful result account.
@@ -1222,6 +1229,7 @@ pub fn authenticate_source_resolution_input_v3(
             &handoff.id().bytes(),
             &occurrence.id().bytes(),
             &source.occurrence_account().bytes(),
+            &source.result_or_absence_account().bytes(),
             &handoff.result_account_authentication_id().bytes(),
             &source.work_receipt_authentication_id().bytes(),
             &handoff.failure_policy_binding_id().bytes(),
@@ -1241,6 +1249,7 @@ pub fn authenticate_source_resolution_input_v3(
         persisted_handoff_account: persisted.account(),
         successful_evaluation_handoff_id: handoff.id(),
         occurrence_account: source.occurrence_account(),
+        result_account: source.result_or_absence_account(),
         result_account_authentication_id: handoff.result_account_authentication_id(),
         work_receipt_authentication_id: source.work_receipt_authentication_id(),
         failure_policy_binding_id: handoff.failure_policy_binding_id(),
