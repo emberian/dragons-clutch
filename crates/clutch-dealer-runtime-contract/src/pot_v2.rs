@@ -7,7 +7,7 @@ use crate::{
     classify_cursor_request, validate_padding_u64, CountedDealerChildV2, CursorRequestV1,
     DealerActionLivenessAuthorizationV1, DealerCandidateFeeSettlementBindingV1,
     DealerChildKindV2, DealerFacilityPositionPhaseV1, DealerFacilityPositionV1,
-    DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV1,
+    DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV2,
     DealerPolicyV1, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
     DealerSelectedFeeAbortBindingV1, DealerSelectedFeeRecordBindingV1, DealerStateV2,
     DeletableRentOwnerV1, Error, FacilityPositionBindingV1, FixedCodec, Id, Result,
@@ -21,7 +21,7 @@ pub const SETTLEMENT_POT_MAGIC_V2: [u8; 8] = *b"DCPOTV02";
 pub const SETTLEMENT_POT_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical V2 Pot body.
 pub const SETTLEMENT_POT_BYTES_V2: usize = HEADER_BYTES
-    + (16 * 32)
+    + (17 * 32)
     + 8
     + 16
     + 8
@@ -40,6 +40,8 @@ pub struct SettlementPotV2 {
     pub policy_id: Id,
     /// Immutable facility identity.
     pub facility_id: Id,
+    /// Immutable purpose binding for the shared canonical Position V3.
+    pub facility_position_binding_id: Id,
     /// Exact immutable V2 Lease identity.
     pub lease_id: Id,
     /// Exact Epoch identity.
@@ -112,6 +114,7 @@ impl SettlementPotV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.lease_id,
             self.epoch_id,
             self.settlement_candidate_id,
@@ -251,6 +254,7 @@ impl SettlementPotV2 {
         lease.validate()?;
         if self.policy_id != lease.policy_id
             || self.facility_id != lease.facility_id
+            || self.facility_position_binding_id != lease.facility_position_binding_id
             || self.lease_id != lease.lease_id()?
             || self.epoch_id != lease.epoch_id
             || self.settlement_candidate_id != lease.settlement_candidate_id
@@ -303,7 +307,7 @@ impl SettlementPotV2 {
                 .and_then(|amount| amount.checked_sub(i128::from(self.facility_buy_eggs[index])))
                 .ok_or(Error::ArithmeticOverflow)?;
             post[index] = i64::try_from(value).map_err(|_| Error::ArithmeticOverflow)?;
-            if state.phase == DealerPhaseV1::UnwindOnly {
+            if state.phase == DealerPhaseV2::UnwindOnly {
                 let old = state.net_sold[index];
                 let new = post[index];
                 let reducing = if old > 0 {
@@ -464,6 +468,7 @@ impl SettlementPotV2 {
     pub const fn counted_child(&self) -> CountedDealerChildV2 {
         CountedDealerChildV2 {
             facility_id: self.facility_id,
+            facility_position_binding_id: self.facility_position_binding_id,
             kind: DealerChildKindV2::SettlementPot,
             counted_generation: self.pre_generation,
         }
@@ -596,6 +601,7 @@ impl FixedCodec for SettlementPotV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.lease_id,
             self.epoch_id,
             self.settlement_candidate_id,
@@ -641,6 +647,7 @@ impl FixedCodec for SettlementPotV2 {
         reader.header(&SETTLEMENT_POT_MAGIC_V2, SETTLEMENT_POT_VERSION_V2)?;
         let policy_id = reader.id();
         let facility_id = reader.id();
+        let facility_position_binding_id = reader.id();
         let lease_id = reader.id();
         let epoch_id = reader.id();
         let settlement_candidate_id = reader.id();
@@ -667,6 +674,7 @@ impl FixedCodec for SettlementPotV2 {
         let value = Self {
             policy_id,
             facility_id,
+            facility_position_binding_id,
             lease_id,
             epoch_id,
             settlement_candidate_id,
@@ -777,7 +785,7 @@ pub fn begin_lease_pot_v2(
     position_before.validate_live_against(binding, policy)?;
     position_leased.validate_live_against(binding, policy)?;
     pot.validate_against_lease(lease)?;
-    if !matches!(state.phase, DealerPhaseV1::Trading | DealerPhaseV1::UnwindOnly)
+    if !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
         || state.children.funded_dependencies != 1
         || state.facility_position_binding_id != binding_id.untyped()
         || state.children.epoch_bindings != 1
@@ -1133,5 +1141,5 @@ fn read_u64_array(reader: &mut Reader<'_>) -> [u64; MAX_OUTCOMES] {
     values
 }
 
-const _: () = assert!(SETTLEMENT_POT_BYTES_V2 == 1_196);
+const _: () = assert!(SETTLEMENT_POT_BYTES_V2 == 1_228);
 const _: () = assert!(SETTLEMENT_POT_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

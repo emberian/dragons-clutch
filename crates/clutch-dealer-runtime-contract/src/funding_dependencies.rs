@@ -4,7 +4,7 @@ use core::convert::TryFrom;
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerFacilityGenesisV1, DealerPhaseV1, DealerPolicyV1, DealerRuntimeActionV1,
+    DealerFacilityGenesisV1, DealerPhaseV2, DealerPolicyV1, DealerRuntimeActionV1,
     DealerStateV2, DeletableRentOwnerV1, Error, FacilityPositionBindingV1, FixedCodec, Id,
     Result, DELETABLE_RENT_OWNER_BYTES,
 };
@@ -29,10 +29,11 @@ pub const DEALER_FUNDED_DEPENDENCIES_BYTES_V1: usize = HEADER_BYTES + (10 * 32) 
 pub const DEALER_FUNDED_DEPENDENCIES_MAGIC_V2: [u8; 8] = *b"DCFDDEP2";
 /// Exact local semantic-body version for the counted successor.
 pub const DEALER_FUNDED_DEPENDENCIES_VERSION_V2: u16 = 2;
-/// Exact bytes: an explicit outer V2 header, the frozen V1 dependency payload,
-/// and one deletable-rent owner. The nested V1 header is intentional provenance.
+/// Exact bytes: outer header, frozen V1 dependency payload, canonical Position
+/// V3 purpose-binding identity, and one deletable-rent owner. The nested V1
+/// header is intentional provenance.
 pub const DEALER_FUNDED_DEPENDENCIES_BYTES_V2: usize =
-    HEADER_BYTES + DEALER_FUNDED_DEPENDENCIES_BYTES_V1 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + DEALER_FUNDED_DEPENDENCIES_BYTES_V1 + 32 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Typed content identity for a frozen Dealer liveness schedule.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1101,6 +1102,8 @@ impl FixedCodec for DealerFundedBudgetDependenciesV1 {
 pub struct DealerFundedDependenciesV2 {
     /// Immutable external-liveness and owner-netted fee-policy joins.
     pub bindings: DealerFundedBudgetDependenciesV1,
+    /// Immutable purpose binding for the canonical shared Position V3.
+    pub facility_position_binding_id: Id,
     /// Exact rent principal owner and donation disposition for this child.
     pub rent: DeletableRentOwnerV1,
 }
@@ -1109,6 +1112,7 @@ impl DealerFundedDependenciesV2 {
     /// Validate the nested immutable joins and V2 rent ownership.
     pub fn validate(&self) -> Result<()> {
         self.bindings.validate()?;
+        self.facility_position_binding_id.validate_live()?;
         self.rent.validate()?;
         if self.rent.neutral_sink != self.bindings.neutral_sink
             || self.rent.payer == self.bindings.asset_vault_authority_account_id
@@ -1130,8 +1134,77 @@ impl DealerFundedDependenciesV2 {
         self.validate()?;
         self.bindings
             .validate_bindings(genesis, binding, policy, schedule, runtime)?;
-        if self.rent.neutral_sink != policy.neutral_sink {
+        if self.facility_position_binding_id != binding.binding_id_for(genesis, policy)?.untyped()
+            || self.rent.neutral_sink != policy.neutral_sink
+        {
             return Err(Error::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Validate the same immutable dependency plane against canonical Position V3.
+    pub fn validate_bindings_v3(
+        &self,
+        genesis: &DealerFacilityGenesisV1,
+        binding: &crate::FacilityPositionBindingV2,
+        policy: &DealerPolicyV1,
+        schedule: &DealerLivenessScheduleV1,
+        runtime: &DealerRuntimeLivenessBindingV1,
+    ) -> Result<()> {
+        self.validate()?;
+        schedule.validate_for_facility_runtime()?;
+        runtime.validate()?;
+        let facility_id = genesis.facility_id_for_policy(policy)?.untyped();
+        let binding_id = binding.binding_id_for(genesis, policy)?;
+        if self.bindings.policy_id != policy.policy_id()?
+            || self.bindings.facility_id != facility_id
+            || binding.facility_id != facility_id
+            || self.facility_position_binding_id != binding_id
+            || self.bindings.liveness_schedule_id != schedule.schedule_id()?.untyped()
+            || self.bindings.liveness_schedule_id != policy.liveness_policy_id
+            || self.bindings.runtime_liveness_policy_id != runtime.runtime_policy_id
+            || self.bindings.runtime_liveness_binding_digest != runtime.binding_digest()?
+            || runtime.realm_id != policy.realm_id
+            || runtime.lifecycle_id != facility_id
+            || runtime.neutral_sink != policy.neutral_sink
+            || self.bindings.fee_policy_id != policy.fee_policy_id
+            || self.bindings.collateral_mint != policy.collateral_mint
+            || self.bindings.token_program != policy.token_program
+            || self.bindings.asset_vault_authority_account_id != binding.dealer_state_account_id
+            || self.bindings.neutral_sink != policy.neutral_sink
+            || self.bindings.dealer_liveness_work_principal_lamports
+                != schedule.dealer_runtime_work_principal_lamports()?
+            || runtime.quote_schedule_ids[DealerLivenessCompartmentV1::Source.index()]
+                == self.bindings.liveness_schedule_id
+            || self.rent.neutral_sink != policy.neutral_sink
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut index = 0usize;
+        while index < DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1 {
+            if (index != DealerLivenessCompartmentV1::Source.index()
+                && runtime.owners[index] != binding.dealer_state_account_id)
+                || runtime.generations[index] != self.bindings.counted_generation
+                || runtime.account_ids[index] == self.bindings.asset_vault_authority_account_id
+                || runtime.account_ids[index] == binding.facility_position_account_id
+                || runtime.account_ids[index] == binding.facility_replay_account_id
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            if index != DealerLivenessCompartmentV1::Source.index() {
+                let compartment = compartment_from_index(index)?;
+                if runtime.quote_schedule_ids[index] != self.bindings.liveness_schedule_id
+                    || runtime.work_principal_lamports[index]
+                        != schedule.compartment_work_principal_lamports(compartment)?
+                    || runtime.maximum_calls[index]
+                        != schedule.compartment_maximum_calls(compartment)?
+                    || runtime.maximum_lamports_per_call[index]
+                        != schedule.compartment_maximum_lamports_per_call(compartment)?
+                {
+                    return Err(Error::MismatchedBinding);
+                }
+            }
+            index += 1;
         }
         Ok(())
     }
@@ -1146,6 +1219,7 @@ impl DealerFundedDependenciesV2 {
         self.validate()?;
         Ok(crate::CountedDealerChildV2 {
             facility_id: self.bindings.facility_id,
+            facility_position_binding_id: self.facility_position_binding_id,
             kind: crate::DealerChildKindV2::FundedDependencies,
             counted_generation: self.bindings.counted_generation,
         })
@@ -1165,6 +1239,7 @@ impl FixedCodec for DealerFundedDependenciesV2 {
             DEALER_FUNDED_DEPENDENCIES_VERSION_V2,
         );
         writer.bytes(&nested);
+        writer.id(self.facility_position_binding_id);
         self.rent.encode_body(&mut writer);
         writer.finish()
     }
@@ -1178,6 +1253,7 @@ impl FixedCodec for DealerFundedDependenciesV2 {
         let nested = reader.bytes::<DEALER_FUNDED_DEPENDENCIES_BYTES_V1>();
         let value = Self {
             bindings: DealerFundedBudgetDependenciesV1::decode(&nested)?,
+            facility_position_binding_id: reader.id(),
             rent: DeletableRentOwnerV1::decode_body(&mut reader),
         };
         reader.finish()?;
@@ -1293,10 +1369,11 @@ pub fn close_funded_dependencies_v2(
     dealer_state_account_id.validate_live()?;
     dependency_account_id.validate_live()?;
     terminal.validate_against(runtime)?;
-    if state.phase != DealerPhaseV1::Retiring
+    if state.phase != DealerPhaseV2::Retiring
         || state.children.funded_dependencies != 1
         || state.funded_dependencies_account_id != dependency_account_id
         || state.funded_dependencies_id != dependency.dependency_id()?
+        || state.facility_position_binding_id != dependency.facility_position_binding_id
         || dependency.bindings.policy_id != state.policy_id
         || dependency.bindings.facility_id != state.facility_id
         || dependency.bindings.asset_vault_authority_account_id != dealer_state_account_id
@@ -1343,7 +1420,7 @@ pub fn close_funded_dependencies_v2(
 const _: () = assert!(DEALER_LIVENESS_ACTION_COUNT_V1 == 22);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 == 372);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 == 348);
-const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 440);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 472);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

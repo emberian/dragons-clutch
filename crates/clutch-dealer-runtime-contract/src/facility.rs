@@ -3,8 +3,9 @@
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     DealerChildCountsV1, DealerChildCountsV2, DealerFundedDependenciesV2,
-    DealerLivenessScheduleV1, DealerPhaseV1, DealerPolicyV1, DealerRuntimeLivenessBindingV1,
-    DealerStateV1, DealerStateV2, Error, FixedCodec, Id, Result, SponsorCapitalDispositionV1,
+    DealerLivenessScheduleV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1,
+    DealerPositionObservationV3, DealerRuntimeLivenessBindingV1, DealerStateV1, DealerStateV2,
+    Error, FacilityPositionBindingV2, FixedCodec, Id, Result, SponsorCapitalDispositionV1,
 };
 
 /// Local semantic-body magic for one immutable facility genesis.
@@ -585,10 +586,9 @@ pub fn validate_facility_initialization_v2(
         || state.funded_dependencies_account_id != dependency_account_id
         || state_account_id != binding.dealer_state_account_id
         || dependency.bindings.asset_vault_authority_account_id != state_account_id
-        || state.phase != DealerPhaseV1::Funding
+        || state.phase != DealerPhaseV2::Funding
         || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
         || state.generation != binding.initial_position_generation
-        || state.generation != dependency.bindings.counted_generation
         || state.child_sequence != 0
         || state.total_shares != 0
         || state.queued_shares != 0
@@ -599,6 +599,76 @@ pub fn validate_facility_initialization_v2(
         || position.generation != state.generation
         || position.cash_atoms != state.sponsor_capital_atoms
         || position.eggs != [0; crate::MAX_OUTCOMES]
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(binding_id)
+}
+
+/// Validate authoritative V2 initialization against canonical Position V3.
+///
+/// The legacy Dealer position body is not admitted here. Asset balances,
+/// lifecycle, generation, purpose, controller, and Replay are projected from
+/// the shared Position V3 semantic owner.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_facility_initialization_v3(
+    genesis: &DealerFacilityGenesisV1,
+    binding: &FacilityPositionBindingV2,
+    policy: &DealerPolicyV1,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    state_account_id: Id,
+    dependency_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    position: &DealerPositionObservationV3,
+    state: &DealerStateV2,
+) -> Result<Id> {
+    use clutch_retirement::PositionLifecycleV3;
+
+    state_account_id.validate_live()?;
+    dependency_account_id.validate_live()?;
+    let binding_id = binding.binding_id_for(genesis, policy)?;
+    dependency.validate_bindings_v3(genesis, binding, policy, schedule, runtime)?;
+    position.validate_against(binding, binding_id, policy)?;
+    state.validate_against_policy(policy)?;
+    let canonical = position.projection.position();
+    let expected_children = DealerChildCountsV2 {
+        facility_positions: 1,
+        facility_replays: 1,
+        funded_dependencies: 1,
+        ..DealerChildCountsV2::default()
+    };
+    if state.policy_id != policy.policy_id()?
+        || state.facility_id != binding.facility_id
+        || state.facility_position_binding_id != binding_id
+        || state.facility_position_id != position.semantic_id
+        || state.facility_position_account_id != position.account_id
+        || state.facility_position_account_id != binding.facility_position_account_id
+        || state.facility_replay_account_id != binding.facility_replay_account_id
+        || Id::from_bytes(canonical.replay_account().bytes())
+            != state.facility_replay_account_id
+        || state.sponsor != genesis.sponsor
+        || state.sponsor_refund_recipient != genesis.sponsor_refund_recipient
+        || state.funded_dependencies_id != dependency.dependency_id()?
+        || state.funded_dependencies_account_id != dependency_account_id
+        || state_account_id != binding.dealer_state_account_id
+        || dependency.bindings.asset_vault_authority_account_id != state_account_id
+        || dependency.facility_position_binding_id != binding_id
+        || state.phase != DealerPhaseV2::Funding
+        || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
+        || state.generation != binding.initial_position_generation
+        || canonical.generation() != state.generation
+        || canonical.lifecycle() != PositionLifecycleV3::Open
+        || canonical.cash_atoms() != state.sponsor_capital_atoms
+        || canonical.reserved_cash_atoms() != 0
+        || canonical.native_eggs() != [0; crate::MAX_OUTCOMES]
+        || canonical.outstanding_reservations() != 0
+        || state.child_sequence != 0
+        || state.total_shares != 0
+        || state.queued_shares != 0
+        || state.terminal_claimed_shares != 0
+        || state.net_sold != [0; crate::MAX_OUTCOMES]
+        || state.children != expected_children
     {
         return Err(Error::MismatchedBinding);
     }

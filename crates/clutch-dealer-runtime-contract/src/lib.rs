@@ -19,6 +19,7 @@
 
 mod budget;
 mod codec;
+mod epoch_v2;
 mod facility;
 mod fee_bindings;
 mod funding_dependencies;
@@ -26,18 +27,22 @@ mod lease;
 mod lease_v2;
 mod lp_funding;
 mod lp_page;
+mod lp_page_v2;
 mod pda;
 mod policy;
 mod pot;
 mod pot_v2;
+mod position_v3;
 mod rent;
 mod root_tombstone;
 mod replay;
 mod state;
 mod state_v2;
+mod terminal_claims;
 mod transitions;
 
 pub use budget::*;
+pub use epoch_v2::*;
 pub use facility::*;
 pub use fee_bindings::*;
 pub use funding_dependencies::*;
@@ -45,15 +50,18 @@ pub use lease::*;
 pub use lease_v2::*;
 pub use lp_funding::*;
 pub use lp_page::*;
+pub use lp_page_v2::*;
 pub use pda::*;
 pub use policy::*;
 pub use pot::*;
 pub use pot_v2::*;
+pub use position_v3::*;
 pub use rent::*;
 pub use root_tombstone::*;
 pub use replay::*;
 pub use state::*;
 pub use state_v2::*;
+pub use terminal_claims::*;
 pub use transitions::*;
 
 use sha2::{Digest, Sha256};
@@ -83,6 +91,9 @@ pub const DEALER_FACILITY_GENESIS_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for `FacilityPositionBindingV1`.
 pub const FACILITY_POSITION_BINDING_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/facility-position-binding/v1\0";
+/// Exact content domain for the canonical Position V3 purpose binding.
+pub const FACILITY_POSITION_BINDING_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position-binding/v2\0";
 /// Exact content domain for `DealerFacilityPositionV1`.
 pub const DEALER_FACILITY_POSITION_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/facility-position/v1\0";
@@ -117,8 +128,19 @@ pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
 /// Exact content domain for authoritative `DealerStateV2`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/state/v2\0";
+/// Exact content domain for one counted Dealer Epoch binding successor.
+pub const DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/epoch-binding/v2\0";
 /// Exact content domain for `LpPageV1`.
 pub const LP_PAGE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lp-page/v1\0";
+/// Exact content domain for immutable-after-activation LP page V2.
+pub const LP_PAGE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/lp-page/v2\0";
+/// Exact content domain for page-scoped terminal allocations.
+pub const DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/terminal-allocation/v1\0";
+/// Exact content domain for streamed terminal claim work.
+pub const DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/claim-work/v1\0";
 /// Exact content domain for `DealerLeaseV1`.
 pub const DEALER_LEASE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lease/v1\0";
 /// Exact content domain for external-liveness `DealerLeaseV2`.

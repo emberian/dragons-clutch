@@ -5,7 +5,7 @@
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     CountedDealerChildV2, DealerActionLivenessAuthorizationV1, DealerChildKindV2,
-    DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV1, DealerPolicyV1,
+    DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerStateV2, DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
     DEALER_LEASE_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES, MAX_OUTCOMES,
@@ -18,7 +18,7 @@ pub const DEALER_LEASE_MAGIC_V2: [u8; 8] = *b"DCLSEV02";
 pub const DEALER_LEASE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical V2 lease body.
 pub const DEALER_LEASE_BYTES_V2: usize =
-    HEADER_BYTES + (26 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + (28 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Immutable authority for one funded `g -> g+1` Dealer settlement.
 ///
@@ -31,6 +31,8 @@ pub struct DealerLeaseV2 {
     pub policy_id: Id,
     /// Immutable facility identity.
     pub facility_id: Id,
+    /// Immutable purpose binding for the shared canonical Position V3.
+    pub facility_position_binding_id: Id,
     /// Exact authoritative State V2 account.
     pub dealer_state_account_id: Id,
     /// Pre-generation Facility Position semantic identity.
@@ -43,6 +45,8 @@ pub struct DealerLeaseV2 {
     pub market_instance_v2_id: Id,
     /// Exact Epoch identity.
     pub epoch_id: Id,
+    /// Exact counted Dealer Epoch-binding account.
+    pub epoch_binding_account_id: Id,
     /// Final SettlementCandidateId.
     pub settlement_candidate_id: Id,
     /// Exact upstream economic-candidate identity.
@@ -103,12 +107,14 @@ impl DealerLeaseV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.dealer_state_account_id,
             self.facility_position_pre_id,
             self.facility_position_leased_id,
             self.lease_account_id,
             self.market_instance_v2_id,
             self.epoch_id,
+            self.epoch_binding_account_id,
             self.settlement_candidate_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
@@ -177,13 +183,15 @@ impl DealerLeaseV2 {
         runtime.validate()?;
         select_begin.validate_against(schedule, runtime)?;
         selected_fee.validate()?;
-        if !matches!(state.phase, DealerPhaseV1::Trading | DealerPhaseV1::UnwindOnly)
+        if !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
             || self.policy_id != policy.policy_id()?
             || self.facility_id != state.facility_id
+            || self.facility_position_binding_id != state.facility_position_binding_id
             || self.dealer_state_account_id != dependency.bindings.asset_vault_authority_account_id
             || self.market_instance_v2_id != policy.market_instance_v2_id
             || self.facility_position_leased_id != state.facility_position_id
             || self.epoch_id != state.active_epoch_id
+            || self.epoch_binding_account_id != state.active_epoch_binding_account_id
             || self.lease_account_id != state.active_lease_id
             || self.outcome_count != state.outcome_count
             || self.pre_generation != state.generation
@@ -229,6 +237,7 @@ impl DealerLeaseV2 {
     pub const fn counted_child(&self) -> CountedDealerChildV2 {
         CountedDealerChildV2 {
             facility_id: self.facility_id,
+            facility_position_binding_id: self.facility_position_binding_id,
             kind: DealerChildKindV2::Lease,
             counted_generation: self.pre_generation,
         }
@@ -250,12 +259,14 @@ impl FixedCodec for DealerLeaseV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.dealer_state_account_id,
             self.facility_position_pre_id,
             self.facility_position_leased_id,
             self.lease_account_id,
             self.market_instance_v2_id,
             self.epoch_id,
+            self.epoch_binding_account_id,
             self.settlement_candidate_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
@@ -294,12 +305,14 @@ impl FixedCodec for DealerLeaseV2 {
         reader.header(&DEALER_LEASE_MAGIC_V2, DEALER_LEASE_VERSION_V2)?;
         let policy_id = reader.id();
         let facility_id = reader.id();
+        let facility_position_binding_id = reader.id();
         let dealer_state_account_id = reader.id();
         let facility_position_pre_id = reader.id();
         let facility_position_leased_id = reader.id();
         let lease_account_id = reader.id();
         let market_instance_v2_id = reader.id();
         let epoch_id = reader.id();
+        let epoch_binding_account_id = reader.id();
         let settlement_candidate_id = reader.id();
         let upstream_economic_candidate_id = reader.id();
         let quote_id = reader.id();
@@ -321,12 +334,14 @@ impl FixedCodec for DealerLeaseV2 {
         let value = Self {
             policy_id,
             facility_id,
+            facility_position_binding_id,
             dealer_state_account_id,
             facility_position_pre_id,
             facility_position_leased_id,
             lease_account_id,
             market_instance_v2_id,
             epoch_id,
+            epoch_binding_account_id,
             settlement_candidate_id,
             upstream_economic_candidate_id,
             quote_id,
@@ -363,5 +378,5 @@ impl FixedCodec for DealerLeaseV2 {
     }
 }
 
-const _: () = assert!(DEALER_LEASE_BYTES_V2 == 972);
+const _: () = assert!(DEALER_LEASE_BYTES_V2 == 1_036);
 const _: () = assert!(DEALER_LEASE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

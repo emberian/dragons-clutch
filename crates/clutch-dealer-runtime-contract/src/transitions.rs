@@ -4,7 +4,7 @@ use crate::{
     add, mul, DealerActionLivenessAuthorizationV1, DealerFacilityGenesisV1,
     DealerFacilityPositionPhaseV1, DealerFacilityPositionV1, DealerFundedBudgetDependenciesV1,
     DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerLpFundingFactsV1,
-    DealerPhaseV1, DealerPolicyV1, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
+    DealerPhaseV1, DealerPhaseV2, DealerPolicyV1, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
     DealerStateV1, DealerStateV2, Error, FacilityPositionBindingV1, Id, Result,
     SponsorCapitalDispositionV1, MAX_OUTCOMES,
 };
@@ -277,7 +277,7 @@ pub fn activate_dealer_v2(
     state.validate_against_policy(policy)?;
     position.validate_live_against(binding, policy)?;
     validate_facility_root_join_v2(genesis, binding, policy, position, state)?;
-    if state.phase != DealerPhaseV1::Funding
+    if state.phase != DealerPhaseV2::Funding
         || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
         || state.children.funded_dependencies != 1
         || state.funded_dependencies_id != dependency.dependency_id()?
@@ -311,7 +311,7 @@ pub fn activate_dealer_v2(
         return Err(Error::ConservationFailure);
     }
     let mut state_after = *state;
-    state_after.phase = DealerPhaseV1::Trading;
+    state_after.phase = DealerPhaseV2::Trading;
     state_after.sponsor_capital_disposition = SponsorCapitalDispositionV1::Donated;
     state_after.validate_against_policy(policy)?;
     Ok(DealerActivationTransitionV2 { state_after })
@@ -439,7 +439,7 @@ fn enter_unwind_common_v2(
     } else {
         DealerFacilityPositionPhaseV1::Leased
     };
-    if state.phase != DealerPhaseV1::Trading
+    if state.phase != DealerPhaseV2::Trading
         || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
         || state.children.funded_dependencies != 1
         || state.funded_dependencies_id != dependency.dependency_id()?
@@ -449,7 +449,7 @@ fn enter_unwind_common_v2(
         return Err(Error::InvalidPhase);
     }
     let mut state_after = *state;
-    state_after.phase = DealerPhaseV1::UnwindOnly;
+    state_after.phase = DealerPhaseV2::UnwindOnly;
     state_after.validate_against_policy(policy)?;
     Ok(DealerUnwindTransitionV2 { state_after })
 }
@@ -494,14 +494,14 @@ pub fn close_dealer_state_v2(
     policy: &DealerPolicyV1,
 ) -> Result<DealerStateV2> {
     state.validate_against_policy(policy)?;
-    if state.phase != DealerPhaseV1::Retiring
+    if state.phase != DealerPhaseV2::Retiring
         || state.children != crate::DealerChildCountsV2::default()
         || !state.funded_dependencies_account_id.is_zero()
     {
         return Err(Error::InvalidChildGraph);
     }
     let mut state_after = *state;
-    state_after.phase = DealerPhaseV1::Closed;
+    state_after.phase = DealerPhaseV2::Closed;
     state_after.validate_against_policy(policy)?;
     Ok(state_after)
 }

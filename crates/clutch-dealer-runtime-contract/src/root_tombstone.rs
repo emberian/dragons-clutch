@@ -2,7 +2,7 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerFacilityGenesisV1, DealerPhaseV1, DealerPolicyV1, DealerStateV1, DealerStateV2,
+    DealerFacilityGenesisV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1, DealerStateV1, DealerStateV2,
     Error, FacilityPositionBindingV1, FixedCodec, Id, Result,
 };
 
@@ -253,7 +253,7 @@ impl DealerRootTombstoneV2 {
         let facility_id = genesis.facility_id_for_policy(policy)?;
         let binding_id = binding.binding_id_for(genesis, policy)?;
         terminal_state.validate_against_policy(policy)?;
-        if terminal_state.phase != DealerPhaseV1::Closed
+        if terminal_state.phase != DealerPhaseV2::Closed
             || terminal_state.children != crate::DealerChildCountsV2::default()
             || !terminal_state.funded_dependencies_account_id.is_zero()
             || self.policy_id != genesis.policy_id

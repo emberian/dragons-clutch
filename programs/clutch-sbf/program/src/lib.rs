@@ -117,6 +117,10 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
             feature = "profile-general-source-v2-point",
             feature = "profile-non-production-general-v2-empty-book-identity-lab"
         )
+    ),
+    all(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "non-production-product-series-lab"
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
