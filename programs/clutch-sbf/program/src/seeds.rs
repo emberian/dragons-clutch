@@ -163,6 +163,10 @@ pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Immutable Source-selected runtime-liveness policy account prefix.
 pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
+/// Occurrence-scoped Product whole-Market lifecycle root prefix.
+pub const SEED_PRODUCT_OCCURRENCE_ROOT_V1: &[u8] = b"dc:product-occurrence-root:v1";
+/// Full-width Product/Failure-owned Resolution V5 prefix.
+pub const SEED_RESOLUTION_V5: &[u8] = b"dc:resolution:v5";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -952,6 +956,27 @@ pub fn source_occurrence_pda(program_id: &Pubkey, source_occurrence_id: &[u8; 32
         program_id,
         &[SEED_SOURCE_OCCURRENCE_V1, source_occurrence_id],
     )
+}
+
+/// Canonical Product occurrence root for one full-width Market generation.
+pub fn product_occurrence_root_pda(
+    program_id: &Pubkey,
+    market_instance_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_OCCURRENCE_ROOT_V1,
+            market_instance_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical full-width Resolution V5 account for one Market occurrence.
+pub fn resolution_v5_pda(program_id: &Pubkey, market_instance_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESOLUTION_V5, market_instance_id])
 }
 
 /// Canonical DirectBatchPolicy V3 artifact address.

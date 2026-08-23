@@ -299,6 +299,9 @@ pure runtime elsewhere does not make a route executable.
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
+| `0xaa/1` | Product | occurrence-scoped counted whole-Market lifecycle root |
+| `0xab/1` | Failure | mutable interval-consensus work (1,088 bytes) |
+| `0xac/1` | Failure/replay | permanent interval-consensus replay receipt (416 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local
