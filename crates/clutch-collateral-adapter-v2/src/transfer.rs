@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{
-    admit_collateral_account_v2, admit_collateral_mint_v2, market_hoard_binding_v2,
-    BoundCollateralProfileV2, CustodyBindingV2, Error, Id, ProgramFamilyV2, Result,
-    RuntimeAccountViewV2, TokenAccountObservationV2, TokenAccountRoleV2,
+    admit_collateral_account_v2, admit_collateral_mint_v2, admit_realm_collateral_account_v2,
+    admit_realm_collateral_mint_v2, market_hoard_binding_v2, BoundCollateralProfileV2,
+    BoundRealmCollateralV2, CustodyBindingV2, Error, Id, MintObservationV2, ProgramFamilyV2,
+    RealmCollateralContextV2, Result, RuntimeAccountViewV2, TokenAccountObservationV2,
+    TokenAccountRoleV2,
     BASE_TOKEN_ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_BYTES,
 };
 
@@ -174,14 +176,18 @@ pub enum CustodyTransferKindV2 {
 pub struct TransferEndpointV2 {
     /// Token byte-admission role.
     pub token_role: TokenAccountRoleV2,
-    /// Artifact that owns the reason this endpoint receives or sends value.
+    /// Artifact that owns the endpoint role, not necessarily its balance facts.
     pub semantic_owner: Id,
     /// Owner-local compartment, zero only for ordinary holder endpoints.
     pub compartment: u16,
 }
 
 impl TransferEndpointV2 {
-    fn validate(self, bound: BoundCollateralProfileV2) -> Result<()> {
+    fn validate(
+        self,
+        bound: BoundRealmCollateralV2,
+        market: Option<BoundCollateralProfileV2>,
+    ) -> Result<()> {
         self.semantic_owner.require_live()?;
         match self.token_role {
             TokenAccountRoleV2::Holder { owner } => {
@@ -191,7 +197,9 @@ impl TransferEndpointV2 {
                 }
             }
             TokenAccountRoleV2::Hoard => {
-                let expected = market_hoard_binding_v2(bound);
+                let expected = market_hoard_binding_v2(
+                    market.ok_or(Error::MismatchedBinding)?,
+                );
                 if self.semantic_owner != expected.semantic_owner
                     || self.compartment != expected.compartment
                 {
@@ -208,6 +216,28 @@ impl TransferEndpointV2 {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransferBoundV2 {
+    Realm(BoundRealmCollateralV2),
+    Market(BoundCollateralProfileV2),
+}
+
+impl TransferBoundV2 {
+    const fn realm(self) -> BoundRealmCollateralV2 {
+        match self {
+            Self::Realm(bound) => bound,
+            Self::Market(bound) => bound.realm_bound(),
+        }
+    }
+
+    const fn market(self) -> Option<BoundCollateralProfileV2> {
+        match self {
+            Self::Realm(_) => None,
+            Self::Market(bound) => Some(bound),
+        }
     }
 }
 
@@ -310,7 +340,7 @@ pub struct CheckedTransferCpiV2 {
 /// Validated pre-CPI snapshot and the sole CPI intent it authorizes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedCollateralTransferV2 {
-    bound: BoundCollateralProfileV2,
+    bound: TransferBoundV2,
     request: TransferRequestV2,
     source_before: TokenAccountObservationV2,
     destination_before: TokenAccountObservationV2,
@@ -338,11 +368,11 @@ pub struct AcceptedCollateralTransferV2 {
     pub kind: CustodyTransferKindV2,
     /// Exact raw atom quantity.
     pub amount_atoms: u64,
-    /// State artifact that semantically owned the debited endpoint.
+    /// Artifact that owned the debited endpoint role.
     pub source_semantic_owner: Id,
     /// Source owner-local compartment discriminant.
     pub source_compartment: u16,
-    /// State artifact that semantically owns the credited endpoint.
+    /// Artifact that owns the credited endpoint role.
     pub destination_semantic_owner: Id,
     /// Destination owner-local compartment discriminant.
     pub destination_compartment: u16,
@@ -366,11 +396,49 @@ pub fn prepare_collateral_transfer_v2(
     source: RuntimeAccountViewV2<'_>,
     destination: RuntimeAccountViewV2<'_>,
 ) -> Result<PreparedCollateralTransferV2> {
+    prepare_collateral_transfer_inner_v2(
+        TransferBoundV2::Market(bound),
+        request,
+        mint,
+        source,
+        destination,
+    )
+}
+
+/// Prepare a non-Hoard transfer from an authenticated Realm collateral profile.
+///
+/// This is the Series-safe entrypoint before an occurrence Market exists. It
+/// admits only holder/segregated-vault shapes; Market deposit, withdrawal, and
+/// any Hoard endpoint require [`prepare_collateral_transfer_v2`].
+pub fn prepare_realm_collateral_transfer_v2(
+    bound: BoundRealmCollateralV2,
+    request: TransferRequestV2,
+    mint: RuntimeAccountViewV2<'_>,
+    source: RuntimeAccountViewV2<'_>,
+    destination: RuntimeAccountViewV2<'_>,
+) -> Result<PreparedCollateralTransferV2> {
+    prepare_collateral_transfer_inner_v2(
+        TransferBoundV2::Realm(bound),
+        request,
+        mint,
+        source,
+        destination,
+    )
+}
+
+fn prepare_collateral_transfer_inner_v2(
+    bound: TransferBoundV2,
+    request: TransferRequestV2,
+    mint: RuntimeAccountViewV2<'_>,
+    source: RuntimeAccountViewV2<'_>,
+    destination: RuntimeAccountViewV2<'_>,
+) -> Result<PreparedCollateralTransferV2> {
     if request.amount_atoms == 0 {
         return Err(Error::InvalidParameter);
     }
-    request.source.validate(bound)?;
-    request.destination.validate(bound)?;
+    let realm = bound.realm();
+    request.source.validate(realm, bound.market())?;
+    request.destination.validate(realm, bound.market())?;
     request.authority.validate()?;
     validate_transfer_shape(request)?;
     if !source.is_writable
@@ -382,11 +450,17 @@ pub fn prepare_collateral_transfer_v2(
     {
         return Err(Error::WrongAccountRole);
     }
-    let mint_before = admit_collateral_mint_v2(bound, mint)?;
-    let source_before =
-        admit_collateral_account_v2(bound, source, request.source.token_role)?;
-    let destination_before =
-        admit_collateral_account_v2(bound, destination, request.destination.token_role)?;
+    let mint_before = admit_mint_for_transfer_v2(bound, mint)?;
+    let source_before = admit_account_for_transfer_v2(
+        bound,
+        source,
+        request.source.token_role,
+    )?;
+    let destination_before = admit_account_for_transfer_v2(
+        bound,
+        destination,
+        request.destination.token_role,
+    )?;
     if source_before.amount_atoms < request.amount_atoms
         || request.authority.address != source_before.owner_authority
     {
@@ -417,11 +491,11 @@ pub fn prepare_collateral_transfer_v2(
             None
         }
     };
-    let release = bound.release();
+    let release = realm.release();
     let mut data = [0; CHECKED_TRANSFER_DATA_V2_BYTES];
     data[0] = release.transfer_checked_discriminator;
     data[1..9].copy_from_slice(&request.amount_atoms.to_le_bytes());
-    data[9] = bound.policy().decimals;
+    data[9] = realm.policy().decimals;
     let cpi = CheckedTransferCpiV2 {
         token_program: release.token_program,
         accounts: [
@@ -476,15 +550,15 @@ pub fn accept_collateral_transfer_v2(
     if !source_after.is_writable || !destination_after.is_writable || mint_after.is_writable {
         return Err(Error::PostAdmissionFailed);
     }
-    let mint = admit_collateral_mint_v2(prepared.bound, mint_after)
+    let mint = admit_mint_for_transfer_v2(prepared.bound, mint_after)
         .map_err(|_| Error::PostAdmissionFailed)?;
-    let source = admit_collateral_account_v2(
+    let source = admit_account_for_transfer_v2(
         prepared.bound,
         source_after,
         request.source.token_role,
     )
     .map_err(|_| Error::PostAdmissionFailed)?;
-    let destination = admit_collateral_account_v2(
+    let destination = admit_account_for_transfer_v2(
         prepared.bound,
         destination_after,
         request.destination.token_role,
@@ -492,7 +566,7 @@ pub fn accept_collateral_transfer_v2(
     .map_err(|_| Error::PostAdmissionFailed)?;
     if source.address != prepared.source_before.address
         || destination.address != prepared.destination_before.address
-        || mint.address != prepared.bound.policy().mint
+        || mint.address != prepared.bound.realm().policy().mint
         || prepared
             .source_before
             .amount_atoms
@@ -523,6 +597,31 @@ pub fn accept_collateral_transfer_v2(
         next_position_cash: prepared.next_position_cash,
         hoard_atoms_after,
     })
+}
+
+fn admit_mint_for_transfer_v2(
+    bound: TransferBoundV2,
+    account: RuntimeAccountViewV2<'_>,
+) -> Result<MintObservationV2> {
+    match bound {
+        TransferBoundV2::Realm(realm) => admit_realm_collateral_mint_v2(realm, account),
+        TransferBoundV2::Market(market) => admit_collateral_mint_v2(market, account),
+    }
+}
+
+fn admit_account_for_transfer_v2(
+    bound: TransferBoundV2,
+    account: RuntimeAccountViewV2<'_>,
+    role: TokenAccountRoleV2,
+) -> Result<TokenAccountObservationV2> {
+    match bound {
+        TransferBoundV2::Realm(realm) => {
+            admit_realm_collateral_account_v2(realm, account, role)
+        }
+        TransferBoundV2::Market(market) => {
+            admit_collateral_account_v2(market, account, role)
+        }
+    }
 }
 
 fn validate_transfer_shape(request: TransferRequestV2) -> Result<()> {
@@ -632,7 +731,7 @@ pub fn prepare_hoard_creation_v2(
     bound: BoundCollateralProfileV2,
 ) -> Result<CustodyCreationPlanV2> {
     let binding: CustodyBindingV2 = market_hoard_binding_v2(bound);
-    prepare_custody_creation_v2(bound, binding)
+    prepare_custody_creation_v2(bound.realm_bound(), binding)
 }
 
 /// Prepare a segregated custody vault's exact layout and initialization sequence.
@@ -640,10 +739,11 @@ pub fn prepare_hoard_creation_v2(
 /// The supplied binding must already be joined to the state artifact and
 /// compartment that own it. This function does not choose PDA seeds or account
 /// addresses for Product/Series, dealer, wrapper, or recovery components.
-pub fn prepare_custody_creation_v2(
-    bound: BoundCollateralProfileV2,
+pub fn prepare_custody_creation_v2<B: RealmCollateralContextV2>(
+    bound: B,
     binding: CustodyBindingV2,
 ) -> Result<CustodyCreationPlanV2> {
+    let bound = bound.realm_collateral();
     let release = bound.release();
     binding.validate(release)?;
     let mut initialize_account3 = [0; INITIALIZE_ACCOUNT3_DATA_V2_BYTES];

@@ -43,12 +43,19 @@ crate's compiled release module.
 
 ## Runtime/account seam
 
-`bind_collateral_profile_v2` recomputes and joins the complete
-Market/Realm/Profile/policy/release chain, the immutable Market cap, and the
-runtime-observed program/deployment/parser identities. Market state carries no
-second copy of mint, decimals, token program, or release facts.
+`bind_realm_collateral_v2` recomputes and joins
+Realm/Profile/policy/release plus the runtime-observed
+program/deployment/parser identities before a Market exists. This profile-level
+capability is what finite Series activation uses to create and fund segregated
+vaults without inventing a pseudo Market or Hoard. It carries the policy's
+mint-supply and possible-Market cap ceilings, but no actual Market cap.
 
-`admit_collateral_mint_v2` and `admit_collateral_account_v2` parse borrowed
+`refine_market_collateral_v2` then joins one concrete Market, immutable Terms
+cap, Hoard authority, and Hoard token account. The compatibility helper
+`bind_collateral_profile_v2` performs both joins. Market state carries no second
+copy of mint, decimals, token program, or release facts.
+
+The Realm-level and Market-refined mint/account admission APIs parse borrowed
 hostile bytes without allocation:
 
 - legacy SPL requires exact 82-byte mint and 165-byte account layouts;
@@ -72,10 +79,12 @@ custody requires both a canonical PDA owner and token-enforced
 
 ## Exact transfers and cap accounting
 
-`prepare_collateral_transfer_v2` accepts typed holder, Market Hoard, and
-segregated-vault endpoints. It emits one fixed checked-transfer CPI intent and
-no arbitrary passthrough. `accept_collateral_transfer_v2` reparses the mint and
-both token accounts after CPI and requires:
+`prepare_realm_collateral_transfer_v2` accepts holder and segregated-vault
+endpoints before any occurrence Market exists. `prepare_collateral_transfer_v2`
+is the Market refinement and additionally admits Hoard Endow/Withdraw. Both emit
+one fixed checked-transfer CPI intent and no arbitrary passthrough.
+`accept_collateral_transfer_v2` retains the prepared binding level, reparses the
+mint and both token accounts after CPI, and requires:
 
 ```text
 source_before - source_after           = requested_atoms
@@ -94,6 +103,11 @@ binds an exact semantic owner and compartment. Product/Series, dealer, recovery,
 and wrapper adapters must supply their own already-authenticated PDA/account
 graph; this crate does not guess seeds or account-family tags.
 
+The endpoint semantic owner owns identity/role namespace, not necessarily
+mutable amount facts. A SeriesPlan can therefore own component roles and
+`component + 1` discriminants while the single SeriesFunding state remains the
+sole owner of each compartment's principal and donation-residue amounts.
+
 `PositionCashV2` preserves `reserved <= cash` and permits withdrawal only from
 the unreserved suffix. `CollateralBackingV2` separately owns locked liability
 principal: lock/unlock is an internal accounting reclassification, never a
@@ -111,7 +125,8 @@ Position-ledger cash movements while pooled Hoard custody remains unchanged; a
 treasury Position can exit only through the same owner-authorized ordinary
 withdrawal and exact postcondition as any other Position.
 
-`prepare_custody_creation_v2` freezes the selected family's account size and
+`prepare_custody_creation_v2` consumes either the Realm-level capability or a
+Market refinement and freezes the selected family's account size and
 initialization order:
 
 - legacy SPL: 165 bytes, then `InitializeAccount3`;
@@ -129,9 +144,11 @@ The SBF successor should consume the crate in this order:
 1. allocate an explicit V2 instruction/account namespace without changing V1;
 2. compile real legacy and Token-2022 release rows only after their parser/CPI
    and external deployment digests are known;
-3. bind Market/Realm/Profile/policy once per instruction;
-4. use `prepare_hoard_creation_v2` or `prepare_custody_creation_v2` for account
-   creation and never share that code with outcome mint creation;
+3. bind Realm/Profile/policy once for Series activation, then refine it with an
+   actual Market only where one exists;
+4. use profile-level `prepare_custody_creation_v2` for Series vaults and
+   Market-only `prepare_hoard_creation_v2` for Hoards, never sharing either
+   with outcome mint creation;
 5. use prepared exact transfer intents for Endow, Withdraw, Series funding,
    occurrence disbursement, and terminal refund/disposition; and
 6. commit cash/backing/funding state only from the accepted post-CPI result.

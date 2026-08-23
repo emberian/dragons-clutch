@@ -65,19 +65,23 @@ pub struct RuntimeReleaseObservationV2 {
     pub parser_cpi_code: Id,
 }
 
-/// Fully joined immutable collateral profile safe for parser and intent APIs.
+/// Realm/Profile-level collateral binding available before any Market exists.
+///
+/// This is the correct authority for Series funding vault construction and
+/// transfers: it binds mint/program/deployment/decimals and both policy
+/// ceilings without inventing a Market, Hoard, or Market cap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BoundCollateralProfileV2 {
-    market: MarketCollateralBindingV2,
+pub struct BoundRealmCollateralV2 {
+    realm: RealmCollateralBindingV2,
     policy_id: Id,
     policy: CollateralPolicyV2,
     release: AdapterReleaseV2,
 }
 
-impl BoundCollateralProfileV2 {
-    /// Canonical Market binding.
-    pub const fn market(self) -> MarketCollateralBindingV2 {
-        self.market
+impl BoundRealmCollateralV2 {
+    /// Canonical immutable Realm/Profile references.
+    pub const fn realm(self) -> RealmCollateralBindingV2 {
+        self.realm
     }
 
     /// Recomputed canonical policy identity.
@@ -96,21 +100,71 @@ impl BoundCollateralProfileV2 {
     }
 }
 
-/// Resolve one complete Market → Realm → Profile → policy → release chain.
-pub fn bind_collateral_profile_v2(
+/// Market refinement of an already joined immutable Realm collateral profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundCollateralProfileV2 {
     market: MarketCollateralBindingV2,
+    realm: BoundRealmCollateralV2,
+}
+
+impl BoundCollateralProfileV2 {
+    /// Canonical Market binding.
+    pub const fn market(self) -> MarketCollateralBindingV2 {
+        self.market
+    }
+
+    /// Recomputed canonical policy identity.
+    pub const fn policy_id(self) -> Id {
+        self.realm.policy_id
+    }
+
+    /// Immutable Realm-selected collateral policy.
+    pub const fn policy(self) -> CollateralPolicyV2 {
+        self.realm.policy
+    }
+
+    /// Exact release resolved from the compiled catalog.
+    pub const fn release(self) -> AdapterReleaseV2 {
+        self.realm.release
+    }
+
+    /// Realm/Profile-level binding refined by this Market.
+    pub const fn realm_bound(self) -> BoundRealmCollateralV2 {
+        self.realm
+    }
+}
+
+/// Read-only projection shared by profile-level and Market-refined contexts.
+///
+/// Generic custody creation may consume either context because it needs no
+/// Market fact. Hoard transfers intentionally do not use this trait and still
+/// require [`BoundCollateralProfileV2`] explicitly.
+pub trait RealmCollateralContextV2: Copy {
+    /// Return the authenticated Realm/Profile-level collateral binding.
+    fn realm_collateral(self) -> BoundRealmCollateralV2;
+}
+
+impl RealmCollateralContextV2 for BoundRealmCollateralV2 {
+    fn realm_collateral(self) -> BoundRealmCollateralV2 {
+        self
+    }
+}
+
+impl RealmCollateralContextV2 for BoundCollateralProfileV2 {
+    fn realm_collateral(self) -> BoundRealmCollateralV2 {
+        self.realm
+    }
+}
+
+/// Resolve the Realm → Profile → policy → release chain before any Market exists.
+pub fn bind_realm_collateral_v2(
     realm: RealmCollateralBindingV2,
     profile: ProfileCollateralBindingV2,
     policy: CollateralPolicyV2,
     catalog: AdapterCatalogV2,
     runtime: RuntimeReleaseObservationV2,
-) -> Result<BoundCollateralProfileV2> {
+) -> Result<BoundRealmCollateralV2> {
     for identity in [
-        market.market,
-        market.realm,
-        market.profile,
-        market.hoard_authority,
-        market.hoard_token_account,
         realm.realm,
         realm.profile,
         profile.profile,
@@ -122,21 +176,9 @@ pub fn bind_collateral_profile_v2(
     ] {
         identity.require_live()?;
     }
-    if market.realm != realm.realm
-        || market.profile != realm.profile
-        || realm.profile != profile.profile
-    {
+    if realm.profile != profile.profile || realm.realm == realm.profile {
         return Err(Error::MismatchedBinding);
     }
-    if market.market == market.realm
-        || market.market == market.profile
-        || market.market == market.hoard_authority
-        || market.market == market.hoard_token_account
-        || market.hoard_authority == market.hoard_token_account
-    {
-        return Err(Error::WrongAccountRole);
-    }
-    policy.admit_market_cap(market.collateral_cap_atoms)?;
     let policy_id = policy.id()?;
     if profile.collateral_policy != policy_id
         || profile.adapter_release != policy.adapter_release
@@ -159,10 +201,51 @@ pub fn bind_collateral_profile_v2(
     {
         return Err(Error::MismatchedBinding);
     }
-    Ok(BoundCollateralProfileV2 {
-        market,
+    Ok(BoundRealmCollateralV2 {
+        realm,
         policy_id,
         policy,
         release,
     })
+}
+
+/// Refine an authenticated Realm collateral profile with one concrete Market.
+pub fn refine_market_collateral_v2(
+    realm: BoundRealmCollateralV2,
+    market: MarketCollateralBindingV2,
+) -> Result<BoundCollateralProfileV2> {
+    for identity in [
+        market.market,
+        market.realm,
+        market.profile,
+        market.hoard_authority,
+        market.hoard_token_account,
+    ] {
+        identity.require_live()?;
+    }
+    if market.realm != realm.realm.realm
+        || market.profile != realm.realm.profile
+        || market.market == market.realm
+        || market.market == market.profile
+        || market.market == market.hoard_authority
+        || market.market == market.hoard_token_account
+        || market.hoard_authority == market.hoard_token_account
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    realm.policy.admit_market_cap(market.collateral_cap_atoms)?;
+    Ok(BoundCollateralProfileV2 { market, realm })
+}
+
+/// Resolve the complete Market chain as a compatibility convenience.
+pub fn bind_collateral_profile_v2(
+    market: MarketCollateralBindingV2,
+    realm: RealmCollateralBindingV2,
+    profile: ProfileCollateralBindingV2,
+    policy: CollateralPolicyV2,
+    catalog: AdapterCatalogV2,
+    runtime: RuntimeReleaseObservationV2,
+) -> Result<BoundCollateralProfileV2> {
+    let realm = bind_realm_collateral_v2(realm, profile, policy, catalog, runtime)?;
+    refine_market_collateral_v2(realm, market)
 }
