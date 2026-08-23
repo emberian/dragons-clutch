@@ -4337,6 +4337,30 @@ fn debit_lamports(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesProgramAccountFundingPoststateV2 {
+    payer_after: u64,
+    target_after: u64,
+    neutral_sink_after: u64,
+}
+
+fn series_program_account_funding_poststate_v2(
+    payer_before: u64,
+    target_prefund: u64,
+    neutral_sink_before: u64,
+    rent_principal_lamports: u64,
+) -> Outcome<SeriesProgramAccountFundingPoststateV2> {
+    require(
+        rent_principal_lamports != 0,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(SeriesProgramAccountFundingPoststateV2 {
+        payer_after: sub(payer_before, rent_principal_lamports)?,
+        target_after: rent_principal_lamports,
+        neutral_sink_after: add(neutral_sink_before, target_prefund)?,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create_series_program_account<'a>(
     program_id: &Pubkey,
@@ -4363,6 +4387,36 @@ fn create_series_program_account<'a>(
         rent_principal_lamports == minimum,
         ClutchError::MismatchedState,
     )?;
+    require_creatable(target)?;
+    let payer_before = payer.lamports();
+    let target_prefund = target.lamports();
+    let sink_before = neutral_sink.lamports();
+    let expected = series_program_account_funding_poststate_v2(
+        payer_before,
+        target_prefund,
+        sink_before,
+        rent_principal_lamports,
+    )?;
+    if target_prefund != 0 {
+        let sweep = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(target_prefund),
+            vec![
+                AccountMeta::new(*target.key, true),
+                AccountMeta::new(*neutral_sink.key, false),
+            ],
+        );
+        invoke_signed(
+            &sweep,
+            &[target.clone(), neutral_sink.clone(), system_program.clone()],
+            &[signer_seeds],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+        require(
+            target.lamports() == 0 && neutral_sink.lamports() == expected.neutral_sink_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+    }
     create_pda_account(
         program_id,
         payer,
@@ -4372,15 +4426,10 @@ fn create_series_program_account<'a>(
         exact_len,
         signer_seeds,
     )?;
-    let surplus = sub(target.lamports(), rent_principal_lamports)?;
-    let sink_before = neutral_sink.lamports();
-    if surplus != 0 {
-        debit_lamports(target, surplus)?;
-        credit_lamports(neutral_sink, surplus)?;
-    }
     require(
-        target.lamports() == rent_principal_lamports
-            && neutral_sink.lamports() == add(sink_before, surplus)?,
+        payer.lamports() == expected.payer_after
+            && target.lamports() == expected.target_after
+            && neutral_sink.lamports() == expected.neutral_sink_after,
         ClutchError::SeriesCustodyDeltaMismatch,
     )
 }
@@ -4388,9 +4437,9 @@ fn create_series_program_account<'a>(
 /// Create and encode one persistent registered-Series PDA after a higher typed
 /// adapter has authenticated its full registry/artifact join.
 ///
-/// Predictable-address prefunding is donation, not a rent discount. The payer
-/// still supplies the exact rent shortfall; any preexisting surplus is moved
-/// atomically to the already-authenticated FundingTerms V2 neutral sink.
+/// Predictable-address prefunding is donation, not a rent discount. Every
+/// preexisting lamport is first moved to the already-authenticated FundingTerms
+/// V2 neutral sink, then the payer supplies the complete typed rent principal.
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub fn create_series_registry_account<'a>(
@@ -5175,7 +5224,7 @@ fn read_series_registry_account_v2_with_role(
 }
 
 /// Consume the sole current funding activation without dropping BundleV5.
-pub fn consume_series_activation_v2(
+fn consume_series_activation_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     expected_series: SeriesPlanV5Id,
