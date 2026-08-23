@@ -13,6 +13,7 @@
 
 mod account_auth;
 mod composition;
+mod final_pot_receipt;
 mod generation_migration;
 mod live_family_auth;
 mod liveness_receipt;
@@ -41,6 +42,11 @@ pub use composition::{
     DirectReservationAccountV8, GeneralEpochAccountV5, GeneralReservationAccountV5,
     GeneralReservationAccountV7, MarketAccountV2, PositionAccountV2, ReplaySuccessorAccountV1,
 };
+pub use final_pot_receipt::{
+    authenticate_general_v2_final_pot_discharge_receipt_v1,
+    prepare_apply_general_v2_final_pot_discharge_receipt_v1,
+    AuthenticatedGeneralV2FinalPotDischargeReceiptV1, PreparedGeneralV2FinalPotDischargeV1,
+};
 pub use generation_migration::{
     authenticate_and_plan_position_replay_reopen_v2,
     authenticate_and_prepare_position_replay_close_v3, AuthenticatedPositionReplayReopenV2,
@@ -50,17 +56,22 @@ pub use generation_migration::{
 };
 pub use live_family_auth::{
     authenticate_epoch_child_final_absence_v2, authenticate_epoch_child_terminal_account_v2,
-    authenticate_general_v2_budget_retirement_v2, authenticate_general_v2_neutral_sink_binding_v1,
-    authenticate_general_v2_final_pot_terminal_v1, authenticate_general_v2_root_siblings_v1,
+    authenticate_general_v2_budget_retirement_v2, authenticate_general_v2_epoch_v1,
+    authenticate_general_v2_final_pot_terminal_v1, authenticate_general_v2_market_runtime_v1,
+    authenticate_general_v2_neutral_sink_binding_v1, authenticate_general_v2_root_siblings_v1,
     authenticate_general_v2_terminal_epoch_v1, authenticate_general_v2_window_retirement_v1,
-    authenticate_terminal_epoch_families_v2, AuthenticatedEpochChildFamiliesV2,
+    authenticate_terminal_epoch_families_v2, prepare_general_v2_child_retirement_v1,
+    prepare_general_v2_epoch_retirement_v1, AuthenticatedEpochChildFamiliesV2,
     AuthenticatedEpochChildFamilyV2, AuthenticatedGeneralV2BudgetRetirementV2,
-    AuthenticatedGeneralV2FinalPotTerminalV1, AuthenticatedGeneralV2NeutralSinkBindingV1,
+    AuthenticatedGeneralV2EpochV1, AuthenticatedGeneralV2FinalPotTerminalV1,
+    AuthenticatedGeneralV2MarketRuntimeV1, AuthenticatedGeneralV2NeutralSinkBindingV1,
     AuthenticatedGeneralV2RootSiblingsV1, AuthenticatedGeneralV2TerminalEpochV1,
     AuthenticatedGeneralV2WindowRetirementV1, AuthenticatedTerminalEpochFamiliesV2,
     FamilyOwnedFinalAbsenceEpochChildV1, FamilyOwnedFinalPotTerminalV1,
     FamilyOwnedTerminalEpochChildV1, FinalPotDonationOnlyLamportDispositionV1,
-    GeneralV2EpochChildParentV1, GeneralV2FinalPotLiabilityCompartmentsV1,
+    GeneralV2EpochChildParentV1, GeneralV2FinalPotLiabilityCompartmentsV1, GeneralV2RootFundingV1,
+    GeneralV2RootLamportDispositionV1, PreparedGeneralV2ChildRetirementV1,
+    PreparedGeneralV2EpochRetirementV1,
 };
 pub use liveness_receipt::{
     authenticate_retirement_receipt_v1, bind_general_v2_epoch_terminal_receipt_v1,
@@ -128,6 +139,8 @@ pub enum RetirementAdapterErrorV2 {
     ReferenceCodec(clutch_solana_reference::Error),
     /// The authoritative General V2 codec or semantic owner refused.
     GeneralV2Codec(clutch_general_v2_contract::CodecError),
+    /// The canonical owner-settlement/FinalPot semantic owner refused.
+    OwnerSettlement(clutch_owner_settlement::Error),
     /// A central base encoder returned a width other than its frozen constant.
     BaseLengthMismatch,
     /// The runtime account is not owned by the expected program.
@@ -181,6 +194,12 @@ impl From<clutch_solana_reference::Error> for RetirementAdapterErrorV2 {
 impl From<clutch_general_v2_contract::CodecError> for RetirementAdapterErrorV2 {
     fn from(error: clutch_general_v2_contract::CodecError) -> Self {
         Self::GeneralV2Codec(error)
+    }
+}
+
+impl From<clutch_owner_settlement::Error> for RetirementAdapterErrorV2 {
+    fn from(error: clutch_owner_settlement::Error) -> Self {
+        Self::OwnerSettlement(error)
     }
 }
 

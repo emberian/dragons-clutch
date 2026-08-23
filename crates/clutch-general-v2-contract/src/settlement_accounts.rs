@@ -9,11 +9,11 @@ use crate::{
 };
 
 pub use clutch_owner_settlement::{
-    FinalPotAuthorityBindingsV1, FinalPotRetirementDispositionV1,
-    FinalPotVirtualClaimOpeningV1, GeneralV2FinalPotV1, OwnerSettlementAccumulatorV1,
-    OwnerSettlementRowRetirementPlanV1, SettlementCashPotV1,
-    GENERAL_V2_FINAL_POT_BODY_V1_BYTES, OWNER_SETTLEMENT_BODY_V1_BYTES,
-    SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+    FinalPotAuthorityBindingsV1, FinalPotDischargeKindV1, FinalPotDischargeReceiptV1,
+    FinalPotRetirementDispositionV1, FinalPotVirtualClaimOpeningV1, GeneralV2FinalPotV1,
+    OwnerSettlementAccumulatorV1, OwnerSettlementRowRetirementPlanV1, SettlementCashPotV1,
+    FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES, GENERAL_V2_FINAL_POT_BODY_V1_BYTES,
+    OWNER_SETTLEMENT_BODY_V1_BYTES, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 
 /// Exact outer owner-settlement account bytes.
@@ -56,7 +56,9 @@ pub struct OwnerSettlementV1AccountV1 {
 impl OwnerSettlementV1AccountV1 {
     /// Validate semantic state, rent ownership, and reserved flags.
     pub fn validate(self) -> Result<(), CodecError> {
-        self.semantic.validate().map_err(|_| CodecError::InvalidState)?;
+        self.semantic
+            .validate()
+            .map_err(|_| CodecError::InvalidState)?;
         self.rent.validate()?;
         if self.flags != 0 {
             return Err(CodecError::InvalidState);
@@ -120,7 +122,9 @@ pub struct SettlementCashPotV1AccountV1 {
 impl SettlementCashPotV1AccountV1 {
     /// Validate semantic state, rent ownership, and reserved flags.
     pub fn validate(self) -> Result<(), CodecError> {
-        self.semantic.validate().map_err(|_| CodecError::InvalidState)?;
+        self.semantic
+            .validate()
+            .map_err(|_| CodecError::InvalidState)?;
         self.rent.validate()?;
         if self.flags != 0 {
             return Err(CodecError::InvalidState);
@@ -184,7 +188,9 @@ pub struct GeneralV2FinalPotV1AccountV1 {
 impl GeneralV2FinalPotV1AccountV1 {
     /// Validate semantic state, rent ownership, and reserved flags.
     pub fn validate(self) -> Result<(), CodecError> {
-        self.semantic.validate().map_err(|_| CodecError::InvalidState)?;
+        self.semantic
+            .validate()
+            .map_err(|_| CodecError::InvalidState)?;
         self.rent.validate()?;
         if self.flags != 0 {
             return Err(CodecError::InvalidState);

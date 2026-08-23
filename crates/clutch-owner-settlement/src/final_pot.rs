@@ -15,6 +15,195 @@ use crate::{
 
 /// Exact semantic bytes in [`GeneralV2FinalPotV1`].
 pub const GENERAL_V2_FINAL_POT_BODY_V1_BYTES: usize = 758;
+/// Exact semantic bytes in one external FinalPot compartment receipt.
+pub const FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES: usize = 368;
+/// Canonical receipt magic. This is a semantic body, not a global account tag.
+pub const FINAL_POT_DISCHARGE_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCFPTDR1";
+
+/// Separately owned FinalPot liability discharged by one external receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FinalPotDischargeKindV1 {
+    /// Relation-certified rounding price units and their whole cash atoms.
+    Rounding = 1,
+    /// Selected virtual cash plus native internal claims.
+    VirtualClaim = 2,
+    /// Collected selected fee atoms bound to the immutable fee record.
+    SelectedFee = 3,
+}
+
+/// Canonical external semantic-owner receipt for exactly one FinalPot
+/// compartment. The Solana adapter separately authenticates the receipt
+/// account owner, PDA, read-only/non-executable role, and exact body length.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalPotDischargeReceiptV1 {
+    /// Disjoint liability class.
+    pub kind: FinalPotDischargeKindV1,
+    /// Once-only receipt content identity retained by FinalPot.
+    pub receipt_id: [u8; 32],
+    /// Exact semantic authority fixed when FinalPot was promoted.
+    pub authority: [u8; 32],
+    /// Full Market identity.
+    pub market: [u8; 32],
+    /// Fresh General V2 Epoch PDA.
+    pub epoch: [u8; 32],
+    /// Selected candidate identity.
+    pub candidate: [u8; 32],
+    /// Immutable fee record for SelectedFee; zero for other kinds.
+    pub fee_record: [u8; 32],
+    /// Nonzero parent Epoch generation.
+    pub epoch_generation: u64,
+    /// Exact rounding liability; zero for non-rounding receipts.
+    pub price_units: u128,
+    /// Exact cash atoms owned by this compartment.
+    pub cash_atoms: Amount,
+    /// Exact virtual internal claims; zero for non-virtual receipts.
+    pub internal_atoms: [Amount; MAX_OUTCOMES],
+}
+
+impl FinalPotDischargeReceiptV1 {
+    /// Validate the disjoint canonical shape before encoding or consumption.
+    pub fn validate(self) -> Result<()> {
+        let required = [
+            self.receipt_id,
+            self.authority,
+            self.market,
+            self.epoch,
+            self.candidate,
+        ];
+        let mut left = 0usize;
+        while left < required.len() {
+            if required[left] == [0; 32] {
+                return Err(Error::InvalidIdentity);
+            }
+            let mut right = left + 1;
+            while right < required.len() {
+                if required[left] == required[right] {
+                    return Err(Error::InvalidIdentity);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        if self.epoch_generation == 0 {
+            return Err(Error::InvariantViolation);
+        }
+        let has_internal = self.internal_atoms.iter().any(|amount| *amount != 0);
+        match self.kind {
+            FinalPotDischargeKindV1::Rounding => {
+                if self.fee_record != [0; 32] || self.price_units == 0 || has_internal {
+                    return Err(Error::InvariantViolation);
+                }
+            }
+            FinalPotDischargeKindV1::VirtualClaim => {
+                if self.fee_record != [0; 32]
+                    || self.price_units != 0
+                    || (self.cash_atoms == 0 && !has_internal)
+                {
+                    return Err(Error::InvariantViolation);
+                }
+            }
+            FinalPotDischargeKindV1::SelectedFee => {
+                if self.fee_record == [0; 32]
+                    || required.contains(&self.fee_record)
+                    || self.price_units != 0
+                    || self.cash_atoms == 0
+                    || has_internal
+                {
+                    return Err(Error::InvariantViolation);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode the total canonical receipt body.
+    pub fn encode_body(self) -> Result<[u8; FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES]> {
+        self.validate()?;
+        let mut output = [0u8; FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES];
+        let mut cursor = 0usize;
+        put(
+            &mut output,
+            &mut cursor,
+            &FINAL_POT_DISCHARGE_RECEIPT_MAGIC_V1,
+        )?;
+        put(&mut output, &mut cursor, &1u16.to_le_bytes())?;
+        put(&mut output, &mut cursor, &[self.kind as u8])?;
+        put(&mut output, &mut cursor, &[0; 5])?;
+        for identity in [
+            self.receipt_id,
+            self.authority,
+            self.market,
+            self.epoch,
+            self.candidate,
+            self.fee_record,
+        ] {
+            put(&mut output, &mut cursor, &identity)?;
+        }
+        put(
+            &mut output,
+            &mut cursor,
+            &self.epoch_generation.to_le_bytes(),
+        )?;
+        put(&mut output, &mut cursor, &self.price_units.to_le_bytes())?;
+        put(&mut output, &mut cursor, &self.cash_atoms.to_le_bytes())?;
+        for amount in self.internal_atoms {
+            put(&mut output, &mut cursor, &amount.to_le_bytes())?;
+        }
+        if cursor != output.len() {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(output)
+    }
+
+    /// Decode and revalidate one exact hostile receipt body.
+    pub fn decode_body(input: &[u8]) -> Result<Self> {
+        if input.len() != FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES {
+            return Err(Error::InvalidAccount);
+        }
+        let mut cursor = 0usize;
+        if take(input, &mut cursor, 8)? != FINAL_POT_DISCHARGE_RECEIPT_MAGIC_V1
+            || read_u16(input, &mut cursor)? != 1
+        {
+            return Err(Error::InvalidAccount);
+        }
+        let kind = match read_u8(input, &mut cursor)? {
+            1 => FinalPotDischargeKindV1::Rounding,
+            2 => FinalPotDischargeKindV1::VirtualClaim,
+            3 => FinalPotDischargeKindV1::SelectedFee,
+            _ => return Err(Error::InvalidAccount),
+        };
+        if take(input, &mut cursor, 5)? != &[0; 5] {
+            return Err(Error::InvalidAccount);
+        }
+        let value = Self {
+            kind,
+            receipt_id: read_key(input, &mut cursor)?,
+            authority: read_key(input, &mut cursor)?,
+            market: read_key(input, &mut cursor)?,
+            epoch: read_key(input, &mut cursor)?,
+            candidate: read_key(input, &mut cursor)?,
+            fee_record: read_key(input, &mut cursor)?,
+            epoch_generation: read_u64(input, &mut cursor)?,
+            price_units: read_u128(input, &mut cursor)?,
+            cash_atoms: read_u64(input, &mut cursor)?,
+            internal_atoms: {
+                let mut values = [0u64; MAX_OUTCOMES];
+                let mut index = 0usize;
+                while index < MAX_OUTCOMES {
+                    values[index] = read_u64(input, &mut cursor)?;
+                    index += 1;
+                }
+                values
+            },
+        };
+        if cursor != input.len() {
+            return Err(Error::InvalidAccount);
+        }
+        value.validate()?;
+        Ok(value)
+    }
+}
 
 /// Separately authenticated semantic authorities fixed when the settled cash
 /// pot becomes a FinalPot.
@@ -172,8 +361,6 @@ impl GeneralV2FinalPotV1 {
             || self.retired_owner_count > self.settled.expectation.owner_count
             || self.remaining_rounding_price_units
                 > self.settled.expectation.rounding_pot_price_units
-            || self.remaining_rounding_price_units % u128::from(self.settled.expectation.price_scale)
-                != 0
             || self.remaining_rounding_cash_atoms
                 != Amount::try_from(
                     self.remaining_rounding_price_units
@@ -211,11 +398,9 @@ impl GeneralV2FinalPotV1 {
                 .any(|amount| *amount != 0);
         let had_fee = self.settled.expectation.selected_fee_atoms != 0;
         if (rounding_open && self.rounding_disposition_id != [0; 32])
-            || (!rounding_open
-                && (self.rounding_disposition_id != [0; 32]) != had_rounding)
+            || (!rounding_open && (self.rounding_disposition_id != [0; 32]) != had_rounding)
             || (virtual_open && self.virtual_claim_disposition_id != [0; 32])
-            || (!virtual_open
-                && (self.virtual_claim_disposition_id != [0; 32]) != had_virtual)
+            || (!virtual_open && (self.virtual_claim_disposition_id != [0; 32]) != had_virtual)
             || (fee_open && self.fee_disposition_id != [0; 32])
             || (!fee_open && (self.fee_disposition_id != [0; 32]) != had_fee)
         {
@@ -288,7 +473,11 @@ impl GeneralV2FinalPotV1 {
         let mut output = [0u8; GENERAL_V2_FINAL_POT_BODY_V1_BYTES];
         let mut cursor = 0usize;
         put(&mut output, &mut cursor, &settled)?;
-        put(&mut output, &mut cursor, &self.epoch_generation.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut cursor,
+            &self.epoch_generation.to_le_bytes(),
+        )?;
         for authority in [
             self.authorities.rounding_authority,
             self.authorities.virtual_claim_authority,
@@ -314,7 +503,11 @@ impl GeneralV2FinalPotV1 {
         ] {
             put(&mut output, &mut cursor, &amount.to_le_bytes())?;
         }
-        put(&mut output, &mut cursor, &self.retired_owner_count.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut cursor,
+            &self.retired_owner_count.to_le_bytes(),
+        )?;
         for receipt in [
             self.rounding_disposition_id,
             self.virtual_claim_disposition_id,
@@ -390,6 +583,7 @@ pub struct AuthenticatedRoundingDischargeV1 {
     market: [u8; 32],
     epoch: [u8; 32],
     candidate: [u8; 32],
+    epoch_generation: u64,
     price_units: u128,
     cash_atoms: Amount,
     disposition_id: [u8; 32],
@@ -402,6 +596,7 @@ pub struct AuthenticatedVirtualClaimDischargeV1 {
     market: [u8; 32],
     epoch: [u8; 32],
     candidate: [u8; 32],
+    epoch_generation: u64,
     internal_atoms: [Amount; MAX_OUTCOMES],
     cash_atoms: Amount,
     disposition_id: [u8; 32],
@@ -414,6 +609,7 @@ pub struct AuthenticatedSelectedFeeDischargeV1 {
     market: [u8; 32],
     epoch: [u8; 32],
     candidate: [u8; 32],
+    epoch_generation: u64,
     fee_record: [u8; 32],
     fee_atoms: Amount,
     disposition_id: [u8; 32],
@@ -433,6 +629,7 @@ impl GeneralV2FinalPotV1 {
             || discharge.market != expected.market
             || discharge.epoch != expected.epoch
             || discharge.candidate != expected.candidate
+            || discharge.epoch_generation != self.epoch_generation
             || discharge.price_units != self.remaining_rounding_price_units
             || discharge.cash_atoms != self.remaining_rounding_cash_atoms
             || discharge.disposition_id == [0; 32]
@@ -459,6 +656,7 @@ impl GeneralV2FinalPotV1 {
             || discharge.market != expected.market
             || discharge.epoch != expected.epoch
             || discharge.candidate != expected.candidate
+            || discharge.epoch_generation != self.epoch_generation
             || discharge.internal_atoms != self.remaining_virtual_claim_internal_atoms
             || discharge.cash_atoms != self.remaining_virtual_claim_cash_atoms
             || (discharge.cash_atoms == 0
@@ -488,6 +686,7 @@ impl GeneralV2FinalPotV1 {
             || discharge.market != expected.market
             || discharge.epoch != expected.epoch
             || discharge.candidate != expected.candidate
+            || discharge.epoch_generation != self.epoch_generation
             || discharge.fee_record != expected.fee_record
             || discharge.fee_atoms != self.remaining_fee_atoms
             || discharge.disposition_id == [0; 32]
@@ -499,6 +698,53 @@ impl GeneralV2FinalPotV1 {
         self.refresh_state();
         self.validate()?;
         Ok(self)
+    }
+
+    /// Consume one canonical external semantic-owner receipt.
+    ///
+    /// This method authenticates only the semantic body. The production-bound
+    /// adapter must first prove the containing receipt account's owner, PDA,
+    /// exact length, and read-only/non-executable roles.
+    pub fn discharge_external_receipt(self, receipt: FinalPotDischargeReceiptV1) -> Result<Self> {
+        receipt.validate()?;
+        match receipt.kind {
+            FinalPotDischargeKindV1::Rounding => {
+                self.discharge_rounding(AuthenticatedRoundingDischargeV1 {
+                    authority: receipt.authority,
+                    market: receipt.market,
+                    epoch: receipt.epoch,
+                    candidate: receipt.candidate,
+                    epoch_generation: receipt.epoch_generation,
+                    price_units: receipt.price_units,
+                    cash_atoms: receipt.cash_atoms,
+                    disposition_id: receipt.receipt_id,
+                })
+            }
+            FinalPotDischargeKindV1::VirtualClaim => {
+                self.discharge_virtual_claims(AuthenticatedVirtualClaimDischargeV1 {
+                    authority: receipt.authority,
+                    market: receipt.market,
+                    epoch: receipt.epoch,
+                    candidate: receipt.candidate,
+                    epoch_generation: receipt.epoch_generation,
+                    internal_atoms: receipt.internal_atoms,
+                    cash_atoms: receipt.cash_atoms,
+                    disposition_id: receipt.receipt_id,
+                })
+            }
+            FinalPotDischargeKindV1::SelectedFee => {
+                self.discharge_selected_fee(AuthenticatedSelectedFeeDischargeV1 {
+                    authority: receipt.authority,
+                    market: receipt.market,
+                    epoch: receipt.epoch,
+                    candidate: receipt.candidate,
+                    epoch_generation: receipt.epoch_generation,
+                    fee_record: receipt.fee_record,
+                    fee_atoms: receipt.cash_atoms,
+                    disposition_id: receipt.receipt_id,
+                })
+            }
+        }
     }
 }
 
@@ -567,35 +813,55 @@ pub struct FinalPotRetirementDispositionV1 {
 
 impl FinalPotRetirementDispositionV1 {
     /// Market identity.
-    pub const fn market(self) -> [u8; 32] { self.market }
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
     /// Fresh General V2 Epoch PDA.
-    pub const fn epoch(self) -> [u8; 32] { self.epoch }
+    pub const fn epoch(self) -> [u8; 32] {
+        self.epoch
+    }
     /// Selected candidate identity.
-    pub const fn candidate(self) -> [u8; 32] { self.candidate }
+    pub const fn candidate(self) -> [u8; 32] {
+        self.candidate
+    }
     /// Nonzero fresh parent Epoch generation.
-    pub const fn epoch_generation(self) -> u64 { self.epoch_generation }
+    pub const fn epoch_generation(self) -> u64 {
+        self.epoch_generation
+    }
     /// Frozen owner/order-set digest.
-    pub const fn owner_order_set_digest(self) -> [u8; 32] { self.owner_order_set_digest }
+    pub const fn owner_order_set_digest(self) -> [u8; 32] {
+        self.owner_order_set_digest
+    }
     /// Exact retired owner-row count.
-    pub const fn owner_count(self) -> u16 { self.owner_count }
+    pub const fn owner_count(self) -> u16 {
+        self.owner_count
+    }
     /// Exact fees that were collected before separate disposition.
-    pub const fn collected_fee_atoms(self) -> Amount { self.collected_fee_atoms }
+    pub const fn collected_fee_atoms(self) -> Amount {
+        self.collected_fee_atoms
+    }
     /// Exact rounding price units realized before separate disposition.
     pub const fn realized_rounding_price_units(self) -> u128 {
         self.realized_rounding_price_units
     }
     /// Rounding-disposition receipt, zero only for an originally zero compartment.
-    pub const fn rounding_disposition_id(self) -> [u8; 32] { self.rounding_disposition_id }
+    pub const fn rounding_disposition_id(self) -> [u8; 32] {
+        self.rounding_disposition_id
+    }
     /// Virtual-disposition receipt, zero only for an originally zero compartment.
     pub const fn virtual_claim_disposition_id(self) -> [u8; 32] {
         self.virtual_claim_disposition_id
     }
     /// Fee-disposition receipt, zero only for an originally zero compartment.
-    pub const fn fee_disposition_id(self) -> [u8; 32] { self.fee_disposition_id }
+    pub const fn fee_disposition_id(self) -> [u8; 32] {
+        self.fee_disposition_id
+    }
 }
 
 fn put<const N: usize>(output: &mut [u8; N], cursor: &mut usize, bytes: &[u8]) -> Result<()> {
-    let end = cursor.checked_add(bytes.len()).ok_or(Error::ArithmeticOverflow)?;
+    let end = cursor
+        .checked_add(bytes.len())
+        .ok_or(Error::ArithmeticOverflow)?;
     output
         .get_mut(*cursor..end)
         .ok_or(Error::InvalidAccount)?

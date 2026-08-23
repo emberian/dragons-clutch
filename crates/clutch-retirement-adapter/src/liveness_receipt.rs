@@ -8,17 +8,14 @@
 //! disposition, and physical liveness-account closure.
 
 use clutch_liveness::{
-    runtime_adapter_v1::{
-        RuntimeReceiptKindV1, RuntimeReceiptObservationV1,
-    },
+    runtime_adapter_v1::{RuntimeReceiptKindV1, RuntimeReceiptObservationV1},
     runtime_v1::RuntimeCompartmentKindV1,
     Id,
 };
 use clutch_retirement::Identity32V1;
 
 use crate::{
-    AuthenticatedGeneralV2FinalPotTerminalV1, AuthenticatedGeneralV2TerminalEpochV1,
-    CanonicalPdaV1,
+    AuthenticatedGeneralV2FinalPotTerminalV1, AuthenticatedGeneralV2TerminalEpochV1, CanonicalPdaV1,
 };
 
 /// Exact bytes in one canonical external counted-retirement receipt.

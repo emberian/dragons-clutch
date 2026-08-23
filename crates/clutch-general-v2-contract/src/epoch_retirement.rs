@@ -14,11 +14,11 @@ use crate::{
 };
 
 /// Exact bytes in [`MarketRuntimeV3AccountV1`].
-pub const MARKET_RUNTIME_ACCOUNT_BYTES: usize = 148;
+pub const MARKET_RUNTIME_ACCOUNT_BYTES: usize = 180;
 /// Exact bytes in the settlement-complete [`GeneralEpochV6AccountV1`].
-pub const GENERAL_EPOCH_ACCOUNT_BYTES: usize = 353;
+pub const GENERAL_EPOCH_ACCOUNT_BYTES: usize = 385;
 /// Exact bytes in [`GeneralEpochTombstoneV2`].
-pub const GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES: usize = 156;
+pub const GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES: usize = 284;
 
 fn live(value: Id32) -> Result<(), CodecError> {
     if value.is_zero() {
@@ -243,6 +243,8 @@ impl GeneralEpochPhaseV1 {
 /// Settlement-complete counted General V2 Epoch root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralEpochV6AccountV1 {
+    /// Full semantic Market identity shared by every child owner.
+    pub market: Id32,
     /// Immutable MarketBinding PDA.
     pub market_binding: Id32,
     /// Mutable monotone MarketRuntime PDA.
@@ -281,6 +283,7 @@ impl GeneralEpochV6AccountV1 {
     /// Validate exact identity, phase, count, and funding partitions.
     pub fn validate(self) -> Result<(), CodecError> {
         for id in [
+            self.market,
             self.market_binding,
             self.market_runtime,
             self.market_instance_v2_id,
@@ -319,10 +322,7 @@ impl GeneralEpochV6AccountV1 {
     }
 
     /// Apply one authenticated exact-once child creation.
-    pub fn child_created(
-        mut self,
-        kind: GeneralV2EpochChildKindV1,
-    ) -> Result<Self, CodecError> {
+    pub fn child_created(mut self, kind: GeneralV2EpochChildKindV1) -> Result<Self, CodecError> {
         if self.phase == GeneralEpochPhaseV1::Open {
             return Err(CodecError::InvalidState);
         }
@@ -342,10 +342,7 @@ impl GeneralEpochV6AccountV1 {
     }
 
     /// Apply one authenticated exact-once terminal child close.
-    pub fn child_retired(
-        mut self,
-        kind: GeneralV2EpochChildKindV1,
-    ) -> Result<Self, CodecError> {
+    pub fn child_retired(mut self, kind: GeneralV2EpochChildKindV1) -> Result<Self, CodecError> {
         self.children = self.children.decremented(kind)?;
         self.validate()?;
         Ok(self)
@@ -358,10 +355,14 @@ impl GeneralEpochV6AccountV1 {
             return Err(CodecError::InvalidState);
         }
         Ok(GeneralEpochRetirementDispositionV1 {
+            market: self.market,
             market_binding: self.market_binding,
             market_runtime: self.market_runtime,
             market_instance_v2_id: self.market_instance_v2_id,
             economic_domain: self.economic_domain,
+            window: self.window,
+            budget: self.budget,
+            order_set: self.order_set,
             epoch_index: self.epoch_index,
             generation: self.generation,
             rent: self.rent,
@@ -376,6 +377,7 @@ impl GeneralEpochV6AccountV1 {
         writer.u8(GENERAL_EPOCH_ACCOUNT_TAG)?;
         writer.u8(GENERAL_EPOCH_ACCOUNT_VERSION)?;
         for id in [
+            self.market,
             self.market_binding,
             self.market_runtime,
             self.market_instance_v2_id,
@@ -423,6 +425,7 @@ impl GeneralEpochV6AccountV1 {
             return Err(CodecError::WrongVersion);
         }
         let value = Self {
+            market: read_id(&mut reader)?,
             market_binding: read_id(&mut reader)?,
             market_runtime: read_id(&mut reader)?,
             market_instance_v2_id: read_id(&mut reader)?,
@@ -464,10 +467,14 @@ impl GeneralEpochV6AccountV1 {
 /// Opaque terminal root facts emitted only by the exhaustive root owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralEpochRetirementDispositionV1 {
+    market: Id32,
     market_binding: Id32,
     market_runtime: Id32,
     market_instance_v2_id: Id32,
     economic_domain: Id32,
+    window: Id32,
+    budget: Id32,
+    order_set: Id32,
     epoch_index: u64,
     generation: u64,
     rent: EpochRentOwnerV2,
@@ -475,27 +482,61 @@ pub struct GeneralEpochRetirementDispositionV1 {
 }
 
 impl GeneralEpochRetirementDispositionV1 {
+    /// Full semantic Market identity.
+    pub const fn market(self) -> Id32 {
+        self.market
+    }
     /// Immutable MarketBinding PDA.
-    pub const fn market_binding(self) -> Id32 { self.market_binding }
+    pub const fn market_binding(self) -> Id32 {
+        self.market_binding
+    }
     /// Mutable MarketRuntime PDA that must record retirement exactly once.
-    pub const fn market_runtime(self) -> Id32 { self.market_runtime }
+    pub const fn market_runtime(self) -> Id32 {
+        self.market_runtime
+    }
     /// Product MarketInstance identity.
-    pub const fn market_instance_v2_id(self) -> Id32 { self.market_instance_v2_id }
+    pub const fn market_instance_v2_id(self) -> Id32 {
+        self.market_instance_v2_id
+    }
     /// EconomicDomain child required in the terminal root bundle.
-    pub const fn economic_domain(self) -> Id32 { self.economic_domain }
+    pub const fn economic_domain(self) -> Id32 {
+        self.economic_domain
+    }
+    /// Historical Window root sibling.
+    pub const fn window(self) -> Id32 {
+        self.window
+    }
+    /// Historical Budget root sibling.
+    pub const fn budget(self) -> Id32 {
+        self.budget
+    }
+    /// Frozen canonical order-set identity.
+    pub const fn order_set(self) -> Id32 {
+        self.order_set
+    }
     /// Monotone Epoch index.
-    pub const fn epoch_index(self) -> u64 { self.epoch_index }
+    pub const fn epoch_index(self) -> u64 {
+        self.epoch_index
+    }
     /// Nonzero Epoch generation.
-    pub const fn generation(self) -> u64 { self.generation }
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
     /// Exact live/permanent/donation funding split.
-    pub const fn rent(self) -> EpochRentOwnerV2 { self.rent }
+    pub const fn rent(self) -> EpochRentOwnerV2 {
+        self.rent
+    }
     /// Canonical root PDA bump retained in the tombstone.
-    pub const fn stored_bump(self) -> u8 { self.stored_bump }
+    pub const fn stored_bump(self) -> u8 {
+        self.stored_bump
+    }
 }
 
 /// Genesis-assisted mutable cursor for one immutable MarketBinding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketRuntimeV3AccountV1 {
+    /// Full semantic Market identity shared by every Epoch generation.
+    pub market: Id32,
     /// Immutable MarketBinding PDA anchoring this runtime.
     pub market_binding: Id32,
     /// Full Product MarketInstance identity.
@@ -523,13 +564,21 @@ pub struct MarketRuntimeV3AccountV1 {
 impl MarketRuntimeV3AccountV1 {
     /// Validate monotone cursor, count, identity, and rent geometry.
     pub fn validate(self) -> Result<(), CodecError> {
-        for id in [self.market_binding, self.market_instance_v2_id, self.rent_payer] {
+        for id in [
+            self.market,
+            self.market_binding,
+            self.market_instance_v2_id,
+            self.rent_payer,
+        ] {
             live(id)?;
         }
         if self.next_epoch_generation == 0
             || self.retired_epoch_count > self.created_epoch_count
             || self.rent_principal == 0
-            || self.rent_principal.checked_add(self.donation_floor).is_none()
+            || self
+                .rent_principal
+                .checked_add(self.donation_floor)
+                .is_none()
             || self.flags != 0
         {
             return Err(CodecError::InvalidState);
@@ -571,7 +620,8 @@ impl MarketRuntimeV3AccountV1 {
         disposition: GeneralEpochRetirementDispositionV1,
     ) -> Result<Self, CodecError> {
         self.validate()?;
-        if disposition.market_binding != self.market_binding
+        if disposition.market != self.market
+            || disposition.market_binding != self.market_binding
             || disposition.market_runtime.is_zero()
             || disposition.market_instance_v2_id != self.market_instance_v2_id
             || disposition.generation == 0
@@ -592,6 +642,7 @@ impl MarketRuntimeV3AccountV1 {
         let mut writer = Writer::exact(output, MARKET_RUNTIME_ACCOUNT_BYTES)?;
         writer.u8(MARKET_RUNTIME_ACCOUNT_TAG)?;
         writer.u8(MARKET_RUNTIME_ACCOUNT_VERSION)?;
+        writer.bytes(&self.market.bytes())?;
         writer.bytes(&self.market_binding.bytes())?;
         writer.bytes(&self.market_instance_v2_id.bytes())?;
         writer.u64(self.next_epoch_index)?;
@@ -616,6 +667,7 @@ impl MarketRuntimeV3AccountV1 {
             return Err(CodecError::WrongVersion);
         }
         let value = Self {
+            market: read_id(&mut reader)?,
             market_binding: read_id(&mut reader)?,
             market_instance_v2_id: read_id(&mut reader)?,
             next_epoch_index: reader.u64()?,
@@ -637,6 +689,8 @@ impl MarketRuntimeV3AccountV1 {
 /// Permanent replay-resistant General V2 Epoch identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralEpochTombstoneV2 {
+    /// Full historical semantic Market identity.
+    pub market: Id32,
     /// Immutable MarketBinding PDA.
     pub market_binding: Id32,
     /// MarketRuntime PDA that recorded the once-only retirement.
@@ -645,6 +699,12 @@ pub struct GeneralEpochTombstoneV2 {
     pub market_instance_v2_id: Id32,
     /// Historical EconomicDomain identity.
     pub economic_domain: Id32,
+    /// Historical Window PDA.
+    pub window: Id32,
+    /// Historical Budget PDA.
+    pub budget: Id32,
+    /// Historical frozen order-set identity.
+    pub order_set: Id32,
     /// Closed monotone Epoch index.
     pub epoch_index: u64,
     /// Closed nonzero generation.
@@ -661,10 +721,14 @@ impl GeneralEpochTombstoneV2 {
         disposition: GeneralEpochRetirementDispositionV1,
     ) -> Result<Self, CodecError> {
         let value = Self {
+            market: disposition.market,
             market_binding: disposition.market_binding,
             market_runtime: disposition.market_runtime,
             market_instance_v2_id: disposition.market_instance_v2_id,
             economic_domain: disposition.economic_domain,
+            window: disposition.window,
+            budget: disposition.budget,
+            order_set: disposition.order_set,
             epoch_index: disposition.epoch_index,
             generation: disposition.generation,
             permanent_tombstone_principal: disposition.rent.permanent_tombstone_principal,
@@ -677,10 +741,14 @@ impl GeneralEpochTombstoneV2 {
     /// Validate permanent identity and funding.
     pub fn validate(self) -> Result<(), CodecError> {
         for id in [
+            self.market,
             self.market_binding,
             self.market_runtime,
             self.market_instance_v2_id,
             self.economic_domain,
+            self.window,
+            self.budget,
+            self.order_set,
         ] {
             live(id)?;
         }
@@ -697,10 +765,14 @@ impl GeneralEpochTombstoneV2 {
         writer.u8(GENERAL_EPOCH_TOMBSTONE_ACCOUNT_TAG)?;
         writer.u8(GENERAL_EPOCH_TOMBSTONE_ACCOUNT_VERSION)?;
         for id in [
+            self.market,
             self.market_binding,
             self.market_runtime,
             self.market_instance_v2_id,
             self.economic_domain,
+            self.window,
+            self.budget,
+            self.order_set,
         ] {
             writer.bytes(&id.bytes())?;
         }
@@ -722,10 +794,14 @@ impl GeneralEpochTombstoneV2 {
             return Err(CodecError::WrongVersion);
         }
         let value = Self {
+            market: read_id(&mut reader)?,
             market_binding: read_id(&mut reader)?,
             market_runtime: read_id(&mut reader)?,
             market_instance_v2_id: read_id(&mut reader)?,
             economic_domain: read_id(&mut reader)?,
+            window: read_id(&mut reader)?,
+            budget: read_id(&mut reader)?,
+            order_set: read_id(&mut reader)?,
             epoch_index: reader.u64()?,
             generation: reader.u64()?,
             permanent_tombstone_principal: reader.u64()?,
@@ -742,5 +818,6 @@ impl GeneralEpochTombstoneV2 {
     }
 }
 
-const _: () = assert!(GENERAL_EPOCH_ACCOUNT_BYTES == 2 + (7 * 32) + 32 + 36 + 56 + 3);
-const _: () = assert!(GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES == 2 + (4 * 32) + 24 + 2);
+const _: () = assert!(GENERAL_EPOCH_ACCOUNT_BYTES == 2 + (8 * 32) + 32 + 36 + 56 + 3);
+const _: () = assert!(MARKET_RUNTIME_ACCOUNT_BYTES == 2 + (4 * 32) + 48 + 2);
+const _: () = assert!(GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES == 2 + (8 * 32) + 24 + 2);
