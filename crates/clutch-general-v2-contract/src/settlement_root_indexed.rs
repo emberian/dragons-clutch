@@ -951,6 +951,61 @@ impl IndexedSettlementRootV1AccountV1 {
         )
     }
 
+    /// Stream one canonical live successor and return its account-key-bound ID.
+    ///
+    /// This is the sole contract-owned transcript used by the runtime builder;
+    /// it does not allocate a second root-sized buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_new_live_and_data_id<B: Sha256BackendV1>(
+        base: &SettlementRootV1AccountV1,
+        locator_account: Id32,
+        adjacency_account: Id32,
+        plane_id: Id32,
+        locator_data_id: Id32,
+        adjacency_data_id: Id32,
+        capability_profile_id: Id32,
+        backend: &B,
+        root_account: Id32,
+        output: &mut [u8],
+    ) -> Result<Id32, CodecError> {
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Self::encode_new_live_into(
+            base,
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
+            output,
+        )?;
+        Self::encoded_data_id(backend, root_account, output)
+    }
+
+    /// Hash an exact-width encoded successor body under the canonical transcript.
+    ///
+    /// This function computes a byte identity; it does not authenticate account
+    /// ownership or claim that hostile bytes decode as a canonical successor.
+    pub fn encoded_data_id<B: Sha256BackendV1>(
+        backend: &B,
+        root_account: Id32,
+        encoded: &[u8],
+    ) -> Result<Id32, CodecError> {
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if encoded.len() != INDEXED_SETTLEMENT_ROOT_BYTES_V1 {
+            return Err(CodecError::WrongLength);
+        }
+        Id32::new(backend.sha256(&[
+            INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
+            &root_account.bytes(),
+            encoded,
+        ]))
+    }
+
     /// Encode the exact reserved successor envelope and nested canonical Root V1.
     pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
         self.validate()?;
@@ -1102,11 +1157,7 @@ impl IndexedSettlementRootV1AccountV1 {
         }
         let mut bytes = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
         self.encode(&mut bytes)?;
-        Id32::new(backend.sha256(&[
-            INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
-            &root_account.bytes(),
-            &bytes,
-        ]))
+        Self::encoded_data_id(backend, root_account, &bytes)
     }
 
     /// Base terminal projection, available only after both index siblings retire.
@@ -1132,6 +1183,19 @@ impl IndexedSettlementRootV1AccountV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    struct Sha2Backend;
+
+    impl Sha256BackendV1 for Sha2Backend {
+        fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+            let mut hash = Sha256::new();
+            for part in parts {
+                hash.update(part);
+            }
+            hash.finalize().into()
+        }
+    }
 
     fn id(value: u8) -> Id32 {
         Id32::new([value; 32]).unwrap()
@@ -1229,6 +1293,27 @@ mod tests {
         .unwrap();
         assert_eq!(streamed, ordinary);
         assert_eq!(IndexedSettlementRootV1AccountV1::decode(&streamed), Ok(indexed));
+        let root_account = id(90);
+        let ordinary_id = indexed.data_id(&Sha2Backend, root_account).unwrap();
+        let streamed_id = IndexedSettlementRootV1AccountV1::encode_new_live_and_data_id(
+            indexed.base(),
+            indexed.locator_account(),
+            indexed.adjacency_account(),
+            indexed.plane_id(),
+            indexed.locator_data_id(),
+            indexed.adjacency_data_id(),
+            indexed.capability_profile_id(),
+            &Sha2Backend,
+            root_account,
+            &mut streamed,
+        )
+        .unwrap();
+        let mut transcript = Sha256::new();
+        transcript.update(INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1);
+        transcript.update(root_account.bytes());
+        transcript.update(ordinary);
+        assert_eq!(streamed_id, ordinary_id);
+        assert_eq!(streamed_id, Id32::new(transcript.finalize().into()).unwrap());
         assert_eq!(
             IndexedSettlementRootV1AccountV1::encode_new_live_into(
                 indexed.base(),
@@ -1256,6 +1341,23 @@ mod tests {
             ),
             Err(CodecError::InvalidState),
         );
+        let before_zero_root = streamed;
+        assert_eq!(
+            IndexedSettlementRootV1AccountV1::encode_new_live_and_data_id(
+                indexed.base(),
+                indexed.locator_account(),
+                indexed.adjacency_account(),
+                indexed.plane_id(),
+                indexed.locator_data_id(),
+                indexed.adjacency_data_id(),
+                indexed.capability_profile_id(),
+                &Sha2Backend,
+                Id32::ZERO,
+                &mut streamed,
+            ),
+            Err(CodecError::ZeroIdentity),
+        );
+        assert_eq!(streamed, before_zero_root);
     }
 
     #[test]

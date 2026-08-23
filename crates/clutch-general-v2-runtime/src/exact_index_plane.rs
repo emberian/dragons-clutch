@@ -14,9 +14,8 @@ use clutch_general_v2_contract::{
     ExactIndexChildrenStateV1, Id32, IndexedSettlementRootRentPreparationV1,
     IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
-    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
-    INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1, MAX_ORDERS, MAX_OUTCOMES, MAX_SLICES,
-    SETTLEMENT_SLICE_BYTES,
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1, MAX_ORDERS,
+    MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_solana_layout::registry::{
     GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
@@ -468,7 +467,7 @@ pub fn stream_counted_exact_index_root_v1(
             rent: adjacency_rent, stored_bump: input.adjacency_create.stored_bump, ..common })?;
     let locator_data_id = sealed_locator_data_id_from_raw_v1(locator_output)?;
     let adjacency_data_id = sealed_adjacency_data_id_from_raw_v1(adjacency_output)?;
-    IndexedSettlementRootV1AccountV1::encode_new_live_into(
+    let indexed_root_data_id = IndexedSettlementRootV1AccountV1::encode_new_live_and_data_id(
         root_rent.base_after(),
         input.locator_create.account,
         input.adjacency_create.account,
@@ -476,14 +475,11 @@ pub fn stream_counted_exact_index_root_v1(
         locator_data_id,
         adjacency_data_id,
         input.capability_profile_id,
+        &CanonicalSha256,
+        input.settlement_root_account,
         root_output,
     )
     .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    let mut indexed_hasher = Sha256::new();
-    indexed_hasher.update(INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1);
-    indexed_hasher.update(input.settlement_root_account.bytes());
-    indexed_hasher.update(root_output);
-    let indexed_root_data_id = finish_id(indexed_hasher)?;
     Ok(CountedExactIndexRootStreamResultV1 { indexed_root_data_id, locator_data_id,
         adjacency_data_id, plane_id })
 }
