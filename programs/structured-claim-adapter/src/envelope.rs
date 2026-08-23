@@ -18,10 +18,10 @@ pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
 /// construction plus canonical and full-vector wrap/unwind.
 #[cfg(not(feature = "live-current-wrapper"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
-/// Exact actions 1 through 5 of the separately deployed wrapper artifact.
+/// Wrapper build seam. No action is admitted until the current Product,
+/// deployment-release, and collateral-route joins are executable together.
 #[cfg(feature = "live-current-wrapper")]
-pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
-    (1_u16 << 1) | (1_u16 << 2) | (1_u16 << 3) | (1_u16 << 4) | (1_u16 << 5);
+pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
 
 const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
@@ -34,7 +34,7 @@ const _: () = assert!(
 #[cfg(not(feature = "live-current-wrapper"))]
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 #[cfg(feature = "live-current-wrapper")]
-const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0b11_1110);
+const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(
