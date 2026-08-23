@@ -2,131 +2,227 @@
 
 //! Dealer-specific transition replay without a parallel asset truth.
 //!
-//! The Replay owns only transition ordering and the last accepted intent. It
-//! binds the authoritative Dealer State account and the canonical Position V3
-//! account, but never duplicates State phase/generation, Position balances,
-//! an active Lease, or transient Pot custody. Runtime account ownership, PDA
-//! derivation, signature checks, and receipt parsing remain adapter duties.
+//! The Replay is the Dealer extension of the canonical purpose-owned Replay V3
+//! envelope. The common prefix owns the Position/Replay keys, purpose binding,
+//! generation, ordinal, lifecycle, extension hash, and rent. The exact Dealer
+//! extension owns only the last transition intent and terminal State receipt.
+//! It never duplicates State phase, Position balances, an active Lease, or Pot
+//! custody. Runtime account ownership, PDA derivation, signature checks, and
+//! receipt parsing remain adapter duties.
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
-use crate::{
-    DealerRuntimeActionV1, DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
-    DELETABLE_RENT_OWNER_BYTES,
+use crate::{DealerRuntimeActionV1, Error, FixedCodec, Id, Result};
+use clutch_retirement::{
+    DeletableRentOwnerV1 as ReplayRentOwnerV1, Identity32V1, PositionPurposeV3, ReplayV3Envelope,
+    ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema, ReplayV3HashBackend,
+    ReplayV3Lifecycle, ReplayV3PdaSeeds, RetirementErrorV2, PURPOSE_REPLAY_V3_PREFIX_BYTES,
 };
+use sha2::{Digest, Sha256};
 
-/// Proposed global account tag, intentionally not allocated in the registry yet.
-pub const DEALER_FACILITY_REPLAY_PROPOSED_ACCOUNT_TAG_V1: u8 = 0x97;
-/// Proposed account schema version, intentionally not runtime-routable yet.
-pub const DEALER_FACILITY_REPLAY_PROPOSED_ACCOUNT_VERSION_V1: u8 = 1;
-/// Local canonical body magic; this is not the proposed global account tag.
-pub const DEALER_FACILITY_REPLAY_MAGIC_V1: [u8; 8] = *b"DCDRPLY1";
-/// Exact local semantic-body version.
-pub const DEALER_FACILITY_REPLAY_VERSION_V1: u16 = 1;
 /// Exact founding ordinal expected by the first transition intent.
 pub const DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1: u64 = 0;
-/// Exact bytes in one canonical Dealer Facility Replay body.
+/// Exact Dealer extension schema (`"DDF1"` in little-endian wire order).
+pub const DEALER_REPLAY_EXTENSION_SCHEMA_V1: u32 = 0x3146_4444;
+/// Exact bytes in the Dealer-owned extension.
+pub const DEALER_REPLAY_EXTENSION_BYTES_V1: usize = 64;
+/// Exact bytes in the canonical Replay V3 Dealer variant.
 pub const DEALER_FACILITY_REPLAY_BYTES_V1: usize =
-    HEADER_BYTES + (6 * 32) + 8 + DELETABLE_RENT_OWNER_BYTES;
-/// Content domain for one canonical Replay body.
-pub const DEALER_FACILITY_REPLAY_CONTENT_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/dealer-facility-replay/v1\0";
-/// PDA domain for the unique Replay companion.
-pub const DEALER_FACILITY_REPLAY_PDA_PREFIX_V1: &[u8] = b"dealer-replay-v1";
+    PURPOSE_REPLAY_V3_PREFIX_BYTES + DEALER_REPLAY_EXTENSION_BYTES_V1;
 
 /// Local magic for a transition intent committed by the Replay.
 pub const DEALER_TRANSITION_INTENT_MAGIC_V1: [u8; 8] = *b"DCDTRNI1";
 /// Exact local transition-intent version.
 pub const DEALER_TRANSITION_INTENT_VERSION_V1: u16 = 1;
 /// Exact bytes in one canonical transition intent.
-pub const DEALER_TRANSITION_INTENT_BYTES_V1: usize = HEADER_BYTES + (9 * 32) + 8 + 8;
+pub const DEALER_TRANSITION_INTENT_BYTES_V1: usize = HEADER_BYTES + (9 * 32) + (3 * 8) + 8;
 /// Content domain for one canonical transition intent.
 pub const DEALER_TRANSITION_INTENT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-transition-intent/v1\0";
 
-const _: () = assert!(DEALER_FACILITY_REPLAY_BYTES_V1 == 292);
-const _: () = assert!(DEALER_TRANSITION_INTENT_BYTES_V1 == 316);
+const _: () = assert!(DEALER_FACILITY_REPLAY_BYTES_V1 == 272);
+const _: () = assert!(DEALER_TRANSITION_INTENT_BYTES_V1 == 332);
 const _: () = assert!(DEALER_FACILITY_REPLAY_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_TRANSITION_INTENT_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 
-/// Canonical Dealer replay body.
+/// Exact Dealer-owned extension committed by the common Replay V3 prefix.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerFacilityReplayV1 {
-    /// Immutable Dealer policy identity.
-    pub policy_id: Id,
-    /// Immutable facility identity.
-    pub facility_id: Id,
-    /// Full MarketInstanceV2 identity.
-    pub market_instance_v2_id: Id,
-    /// Exact authoritative Dealer State V2 account.
-    pub dealer_state_account_id: Id,
-    /// Exact canonical Position V3 account.
-    pub facility_position_account_id: Id,
-    /// Ordinal the next accepted transition must carry.
-    pub next_transition_ordinal: u64,
+pub struct DealerReplayExtensionV1 {
     /// Last accepted transition-intent identity, or zero only at founding.
     pub last_transition_intent_id: Id,
-    /// Independently funded, lamport-only deletion owner.
-    pub rent: DeletableRentOwnerV1,
+    /// Exact State terminal receipt; nonzero only in a Terminal envelope.
+    pub terminal_state_receipt_id: Id,
+}
+
+impl DealerReplayExtensionV1 {
+    fn validate(self, lifecycle: ReplayV3Lifecycle, next_sequence: u64) -> Result<()> {
+        match lifecycle {
+            ReplayV3Lifecycle::Live if next_sequence == 0 => {
+                if !self.last_transition_intent_id.is_zero()
+                    || !self.terminal_state_receipt_id.is_zero()
+                {
+                    return Err(Error::InvalidParameter);
+                }
+            }
+            ReplayV3Lifecycle::Live => {
+                self.last_transition_intent_id.validate_live()?;
+                if !self.terminal_state_receipt_id.is_zero() {
+                    return Err(Error::InvalidParameter);
+                }
+            }
+            ReplayV3Lifecycle::Terminal => {
+                self.last_transition_intent_id.validate_live()?;
+                self.terminal_state_receipt_id.validate_live()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn encode(self) -> [u8; DEALER_REPLAY_EXTENSION_BYTES_V1] {
+        let mut output = [0u8; DEALER_REPLAY_EXTENSION_BYTES_V1];
+        output[..32].copy_from_slice(&self.last_transition_intent_id.bytes());
+        output[32..].copy_from_slice(&self.terminal_state_receipt_id.bytes());
+        output
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() < DEALER_REPLAY_EXTENSION_BYTES_V1 {
+            return Err(Error::Truncated);
+        }
+        if input.len() > DEALER_REPLAY_EXTENSION_BYTES_V1 {
+            return Err(Error::TrailingBytes);
+        }
+        let mut last = [0u8; 32];
+        last.copy_from_slice(&input[..32]);
+        let mut terminal = [0u8; 32];
+        terminal.copy_from_slice(&input[32..]);
+        Ok(Self {
+            last_transition_intent_id: Id::from_bytes(last),
+            terminal_state_receipt_id: Id::from_bytes(terminal),
+        })
+    }
+}
+
+/// Canonical purpose-owned Replay V3 Dealer variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerFacilityReplayV1 {
+    header: ReplayV3EnvelopeHeader,
+    extension: DealerReplayExtensionV1,
 }
 
 impl DealerFacilityReplayV1 {
-    /// Validate full-width joins, founding shape, and lamport-only rent ownership.
+    /// Validate the common envelope and exact Dealer extension.
     pub fn validate(&self) -> Result<()> {
-        for identity in [
-            self.policy_id,
-            self.facility_id,
-            self.market_instance_v2_id,
-            self.dealer_state_account_id,
-            self.facility_position_account_id,
-        ] {
-            identity.validate_live()?;
-        }
-        if self.dealer_state_account_id == self.facility_position_account_id
-            || (self.next_transition_ordinal == DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1)
-                != self.last_transition_intent_id.is_zero()
+        let extension = self.extension.encode();
+        ReplayV3Envelope::from_header(self.header, &extension, &DealerReplaySha256V1)
+            .map_err(map_retirement_error)?;
+        if self.header.purpose() != PositionPurposeV3::DealerFacility
+            || self.header.extension_schema().get() != DEALER_REPLAY_EXTENSION_SCHEMA_V1
+            || self.header.extension_len() as usize != DEALER_REPLAY_EXTENSION_BYTES_V1
         {
-            return Err(Error::InvalidParameter);
+            return Err(Error::MismatchedBinding);
         }
-        self.rent.validate()
+        self.extension
+            .validate(self.header.lifecycle(), self.header.next_sequence())
     }
 
     /// Construct the unique founding state for an authenticated account graph.
+    #[allow(clippy::too_many_arguments)]
     pub fn founding(
-        policy_id: Id,
-        facility_id: Id,
-        market_instance_v2_id: Id,
-        dealer_state_account_id: Id,
         facility_position_account_id: Id,
-        rent: DeletableRentOwnerV1,
+        replay_account_id: Id,
+        facility_position_binding_id: Id,
+        initial_position_generation: u64,
+        stored_bump: u8,
+        rent: ReplayRentOwnerV1,
     ) -> Result<Self> {
-        let replay = Self {
-            policy_id,
-            facility_id,
-            market_instance_v2_id,
-            dealer_state_account_id,
-            facility_position_account_id,
-            next_transition_ordinal: DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1,
+        let extension = DealerReplayExtensionV1 {
             last_transition_intent_id: Id::ZERO,
-            rent,
+            terminal_state_receipt_id: Id::ZERO,
         };
+        let extension_bytes = extension.encode();
+        let header = ReplayV3EnvelopeHeader::new_live(
+            ReplayV3EnvelopeFields {
+                position_account: retirement_id(facility_position_account_id)?,
+                replay_account: retirement_id(replay_account_id)?,
+                purpose: PositionPurposeV3::DealerFacility,
+                purpose_binding_id: retirement_id(facility_position_binding_id)?,
+                position_generation: initial_position_generation,
+                next_sequence: DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1,
+                stored_bump,
+                rent,
+            },
+            dealer_extension_schema()?,
+            &extension_bytes,
+            &DealerReplaySha256V1,
+        )
+        .map_err(map_retirement_error)?;
+        let replay = Self { header, extension };
         replay.validate()?;
         Ok(replay)
     }
 
     /// Canonical semantic identity of this exact Replay body.
     pub fn replay_id(&self) -> Result<Id> {
-        let id = self.content_id(DEALER_FACILITY_REPLAY_CONTENT_DOMAIN_V1)?;
-        id.validate_live()?;
-        Ok(id)
+        self.validate()?;
+        let extension = self.extension.encode();
+        let envelope =
+            ReplayV3Envelope::from_header(self.header, &extension, &DealerReplaySha256V1)
+                .map_err(map_retirement_error)?;
+        Ok(dealer_id(
+            envelope
+                .semantic_id(&DealerReplaySha256V1)
+                .map_err(map_retirement_error)?,
+        ))
     }
 
-    /// Exact PDA seed facts; the adapter derives and authenticates the address.
-    pub const fn pda_seeds(&self) -> DealerFacilityReplayPdaSeedsV1 {
-        DealerFacilityReplayPdaSeedsV1 {
-            facility_id: self.facility_id,
-            dealer_state_account_id: self.dealer_state_account_id,
-            facility_position_account_id: self.facility_position_account_id,
-        }
+    /// Exact common PDA seed facts; the adapter derives and authenticates the address.
+    pub const fn pda_seeds(&self) -> ReplayV3PdaSeeds {
+        self.header.pda_seeds()
+    }
+
+    /// Exact canonical Position V3 account.
+    pub const fn facility_position_account_id(&self) -> Id {
+        dealer_id(self.header.position_account())
+    }
+
+    /// Exact Replay account key retained in the common body.
+    pub const fn replay_account_id(&self) -> Id {
+        dealer_id(self.header.replay_account())
+    }
+
+    /// Exact Dealer facility Position binding identity.
+    pub const fn facility_position_binding_id(&self) -> Id {
+        dealer_id(self.header.purpose_binding_id())
+    }
+
+    /// Current Position generation.
+    pub const fn position_generation(&self) -> u64 {
+        self.header.position_generation()
+    }
+
+    /// Ordinal the next accepted transition must carry.
+    pub const fn next_transition_ordinal(&self) -> u64 {
+        self.header.next_sequence()
+    }
+
+    /// Last accepted transition intent.
+    pub const fn last_transition_intent_id(&self) -> Id {
+        self.extension.last_transition_intent_id
+    }
+
+    /// Exact terminal State receipt, zero while live.
+    pub const fn terminal_state_receipt_id(&self) -> Id {
+        self.extension.terminal_state_receipt_id
+    }
+
+    /// Common Replay lifecycle.
+    pub const fn lifecycle(&self) -> ReplayV3Lifecycle {
+        self.header.lifecycle()
+    }
+
+    /// Common Replay rent owner.
+    pub const fn rent(&self) -> ReplayRentOwnerV1 {
+        self.header.rent()
     }
 
     /// Prepare an atomic transition without mutating the replay projection.
@@ -139,23 +235,81 @@ impl DealerFacilityReplayV1 {
         account_binding.validate()?;
         intent.validate()?;
         let replay_pre_id = self.replay_id()?;
-        if account_binding.position_replay_account_id != account_binding.replay_account_id
+        if intent.action == DealerRuntimeActionV1::Retire
+            || account_binding.position_replay_account_id != account_binding.replay_account_id
+            || account_binding.replay_account_id != self.replay_account_id()
             || intent.replay_account_id != account_binding.replay_account_id
             || intent.replay_pre_id != replay_pre_id
-            || intent.expected_ordinal != self.next_transition_ordinal
+            || intent.expected_ordinal != self.next_transition_ordinal()
+            || intent.position_generation_before != self.position_generation()
         {
             return Err(Error::MismatchedBinding);
         }
         let intent_id = intent.intent_id()?;
-        let next_transition_ordinal = self
-            .next_transition_ordinal
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
-        let replay_post = Self {
-            next_transition_ordinal,
+        let extension = DealerReplayExtensionV1 {
             last_transition_intent_id: intent_id,
-            ..*self
+            terminal_state_receipt_id: Id::ZERO,
         };
+        let extension_bytes = extension.encode();
+        let header = self
+            .header
+            .advanced_live(
+                intent.position_generation_after,
+                &extension_bytes,
+                &DealerReplaySha256V1,
+            )
+            .map_err(map_retirement_error)?;
+        let replay_post = Self { header, extension };
+        replay_post.validate()?;
+        Ok(PreparedDealerReplayTransitionV1 {
+            replay_account_id: account_binding.replay_account_id,
+            replay_pre_id,
+            replay_post,
+            intent,
+            intent_id,
+        })
+    }
+
+    /// Purpose-owner-only terminal advance after complete State V2 validation.
+    ///
+    /// This is crate-visible so the authoritative Dealer State transition can
+    /// expose a private-field terminal capability; a runtime adapter cannot set
+    /// the common terminal bit from unauthenticated booleans.
+    pub(crate) fn prepare_terminal_transition(
+        &self,
+        account_binding: DealerReplayAccountBindingV1,
+        intent: DealerTransitionIntentV1,
+        terminal_state_receipt_id: Id,
+    ) -> Result<PreparedDealerReplayTransitionV1> {
+        self.validate()?;
+        account_binding.validate()?;
+        intent.validate()?;
+        terminal_state_receipt_id.validate_live()?;
+        let replay_pre_id = self.replay_id()?;
+        if intent.action != DealerRuntimeActionV1::Retire
+            || account_binding.replay_account_id != self.replay_account_id()
+            || intent.replay_account_id != account_binding.replay_account_id
+            || intent.replay_pre_id != replay_pre_id
+            || intent.expected_ordinal != self.next_transition_ordinal()
+            || intent.position_generation_before != self.position_generation()
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let intent_id = intent.intent_id()?;
+        let extension = DealerReplayExtensionV1 {
+            last_transition_intent_id: intent_id,
+            terminal_state_receipt_id,
+        };
+        let extension_bytes = extension.encode();
+        let header = self
+            .header
+            .terminalized(
+                intent.position_generation_after,
+                &extension_bytes,
+                &DealerReplaySha256V1,
+            )
+            .map_err(map_retirement_error)?;
+        let replay_post = Self { header, extension };
         replay_post.validate()?;
         Ok(PreparedDealerReplayTransitionV1 {
             replay_account_id: account_binding.replay_account_id,
@@ -172,57 +326,65 @@ impl FixedCodec for DealerFacilityReplayV1 {
 
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
-        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.header(
-            &DEALER_FACILITY_REPLAY_MAGIC_V1,
-            DEALER_FACILITY_REPLAY_VERSION_V1,
-        );
-        for identity in [
-            self.policy_id,
-            self.facility_id,
-            self.market_instance_v2_id,
-            self.dealer_state_account_id,
-            self.facility_position_account_id,
-            self.last_transition_intent_id,
-        ] {
-            writer.id(identity);
-        }
-        writer.u64(self.next_transition_ordinal);
-        self.rent.encode_body(&mut writer);
-        writer.finish()
+        let extension = self.extension.encode();
+        ReplayV3Envelope::from_header(self.header, &extension, &DealerReplaySha256V1)
+            .and_then(|envelope| envelope.encode_into(output, &DealerReplaySha256V1))
+            .map_err(map_retirement_error)
     }
 
     fn decode(input: &[u8]) -> Result<Self> {
-        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.header(
-            &DEALER_FACILITY_REPLAY_MAGIC_V1,
-            DEALER_FACILITY_REPLAY_VERSION_V1,
-        )?;
+        let envelope =
+            ReplayV3Envelope::decode(input, &DealerReplaySha256V1).map_err(map_retirement_error)?;
         let value = Self {
-            policy_id: reader.id(),
-            facility_id: reader.id(),
-            market_instance_v2_id: reader.id(),
-            dealer_state_account_id: reader.id(),
-            facility_position_account_id: reader.id(),
-            last_transition_intent_id: reader.id(),
-            next_transition_ordinal: reader.u64(),
-            rent: DeletableRentOwnerV1::decode_body(&mut reader),
+            header: envelope.header(),
+            extension: DealerReplayExtensionV1::decode(envelope.extension())?,
         };
-        reader.finish()?;
         value.validate()?;
         Ok(value)
     }
 }
 
-/// Exact canonical Replay PDA seed facts, excluding the program id and bump.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerFacilityReplayPdaSeedsV1 {
-    /// Immutable facility seed.
-    pub facility_id: Id,
-    /// Authoritative State-account seed.
-    pub dealer_state_account_id: Id,
-    /// Canonical Position V3 account seed.
-    pub facility_position_account_id: Id,
+const fn dealer_id(identity: Identity32V1) -> Id {
+    Id::from_bytes(identity.bytes())
+}
+
+fn retirement_id(identity: Id) -> Result<Identity32V1> {
+    Identity32V1::new(identity.bytes()).map_err(|_| Error::ZeroIdentity)
+}
+
+fn dealer_extension_schema() -> Result<ReplayV3ExtensionSchema> {
+    ReplayV3ExtensionSchema::new(DEALER_REPLAY_EXTENSION_SCHEMA_V1).map_err(map_retirement_error)
+}
+
+fn map_retirement_error(error: RetirementErrorV2) -> Error {
+    match error {
+        RetirementErrorV2::Truncated => Error::Truncated,
+        RetirementErrorV2::TrailingBytes => Error::TrailingBytes,
+        RetirementErrorV2::WrongTag => Error::BadMagic,
+        RetirementErrorV2::WrongVersion => Error::BadVersion,
+        RetirementErrorV2::ZeroIdentity => Error::ZeroIdentity,
+        RetirementErrorV2::ArithmeticOverflow => Error::ArithmeticOverflow,
+        RetirementErrorV2::WrongPhase | RetirementErrorV2::AlreadyTerminal => Error::InvalidPhase,
+        RetirementErrorV2::WrongGeneration
+        | RetirementErrorV2::WrongParent
+        | RetirementErrorV2::ReplayMismatch => Error::MismatchedBinding,
+        _ => Error::InvalidParameter,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DealerReplaySha256V1;
+
+impl ReplayV3HashBackend for DealerReplaySha256V1 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        let mut index = 0usize;
+        while index < parts.len() {
+            hasher.update(parts[index]);
+            index += 1;
+        }
+        hasher.finalize().into()
+    }
 }
 
 /// Runtime-authenticated actual Replay account joined to Position V3.
@@ -289,6 +451,13 @@ pub struct DealerTransitionIntentV1 {
     pub fee_receipt_semantic_id: Id,
     /// Content identity of the complete exact asset-transfer bundle.
     pub asset_transfer_bundle_id: Id,
+    /// Position generation authenticated before the transition.
+    pub position_generation_before: u64,
+    /// Position generation expected after the transition.
+    ///
+    /// It is equal to the pre-generation for ordinary steps and exactly one
+    /// greater for a generation-consuming Finalize, Abort, or terminal step.
+    pub position_generation_after: u64,
     /// Ordinal consumed from Replay.
     pub expected_ordinal: u64,
     /// Exact Dealer action being committed.
@@ -340,6 +509,23 @@ impl DealerTransitionIntentV1 {
         } else if !self.fee_receipt_semantic_id.is_zero() {
             return Err(Error::MismatchedBinding);
         }
+        if self.position_generation_before == 0
+            || (self.position_generation_after != self.position_generation_before
+                && self.position_generation_before.checked_add(1)
+                    != Some(self.position_generation_after))
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let consumes_generation = matches!(
+            self.action,
+            DealerRuntimeActionV1::FinalizeSettlement
+                | DealerRuntimeActionV1::AbortBeforeCollection
+        );
+        if consumes_generation
+            != (self.position_generation_after != self.position_generation_before)
+        {
+            return Err(Error::MismatchedBinding);
+        }
         Ok(())
     }
 
@@ -374,6 +560,8 @@ impl FixedCodec for DealerTransitionIntentV1 {
         ] {
             writer.id(identity);
         }
+        writer.u64(self.position_generation_before);
+        writer.u64(self.position_generation_after);
         writer.u64(self.expected_ordinal);
         writer.u8(action_byte(self.action));
         writer.u8(liveness_mode_byte(self.liveness_mode));
@@ -396,6 +584,8 @@ impl FixedCodec for DealerTransitionIntentV1 {
         let liveness_receipt_semantic_id = reader.id();
         let fee_receipt_semantic_id = reader.id();
         let asset_transfer_bundle_id = reader.id();
+        let position_generation_before = reader.u64();
+        let position_generation_after = reader.u64();
         let expected_ordinal = reader.u64();
         let action = decode_action(reader.u8())?;
         let liveness_mode = DealerTransitionLivenessModeV1::decode(reader.u8())?;
@@ -411,6 +601,8 @@ impl FixedCodec for DealerTransitionIntentV1 {
             liveness_receipt_semantic_id,
             fee_receipt_semantic_id,
             asset_transfer_bundle_id,
+            position_generation_before,
+            position_generation_after,
             expected_ordinal,
             action,
             liveness_mode,
@@ -473,7 +665,7 @@ pub fn accept_dealer_replay_transition_v1(
     if observed.replay_account_id != prepared.replay_account_id
         || observed.replay_pre_id != prepared.replay_pre_id
         || observed.replay_post != prepared.replay_post
-        || observed.replay_post.last_transition_intent_id != prepared.intent_id
+        || observed.replay_post.last_transition_intent_id() != prepared.intent_id
         || observed.state_post_content_id != prepared.intent.state_post_content_id
         || observed.position_post_semantic_id != prepared.intent.position_post_semantic_id
         || observed.asset_transfer_receipt_id != prepared.intent.asset_transfer_bundle_id
@@ -485,40 +677,104 @@ pub fn accept_dealer_replay_transition_v1(
     Ok(observed.replay_post)
 }
 
-/// Authenticated terminal joins required before deleting a Facility Replay.
+/// Forgeable terminal projection consumed only after runtime authentication.
+///
+/// Public fields confer no terminal authority. The Dealer State handler must
+/// first authenticate and exhaust its exact child graph; retirement separately
+/// authenticates the terminal Position and Replay account bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerReplayTerminalJoinV1 {
     /// Actual Replay account being deleted.
     pub replay_account_id: Id,
     /// Exact Replay account retained by terminal Position V3.
     pub position_replay_account_id: Id,
-    /// Exact authoritative Dealer State account.
-    pub dealer_state_account_id: Id,
     /// Exact canonical Position V3 account.
     pub facility_position_account_id: Id,
-    /// Whether authenticated State V2 is in Retiring.
-    pub dealer_state_is_retiring: bool,
-    /// Whether authenticated Position V3 has minted its terminal projection.
-    pub position_is_terminal: bool,
+    /// Exact facility Position purpose-binding identity.
+    pub facility_position_binding_id: Id,
+    /// Exact terminal Position generation.
+    pub position_generation: u64,
+    /// Exact State-owned terminal receipt committed by the Dealer extension.
+    pub terminal_state_receipt_id: Id,
+    /// Canonical Realm neutral lamport sink authenticated outside Replay.
+    pub neutral_sink: Id,
 }
 
 /// Lamport-only Replay close plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerReplayClosePlanV1 {
     /// Replay account deleted to zero lamports/data.
-    pub replay_account_id: Id,
+    replay_account_id: Id,
+    /// Semantic identity of the exact terminal Replay bytes.
+    terminal_replay_semantic_id: Id,
+    /// Last terminal transition intent committed by the Dealer extension.
+    last_transition_intent_id: Id,
+    /// Exact terminal State receipt committed by the Dealer extension.
+    terminal_state_receipt_id: Id,
     /// Rent payer and sole principal-refund recipient.
-    pub payer: Id,
+    payer: Id,
     /// Canonical Realm neutral lamport sink.
-    pub neutral_sink: Id,
+    neutral_sink: Id,
     /// Exact lamport principal refunded to the payer.
-    pub payer_refund_lamports: u64,
+    payer_refund_lamports: u64,
     /// Donation floor and every later surplus routed to the neutral sink.
-    pub neutral_surplus_lamports: u64,
+    neutral_surplus_lamports: u64,
     /// Expected payer balance after the atomic close.
-    pub payer_balance_after: u64,
+    payer_balance_after: u64,
     /// Expected neutral-sink balance after the atomic close.
-    pub neutral_sink_balance_after: u64,
+    neutral_sink_balance_after: u64,
+}
+
+impl DealerReplayClosePlanV1 {
+    /// Exact Replay account deleted by the combined Position retirement commit.
+    pub const fn replay_account_id(self) -> Id {
+        self.replay_account_id
+    }
+
+    /// Semantic identity of the terminal Replay envelope and Dealer extension.
+    pub const fn terminal_replay_semantic_id(self) -> Id {
+        self.terminal_replay_semantic_id
+    }
+
+    /// Exact terminal transition intent retained as Dealer evidence.
+    pub const fn last_transition_intent_id(self) -> Id {
+        self.last_transition_intent_id
+    }
+
+    /// Exact terminal State receipt retained as Dealer evidence.
+    pub const fn terminal_state_receipt_id(self) -> Id {
+        self.terminal_state_receipt_id
+    }
+
+    /// Replay rent payer and sole principal-refund recipient.
+    pub const fn payer(self) -> Id {
+        self.payer
+    }
+
+    /// Canonical Realm neutral lamport sink.
+    pub const fn neutral_sink(self) -> Id {
+        self.neutral_sink
+    }
+
+    /// Exact refundable Replay rent principal.
+    pub const fn payer_refund_lamports(self) -> u64 {
+        self.payer_refund_lamports
+    }
+
+    /// Donation floor and later Replay surplus routed neutral.
+    pub const fn neutral_surplus_lamports(self) -> u64 {
+        self.neutral_surplus_lamports
+    }
+
+    /// Expected payer balance after atomic Replay deletion.
+    pub const fn payer_balance_after(self) -> u64 {
+        self.payer_balance_after
+    }
+
+    /// Expected neutral-sink balance after atomic Replay deletion.
+    pub const fn neutral_sink_balance_after(self) -> u64 {
+        self.neutral_sink_balance_after
+    }
 }
 
 /// Plan Replay deletion only after exact State/Position terminal joins.
@@ -536,41 +792,53 @@ pub fn plan_dealer_replay_close_v1(
     for identity in [
         join.replay_account_id,
         join.position_replay_account_id,
-        join.dealer_state_account_id,
         join.facility_position_account_id,
+        join.facility_position_binding_id,
+        join.terminal_state_receipt_id,
+        join.neutral_sink,
     ] {
         identity.validate_live()?;
     }
     if join.replay_account_id != join.position_replay_account_id
-        || join.dealer_state_account_id != replay.dealer_state_account_id
-        || join.facility_position_account_id != replay.facility_position_account_id
-        || !join.dealer_state_is_retiring
-        || !join.position_is_terminal
+        || join.replay_account_id != replay.replay_account_id()
+        || join.facility_position_account_id != replay.facility_position_account_id()
+        || join.facility_position_binding_id != replay.facility_position_binding_id()
+        || join.position_generation != replay.position_generation()
+        || join.terminal_state_receipt_id != replay.terminal_state_receipt_id()
+        || replay.lifecycle() != ReplayV3Lifecycle::Terminal
     {
         return Err(Error::MismatchedBinding);
     }
-    let minimum_balance = replay
-        .rent
-        .refundable_principal
-        .checked_add(replay.rent.donation_floor)
+    let rent = replay.rent();
+    let payer = dealer_id(rent.payer());
+    if payer == join.neutral_sink {
+        return Err(Error::InvalidParameter);
+    }
+    let minimum_balance = rent
+        .refundable_principal()
+        .checked_add(rent.donation_floor())
         .ok_or(Error::ArithmeticOverflow)?;
     if replay_lamports < minimum_balance {
         return Err(Error::InvalidParameter);
     }
     let neutral_surplus_lamports = replay_lamports
-        .checked_sub(replay.rent.refundable_principal)
+        .checked_sub(rent.refundable_principal())
         .ok_or(Error::ArithmeticOverflow)?;
     let payer_balance_after = payer_balance_before
-        .checked_add(replay.rent.refundable_principal)
+        .checked_add(rent.refundable_principal())
         .ok_or(Error::ArithmeticOverflow)?;
     let neutral_sink_balance_after = neutral_sink_balance_before
         .checked_add(neutral_surplus_lamports)
         .ok_or(Error::ArithmeticOverflow)?;
+    let terminal_replay_semantic_id = replay.replay_id()?;
     Ok(DealerReplayClosePlanV1 {
         replay_account_id: join.replay_account_id,
-        payer: replay.rent.payer,
-        neutral_sink: replay.rent.neutral_sink,
-        payer_refund_lamports: replay.rent.refundable_principal,
+        terminal_replay_semantic_id,
+        last_transition_intent_id: replay.last_transition_intent_id(),
+        terminal_state_receipt_id: replay.terminal_state_receipt_id(),
+        payer,
+        neutral_sink: join.neutral_sink,
+        payer_refund_lamports: rent.refundable_principal(),
         neutral_surplus_lamports,
         payer_balance_after,
         neutral_sink_balance_after,
