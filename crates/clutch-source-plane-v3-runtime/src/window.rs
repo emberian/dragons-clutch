@@ -1,0 +1,1119 @@
+use clutch_source_plane_v3::{
+    ContentId, FixedCodec, RawPageV3, SourcePlaneProgramV3, StatisticKeyV3,
+    StatisticResultStatusV3, StatisticResultV3, SummaryProgramV3, WindowClosureReceiptV3,
+    WindowSealV3, WindowSpecV3, WindowWorkV3, RAW_PAGE_BYTES, STATISTIC_RESULT_BYTES,
+    WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
+};
+use clutch_source_plane_v3_adapter::{decode_account, PdaRecipeV3};
+use clutch_terminal_identity_v1::Id as TerminalId;
+
+use crate::auth::{
+    account_data_id, domain_id, live_id, AdapterInvocationV1, AuthenticatedSourceRouteV1,
+    ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1,
+    RuntimeKey,
+};
+use crate::lineage::{AuthenticatedReopenLineageV1, LineageAccessV1, LineageFamilyV1};
+use crate::{Error, Result};
+
+const PAGE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-raw-page/v1";
+const WORK_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-work/v1";
+const WORK_STATE_DOMAIN: &[u8] = b"dragons-clutch/window-work-state/v1";
+const SEAL_ACCOUNT_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-seal-account/v1";
+const FOLD_DOMAIN: &[u8] = b"dragons-clutch/window-page-fold-batch/v1";
+const WINDOW_EVIDENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-evidence/v1";
+const EVALUATION_AUTHORITY_DOMAIN: &[u8] = b"dragons-clutch/evaluation-authority/v1";
+const EVALUATION_DOMAIN: &[u8] = b"dragons-clutch/authenticated-evaluation/v1";
+const RESULT_ABSENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-statistic-result-absence/v1";
+const OCCURRENCE_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-record/v1";
+const OCCURRENCE_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-join/v1";
+const FAILURE_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-source-handoff/v1";
+const OCCURRENCE_MAGIC: [u8; 8] = *b"DCSOCCV1";
+
+/// Exact Product/Series-owned occurrence record width.
+pub const SOURCE_OCCURRENCE_RECORD_BYTES: usize = 184;
+/// Maximum immutable pages folded by one bounded runtime call.
+pub const MAX_PAGES_PER_FOLD: usize = 4;
+
+/// Runtime-authenticated immutable raw-page account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedRawPageV1 {
+    route_id: ContentId,
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    page: RawPageV3,
+    authentication_id: ContentId,
+}
+
+/// Runtime-authenticated mutable WindowWork account and open lineage generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedWindowWorkV1 {
+    route_id: ContentId,
+    account: RuntimeKey,
+    terminal_generation: u64,
+    work: WindowWorkV3,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedWindowWorkV1 {
+    /// Exact authenticated source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Physical WindowWork account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Durable close/reopen generation.
+    pub const fn terminal_generation(self) -> u64 {
+        self.terminal_generation
+    }
+
+    /// Complete canonical WindowWork body.
+    pub const fn work(self) -> WindowWorkV3 {
+        self.work
+    }
+
+    /// Complete account/PDA/body/lineage authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+impl AuthenticatedRawPageV1 {
+    /// Exact source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Physical immutable page account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of the complete canonical account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Complete canonical raw page.
+    pub const fn page(self) -> RawPageV3 {
+        self.page
+    }
+
+    /// Exact account/PDA/body authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+/// Authenticate owner, address, PDA recipe, bump, envelope, and complete page body.
+pub fn authenticate_raw_page_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+) -> Result<AuthenticatedRawPageV1> {
+    require_immutable_adapter_account(route, account)?;
+    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
+    let (header, page) = decode_account::<RawPageV3>(account.data, neutral_sink)?;
+    page.validate()?;
+    let recipe = PdaRecipeV3::raw_page(route.source_plane_contract_id(), page.id()?)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        header.bump,
+    )?;
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let mut bytes = [0; 136];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&account.key.bytes());
+    bytes[64..96].copy_from_slice(&account_data_id.bytes());
+    bytes[96..128].copy_from_slice(&page.id()?.bytes());
+    bytes[128] = header.bump;
+    Ok(AuthenticatedRawPageV1 {
+        route_id: route.route_id(),
+        account: account.key,
+        account_data_id,
+        page,
+        authentication_id: domain_id(PAGE_AUTH_DOMAIN, &bytes),
+    })
+}
+
+/// Authenticate writable WindowWork owner/PDA/body and its exact open lineage.
+pub fn authenticate_window_work_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    window: &WindowSpecV3,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedWindowWorkV1> {
+    require_mutable_adapter_account(route, account)?;
+    if authenticated_lineage.access() != LineageAccessV1::Mutable {
+        return Err(Error::WrongPrivilege);
+    }
+    validate_window_route(route, window)?;
+    let lineage = authenticated_lineage.lineage();
+    lineage.validate()?;
+    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
+    let (header, work) = decode_account::<WindowWorkV3>(account.data, neutral_sink)?;
+    work.validate_against(window)?;
+    let recipe = PdaRecipeV3::window_work(window.id()?)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        header.bump,
+    )?;
+    if lineage.adapter_program != route.adapter_program()
+        || lineage.family != LineageFamilyV1::WindowWork
+        || lineage.semantic_binding_id != window.id()?
+        || !lineage.is_open
+        || lineage.active_account != account.key
+        || lineage.latest_generation != header.terminal.generation
+        || lineage.source_work_schedule_id != route.source_work_schedule_id()
+        || lineage.neutral_sink != route.neutral_sink()
+    {
+        return Err(Error::InvalidLineage);
+    }
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let state_id = window_work_state_id(&work)?;
+    let mut bytes = [0; 208];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&window.id()?.bytes());
+    bytes[64..96].copy_from_slice(&account.key.bytes());
+    bytes[96..128].copy_from_slice(&account_data_id.bytes());
+    bytes[128..160].copy_from_slice(&state_id.bytes());
+    bytes[160..192].copy_from_slice(&lineage.lineage_account.bytes());
+    bytes[192..200].copy_from_slice(&header.terminal.generation.to_le_bytes());
+    bytes[200] = header.bump;
+    let authentication_id = domain_id(WORK_AUTH_DOMAIN, &bytes);
+    if lineage.last_opened_state_id != account_data_id {
+        return Err(Error::InvalidLineage);
+    }
+    Ok(AuthenticatedWindowWorkV1 {
+        route_id: route.route_id(),
+        account: account.key,
+        terminal_generation: header.terminal.generation,
+        work,
+        authentication_id,
+    })
+}
+
+/// Result of a bounded multi-page WindowWork fold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoldPagesOutputV1 {
+    /// Exact post-fold work.
+    pub work_after: WindowWorkV3,
+    /// Number of pages folded.
+    pub page_count: u8,
+    /// Ordered page-authentication receipt.
+    pub fold_receipt_id: ContentId,
+}
+
+/// Fold several runtime-authenticated immutable pages in canonical order.
+pub fn fold_authenticated_pages(
+    route: AuthenticatedSourceRouteV1,
+    window: &WindowSpecV3,
+    authenticated_work: AuthenticatedWindowWorkV1,
+    pages: &[AuthenticatedRawPageV1],
+) -> Result<FoldPagesOutputV1> {
+    window.validate()?;
+    if authenticated_work.route_id() != route.route_id() {
+        return Err(Error::MismatchedBinding);
+    }
+    let work = authenticated_work.work();
+    work.validate_against(window)?;
+    if pages.is_empty() || pages.len() > MAX_PAGES_PER_FOLD {
+        return Err(Error::InvalidCount);
+    }
+    validate_window_route(route, window)?;
+    let mut next = work;
+    let mut receipt_bytes = [0; 72 + MAX_PAGES_PER_FOLD * 32];
+    receipt_bytes[..32].copy_from_slice(&window.id()?.bytes());
+    receipt_bytes[32..64].copy_from_slice(&route.route_id().bytes());
+    receipt_bytes[64] = u8::try_from(pages.len()).map_err(|_| Error::InvalidCount)?;
+    receipt_bytes[65..72].fill(0);
+    let mut index = 0_usize;
+    while index < pages.len() {
+        let authenticated = pages[index];
+        let page = authenticated.page();
+        if authenticated.route_id() != route.route_id()
+            || page.source_spec_id != window.source_spec_id
+            || page.repair_generation != window.repair_generation
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        next = next.push_page(window, &page)?;
+        let at = 72 + index * 32;
+        receipt_bytes[at..at + 32].copy_from_slice(&authenticated.id().bytes());
+        index += 1;
+    }
+    let mut transition_bytes = [0; 96];
+    transition_bytes[..32].copy_from_slice(&authenticated_work.id().bytes());
+    transition_bytes[32..64].copy_from_slice(&window_work_state_id(&next)?.bytes());
+    transition_bytes[64..96].copy_from_slice(&domain_id(FOLD_DOMAIN, &receipt_bytes).bytes());
+    Ok(FoldPagesOutputV1 {
+        work_after: next,
+        page_count: u8::try_from(pages.len()).map_err(|_| Error::InvalidCount)?,
+        fold_receipt_id: domain_id(FOLD_DOMAIN, &transition_bytes),
+    })
+}
+
+/// Runtime-authenticated final WindowSeal and closure evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedWindowEvidenceV1 {
+    route_id: ContentId,
+    source_spec_id: ContentId,
+    source_plane_contract_id: ContentId,
+    window_id: ContentId,
+    repair_generation: u64,
+    closure: WindowClosureReceiptV3,
+    seal: WindowSealV3,
+    evidence_id: ContentId,
+}
+
+/// Runtime-authenticated exact-existing immutable WindowSeal account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedWindowSealAccountV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    seal: WindowSealV3,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedWindowSealAccountV1 {
+    /// Physical WindowSeal account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of complete account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Canonical WindowSeal body.
+    pub const fn seal(self) -> WindowSealV3 {
+        self.seal
+    }
+
+    /// Complete owner/PDA/body authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+impl AuthenticatedWindowEvidenceV1 {
+    /// Exact source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Existing SourceSpec identity.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Exact reviewed SourcePlane contract.
+    pub const fn source_plane_contract_id(self) -> ContentId {
+        self.source_plane_contract_id
+    }
+
+    /// Predictable WindowKey.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Exact repair generation.
+    pub const fn repair_generation(self) -> u64 {
+        self.repair_generation
+    }
+
+    /// Canonical closure receipt.
+    pub const fn closure(self) -> WindowClosureReceiptV3 {
+        self.closure
+    }
+
+    /// Canonical final WindowSeal.
+    pub const fn seal(self) -> WindowSealV3 {
+        self.seal
+    }
+
+    /// Authentication identity for the complete page/work/Clock join.
+    pub const fn id(self) -> ContentId {
+        self.evidence_id
+    }
+}
+
+/// Finish a mature Window from exact authenticated page and Clock facts.
+pub fn seal_authenticated_window(
+    route: AuthenticatedSourceRouteV1,
+    source_plane: &SourcePlaneProgramV3,
+    clock_policy: &ClockPolicyV1,
+    clock: ClockSnapshotV1,
+    window: &WindowSpecV3,
+    authenticated_work: AuthenticatedWindowWorkV1,
+    maturity_page: AuthenticatedRawPageV1,
+) -> Result<AuthenticatedWindowEvidenceV1> {
+    source_plane.validate()?;
+    if authenticated_work.route_id() != route.route_id() {
+        return Err(Error::MismatchedBinding);
+    }
+    let work = authenticated_work.work();
+    validate_window_route(route, window)?;
+    if source_plane.id()? != route.source_plane_contract_id()
+        || clock_policy.id()? != route.clock_policy_id()
+        || clock.unix_timestamp < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
+        || maturity_page.route_id() != route.route_id()
+        || maturity_page.page().source_spec_id != window.source_spec_id
+        || maturity_page.page().repair_generation != window.repair_generation
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let closure = WindowClosureReceiptV3::from_page(source_plane, window, &maturity_page.page())?;
+    let seal = work.finish(window, &closure)?;
+    let mut bytes = [0; 232];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&window.id()?.bytes());
+    bytes[64..72].copy_from_slice(&window.repair_generation.to_le_bytes());
+    bytes[72..80].copy_from_slice(&clock.slot.to_le_bytes());
+    bytes[80..88].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+    bytes[88..120].copy_from_slice(&maturity_page.id().bytes());
+    bytes[120..152].copy_from_slice(&closure.id()?.bytes());
+    bytes[152..184].copy_from_slice(&seal.id()?.bytes());
+    bytes[184..216].copy_from_slice(&authenticated_work.id().bytes());
+    let evidence_id = domain_id(WINDOW_EVIDENCE_DOMAIN, &bytes);
+    Ok(AuthenticatedWindowEvidenceV1 {
+        route_id: route.route_id(),
+        source_spec_id: window.source_spec_id,
+        source_plane_contract_id: window.source_plane_program_id,
+        window_id: window.id()?,
+        repair_generation: window.repair_generation,
+        closure,
+        seal,
+        evidence_id,
+    })
+}
+
+/// Reviewed evaluator deployment plus its exact summary-program semantic owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvaluationReleaseBindingV1 {
+    /// Reviewed evaluator executable and ProgramData.
+    pub deployment: DeploymentBindingV1,
+    /// Exact SummaryProgram V3 identity implemented by that release.
+    pub summary_program_id: ContentId,
+}
+
+/// Runtime-authenticated evaluator authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvaluationAuthorityV1 {
+    deployment: DeploymentBindingV1,
+    deployment_id: ContentId,
+    summary_program: SummaryProgramV3,
+    authority_id: ContentId,
+}
+
+impl EvaluationAuthorityV1 {
+    /// Exact evaluator program.
+    pub const fn evaluator_program(self) -> RuntimeKey {
+        self.deployment.program
+    }
+
+    /// Reviewed executable/ProgramData release identity.
+    pub const fn deployment_id(self) -> ContentId {
+        self.deployment_id
+    }
+
+    /// Exact source-neutral SummaryProgram.
+    pub const fn summary_program(self) -> SummaryProgramV3 {
+        self.summary_program
+    }
+
+    /// Authentication identity of release plus SummaryProgram.
+    pub const fn id(self) -> ContentId {
+        self.authority_id
+    }
+}
+
+/// Authenticate evaluator executable/ProgramData bytes and SummaryProgram identity.
+pub fn authenticate_evaluation_authority(
+    binding: EvaluationReleaseBindingV1,
+    summary_program: SummaryProgramV3,
+    program: RuntimeAccountViewV1<'_>,
+    programdata: RuntimeAccountViewV1<'_>,
+) -> Result<EvaluationAuthorityV1> {
+    summary_program.validate()?;
+    if summary_program.id()? != binding.summary_program_id {
+        return Err(Error::MismatchedBinding);
+    }
+    let deployment_id = binding.deployment.authenticate(program, programdata)?;
+    let mut bytes = [0; 64];
+    bytes[..32].copy_from_slice(&deployment_id.bytes());
+    bytes[32..].copy_from_slice(&binding.summary_program_id.bytes());
+    Ok(EvaluationAuthorityV1 {
+        deployment: binding.deployment,
+        deployment_id,
+        summary_program,
+        authority_id: domain_id(EVALUATION_AUTHORITY_DOMAIN, &bytes),
+    })
+}
+
+/// Exact reviewed evaluator output bound to raw evidence and Clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedEvaluationV1 {
+    authority_id: ContentId,
+    window_evidence_id: ContentId,
+    statistic_key_id: ContentId,
+    result: StatisticResultV3,
+    evaluation_id: ContentId,
+}
+
+/// Runtime- and lineage-authenticated never-created StatisticResult slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedStatisticResultAbsenceV1 {
+    statistic_key_id: ContentId,
+    result_account: RuntimeKey,
+    lineage_id: ContentId,
+    absence_id: ContentId,
+}
+
+impl AuthenticatedStatisticResultAbsenceV1 {
+    /// Predictable StatisticKey whose result is absent.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Predictable unallocated result account.
+    pub const fn result_account(self) -> RuntimeKey {
+        self.result_account
+    }
+
+    /// Exact never-created lineage state.
+    pub const fn lineage_id(self) -> ContentId {
+        self.lineage_id
+    }
+
+    /// Complete runtime absence receipt.
+    pub const fn id(self) -> ContentId {
+        self.absence_id
+    }
+}
+
+/// Authenticate an unallocated predictable result PDA plus never-created lineage.
+pub fn authenticate_statistic_result_absence(
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedStatisticResultAbsenceV1> {
+    key.validate()?;
+    if authenticated_lineage.access() != LineageAccessV1::ReadOnly {
+        return Err(Error::WrongPrivilege);
+    }
+    let lineage = authenticated_lineage.lineage();
+    lineage.validate()?;
+    let key_id = key.id()?;
+    let recipe = PdaRecipeV3::statistic_result(key_id)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        derived_pda.bump,
+    )?;
+    if account.owner != route.system_program()
+        || account.lamports != 0
+        || !account.data.is_empty()
+        || account.executable
+        || account.signer
+        || account.writable
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    if lineage.adapter_program != route.adapter_program()
+        || lineage.family != LineageFamilyV1::StatisticResult
+        || lineage.semantic_binding_id != key_id
+        || lineage.latest_generation != 0
+        || lineage.is_open
+        || lineage.source_work_schedule_id != route.source_work_schedule_id()
+        || lineage.neutral_sink != route.neutral_sink()
+    {
+        return Err(Error::InvalidLineage);
+    }
+    let lineage_id = lineage.id()?;
+    let mut bytes = [0; 136];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&key_id.bytes());
+    bytes[64..96].copy_from_slice(&account.key.bytes());
+    bytes[96..128].copy_from_slice(&lineage_id.bytes());
+    bytes[128] = derived_pda.bump;
+    Ok(AuthenticatedStatisticResultAbsenceV1 {
+        statistic_key_id: key_id,
+        result_account: account.key,
+        lineage_id,
+        absence_id: domain_id(RESULT_ABSENCE_DOMAIN, &bytes),
+    })
+}
+
+impl AuthenticatedEvaluationV1 {
+    /// Exact evaluator authority identity.
+    pub const fn authority_id(self) -> ContentId {
+        self.authority_id
+    }
+
+    /// Exact authenticated Window evidence.
+    pub const fn window_evidence_id(self) -> ContentId {
+        self.window_evidence_id
+    }
+
+    /// Predictable StatisticKey.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Canonical evaluator result.
+    pub const fn result(self) -> StatisticResultV3 {
+        self.result
+    }
+
+    /// Complete authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.evaluation_id
+    }
+}
+
+/// Authenticate exact returned result bytes against release, WindowSeal, and key.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_statistic_result(
+    authority: EvaluationAuthorityV1,
+    clock: ClockSnapshotV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    evidence: AuthenticatedWindowEvidenceV1,
+    returned_result_bytes: &[u8],
+    invocation: AdapterInvocationV1,
+) -> Result<AuthenticatedEvaluationV1> {
+    if returned_result_bytes.len() != STATISTIC_RESULT_BYTES {
+        return Err(Error::InvalidCodec);
+    }
+    let result = StatisticResultV3::decode(returned_result_bytes)?;
+    result.validate_against(key, &authority.summary_program, &evidence.seal(), window)?;
+    invocation.validate()?;
+    if invocation.invoked_program != authority.evaluator_program()
+        || invocation.return_data_id != result.id()?
+        || key.summary_program_id != authority.summary_program.id()?
+        || evidence.window_id() != window.id()?
+        || evidence.source_spec_id() != window.source_spec_id
+        || evidence.repair_generation() != window.repair_generation
+    {
+        return Err(Error::WrongInvocation);
+    }
+    let mut bytes = [0; 184];
+    bytes[..32].copy_from_slice(&authority.id().bytes());
+    bytes[32..64].copy_from_slice(&evidence.id().bytes());
+    bytes[64..96].copy_from_slice(&key.id()?.bytes());
+    bytes[96..128].copy_from_slice(&result.id()?.bytes());
+    bytes[128..160].copy_from_slice(&invocation.id()?.bytes());
+    bytes[160..168].copy_from_slice(&clock.slot.to_le_bytes());
+    bytes[168..176].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+    Ok(AuthenticatedEvaluationV1 {
+        authority_id: authority.id(),
+        window_evidence_id: evidence.id(),
+        statistic_key_id: key.id()?,
+        result,
+        evaluation_id: domain_id(EVALUATION_DOMAIN, &bytes),
+    })
+}
+
+/// Whether the Product/Series component was atomically created or read exact-existing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum OccurrenceDispositionV1 {
+    /// Canonical occurrence account was created in this transaction.
+    Created = 1,
+    /// Exact independently existing canonical occurrence was authenticated.
+    ExactExisting = 2,
+}
+
+/// Private-field runtime receipt joining Product/Series provenance to SourcePlane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceSourceReceiptV1 {
+    route_id: ContentId,
+    clock_policy_id: ContentId,
+    occurrence_record_id: ContentId,
+    series_plan_id: ContentId,
+    ordinal: u32,
+    market_instance_id: ContentId,
+    attachment_plan_id: ContentId,
+    source_plane_contract_id: ContentId,
+    source_spec_id: ContentId,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
+    repair_generation: u64,
+    disposition: OccurrenceDispositionV1,
+    occurrence_account_authentication_id: ContentId,
+    join_id: ContentId,
+}
+
+impl OccurrenceSourceReceiptV1 {
+    /// Complete authenticated source route.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Exact Clock/bucket policy selected by the source route.
+    pub const fn clock_policy_id(self) -> ContentId {
+        self.clock_policy_id
+    }
+
+    /// Product/Series-owned occurrence record identity.
+    pub const fn occurrence_record_id(self) -> ContentId {
+        self.occurrence_record_id
+    }
+
+    /// Exact SeriesPlanV5 identity.
+    pub const fn series_plan_id(self) -> ContentId {
+        self.series_plan_id
+    }
+
+    /// Exact finite Series ordinal.
+    pub const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+
+    /// Economic MarketInstanceV2 identity.
+    pub const fn market_instance_id(self) -> ContentId {
+        self.market_instance_id
+    }
+
+    /// Exact operational attachment plan.
+    pub const fn attachment_plan_id(self) -> ContentId {
+        self.attachment_plan_id
+    }
+
+    /// Exact SourcePlane contract.
+    pub const fn source_plane_contract_id(self) -> ContentId {
+        self.source_plane_contract_id
+    }
+
+    /// Existing SourceSpec identity.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Predictable WindowKey.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Predictable StatisticKey.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Exact selected repair generation.
+    pub const fn repair_generation(self) -> u64 {
+        self.repair_generation
+    }
+
+    /// Created versus exact-existing disposition.
+    pub const fn disposition(self) -> OccurrenceDispositionV1 {
+        self.disposition
+    }
+
+    /// Exact created/existing occurrence-account authentication receipt.
+    pub const fn occurrence_account_authentication_id(self) -> ContentId {
+        self.occurrence_account_authentication_id
+    }
+
+    /// Complete Product/Source runtime join identity.
+    pub const fn id(self) -> ContentId {
+        self.join_id
+    }
+}
+
+/// Join the exact Product/Series-owned 184-byte codec without persisting a parallel DTO.
+pub fn join_source_occurrence(
+    route: AuthenticatedSourceRouteV1,
+    occurrence_account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    disposition: OccurrenceDispositionV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+) -> Result<OccurrenceSourceReceiptV1> {
+    let occurrence_record_bytes = occurrence_account.data;
+    if occurrence_record_bytes.len() != SOURCE_OCCURRENCE_RECORD_BYTES
+        || occurrence_record_bytes[..8] != OCCURRENCE_MAGIC
+        || le_u16(&occurrence_record_bytes[8..10]) != 1
+        || occurrence_record_bytes[10..16]
+            .iter()
+            .any(|byte| *byte != 0)
+        || occurrence_record_bytes[52..56]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err(Error::InvalidCodec);
+    }
+    if occurrence_account.owner != route.generation_authority_program() {
+        return Err(Error::WrongOwner);
+    }
+    if occurrence_account.executable
+        || occurrence_account.signer
+        || (disposition == OccurrenceDispositionV1::Created) != occurrence_account.writable
+    {
+        return Err(Error::WrongPrivilege);
+    }
+    validate_window_route(route, window)?;
+    key.validate()?;
+    let series_plan_id = id_at(occurrence_record_bytes, 16);
+    let ordinal = le_u32(&occurrence_record_bytes[48..52]);
+    let market_instance_id = id_at(occurrence_record_bytes, 56);
+    let attachment_plan_id = id_at(occurrence_record_bytes, 88);
+    let source_window_id = id_at(occurrence_record_bytes, 120);
+    let statistic_key_id = id_at(occurrence_record_bytes, 152);
+    for id in [
+        series_plan_id,
+        market_instance_id,
+        attachment_plan_id,
+        source_window_id,
+        statistic_key_id,
+    ] {
+        live_id(id)?;
+    }
+    if source_window_id != window.id()?
+        || statistic_key_id != key.id()?
+        || key.window_id != source_window_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let occurrence_record_id = domain_id(OCCURRENCE_DOMAIN, occurrence_record_bytes);
+    derived_pda.validate_for(
+        route.generation_authority_program(),
+        occurrence_record_id,
+        occurrence_account.key,
+        derived_pda.bump,
+    )?;
+    let occurrence_account_data_id =
+        account_data_id(occurrence_account.key, occurrence_account.data)?;
+    let mut account_auth_bytes = [0; 104];
+    account_auth_bytes[..32].copy_from_slice(&occurrence_account.key.bytes());
+    account_auth_bytes[32..64].copy_from_slice(&occurrence_account_data_id.bytes());
+    account_auth_bytes[64..96].copy_from_slice(&occurrence_record_id.bytes());
+    account_auth_bytes[96] = derived_pda.bump;
+    let occurrence_account_authentication_id = domain_id(
+        b"dragons-clutch/authenticated-source-occurrence-account/v1",
+        &account_auth_bytes,
+    );
+    let mut bytes = [0; 376];
+    bytes[..32].copy_from_slice(&occurrence_record_id.bytes());
+    bytes[32..64].copy_from_slice(&series_plan_id.bytes());
+    bytes[64..68].copy_from_slice(&ordinal.to_le_bytes());
+    bytes[72..104].copy_from_slice(&market_instance_id.bytes());
+    bytes[104..136].copy_from_slice(&attachment_plan_id.bytes());
+    bytes[136..168].copy_from_slice(&route.source_plane_contract_id().bytes());
+    bytes[168..200].copy_from_slice(&route.source_spec_id().bytes());
+    bytes[200..232].copy_from_slice(&source_window_id.bytes());
+    bytes[232..264].copy_from_slice(&statistic_key_id.bytes());
+    bytes[264..272].copy_from_slice(&window.repair_generation.to_le_bytes());
+    bytes[272] = disposition as u8;
+    bytes[280..312].copy_from_slice(&occurrence_account_authentication_id.bytes());
+    bytes[312..344].copy_from_slice(&route.route_id().bytes());
+    bytes[344..376].copy_from_slice(&route.clock_policy_id().bytes());
+    Ok(OccurrenceSourceReceiptV1 {
+        route_id: route.route_id(),
+        clock_policy_id: route.clock_policy_id(),
+        occurrence_record_id,
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        attachment_plan_id,
+        source_plane_contract_id: route.source_plane_contract_id(),
+        source_spec_id: route.source_spec_id(),
+        window_id: source_window_id,
+        statistic_key_id,
+        repair_generation: window.repair_generation,
+        disposition,
+        occurrence_account_authentication_id,
+        join_id: domain_id(OCCURRENCE_JOIN_DOMAIN, &bytes),
+    })
+}
+
+/// Source-owned failure facts accepted by the failure-policy runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SourceFailureKindV1 {
+    /// Immutable primary maturity passed with no accepted result account.
+    PrimaryMaturityWithoutAcceptedResolution = 1,
+    /// Reviewed evaluator returned exact stable refusal content.
+    SourceEvaluationRefused = 2,
+}
+
+/// Exact source half of a failure-policy binding; it never selects a payout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailurePolicySourceHandoffV1 {
+    kind: SourceFailureKindV1,
+    failure_policy_binding_id: ContentId,
+    occurrence: OccurrenceSourceReceiptV1,
+    clock: ClockSnapshotV1,
+    window_evidence_id: ContentId,
+    statistic_result_id: ContentId,
+    refusal_code: u32,
+    absence_or_evaluation_receipt_id: ContentId,
+    handoff_id: ContentId,
+}
+
+impl FailurePolicySourceHandoffV1 {
+    /// Build an exact no-accepted-resolution maturity fact from adapter-authenticated absence.
+    pub fn primary_maturity_without_resolution(
+        failure_policy_binding_id: ContentId,
+        occurrence: OccurrenceSourceReceiptV1,
+        clock_policy: &ClockPolicyV1,
+        clock: ClockSnapshotV1,
+        window: &WindowSpecV3,
+        absence: AuthenticatedStatisticResultAbsenceV1,
+    ) -> Result<Self> {
+        live_id(failure_policy_binding_id)?;
+        if occurrence.window_id() != window.id()?
+            || occurrence.source_spec_id() != window.source_spec_id
+            || occurrence.repair_generation() != window.repair_generation
+            || occurrence.statistic_key_id() != absence.statistic_key_id()
+            || occurrence.clock_policy_id() != clock_policy.id()?
+            || clock.unix_timestamp
+                < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
+        {
+            return Err(Error::InvalidFailureHandoff);
+        }
+        Self::new(
+            SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution,
+            failure_policy_binding_id,
+            occurrence,
+            clock,
+            ContentId::ZERO,
+            ContentId::ZERO,
+            0,
+            absence.id(),
+        )
+    }
+
+    /// Build an exact stable evaluator-refusal fact.
+    pub fn source_evaluation_refused(
+        failure_policy_binding_id: ContentId,
+        occurrence: OccurrenceSourceReceiptV1,
+        clock_policy: &ClockPolicyV1,
+        clock: ClockSnapshotV1,
+        window: &WindowSpecV3,
+        evidence: AuthenticatedWindowEvidenceV1,
+        evaluation: AuthenticatedEvaluationV1,
+    ) -> Result<Self> {
+        live_id(failure_policy_binding_id)?;
+        let result = evaluation.result();
+        if result.status() != StatisticResultStatusV3::Refused
+            || result.refusal_code() == 0
+            || occurrence.window_id() != evidence.window_id()
+            || occurrence.statistic_key_id() != evaluation.statistic_key_id()
+            || occurrence.source_spec_id() != evidence.source_spec_id()
+            || occurrence.repair_generation() != evidence.repair_generation()
+            || occurrence.window_id() != window.id()?
+            || occurrence.clock_policy_id() != clock_policy.id()?
+            || clock.unix_timestamp
+                < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
+        {
+            return Err(Error::InvalidFailureHandoff);
+        }
+        Self::new(
+            SourceFailureKindV1::SourceEvaluationRefused,
+            failure_policy_binding_id,
+            occurrence,
+            clock,
+            evidence.id(),
+            result.id()?,
+            result.refusal_code(),
+            evaluation.id(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        kind: SourceFailureKindV1,
+        failure_policy_binding_id: ContentId,
+        occurrence: OccurrenceSourceReceiptV1,
+        clock: ClockSnapshotV1,
+        window_evidence_id: ContentId,
+        statistic_result_id: ContentId,
+        refusal_code: u32,
+        absence_or_evaluation_receipt_id: ContentId,
+    ) -> Result<Self> {
+        let mut bytes = [0; 224];
+        bytes[0] = kind as u8;
+        bytes[8..40].copy_from_slice(&failure_policy_binding_id.bytes());
+        bytes[40..72].copy_from_slice(&occurrence.id().bytes());
+        bytes[72..80].copy_from_slice(&clock.slot.to_le_bytes());
+        bytes[80..88].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+        bytes[88..120].copy_from_slice(&window_evidence_id.bytes());
+        bytes[120..152].copy_from_slice(&statistic_result_id.bytes());
+        bytes[152..156].copy_from_slice(&refusal_code.to_le_bytes());
+        bytes[160..192].copy_from_slice(&absence_or_evaluation_receipt_id.bytes());
+        bytes[192..224].copy_from_slice(&occurrence.market_instance_id().bytes());
+        Ok(Self {
+            kind,
+            failure_policy_binding_id,
+            occurrence,
+            clock,
+            window_evidence_id,
+            statistic_result_id,
+            refusal_code,
+            absence_or_evaluation_receipt_id,
+            handoff_id: domain_id(FAILURE_HANDOFF_DOMAIN, &bytes),
+        })
+    }
+
+    /// Exact source failure kind.
+    pub const fn kind(self) -> SourceFailureKindV1 {
+        self.kind
+    }
+
+    /// FailurePolicyBindingV1 identity.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Exact occurrence provenance.
+    pub const fn occurrence(self) -> OccurrenceSourceReceiptV1 {
+        self.occurrence
+    }
+
+    /// Adapter-authenticated trigger Clock.
+    pub const fn clock(self) -> ClockSnapshotV1 {
+        self.clock
+    }
+
+    /// Window evidence identity, zero only for the no-resolution absence path.
+    pub const fn window_evidence_id(self) -> ContentId {
+        self.window_evidence_id
+    }
+
+    /// StatisticResult identity, zero only for the no-resolution absence path.
+    pub const fn statistic_result_id(self) -> ContentId {
+        self.statistic_result_id
+    }
+
+    /// Stable nonzero refusal code only for `SourceEvaluationRefused`.
+    pub const fn refusal_code(self) -> u32 {
+        self.refusal_code
+    }
+
+    /// Authenticated absence or evaluation receipt.
+    pub const fn source_fact_receipt_id(self) -> ContentId {
+        self.absence_or_evaluation_receipt_id
+    }
+
+    /// Complete handoff identity.
+    pub const fn id(self) -> ContentId {
+        self.handoff_id
+    }
+}
+
+/// Authenticate an existing immutable WindowSeal account for client/failure joins.
+pub fn authenticate_window_seal_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    window: &WindowSpecV3,
+) -> Result<AuthenticatedWindowSealAccountV1> {
+    require_immutable_adapter_account(route, account)?;
+    validate_window_route(route, window)?;
+    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
+    let (header, seal) = decode_account::<WindowSealV3>(account.data, neutral_sink)?;
+    seal.validate_against(window)?;
+    let recipe = PdaRecipeV3::window_seal(window.id()?)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        header.bump,
+    )?;
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let mut bytes = [0; 136];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&account.key.bytes());
+    bytes[64..96].copy_from_slice(&account_data_id.bytes());
+    bytes[96..128].copy_from_slice(&seal.id()?.bytes());
+    bytes[128] = header.bump;
+    Ok(AuthenticatedWindowSealAccountV1 {
+        account: account.key,
+        account_data_id,
+        seal,
+        authentication_id: domain_id(SEAL_ACCOUNT_AUTH_DOMAIN, &bytes),
+    })
+}
+
+fn require_immutable_adapter_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+) -> Result<()> {
+    if account.owner != route.adapter_program() {
+        return Err(Error::WrongOwner);
+    }
+    if account.executable {
+        return Err(Error::WrongExecutableState);
+    }
+    if account.signer || account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    Ok(())
+}
+
+fn require_mutable_adapter_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+) -> Result<()> {
+    if account.owner != route.adapter_program() {
+        return Err(Error::WrongOwner);
+    }
+    if account.executable {
+        return Err(Error::WrongExecutableState);
+    }
+    if account.signer || !account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    Ok(())
+}
+
+fn validate_window_route(route: AuthenticatedSourceRouteV1, window: &WindowSpecV3) -> Result<()> {
+    window.validate()?;
+    if window.source_plane_program_id != route.source_plane_contract_id()
+        || window.source_spec_id != route.source_spec_id()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(())
+}
+
+fn id_at(input: &[u8], at: usize) -> ContentId {
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(&input[at..at + 32]);
+    ContentId::from_bytes(bytes)
+}
+
+fn window_work_state_id(work: &WindowWorkV3) -> Result<ContentId> {
+    let mut bytes = [0; WINDOW_WORK_BYTES];
+    work.encode_into(&mut bytes)?;
+    Ok(domain_id(WORK_STATE_DOMAIN, &bytes))
+}
+
+fn le_u16(input: &[u8]) -> u16 {
+    let mut bytes = [0; 2];
+    bytes.copy_from_slice(input);
+    u16::from_le_bytes(bytes)
+}
+
+fn le_u32(input: &[u8]) -> u32 {
+    let mut bytes = [0; 4];
+    bytes.copy_from_slice(input);
+    u32::from_le_bytes(bytes)
+}
+
+const _: () = assert!(RAW_PAGE_BYTES == 2_152);
+const _: () = assert!(WINDOW_SEAL_BYTES == 192);
