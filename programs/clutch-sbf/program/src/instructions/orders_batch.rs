@@ -1,28 +1,19 @@
-//! `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`,
-//! `Intent::SettlePage`, the staged checkpoint creation pair
-//! `Intent::InitClearWork` / `Intent::GrowClearWork` ([`clear_work`]), the
-//! general epoch lifecycle ([`general_epoch`]), the on-chain streaming walk
-//! ([`clear_walk`]), the candidate submission and selection lifecycle
-//! ([`selection`]), and the entitlement freeze ([`entitlement`]).
+//! The checked program enters this module only for exact DirectEpochV4
+//! placement and the current direct submission route. Historical General
+//! placement, cancellation, clearing, selection, entitlement, settlement, and
+//! terminal-close handlers remain host-test fixtures; no checked capability or
+//! dispatch arm can reach them.
 //!
-//! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
-//! `CancelOrder` own the funded order lifecycle.  Since T2-8, `SettlePage`
-//! consumes the entitled receipts the freeze (tags 58-59) creates from the
-//! SELECTED candidate's verified allocation: single-Egg direct slices through
-//! the generalized entitled seam, portfolio full pairs through the layout
-//! crate's `{prepare,apply}_full_pair`, and one-ended virtual legs — a
-//! `sigma` split or a `mu` merge — through the pooled complete-set primitive.
-//! Partial fills, mixed pairs and inexact conversions all consume; the
-//! `pub(super)` `settlement` submodule's standing ledger row list is empty,
-//! and what still refuses is authority (a fee) rather than a missing join.
+//! The historical handlers remain useful as hostile fixtures and dependency-
+//! lower arithmetic adapters, but they are not a deployable General lifecycle.
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
-//! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
+//! | `PlaceOrder` | **current only for DirectEpochV4**; other epoch widths refuse before legacy account processing |
+//! | `CancelOrder` | withdrawn General host fixture; no checked route |
 //! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
-//! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts, 8 with the pot), one entitled virtual leg in either churn direction (11 accounts, the pooled complete-set five among them), or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
-//! | `FreezeEntitlement` / `EntitleSlice` | **entitlement freeze** ([`entitlement`]): pot from the verified summary, resumable per-slice receipts, reservations `ACTIVE → ENTITLED` |
+//! | `SettlePage` | withdrawn General host fixture; current settlement uses the disabled V5 successor modules |
+//! | `FreezeEntitlement` / `EntitleSlice` | withdrawn General host fixtures; no checked route |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
 //! atomically writes one order record, encumbers exact free cash or moves exact
@@ -71,9 +62,11 @@
 //! post-state against a page built and encoded by `OrderPageAccount::encode`,
 //! which is the golden reference.
 //!
-//! ## The account lists
+//! ## Historical General host-fixture account lists
 //!
-//! `PlaceOrder`: eight accounts, exact count, no remaining-account tail.
+//! The checked Solana route does not consume these lists. `PlaceOrder` below
+//! describes the eight-account General fixture retained under `cfg(test)`;
+//! the current DirectEpochV4 route owns its separate exact account contract.
 //!
 //! | index | account | role |
 //! | --- | --- | --- |
@@ -308,9 +301,9 @@
 //! `MAX_INTENT_BYTES` is the wider of the two exactly rather than a round
 //! number with slack in it.
 //!
-//! The portfolio placement path is **implemented** here rather than named as a
-//! gap, because its validation surface is the same shape as the single-Egg one
-//! check for check, not merely similar:
+//! The historical portfolio placement host fixture is implemented here rather
+//! than named as a gap, because its validation surface is the same shape as
+//! the single-Egg fixture one check for check, not merely similar:
 //!
 //! | check | single-Egg | portfolio |
 //! | --- | --- | --- |
