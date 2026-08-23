@@ -81,6 +81,33 @@ the default artifact must equal the explicit artifact while bound to the same
 identity manifest. A laboratory full profile is a distinct identity and cannot
 reuse that equivalence.
 
+### Non-promotable size diagnostics
+
+[`measure_capability_profile_sizes.py`](../../programs/clutch-sbf/scripts/measure_capability_profile_sizes.py)
+is a separate optimization diagnostic for periods when no complete linked
+manifest exists or the worktree contains unrelated changes. It accepts only
+caller-named `NAME=FEATURE` selectors, exports the selected Git commit through
+`git archive` into a commit-keyed deterministic local path, and performs two
+fresh explicit builds from that committed tree.
+It records exact ELF, section, syscall, final-frame, and exact-size loader-rent
+results plus pairwise deltas. Final unstripped symbols also attribute every
+`.text` address range to a crate or first-party instruction module. The
+diagnostic binds the section base and exclusive end, rejects zero-sized,
+out-of-range, overlapping, or gapped symbol regions, and deduplicates only
+identical folded aliases. An optional two-build Cargo-default comparison
+reports byte identity from the stripped ELF SHA-256 only; its stricter
+equivalence gate compares every field returned by the linked producer's
+`comparable_measurement`. The
+dated current-HEAD diagnostic is
+[`2026-08-23-current-head-capability-size-diagnostic.json`](../../programs/clutch-sbf/audit/evidence/2026-08-23-current-head-capability-size-diagnostic.json).
+
+Its schema is deliberately not accepted by `check_capability_profile.py`. The
+result is source-derived/selected-commit artifact evidence for size work and a
+model-only rent calculation. It records whether the selected commit equaled
+repository `HEAD` at measurement. It carries no semantic-owner/registry
+linkage and is not runtime, deployment, release, public-cluster, or production
+evidence.
+
 ## Source and toolchain linkage
 
 The schema-V2 record binds:
@@ -88,14 +115,22 @@ The schema-V2 record binds:
 - Git commit and tree;
 - a canonical tracked-file closure, file count, and path-ordered per-file
   SHA-256 fold;
+- the exact linked producer and checker paths, working-byte SHA-256 digests,
+  and selected-commit Git blob object identities;
 - empty tracked **and untracked** status before and after all builds; and
 - version strings and binary SHA-256 digests for `cargo-build-sbf`, platform
   `rustc`, `llvm-readobj`, and `llvm-objdump`.
 
 The identity manifest itself must be tracked and is added to the closure. The
-producer refuses any staged, unstaged, or untracked path in that closure and
-refuses a file-list or digest change during measurement. Ignored build output
-is placed in fresh temporary targets and is not evidence input.
+scripts directory and the exact producer/checker files are also in the
+closure, so dirty or newly imported first-party measurement code cannot coexist
+with `manifest_input_source_clean: true`. The producer refuses any staged,
+unstaged, or untracked path in that closure and refuses a file-list or digest
+change during measurement. Ignored build output is placed in fresh temporary
+targets and is not evidence input.
+Commit, tree, producer-blob, and checker-blob object identities must all use the
+same native Git object width: uniformly SHA-1 (40 lowercase hex characters) or
+uniformly SHA-256 (64). Mixed object formats refuse.
 
 The evidence also records a digest of the producer's canonical planning
 manifest. When a checker later reads a deployable manifest, it normalizes only
@@ -106,8 +141,10 @@ therefore cannot be hidden behind a new evidence pointer.
 ## Final artifact evidence
 
 Each profile has two explicit fresh builds. A full production-inert profile
-also has the default-equivalence build described above. Byte identity is
-required across the applicable runs. Every run records and the checker
+also has the default-equivalence build described above. A matching ELF SHA-256
+is byte identity; the stricter linked gate additionally requires every
+comparable audit and loader field to agree across the applicable runs. Every
+run records and the checker
 recomputes or compares:
 
 - final ELF SHA-256 and exact current ELF length;
@@ -167,10 +204,19 @@ python3 programs/clutch-sbf/scripts/measure_capability_profiles.py \
   --identity-manifest path/to/tracked-profile-manifest.json \
   --output path/to/new-measurement.json
 
+# Current committed-tree optimization diagnostic only; not linked evidence:
+python3 programs/clutch-sbf/scripts/measure_capability_profile_sizes.py \
+  --profile full=profile-full \
+  --profile direct-v3-source-v2-point=profile-direct-v3-source-v2-point \
+  --profile general-source-v2-point=profile-general-source-v2-point \
+  --cargo-default-profile full \
+  --output path/to/size-diagnostic.json
+
 python3 programs/clutch-sbf/scripts/check_capability_profile.py \
   path/to/profile-manifest.json
 
 python3 -m unittest \
   programs/clutch-sbf/scripts/test_check_capability_profile.py \
-  programs/clutch-sbf/scripts/test_measure_capability_profiles.py -v
+  programs/clutch-sbf/scripts/test_measure_capability_profiles.py \
+  programs/clutch-sbf/scripts/test_measure_capability_profile_sizes.py -v
 ```

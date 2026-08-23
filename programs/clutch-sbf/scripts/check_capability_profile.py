@@ -57,12 +57,21 @@ SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
 }
 
 HEX_32 = re.compile(r"[0-9a-f]{64}\Z")
+GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 SEMANTIC_VERSION = re.compile(r"[a-z0-9][a-z0-9._/+:-]{0,127}\Z")
 PROFILE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 PROFILE_LABEL = re.compile(
     r"dragons-clutch/capability-profile/[a-z0-9][a-z0-9._/-]*/v[1-9][0-9]*\Z"
 )
 SYSCALL_NAME = re.compile(r"(?:abort|sol_[a-z0-9_]+)\Z")
+
+# Every first-party Python body executed by the linked schema-V2 producer must
+# be both inside its clean tracked closure and named in the evidence. Changing
+# either body therefore invalidates source_clean before any build begins.
+LINKED_MEASUREMENT_CODE_INPUTS: tuple[tuple[str, str], ...] = (
+    ("checker", "programs/clutch-sbf/scripts/check_capability_profile.py"),
+    ("producer", "programs/clutch-sbf/scripts/measure_capability_profiles.py"),
+)
 
 
 class ProfileError(ValueError):
@@ -89,6 +98,16 @@ def require_hex32(value: Any, where: str, *, nonzero: bool = True) -> str:
     require(HEX_32.fullmatch(text) is not None, f"{where}: malformed lowercase sha256")
     if nonzero:
         require(text != "0" * 64, f"{where}: zero digest is not an identity")
+    return text
+
+
+def require_git_object_id(value: Any, where: str) -> str:
+    text = require_string(value, where)
+    require(
+        GIT_OBJECT_ID.fullmatch(text) is not None,
+        f"{where}: malformed lowercase Git object identity",
+    )
+    require(set(text) != {"0"}, f"{where}: zero Git object identity")
     return text
 
 
@@ -841,12 +860,18 @@ def validate_source(value: Any) -> None:
             "closure_paths",
             "closure_file_count",
             "closure_digest_sha256",
+            "measurement_code",
             "cleanliness",
         },
         "measurement evidence.source",
     )
-    require_hex32(value["git_commit"], "measurement evidence.source.git_commit")
-    require_hex32(value["git_tree"], "measurement evidence.source.git_tree")
+    commit_oid = require_git_object_id(
+        value["git_commit"], "measurement evidence.source.git_commit"
+    )
+    tree_oid = require_git_object_id(
+        value["git_tree"], "measurement evidence.source.git_tree"
+    )
+    git_object_id_lengths = {len(commit_oid), len(tree_oid)}
     require_hex32(
         value["closure_digest_sha256"],
         "measurement evidence.source.closure_digest_sha256",
@@ -866,6 +891,37 @@ def validate_source(value: Any) -> None:
     require(
         paths == sorted(set(paths)),
         "measurement evidence.source.closure_paths: noncanonical order",
+    )
+    required_code_paths = {path for _role, path in LINKED_MEASUREMENT_CODE_INPUTS}
+    require(
+        required_code_paths.issubset(paths),
+        "measurement evidence.source.closure_paths: measurement code is outside tracked closure",
+    )
+    code = value["measurement_code"]
+    require(
+        isinstance(code, list),
+        "measurement evidence.source.measurement_code: expected array",
+    )
+    require(
+        len(code) == len(LINKED_MEASUREMENT_CODE_INPUTS),
+        "measurement evidence.source.measurement_code: incomplete execution provenance",
+    )
+    for index, ((expected_role, expected_path), row) in enumerate(
+        zip(LINKED_MEASUREMENT_CODE_INPUTS, code, strict=True)
+    ):
+        where = f"measurement evidence.source.measurement_code[{index}]"
+        require(isinstance(row, dict), f"{where}: expected object")
+        exact_keys(row, {"role", "path", "sha256", "git_blob_oid"}, where)
+        require(row["role"] == expected_role, f"{where}: unexpected role")
+        require(row["path"] == expected_path, f"{where}: unexpected path")
+        require_hex32(row["sha256"], f"{where}.sha256")
+        blob_oid = require_git_object_id(
+            row["git_blob_oid"], f"{where}.git_blob_oid"
+        )
+        git_object_id_lengths.add(len(blob_oid))
+    require(
+        len(git_object_id_lengths) == 1,
+        "measurement evidence.source: mixed Git object identity formats",
     )
     cleanliness = value["cleanliness"]
     require(
