@@ -33,7 +33,7 @@ family version creates a new namespace; it does not inherit capability.
 | --- | ---: | ---: | ---: | --- |
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
-| Covered dealer | 76 | `0x4c` | 1 | policy catalog only in the named non-production lab |
+| Covered dealer | 76 | `0x4c` | 1 | policy catalog plus Initialize/BindEpoch in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 | Exact fractional redemption | 79 | `0x4f` | 1 | disabled |
@@ -369,7 +369,8 @@ Capability membership is keyed by the exact triple `(family tag, family
 version, local action)`. Production profiles retain empty successor executable
 sets. The distinct
 `profile-non-production-dealer-policy-catalog-lab` identity enables only
-`(76,1,1..=4)`. The separate
+`(76,1,1..=5)` and `(76,1,12)`: the four policy transport actions plus exact
+facility Initialize and BindEpoch. The separate
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read

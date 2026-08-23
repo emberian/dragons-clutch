@@ -44,6 +44,8 @@ use crate::error::ClutchError;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::error::Refusal;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+use crate::instructions::dealer_facility;
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::instructions::dealer_policy;
 #[cfg(any(
     feature = "profile-full",
@@ -416,8 +418,14 @@ fn process_dealer_policy(
             action,
             request.envelope.payload,
         ),
+        ExtensionAction::DealerFacility(action) => dealer_facility::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
         ExtensionAction::GeneralV2(_)
-        | ExtensionAction::DealerFacility(_)
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
@@ -504,7 +512,15 @@ fn disabled_dealer_facility_action(
         instruction_data[14],
         instruction_data[15],
     ) {
-        Ok(clutch_solana_layout::registry::ExtensionAction::DealerFacility(action)) => Some(action),
+        Ok(clutch_solana_layout::registry::ExtensionAction::DealerFacility(action))
+            if !capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+                clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+                action as u8,
+            ) =>
+        {
+            Some(action)
+        }
         _ => None,
     }
 }

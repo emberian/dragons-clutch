@@ -2,14 +2,14 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerChildCountsV1, DealerChildCountsV2, DealerFundedDependenciesV2,
+    DealerActionLivenessAuthorizationV1, DealerAssetEndpointKindV1, DealerChildCountsV1,
+    DealerChildCountsV2, DealerFacilityReplayV1, DealerFundedDependenciesV2,
     DealerLivenessScheduleV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1,
-    DealerPositionObservationV3, DealerRuntimeLivenessBindingV1, DealerStateV1, DealerStateV2,
-    Error, FacilityPositionBindingV2, FixedCodec, Id, Result, SponsorCapitalDispositionV1,
-    DealerActionLivenessAuthorizationV1, DealerAssetEndpointKindV1,
-    DealerFacilityReplayV1, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
-    DealerTransitionIntentV1, DealerTransitionLivenessModeV1,
-    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1,
+    DealerPositionObservationV3, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
+    DealerRuntimeLivenessBindingV1, DealerStateV1, DealerStateV2, DealerTransitionIntentV1,
+    DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, FixedCodec, Id,
+    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1, Result,
+    SponsorCapitalDispositionV1,
 };
 
 /// Local semantic-body magic for one immutable facility genesis.
@@ -647,8 +647,7 @@ pub fn validate_facility_initialization_v3(
         || state.facility_position_binding_id != binding_id
         || state.facility_position_id != position.semantic_id
         || state.facility_position_account_id != position.account_id
-        || Id::from_bytes(canonical.replay_account().bytes())
-            != state.facility_replay_account_id
+        || Id::from_bytes(canonical.replay_account().bytes()) != state.facility_replay_account_id
         || state.sponsor != genesis.sponsor
         || state.sponsor_refund_recipient != genesis.sponsor_refund_recipient
         || state.funded_dependencies_id != dependency.dependency_id()?
@@ -729,6 +728,8 @@ pub fn prepare_facility_initialization_v3(
     let bundle = transfer.bundle();
     bundle.validate()?;
     if authorization.action != DealerRuntimeActionV1::Initialize
+        || dependency.initialize_receipt_account_id != authorization.receipt_account_id
+        || dependency.initialize_receipt_semantic_id != authorization.receipt_semantic_id
         || authorization.owner != state_account_id
         || authorization.lifecycle_id != state.facility_id
         || authorization.facility_generation != state.generation
@@ -743,8 +744,7 @@ pub fn prepare_facility_initialization_v3(
         || replay.replay_account_id() != state.facility_replay_account_id
         || replay.facility_position_binding_id() != state.facility_position_binding_id
         || replay.position_generation() != state.generation
-        || replay.next_transition_ordinal()
-            != crate::DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1
+        || replay.next_transition_ordinal() != crate::DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1
         || !replay.last_transition_intent_id().is_zero()
     {
         return Err(Error::MismatchedBinding);

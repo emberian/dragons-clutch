@@ -289,7 +289,7 @@ pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact counted funded-dependencies account bytes.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 536;
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 600;
 /// Immutable-after-activation Dealer LP page discriminator.
 pub const DEALER_LP_PAGE_V2_ACCOUNT_TAG: u8 = 0x98;
 /// Dealer LP page V2 account version.
