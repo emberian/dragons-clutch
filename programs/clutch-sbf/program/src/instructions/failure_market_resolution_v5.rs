@@ -657,6 +657,9 @@ fn require_current_product_failure_join(
             && bundle_value.capability_profile_id.content_id()
                 == root_binding.capability_profile_id
             && bundle_value.series_plan_id == link_binding.series_plan_id
+            && bundle_value.attachment_plan_id.content_id() == link_binding.attachment_plan_id
+            && bundle_value.funding_quote_id == link_binding.funding_quote_id
+            && bundle_value.funding_terms_id == link_binding.funding_terms_id
             && bundle_value.product_template_id.content_id() == root_binding.product_template_id
             && bundle_value.native_claim_basis_id.content_id()
                 == root_binding.native_claim_basis_id
