@@ -747,6 +747,11 @@ impl AuthenticatedSourceRouteV1 {
         self.parser_deployment_id
     }
 
+    /// Exact evaluator-release binding selected by this immutable release.
+    pub const fn evaluation_release_id(self) -> ContentId {
+        self.manifest.source_plane.release_id
+    }
+
     /// Mutable feed address.
     pub const fn feed(self) -> RuntimeKey {
         self.manifest.feed

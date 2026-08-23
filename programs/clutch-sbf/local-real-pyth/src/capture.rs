@@ -12,7 +12,13 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn sha256(bytes: &[u8]) -> String {
-    hex(&config_byte_digest(bytes))
+    hex(&sha256_digest(bytes))
+}
+
+/// Exact binary SHA-256 used by release manifests. The string helper remains
+/// only for human-readable capture diagnostics.
+pub fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
+    config_byte_digest(bytes)
 }
 
 pub fn fixture(name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

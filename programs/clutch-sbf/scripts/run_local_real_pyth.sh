@@ -286,7 +286,7 @@ cp "$crate/cargo-home-config.toml" "$work/cargo-home/config.toml"
 echo "== build standalone signed-RPC driver =="
 CARGO_HOME="$work/cargo-home" CARGO_TARGET_DIR="$work/host-target" \
   CARGO_NET_OFFLINE=true "${host_cargo[@]}" build --locked --offline --release \
-  --manifest-path "$crate/Cargo.toml"
+  --manifest-path "$crate/Cargo.toml" --features campaign
 driver="$work/host-target/release/clutch-local-real-pyth"
 
 echo "== build unmistakably test-only Clutch ELF =="

@@ -42,8 +42,11 @@ use clutch_solana_layout::product_series::{
 use clutch_solana_layout::registry::{
     ExtensionAction, GeneralV2Action, RecurringSeriesAction, SourceSeriesAction,
 };
-use clutch_source_plane_v3_adapter::{IntentPreimageV3, TransitionActionV3, INTENT_PREIMAGE_BYTES};
-use clutch_source_plane_v3_runtime::ReopenLineageV1;
+use clutch_source_plane_v3::ContentId;
+use clutch_source_plane_v3_adapter::{
+    IntentPreimageV3, TransitionActionV3, TransitionPlanV3, INTENT_PREIMAGE_BYTES,
+};
+use clutch_source_plane_v3_runtime::{ReopenLineageV1, SourceReleaseManifestV1};
 use clutch_structured_claim_runtime_contract::{
     decode_structured_claim_payload_v1, DescriptorStateV1, StructuredClaimActionV1,
     StructuredClaimDescriptorV1,
@@ -94,12 +97,19 @@ impl std::error::Error for WorkflowGraphError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReleasedProgram {
     pub program_id: Address,
+    pub program_data: Address,
+    pub deployment_slot: u64,
     pub elf_sha256: [u8; 32],
 }
 
 impl ReleasedProgram {
     fn validate(self) -> Result<()> {
-        if self.program_id == Address::default() || self.elf_sha256 == [0; 32] {
+        if self.program_id == Address::default()
+            || self.program_data == Address::default()
+            || self.program_id == self.program_data
+            || self.deployment_slot == 0
+            || self.elf_sha256 == [0; 32]
+        {
             Err(WorkflowGraphError::ZeroIdentity)
         } else {
             Ok(())
@@ -112,7 +122,10 @@ impl ReleasedProgram {
 pub struct ExplicitOperatorReleaseManifest {
     pub manifest_sha256: [u8; 32],
     pub clutch: ReleasedProgram,
-    pub source_adapter: ReleasedProgram,
+    /// Exact captured Pyth receiver release admitted by the Source release.
+    pub pyth_receiver: ReleasedProgram,
+    /// Exact captured Pyth router release used to authenticate VAA transport.
+    pub pyth_router: ReleasedProgram,
     pub semantic_releases: Vec<SemanticOwner>,
 }
 
@@ -122,8 +135,12 @@ impl ExplicitOperatorReleaseManifest {
             return Err(WorkflowGraphError::ZeroIdentity);
         }
         self.clutch.validate()?;
-        self.source_adapter.validate()?;
-        if self.clutch.program_id == self.source_adapter.program_id
+        self.pyth_receiver.validate()?;
+        self.pyth_router.validate()?;
+        if self.pyth_receiver.program_id == self.pyth_router.program_id
+            || self.pyth_receiver.program_data == self.pyth_router.program_data
+            || self.pyth_receiver.program_id == self.clutch.program_id
+            || self.pyth_router.program_id == self.clutch.program_id
             || self.semantic_releases.is_empty()
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
@@ -221,6 +238,20 @@ pub struct WorkflowActionMaterial {
     pub payload: Vec<u8>,
 }
 
+/// Source-specific material whose bytes are derived from a guarded transition
+/// plan rather than accepted as a caller-authored payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceWorkflowActionMaterial {
+    pub action_name: String,
+    pub semantic_owner: SemanticOwner,
+    pub accounts: Vec<AccountMeta>,
+    pub required_signers: Vec<Address>,
+    pub exact_equations: Vec<ExactEquation>,
+    pub transition_plan: TransitionPlanV3,
+    pub submitter: ContentId,
+    pub valid_before_slot: u64,
+}
+
 /// One construction result and its mandatory fresh-state reload barrier.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedWorkflowNode {
@@ -236,7 +267,7 @@ pub struct PlannedWorkflowNode {
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
     SourceRegistry(SourceSeriesAction),
-    SourceAdapter {
+    SourceTransition {
         registry: SourceSeriesAction,
         transition: TransitionActionV3,
     },
@@ -592,6 +623,9 @@ pub struct ObservedSourceLineage<'a> {
 /// Canonical Source state from which one adapter intent was constructed.
 #[derive(Clone, Copy, Debug)]
 pub struct SourceCrankObservation<'a> {
+    /// Canonical immutable release body selected by the operator. Execution
+    /// independently authenticates its owner, content-addressed PDA and bytes.
+    pub release: &'a SourceReleaseManifestV1,
     pub generation: u64,
     pub stage: SourceCrankStage,
     pub lineages: &'a [ObservedSourceLineage<'a>],
@@ -599,10 +633,24 @@ pub struct SourceCrankObservation<'a> {
 }
 
 impl SourceCrankObservation<'_> {
-    fn validate(self, source_adapter: Address) -> Result<()> {
+    fn validate(self, manifest: &ExplicitOperatorReleaseManifest) -> Result<()> {
         if self.generation == 0 || self.observed_state_sha256 == [0; 32] || self.lineages.is_empty()
         {
             return Err(WorkflowGraphError::InvalidCanonicalState);
+        }
+        self.release
+            .validate()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        if self.release.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
+            || self.release.adapter.programdata.bytes() != manifest.clutch.program_data.to_bytes()
+            || self.release.adapter.deployment_slot != manifest.clutch.deployment_slot
+            || self.release.parser.program.bytes()
+                != manifest.pyth_receiver.program_id.to_bytes()
+            || self.release.parser.programdata.bytes()
+                != manifest.pyth_receiver.program_data.to_bytes()
+            || self.release.parser.deployment_slot != manifest.pyth_receiver.deployment_slot
+        {
+            return Err(WorkflowGraphError::WrongProgramRelease);
         }
         let mut accounts = BTreeSet::new();
         for observed in self.lineages {
@@ -610,7 +658,7 @@ impl SourceCrankObservation<'_> {
             lineage
                 .validate()
                 .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
-            if lineage.adapter_program.bytes() != source_adapter.to_bytes()
+            if lineage.adapter_program.bytes() != manifest.clutch.program_id.to_bytes()
                 || !accounts.insert(lineage.lineage_account.bytes())
             {
                 return Err(WorkflowGraphError::InvalidCanonicalState);
@@ -651,10 +699,31 @@ pub fn plan_source_crank(
     builder: &ProtocolTransactionBuilder,
     observation: SourceCrankObservation<'_>,
     cursor: ResumableWorkflowCursor,
-    material: WorkflowActionMaterial,
+    material: SourceWorkflowActionMaterial,
 ) -> Result<PlannedWorkflowNode> {
-    observation.validate(manifest.source_adapter.program_id)?;
+    observation.validate(manifest)?;
     let (position, registry, transition) = observation.stage.coordinate();
+    material
+        .transition_plan
+        .validate()
+        .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+    if material.transition_plan.action() != transition
+        || material.submitter.is_zero()
+        || material.valid_before_slot == 0
+    {
+        return Err(WorkflowGraphError::ActionStateMismatch);
+    }
+    let adapter_program_id = ContentId::from_bytes(manifest.clutch.program_id.to_bytes());
+    let intent = IntentPreimageV3::new(
+        material.transition_plan,
+        adapter_program_id,
+        material.submitter,
+        material.valid_before_slot,
+    )
+    .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
+    let payload = intent
+        .encode()
+        .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
     cursor.require(
         WorkflowLane::SourceCrank,
         observation.generation,
@@ -666,11 +735,18 @@ pub fn plan_source_crank(
         builder,
         cursor,
         ProtocolFlow::SourcePlaneV3,
-        CanonicalActionCoordinate::SourceAdapter {
+        CanonicalActionCoordinate::SourceTransition {
             registry,
             transition,
         },
-        material,
+        WorkflowActionMaterial {
+            action_name: material.action_name,
+            semantic_owner: material.semantic_owner,
+            accounts: material.accounts,
+            required_signers: material.required_signers,
+            exact_equations: material.exact_equations,
+            payload: payload.to_vec(),
+        },
     )
 }
 
@@ -1430,7 +1506,7 @@ pub fn plan_recovery_or_retirement(
             }
         }
         RecoveryObservation::CloseSourceGeneration(lineage) => {
-            if lineage.adapter_program.bytes() != manifest.source_adapter.program_id.to_bytes() {
+            if lineage.adapter_program.bytes() != manifest.clutch.program_id.to_bytes() {
                 return Err(WorkflowGraphError::WrongProgramRelease);
             }
         }
@@ -1540,28 +1616,33 @@ fn construct(
                 &material.payload,
             )
         }
-        CanonicalActionCoordinate::SourceAdapter {
-            registry: _,
+        CanonicalActionCoordinate::SourceTransition {
+            registry,
             transition,
         } => {
             let intent = IntentPreimageV3::decode(&material.payload)
                 .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
             if intent.action() != transition
                 || intent.adapter_program_id().bytes()
-                    != manifest.source_adapter.program_id.to_bytes()
+                    != manifest.clutch.program_id.to_bytes()
                 || material.payload.len() != INTENT_PREIMAGE_BYTES
             {
                 return Err(WorkflowGraphError::ActionStateMismatch);
             }
-            OwnedInstructionDraft::source_plane_v3(
+            let expected_registry = source_registry_action(transition)?;
+            if registry != expected_registry {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
+            OwnedInstructionDraft::allocated_successor(
+                ProtocolFlow::SourcePlaneV3,
                 material.action_name,
                 material.semantic_owner,
-                manifest.source_adapter.program_id,
+                manifest.clutch.program_id,
                 material.accounts,
                 material.required_signers,
                 material.exact_equations,
-                INTENT_PREIMAGE_BYTES,
-                material.payload,
+                ExtensionAction::SourceV3(registry),
+                &material.payload,
             )
         }
     }
@@ -1576,6 +1657,27 @@ fn construct(
         unsigned_transaction,
         reload_authoritative_accounts: true,
     })
+}
+
+fn source_registry_action(transition: TransitionActionV3) -> Result<SourceSeriesAction> {
+    match transition {
+        TransitionActionV3::InitializeSourceHead => Ok(SourceSeriesAction::InitializeHead),
+        TransitionActionV3::OpenRawPage => Ok(SourceSeriesAction::OpenRawPage),
+        TransitionActionV3::AppendBoundary => Ok(SourceSeriesAction::IngestBoundaryBatch),
+        TransitionActionV3::SealRawPage => Ok(SourceSeriesAction::SealRawPage),
+        TransitionActionV3::CreateWindowWork => Ok(SourceSeriesAction::InitializeWindowWork),
+        TransitionActionV3::FoldWindowPage => Ok(SourceSeriesAction::FoldWindowPages),
+        TransitionActionV3::SealWindow => Ok(SourceSeriesAction::SealWindow),
+        TransitionActionV3::WriteTerminalResult | TransitionActionV3::WriteDrawdownResult => {
+            Ok(SourceSeriesAction::EvaluateStatistic)
+        }
+        TransitionActionV3::ActivateSeries
+        | TransitionActionV3::CreateSeriesInstance
+        | TransitionActionV3::LapseSeriesOrdinal
+        | TransitionActionV3::AdvanceExistingInstance => {
+            Err(WorkflowGraphError::ActionStateMismatch)
+        }
+    }
 }
 
 fn validate_general_payload(action: GeneralV2Action, payload: &[u8]) -> Result<()> {

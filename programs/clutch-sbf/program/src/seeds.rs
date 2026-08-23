@@ -161,6 +161,8 @@ pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-au
 pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 /// Immutable SourcePlane V3 occurrence-provenance record prefix.
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
+/// Immutable Source-selected runtime-liveness policy account prefix.
+pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -831,6 +833,14 @@ pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]
 /// Canonical immutable successor Product/Series artifact address.
 pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
+}
+
+/// Canonical immutable liveness policy selected by a Source release.
+pub fn source_liveness_policy_pda(
+    program_id: &Pubkey,
+    policy_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_LIVENESS_POLICY_V1, policy_id])
 }
 
 /// Canonical immutable registered-Series address.

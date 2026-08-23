@@ -13,7 +13,8 @@
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/full/v2-source-release";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -21,7 +22,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v1";
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v2-source-release";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -48,8 +49,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0xf2, 0x06, 0x66, 0x13, 0x61, 0x0b, 0x8e, 0x3c, 0xff, 0x18, 0x48, 0x5d, 0x2e, 0x6f, 0x3e, 0x3c,
-    0x9f, 0xdc, 0xfc, 0xbb, 0x75, 0x7b, 0x46, 0xb4, 0x07, 0x73, 0x3e, 0xa1, 0x5c, 0x5e, 0x9a, 0xc8,
+    0xb8, 0x7d, 0xe4, 0x9d, 0xa6, 0xc6, 0x21, 0x89, 0x9a, 0x1c, 0x4a, 0x32, 0x5c, 0xc7, 0x4b, 0x9e,
+    0xdf, 0x39, 0x72, 0x54, 0x5a, 0x13, 0xa8, 0xf2, 0x22, 0x7e, 0xcc, 0xcb, 0x7e, 0x8f, 0xc3, 0xaf,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -58,8 +59,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x64, 0xa6, 0x52, 0x0b, 0xf9, 0x7a, 0xca, 0xba, 0xe3, 0x3e, 0xec, 0xf4, 0xe2, 0x90, 0xf9, 0xe3,
-    0x6a, 0xb0, 0xce, 0xbe, 0x6d, 0x7f, 0xe9, 0xd0, 0x82, 0xf0, 0x6d, 0x87, 0x61, 0x1c, 0xca, 0x60,
+    0x17, 0x45, 0xe2, 0x0d, 0x72, 0xa7, 0x2f, 0x31, 0x5e, 0x97, 0x6e, 0x6c, 0x87, 0xff, 0xb3, 0x9e,
+    0xae, 0x32, 0xe7, 0x1c, 0x54, 0x25, 0x68, 0xaa, 0xb4, 0x9a, 0xa4, 0x12, 0xac, 0x46, 0xbf, 0x71,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -189,11 +190,25 @@ pub const fn extension_intent_action_allocated(
 
 /// Exact extension actions executable by this product.
 ///
-/// Ordinary profiles keep every extension action disabled.
-#[cfg(not(any(
+/// Full profiles execute only artifact-authenticated Source release
+/// registration; actions 2 through 12 remain independently disabled.
+#[cfg(all(
+    feature = "profile-full",
+    not(any(
     feature = "profile-non-production-dealer-policy-catalog-lab",
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
-)))]
+    ))
+))]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1)];
+
+/// Narrow non-laboratory profiles have not yet admitted Source execution.
+#[cfg(all(
+    not(feature = "profile-full"),
+    not(any(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ))
+))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
 /// The laboratory enables only the bounded immutable policy-catalog transport.
@@ -338,7 +353,14 @@ mod tests {
                             local_action,
                             2 | 6 | 7 | 8 | 9 | 10 | 14 | 15 | 16 | 20 | 21 | 32
                         );
-                    let expected_enabled = dealer_enabled || general_enabled;
+                    let source_release_enabled = cfg!(feature = "profile-full")
+                        && !DEALER_POLICY_CATALOG_LAB
+                        && !GENERAL_V2_IDENTITY_LAB
+                        && family_tag == 77
+                        && family_version == 2
+                        && local_action == 1;
+                    let expected_enabled =
+                        dealer_enabled || general_enabled || source_release_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,
@@ -348,7 +370,9 @@ mod tests {
         }
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
-            !(DEALER_POLICY_CATALOG_LAB || GENERAL_V2_IDENTITY_LAB)
+            !(DEALER_POLICY_CATALOG_LAB
+                || GENERAL_V2_IDENTITY_LAB
+                || cfg!(feature = "profile-full"))
         );
     }
 }
