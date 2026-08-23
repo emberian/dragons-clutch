@@ -1,4 +1,14 @@
 use super::*;
+use crate::reservation_v1::{
+    prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
+    DirectReservationPhaseV1,
+};
+use clutch_batch::{PartialPolicy, Side};
+use clutch_owner_settlement::AuthenticatedPositionV3;
+use clutch_retirement::{
+    Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionV3Fields,
+    PositionV3Sha256Backend, RentSplitV2, MAX_OUTCOMES,
+};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug)]
@@ -11,6 +21,35 @@ impl DirectHashBackendV1 for Sha {
             hash.update(part);
         }
         hash.finalize().into()
+    }
+}
+
+impl PositionV3Sha256Backend for Sha {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        self.sha256_parts(&[domain, body])
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AllowReservation;
+
+impl AuthenticatedDirectReservationAdmissionV1 for AllowReservation {
+    fn authenticate_admission(
+        &self,
+        _root: DirectMarketRootV1,
+        _position: AuthenticatedPositionV3,
+        _reservation_account: [u8; 32],
+        _order_id: [u8; 32],
+        _side: Side,
+        _outcome: u8,
+        _quantity: u64,
+        _minimum_fill: u64,
+        _partial_policy: PartialPolicy,
+        _expiry_epoch: u64,
+        _limit_price_units_per_egg: u128,
+        _rent: DirectRentOwnerV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        Ok(())
     }
 }
 
@@ -84,6 +123,52 @@ fn state() -> DirectRootReplayPostV1 {
     };
     replay.validate_against(root).unwrap();
     DirectRootReplayPostV1 { root, replay }
+}
+
+fn identity(value: u8) -> Identity32V1 {
+    Identity32V1::new(id(value)).unwrap()
+}
+
+fn position(cash: u64, eggs_at_zero: u64) -> AuthenticatedPositionV3 {
+    let mut native_eggs = [0u64; MAX_OUTCOMES];
+    native_eggs[0] = eggs_at_zero;
+    let semantic = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::General,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count: 16,
+        stored_bump: 7,
+        generation: 1,
+        market_instance_id: identity(1),
+        realm_id: identity(2),
+        collateral_policy_id: identity(4),
+        collateral_release_id: identity(5),
+        owner: identity(40),
+        controller: identity(40),
+        replay_account: identity(42),
+        purpose_binding_id: identity(12),
+        cash_atoms: cash,
+        reserved_cash_atoms: 0,
+        native_eggs,
+        outstanding_reservations: 0,
+        rent: RentSplitV2 {
+            payer: identity(43),
+            refundable_live_principal: 100,
+            permanent_tombstone_principal: 80,
+            donation_floor: 3,
+        },
+    })
+    .unwrap();
+    let semantic_id = semantic.semantic_id(&Sha).unwrap().bytes();
+    AuthenticatedPositionV3 {
+        account: id(41),
+        general_market_runtime: id(12),
+        semantic,
+        semantic_id,
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: true,
+    }
 }
 
 #[test]
@@ -242,4 +327,71 @@ fn retirement_refuses_duplicate_sources_and_nonzero_tail() {
     let mut tail = retirement();
     tail.sources[2] = tail.sources[1];
     assert_eq!(tail.validate(), Err(DirectMarketErrorV1::InvalidCount));
+}
+
+#[test]
+fn zero_price_buyer_reservation_is_exact_and_counts_the_child() {
+    let plan = prepare_direct_reservation_admission_v1(
+        &AllowReservation,
+        state().root,
+        position(100, 0),
+        id(50),
+        id(51),
+        Side::Buy,
+        0,
+        10,
+        0,
+        PartialPolicy::Allow,
+        7,
+        0,
+        rent(52, 70, 2),
+    )
+    .unwrap();
+    assert_eq!(plan.reservation.phase(), DirectReservationPhaseV1::Active);
+    assert_eq!(plan.reservation.reserved_cash_atoms(), 0);
+    let fields = plan.position_poststate.semantic.fields();
+    assert_eq!(fields.cash_atoms, 100);
+    assert_eq!(fields.reserved_cash_atoms, 0);
+    assert_eq!(fields.outstanding_reservations, 1);
+}
+
+#[test]
+fn reservation_refuses_rounding_and_debits_seller_eggs_exactly() {
+    assert_eq!(
+        prepare_direct_reservation_admission_v1(
+            &AllowReservation,
+            state().root,
+            position(100, 0),
+            id(50),
+            id(51),
+            Side::Buy,
+            0,
+            1,
+            0,
+            PartialPolicy::Allow,
+            7,
+            50,
+            rent(52, 70, 2),
+        ),
+        Err(DirectMarketErrorV1::InexactCashConversion)
+    );
+    let seller = prepare_direct_reservation_admission_v1(
+        &AllowReservation,
+        state().root,
+        position(0, 20),
+        id(50),
+        id(51),
+        Side::Sell,
+        0,
+        7,
+        7,
+        PartialPolicy::AllOrNone,
+        7,
+        0,
+        rent(52, 70, 2),
+    )
+    .unwrap();
+    let fields = seller.position_poststate.semantic.fields();
+    assert_eq!(fields.native_eggs[0], 13);
+    assert_eq!(fields.outstanding_reservations, 1);
 }

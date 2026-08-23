@@ -11,7 +11,9 @@ path = "src/lib.rs"
 
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 clutch-product-series = { path = "../clutch-product-series" }
+clutch-retirement = { path = "../clutch-retirement" }
 
 [dev-dependencies]
 sha2 = { version = "=0.10.9", default-features = false }

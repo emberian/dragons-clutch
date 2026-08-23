@@ -60,6 +60,10 @@ pub enum DirectMarketErrorV1 {
     UnauthenticatedAuthority,
     /// Product rejected the exact family transition.
     Product,
+    /// PositionV3 or its purpose binding was not the exact writable prestate.
+    InvalidPosition,
+    /// A cash reservation would require a rounding boundary.
+    InexactCashConversion,
 }
 
 /// Exact deletable lamport ownership for one Direct account.
@@ -1502,3 +1506,5 @@ fn insert_refund(
 
 #[cfg(test)]
 mod tests;
+
+pub mod reservation_v1;
