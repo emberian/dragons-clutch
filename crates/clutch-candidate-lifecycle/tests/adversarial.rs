@@ -91,6 +91,13 @@ fn budget() -> EpochCandidateBudgetV2 {
     .unwrap()
 }
 
+fn with_all_index_pages_closed(mut budget: EpochCandidateBudgetV2) -> EpochCandidateBudgetV2 {
+    budget.index_cleanup_remaining = 0;
+    budget.index_cleanup_paid = budget.index_cleanup_initial;
+    budget.index_pages_owed = 0;
+    budget
+}
+
 fn frozen(max_candidates: u16) -> (CandidateWindowV3, EpochCandidateBudgetV2) {
     let frozen = freeze_window(
         open(max_candidates),
@@ -401,6 +408,20 @@ fn valid_completion_early_finalization_and_split_claims_conserve_funds() {
     assert_eq!(finalized.window.selected_candidate, id(20));
     assert_eq!(finalized.disposition.solver_escrow_credit, 23);
 
+    let mut selected_but_uncredited = with_all_index_pages_closed(finalized.budget);
+    selected_but_uncredited.solver_remaining = selected_but_uncredited.solver_initial;
+    selected_but_uncredited.solver_credited = 0;
+    assert_eq!(selected_but_uncredited.validate(), Ok(()));
+    assert_eq!(
+        claim_epoch_unused(
+            finalized.window,
+            selected_but_uncredited,
+            liveness(),
+            selected_but_uncredited.accounted_lamports().unwrap(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+
     let bond = claim_bond_refund(
         finalized.window,
         completed.candidate,
@@ -409,10 +430,33 @@ fn valid_completion_early_finalization_and_split_claims_conserve_funds() {
         liveness(),
     )
     .unwrap();
-    assert_eq!(bond.disposition.payer_refund, 100);
+    assert_eq!(bond.disposition.refund_destination_credit, 100);
     let closed_work = mark_work_closed(completed.candidate, bond.escrow, liveness(), 2).unwrap();
     let work = claim_work_refund(completed.candidate, closed_work, liveness()).unwrap();
-    assert_eq!(work.disposition.payer_refund, 0);
+    assert_eq!(work.disposition.refund_destination_credit, 0);
+    let settlement = Some(AdapterVerifiedSettlementTerminalV1 {
+        epoch: finalized.window.epoch,
+        candidate: completed.candidate.candidate,
+        terminal_slot: finalized.window.finalized_slot,
+        flags: 0,
+    });
+    let mut selected_without_credit = work.escrow;
+    selected_without_credit.solver_credited = 0;
+    selected_without_credit.solver_remaining = 0;
+    assert_eq!(selected_without_credit.validate(), Ok(()));
+    assert_eq!(
+        finish_candidate_cleanup(
+            finalized.window,
+            begun.index_page,
+            completed.candidate,
+            Some(completed.verdict),
+            settlement,
+            selected_without_credit,
+            liveness(),
+            selected_without_credit.accounted_lamports().unwrap(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
     let solver = claim_solver_credit(
         finalized.window,
         completed.candidate,
@@ -422,31 +466,67 @@ fn valid_completion_early_finalization_and_split_claims_conserve_funds() {
     )
     .unwrap();
     assert_eq!(solver.disposition.solver_payout, 23);
+    let forged_refused = CandidateVerdictV1 {
+        rank_key: RankKey::EMPTY,
+        refusal_code: 7,
+        kind: VerdictKind::Refused,
+        ..completed.verdict
+    };
+    let mut selected_with_refused_verdict = solver.escrow;
+    selected_with_refused_verdict.bond_slashed = liveness().invalidity_penalty;
+    selected_with_refused_verdict.bond_refunded =
+        liveness().bond_lamports - liveness().invalidity_penalty;
+    assert_eq!(selected_with_refused_verdict.validate(), Ok(()));
+    assert_eq!(
+        finish_candidate_cleanup(
+            finalized.window,
+            begun.index_page,
+            completed.candidate,
+            Some(forged_refused),
+            settlement,
+            selected_with_refused_verdict,
+            liveness(),
+            selected_with_refused_verdict.accounted_lamports().unwrap(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+    let expected_owned = solver.escrow.accounted_lamports().unwrap();
+    assert_eq!(
+        finish_candidate_cleanup(
+            finalized.window,
+            begun.index_page,
+            completed.candidate,
+            Some(completed.verdict),
+            settlement,
+            solver.escrow,
+            liveness(),
+            expected_owned - 1,
+        ),
+        Err(Error::Underfunded)
+    );
     let cleanup = finish_candidate_cleanup(
         finalized.window,
         begun.index_page,
         completed.candidate,
         Some(completed.verdict),
-        Some(AdapterVerifiedSettlementTerminalV1 {
-            epoch: finalized.window.epoch,
-            candidate: completed.candidate.candidate,
-            terminal_slot: finalized.window.finalized_slot,
-            flags: 0,
-        }),
+        settlement,
         solver.escrow,
         liveness(),
+        expected_owned + 3,
     )
     .unwrap();
     assert_eq!(cleanup.disposition.keeper_reward, 11);
-    assert_eq!(cleanup.disposition.payer_refund, 7);
+    assert_eq!(cleanup.disposition.refund_destination_credit, 7);
     assert_eq!(cleanup.disposition.rent_principal_refund, 1_600);
+    assert_eq!(cleanup.disposition.neutral_sink, 3);
+    assert_eq!(cleanup.escrow.surplus_routed, 3);
     assert_eq!(cleanup.escrow.accounted_lamports().unwrap(), 0);
     assert_eq!(cleanup.index_page.closed_mask, 1);
 }
 
 #[test]
 fn refused_verdict_is_the_only_invalidity_slash_path() {
-    let (window, _) = frozen(4);
+    let (window, budget) = frozen(4);
     let begun = begin_one(window, 20, F);
     let sealed = seal_one(
         begun.window,
@@ -517,7 +597,51 @@ fn refused_verdict_is_the_only_invalidity_slash_path() {
         liveness(),
     )
     .unwrap();
-    assert_eq!(refund.disposition.payer_refund, 70);
+    assert_eq!(refund.disposition.refund_destination_credit, 70);
+
+    let finalized = finalize_selection(
+        refused.window,
+        budget,
+        [CandidateVerdictV1::EMPTY; TOP_CANDIDATE_CAPACITY],
+        None,
+        liveness(),
+        S + 1,
+    )
+    .unwrap();
+    let mut lapsed_but_credited = with_all_index_pages_closed(finalized.budget);
+    lapsed_but_credited.solver_remaining = 0;
+    lapsed_but_credited.solver_credited = lapsed_but_credited.solver_initial;
+    assert_eq!(lapsed_but_credited.validate(), Ok(()));
+    assert_eq!(
+        claim_epoch_unused(
+            finalized.window,
+            lapsed_but_credited,
+            liveness(),
+            lapsed_but_credited.accounted_lamports().unwrap(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+
+    let closed_work = mark_work_closed(refused.candidate, refund.escrow, liveness(), 2).unwrap();
+    let work = claim_work_refund(refused.candidate, closed_work, liveness()).unwrap();
+    let mut unselected_with_credit = work.escrow;
+    unselected_with_credit.solver_credited = liveness().solver_prize;
+    unselected_with_credit.solver_paid = liveness().solver_prize;
+    unselected_with_credit.solver_credit_claimed = 1;
+    assert_eq!(unselected_with_credit.validate(), Ok(()));
+    assert_eq!(
+        finish_candidate_cleanup(
+            finalized.window,
+            begun.index_page,
+            refused.candidate,
+            Some(refused.verdict),
+            None,
+            unselected_with_credit,
+            liveness(),
+            unselected_with_credit.accounted_lamports().unwrap(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
 }
 
 #[test]
@@ -607,10 +731,11 @@ fn staging_expiry_slashes_abandonment_only_and_preserves_refundable_remainder() 
         None,
         bond.escrow,
         liveness(),
+        bond.escrow.accounted_lamports().unwrap(),
     )
     .unwrap();
     assert_eq!(cleaned.disposition.keeper_reward, 11);
-    assert_eq!(cleaned.disposition.payer_refund, 0);
+    assert_eq!(cleaned.disposition.refund_destination_credit, 0);
     assert_eq!(cleaned.disposition.rent_principal_refund, 700);
 }
 
@@ -649,20 +774,33 @@ fn index_pages_close_in_reverse_and_unused_epoch_funds_refund_afterward() {
     assert_eq!(finalized.budget.index_pages_owed, 4);
     let wrong = CandidateIndexPageV1::empty(id(1), 0, 1).unwrap();
     assert_eq!(
-        close_index_page(finalized.window, finalized.budget, wrong, liveness()),
+        close_index_page(finalized.window, finalized.budget, wrong, liveness(), 500),
         Err(Error::MismatchedBinding)
+    );
+    assert_eq!(
+        close_index_page(
+            finalized.window,
+            finalized.budget,
+            CandidateIndexPageV1::empty(id(1), 3, 1).unwrap(),
+            liveness(),
+            499
+        ),
+        Err(Error::Underfunded)
     );
     let mut current = finalized.budget;
     for page_index in [3u8, 2, 1] {
+        let observed = if page_index == 3 { 502 } else { 500 };
         let closed = close_index_page(
             finalized.window,
             current,
             CandidateIndexPageV1::empty(id(1), page_index, 1).unwrap(),
             liveness(),
+            observed,
         )
         .unwrap();
         assert_eq!(closed.disposition.keeper_reward, 19);
         assert_eq!(closed.disposition.rent_principal_refund, 500);
+        assert_eq!(closed.disposition.neutral_sink, observed - 500);
         current = closed.budget;
     }
     let unclosed = CandidateIndexPageV1 {
@@ -679,7 +817,7 @@ fn index_pages_close_in_reverse_and_unused_epoch_funds_refund_afterward() {
         flags: 0,
     };
     assert_eq!(
-        close_index_page(finalized.window, current, unclosed, liveness()),
+        close_index_page(finalized.window, current, unclosed, liveness(), 500),
         Err(Error::MismatchedBinding)
     );
     let closed = close_index_page(
@@ -687,16 +825,30 @@ fn index_pages_close_in_reverse_and_unused_epoch_funds_refund_afterward() {
         current,
         CandidateIndexPageV1::empty(id(1), 0, 1).unwrap(),
         liveness(),
+        500,
     )
     .unwrap();
     assert_eq!(closed.disposition.keeper_reward, 19);
     assert_eq!(closed.disposition.rent_principal_refund, 500);
     current = closed.budget;
-    let refund = claim_epoch_unused(finalized.window, current, liveness()).unwrap();
-    assert_eq!(refund.disposition.payer_refund, 23);
+    let refund = claim_epoch_unused(
+        finalized.window,
+        current,
+        liveness(),
+        current.accounted_lamports().unwrap() + 4,
+    )
+    .unwrap();
+    assert_eq!(refund.disposition.refund_destination_credit, 23);
+    assert_eq!(refund.disposition.neutral_sink, 4);
+    assert_eq!(refund.budget.surplus_routed, 6);
     assert_eq!(refund.budget.accounted_lamports().unwrap(), 1_000);
     assert_eq!(
-        claim_epoch_unused(finalized.window, refund.budget, liveness()),
+        claim_epoch_unused(
+            finalized.window,
+            refund.budget,
+            liveness(),
+            refund.budget.accounted_lamports().unwrap()
+        ),
         Err(Error::Replay)
     );
 }
@@ -936,7 +1088,152 @@ fn migration_is_new_epoch_only_and_mixed_score_policy_refuses() {
     );
     assert_eq!(WINDOW_VERSION, 3);
     assert_eq!(CANDIDATE_VERSION, 2);
+    assert_eq!(ESCROW_VERSION, 3);
+    assert_eq!(EPOCH_BUDGET_VERSION, 3);
     assert_eq!(INTENT_VERSION, 2);
+}
+
+#[test]
+fn seal_rechecks_hostile_decoded_candidate_geometry() {
+    let (window, _) = frozen(4);
+    let begun = begin_one(window, 20, F);
+    let mut oversized = begun.candidate;
+    oversized.expected_feed_bytes = lifecycle(4).max_feed_bytes + 1;
+    let mut bytes = [0u8; CANDIDATE_BYTES];
+    oversized.encode(&mut bytes).unwrap();
+    let oversized = CandidateRecordV2::decode(&bytes).unwrap();
+    assert_eq!(
+        seal_candidate(
+            begun.window,
+            begun.index_page,
+            oversized,
+            begun.escrow,
+            FeedSealV1 {
+                candidate: oversized.candidate,
+                epoch: oversized.epoch,
+                feed: oversized.feed,
+                content_digest: id(250),
+                exact_bytes: oversized.expected_feed_bytes,
+                written_bytes: oversized.expected_feed_bytes,
+                canonical_padding: 1,
+            },
+            SealFundingV1 {
+                verification_rent_principal: 900,
+                work_reward_deposit: 9,
+            },
+            lifecycle(4),
+            score(),
+            liveness(),
+            F + 1
+        ),
+        Err(Error::InvalidCount)
+    );
+
+    let mut too_many_units = begun.candidate;
+    too_many_units.verification_units = lifecycle(4).max_verification_units + 1;
+    too_many_units.encode(&mut bytes).unwrap();
+    let too_many_units = CandidateRecordV2::decode(&bytes).unwrap();
+    assert_eq!(
+        seal_candidate(
+            begun.window,
+            begun.index_page,
+            too_many_units,
+            begun.escrow,
+            FeedSealV1 {
+                candidate: too_many_units.candidate,
+                epoch: too_many_units.epoch,
+                feed: too_many_units.feed,
+                content_digest: id(250),
+                exact_bytes: too_many_units.expected_feed_bytes,
+                written_bytes: too_many_units.expected_feed_bytes,
+                canonical_padding: 1,
+            },
+            SealFundingV1 {
+                verification_rent_principal: 900,
+                work_reward_deposit: liveness()
+                    .work_reserve(too_many_units.verification_units)
+                    .unwrap(),
+            },
+            lifecycle(4),
+            score(),
+            liveness(),
+            F + 1
+        ),
+        Err(Error::InvalidCount)
+    );
+}
+
+#[test]
+fn inactive_top_padding_binds_the_canonical_discriminant() {
+    let (window, budget) = frozen(4);
+    let noncanonical_empty = CandidateVerdictV1 {
+        kind: VerdictKind::Refused,
+        ..CandidateVerdictV1::EMPTY
+    };
+    assert!(!noncanonical_empty.is_empty());
+    assert_eq!(
+        finalize_selection(
+            window,
+            budget,
+            [
+                noncanonical_empty,
+                CandidateVerdictV1::EMPTY,
+                CandidateVerdictV1::EMPTY,
+            ],
+            None,
+            liveness(),
+            S
+        ),
+        Err(Error::InvalidState)
+    );
+}
+
+#[test]
+fn epoch_budget_refuses_premature_paid_credited_and_refunded_compartments() {
+    let pristine = budget();
+
+    let mut finalizer_paid = pristine;
+    finalizer_paid.finalizer_remaining -= 1;
+    finalizer_paid.finalizer_paid += 1;
+    assert_eq!(finalizer_paid.validate(), Err(Error::InvalidState));
+    assert_eq!(
+        freeze_window(
+            open(4),
+            finalizer_paid,
+            lifecycle(4),
+            score(),
+            liveness(),
+            F
+        ),
+        Err(Error::InvalidState)
+    );
+
+    let mut index_paid = pristine;
+    index_paid.index_cleanup_remaining -= liveness().index_page_close_reward;
+    index_paid.index_cleanup_paid += liveness().index_page_close_reward;
+    assert_eq!(index_paid.validate(), Err(Error::InvalidState));
+
+    let mut solver_credited = pristine;
+    solver_credited.solver_remaining = 0;
+    solver_credited.solver_credited = solver_credited.solver_initial;
+    assert_eq!(solver_credited.validate(), Err(Error::InvalidState));
+
+    let (window, frozen_budget) = frozen(4);
+    let mut solver_refunded = frozen_budget;
+    solver_refunded.solver_remaining = 0;
+    solver_refunded.solver_refunded = solver_refunded.solver_initial;
+    assert_eq!(solver_refunded.validate(), Err(Error::InvalidState));
+    assert_eq!(
+        finalize_selection(
+            window,
+            solver_refunded,
+            [CandidateVerdictV1::EMPTY; TOP_CANDIDATE_CAPACITY],
+            None,
+            liveness(),
+            S
+        ),
+        Err(Error::InvalidState)
+    );
 }
 
 #[test]
@@ -947,7 +1244,7 @@ fn policy_arithmetic_and_capacity_fail_closed() {
     let mut too_large = lifecycle(4);
     too_large.max_begun_candidates = u16::MAX;
     assert_eq!(too_large.validate(), Err(Error::InvalidPolicy));
-    assert_eq!(ADAPTER_OBLIGATIONS.len(), 14);
+    assert_eq!(ADAPTER_OBLIGATIONS.len(), 15);
     assert!(PROMOTION_BLOCKERS.contains(&PromotionBlocker::CopyFrontRunningAdmissionDesign));
     assert!(PROMOTION_BLOCKERS.contains(&PromotionBlocker::QualityCapacityDenialOfService));
 }

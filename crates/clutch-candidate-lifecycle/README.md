@@ -15,6 +15,7 @@ It owns:
   implementation;
 - prepaid progress/completion/finalization rewards;
 - checked validity/abandonment penalties, expiry, refunds, and winner credit;
+- monotone routing of unsolicited lamport surplus to the immutable neutral sink;
 - atomic pure transitions that validate copies before publishing output.
 
 It does not own hashing, PDAs, Solana account memory, Clock authentication,

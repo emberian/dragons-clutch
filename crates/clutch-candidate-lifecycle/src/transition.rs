@@ -31,6 +31,7 @@ pub enum AdapterObligation {
     ExecuteScorePolicyAndDeriveRankKey,
     AuthenticateWorkCheckpointAndClosure,
     AuthenticateSelectedSettlementTerminal,
+    RouteUnsolicitedSurplusToNeutralSink,
     MoveLamportsExactly,
     CommitReturnedAccountsAtomically,
     MirrorEpochTerminalState,
@@ -47,7 +48,7 @@ pub enum PromotionBlocker {
     GlobalAccountTagMappingNotReserved,
 }
 
-pub const ADAPTER_OBLIGATIONS: [AdapterObligation; 14] = [
+pub const ADAPTER_OBLIGATIONS: [AdapterObligation; 15] = [
     AdapterObligation::AuthenticateClockSysvar,
     AdapterObligation::DeriveAndAuthenticateIdentityAndPda,
     AdapterObligation::ProveFreshCanonicalAdmissionAccounts,
@@ -58,6 +59,7 @@ pub const ADAPTER_OBLIGATIONS: [AdapterObligation; 14] = [
     AdapterObligation::ExecuteScorePolicyAndDeriveRankKey,
     AdapterObligation::AuthenticateWorkCheckpointAndClosure,
     AdapterObligation::AuthenticateSelectedSettlementTerminal,
+    AdapterObligation::RouteUnsolicitedSurplusToNeutralSink,
     AdapterObligation::MoveLamportsExactly,
     AdapterObligation::CommitReturnedAccountsAtomically,
     AdapterObligation::MirrorEpochTerminalState,
@@ -184,7 +186,7 @@ fn bind_escrow(
 pub struct LamportDispositionV1 {
     pub keeper_reward: u64,
     pub neutral_sink: u64,
-    pub payer_refund: u64,
+    pub refund_destination_credit: u64,
     /// Epoch budget transfer into the selected candidate escrow.
     pub solver_escrow_credit: u64,
     /// Candidate escrow payout to the immutable solver reward destination.
@@ -241,6 +243,7 @@ pub fn admit_epoch_budget(
         solver_remaining: liveness.solver_prize,
         solver_credited: 0,
         solver_refunded: 0,
+        surplus_routed: 0,
         index_pages_owed: 0,
         terminalized: 0,
         refund_claimed: 0,
@@ -410,6 +413,7 @@ pub fn begin_candidate(
         solver_credited: 0,
         solver_remaining: 0,
         solver_paid: 0,
+        surplus_routed: 0,
         paid_units: 0,
         total_units: 0,
         funding_state: EscrowFundingState::Staging,
@@ -496,6 +500,11 @@ pub fn seal_candidate(
     bind_escrow(candidate, escrow, liveness)?;
     if window.is_finalized() || window.schedule()?.interval(now_slot)? != Interval::Submission {
         return Err(Error::NotActive);
+    }
+    if candidate.expected_feed_bytes > lifecycle.max_feed_bytes
+        || candidate.verification_units > lifecycle.max_verification_units
+    {
+        return Err(Error::InvalidCount);
     }
     if candidate.status != CandidateStatus::Staging
         || escrow.funding_state != EscrowFundingState::Staging
@@ -1088,7 +1097,7 @@ pub fn claim_bond_refund(
     Ok(EscrowClaimTransitionV2 {
         escrow: next,
         disposition: LamportDispositionV1 {
-            payer_refund: refund,
+            refund_destination_credit: refund,
             ..LamportDispositionV1::default()
         },
     })
@@ -1142,12 +1151,13 @@ pub fn claim_work_refund(
     Ok(EscrowClaimTransitionV2 {
         escrow: next,
         disposition: LamportDispositionV1 {
-            payer_refund: refund,
+            refund_destination_credit: refund,
             ..LamportDispositionV1::default()
         },
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn finish_candidate_cleanup(
     window: CandidateWindowV3,
     index_page: CandidateIndexPageV1,
@@ -1156,6 +1166,7 @@ pub fn finish_candidate_cleanup(
     settlement_terminal: Option<AdapterVerifiedSettlementTerminalV1>,
     escrow: CandidateEscrowV2,
     liveness: CandidateLivenessPolicyV2,
+    observed_owned_lamports: u64,
 ) -> Result<CandidateCleanupTransitionV2, Error> {
     candidate.bind_window(window)?;
     index_page.bind_candidate(candidate)?;
@@ -1166,6 +1177,24 @@ pub fn finish_candidate_cleanup(
         return Err(Error::NotActive);
     }
     if window.selected_candidate == candidate.candidate {
+        let selected_verdict = verdict.ok_or(Error::MismatchedBinding)?;
+        if selected_verdict.kind != VerdictKind::Valid {
+            return Err(Error::MismatchedBinding);
+        }
+        let solver_claim_is_exact = if liveness.solver_prize == 0 {
+            escrow.solver_credited == 0
+                && escrow.solver_remaining == 0
+                && escrow.solver_paid == 0
+                && escrow.solver_credit_claimed == 0
+        } else {
+            escrow.solver_credited == liveness.solver_prize
+                && escrow.solver_remaining == 0
+                && escrow.solver_paid == liveness.solver_prize
+                && escrow.solver_credit_claimed == 1
+        };
+        if !solver_claim_is_exact {
+            return Err(Error::MismatchedBinding);
+        }
         let settlement = settlement_terminal.ok_or(Error::UnresolvedCandidates)?;
         if settlement.epoch != window.epoch
             || settlement.candidate != candidate.candidate
@@ -1174,7 +1203,12 @@ pub fn finish_candidate_cleanup(
         {
             return Err(Error::MismatchedBinding);
         }
-    } else if settlement_terminal.is_some() {
+    } else if settlement_terminal.is_some()
+        || escrow.solver_credited != 0
+        || escrow.solver_remaining != 0
+        || escrow.solver_paid != 0
+        || escrow.solver_credit_claimed != 0
+    {
         return Err(Error::MismatchedBinding);
     }
     if escrow.candidate != candidate.candidate
@@ -1192,6 +1226,10 @@ pub fn finish_candidate_cleanup(
     if escrow.cleanup_remaining < liveness.candidate_close_reward {
         return Err(Error::Underfunded);
     }
+    let expected_owned_lamports = escrow.accounted_lamports()?;
+    let surplus = observed_owned_lamports
+        .checked_sub(expected_owned_lamports)
+        .ok_or(Error::Underfunded)?;
     let after_reward = escrow
         .cleanup_remaining
         .checked_sub(liveness.candidate_close_reward)
@@ -1210,6 +1248,10 @@ pub fn finish_candidate_cleanup(
     next.cleanup_refunded = add(next.cleanup_refunded, after_reward)?;
     next.cleanup_finalized = 1;
     next.candidate_closed = 1;
+    next.surplus_routed = next
+        .surplus_routed
+        .checked_add(u128::from(surplus))
+        .ok_or(Error::ArithmeticOverflow)?;
     bind_escrow(candidate, next, liveness)?;
     let next_page = index_page.mark_candidate_closed(candidate)?;
     Ok(CandidateCleanupTransitionV2 {
@@ -1217,7 +1259,8 @@ pub fn finish_candidate_cleanup(
         escrow: next,
         disposition: LamportDispositionV1 {
             keeper_reward: liveness.candidate_close_reward,
-            payer_refund: after_reward,
+            neutral_sink: surplus,
+            refund_destination_credit: after_reward,
             rent_principal_refund: rent,
             ..LamportDispositionV1::default()
         },
@@ -1274,6 +1317,7 @@ pub fn close_index_page(
     budget: EpochCandidateBudgetV2,
     page: CandidateIndexPageV1,
     liveness: CandidateLivenessPolicyV2,
+    observed_page_lamports: u64,
 ) -> Result<CloseIndexPageTransitionV2, Error> {
     window.validate()?;
     bind_budget(budget, window.epoch, liveness)?;
@@ -1306,6 +1350,9 @@ pub fn close_index_page(
         return Err(Error::InvalidState);
     }
     let rent_refund = budget.index_page_rent_principal / page_count;
+    let surplus = observed_page_lamports
+        .checked_sub(rent_refund)
+        .ok_or(Error::Underfunded)?;
     let mut next = budget;
     next.index_cleanup_remaining = next
         .index_cleanup_remaining
@@ -1316,11 +1363,16 @@ pub fn close_index_page(
         .index_pages_owed
         .checked_sub(1)
         .ok_or(Error::ArithmeticOverflow)?;
+    next.surplus_routed = next
+        .surplus_routed
+        .checked_add(u128::from(surplus))
+        .ok_or(Error::ArithmeticOverflow)?;
     bind_budget(next, window.epoch, liveness)?;
     Ok(CloseIndexPageTransitionV2 {
         budget: next,
         disposition: LamportDispositionV1 {
             keeper_reward: liveness.index_page_close_reward,
+            neutral_sink: surplus,
             rent_principal_refund: rent_refund,
             ..LamportDispositionV1::default()
         },
@@ -1337,6 +1389,7 @@ pub fn claim_epoch_unused(
     window: CandidateWindowV3,
     budget: EpochCandidateBudgetV2,
     liveness: CandidateLivenessPolicyV2,
+    observed_budget_lamports: u64,
 ) -> Result<EpochRefundTransitionV2, Error> {
     window.validate()?;
     bind_budget(budget, window.epoch, liveness)?;
@@ -1350,6 +1403,22 @@ pub fn claim_epoch_unused(
     if budget.refund_claimed != 0 {
         return Err(Error::Replay);
     }
+    let solver_phase_matches_selection = if window.selected_candidate.is_zero() {
+        budget.solver_remaining == budget.solver_initial
+            && budget.solver_credited == 0
+            && budget.solver_refunded == 0
+    } else {
+        budget.solver_remaining == 0
+            && budget.solver_credited == budget.solver_initial
+            && budget.solver_refunded == 0
+    };
+    if !solver_phase_matches_selection {
+        return Err(Error::MismatchedBinding);
+    }
+    let expected_budget_lamports = budget.accounted_lamports()?;
+    let surplus = observed_budget_lamports
+        .checked_sub(expected_budget_lamports)
+        .ok_or(Error::Underfunded)?;
     let refund = add(budget.index_cleanup_remaining, budget.solver_remaining)?;
     let mut next = budget;
     next.index_cleanup_refunded = add(next.index_cleanup_refunded, next.index_cleanup_remaining)?;
@@ -1357,11 +1426,16 @@ pub fn claim_epoch_unused(
     next.solver_refunded = add(next.solver_refunded, next.solver_remaining)?;
     next.solver_remaining = 0;
     next.refund_claimed = 1;
+    next.surplus_routed = next
+        .surplus_routed
+        .checked_add(u128::from(surplus))
+        .ok_or(Error::ArithmeticOverflow)?;
     bind_budget(next, window.epoch, liveness)?;
     Ok(EpochRefundTransitionV2 {
         budget: next,
         disposition: LamportDispositionV1 {
-            payer_refund: refund,
+            neutral_sink: surplus,
+            refund_destination_credit: refund,
             ..LamportDispositionV1::default()
         },
     })

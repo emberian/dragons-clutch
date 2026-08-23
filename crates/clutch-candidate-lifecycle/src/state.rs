@@ -22,9 +22,9 @@ pub const CANDIDATE_VERSION: u8 = 2;
 pub const VERDICT_TAG: u8 = 4;
 pub const VERDICT_VERSION: u8 = 1;
 pub const ESCROW_TAG: u8 = 5;
-pub const ESCROW_VERSION: u8 = 2;
+pub const ESCROW_VERSION: u8 = 3;
 pub const EPOCH_BUDGET_TAG: u8 = 6;
-pub const EPOCH_BUDGET_VERSION: u8 = 2;
+pub const EPOCH_BUDGET_VERSION: u8 = 3;
 pub const LIFECYCLE_POLICY_TAG: u8 = 7;
 pub const LIFECYCLE_POLICY_VERSION: u8 = 2;
 pub const LIVENESS_POLICY_TAG: u8 = 8;
@@ -35,8 +35,8 @@ pub const WINDOW_BYTES: usize =
 pub const INDEX_PAGE_BYTES: usize = 2 + 32 + 1 + 1 + 2 + (CANDIDATES_PER_INDEX_PAGE * 32) + 2;
 pub const CANDIDATE_BYTES: usize = 2 + (12 * 32) + (3 * 8) + 4 + (2 * 2) + 3;
 pub const VERDICT_BYTES: usize = 2 + (5 * 32) + 1 + RANK_KEY_CAPACITY + 8 + 2 + 3;
-pub const ESCROW_BYTES: usize = 2 + (5 * 32) + (17 * 8) + (2 * 2) + 9;
-pub const EPOCH_BUDGET_BYTES: usize = 2 + (5 * 32) + (16 * 8) + 5;
+pub const ESCROW_BYTES: usize = 2 + (5 * 32) + (17 * 8) + 16 + (2 * 2) + 9;
+pub const EPOCH_BUDGET_BYTES: usize = 2 + (5 * 32) + (16 * 8) + 16 + 5;
 pub const LIFECYCLE_POLICY_BYTES: usize = 2 + 32 + (2 * 8) + 4 + (2 * 2) + 2;
 pub const LIVENESS_POLICY_BYTES: usize = 2 + (2 * 32) + (11 * 8) + 2;
 
@@ -44,8 +44,8 @@ const _: () = assert!(WINDOW_BYTES == 379);
 const _: () = assert!(INDEX_PAGE_BYTES == 552);
 const _: () = assert!(CANDIDATE_BYTES == 421);
 const _: () = assert!(VERDICT_BYTES == 240);
-const _: () = assert!(ESCROW_BYTES == 311);
-const _: () = assert!(EPOCH_BUDGET_BYTES == 295);
+const _: () = assert!(ESCROW_BYTES == 327);
+const _: () = assert!(EPOCH_BUDGET_BYTES == 311);
 const _: () = assert!(LIFECYCLE_POLICY_BYTES == 60);
 const _: () = assert!(LIVENESS_POLICY_BYTES == 156);
 
@@ -1259,6 +1259,7 @@ impl CandidateVerdictV1 {
             && self.rank_key.is_empty()
             && self.verified_slot == 0
             && self.refusal_code == 0
+            && self.kind == VerdictKind::Valid
             && self.stored_bump == 0
             && self.flags == 0
     }
@@ -1423,6 +1424,8 @@ pub struct CandidateEscrowV2 {
     pub solver_credited: u64,
     pub solver_remaining: u64,
     pub solver_paid: u64,
+    /// Cumulative unsolicited lamports routed to the immutable neutral sink.
+    pub surplus_routed: u128,
     pub paid_units: u16,
     pub total_units: u16,
     pub funding_state: EscrowFundingState,
@@ -1460,6 +1463,8 @@ impl CandidateEscrowV2 {
             || self.candidate_closed > 1
             || self.flags != 0
             || self.paid_units > self.total_units
+            || (self.candidate_closed == 0 && self.surplus_routed != 0)
+            || self.surplus_routed > u128::from(u64::MAX)
         {
             return Err(Error::InvalidState);
         }
@@ -1579,6 +1584,7 @@ impl CandidateEscrowV2 {
         ] {
             writer.u64(value)?;
         }
+        writer.u128(self.surplus_routed)?;
         writer.u16(self.paid_units)?;
         writer.u16(self.total_units)?;
         writer.u8(self.funding_state.wire())?;
@@ -1619,6 +1625,7 @@ impl CandidateEscrowV2 {
             solver_credited: reader.u64()?,
             solver_remaining: reader.u64()?,
             solver_paid: reader.u64()?,
+            surplus_routed: reader.u128()?,
             paid_units: reader.u16()?,
             total_units: reader.u16()?,
             funding_state: EscrowFundingState::decode(reader.u8()?)?,
@@ -1661,6 +1668,8 @@ pub struct EpochCandidateBudgetV2 {
     pub solver_remaining: u64,
     pub solver_credited: u64,
     pub solver_refunded: u64,
+    /// Cumulative unsolicited lamports routed to the immutable neutral sink.
+    pub surplus_routed: u128,
     pub index_pages_owed: u8,
     pub terminalized: u8,
     pub refund_claimed: u8,
@@ -1689,6 +1698,9 @@ impl EpochCandidateBudgetV2 {
             || self.freeze_initial == 0
             || self.finalizer_initial == 0
             || self.index_cleanup_initial == 0
+            || !self.index_cleanup_initial.is_multiple_of(
+                u64::try_from(MAX_CANDIDATE_INDEX_PAGES).map_err(|_| Error::ArithmeticOverflow)?,
+            )
             || usize::from(self.index_pages_owed) > MAX_CANDIDATE_INDEX_PAGES
             || self.terminalized > 1
             || self.refund_claimed > 1
@@ -1706,15 +1718,64 @@ impl EpochCandidateBudgetV2 {
         {
             return Err(Error::MismatchedBinding);
         }
-        if self.terminalized == 0 && (self.index_pages_owed != 0 || self.refund_claimed != 0) {
-            return Err(Error::InvalidState);
-        }
-        if self.refund_claimed == 1
-            && (self.solver_remaining != 0
-                || self.index_cleanup_remaining != 0
-                || self.index_pages_owed != 0)
-        {
-            return Err(Error::InvalidState);
+        if self.terminalized == 0 {
+            let freeze_pristine =
+                self.freeze_remaining == self.freeze_initial && self.freeze_paid == 0;
+            let freeze_paid = self.freeze_remaining == 0 && self.freeze_paid == self.freeze_initial;
+            if (!freeze_pristine && !freeze_paid)
+                || self.finalizer_remaining != self.finalizer_initial
+                || self.finalizer_paid != 0
+                || self.index_cleanup_remaining != self.index_cleanup_initial
+                || self.index_cleanup_paid != 0
+                || self.index_cleanup_refunded != 0
+                || self.solver_remaining != self.solver_initial
+                || self.solver_credited != 0
+                || self.solver_refunded != 0
+                || self.index_pages_owed != 0
+                || self.refund_claimed != 0
+                || self.surplus_routed != 0
+            {
+                return Err(Error::InvalidState);
+            }
+        } else {
+            let page_count =
+                u64::try_from(MAX_CANDIDATE_INDEX_PAGES).map_err(|_| Error::ArithmeticOverflow)?;
+            let closed_pages = page_count
+                .checked_sub(u64::from(self.index_pages_owed))
+                .ok_or(Error::ArithmeticOverflow)?;
+            let per_page = self.index_cleanup_initial / page_count;
+            let expected_paid = mul(per_page, closed_pages)?;
+            let expected_remaining = mul(per_page, u64::from(self.index_pages_owed))?;
+            let surplus_events = add(closed_pages, u64::from(self.refund_claimed))?;
+            let maximum_surplus = u128::from(u64::MAX)
+                .checked_mul(u128::from(surplus_events))
+                .ok_or(Error::ArithmeticOverflow)?;
+            let solver_unclaimed = self.solver_remaining == self.solver_initial
+                && self.solver_credited == 0
+                && self.solver_refunded == 0;
+            let solver_credited = self.solver_remaining == 0
+                && self.solver_credited == self.solver_initial
+                && self.solver_refunded == 0;
+            let solver_refunded = self.solver_remaining == 0
+                && self.solver_credited == 0
+                && self.solver_refunded == self.solver_initial;
+            if self.freeze_remaining != 0
+                || self.freeze_paid != self.freeze_initial
+                || self.finalizer_remaining != 0
+                || self.finalizer_paid != self.finalizer_initial
+                || self.index_cleanup_paid != expected_paid
+                || self.index_cleanup_remaining != expected_remaining
+                || self.index_cleanup_refunded != 0
+                || (!solver_unclaimed && !solver_credited && !solver_refunded)
+                || self.surplus_routed > maximum_surplus
+                || (self.solver_refunded != 0 && self.refund_claimed != 1)
+                || (self.refund_claimed == 1
+                    && (self.solver_remaining != 0
+                        || self.index_pages_owed != 0
+                        || (self.solver_initial != 0 && solver_unclaimed)))
+            {
+                return Err(Error::InvalidState);
+            }
         }
         Ok(())
     }
@@ -1773,6 +1834,7 @@ impl EpochCandidateBudgetV2 {
         ] {
             writer.u64(value)?;
         }
+        writer.u128(self.surplus_routed)?;
         writer.u8(self.index_pages_owed)?;
         writer.u8(self.terminalized)?;
         writer.u8(self.refund_claimed)?;
@@ -1806,6 +1868,7 @@ impl EpochCandidateBudgetV2 {
             solver_remaining: reader.u64()?,
             solver_credited: reader.u64()?,
             solver_refunded: reader.u64()?,
+            surplus_routed: reader.u128()?,
             index_pages_owed: reader.u8()?,
             terminalized: reader.u8()?,
             refund_claimed: reader.u8()?,

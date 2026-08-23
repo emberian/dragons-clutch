@@ -39,6 +39,10 @@ impl<'a> Writer<'a> {
         self.bytes(&value.to_le_bytes())
     }
 
+    pub(crate) fn u128(&mut self, value: u128) -> Result<(), CodecError> {
+        self.bytes(&value.to_le_bytes())
+    }
+
     pub(crate) fn bytes(&mut self, value: &[u8]) -> Result<(), CodecError> {
         let end = self
             .at
@@ -84,6 +88,10 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn u64(&mut self) -> Result<u64, CodecError> {
         Ok(u64::from_le_bytes(self.array()?))
+    }
+
+    pub(crate) fn u128(&mut self) -> Result<u128, CodecError> {
+        Ok(u128::from_le_bytes(self.array()?))
     }
 
     pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], CodecError> {

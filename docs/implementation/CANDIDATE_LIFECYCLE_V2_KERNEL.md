@@ -154,11 +154,20 @@ work_remaining + work_paid + work_refunded = work_initial
 bond_remaining + bond_slashed + bond_refunded = bond_initial
 cleanup_remaining + cleanup_paid + cleanup_refunded = cleanup_initial
 solver_remaining + solver_paid = solver_credited
+surplus_routed_to_neutral_sink is a monotone u128 total
 ```
 
 Epoch balances have equivalent freeze, finalizer, index-cleanup, and solver
 compartments. Rent principal is never a fee, keeper reward, penalty, or solver
 prize.
+
+Unsolicited lamports are not rejected and cannot make exact-balance cleanup
+fail. Candidate cleanup, index-page close, and epoch-budget refund accept the
+adapter-observed balance, refuse an actual deficit, and route every surplus
+lamport to the immutable neutral sink. The cumulative routed total is monotone;
+there is no pending surplus compartment after an atomic transition. The adapter
+applies the same rule when later retirement closes Window, Verdict, or remaining
+root accounts.
 
 | Terminal fact | Bond | Work | Cleanup/rent | Solver prize |
 | --- | --- | --- | --- | --- |
@@ -173,12 +182,17 @@ Verdict: valid must have zero slash; refused must have exactly the configured
 invalidity penalty. Deadline failure is never classified as invalidity.
 
 Cleanup is last. It requires final selection, bond refund, work closure/refund
-for sealed candidates, and solver claim when credited. This prevents closing a
-record that is still needed to authenticate a claim. Cleanup atomically marks
+for sealed candidates, and the exact solver phase implied by the finalized
+Window: a selected candidate has a fully claimed credited prize (or the
+canonical all-zero state when the configured prize is zero), while every
+unselected candidate has no solver credit. The selected Verdict must be
+`Valid`. This prevents closing a record that is still needed to authenticate a
+claim or carries cross-account-forged credit. Cleanup atomically marks
 the candidate's index bit closed. Index pages close in reverse order only when
 every active bit is closed; each returns exactly one quarter of their divisible prepaid rent
-principal. Unused epoch rewards refund only after all four pages close. Epoch
-root retirement remains separate.
+principal. Unused epoch rewards refund only after all four pages close, and the
+budget's solver phase must agree with whether the Window selected a candidate.
+Epoch root retirement remains separate.
 
 ## Versioned accounts and wire
 
@@ -193,8 +207,8 @@ layout before promotion.
 | `CandidateIndexPageV1` | 2/1 | 552 | epoch, 16 canonical begun identities, and monotone closed mask |
 | `CandidateRecordV2` | 3/2 | 421 | 12 identities, three slots, feed/work geometry, status |
 | `CandidateVerdictV1` | 4/1 | 240 | immutable relation/score result and 64-byte rank capacity |
-| `CandidateEscrowV2` | 5/2 | 311 | exact candidate funding compartments and claim bits |
-| `EpochCandidateBudgetV2` | 6/2 | 295 | exact epoch funding compartments and page-close cursor |
+| `CandidateEscrowV2` | 5/3 | 327 | V3 codec adds monotone surplus routing to candidate funding/claims |
+| `EpochCandidateBudgetV2` | 6/3 | 311 | V3 codec adds surplus routing and strict economic phase invariants |
 | `CandidateLifecyclePolicyV2` | 7/2 | 60 | spans, feed-byte cap, and work/candidate bounds |
 | `CandidateLivenessPolicyV2` | 8/2 | 156 | immutable present-funding amounts and sink |
 
@@ -204,6 +218,12 @@ Progress, Complete, Finalize, both expiry classes through one intent, work
 closure, the four claim/cleanup paths, reverse page close, and epoch-unused
 refund. The Complete intent names the expected Verdict identity; it does not
 carry trusted score or relation claims.
+
+`CandidateIntentV2` is the lifecycle-kernel subset, not the complete live
+instruction family. InitEpoch, fixed page precreation, feed-stage allocation,
+and `WriteCandidateFeedV2` codecs belong to the global layout/SBF adapter. That
+adapter must give them fresh globally mapped tags and enforce its chosen write
+clock rule; no stage write may seal, revive, or race cleanup after `S`.
 
 This is a **new-epoch-only** family. Existing shared-deadline epochs decode and
 finish under their existing version and intent family. A profile must authorize
@@ -251,10 +271,11 @@ SBF adapter must:
 8. execute the bound score policy and derive the canonical rank key;
 9. authenticate work checkpoint progress and terminal closure/abort;
 10. authenticate settlement-terminal evidence before selected-witness cleanup;
-11. move each typed lamport disposition exactly;
-12. commit every returned account replacement atomically;
-13. atomically mirror Window finality into the existing Epoch owner; and
-14. close only owned accounts and return rent to the recorded destination.
+11. observe owned-account lamports and route unsolicited surplus to the neutral sink;
+12. move each typed lamport disposition exactly;
+13. commit every returned account replacement atomically;
+14. atomically mirror Window finality into the existing Epoch owner; and
+15. close only owned accounts and return rent to the recorded destination.
 
 The crate also exposes `PROMOTION_BLOCKERS`. They are not claims of solved
 security:
@@ -290,6 +311,8 @@ cargo doc --manifest-path crates/clutch-candidate-lifecycle/Cargo.toml --no-deps
 The adversarial tests cover both exact boundaries, begun enumeration and cap,
 feed/funding refusals, valid/refused completion, hard finalization with
 unfinished work, both expiry classes, exact slash/refund compartments, local
-rank injectivity, reverse page cleanup, codec versions/lengths, score-policy
-mixing, arithmetic overflow, and typed unresolved blockers. The remaining
-evidence must be supplied by the adapter and SVM integration tests named above.
+rank injectivity, reverse page cleanup, hostile decoded geometry, canonical top
+padding, premature and cross-account solver compartments, surplus
+injection/routing, codec versions/lengths, score-policy mixing, arithmetic
+overflow, and typed unresolved blockers. The remaining evidence must be supplied
+by the adapter and SVM integration tests named above.

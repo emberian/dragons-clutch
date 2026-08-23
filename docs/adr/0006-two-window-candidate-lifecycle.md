@@ -54,6 +54,10 @@ older proposal prose below conflicts:
   rewards;
 - bond, work, cleanup, solver prize, and rent are separate claim/close paths.
   Candidate cleanup is last and marks a monotone closed bit in its index page;
+  cleanup binds exact solver credit/claim state to the Window's selected
+  identity and binds selected cleanup to a valid Verdict. Epoch refund
+  independently binds the budget prize phase to whether the Window selected a
+  candidate;
   pages close in reverse order only when every active bit is closed, and Epoch
   root retirement remains a different semantic owner;
 - the refined index page has canonical identities plus a closed mask; it does
@@ -62,6 +66,15 @@ older proposal prose below conflicts:
 - account tags `1..8` in the standalone crate are kernel-local envelopes, not
   globally reserved live-layout tags. Collision-free adapter mapping remains a
   promotion blocker;
+- unsolicited lamports never fail an exact-balance close: observed surplus is
+  monotonically recorded and routed to the immutable neutral sink, while a
+  real deficit refuses. Refund dispositions name the recorded refund
+  destination rather than assuming it is the original payer. Escrow and Epoch
+  budget envelope codecs advance to version 3 rather than changing V2 bytes in
+  place;
+- the standalone intent enum covers lifecycle transitions only. InitEpoch,
+  page precreation, stage allocation, and feed-write codecs remain explicit
+  global-layout/adapter work and must not reuse historical tags or semantics;
 - pure transitions take values by copy and return complete replacements so a
   kernel refusal is error-atomic. The adapter must authenticate evidence, move
   lamports, mirror Epoch finality, and commit all returned accounts atomically;
