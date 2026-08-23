@@ -1,13 +1,19 @@
-//! Pure offline transport for the canonical production payoff compiler.
+//! Pure offline transport for current Product and exact-market compilation.
 //!
 //! Both the CLI and HTTP adapter call the same function. The adapter decodes
-//! exact rational decimal-string JSON, calls the Rust semantic owners, and
+//! exact rational decimal-string JSON, reopens ReleaseV2/ProfileV4 and the
+//! BundleV5 graph, optionally runs the exact all-support atom solver, and
 //! returns an untrusted proposal. It has no RPC client, persistence, wallet,
 //! signer, transaction builder, or registration authority.
 
 use crate::{bus::Bus, http, Result};
 use clutch_bspline::EdgePolicy;
 use clutch_bspline_shape_compiler::artifact::NativeShapeCertificateV1;
+use clutch_bspline_shape_compiler::exact_market::{
+    bind_exact_market_bundle_v5, compile_exact_market_v1, ExactMarketCompilerRequestV1,
+    ExactMarketCoordinateCoverageV1, ExactMarketSearchOutcomeV1,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V5_ARTIFACT_KIND, EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V1,
+};
 use clutch_bspline_shape_compiler::production::{
     compile_production_payoff_v1, AnalyticSmoothPayoffDefinitionV1,
     ExactCategoricalPayoffDefinitionV1, ExactSmoothPayoffDefinitionV1,
@@ -15,11 +21,11 @@ use clutch_bspline_shape_compiler::production::{
 };
 use clutch_bspline_shape_compiler::{Shape, SpanStatus};
 use clutch_product_series::{
-    assemble_compiled_product_series_bundle_v1, CompiledProductSeriesBundleV1, ContentId,
+    assemble_compiled_product_series_bundle_v5, CompiledProductSeriesBundleV5, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, PriceMeasurePolicyV1,
-    ProductSeriesBundleInputsV1, ProductTemplateV4, RegistryCapabilityProfileV2,
-    SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
-    COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    ProductSeriesBundleInputsV5, ProductTemplateV4, RegistryCapabilityProfileV4,
+    RegistryProgramReleaseV2, SeriesAttachmentPlanV4, SeriesFundingQuoteV4,
+    SeriesFundingTermsV2, SeriesPlanV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -27,23 +33,53 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use solana_address::Address;
 
-pub const ENDPOINT: &str = "/v1/compiler/production-payoff";
+pub const ENDPOINT: &str = "/v1/compiler/product-exact-market";
 pub const MAX_REQUEST_BYTES: usize = 320 * 1024;
-const REQUEST_SCHEMA: &str = "dragons-clutch/compiler/production-payoff-request/v1";
+const REQUEST_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-request/v1";
 const DEFINITION_SCHEMA: &str = "dragons-clutch/compiler/production-payoff-definition/v1";
-const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/production-payoff-proposal/v1";
+const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-proposal/v1";
 
 type CompileResult<T> = std::result::Result<T, String>;
+
+fn parse_product_program_id(value: &str) -> CompileResult<Address> {
+    let program_id = Address::from_str(value)
+        .map_err(|_| "programId is not a canonical Solana address".to_string())?;
+    if program_id.to_string() != value {
+        return Err("programId is not in canonical base58 form".to_string());
+    }
+    if program_id.to_bytes().iter().all(|byte| *byte == 0) {
+        return Err("programId must be a nonzero Product program address".to_string());
+    }
+    Ok(program_id)
+}
+
+fn require_release_program_coordinate(
+    program_id: &Address,
+    release_program: ContentId,
+) -> CompileResult<()> {
+    if release_program != ContentId::from_bytes(program_id.to_bytes()) {
+        return Err(
+            "programId differs from RegistryProgramReleaseV2.program; refusing a cross-program artifact PDA"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CompileRequest {
     schema: String,
     expected_compiler_release_sha256: String,
+    program_id: String,
     definition: DefinitionWire,
     bundle_inputs: BundleInputsWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exact_market_search: Option<ExactMarketSearchWire>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -58,16 +94,27 @@ struct DefinitionWire {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BundleInputsWire {
-    registry_capability_profile_v2_bytes_hex: String,
+    registry_program_release_v2_bytes_hex: String,
+    registry_capability_profile_v4_bytes_hex: String,
     source_release_manifest_id: String,
     evidence_only_recovery_policy_v1_bytes_hex: String,
     product_template_v4_bytes_hex: String,
     price_measure_policy_v1_bytes_hex: String,
     market_genesis_profile_v2_bytes_hex: String,
-    series_funding_quote_v1_bytes_hex: String,
-    series_attachment_plan_v1_bytes_hex: String,
+    series_funding_quote_v4_bytes_hex: String,
+    series_attachment_plan_v4_bytes_hex: String,
     series_plan_v5_bytes_hex: String,
     series_funding_terms_v2_bytes_hex: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExactMarketSearchWire {
+    market_id: String,
+    price_id: String,
+    prices: Vec<String>,
+    coordinates: Vec<String>,
+    maximum_subset_evaluations_per_support: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -480,17 +527,38 @@ fn canonical_json(value: &Value, output: &mut String) -> CompileResult<()> {
     Ok(())
 }
 
-fn bundle_json(bundle: &CompiledProductSeriesBundleV1) -> CompileResult<Value> {
-    let mut bytes = [0_u8; COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES];
+fn bundle_json(
+    bundle: &CompiledProductSeriesBundleV5,
+    program_id: &Address,
+) -> CompileResult<Value> {
+    let mut bytes = [0_u8; COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES];
     bundle
         .encode_into(&mut bytes)
         .map_err(|error| format!("cannot encode compiled Product/Series bundle: {error:?}"))?;
     let bundle_id = bundle
         .id()
         .map_err(|error| format!("cannot identify compiled Product/Series bundle: {error:?}"))?;
+    let kind = [COMPILED_PRODUCT_SERIES_BUNDLE_V5_ARTIFACT_KIND];
+    let digest = bundle_id.bytes();
+    let (artifact_pda, artifact_bump) = Address::find_program_address(
+        &[
+            clutch_sbf::seeds::SEED_PRODUCT_ARTIFACT_V1,
+            &kind,
+            &digest,
+        ],
+        program_id,
+    );
     Ok(json!({
         "id": id_hex(bundle_id.bytes()),
         "bytesHex": hex(&bytes),
+        "artifact": {
+            "kind": COMPILED_PRODUCT_SERIES_BUNDLE_V5_ARTIFACT_KIND.to_string(),
+            "context": id_hex(ContentId::ZERO.bytes()),
+            "exactBodyBytes": COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES.to_string(),
+            "programId": program_id.to_string(),
+            "pda": artifact_pda.to_string(),
+            "bump": artifact_bump.to_string(),
+        },
         "identities": {
             "registryReleaseId": id_hex(bundle.registry_release_id.bytes()),
             "capabilityProfileId": id_hex(bundle.capability_profile_id.bytes()),
@@ -509,6 +577,149 @@ fn bundle_json(bundle: &CompiledProductSeriesBundleV1) -> CompileResult<Value> {
             "seriesPlanId": id_hex(bundle.series_plan_id.bytes()),
             "fundingTermsId": id_hex(bundle.funding_terms_id.bytes()),
         }
+    }))
+}
+
+fn parse_exact_market_search(
+    value: &ExactMarketSearchWire,
+    product_terms_id: ContentId,
+) -> CompileResult<ExactMarketCompilerRequestV1> {
+    let market_id = parse_id(&value.market_id, "exactMarketSearch.marketId")?;
+    let price_id = parse_id(&value.price_id, "exactMarketSearch.priceId")?;
+    let prices = value
+        .prices
+        .iter()
+        .enumerate()
+        .map(|(index, price)| {
+            parse_unsigned(price, &format!("exactMarketSearch.prices[{index}]"))
+        })
+        .collect::<CompileResult<Vec<u64>>>()?;
+    let coordinates = value
+        .coordinates
+        .iter()
+        .enumerate()
+        .map(|(index, coordinate)| {
+            parse_unsigned(
+                coordinate,
+                &format!("exactMarketSearch.coordinates[{index}]"),
+            )
+        })
+        .collect::<CompileResult<Vec<u128>>>()?;
+    let budget = parse_unsigned(
+        &value.maximum_subset_evaluations_per_support,
+        "exactMarketSearch.maximumSubsetEvaluationsPerSupport",
+    )?;
+    ExactMarketCompilerRequestV1::new(
+        market_id,
+        product_terms_id,
+        price_id,
+        &prices,
+        &coordinates,
+        budget,
+    )
+    .map_err(|error| format!("exact market request refused: {error:?}"))
+}
+
+fn exact_market_json(
+    compiled: &clutch_bspline_shape_compiler::production::CompiledProductionPayoffV1,
+    bundle: &CompiledProductSeriesBundleV5,
+    value: &ExactMarketSearchWire,
+    product_terms_id: ContentId,
+) -> CompileResult<Value> {
+    let request = parse_exact_market_search(value, product_terms_id)?;
+    let output = compile_exact_market_v1(compiled, request)
+        .map_err(|error| format!("exact market compiler refused input: {error:?}"))?;
+    let sidecar = bind_exact_market_bundle_v5(compiled, bundle, &output)
+        .map_err(|error| format!("BundleV5 exact-market join refused: {error:?}"))?;
+    let mut sidecar_bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V1];
+    sidecar
+        .encode_into(&mut sidecar_bytes)
+        .map_err(|error| format!("cannot encode exact-market BundleV5 sidecar: {error:?}"))?;
+    let sidecar_id = sidecar
+        .content_id()
+        .map_err(|error| format!("cannot identify exact-market BundleV5 sidecar: {error:?}"))?;
+    let outcome = match output.manifest.outcome() {
+        ExactMarketSearchOutcomeV1::Solved => "solved",
+        ExactMarketSearchOutcomeV1::Unsupported => "unsupported",
+        ExactMarketSearchOutcomeV1::OutOfProfile => "out-of-profile",
+        ExactMarketSearchOutcomeV1::WorkTruncated => "work-truncated",
+    };
+    let coverage = match output.manifest.coverage() {
+        ExactMarketCoordinateCoverageV1::FullIntegerDomain => "full-integer-domain",
+        ExactMarketCoordinateCoverageV1::DeclaredCoordinateSubset => {
+            "declared-coordinate-subset"
+        }
+    };
+    let mut support_work = Vec::with_capacity(usize::from(output.manifest.outcome_count()));
+    let mut support = 1_u8;
+    while support <= output.manifest.outcome_count() {
+        support_work.push(json!({
+            "support": support.to_string(),
+            "evaluations": output.manifest.evaluations_for_support(support)
+                .ok_or_else(|| "exact-market report omitted an active support".to_string())?
+                .to_string(),
+            "exactButUnrepresentable": output.manifest
+                .exact_but_unrepresentable_for_support(support)
+                .ok_or_else(|| "exact-market report omitted an active support".to_string())?
+                .to_string(),
+        }));
+        support = support
+            .checked_add(1)
+            .ok_or_else(|| "exact-market support counter overflowed".to_string())?;
+    }
+    let certificate = output.certificate_bytes.as_ref().map_or(Value::Null, |bytes| {
+        json!({
+            "outputId": id_hex(output.manifest.certificate_output_id().bytes()),
+            "bytesHex": hex(bytes),
+        })
+    });
+    Ok(json!({
+        "authority": "untrusted-compiler-sidecar",
+        "registrationAuthority": false,
+        "outcome": outcome,
+        "coverage": coverage,
+        "completeFullDomainNegative": output.manifest.is_complete_full_domain_negative(),
+        "claims": {
+            "uniquePrice": false,
+            "fairValue": false,
+            "optimalClearing": false,
+        },
+        "bindings": {
+            "marketId": id_hex(output.manifest.market_id().bytes()),
+            "productTermsId": id_hex(output.manifest.product_terms_id().bytes()),
+            "nativeClaimBasisId": id_hex(output.manifest.native_claim_basis_id().bytes()),
+            "priceId": id_hex(output.manifest.price_id().bytes()),
+            "bundleV5Id": id_hex(sidecar.bundle_v5_id().bytes()),
+        },
+        "target": {
+            "outcomeCount": output.manifest.outcome_count().to_string(),
+            "payoutDenominator": output.manifest.payout_denominator().to_string(),
+            "prices": output.manifest.prices()[..usize::from(output.manifest.outcome_count())]
+                .iter().map(|price| price.to_string()).collect::<Vec<_>>(),
+        },
+        "search": {
+            "coordinateDomainMin": output.manifest.coordinate_domain_min().to_string(),
+            "coordinateDomainMax": output.manifest.coordinate_domain_max().to_string(),
+            "coordinates": output.manifest.coordinates()
+                [..usize::from(output.manifest.coordinate_count())]
+                .iter().map(|coordinate| coordinate.to_string()).collect::<Vec<_>>(),
+            "maximumSubsetEvaluationsPerSupport": output.manifest
+                .maximum_subset_evaluations_per_support().to_string(),
+            "exhaustedThroughSupport": output.manifest.exhausted_through_support().to_string(),
+            "truncatedSupport": output.manifest.truncated_support().to_string(),
+            "workBySupport": support_work,
+        },
+        "workManifest": {
+            "id": id_hex(output.manifest_id.bytes()),
+            "bytesHex": hex(&output.manifest_bytes),
+        },
+        "certificate": certificate,
+        "bundleV5Sidecar": {
+            "id": id_hex(sidecar_id.bytes()),
+            "bytesHex": hex(&sidecar_bytes),
+            "bundleArtifactKind": sidecar.bundle_artifact_kind().to_string(),
+            "bundleArtifactContext": id_hex(sidecar.bundle_artifact_context().bytes()),
+        },
     }))
 }
 
@@ -539,10 +750,11 @@ impl CompilerService {
             ));
         }
         let request: CompileRequest = serde_json::from_slice(body)
-            .map_err(|error| format!("invalid production payoff request JSON: {error}"))?;
+            .map_err(|error| format!("invalid Product exact-market request JSON: {error}"))?;
         if request.schema != REQUEST_SCHEMA {
-            return Err("request.schema is not production-payoff-request/v1".to_string());
+            return Err("request.schema is not product-exact-market-request/v1".to_string());
         }
+        let program_id = parse_product_program_id(&request.program_id)?;
         let expected_compiler_release = decode_hex(
             &request.expected_compiler_release_sha256,
             32,
@@ -573,12 +785,28 @@ impl CompilerService {
         let compiled = compile_production_payoff_v1(product_terms_id, definition)
             .map_err(|error| format!("production payoff compiler refused input: {error:?}"))?;
 
-        let registry_profile: RegistryCapabilityProfileV2 = decode_body(
+        let registry_release: RegistryProgramReleaseV2 = decode_body(
             &request
                 .bundle_inputs
-                .registry_capability_profile_v2_bytes_hex,
-            "bundleInputs.registryCapabilityProfileV2BytesHex",
+                .registry_program_release_v2_bytes_hex,
+            "bundleInputs.registryProgramReleaseV2BytesHex",
         )?;
+        require_release_program_coordinate(&program_id, registry_release.program)?;
+        let registry_profile: RegistryCapabilityProfileV4 = decode_body(
+            &request
+                .bundle_inputs
+                .registry_capability_profile_v4_bytes_hex,
+            "bundleInputs.registryCapabilityProfileV4BytesHex",
+        )?;
+        let registry_release_id = registry_release
+            .id()
+            .map_err(|error| format!("RegistryProgramReleaseV2 identity refused: {error:?}"))?;
+        if registry_profile.registry_release_id() != registry_release_id {
+            return Err(
+                "RegistryCapabilityProfileV4 is not bound to RegistryProgramReleaseV2"
+                    .to_string(),
+            );
+        }
         let registry = registry_profile
             .projection()
             .map_err(|error| format!("registry capability projection refused: {error:?}"))?;
@@ -604,13 +832,22 @@ impl CompilerService {
             &request.bundle_inputs.market_genesis_profile_v2_bytes_hex,
             "bundleInputs.marketGenesisProfileV2BytesHex",
         )?;
-        let funding_quote: SeriesFundingQuoteV1 = decode_body(
-            &request.bundle_inputs.series_funding_quote_v1_bytes_hex,
-            "bundleInputs.seriesFundingQuoteV1BytesHex",
+        let genesis_id = genesis
+            .id()
+            .map_err(|error| format!("MarketGenesisProfileV2 identity refused: {error:?}"))?;
+        if genesis_id.content_id() != product_terms_id {
+            return Err(
+                "definition.productTermsId is not the supplied MarketGenesisProfileV2 identity"
+                    .to_string(),
+            );
+        }
+        let funding_quote: SeriesFundingQuoteV4 = decode_body(
+            &request.bundle_inputs.series_funding_quote_v4_bytes_hex,
+            "bundleInputs.seriesFundingQuoteV4BytesHex",
         )?;
-        let attachment: SeriesAttachmentPlanV1 = decode_body(
-            &request.bundle_inputs.series_attachment_plan_v1_bytes_hex,
-            "bundleInputs.seriesAttachmentPlanV1BytesHex",
+        let attachment: SeriesAttachmentPlanV4 = decode_body(
+            &request.bundle_inputs.series_attachment_plan_v4_bytes_hex,
+            "bundleInputs.seriesAttachmentPlanV4BytesHex",
         )?;
         let series: SeriesPlanV5 = decode_body(
             &request.bundle_inputs.series_plan_v5_bytes_hex,
@@ -620,7 +857,7 @@ impl CompilerService {
             &request.bundle_inputs.series_funding_terms_v2_bytes_hex,
             "bundleInputs.seriesFundingTermsV2BytesHex",
         )?;
-        let bundle = assemble_compiled_product_series_bundle_v1(ProductSeriesBundleInputsV1 {
+        let bundle = assemble_compiled_product_series_bundle_v5(ProductSeriesBundleInputsV5 {
             registry: &registry,
             source_release_manifest_id,
             basis: &compiled.native_claim_basis,
@@ -633,7 +870,13 @@ impl CompilerService {
             series: &series,
             funding_terms: &funding_terms,
         })
-        .map_err(|error| format!("canonical Product/Series bundle join refused: {error:?}"))?;
+        .map_err(|error| format!("canonical Product/Series BundleV5 join refused: {error:?}"))?;
+
+        let exact_market = request
+            .exact_market_search
+            .as_ref()
+            .map(|search| exact_market_json(&compiled, &bundle, search, product_terms_id))
+            .transpose()?;
 
         let (span_status, certificate, bounds, subdivision_depth) = match &compiled.evidence {
             ProductionPayoffEvidenceV1::ExactCategoricalBasis => {
@@ -690,6 +933,7 @@ impl CompilerService {
             "authority": "untrusted-compiler-proposal",
             "registrationAuthority": false,
             "compilerReleaseSha256": self.compiler_release_sha256.as_str(),
+            "programId": request.program_id,
             "requestCanonicalSha256": id_hex(request_sha256),
             "inputCanonicalSha256": id_hex(input_sha256),
             "productTermsId": request.definition.product_terms_id,
@@ -702,7 +946,8 @@ impl CompilerService {
             "certificate": certificate,
             "bounds": bounds,
             "subdivisionDepth": subdivision_depth,
-            "compiledProductSeriesBundle": bundle_json(&bundle)?,
+            "compiledProductSeriesBundleV5": bundle_json(&bundle, &program_id)?,
+            "exactMarket": exact_market,
         }))
     }
 }
@@ -717,7 +962,8 @@ fn error_json(detail: String) -> Value {
     })
 }
 
-/// Read one bounded request from stdin and write one proposal to stdout.
+/// Read one bounded current Product/exact-market request from stdin and write
+/// one untrusted proposal to stdout.
 pub fn compile_cli(compiler_release_sha256: String) -> Result<()> {
     let service = CompilerService::new(compiler_release_sha256)
         .map_err(|error| format!("compiler configuration refused: {error}"))?;
@@ -775,4 +1021,73 @@ pub fn post_api(compiler_release_sha256: String) -> Result<http::PostApi> {
         })
     });
     Ok(post_api)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release() -> String {
+        "11".repeat(32)
+    }
+
+    #[test]
+    fn historical_payoff_endpoint_and_request_schema_are_fail_closed() {
+        let api = post_api(release()).unwrap();
+        assert!(api("/v1/compiler/production-payoff", b"{}").is_none());
+
+        let service = CompilerService::new(release()).unwrap();
+        let old = json!({
+            "schema": "dragons-clutch/compiler/production-payoff-request/v1",
+            "expectedCompilerReleaseSha256": release(),
+            "definition": {},
+            "bundleInputs": {},
+        });
+        assert!(service.compile_request(old.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn exact_market_wire_refuses_noncanonical_decimal_and_zero_identity() {
+        let noncanonical = ExactMarketSearchWire {
+            market_id: "01".repeat(32),
+            price_id: "02".repeat(32),
+            prices: vec!["07".to_string(), "25".to_string()],
+            coordinates: vec!["0".to_string(), "1".to_string()],
+            maximum_subset_evaluations_per_support: "1".to_string(),
+        };
+        assert!(parse_exact_market_search(&noncanonical, ContentId::from_bytes([3; 32]))
+            .unwrap_err()
+            .contains("canonical unsigned decimal"));
+
+        let zero_market = ExactMarketSearchWire {
+            market_id: "00".repeat(32),
+            price_id: "02".repeat(32),
+            prices: vec!["7".to_string(), "25".to_string()],
+            coordinates: vec!["0".to_string(), "1".to_string()],
+            maximum_subset_evaluations_per_support: "1".to_string(),
+        };
+        assert!(parse_exact_market_search(&zero_market, ContentId::from_bytes([3; 32]))
+            .unwrap_err()
+            .contains("must be nonzero"));
+    }
+
+    #[test]
+    fn product_program_coordinate_refuses_default_and_release_splice() {
+        assert!(parse_product_program_id("11111111111111111111111111111111")
+            .unwrap_err()
+            .contains("nonzero Product program"));
+
+        let program = Address::from_str("11111111111111111111111111111112").unwrap();
+        assert!(require_release_program_coordinate(
+            &program,
+            ContentId::from_bytes([9; 32]),
+        )
+        .unwrap_err()
+        .contains("cross-program artifact PDA"));
+        assert!(require_release_program_coordinate(
+            &program,
+            ContentId::from_bytes(program.to_bytes()),
+        )
+        .is_ok());
+    }
 }

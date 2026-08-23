@@ -28,6 +28,7 @@
 //! the SVM relation.
 
 pub mod dealer_leg_v2;
+pub mod direct_pair_v1;
 pub mod portfolio_book_v2;
 pub mod portfolio_execution_v2;
 pub mod relation_v1;
@@ -39,6 +40,8 @@ pub mod relation_v2_stream;
 
 #[cfg(test)]
 mod dealer_leg_v2_tests;
+#[cfg(test)]
+mod direct_pair_v1_tests;
 #[cfg(test)]
 mod portfolio_book_v2_tests;
 #[cfg(test)]

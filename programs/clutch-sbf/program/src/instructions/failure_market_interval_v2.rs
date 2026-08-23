@@ -23,8 +23,10 @@ use crate::instructions::product_market::{
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellPhaseV2,
+    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellDispositionV2,
+    FailureMarketIntervalCellExhaustionPlanV2, FailureMarketIntervalCellPhaseV2,
     FailureMarketIntervalCellPlanV2, FailureMarketIntervalCellResetReceiptV2,
+    FailureMarketIntervalCellResolutionPlanV2, FailureMarketIntervalCellResolutionReceiptV2,
     FailureMarketIntervalCellStateIdV2, FailureMarketIntervalCellV2,
     FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
 };
@@ -190,6 +192,22 @@ impl AuthenticatedFailureMarketIntervalFundingV2 for ProductFailureMarketInterva
             return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
         }
         Ok(())
+    }
+}
+
+/// Product-private proof that slot10 Resolution V5 and the shared active root
+/// were atomically persisted from one exact Failure interval receipt.
+///
+/// The method defaults to refusal and accepts the private receipt itself, not
+/// a caller-authored payout/postimage projection. Product's same-program SBF
+/// postwrite receipt is the only intended implementation.
+pub(crate) trait AuthenticatedFailureMarketProductResolutionV2 {
+    /// Authenticate the exact sole payout truth consumed by Product.
+    fn authenticate_failure_market_product_resolution(
+        &self,
+        _expected: FailureMarketIntervalCellResolutionReceiptV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        Err(clutch_failure_policy_runtime::Error::BindingMismatch)
     }
 }
 
@@ -620,15 +638,110 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
     })
 }
 
-/// Persist one private-field cell transition over the exact authenticated
-/// preimage. Used by begin, paid advance, resolution, and exhaustion owners;
-/// it does not itself mint any of those authorities.
+/// Persist one private-field nonterminal cell transition over the exact
+/// authenticated preimage. Only begin and paid advance can use this writer;
+/// terminal transitions require their narrower typed writers below.
 pub(crate) fn write_failure_market_interval_cell_plan_v2(
     program_id: &Pubkey,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     plan: FailureMarketIntervalCellPlanV2,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    write_failure_market_interval_cell_plan_inner_v2(
+        program_id,
+        cell_account,
+        history_account,
+        authenticated,
+        plan,
+        None,
+    )
+}
+
+/// Persist only the deterministic finite-exhaustion terminal.
+///
+/// The resolved-payout terminal intentionally has no corresponding writer:
+/// it remains unavailable until Product atomically persists Resolution V5 and
+/// returns its private once-only activation receipt.
+pub(crate) fn write_failure_market_interval_exhaustion_plan_v2(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    exhaustion: FailureMarketIntervalCellExhaustionPlanV2,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    let receipt = exhaustion.receipt();
+    let facts = receipt.facts();
+    let resulting_cell = exhaustion.resulting_cell();
+    require(
+        receipt.failure_policy_binding_id() == authenticated.cell.failure_policy_binding_id()
+            && facts.cell_before == authenticated.cell_state_id
+            && facts.cell_after
+                == resulting_cell
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            && facts.market_instance_id == authenticated.cell.market_instance_id()
+            && facts.generation == authenticated.cell.generation()
+            && resulting_cell.disposition() == FailureMarketIntervalCellDispositionV2::Exhausted,
+        ClutchError::MismatchedState,
+    )?;
+    write_failure_market_interval_cell_plan_inner_v2(
+        program_id,
+        cell_account,
+        history_account,
+        authenticated,
+        exhaustion.cell_plan(),
+        Some(FailureMarketIntervalCellDispositionV2::Exhausted),
+    )
+}
+
+/// Persist the Resolved cell only after Product's same-call slot10/0xaa
+/// postwrite receipt authenticates this exact private interval capability.
+pub(crate) fn write_failure_market_interval_resolution_plan_v2<
+    A: AuthenticatedFailureMarketProductResolutionV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    resolution: FailureMarketIntervalCellResolutionPlanV2,
+    product_activation: &A,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    let receipt = resolution.receipt();
+    product_activation
+        .authenticate_failure_market_product_resolution(receipt)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = receipt.facts();
+    let resulting_cell = resolution.resulting_cell();
+    require(
+        receipt.failure_policy_binding_id() == authenticated.cell.failure_policy_binding_id()
+            && facts.cell_before == authenticated.cell_state_id
+            && facts.cell_after
+                == resulting_cell
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            && facts.market_instance_id == authenticated.cell.market_instance_id()
+            && facts.generation == authenticated.cell.generation()
+            && resulting_cell.disposition() == FailureMarketIntervalCellDispositionV2::Resolved,
+        ClutchError::MismatchedState,
+    )?;
+    write_failure_market_interval_cell_plan_inner_v2(
+        program_id,
+        cell_account,
+        history_account,
+        authenticated,
+        resolution.cell_plan(),
+        Some(FailureMarketIntervalCellDispositionV2::Resolved),
+    )
+}
+
+fn write_failure_market_interval_cell_plan_inner_v2(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    plan: FailureMarketIntervalCellPlanV2,
+    admitted_terminal: Option<FailureMarketIntervalCellDispositionV2>,
 ) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
     authenticate_unchanged_account_prestate(
         program_id,
@@ -642,8 +755,8 @@ pub(crate) fn write_failure_market_interval_cell_plan_v2(
     let mut next = authenticated.cell;
     next.commit_plan(plan)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        matches!(
+    let admitted = match admitted_terminal {
+        None => matches!(
             (authenticated.cell.phase(), next.phase()),
             (
                 FailureMarketIntervalCellPhaseV2::Idle,
@@ -651,13 +764,15 @@ pub(crate) fn write_failure_market_interval_cell_plan_v2(
             ) | (
                 FailureMarketIntervalCellPhaseV2::Active,
                 FailureMarketIntervalCellPhaseV2::Active
-            ) | (
-                FailureMarketIntervalCellPhaseV2::Active,
-                FailureMarketIntervalCellPhaseV2::Resolved
             )
         ),
-        ClutchError::MismatchedState,
-    )?;
+        Some(disposition) => {
+            authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Active
+                && next.phase() == FailureMarketIntervalCellPhaseV2::Resolved
+                && next.disposition() == disposition
+        }
+    };
+    require(admitted, ClutchError::MismatchedState)?;
     let encoded = encode_cell(authenticated.cell_bump, next)?;
     authenticate_write_prestate(
         program_id,
