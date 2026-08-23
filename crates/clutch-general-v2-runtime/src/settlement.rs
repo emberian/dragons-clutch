@@ -443,22 +443,15 @@ pub fn authenticate_settlement_position_book_v3(
             return Err(SettlementAdapterErrorV1::PositionSetMismatch);
         }
         let position = PositionAccountV3::decode(input.encoded_body)?;
-        if position.lifecycle() != PositionLifecycleV3::Open
-            || position.owner().bytes() != expected_owner.bytes()
-            || position.replay_account().bytes() == input.account.bytes()
+        if position.replay_account().bytes() == input.account.bytes()
             || position.owner().bytes() == input.account.bytes()
         {
             return Err(SettlementAdapterErrorV1::PositionSetMismatch);
         }
-        let purpose_binding = AdapterPositionPurposeBindingV3 {
-            owner: retirement_identity(expected_owner)?,
-            controller: position.controller(),
-            purpose_binding_id: position.purpose_binding_id(),
-        };
-        project_general_position_v3(position, market_binding, purpose_binding)?;
 
         let mut owner_reservation_count = 0u64;
         let mut owner_reserved_cash = 0u64;
+        let mut expected_generation = 0u64;
         order = 0;
         while order < usize::from(projection.book().len) {
             let membership = projection
@@ -468,9 +461,13 @@ pub fn authenticate_settlement_position_book_v3(
                 )
                 .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
             if membership.owner() == expected_owner {
-                if reservations.position_generations[order] != position.generation() {
+                let order_generation = reservations.position_generations[order];
+                if order_generation == 0
+                    || (expected_generation != 0 && expected_generation != order_generation)
+                {
                     return Err(SettlementAdapterErrorV1::PositionSetMismatch);
                 }
+                expected_generation = order_generation;
                 owner_reservation_count = owner_reservation_count
                     .checked_add(1)
                     .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
@@ -480,6 +477,13 @@ pub fn authenticate_settlement_position_book_v3(
             }
             order += 1;
         }
+        project_canonical_general_settlement_position_v3(
+            position,
+            expected_owner,
+            expected_generation,
+            projection.market(),
+            market_binding,
+        )?;
         if position.outstanding_reservations() < owner_reservation_count
             || position.reserved_cash_atoms() < owner_reserved_cash
         {
@@ -504,6 +508,39 @@ pub fn authenticate_settlement_position_book_v3(
 
 fn retirement_identity(value: Id32) -> Result<Identity32V1, SettlementAdapterErrorV1> {
     Identity32V1::new(value.bytes()).map_err(|_| SettlementAdapterErrorV1::BindingMismatch)
+}
+
+/// Bind the one canonical ordinary-General Position purpose profile.
+///
+/// General settlement never accepts a caller-selected controller or purpose
+/// binding. The semantic owner is the controller and the authenticated
+/// MarketRuntime PDA is the purpose binding. This keeps Position and Replay
+/// addresses derivable from frozen owner/generation facts while leaving
+/// Dealer, Series, and StructuredClaim purpose profiles in their own owners.
+fn project_canonical_general_settlement_position_v3(
+    position: PositionAccountV3,
+    expected_owner: Id32,
+    expected_generation: u64,
+    market_runtime: Id32,
+    market_binding: AdapterPositionMarketBindingV3,
+) -> Result<(), SettlementAdapterErrorV1> {
+    if expected_generation == 0
+        || market_runtime.is_zero()
+        || position.lifecycle() != PositionLifecycleV3::Open
+        || position.owner().bytes() != expected_owner.bytes()
+        || position.controller().bytes() != expected_owner.bytes()
+        || position.purpose_binding_id().bytes() != market_runtime.bytes()
+        || position.generation() != expected_generation
+    {
+        return Err(SettlementAdapterErrorV1::PositionSetMismatch);
+    }
+    let purpose_binding = AdapterPositionPurposeBindingV3 {
+        owner: retirement_identity(expected_owner)?,
+        controller: retirement_identity(expected_owner)?,
+        purpose_binding_id: retirement_identity(market_runtime)?,
+    };
+    project_general_position_v3(position, market_binding, purpose_binding)?;
+    Ok(())
 }
 
 /// One canonical settlement leg.
@@ -1964,12 +2001,13 @@ pub fn prepare_account_receipt_end_transition_v3(
         collateral_policy_id: retirement_identity(Id32::new(collateral.policy_id().bytes())?)?,
         collateral_release_id: retirement_identity(Id32::new(collateral.release().id()?.bytes())?)?,
     };
-    let position_purpose = AdapterPositionPurposeBindingV3 {
-        owner: position_body.owner(),
-        controller: position_body.controller(),
-        purpose_binding_id: position_body.purpose_binding_id(),
-    };
-    project_general_position_v3(position_body, position_market, position_purpose)?;
+    project_canonical_general_settlement_position_v3(
+        position_body,
+        owner,
+        reservation.position_generation,
+        selected.market,
+        position_market,
+    )?;
     let position_semantic_id =
         Id32::new(position_body.semantic_id(&PositionBodySha256V3)?.bytes())?;
     let position = AuthenticatedPositionV3 {
