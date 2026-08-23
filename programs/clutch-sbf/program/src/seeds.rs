@@ -175,9 +175,14 @@ pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_S
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 OrderPage V5 seed prefix.
+pub const SEED_GENERAL_V2_ORDER_PAGE_V5: &[u8] =
+    clutch_general_v2_contract::ORDER_PAGE_SEED_DOMAIN_V1;
+/// Disabled General V2 Reservation V3 seed prefix.
+pub const SEED_GENERAL_V2_RESERVATION_V3: &[u8] =
+    clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V1;
 /// Disabled General SettlementReceipt V3 seed prefix.
-pub const SEED_GENERAL_V2_RECEIPT: &[u8] =
-    clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
+pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
@@ -437,6 +442,37 @@ pub fn general_v2_selected_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_SELECTED, epoch, settlement_candidate_id],
+    )
+}
+
+/// Canonical disabled General V2 OrderPage V5 PDA.
+///
+/// The authenticated Epoch owns the MarketRuntime and page-set lifecycle, so
+/// the zero-based page index is the only suffix.
+pub fn general_v2_order_page_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    page_index: u16,
+) -> (Pubkey, u8) {
+    let page_index_le = page_index.to_le_bytes();
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_ORDER_PAGE_V5, epoch, &page_index_le],
+    )
+}
+
+/// Canonical disabled General V2 Reservation V3 PDA.
+///
+/// The semantic identity already commits MarketRuntime, Epoch, owner,
+/// Position generation, and order ID; none is repeated as a second address
+/// projection.
+pub fn general_v2_reservation_v3_pda(
+    program_id: &Pubkey,
+    reservation_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RESERVATION_V3, reservation_id],
     )
 }
 
