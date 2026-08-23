@@ -891,9 +891,23 @@ pub fn prepare_realize_owner_cash_v1(
 /// that derivation, and then calls this function. This ordering avoids a hash
 /// circularity while keeping the unbound plan non-authorizing.
 pub fn bind_owner_cash_realization_id_v1(
+    account: AuthenticatedOwnerSettlementAccountV1,
+    position: AuthenticatedPositionV3,
+    fee: AuthenticatedOwnerFeeDebitV1,
+    pot: SettlementCashPotV1,
     realization: OwnerCashRealizationPlanV1,
     finalization: AuthenticatedOwnerFinalizationIdV1,
 ) -> Result<BoundOwnerCashRealizationPlanV1> {
+    let canonical = prepare_realize_owner_cash_v1(account, position, fee, pot)?;
+    if realization != canonical {
+        return Err(Error::InvariantViolation);
+    }
+    realization.position.validate_successor_of(
+        position,
+        realization.disposition.position_cash_atoms,
+        realization.disposition.position_reserved_cash_atoms,
+        position.semantic.fields().native_eggs,
+    )?;
     realization.settlement_cash_pot.validate()?;
     let row = OwnerSettlementAccumulatorV1::decode_body(&realization.owner_settlement_body)?;
     let expected = row.expectation;
@@ -1113,7 +1127,15 @@ mod tests {
             pot(),
         )
         .unwrap();
-        let bound = bind_owner_cash_realization_id_v1(first, finalization(4, 40)).unwrap();
+        let bound = bind_owner_cash_realization_id_v1(
+            row(4, SettlementSideV1::Buy),
+            position(4, 2, 2),
+            zero_fee(4),
+            pot(),
+            first,
+            finalization(4, 40),
+        )
+        .unwrap();
         assert_eq!(bound.owner_finalization_id, key(40));
         assert_eq!(first.settlement_cash_pot.available_consideration_atoms, 2);
         assert_eq!(first.settlement_cash_pot.realized_rounding_price_units, 5);

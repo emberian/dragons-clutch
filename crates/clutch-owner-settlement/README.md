@@ -66,6 +66,10 @@ outstanding-Reservation identities while binding the separate General runtime
 Market PDA. Every plan returns the exact canonical successor plus the
 authenticated prestate semantic ID; the adapter must compare-and-write that
 prestate and derive the successor semantic ID from the final body.
+The row-data-ID binder re-runs the complete owner realization from its
+authenticated row, Position, fee, and cash-pot prestates before it can return a
+bound plan, so a caller-authored public plan cannot smuggle an alternate
+Position or pot successor through the second-stage hashing seam.
 
 Virtual split and merge use separate typed contracts and cannot pass through
 the paired-direct API. Their default-deny authority records bind a checked
