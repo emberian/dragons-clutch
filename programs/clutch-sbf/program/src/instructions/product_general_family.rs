@@ -184,6 +184,63 @@ fn hash_id(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
 }
 
+/// Private equality surface derived only from authenticated Product bodies.
+///
+/// This is deliberately not a public authority DTO. It keeps the graph-splice
+/// refusal auditable and hostile-testable while the live constructor below is
+/// the sole place that projects it from exact Product account bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralFamilyGraphJoinV1 {
+    profile_id: ContentId,
+    link_profile_id: ContentId,
+    bundle_profile_id: ContentId,
+    link_funding_terms_id: ContentId,
+    bundle_funding_terms_id: ContentId,
+    bundle_source_plane_contract_id: ContentId,
+    profile_source_plane_contract_id: ContentId,
+    bundle_source_spec_id: ContentId,
+    profile_source_spec_id: ContentId,
+    bundle_summary_program_id: ContentId,
+    profile_summary_program_id: ContentId,
+    bundle_native_claim_basis_id: ContentId,
+    profile_native_claim_basis_id: ContentId,
+    bundle_recovery_policy_id: ContentId,
+    profile_recovery_policy_id: ContentId,
+    bundle_compiler_release_id: ContentId,
+    profile_compiler_release_id: ContentId,
+    bundle_price_measure_policy_id: ContentId,
+    profile_price_measure_policy_id: ContentId,
+    root_realm_id: ContentId,
+    profile_realm_id: ContentId,
+    root_collateral_profile_id: ContentId,
+    profile_collateral_profile_id: ContentId,
+    market_collateral_cap: u64,
+    profile_market_collateral_cap_ceiling: u64,
+}
+
+impl GeneralFamilyGraphJoinV1 {
+    fn validate(self) -> Outcome<()> {
+        require(
+            self.profile_id == self.link_profile_id
+                && self.profile_id == self.bundle_profile_id
+                && self.link_funding_terms_id == self.bundle_funding_terms_id
+                && self.bundle_source_plane_contract_id
+                    == self.profile_source_plane_contract_id
+                && self.bundle_source_spec_id == self.profile_source_spec_id
+                && self.bundle_summary_program_id == self.profile_summary_program_id
+                && self.bundle_native_claim_basis_id == self.profile_native_claim_basis_id
+                && self.bundle_recovery_policy_id == self.profile_recovery_policy_id
+                && self.bundle_compiler_release_id == self.profile_compiler_release_id
+                && self.bundle_price_measure_policy_id
+                    == self.profile_price_measure_policy_id
+                && self.root_realm_id == self.profile_realm_id
+                && self.root_collateral_profile_id == self.profile_collateral_profile_id
+                && self.market_collateral_cap <= self.profile_market_collateral_cap_ceiling,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
 fn authenticate_root_from_body<'a>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -312,6 +369,42 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
+    let profile_rules = profile.value().rules;
+    let semantic_owners = profile_rules.semantic_owners;
+    let realm_collateral = profile_rules.realm_collateral;
+    GeneralFamilyGraphJoinV1 {
+        profile_id,
+        link_profile_id: link_binding.capability_profile_id,
+        bundle_profile_id: bundle.value().capability_profile_id.content_id(),
+        link_funding_terms_id: link_binding.funding_terms_id.content_id(),
+        bundle_funding_terms_id: bundle.value().funding_terms_id.content_id(),
+        bundle_source_plane_contract_id: bundle.value().source_plane_contract_id,
+        profile_source_plane_contract_id: semantic_owners.source_plane_contract_id,
+        bundle_source_spec_id: bundle.value().source_spec_id,
+        profile_source_spec_id: semantic_owners.source_spec_id,
+        bundle_summary_program_id: bundle.value().summary_program_id,
+        profile_summary_program_id: semantic_owners.summary_program_id,
+        bundle_native_claim_basis_id: bundle.value().native_claim_basis_id.content_id(),
+        profile_native_claim_basis_id: semantic_owners.native_claim_basis_id.content_id(),
+        bundle_recovery_policy_id: bundle
+            .value()
+            .evidence_only_recovery_policy_id
+            .content_id(),
+        profile_recovery_policy_id: semantic_owners
+            .evidence_only_recovery_policy_id
+            .content_id(),
+        bundle_compiler_release_id: bundle.value().product_compiler_release_id,
+        profile_compiler_release_id: semantic_owners.product_compiler_release_id,
+        bundle_price_measure_policy_id: bundle.value().price_measure_policy_id.content_id(),
+        profile_price_measure_policy_id: semantic_owners.price_measure_policy_id.content_id(),
+        root_realm_id: root_binding.realm_id,
+        profile_realm_id: realm_collateral.realm_id,
+        root_collateral_profile_id: root_binding.collateral_profile_id,
+        profile_collateral_profile_id: realm_collateral.profile_id,
+        market_collateral_cap: market.value().collateral_cap,
+        profile_market_collateral_cap_ceiling: realm_collateral.market_collateral_cap_ceiling,
+    }
+    .validate()?;
     let physical_accounts = [
         *root_account.key,
         *link_account.key,
@@ -750,6 +843,36 @@ mod adversarial_tests {
         }
     }
 
+    fn exact_graph_join() -> GeneralFamilyGraphJoinV1 {
+        GeneralFamilyGraphJoinV1 {
+            profile_id: id(30),
+            link_profile_id: id(30),
+            bundle_profile_id: id(30),
+            link_funding_terms_id: id(31),
+            bundle_funding_terms_id: id(31),
+            bundle_source_plane_contract_id: id(32),
+            profile_source_plane_contract_id: id(32),
+            bundle_source_spec_id: id(33),
+            profile_source_spec_id: id(33),
+            bundle_summary_program_id: id(34),
+            profile_summary_program_id: id(34),
+            bundle_native_claim_basis_id: id(35),
+            profile_native_claim_basis_id: id(35),
+            bundle_recovery_policy_id: id(36),
+            profile_recovery_policy_id: id(36),
+            bundle_compiler_release_id: id(37),
+            profile_compiler_release_id: id(37),
+            bundle_price_measure_policy_id: id(38),
+            profile_price_measure_policy_id: id(38),
+            root_realm_id: id(39),
+            profile_realm_id: id(39),
+            root_collateral_profile_id: id(40),
+            profile_collateral_profile_id: id(40),
+            market_collateral_cap: 41,
+            profile_market_collateral_cap_ceiling: 41,
+        }
+    }
+
     #[test]
     fn postwrite_identity_swaps_refuse_before_product_root_mutation() {
         let preauthorization = preauthorization();
@@ -770,5 +893,31 @@ mod adversarial_tests {
         let mut wrong_series = exact;
         wrong_series.preauthorization.series_ordinal = 11;
         assert!(require_matching_general_postwrite(preauthorization, &wrong_series).is_err());
+    }
+
+    #[test]
+    fn product_graph_splices_refuse_before_general_preauthorization() {
+        let exact = exact_graph_join();
+        assert!(exact.validate().is_ok());
+
+        let mut profile_splice = exact;
+        profile_splice.bundle_profile_id = id(50);
+        assert!(profile_splice.validate().is_err());
+
+        let mut funding_splice = exact;
+        funding_splice.bundle_funding_terms_id = id(51);
+        assert!(funding_splice.validate().is_err());
+
+        let mut semantic_owner_splice = exact;
+        semantic_owner_splice.profile_price_measure_policy_id = id(52);
+        assert!(semantic_owner_splice.validate().is_err());
+
+        let mut collateral_splice = exact;
+        collateral_splice.profile_realm_id = id(53);
+        assert!(collateral_splice.validate().is_err());
+
+        let mut cap_splice = exact;
+        cap_splice.market_collateral_cap = 42;
+        assert!(cap_splice.validate().is_err());
     }
 }
