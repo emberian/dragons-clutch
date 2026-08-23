@@ -17,6 +17,7 @@ clutch-batch = { path = "../clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 clutch-fee-runtime-contract = { path = "../clutch-fee-runtime-contract" }
 clutch-owner-settlement = { path = "../clutch-owner-settlement" }
+clutch-retirement = { path = "../clutch-retirement" }
 
 [dev-dependencies]
 clutch-batch = { path = "../clutch-batch" }
