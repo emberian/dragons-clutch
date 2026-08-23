@@ -58,7 +58,10 @@ positive support. Total variation is accumulated as one signed side of the
 simplex difference, not as a potentially overflowing full L1 sum; the equal
 simplex totals independently require both signed sides to agree. An adapter
 must authenticate and label both sources before presenting this as venue,
-benchmark, oracle, or market-quality telemetry.
+benchmark, oracle, or market-quality telemetry. For downstream UX, the bound
+interface retains a nonzero adapter-authenticated source-authority ID and exact
+price-body ID for each side; there is no caller-supplied authentication flag
+and no later opportunity to relabel the comparison certificate.
 
 ## Trust boundary
 

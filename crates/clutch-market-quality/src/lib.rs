@@ -30,7 +30,9 @@ pub use payoff_shape::{
     PayoffShapeV1, TailDirectionV1, MAX_PARTITION_BOUNDARIES,
 };
 pub use simplex_disagreement::{
-    compare_exact_simplex_prices_v1, ExactSimplexDisagreementV1,
+    compare_bound_exact_simplex_prices_v1, compare_exact_simplex_prices_v1,
+    BoundExactSimplexDisagreementV1, BoundExactSimplexPriceV1,
+    ExactSimplexDisagreementV1,
 };
 
 /// Refusals produced while validating or evaluating an economic certificate.
