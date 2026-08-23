@@ -197,6 +197,7 @@ pub(crate) fn authenticate_direct_price_precondition_v1(
     genesis_account: &AccountInfo<'_>,
     price_grid_account: &AccountInfo<'_>,
     prices: [u64; 16],
+    reservation_limits: [Option<u128>; 2],
 ) -> Outcome<AuthenticatedDirectPricePreconditionV1> {
     let binding = root.value().binding;
     let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
@@ -264,6 +265,17 @@ pub(crate) fn authenticate_direct_price_precondition_v1(
         }
         index += 1;
     }
+    let mut encoded_limits = [[0u8; 16]; 2];
+    index = 0;
+    while index < reservation_limits.len() {
+        if let Some(limit) = reservation_limits[index] {
+            let grid_limit = u64::try_from(limit)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            grid.tick_of(grid_limit)?;
+            encoded_limits[index] = limit.to_le_bytes();
+        }
+        index += 1;
+    }
     let price_vector = PriceVectorV3 {
         basis_degree: basis.value().basis_degree,
         native_outcome_count: binding.outcome_count,
@@ -306,6 +318,8 @@ pub(crate) fn authenticate_direct_price_precondition_v1(
         genesis_account.key.as_ref(),
         price_grid_account.key.as_ref(),
         &grid_data_id,
+        &encoded_limits[0],
+        &encoded_limits[1],
         &semantic_price_digest,
     ])
     .to_bytes();
@@ -508,17 +522,6 @@ pub(crate) fn process_direct_freeze_book_v1(
     };
     selection_rent.validate().map_err(map_direct_error_v1)?;
 
-    let price = authenticate_direct_price_precondition_v1(
-        program_id,
-        root,
-        &accounts[7],
-        &accounts[8],
-        &accounts[9],
-        &accounts[10],
-        &accounts[11],
-        payload.prices,
-    )?;
-
     let mut authenticated = [None; 2];
     let mut index = 0usize;
     while index < reservation_count {
@@ -538,6 +541,25 @@ pub(crate) fn process_direct_freeze_book_v1(
             authenticated = [Some(right), Some(left)];
         }
     }
+    let mut reservation_limits = [None; 2];
+    index = 0;
+    while index < reservation_count {
+        let current = authenticated[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        reservation_limits[index] = Some(current.value().limit_price_units_per_egg());
+        index += 1;
+    }
+    let price = authenticate_direct_price_precondition_v1(
+        program_id,
+        root,
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        payload.prices,
+        reservation_limits,
+    )?;
     let mut reservations = [None; 2];
     let mut reservation_accounts = [[0u8; 32]; 2];
     let mut reservation_semantic_ids = [[0u8; 32]; 2];
