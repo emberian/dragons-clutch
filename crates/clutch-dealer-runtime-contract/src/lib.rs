@@ -45,6 +45,7 @@ mod pot_v2;
 mod position_v3;
 mod rent;
 mod root_tombstone;
+mod series_obligation;
 mod replay;
 mod state;
 mod state_v2;
@@ -80,6 +81,7 @@ pub use pot_v2::*;
 pub use position_v3::*;
 pub use rent::*;
 pub use root_tombstone::*;
+pub use series_obligation::*;
 pub use replay::*;
 pub use state::*;
 pub use state_v2::*;
@@ -210,6 +212,9 @@ pub const DEALER_QUOTE_ADMISSION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for the counted Dealer selection attachment.
 pub const DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/covered-selection/v1\0";
+/// Exact content domain for the facility-lifetime Product Series obligation.
+pub const DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.

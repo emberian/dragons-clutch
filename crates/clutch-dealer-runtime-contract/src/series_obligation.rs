@@ -1,0 +1,606 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Facility-lifetime Product Series obligation owned by Dealer.
+//!
+//! A Product `SeriesMarketLinkV1` has one Dealer obligation slot for the whole
+//! facility lifetime.  A per-Epoch Lease or CoveredDealer selection therefore
+//! cannot own that slot.  This body retains the exact authenticated Product
+//! admission postwrite until Dealer root retirement supplies the terminal
+//! receipt and consumes the same Product obligation.
+
+use sha2::{Digest, Sha256};
+
+use crate::codec::{Reader, Writer, HEADER_BYTES};
+use crate::{
+    DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
+    DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1, DELETABLE_RENT_OWNER_BYTES,
+};
+
+/// Exact local semantic-body magic.
+pub const DEALER_SERIES_OBLIGATION_MAGIC_V1: [u8; 8] = *b"DCDSOBV1";
+/// Exact local semantic-body version.
+pub const DEALER_SERIES_OBLIGATION_VERSION_V1: u16 = 1;
+/// Exact canonical body bytes.
+pub const DEALER_SERIES_OBLIGATION_BYTES_V1: usize =
+    HEADER_BYTES + (20 * 32) + (3 * 8) + 4 + 4 + DELETABLE_RENT_OWNER_BYTES;
+
+const DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation-admission-receipt/v1\0";
+const DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation-terminal-receipt/v1\0";
+
+/// Immutable facility-to-Product coordinates authenticated at the SBF edge.
+///
+/// This key does not authenticate accounts by itself.  The program constructs
+/// it only after decoding the current Product root, link, Series, attachment,
+/// General Market binding, Dealer State, and Position-purpose binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerSeriesObligationKeyV1 {
+    /// Physical rent-owned binding account.
+    pub binding_account_id: Id,
+    /// Exact immutable Dealer policy.
+    pub policy_id: Id,
+    /// Exact immutable Dealer facility.
+    pub facility_id: Id,
+    /// Authoritative Dealer State account.
+    pub dealer_state_account_id: Id,
+    /// Canonical Position V3 purpose binding.
+    pub facility_position_binding_id: Id,
+    /// Full Product MarketInstanceV2 identity.
+    pub market_instance_v2_id: Id,
+    /// Exact Product MarketLifecycleRoot account.
+    pub product_market_root_account_id: Id,
+    /// Semantic Product Market lifecycle binding.
+    pub product_market_binding_id: Id,
+    /// Exact SeriesPlanV5 identity.
+    pub series_plan_v5_id: Id,
+    /// Exact Product SeriesMarketLink account.
+    pub series_market_link_account_id: Id,
+    /// Exact authenticated SeriesAttachmentPlanV4 identity.
+    pub attachment_plan_v4_id: Id,
+    /// Product Market lifecycle generation selected by founding authority.
+    pub product_generation: u64,
+    /// Exact ordinal whose start bucket rederives the MarketInstanceV2.
+    pub series_ordinal: u32,
+}
+
+impl DealerSeriesObligationKeyV1 {
+    /// Validate live, pairwise-distinct physical/semantic owners and a
+    /// nonzero Product generation.
+    pub fn validate(&self) -> Result<()> {
+        let identities = [
+            self.binding_account_id,
+            self.policy_id,
+            self.facility_id,
+            self.dealer_state_account_id,
+            self.facility_position_binding_id,
+            self.market_instance_v2_id,
+            self.product_market_root_account_id,
+            self.product_market_binding_id,
+            self.series_plan_v5_id,
+            self.series_market_link_account_id,
+            self.attachment_plan_v4_id,
+        ];
+        for identity in identities {
+            identity.validate_live()?;
+        }
+        let physical = [
+            self.binding_account_id,
+            self.dealer_state_account_id,
+            self.product_market_root_account_id,
+            self.series_market_link_account_id,
+        ];
+        let mut left = 0usize;
+        while left < physical.len() {
+            let mut right = left + 1;
+            while right < physical.len() {
+                if physical[left] == physical[right] {
+                    return Err(Error::MismatchedBinding);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        if self.product_generation == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(())
+    }
+
+    /// Derive the family-owned receipt supplied to Product's first Dealer
+    /// obligation admission.  The adapter must still authenticate Product's
+    /// projection and resulting link postimage.
+    pub fn admission_owner_receipt_id(
+        &self,
+        link_pre_semantic_id: Id,
+        link_transition_sequence: u64,
+    ) -> Result<Id> {
+        self.validate()?;
+        link_pre_semantic_id.validate_live()?;
+        if link_transition_sequence == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V1);
+        hash_key(self, &mut hasher);
+        hasher.update(link_pre_semantic_id.bytes());
+        hasher.update(link_transition_sequence.to_le_bytes());
+        Ok(Id::from_bytes(hasher.finalize().into()))
+    }
+}
+
+/// Exhaustive facility-level obligation phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerSeriesObligationPhaseV1 {
+    /// Product Dealer obligation is live.
+    Live,
+    /// Facility terminal receipt consumed the Product obligation.
+    Terminal,
+}
+
+impl DealerSeriesObligationPhaseV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Live => 1,
+            Self::Terminal => 2,
+        }
+    }
+
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Live),
+            2 => Ok(Self::Terminal),
+            _ => Err(Error::InvalidPhase),
+        }
+    }
+}
+
+/// Persistent facility-lifetime proof of the one Product Dealer obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerSeriesObligationBindingV1 {
+    /// Immutable authenticated coordinate set.
+    pub key: DealerSeriesObligationKeyV1,
+    /// Dealer-owned admission receipt passed into Product.
+    pub admission_owner_receipt_id: Id,
+    /// Product-owned admission projection identity.
+    pub admission_projection_id: Id,
+    /// Exact link state before Dealer admission.
+    pub admission_link_pre_semantic_id: Id,
+    /// Exact link state after Dealer admission.
+    pub admission_link_post_semantic_id: Id,
+    /// Dealer-owned facility terminal receipt, zero while live.
+    pub terminal_owner_receipt_id: Id,
+    /// Product-owned terminal projection identity, zero while live.
+    pub terminal_projection_id: Id,
+    /// Exact link state before terminal consumption, zero while live.
+    pub terminal_link_pre_semantic_id: Id,
+    /// Exact link state after terminal consumption, zero while live.
+    pub terminal_link_post_semantic_id: Id,
+    /// Exact terminal Dealer State receipt, zero while live.
+    pub terminal_state_receipt_id: Id,
+    /// Product link sequence after first Dealer admission.
+    pub admission_link_transition_sequence: u64,
+    /// Product link sequence after terminal consumption, zero while live.
+    pub terminal_link_transition_sequence: u64,
+    /// Exhaustive lifecycle phase.
+    pub phase: DealerSeriesObligationPhaseV1,
+    /// Exact refundable rent owner and hostile-prefund sink.
+    pub rent: DeletableRentOwnerV1,
+}
+
+impl DealerSeriesObligationBindingV1 {
+    /// Construct a live binding from adapter-authenticated Product pre/post
+    /// state and the exact Product admission projection identity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_live(
+        key: DealerSeriesObligationKeyV1,
+        admission_owner_receipt_id: Id,
+        admission_projection_id: Id,
+        admission_link_pre_semantic_id: Id,
+        admission_link_post_semantic_id: Id,
+        admission_link_transition_sequence: u64,
+        rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        let value = Self {
+            key,
+            admission_owner_receipt_id,
+            admission_projection_id,
+            admission_link_pre_semantic_id,
+            admission_link_post_semantic_id,
+            terminal_owner_receipt_id: Id::ZERO,
+            terminal_projection_id: Id::ZERO,
+            terminal_link_pre_semantic_id: Id::ZERO,
+            terminal_link_post_semantic_id: Id::ZERO,
+            terminal_state_receipt_id: Id::ZERO,
+            admission_link_transition_sequence,
+            terminal_link_transition_sequence: 0,
+            phase: DealerSeriesObligationPhaseV1::Live,
+            rent,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Derive the owner receipt for Product terminal consumption from the
+    /// exact terminal State receipt and the current Product link state.
+    pub fn terminal_owner_receipt_id(
+        &self,
+        terminal_state_receipt_id: Id,
+        terminal_link_pre_semantic_id: Id,
+        terminal_link_transition_sequence: u64,
+    ) -> Result<Id> {
+        self.validate()?;
+        terminal_state_receipt_id.validate_live()?;
+        terminal_link_pre_semantic_id.validate_live()?;
+        if self.phase != DealerSeriesObligationPhaseV1::Live
+            || terminal_link_transition_sequence <= self.admission_link_transition_sequence
+        {
+            return Err(Error::InvalidPhase);
+        }
+        self.derive_terminal_owner_receipt_id(
+            terminal_state_receipt_id,
+            terminal_link_pre_semantic_id,
+            terminal_link_transition_sequence,
+        )
+    }
+
+    fn derive_terminal_owner_receipt_id(
+        &self,
+        terminal_state_receipt_id: Id,
+        terminal_link_pre_semantic_id: Id,
+        terminal_link_transition_sequence: u64,
+    ) -> Result<Id> {
+        let mut hasher = Sha256::new();
+        hasher.update(DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V1);
+        hasher.update(self.admission_state_id()?.bytes());
+        hasher.update(terminal_state_receipt_id.bytes());
+        hasher.update(terminal_link_pre_semantic_id.bytes());
+        hasher.update(terminal_link_transition_sequence.to_le_bytes());
+        Ok(Id::from_bytes(hasher.finalize().into()))
+    }
+
+    fn admission_state_id(&self) -> Result<Id> {
+        self.key.validate()?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"dragons-clutch/dealer-runtime/series-obligation-live-state/v1\0");
+        hash_key(&self.key, &mut hasher);
+        for identity in [
+            self.admission_owner_receipt_id,
+            self.admission_projection_id,
+            self.admission_link_pre_semantic_id,
+            self.admission_link_post_semantic_id,
+        ] {
+            identity.validate_live()?;
+            hasher.update(identity.bytes());
+        }
+        hasher.update(self.admission_link_transition_sequence.to_le_bytes());
+        Ok(Id::from_bytes(hasher.finalize().into()))
+    }
+
+    /// Consume the exact Product obligation after facility-level Dealer
+    /// terminality.  Lease finalization and abort cannot call this transition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn terminalize(
+        self,
+        terminal_owner_receipt_id: Id,
+        terminal_projection_id: Id,
+        terminal_link_pre_semantic_id: Id,
+        terminal_link_post_semantic_id: Id,
+        terminal_state_receipt_id: Id,
+        terminal_link_transition_sequence: u64,
+    ) -> Result<Self> {
+        let expected = self.terminal_owner_receipt_id(
+            terminal_state_receipt_id,
+            terminal_link_pre_semantic_id,
+            terminal_link_transition_sequence,
+        )?;
+        if terminal_owner_receipt_id != expected {
+            return Err(Error::MismatchedBinding);
+        }
+        let next = Self {
+            terminal_owner_receipt_id,
+            terminal_projection_id,
+            terminal_link_pre_semantic_id,
+            terminal_link_post_semantic_id,
+            terminal_state_receipt_id,
+            terminal_link_transition_sequence,
+            phase: DealerSeriesObligationPhaseV1::Terminal,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Validate the immutable join and exhaustive phase-dependent fields.
+    pub fn validate(&self) -> Result<()> {
+        self.key.validate()?;
+        self.rent.validate()?;
+        for identity in [
+            self.admission_owner_receipt_id,
+            self.admission_projection_id,
+            self.admission_link_pre_semantic_id,
+            self.admission_link_post_semantic_id,
+        ] {
+            identity.validate_live()?;
+        }
+        if self.admission_link_pre_semantic_id == self.admission_link_post_semantic_id
+            || self.admission_link_transition_sequence == 0
+            || self.admission_owner_receipt_id
+                != self.key.admission_owner_receipt_id(
+                    self.admission_link_pre_semantic_id,
+                    self.admission_link_transition_sequence,
+                )?
+            || self.rent.neutral_sink == self.key.policy_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let terminal = [
+            self.terminal_owner_receipt_id,
+            self.terminal_projection_id,
+            self.terminal_link_pre_semantic_id,
+            self.terminal_link_post_semantic_id,
+            self.terminal_state_receipt_id,
+        ];
+        match self.phase {
+            DealerSeriesObligationPhaseV1::Live => {
+                if terminal.iter().any(|identity| !identity.is_zero())
+                    || self.terminal_link_transition_sequence != 0
+                {
+                    return Err(Error::InvalidPhase);
+                }
+            }
+            DealerSeriesObligationPhaseV1::Terminal => {
+                for identity in terminal {
+                    identity.validate_live()?;
+                }
+                if self.terminal_link_pre_semantic_id == self.terminal_link_post_semantic_id
+                    || self.terminal_link_transition_sequence
+                        <= self.admission_link_transition_sequence
+                    || self.terminal_owner_receipt_id
+                        != self.derive_terminal_owner_receipt_id(
+                            self.terminal_state_receipt_id,
+                            self.terminal_link_pre_semantic_id,
+                            self.terminal_link_transition_sequence,
+                        )?
+                {
+                    return Err(Error::MismatchedBinding);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Exact content identity of the current binding state.
+    pub fn binding_id(&self) -> Result<Id> {
+        self.content_id(DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1)
+    }
+}
+
+impl FixedCodec for DealerSeriesObligationBindingV1 {
+    const ENCODED_LEN: usize = DEALER_SERIES_OBLIGATION_BYTES_V1;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
+        writer.header(
+            &DEALER_SERIES_OBLIGATION_MAGIC_V1,
+            DEALER_SERIES_OBLIGATION_VERSION_V1,
+        );
+        for identity in [
+            self.key.binding_account_id,
+            self.key.policy_id,
+            self.key.facility_id,
+            self.key.dealer_state_account_id,
+            self.key.facility_position_binding_id,
+            self.key.market_instance_v2_id,
+            self.key.product_market_root_account_id,
+            self.key.product_market_binding_id,
+            self.key.series_plan_v5_id,
+            self.key.series_market_link_account_id,
+            self.key.attachment_plan_v4_id,
+            self.admission_owner_receipt_id,
+            self.admission_projection_id,
+            self.admission_link_pre_semantic_id,
+            self.admission_link_post_semantic_id,
+            self.terminal_owner_receipt_id,
+            self.terminal_projection_id,
+            self.terminal_link_pre_semantic_id,
+            self.terminal_link_post_semantic_id,
+            self.terminal_state_receipt_id,
+        ] {
+            writer.id(identity);
+        }
+        writer.u64(self.key.product_generation);
+        writer.u64(self.admission_link_transition_sequence);
+        writer.u64(self.terminal_link_transition_sequence);
+        writer.u32(self.key.series_ordinal);
+        writer.u8(self.phase.byte());
+        writer.reserved(3);
+        self.rent.encode_body(&mut writer);
+        writer.finish()
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.header(
+            &DEALER_SERIES_OBLIGATION_MAGIC_V1,
+            DEALER_SERIES_OBLIGATION_VERSION_V1,
+        )?;
+        let value = Self {
+            key: DealerSeriesObligationKeyV1 {
+                binding_account_id: reader.id(),
+                policy_id: reader.id(),
+                facility_id: reader.id(),
+                dealer_state_account_id: reader.id(),
+                facility_position_binding_id: reader.id(),
+                market_instance_v2_id: reader.id(),
+                product_market_root_account_id: reader.id(),
+                product_market_binding_id: reader.id(),
+                series_plan_v5_id: reader.id(),
+                series_market_link_account_id: reader.id(),
+                attachment_plan_v4_id: reader.id(),
+                product_generation: 0,
+                series_ordinal: 0,
+            },
+            admission_owner_receipt_id: reader.id(),
+            admission_projection_id: reader.id(),
+            admission_link_pre_semantic_id: reader.id(),
+            admission_link_post_semantic_id: reader.id(),
+            terminal_owner_receipt_id: reader.id(),
+            terminal_projection_id: reader.id(),
+            terminal_link_pre_semantic_id: reader.id(),
+            terminal_link_post_semantic_id: reader.id(),
+            terminal_state_receipt_id: reader.id(),
+            admission_link_transition_sequence: 0,
+            terminal_link_transition_sequence: 0,
+            phase: DealerSeriesObligationPhaseV1::Live,
+            rent: DeletableRentOwnerV1 {
+                payer: Id::ZERO,
+                neutral_sink: Id::ZERO,
+                refundable_principal: 0,
+                donation_floor: 0,
+            },
+        };
+        let mut value = value;
+        value.key.product_generation = reader.u64();
+        value.admission_link_transition_sequence = reader.u64();
+        value.terminal_link_transition_sequence = reader.u64();
+        value.key.series_ordinal = reader.u32();
+        value.phase = DealerSeriesObligationPhaseV1::decode(reader.u8())?;
+        reader.reserved(3)?;
+        value.rent = DeletableRentOwnerV1::decode_body(&mut reader);
+        reader.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+fn hash_key(key: &DealerSeriesObligationKeyV1, hasher: &mut Sha256) {
+    for identity in [
+        key.binding_account_id,
+        key.policy_id,
+        key.facility_id,
+        key.dealer_state_account_id,
+        key.facility_position_binding_id,
+        key.market_instance_v2_id,
+        key.product_market_root_account_id,
+        key.product_market_binding_id,
+        key.series_plan_v5_id,
+        key.series_market_link_account_id,
+        key.attachment_plan_v4_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(key.product_generation.to_le_bytes());
+    hasher.update(key.series_ordinal.to_le_bytes());
+}
+
+const _: () = assert!(DEALER_SERIES_OBLIGATION_BYTES_V1 == 764);
+const _: () = assert!(DEALER_SERIES_OBLIGATION_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn key() -> DealerSeriesObligationKeyV1 {
+        DealerSeriesObligationKeyV1 {
+            binding_account_id: id(1),
+            policy_id: id(2),
+            facility_id: id(3),
+            dealer_state_account_id: id(4),
+            facility_position_binding_id: id(5),
+            market_instance_v2_id: id(6),
+            product_market_root_account_id: id(7),
+            product_market_binding_id: id(8),
+            series_plan_v5_id: id(9),
+            series_market_link_account_id: id(10),
+            attachment_plan_v4_id: id(11),
+            product_generation: 12,
+            series_ordinal: 13,
+        }
+    }
+
+    fn live() -> DealerSeriesObligationBindingV1 {
+        let key = key();
+        let pre = id(14);
+        DealerSeriesObligationBindingV1::new_live(
+            key,
+            key.admission_owner_receipt_id(pre, 15).unwrap(),
+            id(16),
+            pre,
+            id(17),
+            15,
+            DeletableRentOwnerV1 {
+                payer: id(18),
+                neutral_sink: id(19),
+                refundable_principal: 20,
+                donation_floor: 21,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn live_and_terminal_round_trip_preserve_exact_product_postwrites() {
+        let live = live();
+        let mut bytes = [0u8; DEALER_SERIES_OBLIGATION_BYTES_V1];
+        live.encode_into(&mut bytes).unwrap();
+        assert_eq!(DealerSeriesObligationBindingV1::decode(&bytes), Ok(live));
+
+        let state_receipt = id(22);
+        let terminal_pre = id(23);
+        let owner_receipt = live
+            .terminal_owner_receipt_id(state_receipt, terminal_pre, 24)
+            .unwrap();
+        let terminal = live
+            .terminalize(owner_receipt, id(25), terminal_pre, id(26), state_receipt, 24)
+            .unwrap();
+        terminal.encode_into(&mut bytes).unwrap();
+        assert_eq!(
+            DealerSeriesObligationBindingV1::decode(&bytes),
+            Ok(terminal)
+        );
+    }
+
+    #[test]
+    fn hostile_alias_receipt_swap_padding_and_replay_refuse() {
+        let mut alias = key();
+        alias.series_market_link_account_id = alias.product_market_root_account_id;
+        assert_eq!(alias.validate(), Err(Error::MismatchedBinding));
+
+        let live = live();
+        assert_eq!(
+            DealerSeriesObligationBindingV1::new_live(
+                live.key,
+                id(27),
+                live.admission_projection_id,
+                live.admission_link_pre_semantic_id,
+                live.admission_link_post_semantic_id,
+                live.admission_link_transition_sequence,
+                live.rent,
+            ),
+            Err(Error::MismatchedBinding)
+        );
+        assert_eq!(
+            live.terminalize(id(28), id(29), id(30), id(31), id(32), 33),
+            Err(Error::MismatchedBinding)
+        );
+
+        let mut bytes = [0u8; DEALER_SERIES_OBLIGATION_BYTES_V1];
+        live.encode_into(&mut bytes).unwrap();
+        let phase_offset = HEADER_BYTES + (20 * 32) + (3 * 8) + 4;
+        bytes[phase_offset + 1] = 1;
+        assert_eq!(
+            DealerSeriesObligationBindingV1::decode(&bytes),
+            Err(Error::NonCanonicalPadding)
+        );
+        assert_eq!(
+            DealerSeriesObligationBindingV1::decode(&bytes[..bytes.len() - 1]),
+            Err(Error::Truncated)
+        );
+    }
+}
