@@ -112,8 +112,7 @@ pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POL
 pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
     clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
 /// Immutable generic runtime-liveness policy selected by one Dealer facility.
-pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] =
-    b"dc-dealer-runtime-liveness-policy-v1";
+pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] = b"dc-dealer-runtime-liveness-policy-v1";
 /// One facility- and compartment-scoped generic runtime-liveness account.
 pub const SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT: &[u8] = b"dc-dealer-live-account-v1";
 /// Authoritative Dealer StateV2.
@@ -264,6 +263,8 @@ pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Shared-Market Failure admission root successor, disjoint from legacy V1.
+pub const SEED_FAILURE_MARKET_ROOT_V2: &[u8] = b"dc:failure-market-root:v2";
 /// Immutable runtime-liveness policy account.
 pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 /// Sole external Recovery work/rent custody account.
@@ -356,6 +357,22 @@ pub fn failure_external_root_pda(
         program_id,
         &[
             SEED_FAILURE_EXTERNAL_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical shared-Market Failure admission root successor.
+pub fn failure_market_root_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_ROOT_V2,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -801,7 +818,12 @@ pub fn dealer_policy_stage_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_POLICY_STAGE, &[artifact_kind], funder, policy_id],
+        &[
+            SEED_DEALER_POLICY_STAGE,
+            &[artifact_kind],
+            funder,
+            policy_id,
+        ],
     )
 }
 
@@ -820,7 +842,10 @@ pub fn dealer_runtime_liveness_policy_pda(
     program_id: &Pubkey,
     policy_id: &[u8; 32],
 ) -> (Pubkey, u8) {
-    find(program_id, &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id])
+    find(
+        program_id,
+        &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id],
+    )
 }
 
 /// Canonical facility-scoped runtime-liveness compartment address.
@@ -831,7 +856,11 @@ pub fn dealer_runtime_liveness_account_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT, facility_id, &[compartment]],
+        &[
+            SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT,
+            facility_id,
+            &[compartment],
+        ],
     )
 }
 
@@ -1673,5 +1702,16 @@ mod tests {
         for old in REGISTRY {
             assert_ne!(SEED_EPOCH_WINDOW, old);
         }
+    }
+
+    #[test]
+    fn failure_market_root_successor_cannot_alias_the_legacy_root() {
+        assert_ne!(SEED_FAILURE_MARKET_ROOT_V2, SEED_FAILURE_EXTERNAL_ROOT);
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let market = [2; 32];
+        assert_ne!(
+            failure_market_root_v2_pda(&program_id, &market, 3).0,
+            failure_external_root_pda(&program_id, &market, 3).0,
+        );
     }
 }

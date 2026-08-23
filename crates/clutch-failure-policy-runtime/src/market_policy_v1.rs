@@ -27,11 +27,12 @@ use crate::{Error, FailurePolicyBindingId, Result};
 const MARKET_POLICY_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-policy/v1";
 const MARKET_RECOVERY_FUNDING_DOMAIN_V1: &[u8] =
     b"dragons-clutch/failure-market-recovery-funding/v1";
+const MARKET_ROOT_FUNDING_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-root-funding/v1";
 const MARKET_ADMISSION_STATE_MAGIC_V1: [u8; 8] = *b"DCFMRKT1";
 const MARKET_ADMISSION_STATE_SCHEMA_V1: u16 = 1;
 
 /// Exact canonical width of one shared-Market Failure admission state.
-pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_048;
+pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_136;
 
 /// Typed physical account identity used by the Market policy join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +57,23 @@ impl FailureMarketAccountIdV1 {
 pub struct FailureMarketRecoveryFundingReceiptIdV1([u8; 32]);
 
 impl FailureMarketRecoveryFundingReceiptIdV1 {
+    /// Construct from exact digest bytes without claiming authenticity.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return exact digest bytes.
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// Typed identity of exact refundable funding for the shared Failure root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct FailureMarketRootFundingReceiptIdV1([u8; 32]);
+
+impl FailureMarketRootFundingReceiptIdV1 {
     /// Construct from exact digest bytes without claiming authenticity.
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
@@ -255,6 +273,73 @@ impl FailureMarketRecoveryFundingReceiptV1 {
     }
 }
 
+/// Exact root-account funding facts authenticated at Market admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRootFundingFactsV1 {
+    /// Exact shared Market policy owning this root.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Product private receipt for the exact prepaid MarketCore debit.
+    pub prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
+    /// Canonical shared Failure root account.
+    pub root_account_id: FailureMarketAccountIdV1,
+    /// Immutable payer and eventual recipient of refundable rent principal.
+    pub rent_payer: FailureMarketAccountIdV1,
+    /// Exact refundable rent principal present at initialization.
+    pub rent_principal_lamports: u64,
+    /// Lamports already present before the Product debit; never principal.
+    pub donation_floor_lamports: u64,
+    /// Exact balance immediately after the Product debit.
+    pub observed_balance_lamports: u64,
+}
+
+/// Private-field authenticated shared-root funding receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRootFundingReceiptV1 {
+    id: FailureMarketRootFundingReceiptIdV1,
+    facts: FailureMarketRootFundingFactsV1,
+}
+
+impl FailureMarketRootFundingReceiptV1 {
+    /// Exact root-funding receipt identity.
+    pub const fn id(self) -> FailureMarketRootFundingReceiptIdV1 {
+        self.id
+    }
+
+    /// Exact immutable root-funding facts.
+    pub const fn facts(self) -> FailureMarketRootFundingFactsV1 {
+        self.facts
+    }
+}
+
+/// Product-owned authentication of the exact shared-root prepaid debit.
+///
+/// The default refuses. The live implementor must bind the private MarketCore
+/// debit receipt, canonical root, postfund balance, payer, and donation floor.
+pub trait AuthenticatedFailureMarketRootFundingV1 {
+    /// Authenticate every expected root-funding fact.
+    fn authenticate_failure_market_root_funding(
+        &self,
+        _expected: FailureMarketRootFundingFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Admit exact refundable funding for one shared Failure root.
+pub fn admit_failure_market_root_funding_v1<A: AuthenticatedFailureMarketRootFundingV1 + ?Sized>(
+    authority: &A,
+    binding: FailureMarketPolicyBindingV1,
+    facts: FailureMarketRootFundingFactsV1,
+) -> Result<FailureMarketRootFundingReceiptV1> {
+    validate_root_funding(binding, facts)?;
+    authority.authenticate_failure_market_root_funding(facts)?;
+    let id = hash_root_funding(facts);
+    if id.bytes().iter().all(|byte| *byte == 0) {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(FailureMarketRootFundingReceiptV1 { id, facts })
+}
+
 /// Canonical persisted admission for one shared Market Failure lifecycle.
 ///
 /// This is the semantic body stored inside the versioned `0xa0` account. It
@@ -264,6 +349,7 @@ impl FailureMarketRecoveryFundingReceiptV1 {
 pub struct FailureMarketAdmissionStateV1 {
     binding: FailureMarketPolicyBindingV1,
     recovery_funding: FailureMarketRecoveryFundingReceiptV1,
+    root_funding: FailureMarketRootFundingReceiptV1,
 }
 
 impl FailureMarketAdmissionStateV1 {
@@ -271,10 +357,12 @@ impl FailureMarketAdmissionStateV1 {
     pub fn from_receipts(
         binding: FailureMarketPolicyBindingV1,
         recovery_funding: FailureMarketRecoveryFundingReceiptV1,
+        root_funding: FailureMarketRootFundingReceiptV1,
     ) -> Result<Self> {
         let state = Self {
             binding,
             recovery_funding,
+            root_funding,
         };
         state.validate()?;
         Ok(state)
@@ -290,6 +378,11 @@ impl FailureMarketAdmissionStateV1 {
         self.recovery_funding
     }
 
+    /// Exact refundable shared-root funding receipt.
+    pub const fn root_funding(self) -> FailureMarketRootFundingReceiptV1 {
+        self.root_funding
+    }
+
     /// Encode every semantic byte and canonical reserved byte.
     pub fn encode_into(
         self,
@@ -303,6 +396,7 @@ impl FailureMarketAdmissionStateV1 {
         writer.reserved(6)?;
         writer.id(self.binding.id.bytes())?;
         writer.id(self.recovery_funding.id.bytes())?;
+        writer.id(self.root_funding.id.bytes())?;
         let policy = self.binding.facts;
         for id in policy_identity_bytes(policy) {
             writer.id(id)?;
@@ -320,6 +414,11 @@ impl FailureMarketAdmissionStateV1 {
         writer.u32(funding.maximum_calls)?;
         writer.reserved(4)?;
         writer.u64(funding.maximum_lamports_per_call)?;
+        let root_funding = self.root_funding.facts;
+        writer.id(root_funding.prepaid_debit_receipt_id.bytes())?;
+        writer.u64(root_funding.rent_principal_lamports)?;
+        writer.u64(root_funding.donation_floor_lamports)?;
+        writer.u64(root_funding.observed_balance_lamports)?;
         writer.finish()
     }
 
@@ -337,6 +436,7 @@ impl FailureMarketAdmissionStateV1 {
         reader.reserved(6)?;
         let binding_id = FailurePolicyBindingId::from_bytes(reader.id()?);
         let funding_id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(reader.id()?);
+        let root_funding_id = FailureMarketRootFundingReceiptIdV1::from_bytes(reader.id()?);
         let policy = FailureMarketPolicyFactsV1 {
             market_instance_id: MarketInstanceV2Id::from_bytes(reader.id()?),
             product_template_id: ProductTemplateId::from_bytes(reader.id()?),
@@ -401,6 +501,17 @@ impl FailureMarketAdmissionStateV1 {
                 reader.u64()?
             },
         };
+        let root_funding = FailureMarketRootFundingFactsV1 {
+            failure_policy_binding_id: binding_id,
+            prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes(
+                reader.id()?,
+            ),
+            root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
+            rent_payer: FailureMarketAccountIdV1::from_bytes(policy.recovery_refund_owner.bytes()),
+            rent_principal_lamports: reader.u64()?,
+            donation_floor_lamports: reader.u64()?,
+            observed_balance_lamports: reader.u64()?,
+        };
         reader.finish()?;
         let binding = FailureMarketPolicyBindingV1 {
             id: binding_id,
@@ -410,7 +521,11 @@ impl FailureMarketAdmissionStateV1 {
             id: funding_id,
             facts: funding,
         };
-        Self::from_receipts(binding, recovery_funding)
+        let root_funding = FailureMarketRootFundingReceiptV1 {
+            id: root_funding_id,
+            facts: root_funding,
+        };
+        Self::from_receipts(binding, recovery_funding, root_funding)
     }
 
     fn validate(self) -> Result<()> {
@@ -420,6 +535,10 @@ impl FailureMarketAdmissionStateV1 {
         }
         validate_recovery_funding(self.binding, self.recovery_funding.facts)?;
         if hash_recovery_funding(self.recovery_funding.facts) != self.recovery_funding.id {
+            return Err(Error::BindingMismatch);
+        }
+        validate_root_funding(self.binding, self.root_funding.facts)?;
+        if hash_root_funding(self.root_funding.facts) != self.root_funding.id {
             return Err(Error::BindingMismatch);
         }
         Ok(())
@@ -557,6 +676,34 @@ fn validate_recovery_funding(
     Ok(())
 }
 
+fn validate_root_funding(
+    binding: FailureMarketPolicyBindingV1,
+    facts: FailureMarketRootFundingFactsV1,
+) -> Result<()> {
+    let policy = binding.facts;
+    let expected_balance = facts
+        .rent_principal_lamports
+        .checked_add(facts.donation_floor_lamports)
+        .ok_or(Error::BindingMismatch)?;
+    if facts.failure_policy_binding_id != binding.id
+        || facts
+            .prepaid_debit_receipt_id
+            .bytes()
+            .iter()
+            .all(|byte| *byte == 0)
+        || facts.root_account_id.bytes() != policy.recovery_state_id.bytes()
+        || facts.rent_payer.bytes() != policy.recovery_refund_owner.bytes()
+        || facts.root_account_id == facts.rent_payer
+        || facts.root_account_id.bytes() == policy.neutral_sink.bytes()
+        || facts.rent_payer.bytes() == policy.neutral_sink.bytes()
+        || facts.rent_principal_lamports == 0
+        || facts.observed_balance_lamports != expected_balance
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
 fn validate_facts(facts: FailureMarketPolicyFactsV1) -> Result<()> {
     let product_ids = [
         facts.market_instance_id.bytes(),
@@ -682,6 +829,21 @@ fn hash_recovery_funding(
     hasher.update(facts.maximum_calls.to_le_bytes());
     hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
     FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into())
+}
+
+fn hash_root_funding(
+    facts: FailureMarketRootFundingFactsV1,
+) -> FailureMarketRootFundingReceiptIdV1 {
+    let mut hasher = Sha256::new();
+    hasher.update(MARKET_ROOT_FUNDING_DOMAIN_V1);
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.prepaid_debit_receipt_id.bytes());
+    hasher.update(facts.root_account_id.bytes());
+    hasher.update(facts.rent_payer.bytes());
+    hasher.update(facts.rent_principal_lamports.to_le_bytes());
+    hasher.update(facts.donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.observed_balance_lamports.to_le_bytes());
+    FailureMarketRootFundingReceiptIdV1::from_bytes(hasher.finalize().into())
 }
 
 struct AdmissionWriterV1<'a> {
@@ -858,6 +1020,24 @@ mod tests {
 
     impl AuthenticatedFailureMarketRecoveryFundingV1 for Refusing {}
 
+    #[derive(Clone, Copy, Debug)]
+    struct ExactRootFunding(FailureMarketRootFundingFactsV1);
+
+    impl AuthenticatedFailureMarketRootFundingV1 for ExactRootFunding {
+        fn authenticate_failure_market_root_funding(
+            &self,
+            expected: FailureMarketRootFundingFactsV1,
+        ) -> Result<()> {
+            if self.0 == expected {
+                Ok(())
+            } else {
+                Err(Error::BindingMismatch)
+            }
+        }
+    }
+
+    impl AuthenticatedFailureMarketRootFundingV1 for Refusing {}
+
     fn facts() -> FailureMarketPolicyFactsV1 {
         let mut next = 1u8;
         let mut id = || {
@@ -915,6 +1095,19 @@ mod tests {
             observed_balance_lamports: 1_207,
             maximum_calls: 10,
             maximum_lamports_per_call: 100,
+        }
+    }
+
+    fn root_funding(binding: FailureMarketPolicyBindingV1) -> FailureMarketRootFundingFactsV1 {
+        let policy = binding.facts();
+        FailureMarketRootFundingFactsV1 {
+            failure_policy_binding_id: binding.id(),
+            prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes([92; 32]),
+            root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
+            rent_payer: FailureMarketAccountIdV1::from_bytes(policy.recovery_refund_owner.bytes()),
+            rent_principal_lamports: 3_000,
+            donation_floor_lamports: 11,
+            observed_balance_lamports: 3_011,
         }
     }
 
@@ -1139,8 +1332,16 @@ mod tests {
             funding_facts,
         )
         .unwrap();
+        let root_funding_facts = root_funding(binding);
+        let root_funding = admit_failure_market_root_funding_v1(
+            &ExactRootFunding(root_funding_facts),
+            binding,
+            root_funding_facts,
+        )
+        .unwrap();
         let state =
-            FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding).unwrap();
+            FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding, root_funding)
+                .unwrap();
         let mut encoded = [0u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1];
         state.encode_into(&mut encoded).unwrap();
         assert_eq!(FailureMarketAdmissionStateV1::decode(&encoded), Ok(state));
@@ -1163,6 +1364,45 @@ mod tests {
         stale_funding[48] ^= 1;
         assert_eq!(
             FailureMarketAdmissionStateV1::decode(&stale_funding),
+            Err(Error::BindingMismatch)
+        );
+
+        let mut stale_root_funding = encoded;
+        stale_root_funding[80] ^= 1;
+        assert_eq!(
+            FailureMarketAdmissionStateV1::decode(&stale_root_funding),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn root_funding_requires_exact_payer_principal_and_donation_floor() {
+        let policy_facts = facts();
+        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
+        let exact = root_funding(binding);
+        assert!(
+            admit_failure_market_root_funding_v1(&ExactRootFunding(exact), binding, exact,).is_ok()
+        );
+
+        let mut wrong_payer = exact;
+        wrong_payer.rent_payer = FailureMarketAccountIdV1::from_bytes([99; 32]);
+        assert_eq!(
+            admit_failure_market_root_funding_v1(
+                &ExactRootFunding(wrong_payer),
+                binding,
+                wrong_payer,
+            ),
+            Err(Error::BindingMismatch)
+        );
+
+        let mut hidden_shortfall = exact;
+        hidden_shortfall.observed_balance_lamports -= 1;
+        assert_eq!(
+            admit_failure_market_root_funding_v1(
+                &ExactRootFunding(hidden_shortfall),
+                binding,
+                hidden_shortfall,
+            ),
             Err(Error::BindingMismatch)
         );
     }
