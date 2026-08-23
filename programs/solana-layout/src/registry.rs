@@ -169,6 +169,8 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 immutable candidate-cost Market-binding successor version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Product-family-authorized, rent-owned General Market-binding version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -1138,6 +1140,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-market-binding-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3064,6 +3075,10 @@ mod tests {
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,
