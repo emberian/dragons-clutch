@@ -20,6 +20,7 @@ mod owner_settlement;
 mod payload;
 mod position_replay;
 mod rank;
+mod settlement_root;
 mod state;
 mod transition;
 
@@ -38,6 +39,7 @@ pub use rank::{
     ScoreV2QComponentsV1, ScoreV2QCostComponentsV1, SCORE_V2_Q_ACTIVE_RANK_BYTES,
     SCORE_V2_Q_COST_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
+pub use settlement_root::*;
 pub use state::*;
 pub use transition::*;
 
@@ -762,7 +764,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 27] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -892,6 +894,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
         tag: SELECTED_CANDIDATE_ACCOUNT_TAG,
         version: SELECTED_CANDIDATE_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/SelectedCandidateV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: SETTLEMENT_ROOT_ACCOUNT_TAG,
+        version: SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/SettlementRootV1AccountV1",
     },
 ];
 

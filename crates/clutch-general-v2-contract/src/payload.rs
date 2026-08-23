@@ -39,6 +39,10 @@ pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 /// Exact action-38 disabled owner-finalization selector bytes.
 pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
+/// Exact action-39 counted-root initialization selector bytes.
+pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
+/// Exact action-40 merge-payment selector bytes.
+pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 64;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -707,6 +711,63 @@ impl FinalizeOwnerSettlementPayloadV1 {
     }
 }
 
+/// Action-39 `InitializeSettlementRoot` immutable selector.
+///
+/// The root PDA, candidate, full owner expectation, child counts, direction,
+/// and every rent amount are derived from authenticated accounts; none is a
+/// caller-owned payload claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializeSettlementRootPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Winning cost-certificate-bearing AdmissionNode V4 PDA.
+    pub selected_node: Id32,
+}
+
+impl InitializeSettlementRootPayloadV1 {
+    /// Decode exactly 64 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            selected_node: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.selected_node {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+/// Action-40 `FinalizeMergeReceiptPayment` immutable selector.
+///
+/// The payment transition identity is derived from the authenticated Receipt
+/// V4 PDA and exact payment-pending prestate; no replay ID is caller-owned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalizeMergeReceiptPaymentPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Exact payment-pending merge Receipt V4 PDA.
+    pub receipt: Id32,
+}
+
+impl FinalizeMergeReceiptPaymentPayloadV1 {
+    /// Decode exactly 64 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.receipt {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -746,6 +807,15 @@ pub enum VirtualSettlementPayloadV1 {
     ConsumeVirtualMergeReceiptEggs(ConsumeVirtualMergeReceiptEggsPayloadV1),
 }
 
+/// Strict payload facts for the counted settlement-root lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettlementRootPayloadV1 {
+    /// Action 39 selector only; all account creation remains disabled.
+    InitializeSettlementRoot(InitializeSettlementRootPayloadV1),
+    /// Action 40 selector only; all merge-payment mutation remains disabled.
+    FinalizeMergeReceiptPayment(FinalizeMergeReceiptPaymentPayloadV1),
+}
+
 /// Decode action 26 without adding it to the live-lab union.
 pub fn decode_direct_settlement_payload_v1(
     local_action: u8,
@@ -770,6 +840,22 @@ pub fn decode_virtual_settlement_payload_v1(
         )),
         37 => Ok(VirtualSettlementPayloadV1::ConsumeVirtualMergeReceiptEggs(
             ConsumeVirtualMergeReceiptEggsPayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode actions 39 and 40 without adding them to the live-lab union.
+pub fn decode_settlement_root_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<SettlementRootPayloadV1, CodecError> {
+    match local_action {
+        39 => Ok(SettlementRootPayloadV1::InitializeSettlementRoot(
+            InitializeSettlementRootPayloadV1::decode(payload)?,
+        )),
+        40 => Ok(SettlementRootPayloadV1::FinalizeMergeReceiptPayment(
+            FinalizeMergeReceiptPaymentPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }

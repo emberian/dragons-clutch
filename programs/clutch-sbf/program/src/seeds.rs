@@ -246,6 +246,9 @@ pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
 /// Disabled buyer-first candidate settlement cash-pot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+/// Counted candidate-scoped General V2 SettlementRoot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -710,6 +713,18 @@ pub fn general_v2_settlement_cash_pot_pda(
             epoch,
             settlement_candidate,
         ],
+    )
+}
+
+/// Canonical counted General V2 SettlementRoot PDA.
+pub fn general_v2_settlement_root_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
     )
 }
 
