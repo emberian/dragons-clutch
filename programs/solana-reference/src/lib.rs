@@ -101,6 +101,13 @@ const REPLAY_TAG: u8 = 0x43;
 const WINDOW_EVIDENCE_TAG: u8 = 0x45;
 const REQUEST_TAG: u8 = 0xd1;
 const REFERENCE_VERSION: u8 = 1;
+/// Frozen reference Replay account discriminator.
+///
+/// Exported for successor codecs that preserve the authoritative Replay body
+/// while placing it under a new globally allocated outer account header.
+pub const REPLAY_ACCOUNT_TAG: u8 = REPLAY_TAG;
+/// Frozen reference Replay account version.
+pub const REPLAY_ACCOUNT_VERSION: u8 = REFERENCE_VERSION;
 const KERNEL_ACCOUNT_VERSION: u8 = 2;
 const ACTION_LAYOUT: u8 = 0;
 const ACTION_RESOLVE: u8 = 1;
