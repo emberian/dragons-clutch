@@ -49,6 +49,7 @@ mod series_obligation;
 mod replay;
 mod state;
 mod state_v2;
+mod state_v3;
 mod terminal_claims;
 mod terminal_state;
 mod transitions;
@@ -85,6 +86,7 @@ pub use series_obligation::*;
 pub use replay::*;
 pub use state::*;
 pub use state_v2::*;
+pub use state_v3::*;
 pub use terminal_claims::*;
 pub use terminal_state::*;
 pub use transitions::*;
@@ -165,6 +167,8 @@ pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
 /// Exact content domain for authoritative `DealerStateV2`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/state/v2\0";
+/// Exact content domain for authoritative Product-obligation-counting State V3.
+pub const DEALER_STATE_CONTENT_DOMAIN_V3: &[u8] = b"dragons-clutch/dealer-runtime/state/v3\0";
 /// Exact content domain for one counted Dealer Epoch binding successor.
 pub const DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/epoch-binding/v2\0";

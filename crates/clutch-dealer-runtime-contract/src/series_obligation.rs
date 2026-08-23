@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
+    add, DealerStateV3, DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
     DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1, DELETABLE_RENT_OWNER_BYTES,
 };
 
@@ -62,6 +62,57 @@ pub struct DealerSeriesObligationKeyV1 {
     pub product_generation: u64,
     /// Exact ordinal whose start bucket rederives the MarketInstanceV2.
     pub series_ordinal: u32,
+}
+
+/// Exact atomic close plan after Product terminal consumption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerSeriesObligationClosePlanV1 {
+    /// Authoritative State postimage with the child count decremented.
+    pub state_after: DealerStateV3,
+    /// Deleted physical binding account.
+    pub binding_account_id: Id,
+    /// Retained terminal content identity.
+    pub terminal_binding_id: Id,
+    /// Sole refundable-principal recipient.
+    pub rent_payer: Id,
+    /// Exact refundable principal.
+    pub rent_payer_credit_lamports: u64,
+    /// Immutable hostile-prefund/surplus sink.
+    pub neutral_sink: Id,
+    /// Donation floor plus any later surplus.
+    pub neutral_sink_credit_lamports: u64,
+}
+
+/// Close the counted terminal binding without losing Product admission or
+/// terminal evidence.  The adapter must apply the State write, both coalesced
+/// credits, and binding-account deletion in one rollback domain.
+pub fn prepare_dealer_series_obligation_close_v1(
+    state: DealerStateV3,
+    binding: &DealerSeriesObligationBindingV1,
+    binding_lamports_before: u64,
+) -> Result<DealerSeriesObligationClosePlanV1> {
+    binding.validate()?;
+    let floor = add(
+        binding.rent.refundable_principal,
+        binding.rent.donation_floor,
+    )?;
+    if binding.phase != DealerSeriesObligationPhaseV1::Terminal
+        || binding_lamports_before < floor
+    {
+        return Err(Error::InvalidPhase);
+    }
+    let state_after = state.close_terminal_binding(binding)?;
+    Ok(DealerSeriesObligationClosePlanV1 {
+        state_after,
+        binding_account_id: binding.key.binding_account_id,
+        terminal_binding_id: binding.binding_id()?,
+        rent_payer: binding.rent.payer,
+        rent_payer_credit_lamports: binding.rent.refundable_principal,
+        neutral_sink: binding.rent.neutral_sink,
+        neutral_sink_credit_lamports: binding_lamports_before
+            .checked_sub(binding.rent.refundable_principal)
+            .ok_or(Error::ArithmeticOverflow)?,
+    })
 }
 
 impl DealerSeriesObligationKeyV1 {

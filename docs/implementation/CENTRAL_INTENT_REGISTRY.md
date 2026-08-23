@@ -389,6 +389,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
 | `0x93/1` | Dealer | immutable liveness schedule (380 bytes) |
 | `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
+| `0x94/2` | Dealer | authoritative State V3 counting the facility Product obligation and its distinct upgrade-rent payer (1,140 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
 | `0x99/1` | Dealer | root-counted CoveredDealer-selection-bound one-generation Lease V2 (1,140 bytes) |
@@ -418,6 +419,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xac/2` | Failure/history | append-only aggregate interval-session history |
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 | `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
+| `0xaf/1` | Dealer | counted facility-lifetime Product Series-obligation binding (772 bytes) |
 | `0xb0/1` | Product/replay | permanent compact MarketLifecycle replay receipt; replaces terminal `0xaa/1` |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global

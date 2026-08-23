@@ -330,6 +330,12 @@ pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
 pub const DEALER_STATE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer State V2 account bytes.
 pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 972;
+/// Product-obligation-counting Dealer State V3 uses the same State family tag.
+pub const DEALER_STATE_V3_ACCOUNT_TAG: u8 = DEALER_STATE_V2_ACCOUNT_TAG;
+/// Dealer State V3 account version.
+pub const DEALER_STATE_V3_ACCOUNT_VERSION: u8 = 2;
+/// Exact Dealer State V3 account bytes.
+pub const DEALER_STATE_V3_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_132;
 /// Counted funded-dependencies account discriminator.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 /// Counted funded-dependencies account version.
@@ -486,6 +492,13 @@ pub const DEALER_COVERED_TERMINAL_ACCOUNT_VERSION: u8 = 2;
 /// Exact attachment bytes including the Dealer global envelope.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
+/// Counted facility-lifetime Dealer ownership of the Product Series obligation.
+pub const DEALER_SERIES_OBLIGATION_ACCOUNT_TAG: u8 = 0xaf;
+/// First Dealer Series-obligation binding version.
+pub const DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact binding bytes including the Dealer global envelope.
+pub const DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 764;
 /// Permanent compact Product Market-lifecycle replay receipt discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 /// First Product Market-lifecycle replay receipt version.
@@ -497,6 +510,7 @@ pub const MAX_EXTENSION_PAYLOAD_BYTES: usize = MAX_INTENT_BYTES - EXTENSION_ENVE
 
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 74);
 const _: () = assert!(DEALER_COVERED_SELECTION_ACCOUNT_TAG == 0xae);
+const _: () = assert!(DEALER_SERIES_OBLIGATION_ACCOUNT_TAG == 0xaf);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb0);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
@@ -546,6 +560,7 @@ const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION 
 const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION == 2);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
+const _: () = assert!(DEALER_STATE_V3_ACCOUNT_TAG == 0x94);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG == 0x95);
 const _: () = assert!(DEALER_LP_PAGE_V2_ACCOUNT_TAG == 0x98);
 const _: () = assert!(DEALER_LEASE_V2_ACCOUNT_TAG == 0x99);
@@ -1299,6 +1314,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: DEALER_STATE_V3_ACCOUNT_TAG,
+            version: DEALER_STATE_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-state-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
             version: DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION,
         },
@@ -1547,6 +1571,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-covered-terminal-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            version: DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-series-obligation-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
