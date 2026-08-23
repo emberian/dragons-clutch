@@ -20,14 +20,13 @@ use clutch_owner_settlement::{
 use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend};
 
 use crate::{
-    CodecError, FinalizeOwnerSettlementPayloadV1, Id32, OwnerFeeFinalizationV2AccountV1,
-    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
-    GeneralReplayTransitionPlanV1,
-    OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_SEED_DOMAIN_V1,
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_SEED_DOMAIN_V1, RECIPIENT_ALLOCATION_SEED_DOMAIN_V1,
-    SELECTED_FEE_RECORD_SEED_DOMAIN_V1, SETTLEMENT_CASH_POT_SEED_DOMAIN_V1, Sha256BackendV1,
-    TREASURY_LEDGER_SEED_DOMAIN_V1,
+    CodecError, FinalizeOwnerSettlementPayloadV1, GeneralPositionReplayPrestateV1,
+    GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32,
+    OwnerFeeFinalizationV2AccountV1, Sha256BackendV1, OWNER_FEE_CARRY_ACCOUNT_BYTES,
+    OWNER_FEE_CARRY_SEED_DOMAIN_V1, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+    PAYER_ALLOCATION_ACCOUNT_BYTES, PAYER_ALLOCATION_SEED_DOMAIN_V1,
+    RECIPIENT_ALLOCATION_SEED_DOMAIN_V1, SELECTED_FEE_RECORD_SEED_DOMAIN_V1,
+    SETTLEMENT_CASH_POT_SEED_DOMAIN_V1, TREASURY_LEDGER_SEED_DOMAIN_V1,
 };
 
 /// Canonical data-ID domain for complete General fee outer-account bytes.
@@ -81,10 +80,7 @@ pub fn settlement_cash_pot_poststate_data_id_v1<B: Sha256BackendV1>(
     backend: &B,
 ) -> Result<Id32, CodecError> {
     let body = pot.encode_body().map_err(|_| CodecError::InvalidState)?;
-    Id32::new(backend.sha256(&[
-        SETTLEMENT_CASH_POT_POSTSTATE_DATA_ID_DOMAIN_V1,
-        &body,
-    ]))
+    Id32::new(backend.sha256(&[SETTLEMENT_CASH_POT_POSTSTATE_DATA_ID_DOMAIN_V1, &body]))
 }
 
 /// Recompute the canonical rent-transition data ID without accepting a digest
@@ -472,18 +468,17 @@ where
     let expectation = realization.expectation();
     let position_after = realization.position();
     let position_after_fields = position_after.semantic.fields();
+    let finalized_owner_row_data_id = Id32::new(realization.finalized_row_data_id())?;
     let payer_allocation_data_id =
         payer_allocation_account_data_id_v1(payer_allocation_outer_bytes, backend)?;
-    let pot_poststate_data_id = settlement_cash_pot_poststate_data_id_v1(
-        realization.settlement_cash_pot(),
-        backend,
-    )?;
+    let pot_poststate_data_id =
+        settlement_cash_pot_poststate_data_id_v1(realization.settlement_cash_pot(), backend)?;
     let rent_disposition_data_id = owner_fee_rent_disposition_data_id_v2(rent, backend)?;
     let replay = crate::project_general_replay_transition_v1(
         position_replay_before,
         position_after,
         GeneralReplayTransitionKindV1::FinalizeOwnerSettlement,
-        request.finalized_owner_row_data_id,
+        finalized_owner_row_data_id,
         payer_allocation_data_id,
         backend,
     )?;
@@ -491,9 +486,7 @@ where
         || request.owner_settlement != accounts.owner_settlement_account
         || request.position != accounts.position_account
         || request.settlement_cash_pot != accounts.settlement_cash_pot_account
-        || request.finalized_owner_row_data_id.bytes() != realization.finalized_row_data_id()
-        || request.finalized_owner_row_data_id.bytes()
-            != bindings.owner_settlement_final_data_id.0
+        || finalized_owner_row_data_id.bytes() != bindings.owner_settlement_final_data_id.0
         || request.epoch.bytes() != expectation.epoch
         || expectation.owner != accounts.owner.bytes()
         || expectation.candidate != selected.selected_candidate().0
@@ -509,30 +502,23 @@ where
         || accounts.replay_account != replay.replay_account()
         || accounts.settlement_cash_pot_account.bytes() != bindings.settlement_cash_pot.0
         || payer_allocation_data_id.bytes() != bindings.payer_allocation_data_id.0
-        || pot_poststate_data_id.bytes()
-            != bindings.settlement_cash_pot_poststate_data_id.0
+        || pot_poststate_data_id.bytes() != bindings.settlement_cash_pot_poststate_data_id.0
         || rent_disposition_data_id.bytes() != rent.data_id.0
         || replay.kind() != GeneralReplayTransitionKindV1::FinalizeOwnerSettlement
-        || replay.transition_id() != request.finalized_owner_row_data_id
+        || replay.transition_id() != finalized_owner_row_data_id
         || replay.transition_evidence_id() != payer_allocation_data_id
         || replay.position_poststate_semantic_id().bytes()
             != bindings.position_poststate_semantic_id.0
-        || replay.replay_poststate_semantic_id().bytes()
-            != bindings.replay_poststate_semantic_id.0
+        || replay.replay_poststate_semantic_id().bytes() != bindings.replay_poststate_semantic_id.0
         || replay.next_sequence() != bindings.replay_next_sequence
         || rent.carry_account.0 != accounts.carry_account.bytes()
         || rent.payer_allocation_account.0 != accounts.payer_allocation_account.bytes()
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let semantic = OwnerFeeFinalizationReceiptV1::settle(
-        selected,
-        projection,
-        carry,
-        bindings,
-        realization,
-    )
-    .map_err(|_| CodecError::InvalidState)?;
+    let semantic =
+        OwnerFeeFinalizationReceiptV1::settle(selected, projection, carry, bindings, realization)
+            .map_err(|_| CodecError::InvalidState)?;
     let finalization = OwnerFeeFinalizationV2AccountV1 {
         semantic,
         stored_bump: accounts.carry_bump,

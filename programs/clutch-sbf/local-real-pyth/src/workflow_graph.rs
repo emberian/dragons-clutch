@@ -1077,8 +1077,6 @@ impl KeeperReceiptObservation {
                         .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
                 value.epoch.bytes() == input.receipt.epoch
                     && value.receipt.bytes() == input.receipt.receipt
-                    && value.settlement_transition_id.bytes()
-                        == input.receipt.settlement_transition_id
             }
             Self::VirtualSplit(input) => {
                 let value =
@@ -1088,8 +1086,6 @@ impl KeeperReceiptObservation {
                     .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
                 value.epoch.bytes() == input.receipt.epoch
                     && value.receipt.bytes() == input.receipt.receipt
-                    && value.settlement_transition_id.bytes()
-                        == input.receipt.settlement_transition_id
             }
             Self::VirtualMerge(input) => {
                 let value =
@@ -1099,8 +1095,6 @@ impl KeeperReceiptObservation {
                     .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
                 value.epoch.bytes() == input.receipt.epoch
                     && value.receipt.bytes() == input.receipt.receipt
-                    && value.settlement_transition_id.bytes()
-                        == input.receipt.settlement_transition_id
             }
             Self::AccountEnd { owner, receipt, .. } => {
                 let value = clutch_general_v2_contract::AccountReceiptEndPayloadV1::decode(payload)
