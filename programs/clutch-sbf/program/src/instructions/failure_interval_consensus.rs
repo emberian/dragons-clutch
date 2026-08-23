@@ -12,17 +12,22 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_failure_policy_runtime::external_v2::FailureRecoveryWorkReceiptIdV2;
 use clutch_failure_policy_runtime::interval_consensus_v1::{
-    project_failure_interval_consensus_replay_id_v1, restore_failure_interval_consensus_state_v1,
-    AuthenticatedFailureIntervalConsensusStateV1, FailureIntervalConsensusAccountIdV1,
-    FailureIntervalConsensusBindingIdV1, FailureIntervalConsensusCloseAuthorizationIdV1,
-    FailureIntervalConsensusFundingReceiptIdV1, FailureIntervalConsensusPersistedFactsV1,
-    FailureIntervalConsensusPhaseV1, FailureIntervalConsensusReplayReceiptIdV1,
-    FailureIntervalConsensusReplayV1, FailureIntervalConsensusResolutionReceiptIdV1,
-    FailureIntervalConsensusStateV1, FailureIntervalConsensusTransitionReceiptIdV1,
+    project_failure_interval_consensus_replay_id_v1,
+    project_failure_interval_consensus_terminal_receipt_v1,
+    restore_failure_interval_consensus_state_v1, AuthenticatedFailureIntervalConsensusStateV1,
+    FailureIntervalConsensusAccountIdV1, FailureIntervalConsensusBindingIdV1,
+    FailureIntervalConsensusCloseAuthorizationIdV1, FailureIntervalConsensusFundingReceiptIdV1,
+    FailureIntervalConsensusPersistedFactsV1, FailureIntervalConsensusPhaseV1,
+    FailureIntervalConsensusReplayReceiptIdV1, FailureIntervalConsensusReplayV1,
+    FailureIntervalConsensusResolutionReceiptIdV1, FailureIntervalConsensusStateV1,
+    FailureIntervalConsensusTerminalReceiptIdV1, FailureIntervalConsensusTransitionReceiptIdV1,
+};
+use clutch_failure_policy_runtime::market_policy_v1::{
+    FailureMarketFamilyTerminalReceiptIdV1, FailureMarketFamilyTerminalReceiptV1,
 };
 use clutch_failure_policy_runtime::{Error as FailureError, FailurePolicyBindingId};
 use clutch_product_series::{
-    AuthenticatedQuantizedIntervalConsensusHistoryV1, FixedCodec,
+    AuthenticatedQuantizedIntervalConsensusHistoryV1, FixedCodec, MarketInstanceV2Id,
     QuantizedIntervalConsensusCertificateV1Id, QuantizedIntervalConsensusRestorationV1,
     QuantizedIntervalConsensusWorkV1, QuantizedIntervalConsensusWorkV1Id,
 };
@@ -72,6 +77,54 @@ impl AuthenticatedFailureIntervalConsensusStateV1
         } else {
             Err(FailureError::BindingMismatch)
         }
+    }
+}
+
+/// Durable terminal authentication of permanent `0xac/v1` after mutable work
+/// is gone. The optional family receipt is zero before aggregate
+/// terminalization and nonzero afterward.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureIntervalTerminalReplayV1 {
+    account: Pubkey,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    failure_policy_binding_id: FailurePolicyBindingId,
+    replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
+    interval_terminal_receipt_id: FailureIntervalConsensusTerminalReceiptIdV1,
+    family_terminal_receipt_id: Option<FailureMarketFamilyTerminalReceiptIdV1>,
+}
+
+impl AuthenticatedFailureIntervalTerminalReplayV1 {
+    pub(crate) const fn account(self) -> Pubkey {
+        self.account
+    }
+
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    pub(crate) const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) const fn failure_policy_binding_id(self) -> FailurePolicyBindingId {
+        self.failure_policy_binding_id
+    }
+
+    pub(crate) const fn replay_receipt_id(self) -> FailureIntervalConsensusReplayReceiptIdV1 {
+        self.replay_receipt_id
+    }
+
+    pub(crate) const fn interval_terminal_receipt_id(
+        self,
+    ) -> FailureIntervalConsensusTerminalReceiptIdV1 {
+        self.interval_terminal_receipt_id
+    }
+
+    pub(crate) const fn family_terminal_receipt_id(
+        self,
+    ) -> Option<FailureMarketFamilyTerminalReceiptIdV1> {
+        self.family_terminal_receipt_id
     }
 }
 
@@ -210,6 +263,19 @@ pub fn persist_failure_interval_consensus_accounts_v1(
         certificate_id: facts.certificate_id.bytes(),
         resolution_receipt_id: facts.resolution_receipt_id.bytes(),
         close_authorization_id: facts.close_authorization_id.bytes(),
+        replay_receipt_id: replay.id().bytes(),
+        interval_terminal_receipt_id: match facts.phase {
+            FailureIntervalConsensusPhaseV1::Closed => {
+                project_failure_interval_consensus_terminal_receipt_v1(state, replay)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .terminal_receipt_id()
+                    .bytes()
+            }
+            FailureIntervalConsensusPhaseV1::Active | FailureIntervalConsensusPhaseV1::Resolved => {
+                [0; 32]
+            }
+        },
+        failure_family_terminal_receipt_id: [0; 32],
     };
     {
         let mut data = work_account
@@ -308,7 +374,7 @@ pub fn authenticate_failure_interval_consensus_accounts_v1(
             && map_phase(work_record.phase) == map_phase(replay_record.phase)
             && product_work_id.bytes() == replay_record.current_work_id
             && product_work.transcript().bytes() == replay_record.current_transcript
-            && replay_record.preserved_lamports == replay_account.lamports()
+            && replay_record.preserved_lamports <= replay_account.lamports()
             && work_account.lamports() >= work_record.work_rent_principal_lamports,
         ClutchError::MismatchedState,
     )?;
@@ -396,7 +462,151 @@ pub fn authenticate_failure_interval_consensus_accounts_v1(
     };
     let (state, replay) = restore_failure_interval_consensus_state_v1(&authenticated, facts)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_terminal_receipt_id = match phase {
+        FailureIntervalConsensusPhaseV1::Closed => {
+            project_failure_interval_consensus_terminal_receipt_v1(state, replay)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .terminal_receipt_id()
+                .bytes()
+        }
+        FailureIntervalConsensusPhaseV1::Active | FailureIntervalConsensusPhaseV1::Resolved => {
+            [0; 32]
+        }
+    };
+    require(
+        replay_record.replay_receipt_id == replay_receipt_id.bytes()
+            && replay_record.interval_terminal_receipt_id == expected_terminal_receipt_id
+            && replay_record.failure_family_terminal_receipt_id == [0; 32],
+        ClutchError::MismatchedState,
+    )?;
     Ok((authenticated, state, replay, product_work))
+}
+
+/// Reopen the permanent closed replay after the mutable work account is gone.
+/// `require_family_terminal` selects the exact zero/nonzero aggregate phase;
+/// it never accepts a caller-provided receipt ID.
+pub(crate) fn authenticate_failure_interval_terminal_replay_v1(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'_>,
+    expected_market_instance_id: MarketInstanceV2Id,
+    expected_generation: u64,
+    expected_failure_policy_binding_id: FailurePolicyBindingId,
+    writable: bool,
+    require_family_terminal: bool,
+) -> Outcome<AuthenticatedFailureIntervalTerminalReplayV1> {
+    authenticate_metadata(
+        program_id,
+        replay_account,
+        registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+        writable,
+    )?;
+    let data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let input: &[u8; registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] = data
+        .as_ref()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let record = FailureIntervalConsensusReplayAccountV1::decode(input)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let family_terminal = if record.failure_family_terminal_receipt_id == [0; 32] {
+        None
+    } else {
+        Some(FailureMarketFamilyTerminalReceiptIdV1::from_bytes(
+            record.failure_family_terminal_receipt_id,
+        ))
+    };
+    require(
+        record.phase == AccountPhaseV1::Closed
+            && record.generation == expected_generation
+            && record.failure_policy_binding_id == expected_failure_policy_binding_id.bytes()
+            && record.preserved_lamports <= replay_account.lamports()
+            && (require_family_terminal == family_terminal.is_some()),
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        replay_account.key,
+        seeds::failure_interval_consensus_replay_pda(
+            program_id,
+            &expected_market_instance_id.bytes(),
+            expected_generation,
+        ),
+        Some(record.bump),
+    )?;
+    Ok(AuthenticatedFailureIntervalTerminalReplayV1 {
+        account: *replay_account.key,
+        market_instance_id: expected_market_instance_id,
+        generation: expected_generation,
+        failure_policy_binding_id: expected_failure_policy_binding_id,
+        replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1::from_bytes(
+            record.replay_receipt_id,
+        ),
+        interval_terminal_receipt_id: FailureIntervalConsensusTerminalReceiptIdV1::from_bytes(
+            record.interval_terminal_receipt_id,
+        ),
+        family_terminal_receipt_id: family_terminal,
+    })
+}
+
+/// Persist the exact market-level Failure receipt into permanent replay.
+///
+/// The receipt is already private-field authority from the aggregate owner;
+/// this writer rechecks every replay join and preserves all other bytes and
+/// every lamport, including later donations.
+pub(crate) fn persist_failure_market_family_terminal_receipt_v1(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureIntervalTerminalReplayV1,
+    receipt: FailureMarketFamilyTerminalReceiptV1,
+) -> Outcome<AuthenticatedFailureIntervalTerminalReplayV1> {
+    let facts = receipt.facts();
+    require(
+        authenticated.account == *replay_account.key
+            && authenticated.market_instance_id == facts.market_instance_id
+            && authenticated.generation == facts.generation
+            && authenticated.failure_policy_binding_id == facts.failure_policy_binding_id
+            && authenticated.replay_receipt_id == facts.interval_replay_receipt_id
+            && authenticated.interval_terminal_receipt_id == facts.interval_terminal_receipt_id
+            && authenticated.family_terminal_receipt_id.is_none()
+            && facts.interval_replay_account_id.bytes() == replay_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let balance_before = replay_account.lamports();
+    let mut data = replay_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let input: &[u8; registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] = data
+        .as_ref()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let mut record = FailureIntervalConsensusReplayAccountV1::decode(input)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        record.failure_family_terminal_receipt_id == [0; 32],
+        ClutchError::Replay,
+    )?;
+    record.failure_family_terminal_receipt_id = receipt.id().bytes();
+    let output: &mut [u8; registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] = data
+        .as_mut()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    record
+        .encode_into(output)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(data);
+    require(
+        replay_account.lamports() == balance_before,
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_failure_interval_terminal_replay_v1(
+        program_id,
+        replay_account,
+        facts.market_instance_id,
+        facts.generation,
+        facts.failure_policy_binding_id,
+        true,
+        true,
+    )
 }
 
 fn authenticate_metadata(

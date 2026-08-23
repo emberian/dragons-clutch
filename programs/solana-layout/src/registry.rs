@@ -439,7 +439,7 @@ pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
 /// Permanent interval-consensus replay account version.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 1;
 /// Exact permanent interval-consensus replay account bytes.
-pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 416;
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
