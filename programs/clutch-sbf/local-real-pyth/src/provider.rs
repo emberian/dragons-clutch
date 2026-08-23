@@ -193,9 +193,12 @@ fn deterministic_vaa(
     Ok(serde_wormhole::to_vec(&vaa)?)
 }
 
-pub fn observation(publish_time: i64) -> Result<Observation, Box<dyn std::error::Error>> {
+pub fn observation_for_feed(
+    publish_time: i64,
+    feed_id: [u8; 32],
+) -> Result<Observation, Box<dyn std::error::Error>> {
     let message = Message::PriceFeedMessage(PriceFeedMessage {
-        feed_id: FEED_ID,
+        feed_id,
         price: PRICE,
         conf: CONFIDENCE,
         exponent: EXPONENT,
@@ -223,6 +226,10 @@ pub fn observation(publish_time: i64) -> Result<Observation, Box<dyn std::error:
         update,
         post_data,
     })
+}
+
+pub fn observation(publish_time: i64) -> Result<Observation, Box<dyn std::error::Error>> {
+    observation_for_feed(publish_time, FEED_ID)
 }
 
 #[cfg(test)]
@@ -271,6 +278,20 @@ mod tests {
         let (_header, body): (Header, Body<&RawMessage>) =
             serde_wormhole::from_slice(&left.vaa).unwrap();
         assert_eq!(body.timestamp, 1_800_000_000);
+    }
+
+    #[test]
+    fn feed_identity_changes_the_signed_update_and_post_body() {
+        use byteorder::BE;
+
+        let correct = observation(1_800_000_000).unwrap();
+        let wrong = observation_for_feed(1_800_000_000, [0x2b; 32]).unwrap();
+        assert_ne!(correct.vaa, wrong.vaa);
+        assert_ne!(correct.update.message, wrong.update.message);
+        assert_ne!(correct.post_data, wrong.post_data);
+        let decoded: Message =
+            pythnet_sdk::wire::from_slice::<BE, _>(wrong.update.message.as_ref()).unwrap();
+        assert_eq!(decoded.feed_id(), [0x2b; 32]);
     }
 
     #[test]

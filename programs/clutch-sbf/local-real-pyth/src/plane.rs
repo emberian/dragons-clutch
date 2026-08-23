@@ -46,7 +46,6 @@ pub const ORDER_QUANTITY: u64 = 16;
 pub const BUY_LIMIT: u64 = 7_500;
 pub const SELL_LIMIT: u64 = 2_500;
 pub const COLLATERAL_MINT: Address = Address::new_from_array([0x6c; 32]);
-pub const WRONG_MARKET_NONCE: u64 = MARKET_NONCE + 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MarketPrestate {
@@ -114,15 +113,13 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
     (bytes, PayoutSet::new(OUTCOMES, OUTCOMES, kernel))
 }
 
-pub fn real_spec(feed_id: [u8; 32]) -> Result<SourceSpecV2, Box<dyn std::error::Error>> {
+pub fn real_spec() -> Result<SourceSpecV2, Box<dyn std::error::Error>> {
     let config = provider::fixture("receiver-config.account")?;
     let digest = clutch_sbf::pyth_receiver::config_byte_digest(&config);
     if digest != real_pyth_lab::CONFIG_DIGEST {
         return Err("local-real receiver Config does not match the compiled release".into());
     }
-    let mut fields = real_pyth_lab::REGISTERED_SPEC_FIELDS;
-    fields.provider_feed_id = feed_id;
-    SourceSpecV2::new(fields)
+    SourceSpecV2::new(real_pyth_lab::REGISTERED_SPEC_FIELDS)
         .map_err(|error| format!("local-real SourceSpec is invalid: {error:?}").into())
 }
 
@@ -1604,7 +1601,7 @@ mod tests {
     fn signed_plane(actor: Address) -> LabPlane {
         build(
             actor,
-            real_spec(provider::FEED_ID).unwrap(),
+            real_spec().unwrap(),
             29_790_527,
             29_790_528,
             MARKET_NONCE,

@@ -10,11 +10,14 @@ ProgramData keys, deployment slots, and upgrade authority in
 `svm-tests/tests/fixtures/real-pyth-local`. These are reproducible complete
 loader-account bodies, not retained raw `solana account` JSON responses; that
 provenance limitation is explicit in the fixture manifest. It initializes the
-real ABIs with deterministic laboratory guardians, verifies a newly generated
-VAA whose Wormhole-body timestamp and embedded observation use the selected
-fresh boundary, and drives real receiver `PostUpdate` immediately followed by
-Clutch `AppendSourceArchiveV2`. It also checks wrong-Config and wrong-feed
-atomic rollback, reloads the accepted update/archive, seals the one-bucket
+real ABIs with deterministic laboratory guardians and independently signs and
+verifies two newly generated VAAs whose Wormhole-body timestamps and embedded
+observations use the selected fresh boundary. The registered-feed update drives
+real receiver `PostUpdate` immediately followed by Clutch
+`AppendSourceArchiveV2`. The second VAA carries a different feed identity
+through the real router and receiver, then proves that appending it against the
+one registered SourceSpec/archive refuses atomically. The campaign also checks
+wrong-Config rollback, reloads the accepted update/archive, seals the one-bucket
 archive, and resolves the categorical market.
 
 It is not a devnet price, a provider-availability test, a production source
@@ -27,8 +30,10 @@ CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
   programs/clutch-sbf/scripts/run_local_real_pyth.sh
 ```
 
-The default `source-only-v1` mode preserves the original thirteen-transaction
-source campaign. The explicit joined lifecycle is:
+The default `source-only-v1` mode is an exact thirteen-transaction source
+campaign. Its current transcript schema is
+`dragons-clutch/operator/local-real-pyth-transcript/v2`. The explicit joined
+lifecycle is:
 
 ```sh
 CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
@@ -43,10 +48,11 @@ PriceGrid, market state PDAs, Hoard token account, outcome mints, general Epoch,
 order page, reservations, candidate, verifier work, entitlement pot, and
 settlement receipt must all be absent before their signed lifecycle steps.
 
-The extended campaign initializes the real router/receiver and source plane,
-checks both atomic rollback negatives, posts the real receiver update adjacent
-to Clutch admission, and seals the source evidence without weakening its
-staleness bounds. It then uploads and seals the exact typed PriceGrid and
+The extended campaign initializes the real router/receiver and exactly one
+registered source plane, verifies both signed VAAs, checks both atomic rollback
+negatives against that registered archive, posts the correct real receiver
+update adjacent to Clutch admission, and seals the source evidence without
+weakening its staleness bounds. It then uploads and seals the exact typed PriceGrid and
 zero-fee general clearing policy, creates the market, endows both owners, and
 has the seller split a complete set. The owners place funded opposing orders
 for 16 units of outcome 1. After the fixed freeze and candidate windows, the
@@ -56,6 +62,9 @@ selects the best valid submitted candidate, freezes and realizes entitlement,
 and settles the direct slice. Only then does it resolve from the already sealed
 real-Pyth source evidence, redeem both users' internal claims, and withdraw the
 exact conserved 128 collateral atoms (76 to the buyer and 52 to the seller).
+This 52-step producer contract is
+`dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4`; the historical
+joined v2/v3 transcripts retain their original meanings.
 
 The public-safe transcript from the first, pre-trading run of this mode is
 retained at

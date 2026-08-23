@@ -48,6 +48,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const SOURCE_ONLY_MODE: &str = "source-only-v1";
 const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
+const SOURCE_TRANSCRIPT_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v2";
+const JOINED_TRANSCRIPT_SCHEMA: &str =
+    "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4";
 const UPSTREAM_COMMIT: &str = "f50a3faf9fc5a223a22889799b2f778900f186b3";
 const WARP_SLOT: u64 = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT + 1;
 const CLOCK_SETTLED_SLOT: u64 = WARP_SLOT + 16;
@@ -147,6 +150,14 @@ fn require(condition: bool, message: impl Into<String>) -> Result<()> {
         Ok(())
     } else {
         Err(message.into().into())
+    }
+}
+
+fn transcript_schema(campaign_mode: &str) -> &'static str {
+    if campaign_mode == JOINED_LIFECYCLE_MODE {
+        JOINED_TRANSCRIPT_SCHEMA
+    } else {
+        SOURCE_TRANSCRIPT_SCHEMA
     }
 }
 
@@ -440,7 +451,6 @@ fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
 
 fn expected_genesis_rows(
     correct: &plane::LabPlane,
-    wrong_feed: &plane::LabPlane,
     clutch_elf: &[u8],
     second_owner: Address,
 ) -> Result<BTreeMap<String, GenesisRow>> {
@@ -480,7 +490,6 @@ fn expected_genesis_rows(
         },
     )?;
     add_plane_rows(&mut rows, "correct", correct)?;
-    add_plane_rows(&mut rows, "wrong-feed", wrong_feed)?;
     if correct.market_prestate == plane::MarketPrestate::SignedCreate {
         insert_row(
             &mut rows,
@@ -671,31 +680,23 @@ fn prepare(
     };
     let correct = plane::build(
         payer.pubkey(),
-        plane::real_spec(provider::FEED_ID)?,
+        plane::real_spec()?,
         start_bucket,
         end_bucket,
         clutch_svm_fixture::MARKET_NONCE,
         market_prestate,
     );
-    let wrong_feed = plane::build(
-        payer.pubkey(),
-        plane::real_spec(WRONG_FEED_ID)?,
-        start_bucket,
-        end_bucket,
-        plane::WRONG_MARKET_NONCE,
-        market_prestate,
-    );
     require(
-        correct.start_bucket == start_bucket
-            && correct.end_bucket_exclusive == end_bucket
-            && wrong_feed.start_bucket == start_bucket
-            && wrong_feed.end_bucket_exclusive == end_bucket,
+        correct.start_bucket == start_bucket && correct.end_bucket_exclusive == end_bucket,
         "rebuilt plane window differs from manifest",
     )?;
     let observation = provider::observation(publish_time)?;
+    let wrong_feed_observation = provider::observation_for_feed(publish_time, WRONG_FEED_ID)?;
     let merkle_update_hash = provider::sha256(&borsh::to_vec(&observation.update)?);
+    let wrong_feed_merkle_update_hash =
+        provider::sha256(&borsh::to_vec(&wrong_feed_observation.update)?);
 
-    let rows = expected_genesis_rows(&correct, &wrong_feed, &elf_bytes, second_owner.pubkey())?;
+    let rows = expected_genesis_rows(&correct, &elf_bytes, second_owner.pubkey())?;
 
     let mut index = String::new();
     for (number, row) in rows.values().enumerate() {
@@ -707,6 +708,7 @@ fn prepare(
 
     let manifest = json!({
         "claim": CLAIM,
+        "transcript_schema": transcript_schema(campaign_mode),
         "campaign_mode": campaign_mode,
         "network": "127.0.0.1 loopback only",
         "observation": "synthetic deterministic local guardian quorum; not devnet price evidence",
@@ -806,8 +808,9 @@ fn prepare(
         },
         "wrong_feed": {
             "feed_id_hex": WRONG_FEED_ID.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-            "source_spec": wrong_feed.plane.source_spec.address.to_string(),
-            "archive": wrong_feed.plane.source_archive.address.to_string(),
+            "vaa_sha256": provider::sha256(&wrong_feed_observation.vaa),
+            "post_update_data_sha256": provider::sha256(&wrong_feed_observation.post_data),
+            "merkle_price_update_sha256": wrong_feed_merkle_update_hash,
         }
     });
     fs::write(
@@ -866,7 +869,6 @@ fn verify_genesis_manifest(
     rpc: &Rpc,
     public: &Value,
     correct: &plane::LabPlane,
-    wrong_feed: &plane::LabPlane,
     clutch_elf: &[u8],
     second_owner: Address,
 ) -> Result<()> {
@@ -874,7 +876,7 @@ fn verify_genesis_manifest(
         .get("genesis_accounts")
         .and_then(Value::as_array)
         .ok_or("campaign manifest has no genesis_accounts array")?;
-    let mut expected = expected_genesis_rows(correct, wrong_feed, clutch_elf, second_owner)?;
+    let mut expected = expected_genesis_rows(correct, clutch_elf, second_owner)?;
     require(
         rows.len() == expected.len(),
         format!(
@@ -1031,6 +1033,102 @@ fn write_vaa(
             AccountMeta::new(encoded, false),
         ],
     )
+}
+
+fn upload_and_verify_vaa(
+    rpc: &Rpc,
+    payer: &Keypair,
+    steps: &mut Vec<Value>,
+    observation: &provider::Observation,
+    role: &str,
+    allocate_step: &str,
+    verify_step: &str,
+) -> Result<Keypair> {
+    let router = address(real_pyth_lab::ROUTER_PROGRAM);
+    let encoded = Keypair::new();
+    let encoded_len = VAA_START + observation.vaa.len();
+    let split = observation.vaa.len().min(WRITE_SPLIT);
+    let create = system_instruction::create_account(
+        &payer.pubkey(),
+        &encoded.pubkey(),
+        rpc.minimum_rent(encoded_len)?,
+        u64::try_from(encoded_len)?,
+        &router,
+    );
+    let init = Instruction::new_with_bytes(
+        router,
+        &INIT_ENCODED_VAA,
+        vec![
+            AccountMeta::new_readonly(payer.pubkey(), true),
+            AccountMeta::new(encoded.pubkey(), false),
+        ],
+    );
+    let (signature, status) = sign_submit(
+        rpc,
+        payer,
+        &[&encoded],
+        &[
+            compute_budget(),
+            create,
+            init,
+            write_vaa(
+                router,
+                payer.pubkey(),
+                encoded.pubkey(),
+                0,
+                &observation.vaa[..split],
+            ),
+        ],
+    )?;
+    require_accepted(
+        &format!("{role} router encoded VAA allocation/write"),
+        &status,
+    )?;
+    record_step(rpc, steps, allocate_step, signature, &status)?;
+
+    let guardian_set =
+        Address::find_program_address(&[b"GuardianSet", &0_u32.to_be_bytes()], &router).0;
+    let mut verify = vec![compute_budget()];
+    if split < observation.vaa.len() {
+        verify.push(write_vaa(
+            router,
+            payer.pubkey(),
+            encoded.pubkey(),
+            split,
+            &observation.vaa[split..],
+        ));
+    }
+    verify.push(Instruction::new_with_bytes(
+        router,
+        &VERIFY_ENCODED_VAA_V1,
+        vec![
+            AccountMeta::new_readonly(payer.pubkey(), true),
+            AccountMeta::new(encoded.pubkey(), false),
+            AccountMeta::new_readonly(guardian_set, false),
+        ],
+    ));
+    let (signature, status) = sign_submit(rpc, payer, &[], &verify)?;
+    require_accepted(&format!("{role} real router VerifyEncodedVaa"), &status)?;
+    record_step(rpc, steps, verify_step, signature, &status)?;
+
+    let encoded_view = account(rpc, &format!("{role} encoded VAA"), encoded.pubkey())?;
+    require(
+        encoded_view.owner == router.to_string(),
+        format!("{role} Verified VAA account is not router-owned"),
+    )?;
+    require(
+        !encoded_view.executable && encoded_view.data.len() == encoded_len,
+        format!("{role} Verified VAA account shape differs"),
+    )?;
+    require(
+        encoded_view.data.get(8) == Some(&2),
+        format!("{role} router did not persist Verified state"),
+    )?;
+    require(
+        encoded_view.data.get(VAA_START..) == Some(observation.vaa.as_slice()),
+        format!("{role} Verified VAA payload differs from locally signed bytes"),
+    )?;
+    Ok(encoded)
 }
 
 fn receiver_initialize(payer: Address) -> Result<Instruction> {
@@ -1258,6 +1356,11 @@ fn run(
         "prepared and requested campaign modes differ",
     )?;
     require(
+        public.get("transcript_schema").and_then(Value::as_str)
+            == Some(transcript_schema(campaign_mode)),
+        "prepared transcript schema differs from the requested campaign",
+    )?;
+    require(
         public
             .get("dragons_clutch_repository_head")
             .and_then(Value::as_str)
@@ -1331,21 +1434,14 @@ fn run(
     };
     let correct = plane::build(
         payer.pubkey(),
-        plane::real_spec(provider::FEED_ID)?,
+        plane::real_spec()?,
         start_bucket,
         end_bucket,
         clutch_svm_fixture::MARKET_NONCE,
         market_prestate,
     );
-    let wrong_feed = plane::build(
-        payer.pubkey(),
-        plane::real_spec(WRONG_FEED_ID)?,
-        start_bucket,
-        end_bucket,
-        plane::WRONG_MARKET_NONCE,
-        market_prestate,
-    );
     let observation = provider::observation(publish_time)?;
+    let wrong_feed_observation = provider::observation_for_feed(publish_time, WRONG_FEED_ID)?;
     require(
         public.get("vaa_sha256").and_then(Value::as_str)
             == Some(&provider::sha256(&observation.vaa)),
@@ -1365,6 +1461,43 @@ fn run(
             == Some(&provider::sha256(&borsh::to_vec(&observation.update)?)),
         "regenerated MerklePriceUpdate differs from public manifest",
     )?;
+    let wrong_feed_manifest = public
+        .get("wrong_feed")
+        .ok_or("campaign manifest has no wrong_feed observation")?;
+    let wrong_feed_id_hex = WRONG_FEED_ID
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    require(
+        wrong_feed_manifest
+            .get("feed_id_hex")
+            .and_then(Value::as_str)
+            == Some(wrong_feed_id_hex.as_str()),
+        "wrong-feed identity differs from public manifest",
+    )?;
+    require(
+        wrong_feed_manifest
+            .get("vaa_sha256")
+            .and_then(Value::as_str)
+            == Some(&provider::sha256(&wrong_feed_observation.vaa)),
+        "regenerated wrong-feed VAA differs from public manifest",
+    )?;
+    require(
+        wrong_feed_manifest
+            .get("post_update_data_sha256")
+            .and_then(Value::as_str)
+            == Some(&provider::sha256(&wrong_feed_observation.post_data)),
+        "regenerated wrong-feed PostUpdate bytes differ from public manifest",
+    )?;
+    require(
+        wrong_feed_manifest
+            .get("merkle_price_update_sha256")
+            .and_then(Value::as_str)
+            == Some(&provider::sha256(&borsh::to_vec(
+                &wrong_feed_observation.update,
+            )?)),
+        "regenerated wrong-feed MerklePriceUpdate differs from public manifest",
+    )?;
 
     println!("{CLAIM}");
     println!("genesis {}", rpc.genesis_hash()?);
@@ -1373,14 +1506,7 @@ fn run(
         "RPC slot is below the captured receiver deployment",
     )?;
     verify_provider_accounts(&rpc)?;
-    verify_genesis_manifest(
-        &rpc,
-        &public,
-        &correct,
-        &wrong_feed,
-        &clutch_elf,
-        second_owner.pubkey(),
-    )?;
+    verify_genesis_manifest(&rpc, &public, &correct, &clutch_elf, second_owner.pubkey())?;
     assert_clock(&rpc, publish_time)?;
     let mut steps = Vec::new();
     let mut lifecycle_signatures = BTreeMap::new();
@@ -1393,96 +1519,14 @@ fn run(
     )?;
     require_accepted("router initialize", &status)?;
     record_step(&rpc, &mut steps, "router-initialize", signature, &status)?;
-    let router = address(real_pyth_lab::ROUTER_PROGRAM);
-    let encoded = Keypair::new();
-    let encoded_len = VAA_START + observation.vaa.len();
-    let split = observation.vaa.len().min(WRITE_SPLIT);
-    let create = system_instruction::create_account(
-        &payer.pubkey(),
-        &encoded.pubkey(),
-        rpc.minimum_rent(encoded_len)?,
-        u64::try_from(encoded_len)?,
-        &router,
-    );
-    let init = Instruction::new_with_bytes(
-        router,
-        &INIT_ENCODED_VAA,
-        vec![
-            AccountMeta::new_readonly(payer.pubkey(), true),
-            AccountMeta::new(encoded.pubkey(), false),
-        ],
-    );
-    let (signature, status) = sign_submit(
+    let encoded = upload_and_verify_vaa(
         &rpc,
         &payer,
-        &[&encoded],
-        &[
-            compute_budget(),
-            create,
-            init,
-            write_vaa(
-                router,
-                payer.pubkey(),
-                encoded.pubkey(),
-                0,
-                &observation.vaa[..split],
-            ),
-        ],
-    )?;
-    require_accepted("router encoded VAA allocation/write", &status)?;
-    record_step(
-        &rpc,
         &mut steps,
+        &observation,
+        "correct-feed",
         "router-init-and-write-encoded-vaa",
-        signature,
-        &status,
-    )?;
-    let guardian_set =
-        Address::find_program_address(&[b"GuardianSet", &0_u32.to_be_bytes()], &router).0;
-    let mut verify = vec![compute_budget()];
-    if split < observation.vaa.len() {
-        verify.push(write_vaa(
-            router,
-            payer.pubkey(),
-            encoded.pubkey(),
-            split,
-            &observation.vaa[split..],
-        ));
-    }
-    verify.push(Instruction::new_with_bytes(
-        router,
-        &VERIFY_ENCODED_VAA_V1,
-        vec![
-            AccountMeta::new_readonly(payer.pubkey(), true),
-            AccountMeta::new(encoded.pubkey(), false),
-            AccountMeta::new_readonly(guardian_set, false),
-        ],
-    ));
-    let (signature, status) = sign_submit(&rpc, &payer, &[], &verify)?;
-    require_accepted("real router VerifyEncodedVaa", &status)?;
-    record_step(
-        &rpc,
-        &mut steps,
         "router-write-and-verify-encoded-vaa",
-        signature,
-        &status,
-    )?;
-    let encoded_view = account(&rpc, "encoded VAA", encoded.pubkey())?;
-    require(
-        encoded_view.owner == router.to_string(),
-        "Verified VAA account is not router-owned",
-    )?;
-    require(
-        !encoded_view.executable && encoded_view.data.len() == encoded_len,
-        "Verified VAA account shape differs",
-    )?;
-    require(
-        encoded_view.data.get(8) == Some(&2),
-        "router did not persist Verified state",
-    )?;
-    require(
-        encoded_view.data.get(VAA_START..) == Some(observation.vaa.as_slice()),
-        "Verified VAA account payload differs from locally signed bytes",
     )?;
 
     let (signature, status) = sign_submit(
@@ -1504,36 +1548,47 @@ fn run(
         "receiver did not write the pinned Config body",
     )?;
 
-    for (label, lab) in [("correct", &correct), ("wrong-feed", &wrong_feed)] {
-        let (signature, status) = sign_submit(
-            &rpc,
-            &payer,
-            &[],
-            &[compute_budget(), plane::init_spec(payer.pubkey(), lab)],
-        )?;
-        require_accepted(&format!("{label} InitSourceSpecV2"), &status)?;
-        record_step(
-            &rpc,
-            &mut steps,
-            &format!("{label}-init-source-spec-v2"),
-            signature,
-            &status,
-        )?;
-        let (signature, status) = sign_submit(
-            &rpc,
-            &payer,
-            &[],
-            &[compute_budget(), plane::init_archive(payer.pubkey(), lab)],
-        )?;
-        require_accepted(&format!("{label} InitSourceArchiveV2"), &status)?;
-        record_step(
-            &rpc,
-            &mut steps,
-            &format!("{label}-init-source-archive-v2"),
-            signature,
-            &status,
-        )?;
-    }
+    let (signature, status) = sign_submit(
+        &rpc,
+        &payer,
+        &[],
+        &[compute_budget(), plane::init_spec(payer.pubkey(), &correct)],
+    )?;
+    require_accepted("correct InitSourceSpecV2", &status)?;
+    record_step(
+        &rpc,
+        &mut steps,
+        "correct-init-source-spec-v2",
+        signature,
+        &status,
+    )?;
+    let (signature, status) = sign_submit(
+        &rpc,
+        &payer,
+        &[],
+        &[
+            compute_budget(),
+            plane::init_archive(payer.pubkey(), &correct),
+        ],
+    )?;
+    require_accepted("correct InitSourceArchiveV2", &status)?;
+    record_step(
+        &rpc,
+        &mut steps,
+        "correct-init-source-archive-v2",
+        signature,
+        &status,
+    )?;
+
+    let wrong_feed_encoded = upload_and_verify_vaa(
+        &rpc,
+        &payer,
+        &mut steps,
+        &wrong_feed_observation,
+        "wrong-feed",
+        "wrong-feed-router-init-and-write-encoded-vaa",
+        "wrong-feed-router-write-and-verify-encoded-vaa",
+    )?;
 
     let run_joined_trade = |steps: &mut Vec<Value>,
                             lifecycle_signatures: &mut BTreeMap<&'static str, String>|
@@ -2127,8 +2182,7 @@ fn run(
     )?;
 
     let bad_feed_update = Keypair::new();
-    let wrong_watched = [wrong_feed.plane.source_archive.address, treasury];
-    let before = snapshot(&rpc, &wrong_watched)?;
+    let before = snapshot(&rpc, &watched)?;
     assert_clock(&rpc, publish_time)?;
     let (signature, status) = sign_submit(
         &rpc,
@@ -2138,12 +2192,12 @@ fn run(
             compute_budget(),
             receiver_post(
                 payer.pubkey(),
-                encoded.pubkey(),
+                wrong_feed_encoded.pubkey(),
                 bad_feed_update.pubkey(),
-                &observation.post_data,
+                &wrong_feed_observation.post_data,
             ),
             plane::append(
-                &wrong_feed,
+                &correct,
                 bad_feed_update.pubkey(),
                 address(real_pyth_lab::RECEIVER_CONFIG),
             ),
@@ -2163,8 +2217,8 @@ fn run(
         "wrong feed did not roll back receiver update",
     )?;
     require(
-        snapshot(&rpc, &wrong_watched)? == before,
-        "wrong feed changed archive or treasury",
+        snapshot(&rpc, &watched)? == before,
+        "wrong feed changed registered archive or treasury",
     )?;
 
     assert_clock(&rpc, publish_time)?;
@@ -2517,8 +2571,21 @@ fn run(
         Value::Null
     };
 
+    let expected_step_count = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        52
+    } else {
+        13
+    };
+    require(
+        steps.len() == expected_step_count,
+        format!(
+            "campaign recorded {} steps, schema requires exactly {expected_step_count}",
+            steps.len()
+        ),
+    )?;
     let result = json!({
         "claim": CLAIM,
+        "transcript_schema": transcript_schema(campaign_mode),
         "campaign_mode": campaign_mode,
         "network": "loopback validator only",
         "genesis_hash": rpc.genesis_hash()?,
@@ -2530,6 +2597,7 @@ fn run(
         "exponent": provider::EXPONENT,
         "interval": {"lower": lower.to_string(), "upper": upper.to_string()},
         "verified_vaa_account": encoded.pubkey().to_string(),
+        "wrong_feed_verified_vaa_account": wrong_feed_encoded.pubkey().to_string(),
         "update_account": update.pubkey().to_string(),
         "joined_post_append_signature": joined_signature,
         "seal_signature": seal_signature,
