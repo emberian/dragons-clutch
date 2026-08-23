@@ -23,7 +23,9 @@ use crate::seeds;
 use clutch_collateral_adapter_v2::{
     admit_realm_collateral_account_v2, admit_realm_collateral_mint_v2, prepare_custody_creation_v2,
     BoundRealmCollateralV2, CustodyBindingV2, CustodyCreationPlanV2, CustodyInitializationStepV2,
-    Id as CollateralId, RuntimeAccountViewV2, TokenAccountRoleV2,
+    Id as CollateralId, RuntimeAccountViewV2, SeriesCollateralFundingJoinV2,
+    SeriesCollateralTerminalJoinV2, TokenAccountRoleV2, TransferAuthorityKindV2,
+    TransferAuthorityV2,
 };
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV1, ComponentDebitV1, ContentId,
@@ -142,6 +144,57 @@ impl AuthenticatedSeriesRegistryAccountV1 {
 pub struct AuthenticatedSeriesFundingAccountV1 {
     account: Pubkey,
     value: SeriesFundingAccountV1,
+}
+
+/// Exact Realm-selected collateral graph for one authenticated Series funding
+/// account.
+///
+/// Construction authenticates the immutable Product bodies, local registry and
+/// funding PDAs, Realm/Profile/mint/program binding, both receive-only token
+/// destinations, both System-owned lamport destinations, and the canonical
+/// Series collateral authority PDA. It does not substitute for central
+/// registry-release provenance, which remains a separately disabled join.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthenticatedSeriesCollateralFundingV1 {
+    bound: BoundRealmCollateralV2,
+    join: SeriesCollateralFundingJoinV2,
+    authority: TransferAuthorityV2,
+}
+
+impl AuthenticatedSeriesCollateralFundingV1 {
+    /// Exact authenticated Realm collateral binding.
+    pub const fn bound(&self) -> BoundRealmCollateralV2 {
+        self.bound
+    }
+
+    /// Exact immutable Series/collateral funding identity graph.
+    pub const fn join(&self) -> SeriesCollateralFundingJoinV2 {
+        self.join
+    }
+
+    /// Canonical program-derived collateral authority observation.
+    pub const fn authority(&self) -> TransferAuthorityV2 {
+        self.authority
+    }
+}
+
+/// One-shot terminal authorization refined by the exact collateral graph.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthenticatedSeriesCollateralTerminalV1 {
+    funding: AuthenticatedSeriesCollateralFundingV1,
+    join: SeriesCollateralTerminalJoinV2,
+}
+
+impl AuthenticatedSeriesCollateralTerminalV1 {
+    /// Exact authenticated funding graph retained by the terminal receipt.
+    pub const fn funding(&self) -> AuthenticatedSeriesCollateralFundingV1 {
+        self.funding
+    }
+
+    /// Exact collateral terminal join bound to the SBF one-shot receipt.
+    pub const fn join(&self) -> SeriesCollateralTerminalJoinV2 {
+        self.join
+    }
 }
 
 impl AuthenticatedSeriesFundingAccountV1 {
@@ -557,6 +610,10 @@ fn collateral_id(key: &Pubkey) -> CollateralId {
     CollateralId::from_bytes(key.to_bytes())
 }
 
+fn collateral_content_id(value: ContentId) -> CollateralId {
+    CollateralId::from_bytes(value.bytes())
+}
+
 fn require_collateral_program(
     account: &AccountInfo<'_>,
     bound: BoundRealmCollateralV2,
@@ -628,6 +685,241 @@ fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> Runtim
         is_writable: account.is_writable,
         executable: account.executable,
     }
+}
+
+fn require_system_lamport_destination(account: &AccountInfo<'_>, exact: ContentId) -> Outcome<()> {
+    require(
+        account.key.to_bytes() == exact.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        *account.owner == SYSTEM_PROGRAM_ID && account.data_is_empty(),
+        ClutchError::WrongProgramOwner,
+    )
+}
+
+fn require_distinct_series_collateral_graph(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            require(
+                accounts[left].key != accounts[right].key,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+/// Authenticate the complete immutable Series collateral funding graph.
+///
+/// The collateral refund and neutral disposition accounts are admitted only
+/// as receive-only release-selected token accounts for the Realm mint. The
+/// lamport refund and neutral sink are admitted only as distinct writable,
+/// zero-data System accounts. This prevents rent lamports from reaching a
+/// token sink and prevents collateral principal from reaching a lamport sink.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_series_collateral_funding(
+    program_id: &Pubkey,
+    bound: BoundRealmCollateralV2,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    registry: AuthenticatedSeriesRegistryAccountV1,
+    funding: AuthenticatedSeriesFundingAccountV1,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    authority: &AccountInfo<'_>,
+    collateral_principal_refund: &AccountInfo<'_>,
+    neutral_collateral_disposition: &AccountInfo<'_>,
+    lamport_principal_refund: &AccountInfo<'_>,
+    neutral_lamport_sink: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSeriesCollateralFundingV1> {
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let registry_value = registry.value();
+    let funding_value = funding.value();
+    let realm = bound.realm();
+    let policy = bound.policy();
+    require(
+        registry_value.series_plan_id == series_plan_id
+            && registry_value.funding_terms_id == funding_terms_id
+            && funding_value.state.series_plan_id == series_plan_id
+            && funding_value.state.funding_terms_id == funding_terms_id
+            && funding_value.state.funding_quote_id == funding_quote_id
+            && realm.realm == collateral_content_id(artifacts.genesis.realm_id)
+            && realm.profile == collateral_content_id(artifacts.genesis.profile_id)
+            && policy.mint == collateral_content_id(artifacts.funding_terms.collateral_mint)
+            && policy.token_program == collateral_content_id(artifacts.funding_terms.token_program)
+            && collateral_principal_refund.key.to_bytes()
+                == artifacts
+                    .funding_terms
+                    .collateral_principal_refund_token_account
+                    .bytes()
+            && neutral_collateral_disposition.key.to_bytes()
+                == artifacts
+                    .funding_terms
+                    .neutral_collateral_disposition_token_account
+                    .bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require_collateral_program(token_program, bound)?;
+    require_series_collateral_authority(program_id, series_plan_id, authority)?;
+    require(
+        collateral_id(mint.key) == policy.mint
+            && !mint.is_writable
+            && !mint.is_signer
+            && !mint.executable,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        collateral_principal_refund.is_writable && neutral_collateral_disposition.is_writable,
+        ClutchError::NotWritable,
+    )?;
+    require_system_lamport_destination(
+        lamport_principal_refund,
+        artifacts.funding_terms.lamport_principal_refund,
+    )?;
+    require_system_lamport_destination(
+        neutral_lamport_sink,
+        artifacts.funding_terms.neutral_lamport_sink,
+    )?;
+    require_distinct_series_collateral_graph(&[
+        mint,
+        token_program,
+        authority,
+        collateral_principal_refund,
+        neutral_collateral_disposition,
+        lamport_principal_refund,
+        neutral_lamport_sink,
+    ])?;
+    require(
+        registry.account() != funding.account()
+            && registry.account() != *mint.key
+            && registry.account() != *token_program.key
+            && registry.account() != *authority.key
+            && registry.account() != *collateral_principal_refund.key
+            && registry.account() != *neutral_collateral_disposition.key
+            && registry.account() != *lamport_principal_refund.key
+            && registry.account() != *neutral_lamport_sink.key
+            && funding.account() != *mint.key
+            && funding.account() != *token_program.key
+            && funding.account() != *authority.key
+            && funding.account() != *collateral_principal_refund.key
+            && funding.account() != *neutral_collateral_disposition.key
+            && funding.account() != *lamport_principal_refund.key
+            && funding.account() != *neutral_lamport_sink.key,
+        ClutchError::AccountAlias,
+    )?;
+
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_mint_v2(bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let collateral_refund_data = collateral_principal_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(collateral_principal_refund, &collateral_refund_data),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(collateral_principal_refund.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let neutral_collateral_data = neutral_collateral_disposition
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(neutral_collateral_disposition, &neutral_collateral_data),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(neutral_collateral_disposition.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let transfer_authority = TransferAuthorityV2 {
+        address: collateral_id(authority.key),
+        kind: TransferAuthorityKindV2::ProgramDerived,
+        is_transaction_signer: authority.is_signer,
+        program_address_authenticated: true,
+        is_writable: authority.is_writable,
+        executable: authority.executable,
+        data_is_empty: authority.data_is_empty(),
+    };
+    let join = SeriesCollateralFundingJoinV2 {
+        realm: realm.realm,
+        profile: realm.profile,
+        series_plan: CollateralId::from_bytes(series_plan_id.bytes()),
+        funding_terms: CollateralId::from_bytes(funding_terms_id.bytes()),
+        funding_state_account: collateral_id(&funding.account()),
+        quote: CollateralId::from_bytes(funding_quote_id.bytes()),
+        funding_authority: transfer_authority.address,
+        collateral_principal_refund_token_account: collateral_id(collateral_principal_refund.key),
+        neutral_collateral_disposition_token_account: collateral_id(
+            neutral_collateral_disposition.key,
+        ),
+        payer_lamport_refund: collateral_id(lamport_principal_refund.key),
+        neutral_lamport_sink: collateral_id(neutral_lamport_sink.key),
+    };
+    join.validate(bound)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedSeriesCollateralFundingV1 {
+        bound,
+        join,
+        authority: transfer_authority,
+    })
+}
+
+/// Refine an authenticated collateral funding graph with the one-shot Series
+/// terminal receipt and its exact state-derived destinations.
+pub fn authenticate_series_collateral_terminal(
+    funding: AuthenticatedSeriesCollateralFundingV1,
+    terminal: AuthenticatedSeriesTerminalV1,
+) -> Outcome<AuthenticatedSeriesCollateralTerminalV1> {
+    let projection = terminal.projection();
+    let funding_join = funding.join();
+    require(
+        terminal.activation_generation() == SERIES_ACTIVATION_GENERATION_V1
+            && CollateralId::from_bytes(terminal.series_plan_id().bytes())
+                == funding_join.series_plan
+            && CollateralId::from_bytes(terminal.funding_terms_id().bytes())
+                == funding_join.funding_terms
+            && CollateralId::from_bytes(terminal.funding_quote_id().bytes()) == funding_join.quote
+            && collateral_id(&terminal.funding_account()) == funding_join.funding_state_account
+            && collateral_content_id(projection.lamport_principal_refund)
+                == funding_join.payer_lamport_refund
+            && collateral_content_id(projection.collateral_principal_refund_token_account)
+                == funding_join.collateral_principal_refund_token_account
+            && collateral_content_id(projection.neutral_collateral_disposition_token_account)
+                == funding_join.neutral_collateral_disposition_token_account
+            && collateral_content_id(projection.neutral_lamport_sink)
+                == funding_join.neutral_lamport_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let join = SeriesCollateralTerminalJoinV2 {
+        funding: funding_join,
+        terminal_receipt: CollateralId::from_bytes(terminal.id().bytes()),
+    };
+    join.validate(funding.bound())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedSeriesCollateralTerminalV1 { funding, join })
 }
 
 /// Authenticate the Realm-selected mint and all five release-selected Series

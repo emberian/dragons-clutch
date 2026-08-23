@@ -659,7 +659,7 @@ impl FailureRuntimeV1 {
                 != funding_terms.lamport_principal_refund.bytes()
             || recovery_admission.rent_payer.bytes()
                 != funding_terms.lamport_principal_refund.bytes()
-            || recovery_admission.neutral_sink.bytes() != funding_terms.neutral_sink.bytes()
+            || recovery_admission.neutral_sink.bytes() != funding_terms.neutral_lamport_sink.bytes()
         {
             return Err(Error::BindingMismatch);
         }
