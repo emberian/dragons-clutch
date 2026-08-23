@@ -24,11 +24,14 @@ This directory contains offline `no_std` crates
   disabled General V2 account family.
 - `clutch-general-v2-runtime` — executable pure-core join from immutable
   Product V2 bodies and a sealed General V2 feed through exact quantized
-  degree-two/three price coherence, owner-blind RelationV2, and ScoreV2-Q, plus
+  degree-zero-through-three price coherence, owner-blind RelationV2, and
+  ScoreV2-Q, plus
   a deterministic fixed-memory builder for owner-blind page projection, exact
-  atom/price construction, bounded fill search, and canonical CandidateFeedV2
-  serialization. Search completeness is scoped to its named heuristic family;
-  it persists no verdict and activates no SBF capability.
+  atom/price construction, bounded fill search, canonical CandidateFeedV2
+  serialization, full Position V3/reservation authentication, owner-aware
+  direct/virtual settlement tails, and exact owner/fee projections. Search
+  completeness is scoped to its named heuristic family; it persists no verdict
+  and activates no SBF capability.
 - `clutch-liveness` — the host-side liveness/fee-carry kernels
   (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
   profile and the revenue seams.
