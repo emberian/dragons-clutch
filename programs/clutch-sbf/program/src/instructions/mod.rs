@@ -25,6 +25,7 @@
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
 //! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
 //! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
+//! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers), full-width
 //! collateral_cash_v3 (Endow/WithdrawCash), merge_materialize
@@ -63,6 +64,8 @@ pub mod general_v2_fee_terminal;
 pub mod general_v2_identity;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_receipt_v3;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_root;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
