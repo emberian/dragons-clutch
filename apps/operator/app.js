@@ -5,12 +5,14 @@
  * make a trust boundary legible should not ask you to trust a dependency tree
  * to read it.
  *
- * Three modes share this page. In *watch* mode the daemon replays the sealed
+ * Four modes share this page. In *watch* mode the daemon replays the sealed
  * lane's forty-four-step plan and the screens are read-only. In *trade* mode
  * it founds the Friday clutch and the screens become a ticket. The page does
  * not choose: it renders whichever screen set the daemon's own stream implies,
  * because a `market` event only ever arrives from a trade session. The
- * retained local-real Pyth mode is selected only by its explicit identity. */
+ * retained local-real Pyth mode is selected only by its explicit identity.
+ * The separate live-Pyth mode supervises a new loopback execution and never
+ * reads the retained transcript surface. */
 
 import { el, fill } from "./dom.js";
 import { chip } from "./evidence.js";
@@ -19,6 +21,7 @@ import { renderBench } from "./bench.js";
 import { renderWalk } from "./walk.js";
 import { renderFunding, renderTicket, renderBook } from "./market.js";
 import { renderPyth } from "./pyth.js";
+import { renderLivePyth } from "./live-pyth.js";
 import {
   bindRepaint,
   renderBook as renderTradeBook,
@@ -49,11 +52,17 @@ const PYTH_SCREENS = Object.freeze([
   { id: "pyth", label: "Retained campaign", render: renderPyth }
 ]);
 
+const LIVE_PYTH_SCREENS = Object.freeze([
+  { id: "pyth-live", label: "Live campaign", render: renderLivePyth }
+]);
+
 const store = createStore();
 let current = null;
 
 const screensFor = (state) => (
-  state.identity && state.identity.mode === "pyth-local"
+  state.liveRun || (state.identity && state.identity.mode === "pyth-live")
+    ? LIVE_PYTH_SCREENS
+    : state.identity && state.identity.mode === "pyth-local"
     ? PYTH_SCREENS
     : state.market
       ? TRADE_SCREENS
@@ -67,20 +76,23 @@ const screensFor = (state) => (
 const renderBanner = (state) => {
   const strip = document.getElementById("honesty");
   const identity = state.identity;
-  const pyth = identity && identity.mode === "pyth-local";
+  const retainedPyth = identity && identity.mode === "pyth-local";
+  const livePyth = Boolean(state.liveRun || (identity && identity.mode === "pyth-live"));
+  const pyth = retainedPyth || livePyth;
   const parts = [
     el("span", "honesty-flag", "NON-PRODUCTION"),
-    el("span", null, pyth ? "SYNTHETIC OBSERVATION" : "mock-source ELF"),
+    el("span", null, pyth ? "REAL PYTH PROGRAMS / SYNTHETIC OBSERVATION" : "mock-source ELF"),
     el("span", "honesty-sep", "·"),
     el("code", "digest", identity ? identity.elf_sha256 : "sha256 pending"),
     el("span", "honesty-sep", "·"),
     el("span", null, pyth ? "LOCAL VALIDATOR ONLY" : "LOCAL 127.0.0.1 ONLY"),
-    ...(pyth ? [el("span", "honesty-sep", "·"), el("span", null, "READ-ONLY RETAINED TRANSCRIPT")] : []),
+    ...(retainedPyth ? [el("span", "honesty-sep", "·"), el("span", null, "READ-ONLY RETAINED TRANSCRIPT")] : []),
+    ...(livePyth ? [el("span", "honesty-sep", "·"), el("span", null, "LIVE CHILD / NOT RETAINED / BROWSER READ-ONLY")] : []),
     el("span", "honesty-sep", "·"),
     el("span", null, "no value"),
     el("span", "honesty-sep", "·"),
     el("span", null, "evidence scope"),
-    chip(identity && identity.evidence_scope ? identity.evidence_scope : "SBF_EXECUTED"),
+    chip(identity && identity.evidence_scope ? identity.evidence_scope : livePyth ? "IN_FLIGHT" : "SBF_EXECUTED"),
     el("span", "honesty-note", "unpromoted")
   ];
   fill(strip, ...parts);
@@ -115,7 +127,9 @@ const render = (state) => {
 
   const brand = document.getElementById("brand-sub");
   if (brand) {
-    brand.textContent = state.identity && state.identity.mode === "pyth-local"
+    brand.textContent = state.liveRun || (state.identity && state.identity.mode === "pyth-live")
+      ? "live real-Pyth lifecycle — synthetic, loopback"
+      : state.identity && state.identity.mode === "pyth-local"
       ? "read-only retained campaign — synthetic, local"
       : state.market
         ? "Friday clutch — trade mode, committed, local"
@@ -125,6 +139,8 @@ const render = (state) => {
   const status = document.getElementById("status");
   const label = state.fault
     ? "faulted"
+    : state.liveRun
+      ? `live campaign ${state.liveRun.phase}`
     : state.pyth
       ? state.done ? `retained campaign ${state.done.verdict}` : "retained campaign loaded"
     : state.session

@@ -11,6 +11,30 @@ license = "AGPL-3.0-or-later"
 publish = false
 description = "NON-PRODUCTION synthetic local-only signed-RPC Pyth-to-Clutch campaign"
 
+[features]
+default = ["campaign"]
+builder = ["dep:solana-keypair"]
+campaign = [
+  "dep:base64",
+  "dep:borsh",
+  "dep:byteorder",
+  "dep:libsecp256k1",
+  "dep:pyth-solana-receiver-sdk",
+  "dep:pythnet-sdk",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:serde_wormhole",
+  "dep:solana-account",
+  "dep:solana-clock",
+  "dep:solana-hash",
+  "dep:solana-keypair",
+  "dep:solana-rent",
+  "dep:solana-sha256-hasher",
+  "dep:solana-signer",
+  "dep:solana-system-interface",
+  "dep:wormhole-sdk",
+]
+
 [[bin]]
 name = "clutch-local-real-pyth"
 path = "src/main.rs"
@@ -20,6 +44,7 @@ clutch-sbf = { path = "../program", features = ["laboratory-fixtures", "non-prod
 clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real-pyth-lab"] }
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
+clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
@@ -27,31 +52,31 @@ clutch-solana-reference = { path = "../../solana-reference" }
 # Exact released host SDKs matching the pinned pyth-crosschain capture. The
 # deployed programs themselves are never rebuilt from these crates: the runner
 # loads the SHA-pinned captured Program/ProgramData bodies.
-pythnet-sdk = { version = "=3.0.0", features = ["test-utils"] }
-pyth-solana-receiver-sdk = { version = "=2.0.0", features = ["pro-compatible"] }
-wormhole-sdk = { package = "wormhole-vaas-serde", version = "=0.1.0" }
-serde_wormhole = "=0.1.0"
-libsecp256k1 = "=0.7.1"
+pythnet-sdk = { version = "=3.0.0", features = ["test-utils"], optional = true }
+pyth-solana-receiver-sdk = { version = "=2.0.0", features = ["pro-compatible"], optional = true }
+wormhole-sdk = { package = "wormhole-vaas-serde", version = "=0.1.0", optional = true }
+serde_wormhole = { version = "=0.1.0", optional = true }
+libsecp256k1 = { version = "=0.7.1", optional = true }
 
-borsh = "=1.5.7"
-byteorder = "=1.5.0"
-base64 = "=0.22.1"
+borsh = { version = "=1.5.7", optional = true }
+byteorder = { version = "=1.5.0", optional = true }
+base64 = { version = "=0.22.1", optional = true }
 bincode = "=1.3.3"
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.151"
+serde = { version = "=1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "=1.0.151", optional = true }
 
 # Same coherent host transaction stack as svm-tests/devnet-paces.
-solana-account = "=4.3.2"
+solana-account = { version = "=4.3.2", optional = true }
 solana-address = { version = "=2.6.1", features = ["curve25519"] }
-solana-clock = { version = "=3.1.1", features = ["serde"] }
-solana-hash = "=4.5.0"
+solana-clock = { version = "=3.1.1", features = ["serde"], optional = true }
+solana-hash = { version = "=4.5.0", optional = true }
 solana-instruction = "=3.4.1"
-solana-keypair = "=3.1.2"
-solana-rent = "=4.3.0"
-solana-signer = "=3.0.1"
-solana-system-interface = { version = "=3.2.0", features = ["bincode"] }
+solana-keypair = { version = "=3.1.2", optional = true }
+solana-rent = { version = "=4.3.0", optional = true }
+solana-signer = { version = "=3.0.1", optional = true }
+solana-system-interface = { version = "=3.2.0", features = ["bincode"], optional = true }
 solana-transaction = { version = "=4.1.6", features = ["blake3", "serde"] }
-solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }
+solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"], optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
