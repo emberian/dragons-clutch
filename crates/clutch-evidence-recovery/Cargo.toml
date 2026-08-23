@@ -1,0 +1,16 @@
+[package]
+name = "clutch-evidence-recovery"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Pure EvidenceOnlyRecoveryV1 transition kernel for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-product-series = { path = "../clutch-product-series" }
