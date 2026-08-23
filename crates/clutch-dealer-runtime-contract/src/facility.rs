@@ -2,8 +2,9 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerChildCountsV1, DealerPhaseV1, DealerPolicyV1, DealerStateV1, Error, FixedCodec, Id,
-    Result, SponsorCapitalDispositionV1,
+    DealerChildCountsV1, DealerChildCountsV2, DealerFundedDependenciesV2,
+    DealerLivenessScheduleV1, DealerPhaseV1, DealerPolicyV1, DealerRuntimeLivenessBindingV1,
+    DealerStateV1, DealerStateV2, Error, FixedCodec, Id, Result, SponsorCapitalDispositionV1,
 };
 
 /// Local semantic-body magic for one immutable facility genesis.
@@ -526,6 +527,67 @@ pub fn validate_facility_initialization_v1(
         || state.phase != DealerPhaseV1::Funding
         || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
         || state.generation != binding.initial_position_generation
+        || state.child_sequence != 0
+        || state.total_shares != 0
+        || state.queued_shares != 0
+        || state.terminal_claimed_shares != 0
+        || state.net_sold != [0; crate::MAX_OUTCOMES]
+        || state.children != expected_children
+        || position.phase != DealerFacilityPositionPhaseV1::Idle
+        || position.generation != state.generation
+        || position.cash_atoms != state.sponsor_capital_atoms
+        || position.eggs != [0; crate::MAX_OUTCOMES]
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(binding_id)
+}
+
+/// Validate authoritative V2 initialization with its one counted funded dependency.
+///
+/// Legacy fee/liveness budget children are not admitted. External runtime
+/// accounts and fee records remain owned by their respective runtimes; this
+/// root counts only the one rent-owned dependency artifact joining them.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_facility_initialization_v2(
+    genesis: &DealerFacilityGenesisV1,
+    binding: &FacilityPositionBindingV1,
+    policy: &DealerPolicyV1,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    state_account_id: Id,
+    dependency_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    position: &DealerFacilityPositionV1,
+    state: &DealerStateV2,
+) -> Result<FacilityPositionBindingIdV1> {
+    state_account_id.validate_live()?;
+    dependency_account_id.validate_live()?;
+    let binding_id = binding.binding_id_for(genesis, policy)?;
+    dependency.validate_bindings(genesis, binding, policy, schedule, runtime)?;
+    position.validate_against(binding, policy)?;
+    state.validate_against_policy(policy)?;
+    let expected_children = DealerChildCountsV2 {
+        facility_positions: 1,
+        facility_replays: 1,
+        funded_dependencies: 1,
+        ..DealerChildCountsV2::default()
+    };
+    if state.policy_id != genesis.policy_id
+        || state.facility_id != binding.facility_id
+        || state.facility_position_id != binding.facility_position_semantic_id
+        || state.facility_position_account_id != binding.facility_position_account_id
+        || state.facility_replay_account_id != binding.facility_replay_account_id
+        || state.sponsor != genesis.sponsor
+        || state.sponsor_refund_recipient != genesis.sponsor_refund_recipient
+        || state.funded_dependencies_id != dependency.dependency_id()?
+        || state.funded_dependencies_account_id != dependency_account_id
+        || state_account_id != binding.dealer_state_account_id
+        || dependency.bindings.asset_vault_authority_account_id != state_account_id
+        || state.phase != DealerPhaseV1::Funding
+        || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
+        || state.generation != binding.initial_position_generation
+        || state.generation != dependency.bindings.counted_generation
         || state.child_sequence != 0
         || state.total_shares != 0
         || state.queued_shares != 0

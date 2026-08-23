@@ -30,6 +30,7 @@ mod pot;
 mod rent;
 mod root_tombstone;
 mod state;
+mod state_v2;
 mod transitions;
 
 pub use budget::*;
@@ -44,6 +45,7 @@ pub use pot::*;
 pub use rent::*;
 pub use root_tombstone::*;
 pub use state::*;
+pub use state_v2::*;
 pub use transitions::*;
 
 use sha2::{Digest, Sha256};
@@ -85,6 +87,9 @@ pub const DEALER_LIVENESS_SCHEDULE_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for `DealerFundedBudgetDependenciesV1`.
 pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/funded-dependencies/v1\0";
+/// Exact content domain for counted, rent-owned funded dependencies.
+pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/funded-dependencies/v2\0";
 /// Transcript domain for an authenticated external liveness bundle projection.
 pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0";
@@ -102,13 +107,29 @@ pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/final/v1\0";
 /// Exact content domain for `DealerStateV1`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
+/// Exact content domain for authoritative `DealerStateV2`.
+pub const DEALER_STATE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/state/v2\0";
 /// Exact content domain for `LpPageV1`.
 pub const LP_PAGE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lp-page/v1\0";
 /// Exact content domain for `DealerLeaseV1`.
 pub const DEALER_LEASE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lease/v1\0";
+/// Exact content domain for external-liveness `DealerLeaseV2`.
+pub const DEALER_LEASE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/lease/v2\0";
 /// Exact content domain for `SettlementPotV1`.
 pub const SETTLEMENT_POT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/settlement-pot/v1\0";
+/// Exact content domain for owner-netted `SettlementPotV2`.
+pub const SETTLEMENT_POT_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/settlement-pot/v2\0";
+/// Exact content domain for `DealerRootTombstoneV2`.
+pub const DEALER_ROOT_TOMBSTONE_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/root-tombstone/v2\0";
+/// Transcript domain for one selected owner-netted fee record projection.
+pub const DEALER_SELECTED_FEE_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/selected-fee-binding/v1\0";
+/// Transcript domain for candidate-wide completed fee settlement evidence.
+pub const DEALER_CANDIDATE_FEE_SETTLEMENT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/candidate-fee-settlement/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.

@@ -3,7 +3,8 @@
 use sha2::{Digest, Sha256};
 
 use crate::{
-    DealerPolicyV1, DealerStateV1, Error, Id, LpPageV1, Result, MAX_LP_PAGES, NO_NEXT_LP_PAGE,
+    DealerPolicyV1, DealerStateV1, DealerStateV2, Error, Id, LpPageV1, Result, MAX_LP_PAGES,
+    NO_NEXT_LP_PAGE,
 };
 
 /// Exact result of folding the complete, ordered, sealed LP page set.
@@ -37,6 +38,24 @@ pub struct DealerLpFundingFactsV1 {
 impl DealerLpFundingFactsV1 {
     /// Require exact equality to the authoritative root summaries.
     pub fn validate_against_state(&self, state: &DealerStateV1) -> Result<()> {
+        state.validate()?;
+        if self.policy_id != state.policy_id
+            || self.facility_id != state.facility_id
+            || self.counted_generation > state.generation
+            || self.first_page_account_id != state.lp_page_head_id
+            || self.page_set_root != state.lp_page_set_root
+            || self.page_count != state.children.lp_pages
+            || self.live_lp_positions != state.children.live_lp_positions
+            || self.total_shares != state.total_shares
+            || self.queued_shares != state.queued_shares
+        {
+            return Err(Error::InvalidChildGraph);
+        }
+        Ok(())
+    }
+
+    /// Require exact equality to the authoritative V2 root summaries.
+    pub fn validate_against_state_v2(&self, state: &DealerStateV2) -> Result<()> {
         state.validate()?;
         if self.policy_id != state.policy_id
             || self.facility_id != state.facility_id
@@ -207,6 +226,39 @@ impl DealerLpFundingFoldV1 {
             queued_shares: self.queued_shares,
         };
         facts.validate_against_state(state)?;
+        Ok(facts)
+    }
+
+    /// Close the chain against the authoritative V2 State summaries.
+    pub fn finish_v2(self, state: &DealerStateV2) -> Result<DealerLpFundingFactsV1> {
+        if self.next_page_ordinal == 0
+            || self.previous_next_page_ordinal != NO_NEXT_LP_PAGE
+            || self.total_shares == 0
+        {
+            return Err(Error::InvalidLpPage);
+        }
+        let page_set_root = digest_parts(
+            crate::DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1,
+            &[
+                &self.rolling_root.bytes(),
+                &self.next_page_ordinal.to_le_bytes(),
+                &self.live_lp_positions.to_le_bytes(),
+                &self.total_shares.to_le_bytes(),
+                &self.queued_shares.to_le_bytes(),
+            ],
+        );
+        let facts = DealerLpFundingFactsV1 {
+            policy_id: self.policy_id,
+            facility_id: self.facility_id,
+            counted_generation: self.counted_generation,
+            first_page_account_id: self.first_page_account_id,
+            page_set_root,
+            page_count: self.next_page_ordinal,
+            live_lp_positions: self.live_lp_positions,
+            total_shares: self.total_shares,
+            queued_shares: self.queued_shares,
+        };
+        facts.validate_against_state_v2(state)?;
         Ok(facts)
     }
 }

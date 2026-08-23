@@ -16,14 +16,22 @@ pub const DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-replay-v1";
 pub const DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-live-sched-v1";
 /// Canonical PDA seed prefix for immutable funded-dependency artifacts.
 pub const DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-funded-v1";
+/// Canonical PDA seed prefix for counted, rent-owned funded dependencies.
+pub const DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-funded-v2";
 /// Canonical PDA seed prefix for mutable DealerState roots.
 pub const DEALER_STATE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-state-v1";
+/// Canonical PDA seed prefix for authoritative DealerState V2 roots.
+pub const DEALER_STATE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-state-v2";
 /// Canonical PDA seed prefix for counted LP pages.
 pub const LP_PAGE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-lp-page-v1";
 /// Canonical PDA seed prefix for one-generation leases.
 pub const DEALER_LEASE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-lease-v1";
+/// Canonical PDA seed prefix for external-liveness DealerLease V2 accounts.
+pub const DEALER_LEASE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-lease-v2";
 /// Canonical PDA seed prefix for three-stage settlement pots.
 pub const SETTLEMENT_POT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-pot-v1";
+/// Canonical PDA seed prefix for owner-netted SettlementPot V2 accounts.
+pub const SETTLEMENT_POT_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-pot-v2";
 /// Canonical PDA seed prefix for segregated fee budgets.
 pub const FEE_BUDGET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-fee-v1";
 /// Canonical PDA seed prefix for segregated liveness budgets.
@@ -50,14 +58,22 @@ pub enum DealerPdaFamilyV1 {
     LivenessSchedule = 11,
     /// Immutable external-liveness and fee-policy dependency artifact.
     FundedDependencies = 12,
+    /// Rent-owned funded dependency successor counted by State V2.
+    FundedDependenciesV2 = 13,
     /// Mutable state root addressed by immutable facility identity.
     State = 1,
+    /// Authoritative successor state without legacy budget children.
+    StateV2 = 14,
     /// LP page addressed by facility and page ordinal.
     LpPage = 2,
     /// Lease addressed by facility and consumed generation.
     Lease = 3,
+    /// External-liveness/owner-netted fee lease successor.
+    LeaseV2 = 15,
     /// Settlement pot addressed by facility and consumed generation.
     SettlementPot = 4,
+    /// External-liveness/owner-netted fee pot successor.
+    SettlementPotV2 = 16,
     /// Singleton fee budget addressed by facility.
     FeeBudget = 5,
     /// Singleton liveness budget addressed by facility.
@@ -186,12 +202,31 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// Counted V2 funded dependencies: `[b"dc-dealer-funded-v2", facility_id]`.
+    pub fn funded_dependencies_v2(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FundedDependenciesV2,
+            DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2,
+            &facility_id.bytes(),
+        )
+    }
+
     /// Mutable state: `[b"dc-dealer-state-v1", facility_id]`.
     pub fn state(facility_id: Id) -> Result<Self> {
         facility_id.validate_live()?;
         Self::two(
             DealerPdaFamilyV1::State,
             DEALER_STATE_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
+    /// Authoritative state successor: `[b"dc-dealer-state-v2", facility_id]`.
+    pub fn state_v2(facility_id: Id) -> Result<Self> {
+        facility_id.validate_live()?;
+        Self::two(
+            DealerPdaFamilyV1::StateV2,
+            DEALER_STATE_PDA_DOMAIN_V2,
             &facility_id.bytes(),
         )
     }
@@ -221,12 +256,34 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// External-liveness lease successor addressed by consumed generation.
+    pub fn lease_v2(facility_id: Id, pre_generation: u64) -> Result<Self> {
+        facility_id.validate_live()?;
+        Self::three(
+            DealerPdaFamilyV1::LeaseV2,
+            DEALER_LEASE_PDA_DOMAIN_V2,
+            &facility_id.bytes(),
+            &pre_generation.to_le_bytes(),
+        )
+    }
+
     /// Two-phase pot: `[b"dc-dealer-pot-v1", facility_id, generation_le]`.
     pub fn settlement_pot(facility_id: Id, pre_generation: u64) -> Result<Self> {
         facility_id.validate_live()?;
         Self::three(
             DealerPdaFamilyV1::SettlementPot,
             SETTLEMENT_POT_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+            &pre_generation.to_le_bytes(),
+        )
+    }
+
+    /// Owner-netted pot successor addressed by consumed generation.
+    pub fn settlement_pot_v2(facility_id: Id, pre_generation: u64) -> Result<Self> {
+        facility_id.validate_live()?;
+        Self::three(
+            DealerPdaFamilyV1::SettlementPotV2,
+            SETTLEMENT_POT_PDA_DOMAIN_V2,
             &facility_id.bytes(),
             &pre_generation.to_le_bytes(),
         )

@@ -1,106 +1,54 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+//! Authoritative Dealer root successor.
+//!
+//! V1 remains decodable evidence, but its fee-budget and liveness-budget child
+//! classes are not authoritative for a funded facility. V2 counts one typed
+//! funded-dependency child instead. External liveness accounts and owner-netted
+//! fee records remain counted and retired by their own semantic owners.
+
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    validate_padding_i64, DealerPolicyV1, Error, FixedCodec, Id, Result, RootRentOwnerV1,
-    DEALER_STATE_CONTENT_DOMAIN_V1, MAX_ATOMS, MAX_LP_PAGES, MAX_OUTCOMES, ROOT_RENT_OWNER_BYTES,
+    validate_padding_i64, DealerPhaseV1, DealerPolicyV1, Error, FixedCodec, Id, Result,
+    RootRentOwnerV1, SponsorCapitalDispositionV1, DEALER_STATE_CONTENT_DOMAIN_V2, MAX_ATOMS,
+    MAX_LP_PAGES, MAX_OUTCOMES, ROOT_RENT_OWNER_BYTES,
 };
 
 /// Local semantic-body magic; this is not a global account discriminator.
-pub const DEALER_STATE_MAGIC_V1: [u8; 8] = *b"DCDSTAT1";
+pub const DEALER_STATE_MAGIC_V2: [u8; 8] = *b"DCDSTAT2";
 /// Exact local semantic-body version.
-pub const DEALER_STATE_VERSION_V1: u16 = 1;
-/// Exact bytes in one canonical `DealerStateV1` body.
-pub const DEALER_STATE_BYTES_V1: usize =
-    HEADER_BYTES + (11 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 44 + ROOT_RENT_OWNER_BYTES;
+pub const DEALER_STATE_VERSION_V2: u16 = 2;
+/// Exact bytes in one canonical `DealerStateV2` body.
+pub const DEALER_STATE_BYTES_V2: usize =
+    HEADER_BYTES + (13 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 40 + ROOT_RENT_OWNER_BYTES;
 
-/// Covered-dealer runtime phase.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum DealerPhaseV1 {
-    /// LP unit-basket funding may be assembled.
-    Funding = 0,
-    /// Fully funded two-sided aggregate trading.
-    Trading = 1,
-    /// Only componentwise exposure-reducing trades.
-    UnwindOnly = 2,
-    /// Authenticated payout has made LP terminal claims final.
-    Resolved = 3,
-    /// Activation failed or became stale.
-    Cancelled = 4,
-    /// Economic state is terminal and counted children are closing.
-    Retiring = 5,
-    /// Every counted child is closed; only permanent evidence remains.
-    Closed = 6,
-}
-
-impl DealerPhaseV1 {
-    pub(crate) fn decode(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(Self::Funding),
-            1 => Ok(Self::Trading),
-            2 => Ok(Self::UnwindOnly),
-            3 => Ok(Self::Resolved),
-            4 => Ok(Self::Cancelled),
-            5 => Ok(Self::Retiring),
-            6 => Ok(Self::Closed),
-            _ => Err(Error::InvalidPhase),
-        }
-    }
-}
-
-/// Exact disposition of the separately funded sponsor capital.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum SponsorCapitalDispositionV1 {
-    /// Still refundable because activation has not happened.
-    Refundable = 0,
-    /// Irrevocably donated to the LP pool on activation.
-    Donated = 1,
-    /// Returned after cancellation without activation.
-    Refunded = 2,
-}
-
-impl SponsorCapitalDispositionV1 {
-    pub(crate) fn decode(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(Self::Refundable),
-            1 => Ok(Self::Donated),
-            2 => Ok(Self::Refunded),
-            _ => Err(Error::InvalidPhase),
-        }
-    }
-}
-
-/// Exhaustive disjoint outstanding child counts owned by one DealerState.
+/// Exhaustive disjoint children owned by the authoritative V2 root.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DealerChildCountsV1 {
-    /// Facility Position account; canonically zero or one.
+pub struct DealerChildCountsV2 {
+    /// Facility Position account; zero or one.
     pub facility_positions: u32,
-    /// Facility Position Replay companion; canonically zero or one.
+    /// Facility Replay companion; zero or one.
     pub facility_replays: u32,
     /// LP ownership pages.
     pub lp_pages: u32,
-    /// Exact live LP entries nested in the page set.
+    /// Live LP entries nested in the page set.
     pub live_lp_positions: u32,
-    /// Exact terminal LP entries not yet claimed.
+    /// Terminal LP entries whose claims remain undelivered.
     pub unclaimed_lp_positions: u32,
-    /// Active Epoch binding; canonically zero or one.
+    /// The exact rent-owned funded-dependency child; zero or one.
+    pub funded_dependencies: u32,
+    /// Active Epoch binding; zero or one.
     pub epoch_bindings: u32,
-    /// One-generation leases; canonically zero or one outstanding.
+    /// One-generation V2 lease; zero or one.
     pub leases: u32,
-    /// Two-phase settlement pots; canonically zero or one outstanding.
+    /// Three-stage V2 pot; zero or one.
     pub settlement_pots: u32,
-    /// Facility fee budgets; canonically zero or one.
-    pub fee_budgets: u32,
-    /// Facility liveness budgets; canonically zero or one.
-    pub liveness_budgets: u32,
-    /// Open resolution or claim work; canonically zero or one.
+    /// Open resolution or claim work; zero or one.
     pub resolution_claim_work: u32,
 }
 
-impl DealerChildCountsV1 {
-    /// Validate the exhaustive fixed child classes and their cardinality caps.
+impl DealerChildCountsV2 {
+    /// Validate the exhaustive V2 classes and fixed cardinality caps.
     pub fn validate(&self) -> Result<()> {
         let lp_capacity = self
             .lp_pages
@@ -111,11 +59,10 @@ impl DealerChildCountsV1 {
             || self.lp_pages > MAX_LP_PAGES
             || self.live_lp_positions > lp_capacity
             || self.unclaimed_lp_positions > self.live_lp_positions
+            || self.funded_dependencies > 1
             || self.epoch_bindings > 1
             || self.leases > 1
             || self.settlement_pots > 1
-            || self.fee_budgets > 1
-            || self.liveness_budgets > 1
             || self.resolution_claim_work > 1
         {
             return Err(Error::InvalidChildGraph);
@@ -123,20 +70,19 @@ impl DealerChildCountsV1 {
         Ok(())
     }
 
-    /// Return the exact outstanding count for a named child class.
-    pub const fn count(self, kind: DealerChildKindV1) -> u32 {
+    /// Exact outstanding count for a V2 child class.
+    pub const fn count(self, kind: DealerChildKindV2) -> u32 {
         match kind {
-            DealerChildKindV1::FacilityPosition => self.facility_positions,
-            DealerChildKindV1::FacilityReplay => self.facility_replays,
-            DealerChildKindV1::LpPage => self.lp_pages,
-            DealerChildKindV1::LpPosition => self.live_lp_positions,
-            DealerChildKindV1::UnclaimedLpPosition => self.unclaimed_lp_positions,
-            DealerChildKindV1::EpochBinding => self.epoch_bindings,
-            DealerChildKindV1::Lease => self.leases,
-            DealerChildKindV1::SettlementPot => self.settlement_pots,
-            DealerChildKindV1::FeeBudget => self.fee_budgets,
-            DealerChildKindV1::LivenessBudget => self.liveness_budgets,
-            DealerChildKindV1::ResolutionClaimWork => self.resolution_claim_work,
+            DealerChildKindV2::FacilityPosition => self.facility_positions,
+            DealerChildKindV2::FacilityReplay => self.facility_replays,
+            DealerChildKindV2::LpPage => self.lp_pages,
+            DealerChildKindV2::LpPosition => self.live_lp_positions,
+            DealerChildKindV2::UnclaimedLpPosition => self.unclaimed_lp_positions,
+            DealerChildKindV2::FundedDependencies => self.funded_dependencies,
+            DealerChildKindV2::EpochBinding => self.epoch_bindings,
+            DealerChildKindV2::Lease => self.leases,
+            DealerChildKindV2::SettlementPot => self.settlement_pots,
+            DealerChildKindV2::ResolutionClaimWork => self.resolution_claim_work,
         }
     }
 
@@ -146,11 +92,10 @@ impl DealerChildCountsV1 {
         writer.u32(self.lp_pages);
         writer.u32(self.live_lp_positions);
         writer.u32(self.unclaimed_lp_positions);
+        writer.u32(self.funded_dependencies);
         writer.u32(self.epoch_bindings);
         writer.u32(self.leases);
         writer.u32(self.settlement_pots);
-        writer.u32(self.fee_budgets);
-        writer.u32(self.liveness_budgets);
         writer.u32(self.resolution_claim_work);
     }
 
@@ -161,105 +106,99 @@ impl DealerChildCountsV1 {
             lp_pages: reader.u32(),
             live_lp_positions: reader.u32(),
             unclaimed_lp_positions: reader.u32(),
+            funded_dependencies: reader.u32(),
             epoch_bindings: reader.u32(),
             leases: reader.u32(),
             settlement_pots: reader.u32(),
-            fee_budgets: reader.u32(),
-            liveness_budgets: reader.u32(),
             resolution_claim_work: reader.u32(),
         }
     }
 }
 
-/// Exhaustive child classes counted by `DealerStateV1`.
+/// Exhaustive child classes counted by `DealerStateV2`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub enum DealerChildKindV1 {
-    /// The external Facility Position account.
+pub enum DealerChildKindV2 {
+    /// Facility Position.
     FacilityPosition = 0,
-    /// The Facility Position Replay companion.
+    /// Facility Replay companion.
     FacilityReplay = 1,
-    /// One LP page.
+    /// LP page.
     LpPage = 2,
-    /// One live LP entry nested in a page.
+    /// Live nested LP entry.
     LpPosition = 3,
-    /// One terminal LP entry whose claim is not delivered.
+    /// Unclaimed terminal LP entry.
     UnclaimedLpPosition = 4,
-    /// One active Epoch binding.
-    EpochBinding = 5,
-    /// One one-generation lease.
-    Lease = 6,
-    /// One three-stage settlement pot.
-    SettlementPot = 7,
-    /// One fee budget.
-    FeeBudget = 8,
-    /// One liveness budget.
-    LivenessBudget = 9,
-    /// One open resolution or terminal-claim work item.
-    ResolutionClaimWork = 10,
+    /// Rent-owned funded-dependency child.
+    FundedDependencies = 5,
+    /// Active Epoch binding.
+    EpochBinding = 6,
+    /// V2 lease.
+    Lease = 7,
+    /// V2 settlement pot.
+    SettlementPot = 8,
+    /// Resolution/claim work.
+    ResolutionClaimWork = 9,
 }
 
-/// Canonical counted-child edge embedded in every DealerState-owned child.
+/// Canonical counted-child edge embedded in every V2 child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CountedDealerChildV1 {
-    /// Immutable parent facility identity.
+pub struct CountedDealerChildV2 {
+    /// Immutable facility identity.
     pub facility_id: Id,
-    /// Exhaustive child class used by the parent's counter.
-    pub kind: DealerChildKindV1,
-    /// Parent generation at which this child was admitted.
+    /// Exhaustive V2 class.
+    pub kind: DealerChildKindV2,
+    /// Parent generation at admission.
     pub counted_generation: u64,
 }
 
-/// Allocation-free fold used by an adapter while authenticating the complete
-/// child set. Account uniqueness and PDA ownership remain adapter checks; this
-/// fold owns the exact exhaustive class totals and parent binding.
+/// Allocation-free exhaustive V2 child fold.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerChildGraphFoldV1 {
+pub struct DealerChildGraphFoldV2 {
     facility_id: Id,
     generation: u64,
-    observed: DealerChildCountsV1,
+    observed: DealerChildCountsV2,
 }
 
-impl DealerChildGraphFoldV1 {
-    /// Start an empty fold for one live facility.
+impl DealerChildGraphFoldV2 {
+    /// Start an empty fold for one authoritative root.
     pub fn new(facility_id: Id, generation: u64) -> Result<Self> {
         facility_id.validate_live()?;
         Ok(Self {
             facility_id,
             generation,
-            observed: DealerChildCountsV1::default(),
+            observed: DealerChildCountsV2::default(),
         })
     }
 
-    /// Observe one adapter-authenticated counted child.
-    pub fn observe(&mut self, child: CountedDealerChildV1) -> Result<()> {
+    /// Observe one adapter-authenticated V2 child.
+    pub fn observe(&mut self, child: CountedDealerChildV2) -> Result<()> {
         if child.facility_id != self.facility_id {
             return Err(Error::MismatchedBinding);
         }
-        let must_match_generation = matches!(
+        let generation_exact = matches!(
             child.kind,
-            DealerChildKindV1::EpochBinding
-                | DealerChildKindV1::Lease
-                | DealerChildKindV1::SettlementPot
+            DealerChildKindV2::EpochBinding
+                | DealerChildKindV2::Lease
+                | DealerChildKindV2::SettlementPot
         );
         if child.counted_generation > self.generation
-            || (must_match_generation && child.counted_generation != self.generation)
+            || (generation_exact && child.counted_generation != self.generation)
         {
             return Err(Error::MismatchedBinding);
         }
         let mut next = self.observed;
         let slot = match child.kind {
-            DealerChildKindV1::FacilityPosition => &mut next.facility_positions,
-            DealerChildKindV1::FacilityReplay => &mut next.facility_replays,
-            DealerChildKindV1::LpPage => &mut next.lp_pages,
-            DealerChildKindV1::LpPosition => &mut next.live_lp_positions,
-            DealerChildKindV1::UnclaimedLpPosition => &mut next.unclaimed_lp_positions,
-            DealerChildKindV1::EpochBinding => &mut next.epoch_bindings,
-            DealerChildKindV1::Lease => &mut next.leases,
-            DealerChildKindV1::SettlementPot => &mut next.settlement_pots,
-            DealerChildKindV1::FeeBudget => &mut next.fee_budgets,
-            DealerChildKindV1::LivenessBudget => &mut next.liveness_budgets,
-            DealerChildKindV1::ResolutionClaimWork => &mut next.resolution_claim_work,
+            DealerChildKindV2::FacilityPosition => &mut next.facility_positions,
+            DealerChildKindV2::FacilityReplay => &mut next.facility_replays,
+            DealerChildKindV2::LpPage => &mut next.lp_pages,
+            DealerChildKindV2::LpPosition => &mut next.live_lp_positions,
+            DealerChildKindV2::UnclaimedLpPosition => &mut next.unclaimed_lp_positions,
+            DealerChildKindV2::FundedDependencies => &mut next.funded_dependencies,
+            DealerChildKindV2::EpochBinding => &mut next.epoch_bindings,
+            DealerChildKindV2::Lease => &mut next.leases,
+            DealerChildKindV2::SettlementPot => &mut next.settlement_pots,
+            DealerChildKindV2::ResolutionClaimWork => &mut next.resolution_claim_work,
         };
         *slot = slot.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         next.validate()?;
@@ -267,8 +206,8 @@ impl DealerChildGraphFoldV1 {
         Ok(())
     }
 
-    /// Require exact equality with the root's authoritative child counters.
-    pub fn finish(self, state: &DealerStateV1) -> Result<()> {
+    /// Require equality with the authoritative counters.
+    pub fn finish(self, state: &DealerStateV2) -> Result<()> {
         state.validate()?;
         if state.facility_id != self.facility_id
             || state.generation != self.generation
@@ -278,72 +217,70 @@ impl DealerChildGraphFoldV1 {
         }
         Ok(())
     }
-
-    /// Current exact observed counts.
-    pub const fn observed(&self) -> DealerChildCountsV1 {
-        self.observed
-    }
 }
 
-/// Exact semantic state of one dealer, excluding all asset balances.
+/// Exact V2 semantic state, excluding every asset and external-runtime balance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerStateV1 {
-    /// Canonical `DealerPolicyV1` content identity.
+pub struct DealerStateV2 {
+    /// Dealer policy content identity.
     pub policy_id: Id,
-    /// Immutable semantic identity of this facility.
+    /// Immutable facility identity.
     pub facility_id: Id,
-    /// Current semantic identity of the external Facility Position.
-    ///
-    /// The Facility Position is the sole long-lived cash and Egg owner while
-    /// idle. During a lease, the authenticated Position/Pot aggregate refines
-    /// this identity without adding balance fields to DealerState.
+    /// Current Facility Position semantic identity.
     pub facility_position_id: Id,
-    /// Exact external Facility Position account identity.
+    /// Facility Position account identity.
     pub facility_position_account_id: Id,
-    /// Exact Replay companion account identity.
+    /// Replay companion account identity.
     pub facility_replay_account_id: Id,
     /// Sponsor identity.
     pub sponsor: Id,
-    /// Exact sponsor-capital refund recipient before activation.
+    /// Sponsor-capital refund recipient.
     pub sponsor_refund_recipient: Id,
-    /// First LP page account identity, or zero when `children.lp_pages == 0`.
+    /// LP page head or zero.
     pub lp_page_head_id: Id,
-    /// Canonical root of the exact ordered LP-page set, or zero when empty.
+    /// Exact sealed LP-page fold or zero.
     pub lp_page_set_root: Id,
-    /// Exact active Epoch identity, or zero when no Epoch is bound.
+    /// Active Epoch identity or zero.
     pub active_epoch_id: Id,
-    /// Exact active Lease account identity, or zero when no Lease exists.
+    /// Active V2 Lease account or zero.
     pub active_lease_id: Id,
+    /// Immutable semantic identity of the admitted dependency child.
+    ///
+    /// This remains live after the child account closes so the tombstone can
+    /// preserve the exact funded provenance without keeping refundable rent.
+    pub funded_dependencies_id: Id,
+    /// Live dependency child account, or zero after its counted close.
+    pub funded_dependencies_account_id: Id,
     /// Current lifecycle phase.
     pub phase: DealerPhaseV1,
-    /// Exact sponsor-capital disposition.
+    /// Sponsor-capital disposition.
     pub sponsor_capital_disposition: SponsorCapitalDispositionV1,
-    /// Active native outcome width, copied from the bound policy.
+    /// Active outcome width.
     pub outcome_count: u8,
-    /// Monotone facility economic/lifecycle generation.
+    /// Monotone economic generation.
     pub generation: u64,
-    /// Independent monotone child/account graph sequence.
+    /// Monotone child-graph sequence.
     pub child_sequence: u64,
-    /// Exact outstanding LP shares summarized from the page set.
+    /// Outstanding LP shares.
     pub total_shares: u64,
-    /// Exact irrevocably queued shares summarized from the page set.
+    /// Irrevocably queued shares.
     pub queued_shares: u64,
-    /// Exact shares whose terminal page claim has been delivered.
+    /// Delivered terminal shares.
     pub terminal_claimed_shares: u64,
-    /// Present sponsor capital fixed at initialization.
+    /// Present sponsor collateral fixed at initialization.
     pub sponsor_capital_atoms: u64,
-    /// Signed cumulative net Eggs sold; positive is sold, negative is bought.
+    /// Signed cumulative net Eggs sold.
     pub net_sold: [i64; MAX_OUTCOMES],
-    /// Exhaustive outstanding child graph.
-    pub children: DealerChildCountsV1,
-    /// Exact root shrink-to-tombstone rent owner.
+    /// Exhaustive V2 child graph.
+    pub children: DealerChildCountsV2,
+    /// Root shrink-to-tombstone rent owner.
     pub rent: RootRentOwnerV1,
 }
 
-impl DealerStateV1 {
-    /// Validate local state, canonical padding, sponsor facts, and child graph.
+impl DealerStateV2 {
+    /// Validate V2 identity, exact children, and phase partition.
     pub fn validate(&self) -> Result<()> {
-        let required = [
+        for identity in [
             self.policy_id,
             self.facility_id,
             self.facility_position_id,
@@ -351,17 +288,15 @@ impl DealerStateV1 {
             self.facility_replay_account_id,
             self.sponsor,
             self.sponsor_refund_recipient,
-        ];
-        let mut index = 0usize;
-        while index < required.len() {
-            required[index].validate_live()?;
-            index += 1;
+            self.funded_dependencies_id,
+        ] {
+            identity.validate_live()?;
         }
         if self.outcome_count < 2 || usize::from(self.outcome_count) > MAX_OUTCOMES {
             return Err(Error::InvalidParameter);
         }
         validate_padding_i64(self.outcome_count, &self.net_sold)?;
-        index = 0;
+        let mut index = 0usize;
         while index < usize::from(self.outcome_count) {
             if i128::from(self.net_sold[index]).unsigned_abs() > u128::from(MAX_ATOMS) {
                 return Err(Error::InvalidParameter);
@@ -379,20 +314,19 @@ impl DealerStateV1 {
         }
         self.children.validate()?;
         self.rent.validate()?;
-
-        if (self.children.epoch_bindings == 0) != self.active_epoch_id.is_zero()
+        if (self.children.funded_dependencies == 0)
+            != self.funded_dependencies_account_id.is_zero()
+            || (self.children.epoch_bindings == 0) != self.active_epoch_id.is_zero()
             || (self.children.leases == 0) != self.active_lease_id.is_zero()
             || self.children.leases != self.children.settlement_pots
             || self.children.leases > self.children.epoch_bindings
         {
             return Err(Error::InvalidChildGraph);
         }
-
         if self.children.lp_pages == 0 {
-            if !self.lp_page_head_id.is_zero() || !self.lp_page_set_root.is_zero() {
-                return Err(Error::InvalidChildGraph);
-            }
-            if self.total_shares != 0
+            if !self.lp_page_head_id.is_zero()
+                || !self.lp_page_set_root.is_zero()
+                || self.total_shares != 0
                 || self.queued_shares != 0
                 || self.terminal_claimed_shares != 0
             {
@@ -406,13 +340,15 @@ impl DealerStateV1 {
             return Err(Error::InvalidChildGraph);
         }
 
-        let inventory_is_zero = self.net_sold == [0; MAX_OUTCOMES];
+        let inventory_zero = self.net_sold == [0; MAX_OUTCOMES];
         match self.phase {
             DealerPhaseV1::Funding => {
-                if !inventory_is_zero
+                if !inventory_zero
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
-                    || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
+                    || self.sponsor_capital_disposition
+                        != SponsorCapitalDispositionV1::Refundable
+                    || self.children.funded_dependencies != 1
                     || self.children.leases != 0
                     || self.children.settlement_pots != 0
                     || self.children.epoch_bindings != 0
@@ -426,6 +362,7 @@ impl DealerStateV1 {
                 if self.total_shares == 0
                     || self.terminal_claimed_shares != 0
                     || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
+                    || self.children.funded_dependencies != 1
                     || self.children.facility_positions != 1
                     || self.children.facility_replays != 1
                 {
@@ -435,6 +372,7 @@ impl DealerStateV1 {
             DealerPhaseV1::Resolved => {
                 if self.total_shares == 0
                     || self.sponsor_capital_disposition != SponsorCapitalDispositionV1::Donated
+                    || self.children.funded_dependencies != 1
                     || self.children.leases != 0
                     || self.children.settlement_pots != 0
                     || self.children.epoch_bindings != 0
@@ -445,9 +383,10 @@ impl DealerStateV1 {
                 }
             }
             DealerPhaseV1::Cancelled => {
-                if !inventory_is_zero
+                if !inventory_zero
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
+                    || self.children.funded_dependencies != 1
                     || self.children.leases != 0
                     || self.children.settlement_pots != 0
                     || self.children.epoch_bindings != 0
@@ -468,17 +407,19 @@ impl DealerStateV1 {
                     || self.children.leases != 0
                     || self.children.settlement_pots != 0
                     || self.children.resolution_claim_work != 0
-                    || self.sponsor_capital_disposition == SponsorCapitalDispositionV1::Refundable
+                    || self.sponsor_capital_disposition
+                        == SponsorCapitalDispositionV1::Refundable
                 {
                     return Err(Error::InvalidPhase);
                 }
             }
             DealerPhaseV1::Closed => {
-                if self.children != DealerChildCountsV1::default()
+                if self.children != DealerChildCountsV2::default()
                     || self.total_shares != 0
                     || self.queued_shares != 0
                     || self.terminal_claimed_shares != 0
-                    || self.sponsor_capital_disposition == SponsorCapitalDispositionV1::Refundable
+                    || self.sponsor_capital_disposition
+                        == SponsorCapitalDispositionV1::Refundable
                 {
                     return Err(Error::InvalidPhase);
                 }
@@ -487,7 +428,7 @@ impl DealerStateV1 {
         Ok(())
     }
 
-    /// Join local state to the exact immutable policy content identity.
+    /// Join the root to its exact immutable policy.
     pub fn validate_against_policy(&self, policy: &DealerPolicyV1) -> Result<()> {
         self.validate_policy_bindings(policy)?;
         if self.phase == DealerPhaseV1::Trading
@@ -499,9 +440,7 @@ impl DealerStateV1 {
         Ok(())
     }
 
-    /// Validate every immutable and numeric policy binding while allowing the
-    /// one-call transient in which a Trading root has just reached queue
-    /// quorum and must atomically become UnwindOnly.
+    /// Validate immutable policy facts while admitting the atomic queue-quorum transition.
     pub(crate) fn validate_policy_bindings(&self, policy: &DealerPolicyV1) -> Result<()> {
         self.validate()?;
         policy.validate()?;
@@ -527,30 +466,36 @@ impl DealerStateV1 {
         Ok(())
     }
 
-    /// Canonical mutable-state content identity.
+    /// Canonical V2 mutable-state content identity.
     pub fn state_content_id(&self) -> Result<Id> {
-        self.content_id(DEALER_STATE_CONTENT_DOMAIN_V1)
+        self.content_id(DEALER_STATE_CONTENT_DOMAIN_V2)
     }
 }
 
-impl FixedCodec for DealerStateV1 {
-    const ENCODED_LEN: usize = DEALER_STATE_BYTES_V1;
+impl FixedCodec for DealerStateV2 {
+    const ENCODED_LEN: usize = DEALER_STATE_BYTES_V2;
 
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.header(&DEALER_STATE_MAGIC_V1, DEALER_STATE_VERSION_V1);
-        writer.id(self.policy_id);
-        writer.id(self.facility_id);
-        writer.id(self.facility_position_id);
-        writer.id(self.facility_position_account_id);
-        writer.id(self.facility_replay_account_id);
-        writer.id(self.sponsor);
-        writer.id(self.sponsor_refund_recipient);
-        writer.id(self.lp_page_head_id);
-        writer.id(self.lp_page_set_root);
-        writer.id(self.active_epoch_id);
-        writer.id(self.active_lease_id);
+        writer.header(&DEALER_STATE_MAGIC_V2, DEALER_STATE_VERSION_V2);
+        for identity in [
+            self.policy_id,
+            self.facility_id,
+            self.facility_position_id,
+            self.facility_position_account_id,
+            self.facility_replay_account_id,
+            self.sponsor,
+            self.sponsor_refund_recipient,
+            self.lp_page_head_id,
+            self.lp_page_set_root,
+            self.active_epoch_id,
+            self.active_lease_id,
+            self.funded_dependencies_id,
+            self.funded_dependencies_account_id,
+        ] {
+            writer.id(identity);
+        }
         writer.u8(self.phase as u8);
         writer.u8(self.sponsor_capital_disposition as u8);
         writer.u8(self.outcome_count);
@@ -573,7 +518,7 @@ impl FixedCodec for DealerStateV1 {
 
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.header(&DEALER_STATE_MAGIC_V1, DEALER_STATE_VERSION_V1)?;
+        reader.header(&DEALER_STATE_MAGIC_V2, DEALER_STATE_VERSION_V2)?;
         let policy_id = reader.id();
         let facility_id = reader.id();
         let facility_position_id = reader.id();
@@ -585,6 +530,8 @@ impl FixedCodec for DealerStateV1 {
         let lp_page_set_root = reader.id();
         let active_epoch_id = reader.id();
         let active_lease_id = reader.id();
+        let funded_dependencies_id = reader.id();
+        let funded_dependencies_account_id = reader.id();
         let phase = DealerPhaseV1::decode(reader.u8())?;
         let sponsor_capital_disposition = SponsorCapitalDispositionV1::decode(reader.u8())?;
         let outcome_count = reader.u8();
@@ -595,7 +542,7 @@ impl FixedCodec for DealerStateV1 {
         let queued_shares = reader.u64();
         let terminal_claimed_shares = reader.u64();
         let sponsor_capital_atoms = reader.u64();
-        let mut net_sold = [0i64; MAX_OUTCOMES];
+        let mut net_sold = [0; MAX_OUTCOMES];
         let mut index = 0usize;
         while index < MAX_OUTCOMES {
             net_sold[index] = reader.i64();
@@ -613,6 +560,8 @@ impl FixedCodec for DealerStateV1 {
             lp_page_set_root,
             active_epoch_id,
             active_lease_id,
+            funded_dependencies_id,
+            funded_dependencies_account_id,
             phase,
             sponsor_capital_disposition,
             outcome_count,
@@ -623,7 +572,7 @@ impl FixedCodec for DealerStateV1 {
             terminal_claimed_shares,
             sponsor_capital_atoms,
             net_sold,
-            children: DealerChildCountsV1::decode_body(&mut reader),
+            children: DealerChildCountsV2::decode_body(&mut reader),
             rent: RootRentOwnerV1::decode_body(&mut reader),
         };
         reader.finish()?;
@@ -632,5 +581,5 @@ impl FixedCodec for DealerStateV1 {
     }
 }
 
-const _: () = assert!(DEALER_STATE_BYTES_V1 == 680);
-const _: () = assert!(DEALER_STATE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
+const _: () = assert!(DEALER_STATE_BYTES_V2 == 740);
+const _: () = assert!(DEALER_STATE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);
