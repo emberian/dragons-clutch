@@ -1,6 +1,6 @@
 # Operator Bench
 
-The first frontend, in three explicit modes.
+The first frontend, in four explicit modes.
 
 Run its dependency-free source/mechanical checks with:
 
@@ -32,6 +32,16 @@ OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE**. The screen also says
 **READ-ONLY RETAINED TRANSCRIPT**: it cannot trade, extend, replay, refresh, or
 re-read the chain behind the recorded campaign.
 
+**Pyth live** starts a new, unretained, loopback-only campaign and renders it
+while it runs. The supervised child deploys the repository's exact captured
+Pyth receiver/router Program and ProgramData account bodies into a fresh local
+validator, submits two consecutive synthetic signed observations through that
+real provider ABI and cryptographic verification path, then drives SourceV2
+seal/resolution and the joined two-owner trade through redemption and
+withdrawal. It is not a retained-transcript replay and it never reads
+`CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR`. The browser is still read-only and
+receives no ephemeral payer/owner key material.
+
 ```sh
 # watch mode: the sealed lane's plan, step by step
 CARGO_NET_OFFLINE=true cargo run --offline \
@@ -55,8 +65,19 @@ CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
+# live, unretained two-boundary provider/source/trading campaign
+scripts/run_operator_real_pyth_live.sh
 # then open 127.0.0.1:9130 in a browser
 ```
+
+Set `CLUTCH_OPERATOR_PYTH_LIVE_EXIT_WHEN_DONE=1` for an unattended gate that
+exits after the child passes. Listener overrides are
+`CLUTCH_OPERATOR_PYTH_LIVE_PORT`, `CLUTCH_OPERATOR_PYTH_LIVE_RPC_PORT`,
+`CLUTCH_OPERATOR_PYTH_LIVE_FAUCET_PORT`,
+`CLUTCH_OPERATOR_PYTH_LIVE_GOSSIP_PORT`, and
+`CLUTCH_OPERATOR_PYTH_LIVE_DYNAMIC_PORT_RANGE`. An optional
+`CLUTCH_OPERATOR_PYTH_LIVE_WORK_BASE` selects the parent of the daemon-owned
+private session root; it does not retain or expose that session.
 
 To retain a new source-only campaign, choose a new empty directory with
 `CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR` when running
@@ -66,9 +87,12 @@ with the same variable. Then pass that directory to `--transcript`. The display
 reads only `campaign.json`, `result.json`, and `probe-evidence.json`; it does not
 replay or extend the campaign.
 
-Watch/trade runtime prerequisites are Rust/Cargo, `cargo-build-sbf`,
+Watch/trade and Pyth-live runtime prerequisites are Rust/Cargo, `cargo-build-sbf`,
 `solana-keygen`, and `solana-test-validator`; the scripted gate also uses
-`curl` and Python. Retained campaign mode starts no validator. Node
+`curl` and Python. Pyth-live additionally requires the repository's pinned
+loopback-validator runtime/cache prerequisites and `lsof`; its underlying
+runner verifies exact toolchain and binary hashes before starting a bank.
+Retained campaign mode starts no validator. Node
 and npm are required only for the source/mechanical browser checks. Override
 the Trade wrapper's listeners with `CLUTCH_OPERATOR_TRADE_PORT`,
 `CLUTCH_OPERATOR_TRADE_RPC_PORT`, `CLUTCH_OPERATOR_TRADE_FAUCET_PORT`,
@@ -77,9 +101,10 @@ the Trade wrapper's listeners with `CLUTCH_OPERATOR_TRADE_PORT`,
 `CLUTCH_OPERATOR_*` names. Both wrappers pass explicit, disjoint gossip and
 dynamic port ranges so the validator never falls back to Solana's broad
 implicit local range.
-The wrapper stops its daemon/validator and the daemon removes orderly-run
-ephemeral signer files; a force-killed standalone daemon may leave its printed
-temporary work directory for manual inspection and cleanup.
+The wrapper first stops the exact supervised child so the daemon can remove its
+private session root, then stops the daemon. An uncatchably killed standalone
+daemon can still leave a `clutch-pyth-live-session.*` root under the selected
+work parent for manual inspection and cleanup.
 
 Trade mode follows the program's real local clock. The default session waits
 for its short 260-slot freeze window and then the protocol's fixed 1,000-slot
@@ -133,6 +158,38 @@ of daemon-validated or daemon-decoded state, and the onchain accounts remain
 the semantic owners of persisted facts.
 
 ## What is on screen
+
+### Pyth live mode
+
+| screen | what it reads |
+| --- | --- |
+| **Live campaign** | versioned, opt-in events emitted by the currently running campaign child: clean repository/build and captured provider identities; loopback endpoints; two exact SourceV2 archive records; retained archive envelope/commitment facts; complete wrong-config, wrong-feed, and out-of-order rollback objects whose ephemeral receiver accounts are absent and whose SourceArchive/treasury full-state hashes are unchanged; settled trade; and terminal two-owner conservation including zero internal, external-ledger, aggregate, and four Token-2022 mint supplies. The daemon rejects JSON numbers, unexpected provider identities, nonconsecutive records, incomplete rollback closure, and nonzero terminal liabilities. It independently rediscovers the SourceArchive, SupplyLedger, and four outcome mints from loopback RPC in one root-bracketed same-context snapshot before admitting the result. It then rebuilds a typed transaction for the exact source window from the child's public identities and requires its SourceArchive derivation to match. The construction seam does not read the child's private files, fetch a blockhash, sign, submit, or export the wire. The daemon promotes the final scope to `SBF_EXECUTED` only after the child exits successfully, including the runner's final listener-isolation probe. Only structurally allowlisted milestones, waits, and step results reach the browser; stderr, paths, arbitrary text, transaction wire bytes, and retained result JSON stay process-local. |
+
+This screen is a live daemon-validated projection, not an independently
+authenticated RPC client and not retained evidence. Its provider binaries are
+captured local account bodies and its observations are synthetic: it makes no
+claim about provider availability, devnet, mainnet, or value. There is no
+start/retry/reorder/sign action in the page. The launcher is the authority to
+start the single fixed campaign and owns graceful cleanup.
+
+The daemon now creates one mode-private session root, delegates its marked
+campaign/control children to the runner, and keeps the validator and ephemeral
+signer roster alive after the fixed campaign reaches terminal state. The
+chain-discovery event carries a public restart descriptor: owner session ID,
+genesis, repository/program identity, RPC URL, and the six discovered
+addresses. It contains no signer material. `--work DIR` (or the launcher's
+`CLUTCH_OPERATOR_PYTH_LIVE_WORK_BASE`) chooses only the parent under which the
+daemon creates that private root; it is never the campaign directory itself.
+The daemon removes the exact marked root when the child exits normally or is
+gracefully stopped.
+
+This is signer continuity, not an interactive transaction service. The one
+signed `freeze-epoch` plan is a terminal-state, non-submitted proof that the
+real-source builder and public-identity construction seam are connected. The public
+restart descriptor permits read-only rediscovery only while the child is
+alive. A future admission surface still needs chain-derived preterminal state,
+intent validation, simulation/receipt policy, and explicit stop/restart
+semantics before it may submit anything.
 
 ### Pyth local mode
 
@@ -226,6 +283,13 @@ phase come from fixture or daemon memory and say so. Beliefs and candidate-plan
 coordinates are MODEL-ONLY. Transaction rows are daemon-reported RPC receipts.
 A role that has not been observed says `NOT YET OBSERVED` rather than showing a
 zero.
+
+The interactive Friday Trade mode still boots the explicit
+`non-production-mock-source` profile. Pyth-live removes mock-source dependence
+for the fixed, fully joined two-boundary lifecycle, but it does not yet connect
+arbitrary browser ticket intents to that real provider/source plane. That is
+the remaining client/runtime join; this mode keeps the distinction visible
+instead of relabeling Friday Trade.
 
 In particular, the daemon publishes a versioned `candidate-plan` event before
 it submits the candidate. The Book never calls those coordinates bank-stamped,

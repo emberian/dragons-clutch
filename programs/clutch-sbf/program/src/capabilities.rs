@@ -16,6 +16,10 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-sou
 /// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
+/// Non-production General V2 empty-book identity laboratory.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v5";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-full")]
@@ -35,11 +39,21 @@ pub const PROFILE_ID: [u8; 32] = [
     0x1f, 0x9e, 0x2f, 0x27, 0x4c, 0x09, 0xa8, 0x30, 0x14, 0x50, 0x60, 0xef, 0xe1, 0x70, 0x91, 0x28,
     0x78, 0x0a, 0x12, 0x72, 0xc0, 0x83, 0xc7, 0xc2, 0x25, 0x4f, 0x35, 0x3a, 0xa7, 0x8b, 0xf8, 0x20,
 ];
+/// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub const PROFILE_ID: [u8; 32] = [
+    0x6e, 0x0e, 0xb3, 0x55, 0xbd, 0x8b, 0xf2, 0x0b, 0xd6, 0x72, 0x2c, 0xfd, 0x32, 0x5c, 0x73, 0x08,
+    0x92, 0xb0, 0x23, 0x41, 0x0d, 0xc2, 0x88, 0x52, 0x05, 0xaf, 0x0f, 0xbe, 0x68, 0xb7, 0x0e, 0xda,
+];
+
+/// Whether this artifact is the explicitly non-production identity lab.
+pub const GENERAL_V2_IDENTITY_LAB: bool =
+    cfg!(feature = "profile-non-production-general-v2-empty-book-identity-lab");
 
 /// Whether the profile contains legacy Source V1 ingestion and resolution.
 pub const SOURCE_V1: bool = cfg!(feature = "profile-full");
 /// Whether the profile contains Source V2 ingestion and resolution.
-pub const SOURCE_V2: bool = true;
+pub const SOURCE_V2: bool = !GENERAL_V2_IDENTITY_LAB;
 /// Whether the profile contains legacy Direct V2 clearing.
 pub const DIRECT_V2: bool = cfg!(feature = "profile-full");
 /// Whether the profile contains Direct V3 clearing.
@@ -62,7 +76,7 @@ pub const OCCUPATION_RESOLUTION: bool = cfg!(feature = "profile-full");
 pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
     match tag {
         // Common construction, custody, trading, exit and artifact plane.
-        1..=5 | 7 | 10..=21 | 68 | 70..=73 => true,
+        1..=5 | 7 | 10..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
         // The old feed buffer, direct-page settlement and Source V1 families.
         6 | 22..=31 => cfg!(feature = "profile-full"),
         // Resumable occupation work.
@@ -100,9 +114,10 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 34 are allocated; the other family action spaces
-/// remain intentionally empty until their payload contracts are fixed.
+/// Allocation does not imply execution capability. General V2, SourcePlane V3
+/// actions 1 through 12, and recurring-Series actions 13 through 18 have
+/// registered local actions; every exact tuple remains separately disabled
+/// until its handler is admitted.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -114,9 +129,11 @@ pub const fn extension_intent_action_allocated(
             family_version,
             local_action,
         ),
-        Ok(clutch_solana_layout::registry::ExtensionAction::GeneralV2(
-            _
-        ))
+        Ok(
+            clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
+                | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
+                | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
+        )
     )
 }
 
@@ -125,7 +142,25 @@ pub const fn extension_intent_action_allocated(
 /// The empty slice is the mechanical activation gate for this registry-only
 /// wave.  A later runtime wave must add each exact `(family, version, action)`
 /// tuple atomically with its handler and account contract.
+#[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
+
+/// Exact identity, unrevealed-expiry, and solver-claim action set.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (74, 1, 2),
+    (74, 1, 6),
+    (74, 1, 7),
+    (74, 1, 8),
+    (74, 1, 9),
+    (74, 1, 10),
+    (74, 1, 14),
+    (74, 1, 15),
+    (74, 1, 16),
+    (74, 1, 20),
+    (74, 1, 21),
+    (74, 1, 32),
+];
 
 /// Return whether an exact versioned extension action belongs to this product.
 pub fn extension_intent_action_enabled(
@@ -150,8 +185,8 @@ mod tests {
             solana_sha256_hasher::hash(PROFILE_LABEL.as_bytes()).to_bytes(),
             PROFILE_ID
         );
-        assert!(legacy_intent_tag_enabled(1));
-        assert!(legacy_intent_tag_enabled(70));
+        assert_eq!(legacy_intent_tag_enabled(1), !GENERAL_V2_IDENTITY_LAB);
+        assert_eq!(legacy_intent_tag_enabled(70), !GENERAL_V2_IDENTITY_LAB);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
@@ -181,30 +216,44 @@ mod tests {
     }
 
     #[test]
-    fn extension_membership_is_exact_and_every_allocated_action_is_disabled() {
+    fn extension_membership_is_exact_and_capability_bound() {
         for family_tag in u8::MIN..=u8::MAX {
             for family_version in u8::MIN..=3 {
                 for local_action in u8::MIN..=u8::MAX {
-                    let expected_allocated = family_tag
+                    let general = family_tag
                         == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
+                    let source = family_tag
+                        == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || source;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
                         "{family_tag}/{family_version}/{local_action}"
                     );
-                    assert!(!extension_intent_action_enabled(
-                        family_tag,
-                        family_version,
-                        local_action,
-                    ));
+                    let expected_enabled = GENERAL_V2_IDENTITY_LAB
+                        && family_tag == 74
+                        && family_version == 1
+                        && matches!(local_action, 2 | 6 | 7 | 8 | 9 | 10 | 14 | 15);
+                    assert_eq!(
+                        extension_intent_action_enabled(family_tag, family_version, local_action,),
+                        expected_enabled,
+                    );
                 }
             }
         }
-        assert!(ENABLED_EXTENSION_ACTIONS.is_empty());
+        assert_eq!(
+            ENABLED_EXTENSION_ACTIONS.is_empty(),
+            !GENERAL_V2_IDENTITY_LAB
+        );
     }
 }

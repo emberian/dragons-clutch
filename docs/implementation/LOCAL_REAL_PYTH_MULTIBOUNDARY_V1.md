@@ -108,14 +108,44 @@ Its multi-boundary additions are fixed before the first retained run:
   exact body length, complete-body SHA-256, recomputed page commitment, feed
   identity, window identity, and record count. These fields are emitted only
   after the canonical sealed verifier authenticates the exact bytes.
-- `out_of_order_boundary_rollback` retains the refused instruction index and
-  custom code, skipped receiver-update address, explicit post-refusal absence,
-  refusal signature, and ordered watched accounts (archive then receiver
-  treasury). Its equal before/after SHA-256 values cover each account key,
-  presence, lamports, owner, executable bit, data length, and complete data
-  under domain `dragons-clutch/local-real-pyth/rollback-snapshot/v1`.
+- `wrong_config_rollback`, `wrong_feed_rollback`, and
+  `out_of_order_boundary_rollback` share one exact object shape in this schema.
+  Each retains a closed attempt kind and exact attempted/registered identity,
+  the ephemeral receiver-update address and explicit post-refusal absence, the
+  ordered-step label and signature, instruction index `2`, custom code `122`,
+  and ordered watched accounts (archive then receiver treasury). Equal
+  before/after SHA-256 values cover each account key, presence, lamports,
+  owner, executable bit, data length, and complete data under domain
+  `dragons-clutch/local-real-pyth/rollback-snapshot/v1`. The producer refuses
+  malformed digests, aliased watched accounts, equal wrong/correct identities,
+  an out-of-order index/publish-time pair inconsistent with the campaign's
+  60-second boundary schedule, or unequal snapshots before it can serialize a
+  success object. The out-of-order identity may name any later scheduled
+  boundary; it does not freeze the schema to this first two-boundary fixture.
+- `lifecycle.terminal.liabilities` is built only after both withdrawals reload
+  the final SupplyLedger and all four authoritative Token-2022 outcome mints.
+  It retains the ledger address and outcome count, every internal,
+  external-ledger, and aggregate supply, and each indexed mint address and
+  actual supply. All supply values are canonical decimal strings. The producer
+  refuses to emit the object unless the ledger binds the resolved market, its
+  active width matches the mint vector, addresses are nonzero and distinct,
+  canonical padding is zero, and every retained liability value is exactly
+  zero. The joined-v4 producer executes these terminal checks without adding
+  the new multi-boundary-only object to its historical schema.
+
+Historical `source-only-v1` and `joined-user-lifecycle-v1` schemas retain their
+boolean `wrong_config_rollback` and `wrong_feed_rollback` fields. Only the
+separately named multi-boundary v1 schema uses the three structured objects.
 
 The runner may use a destination directory that already exists only when all
 five target filenames are absent: `campaign.json`, `result.json`,
 `probe-evidence.json`, `probe-before.txt`, and `probe-after.txt`. It refuses to
-overwrite any one of them.
+overwrite any one of them. Before any copy, the runner builds those five files
+in an ephemeral public staging directory and audits their final bytes. Raw
+listener probes and the validator log remain in the private work directory;
+the retained probe summaries contain only the exact loopback endpoints,
+per-endpoint and total observation counts, selected-validator hash, result,
+and raw/log SHA-256 provenance. `campaign.json` reduces the selected validator
+path to its basename while keeping the complete binary SHA-256 as its identity.
+The gate rejects absolute home paths, the local username, non-loopback literal
+IPs, PID/FD rows or JSON fields, and keypair/private-key/secret markers.

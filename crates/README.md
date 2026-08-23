@@ -19,12 +19,26 @@ This directory contains offline `no_std` crates
 - `clutch-price-measure` — exact continuous Bernstein witnesses and a separate
   support-bounded certificate for the integer-coordinate, largest-remainder
   quantized payout body. Neither checker is wired into SBF.
+- `clutch-general-v2-contract` — dependency-free fixed codecs, identities,
+  funding compartments, selection rank, and lifecycle contracts for the
+  disabled General V2 account family.
+- `clutch-general-v2-runtime` — executable pure-core join from immutable
+  Product V2 bodies and a sealed General V2 feed through exact quantized
+  degree-two/three price coherence, owner-blind RelationV2, and ScoreV2-Q, plus
+  a deterministic fixed-memory builder for owner-blind page projection, exact
+  atom/price construction, bounded fill search, and canonical CandidateFeedV2
+  serialization. Search completeness is scoped to its named heuristic family;
+  it persists no verdict and activates no SBF capability.
 - `clutch-liveness` — the host-side liveness/fee-carry kernels
   (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
   profile and the revenue seams.
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
+- `clutch-structured-claim-runtime-contract` — the exact wrapper descriptor,
+  deployment/basis identity reconstruction, full-vector wrap/unwind,
+  compaction/redemption/retirement, and atomic Position cash/native-Egg
+  transfer contract for a future small SBF/Token-2022 adapter.
 - `clutch-owner-settlement` — exact owner-aggregated General V2 receipt/cash
   realization across several single or portfolio orders at one named rounding
   boundary.
