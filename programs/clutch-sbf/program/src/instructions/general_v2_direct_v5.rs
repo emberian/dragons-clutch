@@ -147,7 +147,7 @@ fn require_canonical_alias_partition(accounts: &[AccountInfo<'_>]) -> Outcome<()
     Ok(())
 }
 
-fn authenticate_market_collateral_v2(
+pub(crate) fn authenticate_market_collateral_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     receipt: &AuthenticatedGeneralReceiptV5,
