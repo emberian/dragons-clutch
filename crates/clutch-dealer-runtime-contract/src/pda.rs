@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use crate::{Error, Id, Result, MAX_LP_PAGES};
+use crate::{DealerFacilityIdV1, Error, Id, Result, MAX_LP_PAGES};
 
 /// Canonical PDA seed prefix for immutable DealerPolicy artifacts.
 pub const DEALER_POLICY_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-policy-v1";
+/// Canonical PDA seed prefix for immutable facility-genesis artifacts.
+pub const DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-facility-v1";
+/// Canonical PDA seed prefix for the singleton Position authority binding.
+pub const FACILITY_POSITION_BINDING_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-pos-bind-v1";
+/// Canonical PDA seed prefix for the singleton Facility Position account.
+pub const DEALER_FACILITY_POSITION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-position-v1";
+/// Canonical PDA seed prefix for the singleton Facility Replay account.
+pub const DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-replay-v1";
 /// Canonical PDA seed prefix for mutable DealerState roots.
 pub const DEALER_STATE_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-state-v1";
 /// Canonical PDA seed prefix for counted LP pages.
@@ -26,6 +34,14 @@ pub const MAX_DEALER_PDA_SEEDS: usize = 3;
 pub enum DealerPdaFamilyV1 {
     /// Immutable policy content address.
     Policy = 0,
+    /// Immutable facility genesis addressed by its canonical content identity.
+    FacilityGenesis = 7,
+    /// Singleton external Position authority binding addressed by facility.
+    FacilityPositionBinding = 8,
+    /// Singleton Facility Position asset-accounting owner.
+    FacilityPosition = 9,
+    /// Singleton Facility Position Replay companion.
+    FacilityReplay = 10,
     /// Mutable state root addressed by immutable facility identity.
     State = 1,
     /// LP page addressed by facility and page ordinal.
@@ -105,6 +121,42 @@ impl DealerPdaPreimageV1 {
             DealerPdaFamilyV1::Policy,
             DEALER_POLICY_PDA_DOMAIN_V1,
             &policy_id.bytes(),
+        )
+    }
+
+    /// Facility genesis: `[b"dc-dealer-facility-v1", facility_id]`.
+    pub fn facility_genesis(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FacilityGenesis,
+            DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
+    /// Position binding: `[b"dc-dealer-pos-bind-v1", facility_id]`.
+    pub fn facility_position_binding(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FacilityPositionBinding,
+            FACILITY_POSITION_BINDING_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
+    /// Facility Position: `[b"dc-dealer-position-v1", facility_id]`.
+    pub fn facility_position(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FacilityPosition,
+            DEALER_FACILITY_POSITION_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
+    /// Facility Replay: `[b"dc-dealer-replay-v1", facility_id]`.
+    pub fn facility_replay(facility_id: DealerFacilityIdV1) -> Result<Self> {
+        Self::two(
+            DealerPdaFamilyV1::FacilityReplay,
+            DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
         )
     }
 
@@ -207,6 +259,18 @@ impl DealerPdaPreimageV1 {
         }
         let (expected_domain, expected_count, expected_tail_len) = match self.family {
             DealerPdaFamilyV1::Policy => (DEALER_POLICY_PDA_DOMAIN_V1, 2usize, 0usize),
+            DealerPdaFamilyV1::FacilityGenesis => {
+                (DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
+            DealerPdaFamilyV1::FacilityPositionBinding => {
+                (FACILITY_POSITION_BINDING_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
+            DealerPdaFamilyV1::FacilityPosition => {
+                (DEALER_FACILITY_POSITION_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
+            DealerPdaFamilyV1::FacilityReplay => {
+                (DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
             DealerPdaFamilyV1::State => (DEALER_STATE_PDA_DOMAIN_V1, 2usize, 0usize),
             DealerPdaFamilyV1::LpPage => (LP_PAGE_PDA_DOMAIN_V1, 3usize, 4usize),
             DealerPdaFamilyV1::Lease => (DEALER_LEASE_PDA_DOMAIN_V1, 3usize, 8usize),
@@ -262,6 +326,10 @@ impl DealerPdaPreimageV1 {
 }
 
 const _: () = assert!(DEALER_POLICY_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_FACILITY_GENESIS_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(FACILITY_POSITION_BINDING_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_FACILITY_POSITION_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_STATE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(LP_PAGE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_LEASE_PDA_DOMAIN_V1.len() <= 32);

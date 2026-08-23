@@ -97,15 +97,21 @@ separately proves pre-account rejection of the same allocated Dealer request.
 No mock-source account, feature, parser, fixture, or dependency participates
 in this route.
 
-Facility initialization remains blocked. The pure `FeeBudgetV1` and
-`LivenessBudgetV1` are exact ledgers, not token custody or a measured presently
-funded schedule. The protocol still lacks a canonical facility identity,
-Facility Position content/authority join, root tombstone wrapper, budget asset
-owner, complete Position/Replay transfer transition, price-quantization
-certificate, and maximum-width liveness derivation. Therefore all 22 economic
-`DealerRuntimeActionV1` variants remain disabled, including `Initialize`,
-contribution, activation, selection, collection, delivery, resolution, claims,
-and retirement.
+Facility initialization remains blocked. The pure contract now owns canonical
+`DealerFacilityGenesisV1`, `DealerFacilityPositionV1`, and
+`FacilityPositionBindingV1` bodies, including the full policy/Market,
+collateral/token, Position content/account/Replay, exact asset accounting, and
+exact DealerState authority joins, but this catalog profile does not persist
+or authenticate them. A 276-byte `DealerRootTombstoneV1` now fixes the pure
+terminal evidence and rent split, but likewise has no global tag or shrink
+handler. `FeeBudgetV1` and `LivenessBudgetV1` remain exact ledgers,
+not token custody or a measured presently funded schedule. The protocol still
+lacks the corresponding SBF admission/root-shrink route, budget asset owner,
+complete Position/Replay transfer transition,
+price-quantization certificate, and maximum-width liveness derivation.
+Therefore all 22 economic `DealerRuntimeActionV1` variants remain disabled,
+including `Initialize`, contribution, activation, selection, collection,
+delivery, resolution, claims, and retirement.
 
 Run the real-bank laboratory with:
 

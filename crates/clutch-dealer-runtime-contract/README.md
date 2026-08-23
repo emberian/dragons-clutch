@@ -9,8 +9,10 @@ model into strict versioned semantic bodies without adding a Solana route.
 
 It owns:
 
-- exact V1 bodies and hostile codecs for `DealerPolicy`, `DealerState`, paged
-  LP ownership, one-generation `Lease`, three-stage `SettlementPot`, `FeeBudget`,
+- exact V1 bodies and hostile codecs for `DealerPolicy`, canonical facility
+  genesis, the distinct external `DealerFacilityPosition`, its authority
+  binding, the permanent root tombstone, `DealerState`, paged LP
+  ownership, one-generation `Lease`, three-stage `SettlementPot`, `FeeBudget`,
   and `LivenessBudget`;
 - `SHA256(domain || canonical_body)` content identities under fresh, trailing-
   NUL domains;
@@ -98,6 +100,11 @@ staged transport documented in
 [`DEALER_POLICY_SBF_VERTICAL_SLICE.md`](../../docs/implementation/DEALER_POLICY_SBF_VERTICAL_SLICE.md).
 That route persists an unadmitted immutable Policy and does not activate a
 facility action.
+The facility-genesis, Facility Position, authority-binding, and root-tombstone
+codecs close the previous pure-core identity/retirement-shape holes, but no
+global account allocation or SBF handler persists them yet. Existing
+`DealerStateV1` is joined through an explicit initialization validator, not
+silently reinterpreted.
 `require_action_enabled` refuses every current action with `ActionDisabled`.
 The price-certificate fields are binding slots, not a choice between the still
 unresolved exact-divisibility and canonical-quantization profiles. Likewise,

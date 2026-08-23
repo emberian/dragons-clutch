@@ -12,28 +12,32 @@
 //! account, Clock, signature, token, CPI, or transfer operation.
 //!
 //! `DealerStateV1` never persists cash, Egg balances, or per-order settlement
-//! allocations. The separately authenticated Facility Position is the sole
-//! long-lived pool asset owner while idle. During a lease, SettlementPot is the
-//! sole transient selected-leg custody owner and its custody is derived from
-//! exact aggregate conservation facts rather than mirrored balance fields.
+//! allocations. The separately authenticated `DealerFacilityPositionV1` is the
+//! sole long-lived pool asset owner while idle. During a lease, SettlementPot
+//! is the sole transient selected-leg custody owner and its custody is derived
+//! from exact aggregate conservation facts rather than mirrored balance fields.
 
 mod budget;
 mod codec;
+mod facility;
 mod lease;
 mod lp_page;
 mod pda;
 mod policy;
 mod pot;
 mod rent;
+mod root_tombstone;
 mod state;
 
 pub use budget::*;
+pub use facility::*;
 pub use lease::*;
 pub use lp_page::*;
 pub use pda::*;
 pub use policy::*;
 pub use pot::*;
 pub use rent::*;
+pub use root_tombstone::*;
 pub use state::*;
 
 use sha2::{Digest, Sha256};
@@ -57,6 +61,18 @@ pub const NO_NEXT_LP_PAGE: u32 = u32::MAX;
 
 /// Exact content domain for `DealerPolicyV1`.
 pub const DEALER_POLICY_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/policy/v1\0";
+/// Exact content domain for `DealerFacilityGenesisV1`.
+pub const DEALER_FACILITY_GENESIS_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-genesis/v1\0";
+/// Exact content domain for `FacilityPositionBindingV1`.
+pub const FACILITY_POSITION_BINDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position-binding/v1\0";
+/// Exact content domain for `DealerFacilityPositionV1`.
+pub const DEALER_FACILITY_POSITION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/facility-position/v1\0";
+/// Exact content domain for `DealerRootTombstoneV1`.
+pub const DEALER_ROOT_TOMBSTONE_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/root-tombstone/v1\0";
 /// Exact content domain for `DealerStateV1`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
 /// Exact content domain for `LpPageV1`.
