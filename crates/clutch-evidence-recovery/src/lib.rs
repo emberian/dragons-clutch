@@ -21,8 +21,8 @@
 
 pub use clutch_product_series::{
     AbsoluteRecoveryAttemptV1, CompiledScheduleV1, ComponentDebitV1, EvidenceOnlyRecoveryPolicyId,
-    MarketInstanceId, RecoveryAttemptFundingV1, SeriesFundingQuoteId, SeriesFundingQuoteV1,
-    MAX_RECOVERY_ATTEMPTS,
+    MarketInstanceId, MarketInstanceV2Id, RecoveryAttemptFundingV1, SeriesFundingQuoteId,
+    SeriesFundingQuoteV1, MAX_RECOVERY_ATTEMPTS,
 };
 
 /// Fixed width of every non-artifact semantic identity.
@@ -202,6 +202,28 @@ pub enum RecoveryError {
     InvariantViolation,
 }
 
+/// Closed economic-market identity generation admitted by the recovery core.
+///
+/// The variants remain typed rather than treating two equal 32-byte digests
+/// from different market-preimage domains as interchangeable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveryMarketIdentity {
+    /// Legacy V1 market-preimage identity.
+    Legacy(MarketInstanceId),
+    /// Full-width V2 market-preimage identity used by `SeriesPlanV5`.
+    Successor(MarketInstanceV2Id),
+}
+
+impl RecoveryMarketIdentity {
+    fn validate(self) -> Result<()> {
+        match self {
+            Self::Legacy(id) => id.validate(),
+            Self::Successor(id) => id.validate(),
+        }
+        .map_err(|_| RecoveryError::ZeroIdentity)
+    }
+}
+
 /// One semantic transfer compartment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -340,7 +362,7 @@ pub struct RecoveryLedger {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct RecoveryState {
-    market_instance_id: MarketInstanceId,
+    market_identity: RecoveryMarketIdentity,
     schedule: CompiledScheduleV1,
     series_funding_quote_id: SeriesFundingQuoteId,
     funding_quote: SeriesFundingQuoteV1,
@@ -382,9 +404,51 @@ impl RecoveryState {
         creation_clock: RecoveryClock,
         observation: FundingObservation,
     ) -> Result<Self> {
-        market_instance_id
-            .validate()
-            .map_err(|_| RecoveryError::ZeroIdentity)?;
+        Self::admit_market(
+            RecoveryMarketIdentity::Legacy(market_instance_id),
+            recovery_policy_id,
+            schedule,
+            funding_quote,
+            admission,
+            creation_clock,
+            observation,
+        )
+    }
+
+    /// Admit a full-width V2 occurrence compiled from one `SeriesPlanV5`
+    /// ordinal without converting it to the legacy market-identity domain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_v2(
+        market_instance_id: MarketInstanceV2Id,
+        recovery_policy_id: EvidenceOnlyRecoveryPolicyId,
+        schedule: CompiledScheduleV1,
+        funding_quote: SeriesFundingQuoteV1,
+        admission: RecoveryAdmission,
+        creation_clock: RecoveryClock,
+        observation: FundingObservation,
+    ) -> Result<Self> {
+        Self::admit_market(
+            RecoveryMarketIdentity::Successor(market_instance_id),
+            recovery_policy_id,
+            schedule,
+            funding_quote,
+            admission,
+            creation_clock,
+            observation,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_market(
+        market_identity: RecoveryMarketIdentity,
+        recovery_policy_id: EvidenceOnlyRecoveryPolicyId,
+        schedule: CompiledScheduleV1,
+        funding_quote: SeriesFundingQuoteV1,
+        admission: RecoveryAdmission,
+        creation_clock: RecoveryClock,
+        observation: FundingObservation,
+    ) -> Result<Self> {
+        market_identity.validate()?;
         recovery_policy_id
             .validate()
             .map_err(|_| RecoveryError::ZeroIdentity)?;
@@ -437,7 +501,7 @@ impl RecoveryState {
             return Err(RecoveryError::FundingDeltaMismatch);
         }
         let state = Self {
-            market_instance_id,
+            market_identity,
             schedule,
             series_funding_quote_id: admission.series_funding_quote_id,
             funding_quote,
@@ -473,9 +537,45 @@ impl RecoveryState {
         Ok(state)
     }
 
-    /// Economic Market identity whose authenticated compiler output is bound.
-    pub const fn market_instance_id(&self) -> MarketInstanceId {
-        self.market_instance_id
+    /// Typed economic Market identity whose compiler output is bound.
+    pub const fn market_identity(&self) -> RecoveryMarketIdentity {
+        self.market_identity
+    }
+
+    /// Legacy Market identity, absent for a successor occurrence.
+    pub const fn market_instance_id(&self) -> Option<MarketInstanceId> {
+        match self.market_identity {
+            RecoveryMarketIdentity::Legacy(id) => Some(id),
+            RecoveryMarketIdentity::Successor(_) => None,
+        }
+    }
+
+    /// Full-width V2 Market identity, absent for a legacy occurrence.
+    pub const fn market_instance_v2_id(&self) -> Option<MarketInstanceV2Id> {
+        match self.market_identity {
+            RecoveryMarketIdentity::Legacy(_) => None,
+            RecoveryMarketIdentity::Successor(id) => Some(id),
+        }
+    }
+
+    /// Exact recovery-reserve logical identity.
+    pub const fn state_id(&self) -> Identity {
+        self.state_id
+    }
+
+    /// Exact work-principal owner recorded at admission.
+    pub const fn work_funder(&self) -> Identity {
+        self.work_funder
+    }
+
+    /// Exact rent-principal owner recorded at admission.
+    pub const fn rent_payer(&self) -> Identity {
+        self.rent_payer
+    }
+
+    /// Neutral sink role recorded at admission.
+    pub const fn neutral_sink(&self) -> Identity {
+        self.neutral_sink
     }
 
     /// Sole reusable recovery-policy identity.
@@ -486,6 +586,11 @@ impl RecoveryState {
     /// Separate operational FundingQuote identity.
     pub const fn series_funding_quote_id(&self) -> SeriesFundingQuoteId {
         self.series_funding_quote_id
+    }
+
+    /// Exact absolute source/recovery schedule admitted at creation.
+    pub const fn schedule(&self) -> CompiledScheduleV1 {
+        self.schedule
     }
 
     /// Adapter-authenticated generation binding.
@@ -593,7 +698,7 @@ impl RecoveryState {
 
     /// Validate all private reachable-state and conservation invariants.
     pub fn check(&self) -> Result<()> {
-        self.market_instance_id
+        self.market_identity
             .validate()
             .map_err(|_| RecoveryError::InvariantViolation)?;
         self.recovery_policy_id()
