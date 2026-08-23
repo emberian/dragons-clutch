@@ -1,6 +1,6 @@
 //! Staged-disabled action-41 SBF composition and atomic Reservation close.
 //!
-//! The positional ABI is deliberately not frozen here. Action 41 consumes the
+//! The positional ABI is frozen but staged-disabled. Action 41 consumes the
 //! single shared action-39/24/41 traversal authenticator, then authenticates
 //! every mutable endpoint and close destination itself and owns the final
 //! root/Position/Replay write plus ReservationV9 close.
@@ -15,8 +15,9 @@ use std::boxed::Box;
 
 use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_general_v2_contract::{
-    GeneralOrderPageSeedTupleV5, GeneralReservationSeedTupleV9, Id32,
-    ReleaseUnfilledReservationPayloadV1, SettlementRootV1AccountV1,
+    decode_settlement_root_payload_v1, GeneralOrderPageSeedTupleV5,
+    GeneralReservationSeedTupleV9, Id32, ReleaseUnfilledReservationPayloadV1,
+    SettlementRootPayloadV1, SettlementRootV1AccountV1,
     GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
     MARKET_RUNTIME_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES,
 };
@@ -28,10 +29,13 @@ use clutch_general_v2_runtime::{
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
 use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
+use clutch_solana_layout::registry::GeneralV2Action;
+use clutch_solana_layout::{MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{expect_pda, require, Outcome};
+use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
@@ -39,17 +43,32 @@ use crate::seeds;
 use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
 use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
-use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
+use super::general_v2_settlement_traversal_v5::{
+    authenticate_settlement_traversal_v5, authenticate_writable_root_settlement_traversal_v5,
+    AuthenticatedRootSettlementTraversalV5, SettlementTraversalAccountFrameV5,
+};
 
-/// Named action-41 endpoint and close frame below the shared traversal prefix.
+/// Fixed shared traversal roles before its one-to-four PageV5 suffix.
+pub const ACTION41_TRAVERSAL_PREFIX_ACCOUNTS: usize = 12;
+/// Exact action-41 endpoint/close roles after the complete PageV5 suffix.
+pub const ACTION41_ENDPOINT_SUFFIX_ACCOUNTS: usize = 5;
+
+const IX_ROOT: usize = 0;
+const IX_FEED: usize = 1;
+const IX_MARKET_BINDING: usize = 2;
+const IX_MARKET_RUNTIME: usize = 3;
+const IX_ECONOMIC_DOMAIN: usize = 4;
+const IX_PRICE_GRID: usize = 5;
+const IX_REALM: usize = 6;
+const IX_PROFILE: usize = 7;
+const IX_COLLATERAL_POLICY: usize = 8;
+const IX_TOKEN_PROGRAM: usize = 9;
+const IX_MARKET_INSTANCE: usize = 10;
+const IX_MARKET_GENESIS: usize = 11;
+
+/// Exact action-41 endpoint and close suffix after the shared page set.
 #[derive(Clone, Copy, Debug)]
 pub struct ReleaseUnfilledReservationAccountFrameV1<'a, 'info> {
-    /// Writable counted SettlementRoot already authenticated by the shared prefix.
-    pub settlement_root: &'a AccountInfo<'info>,
-    /// Read-only retained Feed already authenticated by the shared traversal.
-    pub retained_feed: &'a AccountInfo<'info>,
-    /// Read-only selected PageV5, which must be one member of that traversal.
-    pub selected_page: &'a AccountInfo<'info>,
     /// Writable active ReservationV9 that will be terminalized and closed.
     pub reservation: &'a AccountInfo<'info>,
     /// Writable canonical General PositionV3 receiving released value.
@@ -60,10 +79,6 @@ pub struct ReleaseUnfilledReservationAccountFrameV1<'a, 'info> {
     pub rent_payer: &'a AccountInfo<'info>,
     /// Writable MarketBinding-owned donation/surplus sink.
     pub neutral_sink: &'a AccountInfo<'info>,
-    /// Read-only live MarketBindingV2 used by Position authentication.
-    pub market_binding: &'a AccountInfo<'info>,
-    /// Read-only live MarketRuntimeV3 used by Position/Replay purpose binding.
-    pub market_runtime: &'a AccountInfo<'info>,
 }
 
 #[derive(Debug)]
@@ -132,20 +147,31 @@ fn require_readonly_program_state(
 
 fn require_distinct_frame(frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>) -> Outcome<()> {
     let accounts = [
-        frame.settlement_root,
-        frame.retained_feed,
-        frame.selected_page,
         frame.reservation,
         frame.position,
         frame.replay,
         frame.rent_payer,
         frame.neutral_sink,
-        frame.market_binding,
-        frame.market_runtime,
     ];
     let mut left = 0usize;
     while left < accounts.len() {
         require(!accounts[left].is_signer, ClutchError::MismatchedState)?;
+        let mut right = left + 1;
+        while right < accounts.len() {
+            require(
+                accounts[left].key != accounts[right].key,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+fn require_all_distinct(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
             require(
@@ -165,12 +191,15 @@ fn authenticate_release_endpoint_v1(
     root: &AuthenticatedGeneralSettlementRootV1,
     traversal: &SettlementTraversalProjectionV4,
     collateral: BoundCollateralProfileV2,
+    selected_page: &AccountInfo<'_>,
+    market_binding: &AccountInfo<'_>,
+    market_runtime: &AccountInfo<'_>,
     frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>,
     data: &ReleaseData<'_>,
 ) -> Outcome<AuthenticatedReleaseEndpointV1> {
     require_program_state(
         program_id,
-        frame.selected_page,
+        selected_page,
         false,
         ORDER_PAGE_V5_BYTES,
     )?;
@@ -182,14 +211,14 @@ fn authenticate_release_endpoint_v1(
         page_seed.epoch(),
         u16::from_le_bytes(*page_seed.page_index_le()),
     );
-    expect_pda(frame.selected_page.key, page_pda, Some(page.stored_bump))?;
+    expect_pda(selected_page.key, page_pda, Some(page.stored_bump))?;
     require(
         page.frozen == 1
             && page.market.0 == root.root().market().bytes()
             && page.epoch.0 == root.root().epoch().bytes()
             && page.order_set.0 == root.root().order_set().bytes()
             && traversal.order_projection().page_account(page.page_index)
-                == Some(id(frame.selected_page.key)),
+                == Some(id(selected_page.key)),
         ClutchError::MismatchedState,
     )?;
 
@@ -215,8 +244,8 @@ fn authenticate_release_endpoint_v1(
     let replay = authenticate_current_general_position_replay_v2(
         program_id,
         collateral,
-        frame.market_binding,
-        frame.market_runtime,
+        market_binding,
+        market_runtime,
         frame.position,
         frame.replay,
         owner,
@@ -225,7 +254,7 @@ fn authenticate_release_endpoint_v1(
         program_id,
         &frame.position.key.to_bytes(),
         PositionPurposeV3::General,
-        &frame.market_runtime.key.to_bytes(),
+        &market_runtime.key.to_bytes(),
     );
     Ok(AuthenticatedReleaseEndpointV1 {
         reservation,
@@ -245,14 +274,17 @@ fn prepare_plan_boxed(
 
 #[inline(never)]
 fn apply_release_bundle_v1(
+    settlement_root: &AccountInfo<'_>,
+    retained_feed: &AccountInfo<'_>,
+    selected_page: &AccountInfo<'_>,
     frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>,
     plan: &ReleaseUnfilledReservationPlanV1,
 ) -> Outcome<()> {
     let close = plan.reservation();
     require(
-        plan.settlement_root_account() == id(frame.settlement_root.key)
-            && plan.retained_feed_account() == id(frame.retained_feed.key)
-            && plan.order_page_account() == id(frame.selected_page.key)
+        plan.settlement_root_account() == id(settlement_root.key)
+            && plan.retained_feed_account() == id(retained_feed.key)
+            && plan.order_page_account() == id(selected_page.key)
             && close.account() == id(frame.reservation.key)
             && plan.position_account() == id(frame.position.key)
             && plan.replay().replay_account() == id(frame.replay.key)
@@ -281,7 +313,7 @@ fn apply_release_bundle_v1(
     let mut root_body = std::vec![0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
     plan.settlement_root_poststate().encode(&mut root_body)?;
     require(
-        frame.settlement_root.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES
+        settlement_root.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES
             && frame.reservation.data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && frame.position.data_len() == POSITION_V3_BYTES
             && frame.replay.data_len() == GENERAL_REPLAY_ACCOUNT_V1_BYTES,
@@ -291,7 +323,7 @@ fn apply_release_bundle_v1(
     {
         // Acquire every fallible borrow before the first byte or lamport is
         // changed. The close resize occurs only after these guards are dropped.
-        let mut root_out = borrow_mut_data(frame.settlement_root)?;
+        let mut root_out = borrow_mut_data(settlement_root)?;
         let mut reservation_out = borrow_mut_data(frame.reservation)?;
         let mut position_out = borrow_mut_data(frame.position)?;
         let mut replay_out = borrow_mut_data(frame.replay)?;
@@ -329,18 +361,128 @@ fn apply_release_bundle_v1(
     )
 }
 
+/// Strict staged-disabled action-41 positional entrypoint.
+pub fn process(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: GeneralV2Action,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)?;
+    require(
+        action == GeneralV2Action::ReleaseUnfilledReservation
+            && capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let SettlementRootPayloadV1::ReleaseUnfilledReservation(request) =
+        decode_settlement_root_payload_v1(action.tag(), payload)?
+    else {
+        return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction));
+    };
+    release_unfilled_reservation(program_id, accounts, request)
+}
+
+#[inline(never)]
+fn release_unfilled_reservation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    payload: ReleaseUnfilledReservationPayloadV1,
+) -> Outcome<()> {
+    require(
+        accounts.len()
+            >= ACTION41_TRAVERSAL_PREFIX_ACCOUNTS + 1 + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS
+            && accounts.len()
+                <= ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
+                    + MAX_ORDER_PAGES
+                    + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+        ClutchError::WrongAccountCount,
+    )?;
+    require_all_distinct(accounts)?;
+    require_program_state(
+        program_id,
+        &accounts[IX_ROOT],
+        true,
+        SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    )?;
+    let order_count = {
+        let root = SettlementRootV1AccountV1::decode(&borrow_data(&accounts[IX_ROOT])?)?;
+        usize::from(root.order_count())
+    };
+    let page_count = order_count
+        .checked_add(MAX_ORDERS_PER_PAGE - 1)
+        .ok_or(ClutchError::Arithmetic)?
+        / MAX_ORDERS_PER_PAGE;
+    let endpoint_at = ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
+        .checked_add(page_count)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        (1..=MAX_ORDER_PAGES).contains(&page_count)
+            && accounts.len() == endpoint_at + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+        ClutchError::WrongAccountCount,
+    )?;
+    let endpoint_frame = ReleaseUnfilledReservationAccountFrameV1 {
+        reservation: &accounts[endpoint_at],
+        position: &accounts[endpoint_at + 1],
+        replay: &accounts[endpoint_at + 2],
+        rent_payer: &accounts[endpoint_at + 3],
+        neutral_sink: &accounts[endpoint_at + 4],
+    };
+    require_program_state(
+        program_id,
+        endpoint_frame.reservation,
+        true,
+        RESERVATION_ACCOUNT_BYTES_V9,
+    )?;
+    let selected_page_index = usize::from(
+        ReservationAccountV9::decode(&borrow_data(endpoint_frame.reservation)?)?
+            .body()
+            .page_index,
+    );
+    require(selected_page_index < page_count, ClutchError::MismatchedState)?;
+    let pages = &accounts[ACTION41_TRAVERSAL_PREFIX_ACCOUNTS..endpoint_at];
+    let traversal_frame = SettlementTraversalAccountFrameV5 {
+        retained_feed: &accounts[IX_FEED],
+        market_binding: &accounts[IX_MARKET_BINDING],
+        market_runtime: &accounts[IX_MARKET_RUNTIME],
+        economic_domain: &accounts[IX_ECONOMIC_DOMAIN],
+        price_grid: &accounts[IX_PRICE_GRID],
+        realm: &accounts[IX_REALM],
+        profile: &accounts[IX_PROFILE],
+        collateral_policy: &accounts[IX_COLLATERAL_POLICY],
+        token_program: &accounts[IX_TOKEN_PROGRAM],
+        market_instance: &accounts[IX_MARKET_INSTANCE],
+        market_genesis: &accounts[IX_MARKET_GENESIS],
+        pages,
+    };
+    let authenticated_traversal =
+        authenticate_settlement_traversal_v5(program_id, traversal_frame)?;
+    let authenticated = authenticate_writable_root_settlement_traversal_v5(
+        program_id,
+        &accounts[IX_ROOT],
+        &authenticated_traversal,
+    )?;
+    compose_and_apply_release_unfilled_reservation_v1(
+        program_id,
+        payload,
+        authenticated,
+        &accounts[IX_ROOT],
+        traversal_frame,
+        &pages[selected_page_index],
+        endpoint_frame,
+    )
+}
+
 /// Compose and atomically apply action 41 after the single shared General
 /// authenticator has equality-bound the writable root and exhaustive traversal.
-///
-/// This is crate-private because the action remains staged-disabled. The
-/// eventual positional handler must obtain `authenticated` from
-/// `authenticate_writable_root_settlement_traversal_v5` and decode the strict
-/// 64-byte selector before calling this function.
 #[inline(never)]
-pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
+fn compose_and_apply_release_unfilled_reservation_v1(
     program_id: &Pubkey,
     payload: ReleaseUnfilledReservationPayloadV1,
     authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    settlement_root: &AccountInfo<'_>,
+    traversal_frame: SettlementTraversalAccountFrameV5<'_, '_>,
+    selected_page: &AccountInfo<'_>,
     frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>,
 ) -> Outcome<()> {
     let authenticated_root = authenticated.root();
@@ -350,32 +492,34 @@ pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
     require_distinct_frame(frame)?;
     require_program_state(
         program_id,
-        frame.settlement_root,
+        settlement_root,
         true,
         SETTLEMENT_ROOT_ACCOUNT_BYTES,
     )?;
-    let observed_root = SettlementRootV1AccountV1::decode(&borrow_data(frame.settlement_root)?)?;
+    let observed_root = SettlementRootV1AccountV1::decode(&borrow_data(settlement_root)?)?;
     require(
-        authenticated_root.account() == id(frame.settlement_root.key)
+        authenticated_root.account() == id(settlement_root.key)
             && authenticated_root.root() == &observed_root
             && payload.epoch == authenticated_root.root().epoch()
             && payload.settlement_root == authenticated_root.account(),
         ClutchError::MismatchedState,
     )?;
-    require_readonly_program_state(program_id, frame.retained_feed)?;
+    require_readonly_program_state(program_id, traversal_frame.retained_feed)?;
     require(
-        id(frame.retained_feed.key) == traversal.selected_feed_account(),
+        id(traversal_frame.retained_feed.key) == traversal.selected_feed_account()
+            && id(traversal_frame.market_binding.key) == authenticated_root.root().market_binding()
+            && id(traversal_frame.market_runtime.key) == authenticated_root.root().market(),
         ClutchError::MismatchedState,
     )?;
     require_program_state(
         program_id,
-        frame.market_binding,
+        traversal_frame.market_binding,
         false,
         MARKET_BINDING_ACCOUNT_BYTES_V2,
     )?;
     require_program_state(
         program_id,
-        frame.market_runtime,
+        traversal_frame.market_runtime,
         false,
         MARKET_RUNTIME_ACCOUNT_BYTES,
     )?;
@@ -386,7 +530,7 @@ pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
     }
 
     let data = ReleaseData {
-        selected_page: borrow_data(frame.selected_page)?,
+        selected_page: borrow_data(selected_page)?,
         reservation: borrow_data(frame.reservation)?,
         position: borrow_data(frame.position)?,
         replay: borrow_data(frame.replay)?,
@@ -396,6 +540,9 @@ pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
         authenticated_root,
         traversal,
         collateral,
+        selected_page,
+        traversal_frame.market_binding,
+        traversal_frame.market_runtime,
         frame,
         &data,
     )?);
@@ -415,7 +562,7 @@ pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
         settlement_root_account: authenticated_root.account(),
         settlement_root: authenticated_root.root(),
         traversal,
-        order_page_account: id(frame.selected_page.key),
+        order_page_account: id(selected_page.key),
         order_page_body: &data.selected_page,
         reservation_account: id(frame.reservation.key),
         reservation_body: &data.reservation,
@@ -440,7 +587,13 @@ pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
     )?;
 
     drop(data);
-    apply_release_bundle_v1(frame, &plan)
+    apply_release_bundle_v1(
+        settlement_root,
+        traversal_frame.retained_feed,
+        selected_page,
+        frame,
+        &plan,
+    )
 }
 
 #[cfg(test)]
@@ -453,5 +606,7 @@ mod tests {
         assert_eq!(SETTLEMENT_ROOT_ACCOUNT_BYTES, 980);
         assert_eq!(POSITION_V3_BYTES, 480);
         assert_eq!(GENERAL_REPLAY_ACCOUNT_V1_BYTES, 344);
+        assert_eq!(ACTION41_TRAVERSAL_PREFIX_ACCOUNTS, 12);
+        assert_eq!(ACTION41_ENDPOINT_SUFFIX_ACCOUNTS, 5);
     }
 }
