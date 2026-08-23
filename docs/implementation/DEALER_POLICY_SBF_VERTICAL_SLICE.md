@@ -1,24 +1,24 @@
 # Dealer catalog and facility-foundation SBF vertical slice
 
-Status: **EXPLICITLY NON-PRODUCTION / IMMUTABLE CATALOG PLUS INITIALIZE AND
-BIND-EPOCH ONLY / NO TRADING CAPABILITY**.
+Status: **EXPLICITLY NON-PRODUCTION / IMMUTABLE CATALOG PLUS INITIALIZE,
+BOUNDED LP-PAGE CREATION, AND BIND-EPOCH / NO TRADING CAPABILITY**.
 
 The signed resumable catalog persists exactly one typed `DealerPolicyV1`,
 `DealerLivenessScheduleV1`, or generic `RuntimeLivenessPolicyV1` body. The
-separate facility adapter owns exact Initialize and BindEpoch transitions.
-It does not enable contribution, activation, selection, trading, settlement,
-claims, or retirement.
+separate facility adapter owns exact Initialize, bounded LP-page creation, and
+BindEpoch transitions. It does not enable contribution, activation, selection,
+trading, settlement, claims, or retirement.
 
 The separate profile identity is:
 
 ```text
-dragons-clutch/capability-profile/non-production-dealer-self-hosted-liveness-init-bind-lab/v1
-c1c034abfb45f11106f5ef220dd10a94f78cb8d01c6c00d188a45b2df7e4cc9b
+dragons-clutch/capability-profile/non-production-dealer-self-hosted-liveness-init-bind-lp-page-lab/v2
+d2e8e452847c12f03955a7e49c67a8d1a26449eb5fc6940e6ef4f8482ad80f4c
 ```
 
 Every production profile rejects these Dealer coordinates before account
 inspection. The laboratory profile rejects every legacy intent and enables
-only Dealer family 76, version 1, local actions `1..=5` and `12`.
+only Dealer family 76, version 1, local actions `1..=6` and `12`.
 
 ## Wire and account contract
 
@@ -102,16 +102,29 @@ separately proves pre-account rejection of the same allocated Dealer request.
 No mock-source account, feature, parser, fixture, or dependency participates
 in this route.
 
-The laboratory now has exact Initialize and BindEpoch handlers over canonical
-PositionV3, ReplayV3, Dealer StateV2, funded-dependency, action-receipt,
-General Epoch, and runtime-liveness owners. The immutable schedule and generic
-runtime policy can be published through this same catalog rather than injected
-as fixture DTOs. Initialize atomically creates all seven canonical runtime
-compartment PDAs from exact present native-lamport work and rent debits. Hostile
-prefunds remain neutral-sink donations and never discount the liveness payer.
+The laboratory now has exact Initialize, `CreateLpPage`, and BindEpoch handlers
+over canonical PositionV3, ReplayV3, Dealer StateV2, funded-dependency,
+action-receipt, LP-page, General Epoch, and runtime-liveness owners. The
+immutable schedule and generic runtime policy can be published through this
+same catalog rather than injected as fixture DTOs. Initialize atomically creates
+all seven canonical runtime compartment PDAs from exact present native-lamport
+work and rent debits. Hostile prefunds remain neutral-sink donations and never
+discount the liveness payer.
+
+`CreateLpPage` consumes the Clearing compartment and one immutable typed action
+receipt. The first-page route uses 20 ordered accounts; successor creation uses
+21 and additionally authenticates and seals the current full tail. Page PDAs are
+`[b"dc-dealer-lp-page-v2", facility_id, page_ordinal_le]`. State owns the page
+count and current page-set root; the mutable tail owns its bounded entries and
+the predecessor owns the sealed successor link. Receipt and page rent are paid
+from the current actor, while Clearing keeper/refund lamports retain the
+immutable compartment payer. Any balance surplus received since the preceding
+call is first projected through the canonical donation-observation transition,
+so it cannot stall a funded action or become work principal.
+
 Every other Dealer facility action remains capability-disabled, including
-contribution, activation, selection, collection, delivery, resolution,
-claims, and retirement.
+contribution, activation, selection, collection, delivery, resolution, claims,
+and retirement.
 
 Run the real-bank laboratory with:
 
