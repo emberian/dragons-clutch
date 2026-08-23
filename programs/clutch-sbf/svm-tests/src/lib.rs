@@ -1367,6 +1367,7 @@ impl Plane {
             RENT_SYSVAR,
             self.hoard_authority.address,
             self.hoard_token.address,
+            TOKEN_2022,
         ];
         out.extend(self.outcome_mints.iter().map(|mint| mint.address));
         out
