@@ -189,25 +189,48 @@ projection.
 | --- | --- |
 | **Clutch** | the founded market's identity — terms digest, basis degree, the eight knots, the frozen limit ladder — the two actors and their positions, the epoch phase, and the Freeze control |
 | **Ticket** | four tabs. *Single hat*: the hat row, a side, a size and a ladder limit. *Belief*: eight sliders, quantized by the daemon, previewing the orders that belief implies against the automaton's resting quotes, with one button to place them all. *Portfolio*: a coefficient vector, lots, and a per-lot collateral bound. *Funding*: Endow more collateral into pooled custody, Split more cash into complete sets. Below them, your resting orders with their reservations and a retire button |
-| **Book** | the automaton's fixture disclosure, the two daemon-held beliefs, the daemon's pre-submit candidate-trial vector drawn over the eight hats with a MODEL-ONLY boundary, and the role-decoded order page slot by slot |
-| **Settlement** | positions and reservation counters from sequential role-decoded RPC data, plus a value-plane invariant that mixes those reads with daemon-held endowed and split totals |
+| **Book** | the automaton's fixture disclosure, the two daemon-held beliefs, the daemon's pre-submit candidate-plan vector drawn over the eight hats with a MODEL-ONLY boundary, and the snapshot-V2-decoded order page slot by slot |
+| **Settlement** | positions and reservation counters from validated daemon snapshot V2 data, plus a value-plane invariant that mixes those reads with daemon-held endowed and split totals |
 | **Steps** | one row per transaction the session actually submitted, with its family, its confirmed slot, its compute units against the 1 400 000-unit ceiling, and its signature. Not a rail with pending rows: a trade session has no plan, so a row exists only because something was built, signed and confirmed. A refusal is a first-class row carrying the bank's own `Custom(0x….)` |
 | **Bench** | validator health, the ELF identity block, the roster, and the genesis-assistance disclosure — the same cards as watch mode, minus the lifecycle rail, which a session with no plan simply does not have |
 
-Trade mode deliberately has more than one field source. Account fields are
-decoded through the frozen `clutch_solana_layout` codecs from sequential RPC
-data responses, but the current daemon discards account owner, executable bit,
-response context, and same-slot consistency, and it selects codecs by its own
-role labels. They therefore say **ROLE-DECODED RPC DATA**, not
-`chain-derived`. Market configuration, actor/address declarations, order
-roster, and session phase come from fixture or daemon memory and say so.
-Beliefs and candidate-trial coordinates are MODEL-ONLY. Transaction rows are
-daemon-reported RPC receipts. A role that has not been observed says
-`NOT YET OBSERVED` rather than showing a zero.
+Trade mode deliberately has more than one field source. Account fields come
+from `graph-root-bracketed-account-snapshot/v2`: one same-context
+`getMultipleAccounts` batch
+supplies child consistency. The daemon brackets that batch with an unchanged
+complete Market envelope, retries a moving root at most three times, and
+otherwise fails closed. That bracket proves only that the root envelope did not
+move around the batch; it does not independently prove whole-graph stability.
+V2 retains data, owner, executable, lamports, and the RPC context slot; checks
+each expected address (including canonical protocol/reservation PDAs) and
+program/Token-2022 owner; refuses executable state accounts; and admits known
+roles only through one exact-length frozen layout decoder whose tag/version
+checks must pass. Token-2022 is deliberately narrower here than the protocol:
+only extension-free 165-byte actor accounts, the Hoard's exact 170-byte
+`ImmutableOwner` account, and extension-free 82-byte mints decode. Every other
+extension-bearing Token-2022 shape is refused as a current client restriction.
+The daemon prepares and validates the complete watched-role image before it
+mutates its retained projection or publishes anything for that snapshot. It
+then publishes the entire image as one event. The browser independently checks
+the declared count, unique roles, schema, ordinal, and context-slot join before
+atomically replacing its prior image and clearing stale conservation data. An
+explicitly absent optional role therefore removes any prior browser/daemon
+projection only as part of an admitted complete image; a previously present
+role or a role mandatory for the current Friday phase faults the session and
+publishes none of that candidate image.
+These fields therefore say **VALIDATED DAEMON SAME-CONTEXT SNAPSHOT V2**, not
+`chain-derived` or release-authenticated. The browser still
+trusts the daemon projection, and V2 does not bind ProgramData or the loaded ELF.
+Market configuration, actor/address declarations, order roster, and session
+phase come from fixture or daemon memory and say so. Beliefs and candidate-plan
+coordinates are MODEL-ONLY. Transaction rows are daemon-reported RPC receipts.
+A role that has not been observed says `NOT YET OBSERVED` rather than showing a
+zero.
 
-In particular, the daemon publishes its candidate coordinates before it
-submits the candidate. The Book never calls those coordinates bank-stamped,
-verified, selected, or cleared. Later transaction rows and account projections
+In particular, the daemon publishes a versioned `candidate-plan` event before
+it submits the candidate. The Book never calls those coordinates bank-stamped,
+verified, selected, or cleared, and explicitly refuses the legacy pre-submit
+`clearing` event vocabulary. Later transaction rows and account projections
 remain separate sources until a future authenticated client performs the exact
 candidate/epoch/release join.
 
@@ -256,10 +279,10 @@ admitted and exactly how it refused the ones before: the midpoint of the two
 published beliefs, the automaton's belief, your painted belief, and the flat
 prior. Each attempt is published to the stream with its refusal.
 
-The browser's candidate-trial drawing is the daemon's pre-submit model output,
+The browser's candidate-plan drawing is the daemon's pre-submit model output,
 not the admitted result. Selection evidence lives in later transaction receipts
-and role-decoded account records, which this client does not authenticate or
-join into a same-slot snapshot.
+and validated snapshot V2 account records, which this client does not join into
+a release-authenticated selection claim.
 
 The midpoint is first because it has the property the frozen allocation policy
 needs: at a knot where the two beliefs disagree it sits strictly between the

@@ -367,8 +367,8 @@ td.role { color: var(--ink-2); }
 .painter-value { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-2); }
 .painter-knot-label { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-3); }
 
-/* Two beliefs and one price, in the disagreement exhibit's idiom: the stated
-   vectors as outlines, the cleared vector as the solid bars between them. */
+/* Two beliefs and one candidate plan, in the disagreement exhibit's idiom:
+   daemon-held vectors as outlines and pre-submit coordinates as bars. */
 .overlay { width: 100%; height: auto; display: block; margin: 0.5rem 0; }
 .overlay .axis { stroke: var(--border); stroke-width: 1; }
 .overlay .axis-label {

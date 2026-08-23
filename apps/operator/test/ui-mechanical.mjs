@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
-import { eventHasSafeNumbers } from "../stream.js";
+import { createStore, eventHasSafeNumbers } from "../stream.js";
 import { campaignIsPresentable } from "../pyth.js";
 import {
   decimalCents,
@@ -73,6 +73,61 @@ test("the untrusted event projection refuses unsafe JSON numbers", () => {
     eventHasSafeNumbers({ type: "state", decoded: { internal: ["1", 9007199254740992, "3"] } }),
     false
   );
+});
+
+test("a graph snapshot is promoted atomically and a partial successor preserves the old image", () => {
+  const store = createStore();
+  const account = (role, slot, ordinal = 1) => ({
+    type: "state",
+    snapshot_schema: "dragons-clutch/operator/graph-root-bracketed-account-snapshot/v2",
+    context_slot: slot,
+    ordinal,
+    role,
+    address: `${role}-address`,
+    address_binding: "test-derived",
+    present: true,
+    owner: "program-owner",
+    executable: false,
+    account_schema: { name: "market", bytes: "1", tag: 1, version: 1 },
+    decoded: { kind: "market" },
+  });
+  const snapshot = (slot, states, count = String(states.length)) => ({
+    type: "account-snapshot-v2",
+    schema: "dragons-clutch/operator/graph-root-bracketed-account-snapshot/v2",
+    context_slot: slot,
+    ordinal: 1,
+    root_role: "friday.market",
+    root_address: "friday.market-address",
+    account_count: count,
+    states,
+  });
+
+  store.ingest(snapshot("10", [
+    account("friday.market", "10"),
+    account("optional.collateral", "10"),
+  ]));
+  assert.equal(store.state.snapshot.context_slot, "10");
+  assert.deepEqual([...store.state.latest.keys()], ["friday.market", "optional.collateral"]);
+
+  store.ingest(snapshot("11", [account("friday.market", "11")], "2"));
+  assert.equal(store.state.snapshot.context_slot, "10");
+  assert.equal(store.state.latest.get("friday.market").context_slot, "10");
+  assert.match(store.state.fault.text, /incomplete or malformed/);
+
+  const absent = {
+    type: "state",
+    snapshot_schema: "dragons-clutch/operator/graph-root-bracketed-account-snapshot/v2",
+    context_slot: "12",
+    ordinal: 1,
+    role: "optional.collateral",
+    address: "optional.collateral-address",
+    address_binding: "test-derived",
+    present: false,
+    decoded: null,
+  };
+  store.ingest(snapshot("12", [account("friday.market", "12"), absent]));
+  assert.equal(store.state.snapshot.context_slot, "12");
+  assert.deepEqual([...store.state.latest.keys()], ["friday.market"]);
 });
 
 test("Pyth presentation keeps retained history and refuses transitional joined-v3", () => {
@@ -155,15 +210,19 @@ test("belief dragging updates in place and freeze is phase-disabled", async () =
 });
 
 test("trade fields preserve source boundaries and pre-submit coordinates stay model-only", async () => {
-  const trade = await source("trade.js");
+  const [session, stream, trade] = await Promise.all([
+    readFile(new URL("../../programs/clutch-sbf/operatord/src/session.rs", here), "utf8"),
+    source("stream.js"),
+    source("trade.js"),
+  ]);
   for (const phrase of [
     "DAEMON FIXTURE DECLARATION",
     "DAEMON SESSION MEMORY",
-    "ROLE-DECODED RPC DATA",
+    "VALIDATED DAEMON SAME-CONTEXT SNAPSHOT V2",
     "DAEMON RPC OBSERVATION",
     "DAEMON-REPORTED TRANSACTION RECEIPTS",
     "MIXED PROJECTION",
-    "candidate-trial coordinates",
+    "candidate-plan coordinates",
     "pre-submit model output",
     "does not establish that the bank accepted, verified, or selected",
   ]) {
@@ -176,6 +235,19 @@ test("trade fields preserve source boundaries and pre-submit coordinates stay mo
   ]) {
     assert.doesNotMatch(trade, new RegExp(falsePromotion));
   }
+  assert.match(session, /"type": "candidate-plan"/);
+  assert.match(session, /dragons-clutch\/operator\/candidate-plan\/v1/);
+  assert.match(session, /"type": "candidate-trial"/);
+  assert.doesNotMatch(session, /"type": "clearing(?:-attempt)?"/);
+  assert.match(stream, /case "candidate-plan"/);
+  assert.match(stream, /case "candidate-trial"/);
+  assert.match(stream, /legacy pre-submit clearing schema/);
+  assert.match(stream, /case "account-snapshot-v2"/);
+  assert.match(stream, /graph-root-bracketed-account-snapshot\/v2/);
+  assert.match(stream, /state\.latest = nextLatest/);
+  assert.match(session, /"present": false/);
+  assert.match(session, /complete snapshot is admitted/);
+  assert.doesNotMatch(trade, /state\.clearing/);
 });
 
 test("the retained Pyth surface is truth-labelled and has no campaign action", async () => {

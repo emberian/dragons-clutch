@@ -1,12 +1,12 @@
 /* Trade mode: the Clutch, the Ticket, the Book, the Settlement.
  *
  * This surface has several inputs, and collapsing them into one generic
- * "observed" category would be a lie. Account fields are role-decoded by the
- * daemon from sequential RPC data reads. Market configuration, the order
- * roster, and the session phase are daemon memory. Beliefs and candidate
- * coordinates are model output. Transaction rows are daemon-reported RPC
- * receipts. Each card names its source; none is an independently authenticated
- * browser observation.
+ * "observed" category would be a lie. Account fields come from a daemon-
+ * validated same-context RPC snapshot V2. Market configuration, the order roster,
+ * and the session phase are daemon memory. Beliefs and candidate coordinates
+ * are model output. Transaction rows are daemon-reported RPC receipts. Each
+ * card names its source; none is an independently authenticated browser or
+ * release observation.
  *
  * The opponent is a fixed-belief automaton. It is called that here, in those
  * words, wherever it appears, because it is not a model and not an AI and the
@@ -40,9 +40,9 @@ const pending = (what) =>
 
 /* A field-source label, deliberately separate from the frozen evidence chips.
  * These labels describe where the daemon/browser value came from; they do not
- * promote it to chain-derived evidence. In particular, current RPC reads do
- * not retain account owner, executable bit, response context, or a same-slot
- * snapshot, and the daemon selects a codec by its own role label. */
+ * promote it to chain-derived evidence. Snapshot V2 retains the account
+ * envelope and shared RPC context and validates expected address, owner, and
+ * exact schema, but it does not authenticate ProgramData or the loaded ELF. */
 const provenance = (label, explanation) => {
   const strip = el("div", "callout provenance");
   strip.append(
@@ -52,10 +52,18 @@ const provenance = (label, explanation) => {
   return strip;
 };
 
-const roleDecodedRpc = (what) => provenance(
-  "ROLE-DECODED RPC DATA",
-  `${what} The daemon selected the address and codec by role. The browser has not independently checked owner, PDA, release identity, or same-slot consistency.`
-);
+const validatedRpc = (state, what) => {
+  if (!state.snapshot) {
+    return provenance(
+      "RPC SNAPSHOT V2 NOT YET OBSERVED",
+      `${what} No complete graph-root-bracketed snapshot has arrived.`
+    );
+  }
+  return provenance(
+    "VALIDATED DAEMON SAME-CONTEXT SNAPSHOT V2",
+    `${what} Shared context slot ${numeric(state.snapshot.context_slot)}; stable market-root bracket admitted in ${numeric(state.snapshot.attempts)} attempt(s). The same-context batch supplies child consistency; the bracket proves only that the Market root envelope did not move around that batch. The daemon checked each expected address, owner, non-executable bit, and exact account schema. Token-2022 decoding is currently restricted to 165-byte base accounts, the Hoard's exact 170-byte ImmutableOwner account, and 82-byte base mints; other extension-bearing shapes refuse. The browser still relies on the daemon, and this schema does not authenticate ProgramData or the loaded ELF.`
+  );
+};
 
 const daemonMemory = (what) => provenance(
   "DAEMON SESSION MEMORY",
@@ -143,7 +151,7 @@ const restingAt = (state, knot) => {
 };
 
 /* One cell per knot: the automaton's resting quote, the person's own resting
- * orders, and the daemon's candidate-trial coordinate when one exists.
+ * orders, and the daemon's pre-submit candidate-plan coordinate when one exists.
  *
  * This is the degree-1 basis made clickable. Each knot is one hat, the ticket
  * points at exactly one of them, and the row is the same eight columns the
@@ -151,7 +159,7 @@ const restingAt = (state, knot) => {
  * the same object seen three ways. */
 const hatRow = (state, onPick) => {
   const grid = el("div", "hat-row");
-  const trial = state.clearing ? state.clearing.prices : null;
+  const trial = state.candidatePlan ? state.candidatePlan.prices : null;
   for (let knot = 0; knot < 8; knot += 1) {
     const cell = el("button", knot === ticket.knot ? "hat hat-on" : "hat");
     cell.type = "button";
@@ -167,7 +175,7 @@ const hatRow = (state, onPick) => {
       )
     );
     cell.append(el("span", "hat-mine", mine.length ? `${mine.length} of yours` : "—"));
-    if (trial) cell.append(el("span", "hat-candidate", `candidate trial ${numeric(trial[knot])}`));
+    if (trial) cell.append(el("span", "hat-candidate", `candidate plan ${numeric(trial[knot])}`));
     cell.addEventListener("click", () => onPick(knot));
     grid.append(cell);
   }
@@ -225,7 +233,7 @@ export const renderClutch = (state) => {
   } else {
     who.append(
       fixtureDeclaration(
-        "Role, label, wallet public key, and Position address come from daemon fixture memory. Cash and reserved balances are role-decoded RPC data."
+        "Role, label, wallet public key, and Position address come from daemon fixture memory. Cash and reserved balances come from the validated daemon RPC snapshot V2."
       )
     );
     who.append(
@@ -253,7 +261,7 @@ export const renderClutch = (state) => {
   phase.append(el("h2", null, "Epoch"));
   phase.append(
     daemonMemory("Session phase and control enablement come from the daemon state machine."),
-    roleDecodedRpc("Epoch phase, counts, and Window deadlines below come from decoded account data when present."),
+    validatedRpc(state, "Epoch phase, counts, and Window deadlines below come from exact decoded account data when present."),
     provenance("DAEMON RPC OBSERVATION", "The clock countdown is reported by the daemon's loopback RPC client, not an account field.")
   );
   phase.append(
@@ -512,8 +520,9 @@ const fundingTicket = (state) => {
   const position = decodedOf(state, "human.position");
   const wallet = decodedOf(state, "human.collateral");
   card.append(
-    roleDecodedRpc(
-      "Custody, Hoard, Position, and collateral-token amounts below are decoded from sequential daemon RPC reads."
+    validatedRpc(
+      state,
+      "Custody, Hoard, Position, and collateral-token amounts below are decoded from one same-context account batch."
     )
   );
   card.append(
@@ -627,7 +636,7 @@ const yourOrders = (state) => {
   card.append(el("h2", null, "Your resting orders"));
   card.append(
     daemonMemory(
-      "Ranks, owners, order terms, and retired flags come from the daemon's submitted-order roster; reservation counters are joined from role-decoded RPC data."
+      "Ranks, owners, order terms, and retired flags come from the daemon's submitted-order roster; reservation counters are joined from validated daemon snapshot V2 data."
     )
   );
   const orders = (state.session ? state.session.orders : []).filter(
@@ -703,7 +712,7 @@ export const renderTicket = (state) => {
 /* The Book                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Two beliefs and one candidate trial, drawn the way the disagreement exhibit
+/* Two beliefs and one candidate plan, drawn the way the disagreement exhibit
  * draws them. The daemon publishes this model output before SubmitCandidate;
  * this projection is never promoted merely because later steps execute. */
 /* The SVG namespace, read off a real node in the document rather than written
@@ -719,14 +728,14 @@ const overlay = (state) => {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("class", "overlay");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Automaton belief, user belief, and model-only candidate-trial coordinates by outcome");
+  svg.setAttribute("aria-label", "Automaton belief, user belief, and model-only candidate-plan coordinates by outcome");
   const theirs = state.bot ? state.bot.quoted_belief : null;
   const mine = state.belief ? state.belief.belief : null;
-  const cleared = state.clearing ? state.clearing.prices : null;
+  const candidatePlan = state.candidatePlan ? state.candidatePlan.prices : null;
   const peak = decimalMax([
     ...(theirs || ["0"]),
     ...(mine || ["0"]),
-    ...(cleared || ["0"])
+    ...(candidatePlan || ["0"])
   ], "1");
   const x = (index) => pad + (index * (width - 2 * pad)) / 7;
   const y = (value) => (
@@ -739,8 +748,8 @@ const overlay = (state) => {
     return node;
   };
   svg.append(make("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, class: "axis" }));
-  if (cleared) {
-    cleared.forEach((value, index) => {
+  if (candidatePlan) {
+    candidatePlan.forEach((value, index) => {
       const top = y(value);
       svg.append(
         make("rect", {
@@ -809,7 +818,7 @@ export const renderBook = (state) => {
   const cards = [automaton(state)];
 
   const shape = el("section", "card");
-  shape.append(el("h2", null, "Two beliefs, one candidate trial"));
+  shape.append(el("h2", null, "Two beliefs, one candidate plan"));
   shape.append(
     el(
       "p",
@@ -817,26 +826,26 @@ export const renderBook = (state) => {
       "The outlines are daemon-held beliefs. The bars are candidate coordinates the daemon constructed before submission. Their appearance does not establish that the bank accepted, verified, or selected that candidate."
     )
   );
-  shape.append(modelOnly("Candidate-trial coordinates are pre-submit model output. Consult transaction rows and role-decoded account records separately; this screen does not join them into a selection claim."));
+  shape.append(modelOnly("Candidate-plan coordinates are pre-submit model output. Consult transaction rows and validated snapshot V2 account records separately; this screen does not join them into a selection claim."));
   shape.append(overlay(state));
   const legend = el("div", "controls");
   legend.append(
     el("span", "legend legend-them", "the automaton"),
     el("span", "legend legend-you", "your painted belief"),
-    el("span", "legend legend-candidate", "candidate trial")
+    el("span", "legend legend-candidate", "candidate plan")
   );
   shape.append(legend);
-  if (state.clearing) {
+  if (state.candidatePlan) {
     shape.append(
       fields("", [
-        ["candidate-trial vector", state.clearing.prices.join(" · ")],
-        ["daemon trial basis", state.clearing.price_basis],
-        ["model pairing slices", numeric(state.clearing.slices)],
-        ["model virtual split / merge", `${numeric(state.clearing.virtual_split)} / ${numeric(state.clearing.virtual_merge)}`]
+        ["candidate-plan vector", state.candidatePlan.prices.join(" · ")],
+        ["daemon trial basis", state.candidatePlan.price_basis],
+        ["model pairing slices", numeric(state.candidatePlan.slices)],
+        ["model virtual split / merge", `${numeric(state.candidatePlan.virtual_split)} / ${numeric(state.candidatePlan.virtual_merge)}`]
       ])
     );
   } else {
-    shape.append(pending("a candidate trial"));
+    shape.append(pending("a candidate plan"));
   }
   cards.push(shape);
 
@@ -849,7 +858,7 @@ export const renderBook = (state) => {
   if (!page) {
     book.append(pending("the order page"));
   } else {
-    book.append(roleDecodedRpc("The OrderPage fields and slots below are decoded from one daemon-selected RPC data response."));
+    book.append(validatedRpc(state, "The OrderPage fields and slots below are decoded from the shared-context account batch."));
     const lines = page.orders.map((order) => {
       const line = el("tr");
       const detail =
@@ -982,8 +991,9 @@ export const renderSettlement = (state) => {
     )
   );
   positions.append(
-    roleDecodedRpc(
-      "Position rows below are decoded from daemon-selected sequential RPC data responses."
+    validatedRpc(
+      state,
+      "Position rows below are decoded from the shared-context account batch."
     )
   );
   if (!strip || !strip.rows.length) {
@@ -1013,13 +1023,13 @@ export const renderSettlement = (state) => {
     el(
       "p",
       "muted",
-      "Derived by the daemon from sequential role-decoded RPC data plus its in-memory endowed and split totals. It is a useful local invariant check, not an authenticated same-slot browser snapshot."
+      "Derived by the daemon from validated snapshot V2 account data plus its in-memory endowed and split totals. It is a useful local invariant check, not an independently authenticated browser or release snapshot."
     )
   );
   conservation.append(
     provenance(
       "MIXED PROJECTION",
-      "Observed balances are role-decoded RPC data; endowed and complete-set totals are daemon session memory."
+      "Observed balances are validated daemon snapshot V2 data; endowed and complete-set totals are daemon session memory."
     )
   );
   if (!strip) {
@@ -1054,7 +1064,7 @@ export const renderSettlement = (state) => {
 
   const receipts = el("section", "card");
   receipts.append(el("h2", null, "Reservations at rest"));
-  receipts.append(roleDecodedRpc("Reservation counters below are decoded from daemon-selected RPC data responses."));
+  receipts.append(validatedRpc(state, "Reservation counters below are decoded from the shared-context account batch."));
   const roles = [...state.latest.keys()].filter((role) => role.includes("reservation-")).sort();
   if (!roles.length) {
     receipts.append(pending("any reservation"));

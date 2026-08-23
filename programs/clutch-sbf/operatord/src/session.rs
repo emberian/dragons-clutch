@@ -27,6 +27,7 @@ use clutch_batch::relation_v1::{
 };
 use clutch_batch_policy_identity::general_clearing_v1::GENERAL_CLEARING_POLICY_V1;
 use clutch_client_contract::settlement::{classify_direct_settlement, SettlementProjection};
+use clutch_sbf_harness::Pda;
 use clutch_solana_layout::clearing::{
     CandidateFeedHeader, LegRef, PairingSlice, CANDIDATE_WINDOW_SLOTS,
 };
@@ -55,6 +56,7 @@ pub struct Placed {
     pub owner: [u8; 32],
     pub id: Hash32,
     pub reservation: [u8; 32],
+    pub reservation_address: String,
     pub kind: &'static str,
     pub outcome: u8,
     pub side: u8,
@@ -76,7 +78,217 @@ struct Live {
     freeze_slot: u64,
     endowed_total: u64,
     split_total: u64,
-    latest: BTreeMap<String, Vec<u8>>,
+    latest: BTreeMap<String, rpc::AccountEnvelope>,
+}
+
+struct WatchedAccount {
+    role: String,
+    address: String,
+    address_binding: &'static str,
+    token_binding: Option<TokenBinding>,
+}
+
+#[derive(Clone, Copy)]
+struct TokenBinding {
+    mint: [u8; 32],
+    authority: [u8; 32],
+}
+
+struct ValidatedEnvelope {
+    role_schema: decode::RoleSchema,
+    decoded: decode::VerifiedDecode,
+}
+
+struct PreparedSnapshot {
+    states: Vec<Value>,
+    next_latest: BTreeMap<String, rpc::AccountEnvelope>,
+}
+
+const GRAPH_SNAPSHOT_V2_SCHEMA: &str =
+    "dragons-clutch/operator/graph-root-bracketed-account-snapshot/v2";
+
+fn watched_pda(role: String, pda: &Pda, address_binding: &'static str) -> Result<WatchedAccount> {
+    watched_derived(role, &pda.address, &pda.bytes, address_binding)
+}
+
+fn watched_derived(
+    role: String,
+    address: &str,
+    bytes: &[u8; 32],
+    address_binding: &'static str,
+) -> Result<WatchedAccount> {
+    if clutch_sbf_harness::base58_of(bytes) != address {
+        return Err(format!("role {role} has a PDA byte/address mismatch").into());
+    }
+    decode::role_schema(&role).map_err(|error| format!("role {role}: {error}"))?;
+    Ok(WatchedAccount {
+        role,
+        address: address.to_string(),
+        address_binding,
+        token_binding: None,
+    })
+}
+
+fn watched_token(
+    role: String,
+    pda: &Pda,
+    address_binding: &'static str,
+    mint: [u8; 32],
+    authority: [u8; 32],
+) -> Result<WatchedAccount> {
+    let mut watched = watched_pda(role, pda, address_binding)?;
+    let role_schema = decode::role_schema(&watched.role)
+        .map_err(|error| format!("role {}: {error}", watched.role))?;
+    if role_schema.owner != decode::OwnerClass::Token2022 {
+        return Err(format!("role {} is not a Token-2022 role", watched.role).into());
+    }
+    watched.token_binding = Some(TokenBinding { mint, authority });
+    Ok(watched)
+}
+
+fn validate_envelope(
+    watched: &WatchedAccount,
+    envelope: &rpc::AccountEnvelope,
+    program_owner: &str,
+    token_owner: &str,
+) -> Result<ValidatedEnvelope> {
+    let role = &watched.role;
+    let role_schema = decode::role_schema(role).map_err(|error| format!("role {role}: {error}"))?;
+    let expected_owner = match role_schema.owner {
+        decode::OwnerClass::ProtocolProgram => program_owner,
+        decode::OwnerClass::Token2022 => token_owner,
+    };
+    if envelope.owner != expected_owner {
+        return Err(format!(
+            "role {role} owner {} does not match expected {} owner {expected_owner}",
+            envelope.owner,
+            role_schema.owner.label(),
+        )
+        .into());
+    }
+    if envelope.executable {
+        return Err(format!("state role {role} is unexpectedly executable").into());
+    }
+    let decoded = decode::verified_by_role(role, &envelope.data)
+        .map_err(|error| format!("role {role}: {error}"))?;
+    if let Some(binding) = watched.token_binding {
+        if envelope.data.get(..32) != Some(binding.mint.as_slice()) {
+            return Err(format!(
+                "role {role} token mint does not match the Friday collateral mint"
+            )
+            .into());
+        }
+        if envelope.data.get(32..64) != Some(binding.authority.as_slice()) {
+            return Err(
+                format!("role {role} token authority does not match its expected bearer").into(),
+            );
+        }
+    }
+    Ok(ValidatedEnvelope {
+        role_schema,
+        decoded,
+    })
+}
+
+fn prepare_snapshot(
+    live: &Live,
+    watched: &[WatchedAccount],
+    snapshot: &rpc::GraphSnapshotV2,
+    family: &str,
+    accepted: bool,
+    program_owner: &str,
+    token_owner: &str,
+) -> Result<PreparedSnapshot> {
+    let mut next_latest = live.latest.clone();
+    let mut states = Vec::with_capacity(watched.len());
+    for entry in watched {
+        let observed = snapshot
+            .accounts
+            .get(&entry.address)
+            .ok_or_else(|| format!("snapshot omitted watched role {}", entry.role))?;
+        let Some(envelope) = observed else {
+            let was_present = live.latest.contains_key(&entry.role);
+            replace_latest(&mut next_latest, &entry.role, None);
+            states.push(json!({
+                "type": "state",
+                "snapshot_schema": GRAPH_SNAPSHOT_V2_SCHEMA,
+                "context_slot": integer::u64_value(snapshot.context_slot),
+                "ordinal": live.ordinal,
+                "role": entry.role,
+                "address": entry.address,
+                "address_binding": entry.address_binding,
+                "present": false,
+                "decoded": Value::Null,
+                "validation": "explicitly absent in the shared-context batch; any prior projection is removed only if the complete snapshot is admitted",
+            }));
+            if was_present || role_is_mandatory(live, &entry.role, family, accepted) {
+                return Err(format!(
+                    "{} role {} is absent at snapshot context slot {}",
+                    if was_present {
+                        "previously present"
+                    } else {
+                        "mandatory"
+                    },
+                    entry.role,
+                    snapshot.context_slot
+                )
+                .into());
+            }
+            continue;
+        };
+        let validated = validate_envelope(entry, envelope, program_owner, token_owner)?;
+        states.push(json!({
+            "type": "state",
+            "snapshot_schema": GRAPH_SNAPSHOT_V2_SCHEMA,
+            "context_slot": integer::u64_value(snapshot.context_slot),
+            "ordinal": live.ordinal,
+            "role": entry.role,
+            "address": entry.address,
+            "address_binding": entry.address_binding,
+            "present": true,
+            "owner": envelope.owner,
+            "owner_class": validated.role_schema.owner.label(),
+            "executable": envelope.executable,
+            "lamports": integer::u64_value(envelope.lamports),
+            "bytes": integer::u64_value(u64::try_from(envelope.data.len())?),
+            "account_schema": validated.decoded.schema,
+            "decoded": validated.decoded.value,
+            "validation": "expected derived address + expected owner + non-executable + exact schema + role-specific token mint/authority join + shared batch context + stable graph root",
+        }));
+        replace_latest(&mut next_latest, &entry.role, Some(envelope.clone()));
+    }
+    Ok(PreparedSnapshot {
+        states,
+        next_latest,
+    })
+}
+
+fn replace_latest(
+    latest: &mut BTreeMap<String, rpc::AccountEnvelope>,
+    role: &str,
+    account: Option<rpc::AccountEnvelope>,
+) {
+    if let Some(account) = account {
+        latest.insert(role.to_string(), account);
+    } else {
+        latest.remove(role);
+    }
+}
+
+fn role_is_mandatory(live: &Live, role: &str, family: &str, accepted: bool) -> bool {
+    match role {
+        "friday.market" | "friday.hoard" | "friday.supply" | "friday.hoard-token"
+        | "human.collateral" | "bot.collateral" => live.ordinal >= 1,
+        "human.position" => live.ordinal >= 2,
+        "bot.position" => live.ordinal >= 3,
+        "friday.epoch" | "friday.window" => live.ordinal >= 6,
+        "friday.page" => live.ordinal >= 7,
+        "friday.pot" => {
+            matches!(live.phase, "cleared" | "settled") || (accepted && family == "Entitlement")
+        }
+        _ if role.starts_with("friday.reservation-") => accepted && family == "PlaceOrder",
+        _ => false,
+    }
 }
 
 pub struct Session {
@@ -167,7 +379,7 @@ impl Session {
             "refusal_code": rpc::custom_error_code(&error)
                 .map(|code| format!("Custom({code:#06x})")),
         }));
-        self.sweep(live)?;
+        self.sweep(live, family, accepted)?;
         if accepted {
             Ok(json!({
                 "ok": true,
@@ -186,49 +398,82 @@ impl Session {
         }
     }
 
-    /// Reload every account this session watches and publish the decoded image.
-    fn sweep(&self, live: &mut Live) -> Result<()> {
+    /// Reload every account this session watches as one graph-bracketed V2 snapshot.
+    #[allow(clippy::too_many_lines)] // one fail-closed snapshot validation boundary
+    fn sweep(&self, live: &mut Live, family: &str, accepted: bool) -> Result<()> {
         let f = &self.friday;
-        let mut roles: Vec<(String, String)> = vec![
-            ("friday.market".into(), f.market.address.clone()),
-            ("friday.hoard".into(), f.hoard.address.clone()),
-            ("friday.supply".into(), f.supply.address.clone()),
-            ("friday.hoard-token".into(), f.hoard_token.address.clone()),
-            ("friday.epoch".into(), f.epoch.address.clone()),
-            ("friday.window".into(), f.window.address.clone()),
-            ("friday.page".into(), f.page.address.clone()),
-            ("friday.pot".into(), f.pot.address.clone()),
+        let mut watched = vec![
+            watched_pda("friday.market".into(), &f.market, "canonical protocol PDA")?,
+            watched_pda("friday.hoard".into(), &f.hoard, "canonical protocol PDA")?,
+            watched_pda("friday.supply".into(), &f.supply, "canonical protocol PDA")?,
+            watched_token(
+                "friday.hoard-token".into(),
+                &f.hoard_token,
+                "canonical protocol PDA owned by Token-2022",
+                f.shared.collateral_mint.bytes,
+                f.hoard_authority.bytes,
+            )?,
+            watched_pda("friday.epoch".into(), &f.epoch, "canonical protocol PDA")?,
+            watched_pda("friday.window".into(), &f.window, "canonical protocol PDA")?,
+            watched_pda("friday.page".into(), &f.page, "canonical protocol PDA")?,
+            watched_pda("friday.pot".into(), &f.pot, "canonical protocol PDA")?,
         ];
         for actor in &f.actors {
-            roles.push((
+            watched.push(watched_pda(
                 format!("{}.position", actor.role),
-                actor.position.address.clone(),
-            ));
-            roles.push((
+                &actor.position,
+                "canonical protocol PDA",
+            )?);
+            watched.push(watched_token(
                 format!("{}.collateral", actor.role),
-                actor.token.address.clone(),
-            ));
+                &actor.token,
+                "fixture-derived Token-2022 account address",
+                f.shared.collateral_mint.bytes,
+                actor.key,
+            )?);
         }
         for order in &live.orders {
-            roles.push((
+            watched.push(watched_derived(
                 format!("friday.reservation-{}", order.rank),
-                clutch_sbf_harness::base58_of(&order.reservation),
-            ));
+                &order.reservation_address,
+                &order.reservation,
+                "canonical reservation PDA",
+            )?);
         }
-        for (role, address) in roles {
-            let Some(bytes) = rpc::account_bytes(&self.url, &address)? else {
-                continue;
-            };
-            self.publish(&json!({
-                "type": "state",
-                "ordinal": live.ordinal,
-                "role": role,
-                "address": address,
-                "bytes": bytes.len(),
-                "decoded": decode::by_role(&role, &bytes),
-            }));
-            live.latest.insert(role, bytes);
-        }
+        let root = f.market.address.clone();
+        let children: Vec<String> = watched
+            .iter()
+            .filter(|entry| entry.address != root)
+            .map(|entry| entry.address.clone())
+            .collect();
+        let snapshot = rpc::graph_snapshot_v2(&self.url, &root, &children)?;
+        let program_owner = &f.shared.program.address;
+        let token_owner = clutch_sbf_harness::base58_of(&f.shared.token_program);
+        let prepared = prepare_snapshot(
+            live,
+            &watched,
+            &snapshot,
+            family,
+            accepted,
+            program_owner,
+            &token_owner,
+        )?;
+        let account_count = u64::try_from(prepared.states.len())?;
+        let snapshot_event = json!({
+            "type": "account-snapshot-v2",
+            "schema": GRAPH_SNAPSHOT_V2_SCHEMA,
+            "ordinal": live.ordinal,
+            "context_slot": integer::u64_value(snapshot.context_slot),
+            "attempts": integer::u64_value(u64::try_from(snapshot.attempts)?),
+            "root_role": "friday.market",
+            "root_address": snapshot.root,
+            "account_count": integer::u64_value(account_count),
+            "states": prepared.states,
+            "consistency": "child accounts share one getMultipleAccounts context; an unchanged complete Market envelope brackets that batch",
+            "boundary": "the bracket proves only an unchanged root envelope, not whole-graph immutability; release ProgramData and ELF identity are not authenticated by this schema",
+        });
+        live.latest = prepared.next_latest;
+        self.publish(&snapshot_event);
         self.publish(&self.conservation(live));
         self.publish(&self.book_event(live));
         Ok(())
@@ -243,11 +488,11 @@ impl Session {
         let mut pending = Vec::new();
         for actor in &self.friday.actors {
             let role = format!("{}.position", actor.role);
-            let Some(bytes) = live.latest.get(&role) else {
+            let Some(account) = live.latest.get(&role) else {
                 pending.push(role);
                 continue;
             };
-            let Ok(position) = PositionAccount::decode(bytes) else {
+            let Ok(position) = PositionAccount::decode(&account.data) else {
                 pending.push(role);
                 continue;
             };
@@ -263,11 +508,11 @@ impl Session {
                 "eggs": integer::u64_values(position.internal[..8].iter().copied()),
             }));
         }
-        for (role, bytes) in &live.latest {
+        for (role, account) in &live.latest {
             if !role.contains("reservation-") {
                 continue;
             }
-            let Ok(reservation) = ReservationAccount::decode(bytes) else {
+            let Ok(reservation) = ReservationAccount::decode(&account.data) else {
                 continue;
             };
             for (index, held) in eggs.iter_mut().enumerate() {
@@ -277,16 +522,16 @@ impl Session {
         let supply = live
             .latest
             .get("friday.supply")
-            .and_then(|bytes| SupplyLedgerAccount::decode(bytes).ok());
+            .and_then(|account| SupplyLedgerAccount::decode(&account.data).ok());
         let locked = live
             .latest
             .get("friday.hoard")
-            .and_then(|bytes| clutch_solana_layout::HoardAccount::decode(bytes).ok())
+            .and_then(|account| clutch_solana_layout::HoardAccount::decode(&account.data).ok())
             .map(|hoard| hoard.collateral_atoms);
         let custody = live
             .latest
             .get("friday.hoard-token")
-            .and_then(|bytes| bytes.get(64..72))
+            .and_then(|account| account.data.get(64..72))
             .and_then(|slice| slice.try_into().ok())
             .map(u64::from_le_bytes);
         /* The Eggs a resting sell escrows have left the Position and live in
@@ -514,13 +759,15 @@ impl Session {
             generation: 1,
             expiry_epoch: EPOCH_INDEX,
         });
-        let reservation = self.friday.reservation(Hash32::from_bytes(owner), id).bytes;
+        let reservation_pda = self.friday.reservation(Hash32::from_bytes(owner), id);
+        let reservation = reservation_pda.bytes;
         live.orders.push(Placed {
             rank,
             owner_role,
             owner,
             id,
             reservation,
+            reservation_address: reservation_pda.address,
             kind: "single",
             outcome: quote.outcome,
             side: quote.side,
@@ -705,13 +952,15 @@ impl Session {
             generation: 1,
             expiry_epoch: EPOCH_INDEX,
         });
-        let reservation = self.friday.reservation(Hash32::from_bytes(human), id).bytes;
+        let reservation_pda = self.friday.reservation(Hash32::from_bytes(human), id);
+        let reservation = reservation_pda.bytes;
         live.orders.push(Placed {
             rank,
             owner_role: "human",
             owner: human,
             id,
             reservation,
+            reservation_address: reservation_pda.address,
             kind: "portfolio",
             outcome: u8::MAX,
             side,
@@ -836,7 +1085,7 @@ impl Session {
     }
 
     /// Place every order the painter proposed, and remember the belief the
-    /// auto-crank will read the clearing price out of.
+    /// auto-crank will use as one candidate-coordinate input.
     pub fn paint(&self, weights: &[u64]) -> Result<Value> {
         let proposal = self.propose(weights);
         if proposal.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -926,12 +1175,12 @@ impl Session {
         let epoch_bytes = live
             .latest
             .get("friday.epoch")
-            .cloned()
+            .map(|account| account.data.clone())
             .ok_or("the frozen epoch was never reloaded")?;
         let page_bytes = live
             .latest
             .get("friday.page")
-            .cloned()
+            .map(|account| account.data.clone())
             .ok_or("the frozen page was never reloaded")?;
         let epoch = EpochAccount::decode(&epoch_bytes)
             .map_err(|error| format!("the frozen epoch does not decode: {error:?}"))?;
@@ -964,12 +1213,12 @@ impl Session {
             policy: GENERAL_CLEARING_POLICY_V1,
         };
 
-        let (prices, basis) = self.clearing_prices(&live, &domain, book)?;
+        let (prices, basis) = self.candidate_plan(&live, &domain, book)?;
         self.stage(&format!(
-            "the cleared vector is {prices:?}, taken as {basis}"
+            "the pre-submit candidate plan is {prices:?}, derived from {basis}"
         ));
         let candidate = canonical_candidate(&domain, book, &prices, 0, 0)
-            .map_err(|error| format!("no canonical candidate at the cleared vector: {error:?}"))?;
+            .map_err(|error| format!("no canonical candidate for the candidate plan: {error:?}"))?;
         let witness = canonical_pairing(&domain, book, &candidate)
             .map_err(|error| format!("the candidate has no canonical pairing: {error:?}"))?;
         let settlement_plan = classify_direct_settlement(&SettlementProjection {
@@ -987,7 +1236,8 @@ impl Session {
         let groups = settlement_plan.groups();
         let fills = candidate.fills[..book.len as usize].to_vec();
         self.publish(&json!({
-            "type": "clearing",
+            "type": "candidate-plan",
+            "schema": "dragons-clutch/operator/candidate-plan/v1",
             "prices": integer::u64_values(
                 prices[..usize::from(OUTCOMES)].iter().copied()
             ),
@@ -996,11 +1246,8 @@ impl Session {
             "slices": witness.len,
             "virtual_split": integer::u64_value(candidate.virtual_split),
             "virtual_merge": integer::u64_value(candidate.virtual_merge),
-            /* "Verified" is the program's own name for a candidate status and
-             * is not this bench's word for its own evidence.  Nothing here is
-             * verified; the bank either accepts the candidate carrying these
-             * coordinates or it does not. */
-            "label": "MODEL-ONLY until the bank accepts a candidate carrying it",
+            "label": "MODEL-ONLY PRE-SUBMIT CANDIDATE PLAN",
+            "boundary": "constructed before SubmitCandidate; not bank-accepted, verified, selected, or cleared",
         }));
 
         let mut shell = CandidateFeedHeader {
@@ -1254,7 +1501,7 @@ impl Session {
         Ok(actor.position.bytes)
     }
 
-    /// The cleared vector, and how it was chosen.
+    /// The pre-submit candidate plan, and how its coordinates were chosen.
     ///
     /// This is **not** a solver and makes no optimality claim.  It is four
     /// stated coordinates, tried in a fixed published order, and the bench
@@ -1278,7 +1525,7 @@ impl Session {
     ///    quotes nobody answered still clears.
     /// 3. *The person's belief*, for the same reason from the other side.
     /// 4. *The flat prior*, which is the coordinate that assumes nothing.
-    fn clearing_prices(
+    fn candidate_plan(
         &self,
         live: &Live,
         domain: &RelationDomainV1,
@@ -1322,7 +1569,9 @@ impl Session {
             match canonical_candidate(domain, book, &prices, 0, 0) {
                 Ok(_) => {
                     self.publish(&json!({
-                        "type": "clearing-attempt", "basis": basis, "taken": true,
+                        "type": "candidate-trial",
+                        "schema": "dragons-clutch/operator/candidate-trial/v1",
+                        "basis": basis, "taken": true,
                         "prices": integer::u64_values(
                             prices[..usize::from(OUTCOMES)].iter().copied()
                         ),
@@ -1333,7 +1582,9 @@ impl Session {
                 Err(error) => {
                     let refusal = format!("{error:?}");
                     self.publish(&json!({
-                        "type": "clearing-attempt", "basis": basis, "taken": false,
+                        "type": "candidate-trial",
+                        "schema": "dragons-clutch/operator/candidate-trial/v1",
+                        "basis": basis, "taken": false,
                         "prices": integer::u64_values(
                             prices[..usize::from(OUTCOMES)].iter().copied()
                         ),
@@ -1344,7 +1595,7 @@ impl Session {
             }
         }
         Err(format!(
-            "no admitted price vector clears this book ({})",
+            "no stated coordinate constructs a canonical candidate for this book ({})",
             attempts.join("; ")
         )
         .into())
@@ -1581,7 +1832,7 @@ mod tests {
             }
         }
         panic!(
-            "no stated coordinate cleared the book: {}",
+            "no stated coordinate constructed a candidate for the book: {}",
             refusals.join("; ")
         );
     }
@@ -1591,10 +1842,10 @@ mod tests {
     /// person is not already resting on.
     ///
     /// This is the exact shape `scripts/run_operator_trade.sh` drives, pinned
-    /// here so the clearing question is answered in milliseconds rather than
-    /// after a ten-minute validator run.
+    /// here so the candidate-construction question is answered in milliseconds
+    /// rather than after a ten-minute validator run.
     #[test]
-    fn a_stated_coordinate_clears_the_bench_book() {
+    fn a_stated_coordinate_constructs_the_bench_candidate() {
         let slots = vec![
             single(1, 1, 0, 1, 500, 0),      // the automaton sells the $100 hat
             single(1, 2, 1, 1, 500, 200),    // sells the $120 hat
@@ -1616,12 +1867,182 @@ mod tests {
         let bot = [0_u64, 200, 2_600, 6_000, 1_200, 0, 0, 0];
         let painted = [200_u64, 400, 1_600, 3_400, 2_600, 1_200, 400, 200];
         let (basis, witness) = ladder(&book, &bot, &painted);
-        assert!(witness.len > 0, "the cleared book must pair something");
+        assert!(witness.len > 0, "the candidate plan must pair something");
         assert_eq!(
             basis, "automaton",
             "the midpoint is priced out by the person's $160 ticket, so the \
-             automaton's own belief is the coordinate that clears"
+             automaton's own belief is the coordinate that constructs the candidate"
         );
+    }
+
+    #[test]
+    fn snapshot_roles_bind_addresses_owners_executable_bits_and_exact_schemas() {
+        let bytes = [7_u8; 32];
+        let address = clutch_sbf_harness::base58_of(&bytes);
+        let position = watched_derived(
+            "human.position".to_string(),
+            &address,
+            &bytes,
+            "test-derived",
+        )
+        .expect("matching address bytes and known role are admitted");
+        assert_eq!(position.address, address);
+        assert!(watched_derived(
+            "human.position".to_string(),
+            "11111111111111111111111111111111",
+            &bytes,
+            "test-derived",
+        )
+        .is_err());
+
+        let watched = watched_derived(
+            "human.collateral".to_string(),
+            &address,
+            &bytes,
+            "test-derived",
+        )
+        .unwrap();
+
+        let mut token_data = vec![0_u8; 165];
+        token_data[108] = 1;
+        let token = rpc::AccountEnvelope {
+            data: token_data,
+            owner: "token-owner".to_string(),
+            executable: false,
+            lamports: 1,
+        };
+        validate_envelope(&watched, &token, "program-owner", "token-owner")
+            .expect("exact initialized token account with the expected owner is admitted");
+
+        let mut wrong_owner = token.clone();
+        wrong_owner.owner = "attacker".to_string();
+        assert!(
+            validate_envelope(&watched, &wrong_owner, "program-owner", "token-owner",).is_err()
+        );
+        let mut executable = token.clone();
+        executable.executable = true;
+        assert!(validate_envelope(&watched, &executable, "program-owner", "token-owner",).is_err());
+        let mut truncated = token;
+        truncated.data.pop();
+        assert!(validate_envelope(&watched, &truncated, "program-owner", "token-owner",).is_err());
+    }
+
+    #[test]
+    fn token_roles_bind_the_exact_collateral_mint_and_bearer() {
+        let address_bytes = [7_u8; 32];
+        let address = clutch_sbf_harness::base58_of(&address_bytes);
+        let mut watched = watched_derived(
+            "human.collateral".to_string(),
+            &address,
+            &address_bytes,
+            "test-derived",
+        )
+        .unwrap();
+        watched.token_binding = Some(TokenBinding {
+            mint: [11; 32],
+            authority: [12; 32],
+        });
+        let mut data = clutch_sbf_harness::token_account_bytes([11; 32], [12; 32], 99);
+        let envelope = rpc::AccountEnvelope {
+            data: data.clone(),
+            owner: "token-owner".to_string(),
+            executable: false,
+            lamports: 1,
+        };
+        validate_envelope(&watched, &envelope, "program-owner", "token-owner").unwrap();
+
+        data[0] ^= 1;
+        let wrong_mint = rpc::AccountEnvelope {
+            data,
+            ..envelope.clone()
+        };
+        assert!(validate_envelope(&watched, &wrong_mint, "program-owner", "token-owner").is_err());
+        let mut wrong_authority = envelope.clone();
+        wrong_authority.data[32] ^= 1;
+        assert!(
+            validate_envelope(&watched, &wrong_authority, "program-owner", "token-owner").is_err()
+        );
+    }
+
+    #[test]
+    fn an_explicit_absence_removes_a_prior_live_projection() {
+        let role = "human.collateral";
+        let account = rpc::AccountEnvelope {
+            data: vec![1],
+            owner: "token-owner".to_string(),
+            executable: false,
+            lamports: 1,
+        };
+        let mut latest = BTreeMap::new();
+        replace_latest(&mut latest, role, Some(account));
+        assert!(latest.contains_key(role));
+        replace_latest(&mut latest, role, None);
+        assert!(!latest.contains_key(role));
+    }
+
+    #[test]
+    fn a_late_snapshot_refusal_preserves_the_entire_prior_projection() {
+        fn watched(role: &str, address: &str) -> WatchedAccount {
+            WatchedAccount {
+                role: role.to_string(),
+                address: address.to_string(),
+                address_binding: "test-derived",
+                token_binding: Some(TokenBinding {
+                    mint: [11; 32],
+                    authority: [12; 32],
+                }),
+            }
+        }
+        fn token() -> rpc::AccountEnvelope {
+            rpc::AccountEnvelope {
+                data: clutch_sbf_harness::token_account_bytes([11; 32], [12; 32], 99),
+                owner: "token-owner".to_string(),
+                executable: false,
+                lamports: 1,
+            }
+        }
+
+        let first = watched("first.collateral", "first-address");
+        let later = watched("later.collateral", "later-address");
+        let previous = token();
+        let mut latest = BTreeMap::new();
+        latest.insert(later.role.clone(), previous.clone());
+        let live = Live {
+            phase: "open",
+            ordinal: 0,
+            next_rank: 1,
+            sequences: BTreeMap::new(),
+            orders: Vec::new(),
+            human_belief: None,
+            freeze_deadline: 0,
+            freeze_slot: 0,
+            endowed_total: 0,
+            split_total: 0,
+            latest,
+        };
+        let snapshot = rpc::GraphSnapshotV2 {
+            context_slot: 10,
+            attempts: 1,
+            root: first.address.clone(),
+            accounts: BTreeMap::from([
+                (first.address.clone(), Some(token())),
+                (later.address.clone(), None),
+            ]),
+        };
+
+        assert!(prepare_snapshot(
+            &live,
+            &[first, later],
+            &snapshot,
+            "test",
+            false,
+            "program-owner",
+            "token-owner",
+        )
+        .is_err());
+        assert_eq!(live.latest.len(), 1);
+        assert_eq!(live.latest["later.collateral"], previous);
+        assert!(!live.latest.contains_key("first.collateral"));
     }
 
     /// Two orders of yours against one quote of the automaton's cannot clear:

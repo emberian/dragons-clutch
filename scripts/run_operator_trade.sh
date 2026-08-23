@@ -217,11 +217,25 @@ for event in events:
 print("  event types:", ", ".join(f"{k}={v}" for k, v in sorted(kinds.items())))
 
 failed = []
+def exact_int(value, label):
+    if isinstance(value, bool):
+        failed.append(f"{label} is a boolean, not an exact integer")
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and (value == "0" or (value.isascii() and value.isdigit() and not value.startswith("0"))):
+        return int(value)
+    failed.append(f"{label} is not a canonical decimal integer")
+    return 0
+
+def exact_sum(values, label):
+    return sum(exact_int(value, f"{label}[{index}]") for index, value in enumerate(values))
+
 identity = next((e for e in events if e["type"] == "identity"), None)
 market = next((e for e in events if e["type"] == "market"), None)
 bot = next((e for e in events if e["type"] == "bot"), None)
 belief = next((e for e in events if e["type"] == "belief"), None)
-clearing = next((e for e in events if e["type"] == "clearing"), None)
+candidate_plan = next((e for e in events if e["type"] == "candidate-plan"), None)
 done = next((e for e in events if e["type"] == "done"), None)
 faults = [e for e in events if e["type"] == "fault"]
 sessions = [e for e in events if e["type"] == "session"]
@@ -254,7 +268,7 @@ else:
     print(f"  automaton kind={d['kind']!r} belief={d['belief']} quoted={d['quoted_belief']}")
     if d["kind"] != "fixed-belief automaton":
         failed.append("the opponent is not labelled a fixed-belief automaton")
-    if sum(d["belief"]) != 10000:
+    if exact_sum(d["belief"], "automaton belief") != 10000:
         failed.append("the automaton's published belief is not a price vector")
 
 if belief is None:
@@ -263,7 +277,7 @@ else:
     print(f"  painted belief={belief['belief']} -> {len(belief['proposed'])} proposed orders")
     if belief.get("label") != "MODEL-ONLY":
         failed.append("the painted belief was not labelled MODEL-ONLY")
-    if sum(belief["belief"]) != 10000:
+    if exact_sum(belief["belief"], "painted belief") != 10000:
         failed.append("the painted belief is not a price vector")
 
 steps = [e for e in events if e["type"] == "step" and e.get("state") in ("accepted", "refused")]
@@ -275,7 +289,7 @@ for step in refused:
     failed.append(f"refused: {step['name']}")
 with_cu = [e for e in accepted if e.get("cu") is not None]
 if with_cu:
-    peak = max(with_cu, key=lambda e: e["cu"])
+    peak = max(with_cu, key=lambda e: exact_int(e["cu"], "compute units"))
     print(f"  peak_compute_units={peak['cu']} at {peak['name']}")
     print("  every submitted transaction carries its compute units: "
           f"{len(with_cu)}/{len(accepted)}")
@@ -292,26 +306,70 @@ print(f"  orders_placed={len(places)}")
 if len(places) < 14:
     failed.append(f"expected the automaton's eight quotes plus the person's book, saw {len(places)}")
 
-attempts = [e for e in events if e["type"] == "clearing-attempt"]
+attempts = [e for e in events if e["type"] == "candidate-trial"]
 for attempt in attempts:
     verdict = "TAKEN" if attempt["taken"] else f"refused ({attempt['refusal']})"
     print(f"  price coordinate {attempt['basis']!r}: {attempt['prices']} {verdict}")
+    if attempt.get("schema") != "dragons-clutch/operator/candidate-trial/v1":
+        failed.append("candidate trial has an unknown schema")
 if not any(a["taken"] for a in attempts):
     failed.append("no stated price coordinate was admitted")
 
-if clearing is None:
-    failed.append("no clearing event")
+if candidate_plan is None:
+    failed.append("no candidate-plan event")
 else:
-    print(f"  cleared vector={clearing['prices']} ({clearing['price_basis']})")
-    print(f"  fills={clearing['fills']} slices={clearing['slices']}")
-    if sum(clearing["prices"]) != 10000:
-        failed.append("the cleared vector is not on the price simplex")
-    if clearing["slices"] == 0:
-        failed.append("the cleared candidate paired nothing")
+    print(f"  pre-submit candidate plan={candidate_plan['prices']} ({candidate_plan['price_basis']})")
+    print(f"  model fills={candidate_plan['fills']} slices={candidate_plan['slices']}")
+    if candidate_plan.get("schema") != "dragons-clutch/operator/candidate-plan/v1":
+        failed.append("candidate plan has an unknown schema")
+    if exact_sum(candidate_plan["prices"], "candidate-plan prices") != 10000:
+        failed.append("the candidate-plan vector is not on the price simplex")
+    if exact_int(candidate_plan["slices"], "candidate-plan slices") == 0:
+        failed.append("the candidate plan paired nothing")
+if any(e.get("type") in ("clearing", "clearing-attempt") for e in events):
+    failed.append("legacy pre-submit clearing event vocabulary was emitted")
 
-states = [e for e in events if e["type"] == "state"]
-decoded = sum(1 for e in states if e["decoded"].get("kind") != "opaque")
+snapshots = [e for e in events if e["type"] == "account-snapshot-v2"]
+states = [state for snapshot in snapshots for state in snapshot.get("states", [])]
+decoded = sum(
+    1 for e in states
+    if isinstance(e.get("decoded"), dict) and e["decoded"].get("kind") != "opaque"
+)
 print(f"  account_reloads_published={len(states)} decoded_through_layout_codecs={decoded}")
+print(f"  graph_snapshot_v2_batches={len(snapshots)}")
+if not snapshots:
+    failed.append("no graph-root-bracketed snapshot V2 event")
+for snapshot in snapshots:
+    if snapshot.get("schema") != "dragons-clutch/operator/graph-root-bracketed-account-snapshot/v2":
+        failed.append("graph snapshot has an unknown schema")
+    batch = snapshot.get("states")
+    if not isinstance(batch, list):
+        failed.append("graph snapshot has no complete state array")
+        continue
+    if exact_int(snapshot.get("account_count"), "snapshot account_count") != len(batch):
+        failed.append("graph snapshot account_count does not match its state array")
+    roles = [state.get("role") for state in batch]
+    if len(roles) != len(set(roles)):
+        failed.append("graph snapshot contains duplicate roles")
+    for state in batch:
+        if state.get("snapshot_schema") != snapshot.get("schema"):
+            failed.append(f"state {state.get('role')} is not snapshot-V2-bound")
+        if state.get("context_slot") != snapshot.get("context_slot"):
+            failed.append(f"state {state.get('role')} does not share the snapshot context")
+        if state.get("ordinal") != snapshot.get("ordinal"):
+            failed.append(f"state {state.get('role')} does not share the snapshot ordinal")
+        if state.get("present") is False:
+            if state.get("decoded") is not None:
+                failed.append(f"absent state {state.get('role')} retained decoded data")
+        elif not (
+            state.get("present") is True
+            and isinstance(state.get("owner"), str)
+            and state.get("executable") is False
+            and isinstance(state.get("account_schema"), dict)
+        ):
+            failed.append(f"present state {state.get('role')} lacks its validated envelope")
+if any(e.get("type") in ("snapshot-v2", "state") for e in events):
+    failed.append("legacy sequential snapshot events were emitted")
 
 phases = [e["phase"] for e in sessions]
 print(f"  phases={sorted(set(phases))}")
