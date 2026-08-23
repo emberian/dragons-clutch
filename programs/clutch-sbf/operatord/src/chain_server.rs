@@ -13,7 +13,9 @@ use crate::{
     payoff_compiler, processed_ws, Result,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use clutch_local_real_pyth::account_index::{CanonicalDecoderContext, IndexCapacity};
+use clutch_local_real_pyth::account_index::{
+    CanonicalDecoderContext, IndexCapacity, CANONICAL_ACCOUNT_DECODER_SET,
+};
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
@@ -34,13 +36,14 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
-const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v1";
+const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v2";
 const MAX_CONFIG_BYTES: usize = 262_144;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ChainConfigWire {
     schema: String,
+    decoder_set: String,
     cluster: ClusterWire,
     releases: Vec<ReleaseWire>,
     source_neutral_sink: String,
@@ -159,6 +162,8 @@ fn address(text: &str, name: &str) -> Result<Address> {
 
 fn family(text: &str) -> Result<CanonicalFamily> {
     Ok(match text {
+        "collateral" => CanonicalFamily::Collateral,
+        "fractional" => CanonicalFamily::Fractional,
         "general" => CanonicalFamily::General,
         "source" => CanonicalFamily::Source,
         "series" => CanonicalFamily::Series,
@@ -180,7 +185,13 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
     }
     let wire: ChainConfigWire = serde_json::from_slice(&bytes)?;
     if wire.schema != CONFIG_SCHEMA {
-        return Err("chain config schema is not operatord-chain-config/v1".into());
+        return Err("chain config schema is not operatord-chain-config/v2".into());
+    }
+    if wire.decoder_set != CANONICAL_ACCOUNT_DECODER_SET {
+        return Err(format!(
+            "chain config decoderSet must be exactly {CANONICAL_ACCOUNT_DECODER_SET}"
+        )
+        .into());
     }
     if wire.releases.is_empty() || wire.releases.len() > 64 {
         return Err("chain config must contain 1..=64 explicit releases".into());

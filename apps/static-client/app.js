@@ -4,7 +4,6 @@
 
   const CHAIN = root.GlassChainClient;
   const BUILDER = root.GlassSuccessorBuilder;
-  const REGISTRY = root.GlassSuccessorRegistry;
   const COMPILER = root.GlassCompilerProposal;
   const state = { configuration: null, snapshot: null, compilerProposal: null, construction: null };
   let compilerRevision = 0;
@@ -48,6 +47,7 @@
   const short = (value, head = 8, tail = 6) => value && value.length > head + tail + 2 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
 
   const readConfigurationForm = () => ({
+    decoderSet: $("decoder-set").value.trim(),
     operatorUrl: $("operator-url").value.trim(),
     clusterName: $("cluster-name").value.trim(),
     genesisHash: $("genesis-hash").value.trim(),
@@ -126,6 +126,7 @@
     const release = snapshot.release.observed;
     target.append(
       definition("Cluster identity", snapshot.configuration.clusterKey),
+      definition("Canonical decoder set", snapshot.configuration.decoderSet),
       definition("Program", release.programId),
       definition("ProgramData", release.programData),
       definition("Deployment slot", release.deploymentSlot),
@@ -185,6 +186,7 @@
       definition("Slot / lag", `${account.slot} / ${account.slotLag}`),
       definition("Lamports", account.lamports),
       definition("Data bytes", account.dataBytes),
+      definition("Codec tag / version", `${account.accountTag} / ${account.accountVersion}`),
       definition("Generation", account.generation),
       definition("Primary binding", account.primaryBinding),
       definition("Secondary binding", account.secondaryBinding),
@@ -220,16 +222,13 @@
   const renderKeeper = (snapshot) => {
     const select = $("keeper-action");
     reset(select);
-    const manual = create("option", null, "Manual explicit construction (no keeper cursor)");
+    const manual = create("option", null, snapshot.keeperActions.length === 0
+      ? "Manual explicit construction (no keeper cursor)"
+      : `${snapshot.keeperActions.length} projected keeper cursor(s); action coordinates not authenticated`);
     manual.value = "";
     select.append(manual);
-    snapshot.keeperActions.forEach((action, index) => {
-      const option = create("option", null, `${action.action} · ${short(action.account)} · slot ${action.accountSlot}`);
-      option.value = String(index);
-      select.append(option);
-    });
     const processed = snapshot.finality.requestedCommitment === "processed";
-    select.disabled = processed;
+    select.disabled = true;
     $("build-workflow").disabled = processed;
   };
 
@@ -264,17 +263,7 @@
 
   const requireKeeperJoin = (draft, keeper) => {
     if (!keeper) return null;
-    const coordinate = REGISTRY.keeperCoordinates[keeper.action];
-    if (!coordinate) throw new Error(`Keeper action ${keeper.action} has no exact browser-side successor coordinate; construction refuses instead of guessing.`);
-    if (!draft.instructions || !draft.instructions[0] || draft.instructions[0].family !== coordinate.family || draft.instructions[0].localAction !== String(coordinate.localAction)) {
-      throw new Error(`The first draft instruction must be ${coordinate.family}/${coordinate.localAction} for keeper action ${keeper.action}.`);
-    }
-    const metas = new Set(draft.instructions.flatMap((instruction) => Array.isArray(instruction.accounts) ? instruction.accounts.map((meta) => meta.address) : []));
-    for (const required of [keeper.account, ...keeper.dependencies]) {
-      if (!metas.has(required)) throw new Error(`Keeper dependency ${required} is absent from the explicit transaction metas.`);
-      if (!state.snapshot.accounts.some((account) => account.address === required)) throw new Error(`Keeper dependency ${required} is absent from the acquired selected-release projection.`);
-    }
-    return coordinate;
+    throw new Error(`Keeper action ${keeper.action} has no release-authenticated action coordinate in operatord; construction refuses instead of consulting a browser allocation mirror.`);
   };
 
   const parseJsonField = (id, label) => {

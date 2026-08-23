@@ -65,6 +65,7 @@
               <label class="field"><span>Validator RPC HTTP URL</span><input id="rpc-http-url" type="url" autocomplete="off" placeholder="Explicit acquisition target" required><small>Configuration binding only; the browser does not contact it or copy its path/query credentials.</small></label>
               <label class="field"><span>Validator RPC WebSocket URL</span><input id="rpc-websocket-url" type="url" autocomplete="off" placeholder="Explicit subscription target" required><small>Configuration binding only; the browser does not open it or copy its path/query credentials.</small></label>
               <label class="field"><span>Projection commitment</span><select id="commitment"><option value="finalized">finalized</option><option value="processed">processed</option></select><small>Processed state remains fork-sensitive even when its slot is frozen.</small></label>
+              <label class="field wide"><span>Canonical account decoder set</span><input id="decoder-set" class="mono" autocomplete="off" placeholder="dragons-clutch/canonical-account-decoders/v1-source-v3-current" required><small>Must name the current Source V3/current-account decoder contract echoed by operatord. Nothing is inferred.</small></label>
             </div>
           </fieldset>
 
@@ -144,7 +145,7 @@
             <p class="eyebrow">Allocation is not execution</p>
             <h2 id="capability-title">Capability reasons stay explicit</h2>
           </div>
-          <p>A decoded family proves only that the selected release told operatord which hostile decoder to use. Successor families remain ReservedDisabled; Product registration and Owner/Position V3 remain not authenticated until operatord exposes a release-bound action verdict.</p>
+          <p>A decoded family proves only that the selected release told operatord which current hostile decoder to use. The browser ships no capability/allocation mirror; every action stays disabled until chain state and operatord expose a release-bound coordinate and verdict.</p>
         </div>
         <div id="capability-grid" class="capability-grid"></div>
       </section>
@@ -196,12 +197,12 @@ Registration remains authority.</pre>
 
         <div class="constructor-layout">
           <form id="workflow-form" class="workflow-form">
-            <label class="field"><span>Chain-derived keeper cursor</span><select id="keeper-action" disabled><option value="">Manual explicit construction (no keeper cursor)</option></select><small>When selected, the action coordinate, driver account, and dependencies must all join the draft metas.</small></label>
+            <label class="field"><span>Chain-derived keeper cursor</span><select id="keeper-action" disabled><option value="">Manual explicit construction (no keeper cursor)</option></select><small>Projected cursors remain non-selectable until operatord authenticates their exact action coordinate.</small></label>
             <label class="field"><span>Transport packet limit bytes</span><input id="packet-limit" inputmode="numeric" pattern="[0-9]*" value="1232" required></label>
-            <label class="field"><span>Semantic-owner construction draft JSON</span><textarea id="draft-json" class="mono" spellcheck="false" placeholder="Explicit object with payer and 1..16 instructions. Each instruction names flow, family, localAction as a decimal string, payloadHex, semanticOwner, ordered accounts, requiredSigners, and exact equations." required></textarea><small>No example payload is embedded: bytes must come from the selected release's semantic owner, not a UI fixture.</small></label>
+            <label class="field"><span>Semantic-owner construction draft JSON</span><textarea id="draft-json" class="mono" spellcheck="false" placeholder="Explicit object with payer and 1..16 instructions. Each instruction names flow, family, familyTag, familyVersion, localAction as decimal strings, payloadHex, semanticOwner, ordered accounts, requiredSigners, and exact equations." required></textarea><small>No example payload or allocation map is embedded: exact frame coordinates and bytes must come from the selected release's semantic owner.</small></label>
             <details class="draft-contract">
               <summary>Draft field contract</summary>
-              <p><code>payer</code> is a public base58 address. Each instruction carries <code>flow</code>, <code>family</code>, <code>localAction</code>, optional exact <code>actionName</code>, lowercase <code>payloadHex</code>, <code>semanticOwner</code> (<code>package</code>, <code>schema</code>, <code>releaseSha256</code>), ordered <code>accounts</code> (<code>address</code>, <code>isSigner</code>, <code>isWritable</code>), <code>requiredSigners</code>, and one or more <code>equations</code> with equal canonical decimal <code>left</code>/<code>right</code>. Each equation's typed <code>unit</code> is lamports, collateral/fee/wrapper atoms with a mint, price units with a positive scale, or Egg atoms with a Market ID and outcome.</p>
+              <p><code>payer</code> is a public base58 address. Each instruction carries <code>flow</code>, <code>family</code>, explicit decimal-byte <code>familyTag</code>, <code>familyVersion</code>, and <code>localAction</code>, optional descriptive <code>actionName</code>, lowercase <code>payloadHex</code>, <code>semanticOwner</code> (<code>package</code>, <code>schema</code>, <code>releaseSha256</code>), ordered <code>accounts</code> (<code>address</code>, <code>isSigner</code>, <code>isWritable</code>), <code>requiredSigners</code>, and one or more <code>equations</code> with equal canonical decimal <code>left</code>/<code>right</code>. Coordinates are construction material, never a capability verdict. Each equation's typed <code>unit</code> is lamports, collateral/fee/wrapper atoms with a mint, price units with a positive scale, or Egg atoms with a Market ID and outcome.</p>
             </details>
             <button id="build-workflow" class="primary-button" type="submit" disabled>Construct blockhash-free transaction</button>
             <p id="workflow-error" class="form-error" role="alert" hidden></p>
@@ -233,7 +234,6 @@ Submission: absent</pre>
     </main>
 
     <footer class="footer"><span>DRAGON'S CLUTCH · UNTRUSTED CHAIN PROJECTION</span><span>NO WALLET · NO SIGNATURE · NO SUBMISSION</span></footer>
-    <script src="successor-registry.js"></script>
     <script src="successor-builder.js"></script>
     <script src="chain-client.js"></script>
     <script src="compiler-proposal.js"></script>

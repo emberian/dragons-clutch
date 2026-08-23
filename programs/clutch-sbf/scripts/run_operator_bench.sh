@@ -2,7 +2,8 @@
 # The Operator Bench M0 gate: the whole general-clearing walk, watched through
 # the daemon's own API rather than through its stdout.
 #
-# `operatord serve` reproduces `run_general_committed.sh`'s prologue in
+# `operatord serve --mode non-production-mock-watch` reproduces
+# `run_general_committed.sh`'s prologue in
 # process -- fresh test-only keys, the NON-PRODUCTION mock-source ELF, the
 # plan emitted by the repository's own builders, a fresh local ledger with the
 # genesis accounts installed, the same readiness probe -- and then drives the
@@ -63,13 +64,13 @@ daemon="$root/operatord/target/debug/clutch-sbf-operatord"
 [ -x "$daemon" ] || { echo "FAIL: $daemon is not executable"; exit 1; }
 
 echo
-echo "== operatord serve (M0 watch mode) =="
+echo "== operatord serve --mode non-production-mock-watch (M0) =="
 # Exec the daemon directly rather than through `cargo run`.  With `cargo run`,
 # $! is cargo's pid and the daemon is its *child*, so the cleanup trap kills
 # the wrapper and leaves a live daemon holding the RPC port -- which then
 # silently answers the next run's readiness probe.  Measured, once, the hard
 # way.
-"$daemon" serve \
+"$daemon" serve --mode non-production-mock-watch \
   --port "$http_port" --rpc-port "$rpc_port" --faucet-port "$faucet_port" \
   --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range" \
   --work "$work/bench" --exit-when-done >"$work/daemon.log" 2>&1 &

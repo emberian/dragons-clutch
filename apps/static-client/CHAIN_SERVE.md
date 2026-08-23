@@ -15,7 +15,8 @@ named. No field has an inferred network or release default.
 
 ```json
 {
-  "schema": "dragons-clutch/operatord-chain-config/v1",
+  "schema": "dragons-clutch/operatord-chain-config/v2",
+  "decoderSet": "dragons-clutch/canonical-account-decoders/v1-source-v3-current",
   "cluster": {
     "name": "localnet-or-devnet-label",
     "genesisHash": "<exact Solana genesis hash>",
@@ -28,7 +29,7 @@ named. No field has an inferred network or release default.
       "programData": "<linked ProgramData address>",
       "elfSha256": "<lowercase SHA-256 of ProgramData bytes after the 45-byte loader metadata>",
       "deploymentSlot": "1",
-      "families": ["general", "source", "series", "fees", "liveness", "position-v3", "replay-v3", "structured-claim", "dealer", "failure"]
+      "families": ["collateral", "fractional", "general", "source", "series", "fees", "liveness", "position-v3", "replay-v3", "structured-claim", "dealer", "failure"]
     }
   ],
   "sourceNeutralSink": "<explicit Source runtime neutral-sink address>",
@@ -55,7 +56,23 @@ The values above illustrate widths and shape, not a shipped network, program,
 release, wallet, or source fixture. Replace every placeholder and review every
 bound. Decoder family names are explicit operator configuration assertions about
 the selected release;
-the hostile decoder refuses unknown and ambiguous account bodies.
+the hostile decoder refuses unknown and ambiguous account bodies. The decoder
+set is mandatory: it admits Source V3 runtime accounts and only the current
+Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
+successor versions (including Window V5, AdmissionNode V4/outer-v2,
+MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
+SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
+The separately selected `fractional` family admits only Policy V2, Ledger V1,
+Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
+are withdrawn and invisible to live discovery.
+It also admits only the current globally enveloped Dealer state graph (State,
+funded dependencies, LP pages, leases, pots, Epoch bindings, terminal work,
+tombstones, tickets, and receipts); raw historical Dealer V1 bodies are not
+live accounts, and the explicitly non-production upload-stage account is not
+discoverable here. Failure projections likewise decode the complete current
+MarketRoot V2 semantic body and exact interval-consensus work/replay accounts,
+not merely their outer tag. Withdrawn versions do not silently enter the live
+projection.
 
 ## What is checked before serving
 

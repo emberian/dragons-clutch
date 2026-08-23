@@ -61,6 +61,7 @@ const LIVE_RESULT_SCHEMA = "dragons-clutch/operator/live-real-pyth-result/v1";
 const LIVE_CHAIN_SCHEMA = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
 const LIVE_BUILDER_CONSTRUCTION_SCHEMA = "dragons-clutch/operator/local-real-builder-construction/v2";
 const LIVE_CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
+const LIVE_MODE = "non-production-synthetic-source-v2-live";
 const LIVE_CAMPAIGN_MODE = "joined-multiboundary-v1";
 const LIVE_TRANSCRIPT_SCHEMA = "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";
 const LOWER_HEX_64 = /^[0-9a-f]{64}$/;
@@ -88,7 +89,7 @@ export const liveRunIsPresentable = (event) => Boolean(
   && eventUsesExactDecimalTransport(event)
   && event.type === "live-real-pyth-run"
   && event.schema === LIVE_RUN_SCHEMA
-  && event.mode === "pyth-live"
+  && event.mode === LIVE_MODE
   && ["starting", "running", "session-ready", "passed", "failed"].includes(event.phase)
   && event.campaign_mode === LIVE_CAMPAIGN_MODE
   && event.retained_transcript === false
@@ -288,7 +289,7 @@ export const liveChainIsPresentable = (event) => {
     ])
     && event.type === "live-real-pyth-chain-discovery"
     && event.schema === LIVE_CHAIN_SCHEMA
-    && event.mode === "pyth-live"
+    && event.mode === LIVE_MODE
     && event.authority === "loopback RPC graph-root-bracketed same-context account envelopes"
     && CANONICAL_INTEGER.test(event.context_slot)
     && /^(1|2|3)$/.test(event.attempts)

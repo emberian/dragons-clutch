@@ -9,15 +9,16 @@
   "use strict";
 
   const BUILDER = root.GlassSuccessorBuilder;
-  const REGISTRY = root.GlassSuccessorRegistry;
   const UINT = /^(0|[1-9][0-9]*)$/;
   const HASH32 = /^[0-9a-f]{64}$/;
   const COMMIT = /^[0-9a-f]{40}$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const GROUP_ORDER = Object.freeze(["market", "product", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+  const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
     product: "Product",
+    collateral: "Collateral & liabilities",
     source: "Source",
     series: "Series",
     candidate: "Candidate & clearing",
@@ -27,10 +28,19 @@
     other: "Other release state"
   });
   const KIND_GROUPS = Object.freeze({
+    "collateral-hoard-v2": "collateral",
+    "collateral-claim-ledger-v3": "collateral",
+    "collateral-resolution-v5": "collateral",
+    "fractional-policy-v2": "collateral",
+    "fractional-ledger-v1": "collateral",
+    "fractional-credit-v2": "collateral",
+    "fractional-credit-tombstone-v2": "collateral",
     "general-market-runtime": "market",
     "general-epoch": "market",
     "general-economic-domain": "market",
     "general-market-binding": "market",
+    "general-order-page-v5": "market",
+    "general-reservation-v9": "settlement",
     "general-candidate-window": "market",
     "series-registry": "product",
     "structured-claim-descriptor": "product",
@@ -47,12 +57,16 @@
     "general-selected-candidate": "candidate",
     "general-epoch-budget": "candidate",
     "general-owner-settlement": "settlement",
+    "general-owner-settlement-v5": "settlement",
+    "general-settlement-receipt-v5": "settlement",
+    "general-settlement-root-v1": "settlement",
     "general-owner-settlement-v3": "settlement",
     "owner-settlement-v3": "settlement",
     "general-settlement-cash-pot": "settlement",
     "general-final-pot": "settlement",
     "fee-selected-record": "settlement",
     "fee-owner-carry": "settlement",
+    "fee-owner-finalization": "settlement",
     "fee-payer-allocation": "settlement",
     "fee-recipient-allocation": "settlement",
     "fee-treasury-ledger": "settlement",
@@ -139,6 +153,7 @@
 
   const validateConfiguration = (raw) => {
     requirePlain(raw, "configuration");
+    if (text(raw.decoderSet, "decoder set", 128) !== DECODER_SET) throw new Error(`decoder set must be exactly ${DECODER_SET}.`);
     const operatorUrl = boundedUrl(raw.operatorUrl, "operatord URL", ["http:", "https:"]);
     const clusterName = text(raw.clusterName, "cluster name", 48);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clusterName)) throw new Error("cluster name contains unsupported characters.");
@@ -165,8 +180,9 @@
     const clusterKey = `${clusterName}:${genesisHash}`;
     const releaseKey = `${programId}:${deploymentSlot}:${elfSha256}`;
     return Object.freeze({
-      schema: "dragons-clutch/browser-chain-target/v1",
+      schema: "dragons-clutch/browser-chain-target/v2",
       authority: "explicit-user-selection",
+      decoderSet: DECODER_SET,
       operatorUrl,
       clusterName,
       genesisHash,
@@ -183,6 +199,7 @@
   const redactedConfiguration = (configuration) => Object.freeze({
     schema: configuration.schema,
     authority: configuration.authority,
+    decoderSet: configuration.decoderSet,
     operatorUrl: configuration.operatorUrl,
     clusterName: configuration.clusterName,
     genesisHash: configuration.genesisHash,
@@ -308,6 +325,7 @@
         || text(binding.clusterName, "transportBinding.clusterName", 48) !== configuration.clusterName
         || nonzeroAddress(binding.genesisHash, "transportBinding.genesisHash") !== configuration.genesisHash
         || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== configuration.clusterKey
+        || text(binding.decoderSet, "transportBinding.decoderSet", 128) !== DECODER_SET
         || text(binding.rpcHttpEndpoint.redacted, "transportBinding.rpcHttpEndpoint.redacted", 512) !== redactRpcEndpoint(configuration.rpcHttpUrl)
         || hash32(binding.rpcHttpEndpoint.bindingSha256, "transportBinding.rpcHttpEndpoint.bindingSha256") !== httpBindingSha256
         || text(binding.rpcWebsocketEndpoint.redacted, "transportBinding.rpcWebsocketEndpoint.redacted", 512) !== redactRpcEndpoint(configuration.rpcWebsocketUrl)
@@ -379,6 +397,7 @@
       processedAvailable,
       processedTransport,
       transportBinding: Object.freeze({
+        decoderSet: binding.decoderSet,
         rpcHttpEndpoint: Object.freeze({ redacted: binding.rpcHttpEndpoint.redacted, bindingSha256: httpBindingSha256 }),
         rpcWebsocketEndpoint: Object.freeze({ redacted: binding.rpcWebsocketEndpoint.redacted, bindingSha256: websocketBindingSha256 }),
         releaseKey: configuration.release.releaseKey
@@ -434,6 +453,8 @@
       rentEpoch: decimal(raw.rentEpoch, `accounts[${index}].rentEpoch`).toString(),
       dataBytes: decimal(raw.dataBytes, `accounts[${index}].dataBytes`).toString(),
       dataSha256: hash32(raw.dataSha256, `accounts[${index}].dataSha256`),
+      accountTag: decimal(raw.accountTag, `accounts[${index}].accountTag`, 255n).toString(),
+      accountVersion: decimal(raw.accountVersion, `accounts[${index}].accountVersion`, 255n).toString(),
       family: text(raw.family, `accounts[${index}].family`, 40),
       kind: text(raw.kind, `accounts[${index}].kind`, 80),
       decode: Object.freeze({ status: raw.decode.status, requirement }),
@@ -542,16 +563,14 @@
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
     const familySet = new Set(releases.selected.families);
-    const successorCapabilities = Object.values(REGISTRY.families).map((familyValue) => Object.freeze({
+    const successorCapabilities = releases.selected.families.map((familyName) => Object.freeze({
       surface: "successor-family",
-      family: familyValue.name,
-      label: familyValue.label,
-      indexedByRelease: familySet.has(familyValue.operatorFamily),
-      allocationStatus: familyValue.allocationStatus,
+      family: familyName,
+      label: familyName,
+      indexedByRelease: true,
+      allocationStatus: "not-authenticated",
       enabled: false,
-      reason: familyValue.disabledReason || (familySet.has(familyValue.operatorFamily)
-        ? "The selected release declares this decoder family, but the central allocation is ReservedDisabled and operatord exposes no release-bound capability admission."
-        : `The selected release does not declare the ${familyValue.operatorFamily} decoder family, and the central allocation is ReservedDisabled.`)
+      reason: "The explicit release configuration names this decoder family, but that declaration is not derived from the ELF and no release-bound action coordinate or capability admission is exposed. The browser carries no fallback allocation table."
     }));
     const productIndexed = familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
     const ownerV3Indexed = familySet.has("position-v3") || familySet.has("replay-v3") || annotated.some((accountValue) => accountValue.kind === "position-v3" || accountValue.kind === "replay-v3" || accountValue.kind.startsWith("general-owner-settlement"));

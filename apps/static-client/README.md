@@ -22,6 +22,8 @@ The form requires these values and embeds none of them as defaults:
 - operatord base URL;
 - cluster name and genesis hash;
 - validator HTTP and WebSocket URLs used by the daemon's acquisition plan;
+- exact `dragons-clutch/canonical-account-decoders/v1-source-v3-current`
+  decoder-set identity;
 - processed or finalized commitment;
 - program and ProgramData addresses, deployment slot, ELF SHA-256;
 - release-manifest SHA-256, source commit, capability-profile identity; and
@@ -59,11 +61,26 @@ coordinates plus the release coordinates; the browser hashes its selections
 and refuses any mismatch. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
+The config must name the current `source-v3-current` canonical decoder set.
+Withdrawn Source V1/V2, historical General account versions, and raw historical
+Dealer V1 bodies are not live fallbacks: a selected release containing those
+bytes fails closed instead of being reinterpreted or displayed as current
+state. Current Dealer accounts must carry their exact central tag/version and
+strict eight-byte global envelope. Current Failure MarketRoot V2 and
+interval-consensus work/replay accounts are also decoded through their exact
+semantic-owner codecs. The Dealer upload-stage allocation is explicitly
+non-production and is not part of live discovery.
+
+When a checked release explicitly selects the `fractional` family, Glass
+recognizes only the current Resolution-data-bound Policy V2, Ledger V1, Credit
+V2, and Tombstone V2 layouts. Withdrawn fractional V1 layouts are not fallback
+DTOs, and their presence does not create redemption capability.
+
 ## Projection semantics
 
-The console groups chain-derived account rows into Market, Product, Source,
-Series, candidate/clearing, settlement/position, covered-liquidity, recovery,
-and unknown-release surfaces. It preserves account body digests, generation
+The console groups chain-derived account rows into Market, Product, collateral
+and liabilities, Source, Series, candidate/clearing, settlement/position,
+covered-liquidity, recovery, and unknown-release surfaces. It preserves account body digests, generation
 and binding IDs, observed/effective commitment, slot/lag, and one of these fork
 states:
 
@@ -85,11 +102,13 @@ fork-bound removals instead of forcing a reconnect; malformed or ambiguous
 changes still fail closed. No processed projection or removal is
 authority-eligible.
 
-Successor coordinates are mirrored from the central registry only to label and
-frame construction material. Every family remains `reserved-disabled` in this
-client. A decoded family is not executable capability admission, and the
-current operatord API does not authenticate the user-declared manifest, source
-commit, or capability-profile identity.
+Successor coordinates are not mirrored into the browser. A semantic-owner
+draft must state its exact family tag/version/action bytes, which remain
+untrusted construction material. Projected keeper cursors are non-selectable
+until operatord exposes a release-authenticated coordinate. A decoded family
+is not executable capability admission, and the current operatord API does not
+authenticate the user-declared manifest, source commit, or capability-profile
+identity.
 
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler
@@ -145,16 +164,15 @@ message signer. It emits hex and base64 bytes with an explicit packet-size
 limit. It cannot decide semantic payloads, infer account metas, enable a route,
 obtain a recent blockhash, sign, or submit.
 
-A selected keeper cursor adds exact joins: the draft's first successor
-coordinate must match the known keeper action, and the driver/dependencies must
-appear both in explicit metas and the acquired selected-release projection.
-Every workflow node states that authoritative accounts must be reloaded.
+Projected keeper cursors remain deliberately non-selectable because the read
+API does not yet expose a release-authenticated successor coordinate. Exact
+family tag/version/action bytes come from the semantic-owner draft and the
+output marks them as construction material, never runtime capability. Every
+workflow node states that authoritative accounts must be reloaded.
 
 ## Files
 
 - `chain-client.js`: explicit configuration and bounded operatord transport.
-- `successor-registry.js`: non-authoritative coordinate mirror and disabled
-  capability reasons.
 - `successor-builder.js`: exact outer message and unsigned transaction bytes.
 - `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
   validation; no compiler math.
@@ -163,8 +181,6 @@ Every workflow node states that authoritative accounts must be reloaded.
 - [`CHAIN_SERVE.md`](CHAIN_SERVE.md): explicit bounded HTTP/WebSocket acquisition,
   processed rollback/reconnect, and finalized projection boundary.
 - `app.js`, `index.html`, `styles.css`: DOM presentation.
-- `manifest.json` and `terms.json`: retained historical evidence records; no
-  shipped script loads them and they are not application defaults.
 - [`SERVING.md`](SERVING.md): same-origin/CORS and response-header guidance.
 
 There are no runtime dependencies or asset build step. The repository keeps

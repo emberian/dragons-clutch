@@ -50,6 +50,7 @@ impl std::error::Error for RpcIndexError {}
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CanonicalFamily {
     Collateral,
+    Fractional,
     General,
     Source,
     Series,
@@ -67,6 +68,7 @@ impl CanonicalFamily {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Collateral => "collateral",
+            Self::Fractional => "fractional",
             Self::General => "general",
             Self::Source => "source",
             Self::Series => "series",

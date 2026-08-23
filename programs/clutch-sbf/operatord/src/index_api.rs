@@ -5,6 +5,7 @@
 //! untrusted projection and is never eligible to authorize a workflow.
 
 use crate::http::{JsonReadResponse, ReadApi};
+use clutch_local_real_pyth::account_index::CANONICAL_ACCOUNT_DECODER_SET;
 use clutch_local_real_pyth::index_service::{
     ProcessedReconnectRollback, RpcIndexEngine, RpcIndexEngineEvent,
 };
@@ -454,6 +455,7 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
         "clusterName": plan.cluster.cluster_name,
         "genesisHash": plan.cluster.genesis_hash,
         "clusterKey": plan.cluster.key(),
+        "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
         "rpcHttpEndpoint": {
             "redacted": http.redacted,
             "bindingSha256": hex32(http.binding_sha256)

@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
-const MODE: &str = "pyth-live";
+const MODE: &str = "non-production-synthetic-source-v2-live";
 const CAMPAIGN_MODE: &str = "joined-multiboundary-v1";
 const TRANSCRIPT_SCHEMA: &str =
     "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";

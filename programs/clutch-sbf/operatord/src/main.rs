@@ -11,10 +11,10 @@
 //! the same library the sealed lane's plan generator is, and
 //! `operatord replay` byte-diffs that claim.
 //!
-//! Nothing this daemon produces is evidence about a deployment, devnet, or
-//! mainnet. Watch and Friday Trade carry the explicit mock-source profile;
-//! `pyth-live` separately supervises the real router/receiver local laboratory
-//! without reading a retained transcript or giving the browser key material.
+//! The chain-attached surface is `chain-serve` and requires an explicit
+//! genesis/release/decoder configuration. Historical mock and synthetic
+//! laboratories remain reachable only through command modes whose names begin
+//! with `non-production-`; none is a live discovery fallback.
 
 mod bot;
 mod builders;
@@ -63,7 +63,7 @@ pub(crate) fn repo_path(relative: &str) -> PathBuf {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         operatord serve [--mode watch|trade|pyth-local|pyth-live] [--port N] [--rpc-port N] [--faucet-port N] \
+         operatord serve --mode non-production-mock-watch|non-production-mock-trade|non-production-retained-source-v2|non-production-synthetic-source-v2-live [--port N] [--rpc-port N] [--faucet-port N] \
          [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
          [--freeze-window SLOTS] [--transcript DIR] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
@@ -161,7 +161,7 @@ struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            mode: "watch".to_string(),
+            mode: String::new(),
             port: 9130,
             rpc_port: 9137,
             // Agave reserves rpc_port + 1 (9138) for RPC WebSocket.
@@ -200,10 +200,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
     Ok(options)
 }
 
-/// Dispatch on the session mode: watch the sealed lane's plan, or trade the
-/// Friday clutch.  The two share the prologue and nothing else.
+/// Dispatch one explicitly named non-production laboratory session.
 fn dispatch(options: Options) -> Result<()> {
-    if options.mode != "pyth-local" {
+    if options.mode.is_empty() {
+        return Err("serve requires an explicit non-production --mode; use chain-serve --config FILE for real/local chain discovery".into());
+    }
+    if options.mode != "non-production-retained-source-v2" {
         toolchain::validate_validator_network(
             Some(options.port),
             options.rpc_port,
@@ -213,8 +215,8 @@ fn dispatch(options: Options) -> Result<()> {
         )?;
     }
     match options.mode.as_str() {
-        "watch" => serve(options),
-        "trade" => trade::serve(trade::Options {
+        "non-production-mock-watch" => serve(options),
+        "non-production-mock-trade" => trade::serve(trade::Options {
             port: options.port,
             rpc_port: options.rpc_port,
             faucet_port: options.faucet_port,
@@ -225,18 +227,18 @@ fn dispatch(options: Options) -> Result<()> {
             freeze_window: options.freeze_window,
             exit_when_settled: options.exit_when_done,
         }),
-        "pyth-local" => pyth::serve(pyth::Options {
+        "non-production-retained-source-v2" => pyth::serve(pyth::Options {
             port: options.port,
             transcript: options
                 .transcript
-                .ok_or("pyth-local mode requires --transcript DIR")?,
+                .ok_or("non-production-retained-source-v2 mode requires --transcript DIR")?,
             statics: options.statics,
             exit_when_done: options.exit_when_done,
         }),
-        "pyth-live" => {
+        "non-production-synthetic-source-v2-live" => {
             if options.transcript.is_some() {
                 return Err(
-                    "pyth-live refuses --transcript; use pyth-local for retained evidence".into(),
+                    "non-production-synthetic-source-v2-live refuses --transcript; use non-production-retained-source-v2 for retained evidence".into(),
                 );
             }
             pyth_live::serve(pyth_live::Options {
@@ -251,7 +253,7 @@ fn dispatch(options: Options) -> Result<()> {
             })
         }
         other => Err(format!(
-            "unknown session mode {other}; try watch, trade, pyth-local, or pyth-live"
+            "unknown session mode {other}; every laboratory mode must use its complete non-production-* name"
         )
         .into()),
     }
@@ -276,6 +278,7 @@ fn banner(
 ) -> Value {
     json!({
         "type": "identity",
+        "mode": "non-production-mock-watch",
         "integer_transport": integer::TRANSPORT,
         "source_profile": artifact.source_profile,
         "elf_path": artifact.path.display().to_string(),
@@ -537,7 +540,14 @@ fn main() {
 
 #[cfg(test)]
 mod option_tests {
-    use super::{parse, toolchain};
+    use super::{dispatch, parse, toolchain, Options};
+
+    #[test]
+    fn serve_has_no_implicit_laboratory_mode() {
+        let error = dispatch(Options::default()).unwrap_err().to_string();
+        assert!(error.contains("requires an explicit non-production --mode"));
+        assert!(error.contains("chain-serve --config FILE"));
+    }
 
     #[test]
     fn parses_an_explicit_disjoint_validator_network() {
@@ -560,6 +570,7 @@ mod option_tests {
         .unwrap();
         assert_eq!(options.gossip_port, 9570);
         assert_eq!(options.dynamic_port_range, "9571-9620");
+        assert!(options.mode.is_empty());
         toolchain::validate_validator_network(
             Some(options.port),
             options.rpc_port,
@@ -573,12 +584,16 @@ mod option_tests {
     #[test]
     fn live_pyth_mode_is_explicit_and_does_not_imply_a_transcript() {
         let options = parse(
-            ["--mode", "pyth-live", "--exit-when-done"]
-                .into_iter()
-                .map(str::to_string),
+            [
+                "--mode",
+                "non-production-synthetic-source-v2-live",
+                "--exit-when-done",
+            ]
+            .into_iter()
+            .map(str::to_string),
         )
         .unwrap();
-        assert_eq!(options.mode, "pyth-live");
+        assert_eq!(options.mode, "non-production-synthetic-source-v2-live");
         assert!(options.exit_when_done);
         assert!(options.transcript.is_none());
         assert!(options.work.is_none());

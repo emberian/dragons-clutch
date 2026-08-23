@@ -1,6 +1,9 @@
-# Operator Bench
+# Non-production Operator Bench
 
-The first frontend, in four explicit modes.
+The historical laboratory frontend, in four explicit modes. It is not the
+chain-attached client and no laboratory mode is a default: every selectable
+mode begins with `non-production-`. Use `operatord chain-serve --config FILE`
+with `apps/static-client` for real/local chain discovery.
 
 Run its dependency-free source/mechanical checks with:
 
@@ -45,25 +48,26 @@ receives no ephemeral payer/owner key material.
 ```sh
 # watch mode: the sealed lane's plan, step by step
 CARGO_NET_OFFLINE=true cargo run --offline \
-  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- serve
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+  serve --mode non-production-mock-watch
 # trade mode: found the Friday clutch and trade it
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode trade
+  serve --mode non-production-mock-trade
 # retained campaign mode: display three truth-labelled public transcript files
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode pyth-local \
+  serve --mode non-production-retained-source-v2 \
   --transcript docs/reviews/evidence/local-real-pyth-signed-rpc-2026-08-22
 # retained historical joined-v2 lifecycle: exact 21-step blocker history
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode pyth-local \
+  serve --mode non-production-retained-source-v2 \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22
 # current joined-v4 settled trading lifecycle
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode pyth-local \
+  serve --mode non-production-retained-source-v2 \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
 # live, unretained two-boundary provider/source/trading campaign
 scripts/run_operator_real_pyth_live.sh

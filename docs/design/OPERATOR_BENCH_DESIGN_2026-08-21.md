@@ -101,7 +101,9 @@ the workspace boundary, so it still calls the one true builder without
 moving the ELF's dependency pins. **No member line is added to
 `programs/clutch-sbf/Cargo.toml`.**
 
-**Lifecycle.** `operatord serve` reproduces `run_general_committed.sh`
+**Lifecycle.** This historical laboratory is now reachable only as
+`operatord serve --mode non-production-mock-watch`; it reproduces
+`run_general_committed.sh`
 step for step, in process:
 
 1. mint fresh test-only keys into a `mktemp` directory
@@ -303,7 +305,8 @@ Built 2026-08-21 by the trade lane, in the shared tree on `main`. The vision
 gap M0 left open was the whole point of the bench: *a person creates the Friday
 clutch and trades it against an opponent in a browser*. This closes it.
 
-`operatord serve --mode trade` shares watch mode's prologue exactly — ephemeral
+`operatord serve --mode non-production-mock-trade` shares the explicitly
+non-production watch mode's prologue exactly — ephemeral
 keys, the NON-PRODUCTION mock-source ELF hashed in process, a fresh ledger with
 genesis rows installed, the same readiness probe — and then diverges
 completely: there is no plan.

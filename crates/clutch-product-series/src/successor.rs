@@ -11,8 +11,8 @@ use crate::{
     MarketGenesisProfileV2Id, MarketInstanceV2Id, NativeClaimBasisV1, PriceMeasurePolicyV1Id,
     ProductTemplateId, ProductTemplateV4, QuantizedBasisSpecV1, QuantizedEdgePolicyV1,
     RealmCollateralProjectionV1, Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV1,
-    SeriesFundingQuoteId, SeriesFundingQuoteV1, SeriesFundingTermsV2Id, SeriesPlanV5Id,
-    MAX_BASIS_DEGREE, MAX_OUTCOMES, MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS,
+    SeriesAttachmentPlanV2, SeriesFundingQuoteId, SeriesFundingQuoteV1, SeriesFundingTermsV2Id,
+    SeriesPlanV5Id, MAX_BASIS_DEGREE, MAX_OUTCOMES, MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS,
 };
 
 const PRICE_MEASURE_POLICY_MAGIC: [u8; 8] = *b"DCPMPV1\0";
@@ -699,6 +699,48 @@ impl SeriesPlanV5 {
         Ok(())
     }
 
+    /// Validate the same economic Series against the V2 attachment/funding owner.
+    ///
+    /// The Series attachment identity is version-family typed. Successor
+    /// registration calls only this method and never treats a V1 attachment
+    /// body as equivalent to the V2 body.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_bindings_v2(
+        &self,
+        template: &ProductTemplateV4,
+        basis: &NativeClaimBasisV1,
+        recovery: &EvidenceOnlyRecoveryPolicyV1,
+        price_policy: &PriceMeasurePolicyV1,
+        genesis: &MarketGenesisProfileV2,
+        attachment: &SeriesAttachmentPlanV2,
+        registry: &RegistryCapabilityProjectionV2,
+    ) -> Result<()> {
+        self.validate_shape()?;
+        template.validate_bindings(basis, recovery)?;
+        registry.validate_complete_join(self, template, basis, recovery, price_policy, genesis)?;
+        attachment.validate()?;
+        if self.product_template_id != template.id()?
+            || self.market_genesis_profile_id != genesis.id()?
+            || self.attachment_plan_id != attachment.id()?
+            || self.market_collateral_cap < genesis.native_bearer_lot
+            || !self
+                .market_collateral_cap
+                .is_multiple_of(genesis.native_bearer_lot)
+        {
+            return Err(Error::MismatchedArtifact);
+        }
+        let final_start = self.start_bucket(self.instance_count - 1)?;
+        let primary_maturity = final_start
+            .checked_add(template.window_span_buckets)
+            .and_then(|value| value.checked_add(template.primary_maturity_grace_buckets))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let last = recovery.attempts[usize::from(recovery.attempt_count) - 1];
+        primary_maturity
+            .checked_add(last.closes_after_primary_maturity_buckets)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(())
+    }
+
     /// Typed identity of this V5 finite schedule and attachment choice.
     pub fn id(&self) -> Result<SeriesPlanV5Id> {
         let mut body = [0; SERIES_PLAN_V5_BYTES];
@@ -987,6 +1029,50 @@ pub fn compile_ordinal_v2(
     ordinal: u32,
 ) -> Result<CompiledOrdinalV2> {
     series.validate_bindings(
+        template,
+        basis,
+        recovery,
+        price_policy,
+        genesis,
+        attachment,
+        registry,
+    )?;
+    let start_bucket = series.start_bucket(ordinal)?;
+    let schedule = compile_schedule_v2(template, recovery, start_bucket)?;
+    let market = MarketInstancePreimageV2 {
+        product_template_id: template.id()?,
+        market_genesis_profile_id: genesis.id()?,
+        start_bucket,
+        collateral_cap: series.market_collateral_cap,
+    };
+    market.validate_bindings(template, basis, price_policy, genesis)?;
+    Ok(CompiledOrdinalV2 {
+        series_plan_id: series.id()?,
+        ordinal,
+        market_instance_id: market.id()?,
+        market,
+        attachment_plan_id: attachment.id()?,
+        schedule,
+    })
+}
+
+/// Compile one V5 ordinal against the QuoteV2-bound attachment successor.
+///
+/// The economic Market preimage remains V2 and can therefore converge across
+/// Series. Only the Series-scoped attachment authority advances to V2.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_ordinal_v3(
+    series: &SeriesPlanV5,
+    template: &ProductTemplateV4,
+    basis: &NativeClaimBasisV1,
+    recovery: &EvidenceOnlyRecoveryPolicyV1,
+    price_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    attachment: &SeriesAttachmentPlanV2,
+    registry: &RegistryCapabilityProjectionV2,
+    ordinal: u32,
+) -> Result<CompiledOrdinalV2> {
+    series.validate_bindings_v2(
         template,
         basis,
         recovery,

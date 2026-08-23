@@ -9,7 +9,6 @@ const read = (name) => fs.readFileSync(path.join(root, name), "utf8");
 const html = read("index.html");
 const app = read("app.js");
 const chain = read("chain-client.js");
-const registry = read("successor-registry.js");
 const builder = read("successor-builder.js");
 const compiler = read("compiler-proposal.js");
 
@@ -20,13 +19,14 @@ const browserRealm = (...scripts) => {
 };
 
 test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
-  for (const id of ["operator-url", "cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) {
+  for (const id of ["operator-url", "cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "decoder-set", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.doesNotMatch(html, /<script src="(?:embedded-data|protocol-client|protocol-contracts|native-bspline-v1)\.js"/);
   assert.doesNotMatch(html, /value="(?:https?:\/\/|wss?:\/\/|[1-9][0-9]*|[1-9A-HJ-NP-Za-km-z]{32,44}|[0-9a-f]{40,64})"/);
   assert.match(app, /Nothing is inferred from fixtures or defaults/);
   assert.doesNotMatch(app, /manifest\.json|terms\.json|GlassEmbeddedData/);
+  for (const obsolete of ["manifest.json", "terms.json", "successor-registry.js"]) assert.equal(fs.existsSync(path.join(root, obsolete)), false, obsolete);
 });
 
 test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_configuration_only", () => {
@@ -40,10 +40,11 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_configuration_onl
 });
 
 test("explicit_configuration_preserves_full_width_fields_as_decimal_strings", () => {
-  const context = browserRealm("successor-registry.js", "successor-builder.js", "chain-client.js");
+  const context = browserRealm("successor-builder.js", "chain-client.js");
   const output = vm.runInContext(`(() => {
     const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
     return GlassChainClient.validateConfiguration({
+      decoderSet: "dragons-clutch/canonical-account-decoders/v1-source-v3-current",
       operatorUrl: "http://127.0.0.1:9898",
       clusterName: "private-local",
       genesisHash: bytes(4),
@@ -64,15 +65,15 @@ test("explicit_configuration_preserves_full_width_fields_as_decimal_strings", ()
   assert.match(output.release.releaseKey, /:18446744073709551615:/);
 });
 
-test("outer_builder_emits_zero_signature_blockhash_free_reserved_disabled_transaction", () => {
-  const context = browserRealm("successor-registry.js", "successor-builder.js");
+test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_transaction", () => {
+  const context = browserRealm("successor-builder.js");
   const output = vm.runInContext(`(() => {
     const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
     const programId = bytes(2);
     return GlassSuccessorBuilder.build({
       payer: bytes(1),
       instructions: [{
-        flow: "market-epoch-creation", family: "general", localAction: "1", actionName: "CreateMarket",
+        flow: "market-epoch-creation", family: "general", familyTag: "74", familyVersion: "1", localAction: "1", actionName: "CreateMarket",
         payloadHex: "aabb", semanticOwner: { package: "clutch-market", schema: "create-market/v1", releaseSha256: "09".repeat(32) },
         accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
       }]
@@ -80,12 +81,13 @@ test("outer_builder_emits_zero_signature_blockhash_free_reserved_disabled_transa
       clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
     }, "1232");
   })()`, context);
-  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v3");
+  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v4");
   assert.equal(output.message.recentBlockhash, "11111111111111111111111111111111");
   assert.equal(output.hasRecentBlockhash, false);
   assert.equal(output.signed, false);
   assert.equal(output.submitted, false);
-  assert.deepEqual([...output.runtimeAdmissions], ["reserved-disabled"]);
+  assert.equal(output.runtimeCapability, "not-authenticated");
+  assert.equal(output.instructionCoordinates[0].source, "explicit-semantic-owner-draft; not runtime capability admission");
   assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);
   assert.equal(output.exactEquations[0].left, "340282366920938463463374607431768211455");
 });
@@ -93,7 +95,7 @@ test("outer_builder_emits_zero_signature_blockhash_free_reserved_disabled_transa
 test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
   assert.doesNotMatch(builder, /runtimeAdmission\s*=|raw\.runtimeAdmission|enabled\s*:\s*raw/);
   assert.match(builder, /Unbalanced exact equation/);
-  assert.match(builder, /central allocation ledger is ReservedDisabled/);
+  assert.match(builder, /No release-authenticated runtime capability verdict/);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
@@ -141,7 +143,7 @@ test("compiler_transport_joins_definition_class_terms_bytes_and_sixteen_bundle_i
 });
 
 test("no_shipped_script_contains_wallet_sign_or_submit_capability", () => {
-  for (const [name, source] of [["app.js", app], ["chain-client.js", chain], ["successor-registry.js", registry], ["successor-builder.js", builder], ["compiler-proposal.js", compiler]]) {
+  for (const [name, source] of [["app.js", app], ["chain-client.js", chain], ["successor-builder.js", builder], ["compiler-proposal.js", compiler]]) {
     assert.doesNotMatch(source, /window\.(?:solana|phantom)|signTransaction|signAllTransactions|sendRawTransaction|sendTransaction|@solana\//, name);
     assert.doesNotMatch(source, /new\s+WebSocket|XMLHttpRequest|EventSource|navigator\.sendBeacon|serviceWorker/, name);
   }
