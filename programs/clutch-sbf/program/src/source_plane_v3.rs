@@ -21,30 +21,32 @@ use clutch_liveness::{
 };
 use clutch_product_series::{CompiledSourceOccurrenceV3, FixedCodec as ProductFixedCodec};
 use clutch_source_plane_v3::{
-    ContentId, OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticKeyV3, SummaryProgramV3,
-    WindowSpecV3,
+    ContentId, FixedCodec, OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticKeyV3,
+    StatisticResultV3, SummaryProgramV3, WindowSpecV3,
 };
 use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
-    account_data_id, authenticate_boundary, authenticate_open_raw_page_account,
-    authenticate_raw_page_account, authenticate_reopen_lineage_account,
-    authenticate_source_head_account, authenticate_source_release_account,
-    authenticate_source_route, authenticate_source_work_receipt_account,
+    account_data_id, authenticate_boundary, authenticate_evaluation_authority,
+    authenticate_open_raw_page_account, authenticate_raw_page_account,
+    authenticate_reopen_lineage_account, authenticate_source_head_account,
+    authenticate_source_release_account, authenticate_source_route,
+    authenticate_source_work_receipt_account, authenticate_statistic_result,
     authenticate_statistic_result_absence, authenticate_statistic_result_account,
     authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
     join_source_occurrence, AdapterInvocationV1, AuthenticatedBoundaryV1,
-    AuthenticatedClockBucketV1, AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
-    AuthenticatedReopenLineageV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
-    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
+    AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1,
+    AuthenticatedRawPageV1, AuthenticatedReopenLineageV1, AuthenticatedSourceHeadV1,
+    AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
-    ClockSnapshotV1, FailurePolicySourceHandoffV1, LineageAccessV1, OccurrenceDispositionV1,
-    OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1, RuntimeAccountViewV1,
-    RuntimeDerivedPdaV1, RuntimeKey, SourceReceiptDispositionV1, SourceReleaseManifestV1,
-    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
-    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
-    REOPEN_LINEAGE_ACCOUNT_VERSION, RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
-    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
+    ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, LineageAccessV1,
+    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1,
+    RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceReceiptDispositionV1,
+    SourceReleaseManifestV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
+    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, OPEN_RAW_PAGE_ACCOUNT_TAG,
+    RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION,
+    RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
     SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
     WINDOW_WORK_ACCOUNT_TAG,
 };
@@ -53,7 +55,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::Outcome;
-use crate::error::ClutchError;
+use crate::error::{ClutchError, Refusal};
 use crate::source_identity::CLOCK_SYSVAR_ID;
 use crate::source_v2::auth::{decode_clock_view, AccountViewV2, AuthV2Error};
 
@@ -171,6 +173,12 @@ pub enum SourceV3SbfError {
     ParserAccountCount,
     /// The ordered parser accounts omitted, aliased, or widened feed/config roles.
     ParserAccountVector,
+    /// A reviewed statistic evaluator invocation failed in CPI.
+    EvaluatorCpi,
+    /// The evaluator did not return one exact StatisticResult under its own identity.
+    EvaluatorReturn,
+    /// The CPI program differed from the authenticated evaluator release.
+    WrongEvaluatorProgram,
     /// An authenticated receipt disposition did not match the requested liveness action.
     WrongReceiptDisposition,
     /// The single-custody liveness runtime refused the projected intent.
@@ -183,6 +191,12 @@ impl From<clutch_source_plane_v3_runtime::Error> for SourceV3SbfError {
     }
 }
 
+impl From<clutch_source_plane_v3::Error> for SourceV3SbfError {
+    fn from(value: clutch_source_plane_v3::Error) -> Self {
+        Self::Runtime(clutch_source_plane_v3_runtime::Error::Core(value))
+    }
+}
+
 impl From<clutch_source_plane_v3_adapter::Error> for SourceV3SbfError {
     fn from(value: clutch_source_plane_v3_adapter::Error) -> Self {
         Self::Pda(value)
@@ -192,6 +206,36 @@ impl From<clutch_source_plane_v3_adapter::Error> for SourceV3SbfError {
 impl From<RuntimeAdapterErrorV1> for SourceV3SbfError {
     fn from(value: RuntimeAdapterErrorV1) -> Self {
         Self::Liveness(value)
+    }
+}
+
+impl From<SourceV3SbfError> for Refusal {
+    fn from(value: SourceV3SbfError) -> Self {
+        let error = match value {
+            SourceV3SbfError::AccountBorrow => ClutchError::AccountBorrowFailed,
+            SourceV3SbfError::WrongClockAccount => ClutchError::MismatchedState,
+            SourceV3SbfError::Clock(_) => ClutchError::SourceAdmissionFailed,
+            SourceV3SbfError::Runtime(
+                clutch_source_plane_v3_runtime::Error::ArithmeticOverflow,
+            ) => ClutchError::Arithmetic,
+            SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec) => {
+                ClutchError::NonCanonical
+            }
+            SourceV3SbfError::Runtime(_) => ClutchError::SourceAdmissionFailed,
+            SourceV3SbfError::Pda(_) => ClutchError::WrongPda,
+            SourceV3SbfError::ParserCpi
+            | SourceV3SbfError::ParserReturn
+            | SourceV3SbfError::WrongParserProgram
+            | SourceV3SbfError::ParserAccountCount
+            | SourceV3SbfError::ParserAccountVector
+            | SourceV3SbfError::EvaluatorCpi
+            | SourceV3SbfError::EvaluatorReturn
+            | SourceV3SbfError::WrongEvaluatorProgram => ClutchError::SourceAdmissionFailed,
+            SourceV3SbfError::WrongReceiptDisposition | SourceV3SbfError::Liveness(_) => {
+                ClutchError::MismatchedState
+            }
+        };
+        Self::Adapter(error)
     }
 }
 
@@ -563,13 +607,14 @@ pub fn authenticate_work_receipt(
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
     let receipt = SourceWorkReceiptAccountV1::decode(&data)?;
-    let recipe = PdaRecipeV3::source_work_receipt(receipt.receipt_id())?;
+    let recipe = PdaRecipeV3::source_work_receipt(receipt.receipt_slot_id(route, schedule)?)?;
     let derived = derive_runtime_pda(program_id, &recipe)?;
     authenticate_source_work_receipt_account(
         route,
         schedule,
         runtime_account_view(receipt_account, &data),
         derived,
+        SourceWorkReceiptAccessV1::ExistingReadOnly,
     )
     .map_err(Into::into)
 }
@@ -737,6 +782,68 @@ pub fn successful_evaluation_handoff(
         window,
         evidence,
         result_account,
+    )
+    .map_err(Into::into)
+}
+
+/// Invoke one exact reviewed evaluator release and authenticate its canonical
+/// StatisticResult against the already-authenticated Window evidence.
+#[allow(clippy::too_many_arguments)]
+pub fn invoke_statistic_evaluator(
+    binding: EvaluationReleaseBindingV1,
+    summary: SummaryProgramV3,
+    evaluator_program: &AccountInfo<'_>,
+    evaluator_programdata: &AccountInfo<'_>,
+    clock: ClockSnapshotV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    evidence: AuthenticatedWindowEvidenceV1,
+    instruction: &Instruction,
+    invocation_accounts: &[AccountInfo<'_>],
+) -> SourceV3SbfResult<AuthenticatedEvaluationV1> {
+    let program_data = evaluator_program
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let programdata_data = evaluator_programdata
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let authority = authenticate_evaluation_authority(
+        binding,
+        summary,
+        runtime_account_view(evaluator_program, &program_data),
+        runtime_account_view(evaluator_programdata, &programdata_data),
+    )?;
+    drop(programdata_data);
+    drop(program_data);
+    if runtime_key(&instruction.program_id) != authority.evaluator_program() {
+        return Err(SourceV3SbfError::WrongEvaluatorProgram);
+    }
+    if invocation_accounts.len() > MAX_SOURCE_PARSER_ACCOUNTS {
+        return Err(SourceV3SbfError::ParserAccountCount);
+    }
+    solana_cpi::invoke(instruction, invocation_accounts)
+        .map_err(|_| SourceV3SbfError::EvaluatorCpi)?;
+    let (return_program, return_bytes) =
+        solana_cpi::get_return_data().ok_or(SourceV3SbfError::EvaluatorReturn)?;
+    if runtime_key(&return_program) != authority.evaluator_program() {
+        return Err(SourceV3SbfError::EvaluatorReturn);
+    }
+    let result = StatisticResultV3::decode(&return_bytes)?;
+    let invocation = AdapterInvocationV1 {
+        invoked_program: authority.evaluator_program(),
+        return_data_program: runtime_key(&return_program),
+        return_data_id: result.id()?,
+        instruction_data_id: hash_parts(INSTRUCTION_DATA_DOMAIN, &instruction.data),
+        account_vector_id: account_vector_id(invocation_accounts)?,
+    };
+    authenticate_statistic_result(
+        authority,
+        clock,
+        window,
+        key,
+        evidence,
+        &return_bytes,
+        invocation,
     )
     .map_err(Into::into)
 }
