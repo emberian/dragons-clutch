@@ -37,10 +37,13 @@ const OWNER_SETTLEMENT_PRESENCE_MASK_V2: u8 = EXPECTED_BUY_PRESENT_V2
 const BUY_END_MASK: u8 = 1;
 const SELL_END_MASK: u8 = 2;
 
-/// Adapter-authenticated PDA derivation under the V2-only seed domain.
+/// Structural PDA projection supplied by the General V2 adapter.
+///
+/// This type is not authority. The adapter must independently derive the
+/// address from `owner-settlement:v2` before consuming any returned plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct AdapterDerivedOwnerSettlementPdaV2 {
+pub struct OwnerSettlementPdaProjectionV2 {
     /// Program owning this seed domain.
     pub program_id: [u8; 32],
     /// Derived V2 row address.
@@ -53,18 +56,15 @@ pub struct AdapterDerivedOwnerSettlementPdaV2 {
     pub owner: [u8; 32],
     /// Canonical bump returned by V2 derivation.
     pub bump: u8,
-    /// True only after deriving with `owner-settlement:v2`.
-    pub v2_derivation_authenticated: bool,
 }
 
-impl AdapterDerivedOwnerSettlementPdaV2 {
+impl OwnerSettlementPdaProjectionV2 {
     fn validate(self) -> Result<()> {
         if self.program_id == [0; 32]
             || self.address == [0; 32]
             || self.epoch == [0; 32]
             || self.candidate == [0; 32]
             || self.owner == [0; 32]
-            || !self.v2_derivation_authenticated
         {
             Err(Error::InvalidAccount)
         } else {
@@ -73,7 +73,11 @@ impl AdapterDerivedOwnerSettlementPdaV2 {
     }
 }
 
-/// Outer facts supplied only after strict tag `0x81`, version `2` decoding.
+/// Structural outer-account facts for a strict V2 body projection.
+///
+/// This type does not authenticate the tag, version, owner, or PDA. The
+/// General adapter must decode `OwnerSettlementV2AccountV1` and derive the V2
+/// PDA before treating the returned projection as part of an atomic plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerSettlementAccountViewV2<'a> {
     /// Presented V2 row address.
@@ -88,10 +92,8 @@ pub struct OwnerSettlementAccountViewV2<'a> {
     pub lamports: u64,
     /// Exact rent minimum for the 292-byte envelope.
     pub rent_minimum: u64,
-    /// Exact V2 semantic body after strict outer-version authentication.
+    /// Exact V2 semantic body bytes.
     pub body: &'a [u8],
-    /// True only when the outer decoder observed tag `0x81`, version `2`.
-    pub v2_envelope_authenticated: bool,
 }
 
 /// Explicitly present or absent exact integer price.
@@ -1352,10 +1354,10 @@ impl AuthenticatedSettlementReceiptEndV2 {
     }
 }
 
-/// SBF-authenticated V2 owner row.
+/// Structurally checked V2 owner-row projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct AuthenticatedOwnerSettlementAccountV2 {
+pub struct OwnerSettlementAccountProjectionV2 {
     /// Canonical row PDA.
     pub address: [u8; 32],
     /// Dragon's Clutch program identity.
@@ -1368,14 +1370,13 @@ pub struct AuthenticatedOwnerSettlementAccountV2 {
     pub accumulator: OwnerSettlementAccumulatorV2,
 }
 
-/// Authenticate an existing V2 row after its outer tag/version was checked.
-pub fn authenticate_owner_settlement_account_v2(
+/// Project an existing V2 row without claiming adapter authentication.
+pub fn project_owner_settlement_account_v2(
     view: OwnerSettlementAccountViewV2<'_>,
-    derived: AdapterDerivedOwnerSettlementPdaV2,
-) -> Result<AuthenticatedOwnerSettlementAccountV2> {
+    derived: OwnerSettlementPdaProjectionV2,
+) -> Result<OwnerSettlementAccountProjectionV2> {
     validate_derived(derived)?;
-    if !view.v2_envelope_authenticated
-        || !view.writable
+    if !view.writable
         || view.address != derived.address
         || view.program_owner != derived.program_id
         || view.stored_bump != derived.bump
@@ -1391,7 +1392,7 @@ pub fn authenticate_owner_settlement_account_v2(
     {
         return Err(Error::InvalidAccount);
     }
-    Ok(AuthenticatedOwnerSettlementAccountV2 {
+    Ok(OwnerSettlementAccountProjectionV2 {
         address: view.address,
         program_id: derived.program_id,
         lamports: view.lamports,
@@ -1477,7 +1478,7 @@ pub struct OwnerSettlementCreatePlanV2 {
 /// Prepare rent-safe creation of a V2 owner row.
 pub fn prepare_create_owner_settlement_account_v2(
     authority: SelectedOwnerRowAuthorityV2,
-    derived: AdapterDerivedOwnerSettlementPdaV2,
+    derived: OwnerSettlementPdaProjectionV2,
     funding: OwnerSettlementCreateFundingV1,
 ) -> Result<OwnerSettlementCreatePlanV2> {
     authority.validate()?;
@@ -1551,7 +1552,7 @@ pub struct OwnerSettlementReceiptAccountingProjectionV2 {
 
 /// Project one present V2 end, including zero, without authorizing a write.
 pub fn project_owner_receipt_end_v2(
-    account: AuthenticatedOwnerSettlementAccountV2,
+    account: OwnerSettlementAccountProjectionV2,
     receipt: AuthenticatedSettlementReceiptEndV2,
 ) -> Result<OwnerSettlementReceiptAccountingProjectionV2> {
     receipt.validate()?;
@@ -1581,7 +1582,7 @@ pub fn project_owner_receipt_end_v2(
     })
 }
 
-fn validate_derived(value: AdapterDerivedOwnerSettlementPdaV2) -> Result<()> {
+fn validate_derived(value: OwnerSettlementPdaProjectionV2) -> Result<()> {
     value.validate()
 }
 
