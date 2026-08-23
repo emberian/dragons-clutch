@@ -167,13 +167,19 @@ impl FractionalPolicyV2 {
         self.rent.validate().map_err(map_retirement)
     }
 
-    /// Join the immutable policy to the canonical payout and external adapters.
-    pub fn validate_join(
+    /// Join the immutable policy to the canonical payout and Realm-selected
+    /// collateral plane.
+    ///
+    /// Internal Position redemption has no bearer-mint or Token-2022 effect,
+    /// so it must not be made unavailable merely because a claim-program
+    /// release is not present at runtime. The independent claim binding is
+    /// still persisted (and required to be nonzero) and bearer routes perform
+    /// the stronger [`Self::validate_join`] below.
+    pub fn validate_internal_join(
         self,
         payout: PayoutVectorV1,
         resolution_data_id: Identity32V1,
         collateral: BoundCollateralProfileV2,
-        claims: BoundClaimIssuanceV1,
     ) -> Result<()> {
         self.validate()?;
         payout.validate()?;
@@ -186,11 +192,27 @@ impl FractionalPolicyV2 {
             || self.realm.bytes() != market.realm.bytes()
             || self.collateral_policy.bytes() != collateral.policy_id().bytes()
             || self.collateral_release.bytes() != release_id.bytes()
-            || self.claim_issuance_binding.bytes() != claims.binding_id().bytes()
             || self.resolution_data_id != resolution_data_id
             || self.outcome_count != payout.outcome_count
             || self.common_lot != payout.common_lot()?
         {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Join the immutable policy to the canonical payout and both external
+    /// adapters. Bearer routes require this stronger join because they mutate
+    /// the independently released Token-2022 claim plane.
+    pub fn validate_join(
+        self,
+        payout: PayoutVectorV1,
+        resolution_data_id: Identity32V1,
+        collateral: BoundCollateralProfileV2,
+        claims: BoundClaimIssuanceV1,
+    ) -> Result<()> {
+        self.validate_internal_join(payout, resolution_data_id, collateral)?;
+        if self.claim_issuance_binding.bytes() != claims.binding_id().bytes() {
             return Err(Error::MismatchedBinding);
         }
         Ok(())

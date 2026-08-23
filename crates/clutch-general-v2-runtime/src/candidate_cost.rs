@@ -258,9 +258,12 @@ pub fn project_costed_candidate_action14_v1(
     }
     let components = ScoreV2QCostComponentsV1 {
         score: ScoreV2QComponentsV1 {
-            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
-            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
-            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics
+                .score
+                .score()
+                .cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
             settlement_candidate_id: candidate_id,
         },
         owner_net_cost_atoms: certificate.owner_net_cost_atoms(),

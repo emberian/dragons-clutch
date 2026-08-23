@@ -4,11 +4,11 @@ use clutch_collateral_adapter_v2::{
     prepare_fractional_claim_ledger_founding_v3, prepare_fractional_claim_ledger_retirement_v3,
     prepare_fractional_claim_ledger_successor_v3, prepare_fractional_claim_redemption_v3,
     AcceptedClaimRedemptionCollateralV2, BoundClaimIssuanceV1, BoundCollateralProfileV2,
-    ClaimLedgerV3, FractionalClaimLedgerFoundingPlanV3, FractionalClaimLedgerPlanV3,
-    FractionalClaimLedgerRetirementPlanV3, FractionalClaimRedemptionPlanV3,
-    FractionalClaimSupplyMutationV3, FractionalPayoutDispositionV3, HoardV2, Id,
-    MarketLiabilityLifecycleV1, ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5,
-    ResolutionStateV5, ResolutionV5,
+    ClaimLedgerV3, FractionalBindingStateV1, FractionalClaimLedgerFoundingPlanV3,
+    FractionalClaimLedgerPlanV3, FractionalClaimLedgerRetirementPlanV3,
+    FractionalClaimRedemptionPlanV3, FractionalClaimSupplyMutationV3,
+    FractionalPayoutDispositionV3, HoardV2, Id, MarketLiabilityLifecycleV1,
+    ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5, ResolutionStateV5, ResolutionV5,
 };
 use clutch_general_v2_contract::{
     project_general_replay_transition_v1, GeneralPositionReplayPrestateV1,
@@ -24,6 +24,11 @@ use crate::{
     Error, FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerPhaseV1,
     FractionalLedgerV1, FractionalPolicyV2, PayoutVectorV1, Result, MAX_OUTCOMES,
 };
+
+/// Semantic domain for the unique Fractional child admission consumed by the
+/// Product five-family Market aggregator.
+pub const FRACTIONAL_FAMILY_ADMISSION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-admission/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -78,7 +83,7 @@ pub struct BoundFractionalContextV1 {
     resolution_data_id: Identity32V1,
     payout: PayoutVectorV1,
     collateral: BoundCollateralProfileV2,
-    claims: BoundClaimIssuanceV1,
+    claims: Option<BoundClaimIssuanceV1>,
 }
 
 impl BoundFractionalContextV1 {
@@ -131,7 +136,7 @@ impl BoundFractionalContextV1 {
         self.collateral
     }
     /// Independent claim-issuance capability.
-    pub const fn claims(self) -> BoundClaimIssuanceV1 {
+    pub const fn claims(self) -> Option<BoundClaimIssuanceV1> {
         self.claims
     }
 
@@ -177,6 +182,7 @@ fn validate_canonical_ledgers(
     map_collateral(claim_ledger.validate())?;
     map_collateral(hoard.validate())?;
     if ledger.claim_ledger_account != claim_ledger_account
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
         || claim_ledger.market_instance_id != collateral_id(policy.market_instance)
         || claim_ledger.realm_id != collateral_id(policy.realm)
         || claim_ledger.fractional_policy_id != collateral_id(policy_account)
@@ -265,7 +271,77 @@ pub fn bind_fractional_context_v1(
         resolution_data_id,
         payout,
         collateral,
-        claims,
+        claims: Some(claims),
+    })
+}
+
+/// Bind the canonical subset needed by an internal Position redemption.
+///
+/// This is deliberately not sufficient for a bearer action: the resulting
+/// context carries no authenticated claim-program capability and every bearer
+/// source refuses it. Native internal claims are instead authenticated by the
+/// canonical Position V3, ClaimLedger V3, and purpose-owned GEN1 Replay.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_fractional_internal_context_v1(
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+    hoard: HoardV2,
+    resolution: ResolutionV5,
+    collateral: BoundCollateralProfileV2,
+) -> Result<BoundFractionalContextV1> {
+    map_collateral(resolution.validate())?;
+    if resolution.state != ResolutionStateV5::Finalized
+        || resolution.facts.market_instance_id != collateral_id(policy.market_instance)
+        || resolution.facts.native_claim_basis_id != claim_ledger.native_claim_basis_id
+        || resolution.facts.generation != policy.domain_generation
+        || resolution.facts.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let payout = PayoutVectorV1::from_resolution_v5(resolution)?;
+    let resolution_semantic_id = runtime_identity(
+        resolution
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    let resolution_data_id = runtime_identity(
+        resolution
+            .data_id(collateral_id(policy.resolution_account))
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    policy.validate_internal_join(payout, resolution_data_id, collateral)?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    if policy_account == ledger_account {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_ledgers(
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        claim_ledger_account,
+        claim_ledger,
+        hoard,
+        collateral,
+    )?;
+    Ok(BoundFractionalContextV1 {
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        claim_ledger_account,
+        claim_ledger,
+        hoard,
+        resolution,
+        resolution_semantic_id,
+        resolution_data_id,
+        payout,
+        collateral,
+        claims: None,
     })
 }
 
@@ -276,6 +352,71 @@ pub struct FractionalInitializationPlanV1 {
     pub ledger_after: FractionalLedgerV1,
     /// Canonical ClaimLedger V3 founding successor.
     pub claim_ledger: FractionalClaimLedgerFoundingPlanV3,
+    /// Exact child receipt presented to the Product five-family aggregator.
+    pub family_admission: FractionalFamilyAdmissionReceiptV1,
+}
+
+/// Private-field receipt proving one exact a4/a5/ClaimLedger founding latch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalFamilyAdmissionReceiptV1 {
+    market_instance: Identity32V1,
+    domain_generation: u64,
+    policy_account: Identity32V1,
+    policy_state_id: Identity32V1,
+    ledger_account: Identity32V1,
+    ledger_state_id: Identity32V1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger_before_id: Identity32V1,
+    claim_ledger_after_id: Identity32V1,
+    latch_transition_id: Identity32V1,
+    receipt_id: Identity32V1,
+}
+
+impl FractionalFamilyAdmissionReceiptV1 {
+    /// Full shared Market identity.
+    pub const fn market_instance(self) -> Identity32V1 {
+        self.market_instance
+    }
+    /// Exact nonzero fractional domain generation.
+    pub const fn domain_generation(self) -> u64 {
+        self.domain_generation
+    }
+    /// Exact immutable a4/v2 physical account.
+    pub const fn policy_account(self) -> Identity32V1 {
+        self.policy_account
+    }
+    /// Immutable a4/v2 state identity.
+    pub const fn policy_state_id(self) -> Identity32V1 {
+        self.policy_state_id
+    }
+    /// Exact a5/v1 physical account.
+    pub const fn ledger_account(self) -> Identity32V1 {
+        self.ledger_account
+    }
+    /// Founding a5/v1 state identity.
+    pub const fn ledger_state_id(self) -> Identity32V1 {
+        self.ledger_state_id
+    }
+    /// Exact canonical ClaimLedger V3 physical account.
+    pub const fn claim_ledger_account(self) -> Identity32V1 {
+        self.claim_ledger_account
+    }
+    /// ClaimLedger semantic identity before the one-way latch.
+    pub const fn claim_ledger_before_id(self) -> Identity32V1 {
+        self.claim_ledger_before_id
+    }
+    /// ClaimLedger semantic identity after the one-way latch.
+    pub const fn claim_ledger_after_id(self) -> Identity32V1 {
+        self.claim_ledger_after_id
+    }
+    /// Atomic ClaimLedger/a5 founding transition identity.
+    pub const fn latch_transition_id(self) -> Identity32V1 {
+        self.latch_transition_id
+    }
+    /// Unique receipt identity consumed by Product family admission.
+    pub const fn receipt_id(self) -> Identity32V1 {
+        self.receipt_id
+    }
 }
 
 /// Initialize the sole aggregate-credit owner beside an authenticated policy.
@@ -297,10 +438,11 @@ pub fn initialize_fractional_ledger_v1(
         return Err(Error::MismatchedBinding);
     }
     map_collateral(claim_ledger.validate())?;
-    if claim_ledger.market_instance_id != collateral_id(policy.market_instance)
+    if claim_ledger.fractional_binding != FractionalBindingStateV1::OpenUnlatched
+        || claim_ledger.market_instance_id != collateral_id(policy.market_instance)
         || claim_ledger.realm_id != collateral_id(policy.realm)
-        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
-        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || !claim_ledger.fractional_policy_id.is_zero()
+        || !claim_ledger.fractional_ledger_account.is_zero()
         || claim_ledger.resolution_account != collateral_id(policy.resolution_account)
         || claim_ledger.outcome_count != policy.outcome_count
         || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
@@ -324,15 +466,56 @@ pub fn initialize_fractional_ledger_v1(
     let ledger_after_id = collateral_id(ledger.state_id()?);
     let claim_ledger = map_collateral(prepare_fractional_claim_ledger_founding_v3(
         claim_ledger,
+        collateral_id(policy_account),
+        collateral_id(ledger_account),
         ledger_after_id,
         &FractionalSha256V1,
     ))?;
-    if claim_ledger.fractional_ledger_account() != collateral_id(ledger_account) {
+    if claim_ledger.fractional_policy_id() != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account() != collateral_id(ledger_account)
+    {
         return Err(Error::MismatchedBinding);
     }
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_before_id = runtime_identity(claim_ledger.claim_ledger_before_id())?;
+    let claim_ledger_after_id = runtime_identity(claim_ledger.claim_ledger_after_id())?;
+    let latch_transition_id = runtime_identity(claim_ledger.transition_id())?;
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_ADMISSION_RECEIPT_DOMAIN_V1);
+    for identity in [
+        policy.market_instance,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        claim_ledger_before_id,
+        claim_ledger_after_id,
+        latch_transition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(policy.domain_generation.to_le_bytes());
+    let receipt_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    let family_admission = FractionalFamilyAdmissionReceiptV1 {
+        market_instance: policy.market_instance,
+        domain_generation: policy.domain_generation,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        claim_ledger_before_id,
+        claim_ledger_after_id,
+        latch_transition_id,
+        receipt_id,
+    };
     Ok(FractionalInitializationPlanV1 {
         ledger_after: ledger,
         claim_ledger,
+        family_admission,
     })
 }
 
@@ -398,7 +581,8 @@ pub struct BearerClaimSourceV1 {
 
 impl BearerClaimSourceV1 {
     fn validate(self, context: BoundFractionalContextV1, quantity: u64) -> Result<()> {
-        if self.claim_issuance_binding.bytes() != context.claims.binding_id().bytes()
+        let claims = context.claims.ok_or(Error::ClaimPlaneRefused)?;
+        if self.claim_issuance_binding.bytes() != claims.binding_id().bytes()
             || self.claim_issuance_binding != context.policy.claim_issuance_binding
             || self.source_claim_atoms < quantity
             || self.claim_token_account == self.claim_mint
@@ -1591,7 +1775,7 @@ fn prepare_fractional_account_close_funding(
     })
 }
 
-/// Exact terminal facts a ProductOccurrenceRoot authorization must bind before
+/// Exact terminal facts a Product five-family authorization must bind before
 /// either fractional-family account may be deleted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalDomainTerminalRequirementV1 {
@@ -1687,7 +1871,7 @@ impl FractionalDomainTerminalRequirementV1 {
 /// Prepared terminal fractional-family close after all economic state is zero.
 ///
 /// This pure value is not Product authorization. The disabled SBF adapter must
-/// consume the matching private ProductOccurrenceRoot close authorization
+/// consume the matching private Product five-family close authorization
 /// before applying either deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EmptyLedgerClosePlanV1 {
@@ -1705,7 +1889,7 @@ impl EmptyLedgerClosePlanV1 {
         self.claim_ledger_after
     }
 
-    /// Exact facts the private ProductOccurrenceRoot authorization must match.
+    /// Exact facts the private Product five-family authorization must match.
     pub const fn terminal_requirement(self) -> FractionalDomainTerminalRequirementV1 {
         self.terminal_requirement
     }

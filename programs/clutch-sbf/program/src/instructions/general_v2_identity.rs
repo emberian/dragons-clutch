@@ -1976,9 +1976,12 @@ fn checked_empty_book_verdict(
     let economics = verified.economics();
     Ok(CheckedVerdict::Valid {
         score: contract::ScoreV2QComponentsV1 {
-            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
-            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
-            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics
+                .score
+                .score()
+                .cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
             settlement_candidate_id: base,
         },
         expected_rank: *verified.rank_key(),

@@ -208,13 +208,16 @@ fn complete_set_direct_flow_and_virtual_churn_cannot_improve_score() {
     .unwrap();
     assert_eq!(wash.direct_flow[..2], [7, 7]);
     assert_eq!(
-        wash.score.risk,
+        wash.score.score().risk,
         RiskObjectiveV2 {
             certified_risk_flow_atoms: 0
         }
     );
-    assert_eq!(wash.score.cash_equivalent_direct_flow_atoms, 7);
-    assert!(empty.score.is_better_than(&wash.score));
+    assert_eq!(wash.score.score().cash_equivalent_direct_flow_atoms, 7);
+    assert_eq!(
+        empty.score.total_order_same_domain(&wash.score),
+        Ok(core::cmp::Ordering::Greater)
+    );
 
     let split_book = book_of(&[order(
         1,
@@ -236,9 +239,12 @@ fn complete_set_direct_flow_and_virtual_churn_cannot_improve_score() {
     )
     .unwrap();
     assert_eq!(churn.direct_flow[..2], [0, 0]);
-    assert_eq!(churn.score.risk.certified_risk_flow_atoms, 0);
-    assert_eq!(churn.score.virtual_churn_atoms, 5);
-    assert!(no_churn.score.is_better_than(&churn.score));
+    assert_eq!(churn.score.score().risk.certified_risk_flow_atoms, 0);
+    assert_eq!(churn.score.score().virtual_churn_atoms, 5);
+    assert_eq!(
+        no_churn.score.total_order_same_domain(&churn.score),
+        Ok(core::cmp::Ordering::Greater)
+    );
 }
 
 #[test]
@@ -455,7 +461,10 @@ fn semantic_price_binding_and_full_digest_are_not_claimed_or_truncated() {
             0x58, 0xc9, 0x98, 0x87,
         ]
     );
-    assert_eq!(baseline.score.digest, baseline.economic_candidate_digest);
+    assert_eq!(
+        baseline.score.score().digest,
+        baseline.economic_candidate_digest
+    );
 
     let mut forged_semantics = price();
     forged_semantics.semantic_price_digest = id(6);

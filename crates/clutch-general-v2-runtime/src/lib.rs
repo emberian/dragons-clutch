@@ -66,11 +66,13 @@ use sha2::{Digest, Sha256};
 mod builder;
 mod candidate_cost;
 mod settlement;
+mod settlement_root_projection;
 mod work;
 
 pub use builder::*;
 pub use candidate_cost::*;
 pub use settlement::*;
+pub use settlement_root_projection::*;
 pub use work::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -967,9 +969,12 @@ fn verify_smooth_direct_candidate_with_score_policy_v1(
 
     let rank_key = encode_score_v2_q_first_admitted_tie_v1(
         ScoreV2QComponentsV1 {
-            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
-            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
-            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics
+                .score
+                .score()
+                .cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
             settlement_candidate_id: header.settlement_candidate_id,
         },
         FirstAdmittedTieV1 {
@@ -1075,11 +1080,12 @@ pub fn verify_smooth_direct_candidate_costed_v1(
     let rank_key = encode_score_v2_q_cost_first_admitted_tie_v1(
         ScoreV2QCostComponentsV1 {
             score: ScoreV2QComponentsV1 {
-                certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
+                certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
                 cash_equivalent_direct_flow_atoms: economics
                     .score
+                    .score()
                     .cash_equivalent_direct_flow_atoms,
-                virtual_churn_atoms: economics.score.virtual_churn_atoms,
+                virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
                 settlement_candidate_id: header.settlement_candidate_id,
             },
             owner_net_cost_atoms: cost_certificate.owner_net_cost_atoms(),

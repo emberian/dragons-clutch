@@ -226,9 +226,13 @@ never owned either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
-backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
-accounts, and claim backing all to be zero. It then closes both `0xa4` and
-`0xa5` under one private ProductOccurrenceRoot terminal authorization, refunds
+backing live. ClaimLedger V3 begins with an explicit unlatched fractional state
+and zero a4/a5 identities; Resolution activation preserves it. Only Fractional
+Initialize can atomically latch both exact accounts, sequence zero-to-one, and
+the Product five-family admission receipt. `CloseEmptyLedger` requires claims,
+aggregate credit, live credit accounts, and claim backing all to be zero. It
+then closes both `0xa4` and `0xa5` under one private Product five-family
+terminal authorization, refunds
 each account's stored rent payer independently, and routes only hostile or
 unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
 principal, reinterpret donation surplus as revenue, strand policy rent, permit
@@ -329,9 +333,9 @@ price artifacts, and present-funded liveness before capability admission.
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
 `NonProductionLab`; current unactivated rows are `ReservedDisabled`; and
-historical Reservation/receipt/owner-row coordinates remain occupied as
-`Withdrawn`. An account codec or pure runtime elsewhere does not make a route
-executable.
+historical General Reservation/receipt/owner-row coordinates and withdrawn
+Fractional V1 coordinates remain occupied as `Withdrawn`. An account codec or
+pure runtime elsewhere does not make a route executable.
 
 | tag/version | owner | account |
 |---:|---|---|

@@ -58,7 +58,7 @@ use crate::instructions::general_v2_identity;
 use crate::instructions::product_series;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
+    fractional_redemption, genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -92,6 +92,7 @@ enum Route {
     Artifact,
     OrdersBatch,
     Genesis,
+    FractionalRedemption,
     #[cfg(feature = "profile-full")]
     SourceIngest,
     SourceIngestV2,
@@ -204,6 +205,21 @@ fn route_hint(instruction_data: &[u8]) -> Route {
     }
     match instruction_data.get(10).copied() {
         Some(ACTION_LAYOUT_HINT) => match instruction_data.get(13).copied() {
+            Some(clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(
+                        clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+                    )
+                    && instruction_data.get(15).copied().is_some_and(|action| {
+                        capabilities::extension_intent_action_enabled(
+                            clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG,
+                            clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+                            action,
+                        )
+                    }) =>
+            {
+                Route::FractionalRedemption
+            }
             #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
             Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
                 if instruction_data.get(14).copied()
@@ -377,6 +393,9 @@ pub fn process(
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
+        Route::FractionalRedemption => {
+            process_fractional_redemption(program_id, accounts, instruction_data)
+        }
         #[cfg(feature = "profile-full")]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
@@ -429,7 +448,8 @@ fn process_dealer_policy(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
-        | ExtensionAction::Recovery(_) => unexpected_route(),
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -458,7 +478,8 @@ fn process_recurring_series(
         | ExtensionAction::DealerFacility(_)
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
-        | ExtensionAction::Recovery(_) => unexpected_route(),
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -486,6 +507,30 @@ fn process_source_v3(
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
         ExtensionAction::SourceV3(action) => crate::instructions::source_series::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        _ => unexpected_route(),
+    }
+}
+
+/// Decode the strict FractionalRedemption envelope after the central exact
+/// capability check. Until Product Foundation admits actions 1 and 2 together,
+/// `disabled_canonical_tag` refuses every tuple before this function is
+/// reachable or any account is inspected.
+#[inline(never)]
+fn process_fractional_redemption(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::FractionalRedemption(action) => fractional_redemption::process(
             program_id,
             accounts,
             request.sequence,
@@ -548,7 +593,8 @@ fn process_general_v2(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
-        | ExtensionAction::Recovery(_) => unexpected_route(),
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 

@@ -1,9 +1,10 @@
 use clutch_collateral_adapter_v2::{
     bind_claim_issuance_v1, bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2,
-    ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1, CollateralPolicyV2, HoardV2,
-    Id, MarketCollateralBindingV2, MarketLiabilityLifecycleV1, ProfileCollateralBindingV2,
-    RealmCollateralBindingV2, ResolutionFinalizationFactsV5, ResolutionPayoutUnitBoundaryV5,
-    ResolutionV5, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
+    ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1, CollateralPolicyV2,
+    FractionalBindingStateV1, HoardV2, Id, MarketCollateralBindingV2, MarketLiabilityLifecycleV1,
+    ProfileCollateralBindingV2, RealmCollateralBindingV2, ResolutionFinalizationFactsV5,
+    ResolutionPayoutUnitBoundaryV5, ResolutionV5, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1,
+    TOKEN_2022_PROGRAM,
 };
 use clutch_fractional_redemption_runtime::*;
 use clutch_general_v2_contract::{
@@ -197,13 +198,14 @@ fn external_context(
         market_instance_id: cid(20),
         realm_id: cid(10),
         native_claim_basis_id: cid(33),
-        fractional_policy_id: cid(41),
-        fractional_ledger_account: cid(42),
+        fractional_policy_id: Id::ZERO,
+        fractional_ledger_account: Id::ZERO,
         resolution_account: cid(21),
         aggregate_internal_supply: internal_supply,
         aggregate_materialized_supply: materialized_supply,
         next_fractional_sequence: 0,
         last_fractional_transition_id: Id::ZERO,
+        fractional_binding: FractionalBindingStateV1::OpenUnlatched,
         lifecycle: MarketLiabilityLifecycleV1::Resolved,
         outcome_count: 2,
         stored_bump: 6,
@@ -235,6 +237,24 @@ fn external_context(
         deletable_rent(43),
     )
     .unwrap();
+    assert_eq!(
+        founding
+            .claim_ledger
+            .claim_ledger_after()
+            .fractional_binding,
+        FractionalBindingStateV1::Latched
+    );
+    assert_eq!(
+        founding.family_admission.market_instance(),
+        policy.market_instance
+    );
+    assert_eq!(founding.family_admission.policy_account(), policy_account);
+    assert_eq!(founding.family_admission.ledger_account(), ledger_account);
+    assert_eq!(
+        founding.family_admission.claim_ledger_account(),
+        claim_ledger_account
+    );
+    assert_ne!(founding.family_admission.receipt_id().bytes(), [0; 32]);
     let ledger = FractionalLedgerV1 {
         aggregate_credit_numerator: aggregate_credit,
         active_credit_accounts: active_credits,
@@ -376,6 +396,42 @@ fn payout_lots_and_solvency_use_exact_integer_numerators() {
     assert_eq!(
         vector.validate_solvency(supply, 1, 1),
         Err(Error::Insolvent)
+    );
+}
+
+#[test]
+fn exact_internal_redemption_needs_no_bearer_claim_release() {
+    let mut internal_supply = [0; MAX_OUTCOMES];
+    internal_supply[0] = 7;
+    internal_supply[1] = 1;
+    let (full, policy, ledger) = external_context(0, 0, internal_supply, [0; MAX_OUTCOMES], 2);
+    let internal = bind_fractional_internal_context_v1(
+        full.policy_account(),
+        policy,
+        full.ledger_account(),
+        ledger,
+        full.claim_ledger_account(),
+        full.claim_ledger(),
+        full.hoard(),
+        full.resolution(),
+        full.collateral(),
+    )
+    .unwrap();
+    assert_eq!(internal.claims(), None);
+    let mut position_eggs = [0; MAX_OUTCOMES];
+    position_eggs[0] = 7;
+    let source = canonical_internal_source(internal, rid(50), position_eggs, 1);
+    let plan = redeem_internal_exact_v1(internal, 1, 1, source, 0, 7).unwrap();
+    assert_eq!(plan.paid_atoms, 1);
+    assert_eq!(plan.claimant_numerator_after, 0);
+    let RedemptionSourcePoststateV1::Internal(position) = plan.source_after else {
+        panic!("wrong payout source");
+    };
+    assert_eq!(position.position_after.fields().cash_atoms, 1);
+    assert_eq!(position.position_after.fields().native_eggs[0], 0);
+    assert_eq!(
+        position.replay.kind(),
+        GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
     );
 }
 
@@ -598,7 +654,7 @@ fn context_refuses_a_coherent_but_wrong_resolution_v5_body() {
             context.hoard(),
             wrong_resolution,
             context.collateral(),
-            context.claims(),
+            context.claims().unwrap(),
         ),
         Err(Error::MismatchedBinding)
     ));
