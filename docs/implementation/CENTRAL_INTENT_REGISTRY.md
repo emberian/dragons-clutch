@@ -147,9 +147,10 @@ refundable account-rent principal, and five release-selected collateral-vault
 rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
 copy its cursor or component-balance facts.
 
-The Structured and Recovery family action spaces remain empty. Dealer actions
-outside the four policy-transport coordinates remain unknown until an atomic
-design wave fixes their payload and capability contract.
+The Structured and Recovery family action spaces remain empty. Dealer facility
+actions `5..=25` are allocated in runtime order `Initialize..=Retire`, while
+only policy transport `1..=4` is executable in the existing non-production
+catalog profile. Every facility action remains capability-disabled.
 
 ## Coordinated successor account block
 
@@ -181,6 +182,20 @@ or pure runtime elsewhere does not make a route executable.
 | `0x90/1` | SourcePlane V3 | window seal |
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0x93/1` | Dealer | immutable liveness schedule (380 bytes) |
+| `0x94/1` | Dealer | authoritative State V2 (848 bytes) |
+| `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
+| `0x98/1` | Dealer | immutable-after-activation LP page V2 (1,028 bytes) |
+| `0x99/1` | Dealer | one-generation Lease V2 (1,044 bytes) |
+| `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
+| `0x9b/1` | Dealer | counted Epoch binding V2 (772 bytes) |
+| `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
+| `0x9d/1` | Dealer | streamed terminal ClaimWork (1,148 bytes) |
+| `0x9e/1` | Dealer | permanent root tombstone V2 (476 bytes) |
+
+`0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
+Position V3 and purpose-owned Replay V3 families rather than minting local
+account-body duplicates at those coordinates.
 
 ## Decimal 74 is not hexadecimal `0x74`
 

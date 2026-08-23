@@ -169,8 +169,8 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability. General V2, Dealer policy,
-/// SourcePlane V3
+/// Allocation does not imply execution capability. General V2, Dealer policy
+/// and facility, SourcePlane V3
 /// actions 1 through 12, and recurring-Series actions 13 through 18 have
 /// registered local actions; every exact tuple remains separately disabled
 /// until its handler is admitted. The Series payload/account codecs are frozen
@@ -288,9 +288,12 @@ mod tests {
                         == clutch_solana_layout::registry::DEALER_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                        && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                            .contains(&local_action);
+                            .contains(&local_action)
+                            || (clutch_solana_layout::registry::DealerFacilityAction::FIRST_TAG
+                                ..=clutch_solana_layout::registry::DealerFacilityAction::LAST_TAG)
+                                .contains(&local_action));
                     let source = family_tag
                         == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
                         && family_version

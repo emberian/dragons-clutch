@@ -39,6 +39,7 @@ mod replay;
 mod state;
 mod state_v2;
 mod terminal_claims;
+mod terminal_state;
 mod transitions;
 
 pub use budget::*;
@@ -62,6 +63,7 @@ pub use replay::*;
 pub use state::*;
 pub use state_v2::*;
 pub use terminal_claims::*;
+pub use terminal_state::*;
 pub use transitions::*;
 
 use sha2::{Digest, Sha256};
@@ -141,6 +143,9 @@ pub const DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for streamed terminal claim work.
 pub const DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/claim-work/v1\0";
+/// Exact content domain for one State-owned Replay-terminalization receipt.
+pub const DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/terminal-state-receipt/v2\0";
 /// Exact content domain for `DealerLeaseV1`.
 pub const DEALER_LEASE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/lease/v1\0";
 /// Exact content domain for external-liveness `DealerLeaseV2`.

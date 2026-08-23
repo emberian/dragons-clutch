@@ -2,9 +2,14 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerFacilityGenesisV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1, DealerStateV1, DealerStateV2,
-    Error, FacilityPositionBindingV1, FixedCodec, Id, Result,
+    DealerFacilityGenesisV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1,
+    DealerReplayClosePlanV1, DealerStateV1, DealerStateV2, DealerTerminalStateReceiptV2, Error,
+    FacilityPositionBindingV1, FacilityPositionBindingV2, FixedCodec, Id, Result,
 };
+use clutch_retirement::{
+    PositionPurposeV3, PositionTombstoneV3, PositionV3Sha256Backend,
+};
+use sha2::{Digest, Sha256};
 
 /// Local semantic-body magic for the permanent Dealer root tombstone.
 pub const DEALER_ROOT_TOMBSTONE_MAGIC_V1: [u8; 8] = *b"DCRTMBV1";
@@ -17,7 +22,7 @@ pub const DEALER_ROOT_TOMBSTONE_MAGIC_V2: [u8; 8] = *b"DCRTMBV2";
 /// Exact local semantic-body version for the root successor.
 pub const DEALER_ROOT_TOMBSTONE_VERSION_V2: u16 = 2;
 /// Exact bytes retained after shrinking a V2 State root.
-pub const DEALER_ROOT_TOMBSTONE_BYTES_V2: usize = HEADER_BYTES + (9 * 32) + (5 * 8);
+pub const DEALER_ROOT_TOMBSTONE_BYTES_V2: usize = HEADER_BYTES + (13 * 32) + (5 * 8);
 
 /// Permanent evidence retained after every counted Dealer child is closed.
 ///
@@ -192,6 +197,14 @@ pub struct DealerRootTombstoneV2 {
     pub funded_dependencies_id: Id,
     /// Last Facility Position semantic identity before that account closed.
     pub terminal_facility_position_id: Id,
+    /// Canonical permanent Position V3 tombstone identity.
+    pub position_tombstone_id: Id,
+    /// Semantic identity of the exact deleted terminal Replay V3 body.
+    pub terminal_replay_semantic_id: Id,
+    /// Last Retire transition intent committed by terminal Replay.
+    pub terminal_replay_intent_id: Id,
+    /// State-owned terminal receipt committed by terminal Replay.
+    pub terminal_state_receipt_id: Id,
     /// Content identity of the exhaustive closed `DealerStateV2` body.
     pub terminal_state_id: Id,
     /// Root account shrunk in place.
@@ -221,6 +234,10 @@ impl DealerRootTombstoneV2 {
             self.facility_position_binding_id,
             self.funded_dependencies_id,
             self.terminal_facility_position_id,
+            self.position_tombstone_id,
+            self.terminal_replay_semantic_id,
+            self.terminal_replay_intent_id,
+            self.terminal_state_receipt_id,
             self.terminal_state_id,
             self.dealer_state_account_id,
             self.rent_payer,
@@ -242,40 +259,106 @@ impl DealerRootTombstoneV2 {
     }
 
     /// Require the closed V2 root and exact immutable facility/rent joins.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_retirement(
         &self,
         genesis: &DealerFacilityGenesisV1,
-        binding: &FacilityPositionBindingV1,
+        binding: &FacilityPositionBindingV2,
         policy: &DealerPolicyV1,
-        terminal_state: &DealerStateV2,
+        terminalizing_state: &DealerStateV2,
+        terminal_receipt: &DealerTerminalStateReceiptV2,
+        closed_state: &DealerStateV2,
+        position_tombstone: PositionTombstoneV3,
+        replay_close: DealerReplayClosePlanV1,
     ) -> Result<()> {
         self.validate()?;
-        let facility_id = genesis.facility_id_for_policy(policy)?;
+        let facility_id = genesis.facility_id_for_policy(policy)?.untyped();
         let binding_id = binding.binding_id_for(genesis, policy)?;
-        terminal_state.validate_against_policy(policy)?;
-        if terminal_state.phase != DealerPhaseV2::Closed
-            || terminal_state.children != crate::DealerChildCountsV2::default()
-            || !terminal_state.funded_dependencies_account_id.is_zero()
-            || self.policy_id != genesis.policy_id
-            || self.facility_id != facility_id.untyped()
-            || self.facility_position_binding_id != binding_id.untyped()
-            || self.funded_dependencies_id != terminal_state.funded_dependencies_id
-            || self.terminal_facility_position_id != terminal_state.facility_position_id
-            || self.terminal_state_id != terminal_state.state_content_id()?
+        terminalizing_state.validate_against_policy(policy)?;
+        terminal_receipt.validate()?;
+        closed_state.validate_against_policy(policy)?;
+        position_tombstone
+            .validate()
+            .map_err(|_| Error::MismatchedBinding)?;
+        let position_fields = position_tombstone.fields();
+        let position_tombstone_id = Id::from_bytes(
+            position_tombstone
+                .semantic_id(&DealerRootSha256V2)
+                .map_err(|_| Error::MismatchedBinding)?
+                .bytes(),
+        );
+        if terminalizing_state.phase != DealerPhaseV2::Retiring
+            || terminalizing_state.children.facility_positions != 1
+            || terminalizing_state.children.facility_replays != 1
+            || terminalizing_state.children.lp_pages != 0
+            || terminalizing_state.children.live_lp_positions != 0
+            || terminalizing_state.children.unclaimed_lp_positions != 0
+            || terminalizing_state.children.funded_dependencies != 0
+            || terminalizing_state.children.epoch_bindings != 0
+            || terminalizing_state.children.leases != 0
+            || terminalizing_state.children.settlement_pots != 0
+            || terminalizing_state.children.terminal_allocations != 0
+            || terminalizing_state.children.claim_work != 0
+            || closed_state.phase != DealerPhaseV2::Closed
+            || closed_state.children != crate::DealerChildCountsV2::default()
+            || !closed_state.funded_dependencies_account_id.is_zero()
+            || self.policy_id != policy.policy_id()?
+            || self.facility_id != facility_id
+            || self.facility_position_binding_id != binding_id
+            || self.funded_dependencies_id != closed_state.funded_dependencies_id
+            || self.terminal_facility_position_id != terminal_receipt.terminal_position_semantic_id
+            || self.position_tombstone_id != position_tombstone_id
+            || self.terminal_replay_semantic_id != replay_close.terminal_replay_semantic_id()
+            || self.terminal_replay_intent_id != replay_close.last_transition_intent_id()
+            || self.terminal_state_receipt_id != terminal_receipt.receipt_id()?
+            || self.terminal_state_receipt_id != replay_close.terminal_state_receipt_id()
+            || self.terminal_state_id != closed_state.state_content_id()?
             || self.dealer_state_account_id != binding.dealer_state_account_id
-            || self.facility_id != terminal_state.facility_id
-            || terminal_state.facility_position_account_id
+            || terminal_receipt.terminal_state_content_id
+                != terminalizing_state.state_content_id()?
+            || terminal_receipt.policy_id != self.policy_id
+            || terminal_receipt.facility_id != self.facility_id
+            || terminal_receipt.facility_position_binding_id != binding_id
+            || terminal_receipt.dealer_state_account_id != self.dealer_state_account_id
+            || terminal_receipt.replay_account_id != replay_close.replay_account_id()
+            || self.facility_id != closed_state.facility_id
+            || self.facility_id != terminalizing_state.facility_id
+            || closed_state.facility_position_account_id != binding.facility_position_account_id
+            || terminalizing_state.facility_position_account_id
                 != binding.facility_position_account_id
-            || terminal_state.facility_replay_account_id != binding.facility_replay_account_id
-            || self.terminal_generation != terminal_state.generation
-            || self.terminal_child_sequence != terminal_state.child_sequence
-            || self.rent_payer != terminal_state.rent.payer
-            || self.neutral_sink != terminal_state.rent.neutral_sink
+            || closed_state.facility_replay_account_id != replay_close.replay_account_id()
+            || terminalizing_state.facility_replay_account_id != replay_close.replay_account_id()
+            || position_fields.purpose != PositionPurposeV3::DealerFacility
+            || Id::from_bytes(position_fields.market_instance_id.bytes())
+                != policy.market_instance_v2_id
+            || Id::from_bytes(position_fields.realm_id.bytes()) != policy.realm_id
+            || Id::from_bytes(position_fields.collateral_policy_id.bytes())
+                != binding.collateral_policy_id
+            || Id::from_bytes(position_fields.collateral_release_id.bytes())
+                != binding.collateral_release_id
+            || Id::from_bytes(position_fields.owner.bytes()) != self.facility_id
+            || Id::from_bytes(position_fields.controller.bytes()) != self.dealer_state_account_id
+            || Id::from_bytes(position_fields.replay_account.bytes())
+                != replay_close.replay_account_id()
+            || Id::from_bytes(position_fields.purpose_binding_id.bytes()) != binding_id
+            || self.terminal_generation != closed_state.generation
+            || self.terminal_generation != terminalizing_state.generation
+            || self.terminal_generation != position_fields.generation
+            || self.terminal_generation != terminal_receipt.terminal_generation
+            || self.terminal_child_sequence != closed_state.child_sequence
+            || self.terminal_child_sequence
+                != terminalizing_state
+                    .child_sequence
+                    .checked_add(2)
+                    .ok_or(Error::ArithmeticOverflow)?
+            || terminal_receipt.terminal_child_sequence != terminalizing_state.child_sequence
+            || self.rent_payer != closed_state.rent.payer
+            || self.neutral_sink != closed_state.rent.neutral_sink
             || self.refunded_live_principal
-                != terminal_state.rent.refundable_live_principal
+                != closed_state.rent.refundable_live_principal
             || self.permanent_tombstone_principal
-                != terminal_state.rent.permanent_tombstone_principal
-            || self.creation_donation_floor != terminal_state.rent.donation_floor
+                != closed_state.rent.permanent_tombstone_principal
+            || self.creation_donation_floor != closed_state.rent.donation_floor
         {
             return Err(Error::MismatchedBinding);
         }
@@ -304,6 +387,10 @@ impl FixedCodec for DealerRootTombstoneV2 {
             self.facility_position_binding_id,
             self.funded_dependencies_id,
             self.terminal_facility_position_id,
+            self.position_tombstone_id,
+            self.terminal_replay_semantic_id,
+            self.terminal_replay_intent_id,
+            self.terminal_state_receipt_id,
             self.terminal_state_id,
             self.dealer_state_account_id,
             self.rent_payer,
@@ -331,6 +418,10 @@ impl FixedCodec for DealerRootTombstoneV2 {
             facility_position_binding_id: reader.id(),
             funded_dependencies_id: reader.id(),
             terminal_facility_position_id: reader.id(),
+            position_tombstone_id: reader.id(),
+            terminal_replay_semantic_id: reader.id(),
+            terminal_replay_intent_id: reader.id(),
+            terminal_state_receipt_id: reader.id(),
             terminal_state_id: reader.id(),
             dealer_state_account_id: reader.id(),
             rent_payer: reader.id(),
@@ -348,6 +439,18 @@ impl FixedCodec for DealerRootTombstoneV2 {
 }
 
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_BYTES_V1 == 276);
-const _: () = assert!(DEALER_ROOT_TOMBSTONE_BYTES_V2 == 340);
+const _: () = assert!(DEALER_ROOT_TOMBSTONE_BYTES_V2 == 468);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);
+
+#[derive(Clone, Copy, Debug)]
+struct DealerRootSha256V2;
+
+impl PositionV3Sha256Backend for DealerRootSha256V2 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        hasher.update(body);
+        hasher.finalize().into()
+    }
+}

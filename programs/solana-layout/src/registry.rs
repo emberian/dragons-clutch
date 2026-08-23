@@ -219,6 +219,75 @@ pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION: u8 = 1;
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
 /// SourcePlane V3 liveness-work receipt account version.
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
+/// Fixed global envelope preceding each Dealer runtime semantic body.
+pub const DEALER_RUNTIME_ACCOUNT_HEADER_BYTES: usize = 8;
+/// Immutable Dealer liveness-schedule account discriminator.
+pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG: u8 = 0x93;
+/// Immutable Dealer liveness-schedule account version.
+pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer liveness-schedule account bytes.
+pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 372;
+/// Authoritative Dealer State V2 account discriminator.
+pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
+/// Authoritative Dealer State V2 account version.
+pub const DEALER_STATE_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer State V2 account bytes.
+pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 840;
+/// Counted funded-dependencies account discriminator.
+pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
+/// Counted funded-dependencies account version.
+pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact counted funded-dependencies account bytes.
+pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 472;
+/// Immutable-after-activation Dealer LP page discriminator.
+pub const DEALER_LP_PAGE_V2_ACCOUNT_TAG: u8 = 0x98;
+/// Dealer LP page V2 account version.
+pub const DEALER_LP_PAGE_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer LP page V2 account bytes.
+pub const DEALER_LP_PAGE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_020;
+/// One-generation Dealer Lease V2 discriminator.
+pub const DEALER_LEASE_V2_ACCOUNT_TAG: u8 = 0x99;
+/// Dealer Lease V2 account version.
+pub const DEALER_LEASE_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer Lease V2 account bytes.
+pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_036;
+/// Three-stage Dealer SettlementPot V2 discriminator.
+pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG: u8 = 0x9a;
+/// Dealer SettlementPot V2 account version.
+pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer SettlementPot V2 account bytes.
+pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_228;
+/// Counted Dealer Epoch-binding V2 discriminator.
+pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG: u8 = 0x9b;
+/// Dealer Epoch-binding V2 account version.
+pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer Epoch-binding V2 account bytes.
+pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 764;
+/// Page-scoped Dealer terminal-allocation discriminator.
+pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG: u8 = 0x9c;
+/// Dealer terminal-allocation account version.
+pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer terminal-allocation account bytes.
+pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 748;
+/// Singleton Dealer terminal ClaimWork discriminator.
+pub const DEALER_CLAIM_WORK_ACCOUNT_TAG: u8 = 0x9d;
+/// Dealer terminal ClaimWork account version.
+pub const DEALER_CLAIM_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer terminal ClaimWork account bytes.
+pub const DEALER_CLAIM_WORK_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_140;
+/// Permanent Dealer root-tombstone V2 discriminator.
+pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG: u8 = 0x9e;
+/// Dealer root-tombstone V2 account version.
+pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Dealer root-tombstone V2 account bytes.
+pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 468;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -233,6 +302,16 @@ const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 116);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
+const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
+const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG == 0x95);
+const _: () = assert!(DEALER_LP_PAGE_V2_ACCOUNT_TAG == 0x98);
+const _: () = assert!(DEALER_LEASE_V2_ACCOUNT_TAG == 0x99);
+const _: () = assert!(DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG == 0x9a);
+const _: () = assert!(DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG == 0x9b);
+const _: () = assert!(DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG == 0x9c);
+const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
+const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -740,6 +819,96 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "source-v3-work-receipt-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG,
+            version: DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-liveness-schedule-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_STATE_V2_ACCOUNT_TAG,
+            version: DEALER_STATE_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-state-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
+            version: DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-funded-dependencies-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+            version: DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-lp-page-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_LEASE_V2_ACCOUNT_TAG,
+            version: DEALER_LEASE_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-lease-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+            version: DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-settlement-pot-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG,
+            version: DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-epoch-binding-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG,
+            version: DEALER_TERMINAL_ALLOCATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-terminal-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_CLAIM_WORK_ACCOUNT_TAG,
+            version: DEALER_CLAIM_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-claim-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG,
+            version: DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-root-tombstone-v2-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -962,6 +1131,98 @@ impl DealerPolicyAction {
             2 => Some(Self::WritePolicy),
             3 => Some(Self::SealPolicy),
             4 => Some(Self::AbortPolicy),
+            _ => None,
+        }
+    }
+}
+
+/// Dealer facility runtime actions following the four policy transport tags.
+///
+/// These coordinates are allocated but remain capability-disabled. Values
+/// `5..=25` map in order to pure runtime actions `Initialize..=Retire`; the
+/// pure `CreatePolicy` coordinate is represented only by `SealPolicy` above.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerFacilityAction {
+    /// Initialize the facility State, Position, Replay, and funded dependency.
+    Initialize = 5,
+    /// Create the next counted LP ownership page.
+    CreateLpPage = 6,
+    /// Contribute one exact LP share bundle.
+    Contribute = 7,
+    /// Withdraw pre-activation LP funding.
+    WithdrawFunding = 8,
+    /// Activate the fully funded facility.
+    Activate = 9,
+    /// Cancel a stale or explicitly halted funding phase.
+    CancelFunding = 10,
+    /// Refund cancelled sponsor capital.
+    RefundCancelledSponsor = 11,
+    /// Bind one authenticated General Epoch.
+    BindEpoch = 12,
+    /// Lapse one unused Dealer Epoch binding.
+    LapseEpoch = 13,
+    /// Select one lease and atomically begin custody.
+    SelectLeaseAndBegin = 14,
+    /// Collect one bounded settlement slice.
+    Collect = 15,
+    /// Deliver one bounded settlement slice.
+    Deliver = 16,
+    /// Finalize settlement and return custody to Position.
+    FinalizeSettlement = 17,
+    /// Abort an uncollected lease and restore Position.
+    AbortBeforeCollection = 18,
+    /// Queue one LP exit.
+    QueueExit = 19,
+    /// Sponsor-authorized halt.
+    SponsorHalt = 20,
+    /// Enter exposure-reducing unwind.
+    EnterUnwind = 21,
+    /// Permissionlessly enter unwind after the deadline.
+    TimedClose = 22,
+    /// Resolve the terminal facility and allocate LP claims.
+    Resolve = 23,
+    /// Deliver one LP terminal claim.
+    Claim = 24,
+    /// Close one terminal counted artifact or root.
+    Retire = 25,
+}
+
+impl DealerFacilityAction {
+    /// First allocated Dealer facility action.
+    pub const FIRST_TAG: u8 = 5;
+    /// Last allocated Dealer facility action.
+    pub const LAST_TAG: u8 = 25;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one allocated facility action.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            5 => Some(Self::Initialize),
+            6 => Some(Self::CreateLpPage),
+            7 => Some(Self::Contribute),
+            8 => Some(Self::WithdrawFunding),
+            9 => Some(Self::Activate),
+            10 => Some(Self::CancelFunding),
+            11 => Some(Self::RefundCancelledSponsor),
+            12 => Some(Self::BindEpoch),
+            13 => Some(Self::LapseEpoch),
+            14 => Some(Self::SelectLeaseAndBegin),
+            15 => Some(Self::Collect),
+            16 => Some(Self::Deliver),
+            17 => Some(Self::FinalizeSettlement),
+            18 => Some(Self::AbortBeforeCollection),
+            19 => Some(Self::QueueExit),
+            20 => Some(Self::SponsorHalt),
+            21 => Some(Self::EnterUnwind),
+            22 => Some(Self::TimedClose),
+            23 => Some(Self::Resolve),
+            24 => Some(Self::Claim),
+            25 => Some(Self::Retire),
             _ => None,
         }
     }
@@ -1191,6 +1452,8 @@ pub enum ExtensionAction {
     GeneralV2(GeneralV2Action),
     /// One Dealer policy-catalog transport action.
     DealerPolicy(DealerPolicyAction),
+    /// One capability-disabled Dealer facility action.
+    DealerFacility(DealerFacilityAction),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
     /// One recurring-Series action in the shared SourceSeries family.
@@ -1202,6 +1465,7 @@ impl ExtensionAction {
     pub const fn family(self) -> ExtensionFamily {
         match self {
             Self::GeneralV2(_) => ExtensionFamily::GeneralV2,
+            Self::DealerPolicy(_) | Self::DealerFacility(_) => ExtensionFamily::Dealer,
             Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
         }
     }
@@ -1211,6 +1475,7 @@ impl ExtensionAction {
         match self {
             Self::GeneralV2(action) => action.tag(),
             Self::DealerPolicy(action) => action.tag(),
+            Self::DealerFacility(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
             Self::RecurringSeries(action) => action.tag(),
         }
@@ -1245,7 +1510,10 @@ pub const fn decode_extension_action(
         },
         Some(ExtensionFamily::Dealer) => match DealerPolicyAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::DealerPolicy(action)),
-            None => Err(RegistryError::UnknownLocalAction),
+            None => match DealerFacilityAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::DealerFacility(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            },
         },
         Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::SourceV3(action)),
