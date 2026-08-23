@@ -2,8 +2,8 @@
 
 use crate::{
     AdapterReleaseV2, BoundCollateralProfileV2, BoundRealmCollateralV2, Error, Id, OwnerGuardV2,
-    ProgramFamilyV2, Result, BASE_MINT_BYTES, BASE_TOKEN_ACCOUNT_BYTES,
-    EXTENSION_IMMUTABLE_OWNER, IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    ProgramFamilyV2, Result, BASE_MINT_BYTES, BASE_TOKEN_ACCOUNT_BYTES, EXTENSION_IMMUTABLE_OWNER,
+    IMMUTABLE_OWNER_ACCOUNT_BYTES,
 };
 
 const ACCOUNT_TYPE_TOKEN_ACCOUNT: u8 = 2;
@@ -77,6 +77,16 @@ pub enum TokenAccountRoleV2 {
     Holder {
         /// Required token owner authority.
         owner: Id,
+    },
+    /// Exact receive-only token account whose mutable owner is discovered from
+    /// hostile account bytes rather than copied into immutable protocol Terms.
+    ///
+    /// This role can never authorize a debit. Transfer-shape validation admits
+    /// it only as the destination of principal-refund or neutral-disposition
+    /// movements.
+    ReceiveOnly {
+        /// Exact token-account address frozen by the semantic owner.
+        account: Id,
     },
     /// Market-local pooled Hoard owned by the canonical Hoard authority.
     Hoard,
@@ -245,10 +255,21 @@ fn admit_collateral_account_inner_v2(
             }
             None
         }
+        TokenAccountRoleV2::ReceiveOnly {
+            account: exact_account,
+        } => {
+            exact_account.require_live()?;
+            if account.key != exact_account
+                || (account.data.len() != usize::from(release.holder_account_bytes)
+                    && !(release.family == ProgramFamilyV2::Token2022Base
+                        && account.data.len() == usize::from(IMMUTABLE_OWNER_ACCOUNT_BYTES)))
+            {
+                return Err(Error::WrongAccountRole);
+            }
+            None
+        }
         TokenAccountRoleV2::Hoard => {
-            let binding = market_hoard_binding_v2(
-                market_bound.ok_or(Error::MismatchedBinding)?,
-            );
+            let binding = market_hoard_binding_v2(market_bound.ok_or(Error::MismatchedBinding)?);
             binding.validate(release)?;
             if account.key != binding.account
                 || account.data.len() != usize::from(release.custody_account_bytes)
@@ -279,6 +300,9 @@ fn admit_collateral_account_inner_v2(
     }
     let (expected_owner, semantic_owner, compartment) = match (role, custody) {
         (TokenAccountRoleV2::Holder { owner }, None) => (owner, owner, 0),
+        (TokenAccountRoleV2::ReceiveOnly { .. }, None) => {
+            (raw.owner_authority, raw.owner_authority, 0)
+        }
         (_, Some(binding)) => {
             if raw.delegate.is_some() || raw.close_authority.is_some() {
                 return Err(Error::CustodyAuthorityNotAdmitted);
@@ -354,10 +378,7 @@ fn parse_mint(release: AdapterReleaseV2, data: &[u8]) -> Result<RawMint> {
     })
 }
 
-fn parse_token_account(
-    release: AdapterReleaseV2,
-    data: &[u8],
-) -> Result<RawTokenAccount> {
+fn parse_token_account(release: AdapterReleaseV2, data: &[u8]) -> Result<RawTokenAccount> {
     if data.len() < usize::from(BASE_TOKEN_ACCOUNT_BYTES) {
         return Err(Error::MalformedTokenState);
     }

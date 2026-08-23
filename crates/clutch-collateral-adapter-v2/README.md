@@ -27,7 +27,8 @@ semantics is not.
 - `AdapterReleaseV2` is a 192-byte canonical record. Its content ID binds the
   exact parser/CPI code digest, external token-program deployment digest,
   family, parser/safe extension ceilings, custody owner guard, fixed account
-  lengths, exact-transfer law, and supported operation set.
+  lengths, exact-transfer law, close-account discriminator, and supported
+  operation set.
 - `CollateralPolicyV2` is a 224-byte canonical record. Its content ID binds the
   selected release, program/deployment, mint, raw decimals, current mint-supply
   ceiling, per-Market cap ceiling, and Realm-narrowed extension sets.
@@ -103,6 +104,12 @@ binds an exact semantic owner and compartment. Product/Series, dealer, recovery,
 and wrapper adapters must supply their own already-authenticated PDA/account
 graph; this crate does not guess seeds or account-family tags.
 
+Terminal refund and donation destinations may use the receive-only exact-address
+role. Their current token owner is parsed from hostile bytes and is not copied
+into immutable FundingTerms. This role is admitted only as the destination of
+those two transfer kinds and can never authorize a debit; activation funding
+still requires an exact transaction-signer Holder owner.
+
 The endpoint semantic owner owns identity/role namespace, not necessarily
 mutable amount facts. A SeriesPlan can therefore own component roles and
 `component + 1` discriminants while the single SeriesFunding state remains the
@@ -137,6 +144,27 @@ System allocation, rent, payer authorization, canonical PDA derivation,
 `invoke`/`invoke_signed`, loader/ProgramData authentication, rollback, and
 global dispatch remain the small live-adapter trust boundary.
 
+`SeriesCollateralFundingJoinV2` binds the exact Realm/Profile, SeriesPlan,
+FundingTerms, funding-state account, quote, funding authority, and refund/sink
+accounts. Its five collateral compartments are exactly `1..=5`.
+`SeriesCollateralTerminalJoinV2` adds the authenticated one-shot terminal
+receipt; activation generation is canonically `1` and is not mutable input.
+
+`prepare_series_collateral_vault_close_v2` reparses an exact segregated vault
+and refuses unless its mint, PDA authority, owner guard, extensions, and zero
+collateral-atom balance match the selected release. Its CPI intent chooses
+legacy SPL Token or Token-2022 from the Realm release and carries the
+release-frozen close discriminator. The postcheck requires a zero-lamport,
+zero-data, System-owned closed vault and an exact lamport credit to the named
+component vault.
+
+The follow-on rent disposition isolates only that close delta. Persisted
+token-vault rent principal returns to the payer; any prefunding or donation
+surplus goes to the neutral sink; and the component lamport vault must return
+to its exact pre-close balance. No collateral principal can enter this lamport
+split, because a nonempty token vault refuses before close. These lamports are
+also never a fee, work budget, liveness reserve, or Hoard source.
+
 ## Immediate integration seam
 
 The SBF successor should consume the crate in this order:
@@ -151,7 +179,9 @@ The SBF successor should consume the crate in this order:
    with outcome mint creation;
 5. use prepared exact transfer intents for Endow, Withdraw, Series funding,
    occurrence disbursement, and terminal refund/disposition; and
-6. commit cash/backing/funding state only from the accepted post-CPI result.
+6. close a terminal Series token vault only through its typed release-selected
+   intent, then postcheck both close delta and rent/surplus disposition; and
+7. commit cash/backing/funding state only from the accepted post-CPI result.
 
 No validation evidence is claimed by this implementation commit. Adversarial,
 SBF, and local-validator campaigns belong after the active implementation gap

@@ -5,8 +5,7 @@ use crate::{
     admit_realm_collateral_mint_v2, market_hoard_binding_v2, BoundCollateralProfileV2,
     BoundRealmCollateralV2, CustodyBindingV2, Error, Id, MintObservationV2, ProgramFamilyV2,
     RealmCollateralContextV2, Result, RuntimeAccountViewV2, TokenAccountObservationV2,
-    TokenAccountRoleV2,
-    BASE_TOKEN_ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    TokenAccountRoleV2, BASE_TOKEN_ACCOUNT_BYTES, IMMUTABLE_OWNER_ACCOUNT_BYTES,
 };
 
 /// Exact checked-transfer instruction-data width for both compiled V2 families.
@@ -196,10 +195,14 @@ impl TransferEndpointV2 {
                     return Err(Error::InvalidParameter);
                 }
             }
+            TokenAccountRoleV2::ReceiveOnly { account } => {
+                account.require_live()?;
+                if self.compartment != 0 {
+                    return Err(Error::InvalidParameter);
+                }
+            }
             TokenAccountRoleV2::Hoard => {
-                let expected = market_hoard_binding_v2(
-                    market.ok_or(Error::MismatchedBinding)?,
-                );
+                let expected = market_hoard_binding_v2(market.ok_or(Error::MismatchedBinding)?);
                 if self.semantic_owner != expected.semantic_owner
                     || self.compartment != expected.compartment
                 {
@@ -270,7 +273,7 @@ pub struct TransferAuthorityV2 {
 }
 
 impl TransferAuthorityV2 {
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         self.address.require_live()?;
         if self.is_writable || self.executable {
             return Err(Error::WrongAccountRole);
@@ -451,16 +454,9 @@ fn prepare_collateral_transfer_inner_v2(
         return Err(Error::WrongAccountRole);
     }
     let mint_before = admit_mint_for_transfer_v2(bound, mint)?;
-    let source_before = admit_account_for_transfer_v2(
-        bound,
-        source,
-        request.source.token_role,
-    )?;
-    let destination_before = admit_account_for_transfer_v2(
-        bound,
-        destination,
-        request.destination.token_role,
-    )?;
+    let source_before = admit_account_for_transfer_v2(bound, source, request.source.token_role)?;
+    let destination_before =
+        admit_account_for_transfer_v2(bound, destination, request.destination.token_role)?;
     if source_before.amount_atoms < request.amount_atoms
         || request.authority.address != source_before.owner_authority
     {
@@ -552,12 +548,9 @@ pub fn accept_collateral_transfer_v2(
     }
     let mint = admit_mint_for_transfer_v2(prepared.bound, mint_after)
         .map_err(|_| Error::PostAdmissionFailed)?;
-    let source = admit_account_for_transfer_v2(
-        prepared.bound,
-        source_after,
-        request.source.token_role,
-    )
-    .map_err(|_| Error::PostAdmissionFailed)?;
+    let source =
+        admit_account_for_transfer_v2(prepared.bound, source_after, request.source.token_role)
+            .map_err(|_| Error::PostAdmissionFailed)?;
     let destination = admit_account_for_transfer_v2(
         prepared.bound,
         destination_after,
@@ -615,12 +608,8 @@ fn admit_account_for_transfer_v2(
     role: TokenAccountRoleV2,
 ) -> Result<TokenAccountObservationV2> {
     match bound {
-        TransferBoundV2::Realm(realm) => {
-            admit_realm_collateral_account_v2(realm, account, role)
-        }
-        TransferBoundV2::Market(market) => {
-            admit_collateral_account_v2(market, account, role)
-        }
+        TransferBoundV2::Realm(realm) => admit_realm_collateral_account_v2(realm, account, role),
+        TransferBoundV2::Market(market) => admit_collateral_account_v2(market, account, role),
     }
 }
 
@@ -632,13 +621,11 @@ fn validate_transfer_shape(request: TransferRequestV2) -> Result<()> {
     let source_is_hoard = matches!(request.source.token_role, Hoard);
     let source_is_segregated = matches!(request.source.token_role, SegregatedVault(_));
     let destination_is_holder = matches!(request.destination.token_role, Holder { .. });
+    let destination_is_receive_only = matches!(request.destination.token_role, ReceiveOnly { .. });
     let destination_is_hoard = matches!(request.destination.token_role, Hoard);
-    let destination_is_segregated = matches!(
-        request.destination.token_role,
-        Hoard | SegregatedVault(_)
-    );
-    let transaction_signer =
-        request.authority.kind == TransferAuthorityKindV2::TransactionSigner;
+    let destination_is_segregated =
+        matches!(request.destination.token_role, Hoard | SegregatedVault(_));
+    let transaction_signer = request.authority.kind == TransferAuthorityKindV2::TransactionSigner;
     let program_signer = request.authority.kind == TransferAuthorityKindV2::ProgramDerived;
 
     let valid = match request.kind {
@@ -653,7 +640,9 @@ fn validate_transfer_shape(request: TransferRequestV2) -> Result<()> {
             source_is_segregated && destination_is_segregated && program_signer
         }
         PrincipalRefund | DonationDisposition => {
-            source_is_segregated && destination_is_holder && program_signer
+            source_is_segregated
+                && (destination_is_holder || destination_is_receive_only)
+                && program_signer
         }
     };
     if valid {
@@ -668,10 +657,7 @@ fn hoard_amount(
     source: TokenAccountObservationV2,
     destination: TokenAccountObservationV2,
 ) -> Option<u64> {
-    match (
-        request.source.token_role,
-        request.destination.token_role,
-    ) {
+    match (request.source.token_role, request.destination.token_role) {
         (TokenAccountRoleV2::Hoard, _) => Some(source.amount_atoms),
         (_, TokenAccountRoleV2::Hoard) => Some(destination.amount_atoms),
         _ => None,
@@ -727,9 +713,7 @@ pub struct CustodyCreationPlanV2 {
 }
 
 /// Prepare the selected family's exact Hoard layout and initialization sequence.
-pub fn prepare_hoard_creation_v2(
-    bound: BoundCollateralProfileV2,
-) -> Result<CustodyCreationPlanV2> {
+pub fn prepare_hoard_creation_v2(bound: BoundCollateralProfileV2) -> Result<CustodyCreationPlanV2> {
     let binding: CustodyBindingV2 = market_hoard_binding_v2(bound);
     prepare_custody_creation_v2(bound.realm_bound(), binding)
 }
