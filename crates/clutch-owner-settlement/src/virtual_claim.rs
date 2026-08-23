@@ -141,6 +141,86 @@ pub struct AuthenticatedFinalPotV1 {
     pub selected_budget_authenticated: bool,
 }
 
+/// Semantic-owner proof that a FinalPot has no remaining principal, native
+/// claim, or unprocessed virtual-inventory liability.
+///
+/// This is an ephemeral capability, not a replacement account format. The
+/// General adapter must still authenticate the 0x89 outer envelope, the
+/// SelectedCandidate join, the terminal fee receipt, and the atomic root
+/// close before deleting the account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct FinalPotRetirementProjectionV1 {
+    account: [u8; 32],
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    relation_witness_digest: [u8; 32],
+    inventory_kind: VirtualReceiptKindV1,
+    authorized_complete_set_atoms: Amount,
+    processed_complete_set_atoms: Amount,
+    inventory_transition_sequence: u64,
+    outcome_count: u8,
+}
+
+impl FinalPotRetirementProjectionV1 {
+    /// Canonical FinalPot account.
+    pub const fn account(self) -> [u8; 32] {
+        self.account
+    }
+
+    /// Canonical General Market identity.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Parent counted Epoch PDA.
+    pub const fn epoch(self) -> [u8; 32] {
+        self.epoch
+    }
+
+    /// Selected settlement-candidate identity.
+    pub const fn candidate(self) -> [u8; 32] {
+        self.candidate
+    }
+
+    /// Complete owner/order-set digest whose obligations were settled.
+    pub const fn owner_order_set_digest(self) -> [u8; 32] {
+        self.owner_order_set_digest
+    }
+
+    /// Checked-relation witness digest, zero only for no virtual inventory.
+    pub const fn relation_witness_digest(self) -> [u8; 32] {
+        self.relation_witness_digest
+    }
+
+    /// Frozen virtual inventory kind.
+    pub const fn inventory_kind(self) -> VirtualReceiptKindV1 {
+        self.inventory_kind
+    }
+
+    /// Exact selected complete-set quantity.
+    pub const fn authorized_complete_set_atoms(self) -> Amount {
+        self.authorized_complete_set_atoms
+    }
+
+    /// Exact processed complete-set quantity, equal to the authorization.
+    pub const fn processed_complete_set_atoms(self) -> Amount {
+        self.processed_complete_set_atoms
+    }
+
+    /// Final monotone inventory transition sequence.
+    pub const fn inventory_transition_sequence(self) -> u64 {
+        self.inventory_transition_sequence
+    }
+
+    /// Active market outcome width.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+}
+
 impl AuthenticatedFinalPotV1 {
     fn validate(self) -> Result<()> {
         for key in [
@@ -177,6 +257,31 @@ impl AuthenticatedFinalPotV1 {
             transition_sequence: self.inventory_transition_sequence,
             state: self.inventory_state,
         }
+    }
+
+    /// Project terminal deletion authority from the exact semantic owner.
+    pub fn retirement_projection(self) -> Result<FinalPotRetirementProjectionV1> {
+        self.validate()?;
+        if self.cash_principal_atoms != 0
+            || self.internal_claims != [0; MAX_OUTCOMES]
+            || self.inventory_state != VirtualInventoryStateV1::Complete
+            || self.processed_complete_set_atoms != self.authorized_complete_set_atoms
+        {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(FinalPotRetirementProjectionV1 {
+            account: self.account,
+            market: self.market,
+            epoch: self.epoch,
+            candidate: self.candidate,
+            owner_order_set_digest: self.owner_order_set_digest,
+            relation_witness_digest: self.relation_witness_digest,
+            inventory_kind: self.inventory_kind,
+            authorized_complete_set_atoms: self.authorized_complete_set_atoms,
+            processed_complete_set_atoms: self.processed_complete_set_atoms,
+            inventory_transition_sequence: self.inventory_transition_sequence,
+            outcome_count: self.outcome_count,
+        })
     }
 
     /// Encode persisted semantics, excluding account address and writability.
