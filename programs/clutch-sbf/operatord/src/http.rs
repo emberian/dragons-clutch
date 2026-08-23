@@ -35,23 +35,46 @@ const CAPABILITY_COOKIE: &str = "operator_capability";
 /// What a POST to `/api` is answered by.
 pub type Action = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonReadResponse {
+    pub status: u16,
+    pub body: Value,
+}
+
+/// Optional read-only route owner. Returning `None` delegates to the static
+/// bench. It cannot receive a request body or the mutating `/api` capability.
+pub type ReadApi = Arc<dyn Fn(&str, &str) -> Option<JsonReadResponse> + Send + Sync>;
+
 pub struct Server {
     listener: TcpListener,
     bus: Arc<Bus>,
     root: PathBuf,
     action: Action,
+    read_api: Option<ReadApi>,
     capability: String,
 }
 
 impl Server {
     /// Bind the bench to a loopback port.
     pub fn bind(port: u16, bus: Arc<Bus>, root: PathBuf, action: Action) -> Result<Self> {
+        Self::bind_with_read_api(port, bus, root, action, None)
+    }
+
+    /// Bind with an additional GET-only JSON projection surface.
+    pub fn bind_with_read_api(
+        port: u16,
+        bus: Arc<Bus>,
+        root: PathBuf,
+        action: Action,
+        read_api: Option<ReadApi>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
         Ok(Self {
             listener,
             bus,
             root,
             action,
+            read_api,
             capability: Keypair::new().pubkey().to_string(),
         })
     }
@@ -67,9 +90,17 @@ impl Server {
             let bus = Arc::clone(&self.bus);
             let root = self.root.clone();
             let action = Arc::clone(&self.action);
+            let read_api = self.read_api.clone();
             let capability = self.capability.clone();
             thread::spawn(move || {
-                let _ignored = handle(stream, &bus, &root, action.as_ref(), &capability);
+                let _ignored = handle(
+                    stream,
+                    &bus,
+                    &root,
+                    action.as_ref(),
+                    read_api.as_deref(),
+                    &capability,
+                );
             });
         }
     }
@@ -160,6 +191,17 @@ fn not_found(stream: &mut TcpStream) -> Result<()> {
     )
 }
 
+fn json_status(status: u16) -> &'static str {
+    match status {
+        200 => "200 OK",
+        400 => "400 Bad Request",
+        404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
+        _ => "500 Internal Server Error",
+    }
+}
+
 /// Authenticate the browser-facing authority before serving any route.
 ///
 /// Binding a listener to loopback does not by itself stop DNS rebinding: a
@@ -242,6 +284,7 @@ fn handle(
     bus: &Bus,
     root: &Path,
     action: &dyn Fn(&Value) -> Value,
+    read_api: Option<&(dyn Fn(&str, &str) -> Option<JsonReadResponse> + Send + Sync)>,
     capability: &str,
 ) -> Result<()> {
     let port = stream.local_addr()?.port();
@@ -252,6 +295,20 @@ fn handle(
             "403 Forbidden",
             "text/plain; charset=utf-8",
             b"403\n",
+        );
+    }
+    if request.path.starts_with("/v1/") {
+        let Some(read_api) = read_api else {
+            return not_found(&mut stream);
+        };
+        let Some(reply) = read_api(&request.method, &request.path) else {
+            return not_found(&mut stream);
+        };
+        return respond(
+            &mut stream,
+            json_status(reply.status),
+            "application/json",
+            reply.body.to_string().as_bytes(),
         );
     }
     match (request.method.as_str(), request.path.as_str()) {
