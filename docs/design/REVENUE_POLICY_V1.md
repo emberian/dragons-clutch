@@ -36,11 +36,13 @@ admissible behind the Realm's absence; the fee-bearing sibling const
 explicit zeros**; any nonzero rate is a new const + digest + ember decision);
 and general epoch admission enforces the §5 seam — a fee-bearing epoch
 refuses `RevenuePolicyRecordMissing` / `RevenueTreasuryUnset` today, always,
-because the treasury byte stays deferred.  The §6 carry and the B4b grief
-rider live as host kernels (`EnvelopedIntentFeeCarry`,
-`TreasuryServiceLedger` in `crates/clutch-liveness`) ahead of their byte
-hosts; the reservation format is deliberately unbumped.  The §10 falsifiers
-run at zero rates only; every nonzero-rate obligation stays owed.
+because the treasury byte stays deferred. The B4b grief rider has a host
+kernel (`TreasuryServiceLedger` in `crates/clutch-liveness`), while the older
+`EnvelopedIntentFeeCarry` is arithmetic evidence, not the selected composite
+carry owner. The 2026-08-23 successor contract makes `(fee record, owner)` the
+§6 owner and deliberately chooses no byte host yet. The reservation format is
+unbumped. The §10 falsifiers run at zero rates only; every nonzero-rate
+obligation stays owed.
 
 Written
 2026-08-20 for ember's morning review, executing step 3 of
@@ -296,56 +298,67 @@ first chargeable intent is admitted, which is precisely the "named
 recipient" the settlement seam already demands in its own comment
 (`orders_batch/settlement.rs:596-597`).
 
-## 6. The per-intent carry: wire `IntentFeeCarry`, embedded
+## 6. The carry is owner-scoped, then allocated across signed intents
 
-`IntentFeeCarry` (`crates/clutch-liveness/src/lib.rs:1128-1245`) already
-implements the recommended semantics with zero consumers: frozen
-denominator, exact fragment accumulation, terminal-ceil close charging one
-atom exactly once (`:1230-1244`), and authentication refusing wrong owner,
-wrong intent, reopen, and non-canonical carry (`:1191-1205`), with
-fragmentation-invariance tests.
+The earlier per-intent proposal was wrong for the selected composite base.
+`G(a,p)` is computed over an owner's aggregate filled payoff vector and is
+subadditive across intents. Independent intent carries would first change the
+base by preventing owner netting and then introduce independent rounding
+boundaries. That can overcharge the same economic owner. A reservation may own
+an intent's authorization envelope, but it cannot own the composite rational.
 
-**(D7) Keep the kernel, reject the standalone account.** The semantics are
-wired, not superseded; the *byte host* is the next version of the
-reservation account, not a new carry PDA:
+`IntentFeeCarry` (`crates/clutch-liveness/src/lib.rs`) still supplies useful
+full-width arithmetic evidence: its exact denominator, remainder, and fragment
+numerator are `u128`, required because the admitted
+`10_000 * price_scale^2 * 10_000` denominator can exceed `u64`. It is not the
+runtime semantic owner of the composite carry.
 
-- The reservation is already the intent-scoped account: it binds
-  `owner`, `order_id`, `order_generation`, `market`, `epoch`, and
-  `max_fee_atoms` (`programs/solana-layout/src/reservation.rs:173-196`), and
-  every §9 gate already authenticates exactly those bindings. The
-  `IntentFeeCarry.authenticate` mapping is structural: `owner` →
-  `reservation.owner`, `intent_id` → `(order_id, order_generation)`,
-  `closed` → the release/close path, `remainder >= denominator` → refused at
-  decode.
-- A standalone carry PDA would add one rent row per signed intent — the
-  exact unplanned-rent shape §3 warns about — and a second authentication
-  surface for facts the reservation already owns.
+The account-neutral successor in `crates/clutch-fee-runtime-contract` corrects
+the ownership boundary:
 
-Reservation V-next additions (an ABI change to reservation bytes, versioned
-like every layout change):
+- `SelectedCompositeFeeV1` binds one canonical fee-record identity, selected
+  candidate, exact rated policy and revenue-policy digests, treasury owner and
+  ordinary Position, scale, width, rates, and relation-derived denominator.
+- `OwnerFeeCarryV1` is keyed by `(fee record, owner)`, validates restored
+  `u128` remainder state, and is the only constructor of the owner-level
+  floor or terminal-ceil assessment.
+- Only after that quote does `allocate_payer_debit` partition the resulting
+  `u64` atom debit across the same owner's strictly intent-ID-ordered signed
+  envelopes. The returned rows bind both intent identities and debit amounts.
+- Recipient allocation rebinds the selected revenue-policy preimage, applies
+  60/0/40, and uses Hamilton largest remainder over candidate-verified
+  standing-maker Position weights. A nonzero executor share refuses because
+  V1 authenticates no executor identity.
+
+**(D7 revised): no per-intent carry PDA and no carry words in a reservation.**
+The reservation successor keeps the signed `max_fee_atoms` and cumulative
+intent debit. The owner carry must live once per owner in a versioned selected-
+candidate/epoch fee ledger, or in an equivalently exhaustive fixed owner table
+whose identity is covered by the selected fee record. The adapter choice is
+still open because the rent, account-lock, maximum-owner, and terminal-close
+tradeoffs have not been measured. What is no longer open is the semantic key:
+one carry per `(fee record, owner)`, never one per intent.
+
+Required persisted owner row:
 
 ```text
-carry_denominator:  u128   frozen at admission from the policy quote
-carry_remainder:    u128   IntentFeeCarry.remainder
-fee_paid_atoms:     u64    IntentFeeCarry.paid_atoms
+owner:              [u8; 32]
+carry_denominator:  u128
+carry_remainder:    u128
+fee_paid_atoms:     u64
+terminal:           bool
 ```
 
-`u128` because the dispersion arm's carry denominator is
-`kappa_denominator * price_scale^2`
-(`programs/solana-layout/src/portfolio_settlement.rs:388-408`); flat-notional
-fits narrower but the field is sized for the worst admitted base.
+**Envelope rule (D8):** admission under a fee-bearing policy requires the
+canonical aggregate remaining capacity of that owner's signed envelopes to
+cover the quoted worst-case fee, terminal-ceil atom included. Every debit also
+stays within each contributing intent's bound. `max_fee_atoms == 0` remains
+admissible only under the zero-fee policy and means "no fee, ever" bit-exactly.
 
-**Envelope rule (D8):** admission under a fee-bearing policy requires
-`max_fee_atoms >=` the quoted worst-case fee *including the terminal-ceil
-atom*; the close's ceiling atom must never exceed the owner-signed envelope.
-`max_fee_atoms == 0` remains admissible only under the zero-fee policy and
-touches no carry field — the signed zero envelope keeps meaning "no fee,
-ever," bit-exactly.
-
-Terminal-ceil close fires on reservation release: if `carry_remainder != 0`,
-one atom credits the treasury Position (which is therefore in the release
-account list for fee-bearing epochs), and the carry closes once, ever, per
-generation — `IntentFeeCarry`'s reopen refusal carried into bytes.
+Terminal-ceil fires once when the owner row closes, not when an arbitrary
+reservation releases. Its assessed atom is allocated through the same signed
+envelope rule and the exact recipient split before the owner row becomes
+terminal.
 
 ## 7. The split: 60 / ≤15 / ≥25 becomes structure, executor deferred
 
@@ -393,9 +406,10 @@ What must exist before the domain validator admits a fee-bearing epoch:
    candidate body carries ids, digests, prices, fills, volume terms, and a
    slot — **no fee field of any kind**
    (`programs/solana-layout/src/direct_selection_v3.rs:759-779`). A
-   fee-bearing candidate is a **new candidate version** whose body adds the
-   relation-computed per-order fee/rebate vector, the treasury total, and
-   the closing carries, so that `verify_submitted_candidate`'s verdict (and
+   fee-bearing candidate is a **new candidate version** whose body commits the
+   exhaustive owner-level fee/carry rows, intent-envelope debit rows,
+   standing-maker rebate rows, and treasury total, so that
+   `verify_submitted_candidate`'s verdict (and
    the streaming `ClearWorkV1` verdict on the general route) covers fee
    arithmetic exactly as it covers fills. The fee columns enter the relation
    domain digest; an old-version candidate under a fee-bearing policy is a
@@ -417,47 +431,31 @@ What must exist before the domain validator admits a fee-bearing epoch:
      makes the chosen arm's disposition of that channel a required fixture,
      not a footnote.
 
-## 9. The five `max_fee_atoms == 0` gates, enumerated
+## 9. The repeated `max_fee_atoms == 0` boundaries
 
-The live program forces the signed fee envelope to zero at exactly five
-sites. Per gate, what relaxing it requires:
+The historical five-gate count is stale. The current program re-authenticates
+the signed zero envelope at every value-moving trust boundary:
 
-1. **Admission** — `validate_direct_v4_place`,
-   `programs/clutch-sbf/program/src/instructions/orders_batch.rs:880`.
-   Requires: the epoch pinned to a fee-bearing sibling digest (§8.1), the
-   Market's treasury Position present (§5), the (D8) envelope check
-   replacing the zero pin, and carry fields initialized in the V-next
-   reservation (§6).
-2. **Reservation validation at settlement** —
-   `validate_submission_reservation`,
-   `programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs:429`.
-   Requires: the equality re-pinned to the admitted envelope instead of
-   zero; `ReservationPlan` already computes the fee-inclusive envelope
-   (`reservation.rs:85,111`), so this is a comparison change, not new
-   arithmetic.
-3. **Pair/slice settlement** — `prepare_direct_full_slice`,
-   `orders_batch/settlement.rs:596-600`, whose comment already states the
-   requirement: *"Fees need a frozen policy preimage and a named
-   recipient."* Requires: the candidate's fee vector (§8.2), the treasury
-   Position in the account list, the §6 carry update, and the §10
-   conservation identity extended to include the fee credit.
-4. **Direct-selection settlement** — `execute_settlement`,
-   `programs/clutch-sbf/program/src/instructions/direct_selection.rs:906-907`.
-5. **Direct-selection reservation validation** —
-   `validate_order_reservation`, `direct_selection.rs:1755`.
+- Direct V4 placement (`orders_batch.rs:982`);
+- General walk reservation (`orders_batch/clear_walk.rs:377`);
+- General entitlement and portfolio-pair settlement
+  (`orders_batch/entitlement.rs:841,2084`);
+- General direct submission and settlement
+  (`orders_batch/settlement.rs:439,695`);
+- General virtual split-pay, merge-deliver, and merge-pay
+  (`orders_batch/settlement.rs:1290,1468,1581`); and
+- legacy/direct selection settlement and reservation validation
+  (`direct_selection.rs:909-910,1778`).
 
-For gates 4-5: any route that stays pinned to a zero-fee policy const
-(`DIRECT_POLICY_V1`; likewise `GENERAL_CLEARING_POLICY_V1`, whose own doc
-holds fees zero at every Tier 2 gate until the fork is decided,
-`general_clearing_v1.rs:19-33`) **keeps its gates permanently**. Relaxation
-is per-route and only for routes whose candidate version carries the fee
-vector; a zero-fee route's gate is a feature, not debt.
+These repetitions are trust-boundary checks, not duplicate scar tissue to
+delete. A fee-bearing successor must replace each zero comparison with the
+same selected fee-record identity, exact policy preimages, owner carry row,
+exhaustive intent debit rows, verified recipient rows, treasury Position, and
+atomic conservation transition. A zero-fee route keeps its refusal forever.
 
-The layout crate's mirrors (`portfolio_settlement.rs:526,617,993` — including
-`prepare_full_pair`, which never calls its own orphaned `dispersion_fee_step`,
-findings §5) and the research lifecycle's
-(`research/batch-policy-identity/src/direct_lifecycle_v3.rs:2101-2102,3562-3563`)
-relax in lockstep with their program gates, never ahead of them.
+The layout and pure mirrors relax in lockstep with a versioned runtime route,
+never ahead of it. Changing only the host mirror or only SBF would destroy the
+differential oracle.
 
 ## 10. Falsifiers required before any charge is nonzero
 
@@ -470,19 +468,22 @@ design rather than the test:
    `collateral_atoms` unchanged by any fee. Plane L: prepaid-budget debits
    equal vault credits plus rewards plus refunds, and the re-derived
    terminal reconciliation of §4 balances with mid-life charge departures.
-2. **No-theft.** Charged atoms never exceed the owner-signed
-   `max_fee_atoms`, terminal-ceil atom included, on every admitted shape —
-   and a zero envelope provably never touches a carry field or pays an
-   atom. The Sybil recovery bound is measured at ≤60% under the V1 vector.
+2. **No-theft.** Charged atoms never exceed any contributing intent's signed
+   `max_fee_atoms`, nor the canonical aggregate remaining capacity of the
+   owner's exhaustive envelope set, terminal-ceil atom included. A zero
+   envelope pays no atom. The Sybil recovery bound is measured at ≤60% under
+   the V1 vector.
 3. **No-stranding.** The hostile terminal walk
    (`TERMINAL_LIFECYCLE_RUNTIME_V1.md` §9) extended: treasury Position
-   swept and closed, carry closed exactly once per generation with reopen
-   refused, vault swept and closed, policy record closed, ending in the
-   exact declared account set. The two new rows are in
+   swept and closed, each owner carry closed exactly once per selected fee
+   record with reopen refused, vault swept and closed, policy record closed,
+   ending in the exact declared account set. The two new rows are in
    `terminal_profile.py` with bounds before implementation.
-4. **Carry exactness.** Fragmentation invariance (splitting an intent's
-   fills cannot change total atoms paid) at the byte plane, inheriting
-   `clutch-liveness`'s kernel tests; noncanonical carry refused at decode.
+4. **Carry exactness.** Owner-level fragmentation invariance (partitioning one
+   owner's filled payoff vector across settlement fragments cannot change
+   total atoms paid) at the byte plane, inheriting
+   `clutch-fee-runtime-contract` semantics; noncanonical carry refused at
+   decode.
 5. **Zero-price channel disposition.** The `run_lab.py` laundering row
    becomes a frozen regression fixture for the selected base: if the base
    is price-weighted, the accepted feeless channel is documented in

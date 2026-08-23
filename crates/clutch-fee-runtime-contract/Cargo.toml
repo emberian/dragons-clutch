@@ -1,0 +1,17 @@
+[package]
+name = "clutch-fee-runtime-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Pure exact fee selection, allocation, custody, and integration contract for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clutch-batch = { path = "../clutch-batch" }
+clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
+
+[features]
+default = []

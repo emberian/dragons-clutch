@@ -11,3 +11,8 @@ path = "src/lib.rs"
 
 [features]
 default = []
+
+[dev-dependencies]
+# Differential oracle for the selected composite fee shape.  This remains
+# test-only so the pure liveness kernel keeps no price or batch dependency.
+clutch-batch = { path = "../clutch-batch" }
