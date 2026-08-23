@@ -20,6 +20,12 @@ The model does not own the Terms, payout basis, actual Hoard, actual token
 supply, call-auction candidate, or resolved source result. It binds identities
 that a live adapter must authenticate against their existing semantic owners.
 
+The `signed_dealer` extension has a distinct custody boundary. Its LPs deposit
+existing native Eggs already backed by the global Hoard. Deposits and trades do
+not create facility-attributed Hoard backing and must never increment a supply
+or Hoard mirror. Resolution redeems only the exact custodied Egg balances
+through the ordinary claim path.
+
 ## Existing semantic owners to reuse
 
 | Model fact | Existing or planned owner |
@@ -59,6 +65,16 @@ way to prevent ambiguous allocation, replay, and inconsistent intermediate
 capacity. The existing auction's other cash and fee conservation equations
 must include the facility receipt exactly. The facility does not certify the
 candidate as best, globally optimal, or even included.
+
+For the signed dealer, one candidate also supplies each user order's exact
+dealer-leg cash allocation in strictly increasing immutable order identity.
+The pure model checks a frozen dealer-leg envelope excluding fees. The live
+verifier must derive and authenticate that envelope from every all-in order
+limit after exact fees or rebates, require the net signed sum against the
+facility to equal the one aggregate endpoint receipt, and close the existing
+total cash/fee equations. The endpoint alone does not determine a unique
+per-user split. A net-zero same-outcome flow must be removed before the
+facility leg rather than used to manufacture volume.
 
 ## Promotion gates
 
@@ -110,12 +126,42 @@ Before a live route exists, all of the following must close:
     conservation, transition-totality, and lifecycle theorems. Do not call this
     model formally verified.
 
+The signed dealer adds these gates:
+
+13. **Existing-Egg deposits.** Authenticate every LP Egg mint, owner, amount,
+    Terms/Instance binding, transfer profile, and post-transfer vault balance.
+    Reject fee-bearing, opaque, frozen, delegated, or wrong-domain assets.
+14. **Share roster.** Freeze the exhaustive unique-owner set at activation,
+    prevent share mutation thereafter, bind queue votes to those balances, and
+    implement the exact terminal allocation once. Wallet identity is not a
+    proved beneficial-owner anti-Sybil rule.
+15. **Expense separation.** Charge all rent, keeper, transfer, fee, and
+    resolution costs outside the guaranteed LP assets, or capitalize a separate
+    immutable worst-case expense compartment. Neither `K` nor future revenue
+    silently pays them.
+16. **Signed receipt integration.** Aggregate native flow once per dealer and
+    generation; check physical vault conservation, derive dealer-leg envelopes
+    from authenticated all-in limits and fees, and atomically apply the receipt
+    with all user legs.
+17. **Terminal retirement.** Join every LP claim, Egg vault, cash vault,
+    generation, and immutable terminal allocation into the counted-retirement
+    authority before reclaiming dealer state or rent.
+
+The pure API deliberately distinguishes the mathematical first-loss minimum
+from the actual sponsor cash minimum. The latter also finances the all-buy
+lower corner after minimum LP cash. A live initializer must transfer and reload
+that actual amount atomically; a computed requirement is not evidence of funds.
+
 ## Economic exclusions preserved at integration
 
-The adapter must refuse dynamic depth, negative inventory, margin, borrowing,
+The issuance adapter must refuse dynamic depth, margin, borrowing,
 loss mutualization, sponsor substitution, facility cross-netting, a second
 resolution owner, or any attempt to count Hoard principal or anticipated fees
 as sponsor capital. Multiple facilities compose only as independently solvent
 sponsors. Realized fee or spread revenue may be paid under a separately frozen
 policy after it exists; it is never part of this model's solvency or liveness
 proof.
+
+The signed dealer admits negative *net-sold flow* only against present cash and
+authenticated long Egg custody. That is not authority for a negative token
+balance, short borrow, cross-facility netting, or margin.

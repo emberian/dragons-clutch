@@ -7,6 +7,20 @@ model of a fully capitalized cost-function facility over one Dragon's Clutch
 native Egg basis. It changes no kernel, account layout, SBF route, mint
 authority, call-auction relation, or release claim.
 
+It contains two deliberately separate policy models:
+
+- the original nonnegative issuance/repurchase facility, which can create
+  complete sets under its exact backing recipe; and
+- [`signed_dealer`](src/signed_dealer.rs), a genuinely two-sided covered dealer
+  funded by an immutable LP cash-and-existing-Egg unit basket plus a separate
+  sponsor cash donation. Its API distinguishes the curve-loss subsidy minimum
+  from the possibly larger deposit required to finance the all-buy corner.
+
+The signed dealer never mints. It buys with present cash and sells only actual
+custodied Eggs whose backing already remains in the Market Hoard. Its complete
+economic design is
+[`COVERED_SIGNED_DEALER_V1.md`](../../docs/design/COVERED_SIGNED_DEALER_V1.md).
+
 The facility is deliberately not called an AMM. On a blockchain it cannot
 promise autonomous availability, and the present runtime has no adapter for
 this state. The intended execution venue remains the batch call auction. A
@@ -112,12 +126,21 @@ cargo clippy --manifest-path research/bounded-liquidity-facility/Cargo.toml --al
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path research/bounded-liquidity-facility/Cargo.toml --no-deps
 ```
 
-The adversarial suite includes an exhaustive small inventory/payout domain,
+The issuance-facility adversarial suite includes an exhaustive small
+inventory/payout domain,
 exact simplex prices, the global loss bound, complete-set translation, direct
 versus split execution, round trips, mixed cross-outcome flow, native wrapper
 decomposition, buyback-only shutdown, vertex and graded resolution, malformed
 payouts, hostile padding, inventory and price boundaries, replay overflow,
 largest-domain arithmetic, cached-state mutants, and refusal atomicity.
+
+The signed-dealer suite separately covers buy-before-sale execution, exact
+negative ceilings, full mixed-corner price admission, the distinction between
+loss subsidy and bid financing, exhaustive signed endpoints and payouts,
+state-contingent per-LP principal floors, funding cancellation/refunds,
+fixed-capacity positions, exit-queue shutdown, mixed-sign unwind, terminal
+Hamilton allocation, claim-order independence, cached-custody mutants, and
+rollback.
 
 The checked arguments are in [`PROOF_ARGUMENTS.md`](PROOF_ARGUMENTS.md). The
 unverified runtime boundary is in [`MODEL_BOUNDARY.md`](MODEL_BOUNDARY.md). The

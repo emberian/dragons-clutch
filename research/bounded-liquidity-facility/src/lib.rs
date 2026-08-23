@@ -10,9 +10,12 @@
 
 use core::convert::TryFrom;
 
+/// Fully covered two-sided dealer with explicit LP-contributed long inventory.
+pub mod signed_dealer;
+
 /// Maximum active native Eggs in one modeled facility.
 pub const MAX_OUTCOMES: usize = 16;
-/// Largest admitted collateral, Egg inventory, depth, or sponsor-capital value.
+/// Largest admitted single-source capital, per-coordinate inventory, or depth input.
 pub const MAX_ATOMS: u64 = 1_000_000_000_000;
 /// Largest admitted denominator for the exact initial-price simplex.
 pub const MAX_PRICE_DENOMINATOR: u64 = 1_000_000_000;

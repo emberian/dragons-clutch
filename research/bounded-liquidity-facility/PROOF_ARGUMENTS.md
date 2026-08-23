@@ -195,6 +195,18 @@ V1 caps `n <= 16` and each atom value, inventory coordinate, and `b` at
 - the largest potential numerator is below `2^128` by a wide margin; and
 - every persisted output fits its checked `u64` domain.
 
+For the signed dealer, `MAX_ATOMS` is a single-source/input bound rather than an
+aggregate pool bound. Checked admission proves live cash is at most three such
+sources (`c0 + K + C_hat(q) <= 3*MAX_ATOMS`). Retained Egg redemption contributes
+at most one additional source because an exact simplex payout is bounded by the
+largest custody coordinate. Thus terminal cash is at most `4*MAX_ATOMS`.
+Dedicated aggregate constants encode those conservative bounds; all individual
+capital, inventory, depth, and allocation inputs remain capped at `MAX_ATOMS`.
+The curve term has magnitude at most one inventory-coordinate bound because
+prices remain a nonnegative simplex throughout the box: integrating along the
+straight segment from zero bounds `|C(q)|` by `||q||_infinity`; integer ceiling
+does not exceed the integer endpoint bound.
+
 The largest-domain test exercises 16 outcomes, `b=10^12`, every inventory
 coordinate at `10^12`, an exact `10^12`-set translation, and sponsor capital
 `468,750,000,000`.
@@ -207,3 +219,41 @@ plus a source digest and exact toolchain. More importantly, the pure state does
 not prove account identity, token custody, transaction atomicity, candidate-set
 completeness, source authentication, clock authenticity, transaction
 inclusion, or runtime compute bounds. Those are explicit adapter obligations.
+
+## 10. Signed covered-dealer extension
+
+The `signed_dealer` module permits `q_i` on both sides of zero while retaining
+the same potential and global loss proof. LPs contribute fixed assets `c0,g0`,
+and actual custody is
+
+```text
+c(q)=c0+K+C_hat(q)
+g(q)=g0-q.
+```
+
+The policy proves its complete signed box has nonnegative simplex prices by
+checking, for each `i`, the mixed corner minimizing `p_i`: `q_i=-B_i` and every
+other `q_j=U_j`. Coordinatewise monotonicity then makes the all-buy lower corner
+the exact cash minimum. Structural admission checks `g0_i>=U_i` and the maximum
+custody arithmetic bound `g0_i+B_i<=10^12`. Initialization checks the actual
+sponsor deposit against both the curve-loss subsidy and
+`c0+K+C_hat(L)>=0`. This permits sound sponsor overcapitalization instead of
+unnecessarily requiring all bid financing from LP cash.
+
+At payout `w/D`, terminal pool value factors exactly:
+
+```text
+T = c0 + g0 dot w/D + [K+C_hat(q)-q dot w/D].
+```
+
+The bracket is nonnegative by the same generalized quadratic conjugate bound,
+which applies to signed `q`. Each per-share contributed Egg coordinate is a
+multiple of `D`; therefore each holder's baseline basket payoff is an integer.
+Hamilton allocation of `S*baseline+yield` gives every holder at least its exact
+share-scaled baseline and allocates only nonnegative yield dust.
+
+This extension assumes zero pool-borne expenses. It does not prove token
+custody, Hoard refinement, beneficial-owner identity, candidate transaction
+atomicity, or inclusion liveness. Its sponsor capital becomes an irrevocable
+LP-pool donation only at activation; changing that waterfall requires a
+successor theorem.

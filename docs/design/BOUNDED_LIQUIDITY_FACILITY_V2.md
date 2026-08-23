@@ -53,12 +53,13 @@ native Eggs:
 - every payoff in the same native claim domain can reach the same inventory
   curve after canonical wrapper-to-Egg decomposition.
 
-It is not a universal two-sided dealer from an empty state. It does not buy an
-unbounded long Egg position that it did not previously underwrite. That is a
-real restriction, not marketing fine print. Supporting signed long inventory
-would require signed potentials, a separate cash-reservation theorem,
-complete-set normalization after full-basket purchases, and a new exact model.
-It must not be enabled by an adapter shortcut.
+This issuance policy is not a universal two-sided dealer from an empty state.
+It does not buy a long Egg position that it did not previously underwrite. That
+is a real restriction, not marketing fine print. The separate exact
+[`COVERED_SIGNED_DEALER_V1`](COVERED_SIGNED_DEALER_V1.md) research model now
+supports genuine bids only when LPs explicitly contribute cash and existing
+long Eggs and a sponsor separately capitalizes curve loss. No live adapter may
+infer signed authority from this issuance state.
 
 This underwriter role is still economically meaningful. It supplies initial
 state-contingent claims without guessing which complete-set complements users
@@ -384,9 +385,9 @@ authenticated payout; it does not prove a transaction will be included.
 
 High-value successor work:
 
-1. Prove a signed-inventory facility that can buy long Eggs from an empty state,
-   including exact negative potential, cash reservation, and canonical
-   complete-set normalization.
+1. Promote the now-modeled covered signed dealer only after its existing-Egg
+   custody, share roster, expense compartment, and aggregate candidate adapter
+   gates close; do not add negative balances to this issuance facility.
 2. Integrate the protocol's fractional-credit owner so lot size can be smaller
    than the payout denominator without order-dependent floors.
 3. Define a proved realized-spread policy and compare sponsor expected utility,
@@ -425,7 +426,7 @@ Not established:
 - compatibility with every current batch/Portfolio runtime branch;
 - transaction inclusion or an economically sufficient solver reward;
 - profitability to passive sponsors;
-- safe signed long inventory;
+- live signed-dealer custody and candidate integration;
 - smaller terminal lots;
 - source-window-specific safe close times;
 - rent/CU feasibility of retained token custody; or
