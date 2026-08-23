@@ -173,8 +173,9 @@ oracle statement.
 
 Before a production SBF profile selects ScoreV2-Q:
 
-1. complete the nonempty streamed-work completion join so PriceGrid membership
-   is authenticated onchain as explicitly as the exact atom certificate;
+1. adopt the staged 17-account nonempty Work tuple in the shared account-meta
+   and capability owners, then retain its exact-price fact through streamed
+   completion;
 2. freeze a separate price-quality rule; quantized measure coherence is not a
    price-quality or welfare theorem;
 3. finish successor-policy projection across every selected-artifact and

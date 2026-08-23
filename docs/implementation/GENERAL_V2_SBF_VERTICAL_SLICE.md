@@ -540,11 +540,22 @@ economic-validity verdict.
 9. System program, read-only and executable
 10. Rent sysvar, read-only
 11. Clock sysvar, read-only
+12. canonical PriceGrid PDA, read-only and program-owned
+13. authenticated ProductTemplateV4 artifact, read-only and program-owned
+14. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+15. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+16. content-addressed MarketInstancePreimageV2 artifact, read-only
 
 This action is permissionless. Move the exact pre-funded work rent and reward
 reserve from the program-owned node compartment, allocate and assign the exact
 active-width Work PDA, decrement node escrow, and increment the Epoch's work
-count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
+count atomically. Before any allocation, the successor handler authenticates
+the complete MarketInstance/Template/Basis/Policy/Genesis/coordinate-domain
+tuple, exact PriceGrid PDA and active tick membership, successor Relation and
+Score policies, and the finite production atom-mixture certificate. The
+isolated handler owns this 17-account expectation; shared account-meta and
+capability registration must adopt the tuple atomically before enabling the
+route. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 
 ### 6.7 `CompleteCandidateVerification`
 
@@ -565,9 +576,10 @@ count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 14. Clock sysvar, read-only
 
 Only `[S,V)` admits ordinary completion. The identity-only lab consumes
-`clutch-general-v2-runtime::verify_smooth_direct_candidate_v1` over the bounded
-zero-order/zero-slice RelationV2 book. That private-construction result joins
-the full Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
+`clutch-general-v2-runtime::verify_quantized_relation_product_price_admission_v2`
+and `verify_quantized_relation_candidate_v2` over the bounded zero-order/
+zero-slice RelationV2 book. That private-construction result joins the full
+Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
 the V3 quantized witness, owner-blind RelationV2, and ScoreV2-Q. A well-formed,
 authenticated but economically invalid candidate returns success after
 terminalizing the node as `VerifiedRefused`. Malformed bytes, bad authority,
