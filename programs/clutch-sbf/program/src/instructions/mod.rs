@@ -71,6 +71,8 @@ pub mod failure_recovery;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub(crate) mod general_v2_position_replay;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_receipt_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_root;
