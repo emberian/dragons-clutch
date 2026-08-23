@@ -39,6 +39,8 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
+  assert.match(chain, /canonical-account-decoders\/v3-general-no-keeper-no-selected-candidate/);
+  assert.doesNotMatch(chain, /general-selected-candidate/);
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {
