@@ -69,7 +69,7 @@ const CANONICAL_ACCOUNT_COUNT: usize = 30;
 const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
 const FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
 const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
-const COMPACTION_ACCOUNT_COUNT: usize = 27;
+const COMPACTION_ACCOUNT_COUNT: usize = 32;
 const RETIREMENT_ACCOUNT_COUNT: usize = 31;
 const _: () = assert!(
     clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
@@ -113,6 +113,8 @@ const CREATE_CAPABILITY_PROFILE_V4: usize = 31;
 const CREATE_WRAPPER_RELEASE_V2: usize = 32;
 const CREATE_TOKEN_RELEASE_V2: usize = 33;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
+const COMPACTION_TOKEN_IDENTITY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/compaction-token-identity/v1\0";
 
 const C_COLLATERAL_TOKEN_PROGRAM: usize = 4;
 const C_COLLATERAL_TOKEN_DATA: usize = 5;
@@ -170,9 +172,15 @@ const X_LEDGER: usize = 20;
 const X_MINT: usize = 21;
 const X_COLLATERAL_MINT: usize = 22;
 const X_HOARD_TOKEN: usize = 23;
-const X_WRAPPER_RELEASE: usize = 24;
-const X_BASE_RELEASE: usize = 25;
-const X_TOKEN_RELEASE: usize = 26;
+const X_HOARD_AUTHORITY: usize = 24;
+const X_NEUTRAL_TOKEN: usize = 25;
+const X_STRUCTURED_ROOT: usize = 26;
+const X_SERIES_LINK: usize = 27;
+const X_FUNDING_TERMS: usize = 28;
+const X_WRAPPER_RELEASE: usize = 29;
+const X_BASE_RELEASE: usize = 30;
+const X_TOKEN_RELEASE: usize = 31;
+const _: () = assert!(X_TOKEN_RELEASE + 1 == COMPACTION_ACCOUNT_COUNT);
 
 const R_REALM: usize = 1;
 const R_PROFILE: usize = 2;
@@ -212,6 +220,12 @@ struct AuthenticatedStructuredDeploymentsV2 {
     base_release_id: ContentId,
     token_release_id: ContentId,
     owner_release_id: ContentId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompactionTokenSnapshotV1 {
+    amount_atoms: u64,
+    identity_id: [u8; 32],
 }
 
 /// Process the exact enabled wrapper profile.
@@ -1166,11 +1180,16 @@ fn compact_donation(
         .validate()
         .map_err(|_| WrapperError::BaseCustody)?;
 
+    let hoard_collateral_before = compaction_token_snapshot(&accounts[X_HOARD_TOKEN])?;
+    let neutral_collateral_before = compaction_token_snapshot(&accounts[X_NEUTRAL_TOKEN])?;
+
     invoke_base_compaction(accounts, payload)?;
 
     let vault_after = decode_position(&accounts[X_VAULT_POSITION])?;
     let replay_after = decode_replay(&accounts[X_VAULT_REPLAY])?;
     let mint_after = decode_compaction_mint(accounts, &bound)?;
+    let hoard_collateral_after = compaction_token_snapshot(&accounts[X_HOARD_TOKEN])?;
+    let neutral_collateral_after = compaction_token_snapshot(&accounts[X_NEUTRAL_TOKEN])?;
     if vault_after != expected_vault
         || decode_compaction_hoard(accounts)? != expected_hoard
         || decode_compaction_ledger(accounts)? != expected_ledger
@@ -1188,10 +1207,50 @@ fn compact_donation(
         || !immutable_replay_fields(replay_before, replay_after)
         || replay_after.header.rent() != replay_before.header.rent()
         || replay_after.semantic_id == replay_before.semantic_id
+        || hoard_collateral_before.identity_id != hoard_collateral_after.identity_id
+        || neutral_collateral_before.identity_id != neutral_collateral_after.identity_id
+        || hoard_collateral_before
+            .amount_atoms
+            .checked_sub(hoard_collateral_after.amount_atoms)
+            != Some(donated_cash)
+        || neutral_collateral_after
+            .amount_atoms
+            .checked_sub(neutral_collateral_before.amount_atoms)
+            != Some(donated_cash)
     {
         return Err(WrapperError::BaseCustody);
     }
     Ok(())
+}
+
+fn compaction_token_snapshot(account: &AccountInfo<'_>) -> Result<CompactionTokenSnapshotV1> {
+    if account.executable
+        || !account.is_writable
+        || !matches!(account.data_len(), 165 | 170)
+    {
+        return Err(WrapperError::Accounts);
+    }
+    let data = account.try_borrow_data().map_err(|_| WrapperError::Borrow)?;
+    let amount_bytes: [u8; 8] = data
+        .get(64..72)
+        .ok_or(WrapperError::Accounts)?
+        .try_into()
+        .map_err(|_| WrapperError::Accounts)?;
+    let identity_id = hashv(&[
+        COMPACTION_TOKEN_IDENTITY_DOMAIN_V1,
+        account.key.as_ref(),
+        account.owner.as_ref(),
+        data.get(..64).ok_or(WrapperError::Accounts)?,
+        data.get(72..).ok_or(WrapperError::Accounts)?,
+    ])
+    .to_bytes();
+    if identity_id == [0; 32] {
+        return Err(WrapperError::Identity);
+    }
+    Ok(CompactionTokenSnapshotV1 {
+        amount_atoms: u64::from_le_bytes(amount_bytes),
+        identity_id,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1543,17 +1602,17 @@ fn validate_compaction_accounts(
     let signer = [
         false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false,
+        false, false, false, false, false, false, false, false,
     ];
     let writable = [
         false, false, false, false, false, false, false, false, true, true, false, false, false,
-        false, false, false, false, false, false, true, true, false, false, false, false, false,
-        false,
+        false, false, false, false, false, false, true, true, false, false, true, false, true,
+        false, false, false, false, false, false,
     ];
     let executable = [
         false, false, false, false, true, false, false, false, false, false, false, true, false,
         true, false, true, false, false, false, false, false, false, false, false, false, false,
-        false,
+        false, false, false, false, false, false,
     ];
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[X_WRAPPER_PROGRAM].key != *program_id
@@ -1561,6 +1620,12 @@ fn validate_compaction_accounts(
         || accounts[X_MINT].owner != accounts[X_TOKEN_PROGRAM].key
         || accounts[X_COLLATERAL_MINT].owner != accounts[X_COLLATERAL_TOKEN_PROGRAM].key
         || accounts[X_HOARD_TOKEN].owner != accounts[X_COLLATERAL_TOKEN_PROGRAM].key
+        || accounts[X_NEUTRAL_TOKEN].owner != accounts[X_COLLATERAL_TOKEN_PROGRAM].key
+        || accounts[X_HOARD_AUTHORITY].owner != &system_program::ID
+        || !accounts[X_HOARD_AUTHORITY].data_is_empty()
+        || accounts[X_STRUCTURED_ROOT].owner != accounts[X_BASE_PROGRAM].key
+        || accounts[X_SERIES_LINK].owner != accounts[X_BASE_PROGRAM].key
+        || accounts[X_FUNDING_TERMS].owner != accounts[X_BASE_PROGRAM].key
     {
         return Err(WrapperError::Accounts);
     }
@@ -2518,6 +2583,19 @@ fn reconcile_retirement(
         .checked_add(position_donation)
         .and_then(|value| value.checked_add(replay_donation))
         .ok_or(WrapperError::Arithmetic)?;
+    let link_binding_before = link_before.state.binding();
+    let current_product_lineage = clutch_structured_claim_adapter::runtime_contract::StructuredProductLineageV1 {
+        link_binding_id: link_binding_before
+            .id()
+            .map_err(|_| WrapperError::Identity)?,
+        wrapper_obligation_configuration_id: link_binding_before
+            .obligation_configuration_id
+            .content_id(),
+        product_admission_receipt_id: link_before
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper),
+        last_observed_link_transition_sequence: link_before.state.transition_sequence(),
+    };
     if family_terminal {
         expected_refund = expected_refund
             .checked_add(root_before.rent_principal_lamports)
@@ -2548,7 +2626,7 @@ fn reconcile_retirement(
             .map_err(|_| WrapperError::BaseCustody)?;
         drop(root_data);
         if root_after.binding != root_before.binding
-            || root_after.product_lineage != root_before.product_lineage
+            || root_after.product_lineage != current_product_lineage
             || root_after.transition_sequence
                 != root_before
                     .transition_sequence
@@ -2585,8 +2663,15 @@ fn reconcile_retirement(
         || link_before.state.binding().ordinal != root_before.binding.ordinal
         || link_before.state.binding().market_instance_id != root_before.binding.market_instance_id
         || link_before.state.binding().generation != root_before.binding.generation
+        || current_product_lineage.link_binding_id != root_before.product_lineage.link_binding_id
+        || current_product_lineage.wrapper_obligation_configuration_id
+            != root_before
+                .product_lineage
+                .wrapper_obligation_configuration_id
         || link_before.state.transition_sequence()
-            != root_before.product_lineage.product_link_transition_sequence
+            < root_before
+                .product_lineage
+                .last_observed_link_transition_sequence
         || link_before
             .state
             .obligation_status(SeriesLinkObligationV1::Wrapper)
@@ -3002,7 +3087,12 @@ fn invoke_base_compaction(
             is_signer: index == VAULT_AUTHORITY,
             is_writable: matches!(
                 index,
-                X_VAULT_POSITION | X_VAULT_REPLAY | X_HOARD | X_LEDGER
+                X_VAULT_POSITION
+                    | X_VAULT_REPLAY
+                    | X_HOARD
+                    | X_LEDGER
+                    | X_HOARD_TOKEN
+                    | X_NEUTRAL_TOKEN
             ),
         });
         infos.push(accounts[index].clone());
@@ -3479,10 +3569,15 @@ fn reconcile_product_series_link(
             .state
             .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
             != root.product_lineage.product_admission_receipt_id
+        || binding.id().map_err(|_| WrapperError::Identity)?
+            != root.product_lineage.link_binding_id
+        || binding.obligation_configuration_id.content_id()
+            != root.product_lineage.wrapper_obligation_configuration_id
         || link.state.transition_sequence()
-            != root.product_lineage.product_link_transition_sequence
-        || ContentId::from_bytes(semantic_id.bytes()) != root.product_lineage.link_semantic_id
-        || authentication_id != root.product_lineage.link_authentication_id
+            != root
+                .product_lineage
+                .last_observed_link_transition_sequence
+        || authentication_id.is_zero()
     {
         return Err(WrapperError::BaseCustody);
     }

@@ -4,14 +4,15 @@
 //! `SupplyLedger` projection used by the model-only handler.  Every transition
 //! starts from the exact current owners: Position/Replay V3 projections,
 //! Hoard V2, ClaimLedger V3, and, for terminal redemption, Resolution V5.
-//! It stages complete postimages without moving an external collateral token;
-//! an SBF composer must authenticate the accounts, write every returned owner
-//! atomically, and reconcile the Token-2022 wrapper delta separately.
+//! It stages complete postimages without invoking an external token program.
+//! A live SBF composer must authenticate the accounts, join compaction to the
+//! exact accepted Hoard-to-neutral disposition, write every returned owner
+//! atomically, and reconcile every Token-2022 delta separately.
 
 use clutch_collateral_adapter_v2::{
-    prepare_complete_set_reclassification_v3, BoundCollateralProfileV2, ClaimLedgerV3,
-    CompleteSetReclassificationKindV3, HoardV2, MarketLiabilityLifecycleV1,
-    PositionV3Sha256Backend, ResolutionStateV5, ResolutionV5,
+    prepare_complete_set_reclassification_v3, AcceptedHoardSurplusDispositionV1,
+    BoundCollateralProfileV2, ClaimLedgerV3, CompleteSetReclassificationKindV3, HoardV2,
+    MarketLiabilityLifecycleV1, PositionV3Sha256Backend, ResolutionStateV5, ResolutionV5,
 };
 use clutch_structured_claim::BackingPlan;
 
@@ -29,12 +30,20 @@ pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1: &[u8] =
 /// collateral ProgramData/ELF value-route receipt.
 pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/structured-claim/current-transition/v2\0";
+/// Successor compaction receipt which additionally commits the accepted exact
+/// Hoard-to-neutral collateral disposition.
+pub const CURRENT_STRUCTURED_COMPACTION_DISPOSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/current-compaction-disposition/v1\0";
 /// Exact projection domain used inside the transition receipt.
 pub const CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/current-position-projection/v1\0";
 
 const POSITION_PROJECTION_PREIMAGE_BYTES: usize = 232;
 const TRANSITION_PREIMAGE_BYTES_V2: usize = 840;
+const COMPACTION_DISPOSITION_PREIMAGE_BYTES_V1: usize = 464;
+const _: () = assert!(
+    COMPACTION_DISPOSITION_PREIMAGE_BYTES_V1 == 9 * 32 + 8 + MAX_OUTCOMES * 8 + 5 * 8
+);
 
 /// Current physical accounts bound by a quantity-changing Structured route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,7 +68,7 @@ pub struct CurrentStructuredQuantityAccountsV1 {
     pub actor: Key,
 }
 
-/// Current physical accounts bound by a vault-only compaction route.
+/// Current physical accounts bound by the exact compaction route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CurrentStructuredVaultAccountsV1 {
     /// Wrapper-owned descriptor account.
@@ -130,6 +139,105 @@ pub struct CurrentStructuredTransitionPlanV1 {
     pub collateral_value_receipt_id: Key,
     /// Receipt committing every account, projection, owner, and integer above.
     pub transition_id: Key,
+}
+
+/// Join the family-local compaction plan to collateral's accepted exact
+/// Hoard-to-neutral disposition and replace the transition identity consumed
+/// by Replay V3. The accepted receipt is an opaque validated pure result; a
+/// live SBF composer must construct it only from hostile-authenticated account
+/// observations and the same-instruction CPI/postreload. No instruction
+/// payload or caller-shaped destination is accepted at this boundary.
+pub fn finalize_current_compaction_disposition_v1<B: PositionV3Sha256Backend>(
+    mut plan: CurrentStructuredTransitionPlanV1,
+    accepted: AcceptedHoardSurplusDispositionV1,
+    backend: &B,
+) -> Result<CurrentStructuredTransitionPlanV1> {
+    if plan.action != StructuredClaimActionV1::CompactDonation
+        || accepted.transition_id().bytes() != plan.transition_id
+        || accepted.collateral_value_receipt_id().bytes() != plan.collateral_value_receipt_id
+        || accepted.donated_cash_atoms() != plan.donated_cash_atoms
+        || accepted.donated_internal() != plan.donated_internal
+        || accepted.hoard_after() != plan.hoard_after
+        || accepted.claim_ledger_after() != plan.claim_ledger_after
+        || accepted.hoard_before_id().bytes() != plan.hoard_before_id
+        || accepted.hoard_after_id().bytes() != plan.hoard_after_id
+        || accepted.claim_ledger_before_id().bytes() != plan.claim_ledger_before_id
+        || accepted.claim_ledger_after_id().bytes() != plan.claim_ledger_after_id
+        || accepted.destination_token_account().is_zero()
+        || accepted.destination_semantic_owner().is_zero()
+        || accepted.destination_token_account() == accepted.destination_semantic_owner()
+        || accepted.receipt_id().is_zero()
+        || accepted.custody().is_some() != (plan.donated_cash_atoms != 0)
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+    plan.transition_id = compaction_disposition_transition_id(plan, accepted, backend)?;
+    Ok(plan)
+}
+
+fn compaction_disposition_transition_id<B: PositionV3Sha256Backend>(
+    plan: CurrentStructuredTransitionPlanV1,
+    accepted: AcceptedHoardSurplusDispositionV1,
+    backend: &B,
+) -> Result<Key> {
+    compaction_disposition_transition_id_from_evidence(
+        plan,
+        accepted.receipt_id().bytes(),
+        accepted.destination_token_account().bytes(),
+        accepted.destination_semantic_owner().bytes(),
+        [
+            accepted.source_atoms_before(),
+            accepted.source_atoms_after(),
+            accepted.destination_atoms_before(),
+            accepted.destination_atoms_after(),
+            accepted.mint_supply_atoms(),
+        ],
+        backend,
+    )
+}
+
+fn compaction_disposition_transition_id_from_evidence<B: PositionV3Sha256Backend>(
+    plan: CurrentStructuredTransitionPlanV1,
+    accepted_receipt_id: Key,
+    destination_token_account: Key,
+    destination_semantic_owner: Key,
+    token_evidence: [u64; 5],
+    backend: &B,
+) -> Result<Key> {
+    let mut body = [0_u8; COMPACTION_DISPOSITION_PREIMAGE_BYTES_V1];
+    let mut cursor = 0usize;
+    for id in [
+        plan.transition_id,
+        plan.collateral_value_receipt_id,
+        accepted_receipt_id,
+        destination_token_account,
+        destination_semantic_owner,
+        plan.hoard_before_id,
+        plan.hoard_after_id,
+        plan.claim_ledger_before_id,
+        plan.claim_ledger_after_id,
+    ] {
+        put(&mut body, &mut cursor, &id)?;
+    }
+    put(
+        &mut body,
+        &mut cursor,
+        &plan.donated_cash_atoms.to_le_bytes(),
+    )?;
+    for value in plan.donated_internal {
+        put(&mut body, &mut cursor, &value.to_le_bytes())?;
+    }
+    for value in token_evidence {
+        put(&mut body, &mut cursor, &value.to_le_bytes())?;
+    }
+    if cursor != COMPACTION_DISPOSITION_PREIMAGE_BYTES_V1 {
+        return Err(Error::Arithmetic);
+    }
+    let id = backend.sha256(CURRENT_STRUCTURED_COMPACTION_DISPOSITION_DOMAIN_V1, &body);
+    if is_zero(&id) || id == plan.transition_id {
+        return Err(Error::DigestMismatch);
+    }
+    Ok(id)
 }
 
 /// Prepare current descriptor retirement without consulting the withdrawn
@@ -1461,6 +1569,101 @@ mod tests {
         let mut value = liabilities(MarketLiabilityLifecycleV1::Open);
         value.claim_ledger.realm_id = id(44);
         assert!(validate_liability_successors(value.hoard, value.claim_ledger).is_err());
+    }
+
+    fn compaction_plan() -> CurrentStructuredTransitionPlanV1 {
+        let values = liabilities(MarketLiabilityLifecycleV1::Open);
+        let mut hoard_after = values.hoard;
+        hoard_after.cash_liability_atoms = 97;
+        let mut claim_ledger_after = values.claim_ledger;
+        claim_ledger_after.aggregate_internal_supply[0] = 98;
+        CurrentStructuredTransitionPlanV1 {
+            action: StructuredClaimActionV1::CompactDonation,
+            user_after: None,
+            vault_after: PositionProjectionV1 {
+                owner: [1; 32],
+                market: [2; 32],
+                generation: 1,
+                replay_sequence: 2,
+                cash_atoms: 4,
+                reserved_cash_atoms: 0,
+                internal: [0; MAX_OUTCOMES],
+                closed: false,
+            },
+            hoard_after,
+            claim_ledger_after,
+            mint_supply_before: 5,
+            mint_supply_after: 5,
+            holder_before: 0,
+            holder_after: 0,
+            wrapper_quantity: 0,
+            complete_set_atoms: 0,
+            payout_cash_atoms: 0,
+            donated_cash_atoms: 3,
+            donated_internal: {
+                let mut values = [0; MAX_OUTCOMES];
+                values[0] = 2;
+                values
+            },
+            hoard_before_id: [10; 32],
+            hoard_after_id: [11; 32],
+            claim_ledger_before_id: [12; 32],
+            claim_ledger_after_id: [13; 32],
+            resolution_semantic_id: [0; 32],
+            liability_receipt_id: [0; 32],
+            collateral_value_receipt_id: [14; 32],
+            transition_id: [15; 32],
+        }
+    }
+
+    #[test]
+    fn compaction_disposition_receipt_commits_owner_destination_and_token_reload() {
+        let plan = compaction_plan();
+        let base = compaction_disposition_transition_id_from_evidence(
+            plan,
+            [16; 32],
+            [17; 32],
+            [18; 32],
+            [100, 97, 7, 10, 1_000],
+            &Hash,
+        )
+        .expect("receipt");
+        for changed in [
+            compaction_disposition_transition_id_from_evidence(
+                plan,
+                [19; 32],
+                [17; 32],
+                [18; 32],
+                [100, 97, 7, 10, 1_000],
+                &Hash,
+            ),
+            compaction_disposition_transition_id_from_evidence(
+                plan,
+                [16; 32],
+                [20; 32],
+                [18; 32],
+                [100, 97, 7, 10, 1_000],
+                &Hash,
+            ),
+            compaction_disposition_transition_id_from_evidence(
+                plan,
+                [16; 32],
+                [17; 32],
+                [21; 32],
+                [100, 97, 7, 10, 1_000],
+                &Hash,
+            ),
+            compaction_disposition_transition_id_from_evidence(
+                plan,
+                [16; 32],
+                [17; 32],
+                [18; 32],
+                [100, 97, 7, 10, 1_001],
+                &Hash,
+            ),
+        ] {
+            assert_ne!(base, changed.expect("changed receipt"));
+        }
     }
 
     #[test]

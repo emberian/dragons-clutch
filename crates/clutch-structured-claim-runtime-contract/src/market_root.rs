@@ -239,28 +239,32 @@ impl StructuredMarketRootBindingV1 {
     }
 }
 
-/// Current Product link lineage authenticated by Product's private SBF receipt.
+/// Immutable Product link/Wrapper admission authority plus one monotone audit
+/// sequence. Sibling obligations, Failure sessions, and lamport donations may
+/// legitimately advance the shared link while these immutable identities remain
+/// unchanged; the sequence is never a whole-link liveness lock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredProductLineageV1 {
-    /// Full current link-account authentication receipt.
-    pub link_authentication_id: ContentId,
-    /// Current exact Product link semantic identity.
-    pub link_semantic_id: ContentId,
+    /// Immutable complete Product link binding identity.
+    pub link_binding_id: ContentId,
+    /// Immutable configuration governing Product's Wrapper obligation.
+    pub wrapper_obligation_configuration_id: ContentId,
     /// Persisted receipt which moved Wrapper from never-founded to live.
     pub product_admission_receipt_id: ContentId,
-    /// Current Product link transition sequence.
-    pub product_link_transition_sequence: u64,
+    /// Most recently observed Product link sequence, retained for audit only.
+    /// Live authentication permits unrelated monotone sibling transitions.
+    pub last_observed_link_transition_sequence: u64,
 }
 
 impl StructuredProductLineageV1 {
     fn validate(self) -> Result<()> {
-        if self.link_authentication_id.is_zero()
-            || self.link_semantic_id.is_zero()
+        if self.link_binding_id.is_zero()
+            || self.wrapper_obligation_configuration_id.is_zero()
             || self.product_admission_receipt_id.is_zero()
-            || self.product_link_transition_sequence == 0
-            || self.link_authentication_id == self.link_semantic_id
-            || self.link_authentication_id == self.product_admission_receipt_id
-            || self.link_semantic_id == self.product_admission_receipt_id
+            || self.last_observed_link_transition_sequence == 0
+            || self.link_binding_id == self.wrapper_obligation_configuration_id
+            || self.link_binding_id == self.product_admission_receipt_id
+            || self.wrapper_obligation_configuration_id == self.product_admission_receipt_id
         {
             return Err(Error::InvalidIdentity);
         }
@@ -273,7 +277,7 @@ impl StructuredProductLineageV1 {
 pub struct StructuredMarketRootV1 {
     /// Immutable Product/Series/root identity.
     pub binding: StructuredMarketRootBindingV1,
-    /// Most recently authenticated Product link lineage.
+    /// Immutable Product link/Wrapper admission lineage and observed sequence.
     pub product_lineage: StructuredProductLineageV1,
     /// Monotone Structured transition sequence.
     pub transition_sequence: u64,
@@ -300,6 +304,25 @@ pub struct StructuredMarketRootV1 {
 }
 
 impl StructuredMarketRootV1 {
+    /// Advance the observed Product sequence without consuming a Structured
+    /// transition sequence. A live adapter must hostile-authenticate the current
+    /// link account, immutable binding/configuration, and exact Wrapper admission
+    /// receipt before constructing `current_product_lineage`.
+    pub fn observe_current_product_lineage(
+        self,
+        current_product_lineage: StructuredProductLineageV1,
+    ) -> Result<Self> {
+        self.validate()?;
+        current_product_lineage.validate()?;
+        validate_product_lineage_successor(self.product_lineage, current_product_lineage)?;
+        let next = Self {
+            product_lineage: current_product_lineage,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Reconcile unsolicited lamports immediately before a descriptor/root
     /// mutation. The persisted principal is immutable; every excess lamport is
     /// donation residue and can only increase while the account remains live.
@@ -488,8 +511,8 @@ impl StructuredMarketRootV1 {
             &self.binding.encode_preimage()?,
         )?;
         for id in [
-            self.product_lineage.link_authentication_id,
-            self.product_lineage.link_semantic_id,
+            self.product_lineage.link_binding_id,
+            self.product_lineage.wrapper_obligation_configuration_id,
             self.product_lineage.product_admission_receipt_id,
         ] {
             put(&mut output, &mut cursor, &id.bytes())?;
@@ -499,7 +522,7 @@ impl StructuredMarketRootV1 {
             &mut cursor,
             &self
                 .product_lineage
-                .product_link_transition_sequence
+                .last_observed_link_transition_sequence
                 .to_le_bytes(),
         )?;
         put(
@@ -551,10 +574,10 @@ impl StructuredMarketRootV1 {
             &mut cursor,
         )?)?;
         let product_lineage = StructuredProductLineageV1 {
-            link_authentication_id: ContentId::from_bytes(read_id(input, &mut cursor)?),
-            link_semantic_id: ContentId::from_bytes(read_id(input, &mut cursor)?),
+            link_binding_id: ContentId::from_bytes(read_id(input, &mut cursor)?),
+            wrapper_obligation_configuration_id: ContentId::from_bytes(read_id(input, &mut cursor)?),
             product_admission_receipt_id: ContentId::from_bytes(read_id(input, &mut cursor)?),
-            product_link_transition_sequence: read_u64(input, &mut cursor)?,
+            last_observed_link_transition_sequence: read_u64(input, &mut cursor)?,
         };
         let transition_sequence = read_u64(input, &mut cursor)?;
         let admitted_descriptor_count = read_u32(input, &mut cursor)?;
@@ -667,9 +690,9 @@ impl StructuredMarketRootV1 {
                 && (self.aggregate_terminal_receipt_id == self.admission_transcript_id
                     || self.aggregate_terminal_receipt_id == self.terminal_transcript_id
                     || self.aggregate_terminal_receipt_id
-                        == self.product_lineage.link_authentication_id
+                        == self.product_lineage.link_binding_id
                     || self.aggregate_terminal_receipt_id
-                        == self.product_lineage.link_semantic_id
+                        == self.product_lineage.wrapper_obligation_configuration_id
                     || self.aggregate_terminal_receipt_id
                         == self.product_lineage.product_admission_receipt_id))
         {
@@ -733,8 +756,8 @@ fn derive_market_terminal_receipt_v1<H: WrapperRecipeHashV1 + ?Sized>(
     for id in [
         terminal_without_receipt
             .product_lineage
-            .link_authentication_id,
-        terminal_without_receipt.product_lineage.link_semantic_id,
+            .link_binding_id,
+        terminal_without_receipt.product_lineage.wrapper_obligation_configuration_id,
         terminal_without_receipt
             .product_lineage
             .product_admission_receipt_id,
@@ -744,7 +767,7 @@ fn derive_market_terminal_receipt_v1<H: WrapperRecipeHashV1 + ?Sized>(
     for sequence in [
         terminal_without_receipt
             .product_lineage
-            .product_link_transition_sequence,
+            .last_observed_link_transition_sequence,
         terminal_without_receipt.transition_sequence,
     ] {
         put(&mut preimage, &mut cursor, &sequence.to_le_bytes())?;
@@ -853,8 +876,12 @@ fn validate_product_lineage_successor(
     previous: StructuredProductLineageV1,
     current: StructuredProductLineageV1,
 ) -> Result<()> {
-    if current.product_admission_receipt_id != previous.product_admission_receipt_id
-        || current.product_link_transition_sequence < previous.product_link_transition_sequence
+    if current.link_binding_id != previous.link_binding_id
+        || current.wrapper_obligation_configuration_id
+            != previous.wrapper_obligation_configuration_id
+        || current.product_admission_receipt_id != previous.product_admission_receipt_id
+        || current.last_observed_link_transition_sequence
+            < previous.last_observed_link_transition_sequence
     {
         return Err(Error::InvalidIdentity);
     }
@@ -998,8 +1025,8 @@ mod tests {
 
     fn lineage(hash: &DeterministicHash) -> StructuredProductLineageV1 {
         StructuredProductLineageV1 {
-            link_authentication_id: id(14),
-            link_semantic_id: id(15),
+            link_binding_id: id(14),
+            wrapper_obligation_configuration_id: id(15),
             product_admission_receipt_id: structured_descriptor_admission_receipt_v1(
                 ContentId::ZERO,
                 id(17),
@@ -1008,7 +1035,7 @@ mod tests {
                 hash,
             )
             .unwrap(),
-            product_link_transition_sequence: 3,
+            last_observed_link_transition_sequence: 3,
         }
     }
 
@@ -1041,6 +1068,49 @@ mod tests {
             StructuredMarketRootV1::decode(&hostile),
             Err(Error::InvalidHeader)
         );
+    }
+
+    #[test]
+    fn sibling_link_churn_is_observable_but_binding_and_wrapper_splices_are_refused() {
+        let hash = DeterministicHash;
+        let root = StructuredMarketRootV1::initialize(
+            binding(),
+            lineage(&hash),
+            id(17),
+            id(18),
+            1_000,
+            40,
+            7,
+            &hash,
+        )
+        .unwrap();
+        let mut sibling_churn = root.product_lineage;
+        sibling_churn.last_observed_link_transition_sequence += 9;
+        let observed = root
+            .observe_current_product_lineage(sibling_churn)
+            .expect("unrelated monotone Product transition");
+        assert_eq!(
+            observed
+                .product_lineage
+                .last_observed_link_transition_sequence,
+            sibling_churn.last_observed_link_transition_sequence
+        );
+
+        let mut binding_splice = sibling_churn;
+        binding_splice.link_binding_id = id(55);
+        assert!(root
+            .observe_current_product_lineage(binding_splice)
+            .is_err());
+        let mut wrapper_splice = sibling_churn;
+        wrapper_splice.wrapper_obligation_configuration_id = id(56);
+        assert!(root
+            .observe_current_product_lineage(wrapper_splice)
+            .is_err());
+        let mut admission_splice = sibling_churn;
+        admission_splice.product_admission_receipt_id = id(57);
+        assert!(root
+            .observe_current_product_lineage(admission_splice)
+            .is_err());
     }
 
     #[test]
@@ -1092,7 +1162,7 @@ mod tests {
         forged.aggregate_terminal_receipt_id = id(20);
         assert_eq!(forged.projection(&hash), Err(Error::InvalidIdentity));
         forged = terminal;
-        forged.product_lineage.link_semantic_id = id(21);
+        forged.product_lineage.wrapper_obligation_configuration_id = id(21);
         assert_eq!(forged.projection(&hash), Err(Error::InvalidIdentity));
     }
 

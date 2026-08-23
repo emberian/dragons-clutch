@@ -17,7 +17,8 @@ version while retaining the same recipe identities.
 
 The root's terminal receipt is derived from its complete final body with only
 the recursive receipt field omitted. It therefore commits the exact Product
-link lineage, immutable Series/root binding, admission and terminal
+immutable Product link binding/configuration, Wrapper admission receipt, most
+recently observed monotone Product sequence, immutable Series/root binding, admission and terminal
 transcripts, exhaustive counts, rent principal, donation residue, and bump;
 an arbitrary caller receipt cannot become Product terminal evidence.
 
