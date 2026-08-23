@@ -1,0 +1,758 @@
+//! Construction-only RPC acquisition plans and hostile response decoding.
+//!
+//! This module has no HTTP or websocket client. It produces bounded request
+//! bodies for an external transport and decodes responses only against the
+//! exact cluster, program, and release that authorized the request.
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use serde_json::{json, Value};
+use solana_address::Address;
+use std::collections::BTreeSet;
+use std::str::FromStr;
+
+pub type Result<T> = core::result::Result<T, RpcIndexError>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcIndexError {
+    InvalidCluster,
+    InvalidRelease,
+    DuplicateRelease,
+    InvalidBound,
+    MalformedResponse,
+    WrongOwner,
+    ResponseTooLarge,
+    InvalidAccount,
+    WrongRequest,
+}
+
+impl core::fmt::Display for RpcIndexError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidCluster => "RPC index cluster binding is invalid",
+            Self::InvalidRelease => "RPC index program release is invalid",
+            Self::DuplicateRelease => "RPC index program release is duplicated",
+            Self::InvalidBound => "RPC index acquisition bound is invalid",
+            Self::MalformedResponse => "RPC index response is malformed",
+            Self::WrongOwner => "RPC account owner differs from the requested release",
+            Self::ResponseTooLarge => "RPC response exceeds its explicit acquisition bound",
+            Self::InvalidAccount => "RPC response contains an invalid account",
+            Self::WrongRequest => "RPC response was supplied to the wrong request plan",
+        })
+    }
+}
+
+impl std::error::Error for RpcIndexError {}
+
+/// Semantic families a reviewed program release is allowed to own.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CanonicalFamily {
+    General,
+    Source,
+    Series,
+    Fees,
+    Liveness,
+    PositionV3,
+    ReplayV3,
+    StructuredClaim,
+    Dealer,
+    Failure,
+}
+
+impl CanonicalFamily {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Source => "source",
+            Self::Series => "series",
+            Self::Fees => "fees",
+            Self::Liveness => "liveness",
+            Self::PositionV3 => "position-v3",
+            Self::ReplayV3 => "replay-v3",
+            Self::StructuredClaim => "structured-claim",
+            Self::Dealer => "dealer",
+            Self::Failure => "failure",
+        }
+    }
+}
+
+/// Exact network identity. URLs are transport coordinates, never cluster truth.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RpcClusterBinding {
+    pub cluster_name: String,
+    pub genesis_hash: String,
+    pub rpc_http_url: String,
+    pub rpc_websocket_url: String,
+}
+
+impl RpcClusterBinding {
+    pub fn validate(&self) -> Result<()> {
+        if self.cluster_name.trim().is_empty()
+            || self.genesis_hash.len() < 32
+            || self.genesis_hash.len() > 64
+            || self.genesis_hash.chars().any(char::is_whitespace)
+            || !safe_endpoint(&self.rpc_http_url, false)
+            || !safe_endpoint(&self.rpc_websocket_url, true)
+        {
+            return Err(RpcIndexError::InvalidCluster);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.cluster_name, self.genesis_hash)
+    }
+}
+
+fn safe_endpoint(url: &str, websocket: bool) -> bool {
+    if url.contains('@') || url.contains('#') || url.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let public_prefix = if websocket { "wss://" } else { "https://" };
+    let loopback_prefix = if websocket {
+        "ws://127.0.0.1:"
+    } else {
+        "http://127.0.0.1:"
+    };
+    url.starts_with(public_prefix)
+        || url
+            .strip_prefix(loopback_prefix)
+            .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// One exact executable release and the account families it may own.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IndexedProgramRelease {
+    pub program_id: Address,
+    pub program_data: Address,
+    pub elf_sha256: [u8; 32],
+    pub deployment_slot: u64,
+    pub families: Vec<CanonicalFamily>,
+}
+
+impl IndexedProgramRelease {
+    pub fn validate(&self) -> Result<()> {
+        if self.program_id == Address::default()
+            || self.program_data == Address::default()
+            || self.program_id == self.program_data
+            || self.elf_sha256 == [0; 32]
+            || self.deployment_slot == 0
+            || self.families.is_empty()
+        {
+            return Err(RpcIndexError::InvalidRelease);
+        }
+        let mut previous = None;
+        for family in &self.families {
+            if previous.is_some_and(|value| value >= *family) {
+                return Err(RpcIndexError::InvalidRelease);
+            }
+            previous = Some(*family);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.program_id,
+            self.deployment_slot,
+            hex(&self.elf_sha256)
+        )
+    }
+}
+
+/// Hard acquisition limits applied before any account reaches a decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RpcAcquisitionBounds {
+    pub maximum_accounts_per_scan: usize,
+    pub maximum_account_data_bytes: usize,
+    pub maximum_total_response_bytes: usize,
+    pub maximum_subscriptions: usize,
+}
+
+impl RpcAcquisitionBounds {
+    pub fn validate(self) -> Result<()> {
+        if self.maximum_accounts_per_scan == 0
+            || self.maximum_accounts_per_scan > 65_536
+            || self.maximum_account_data_bytes == 0
+            || self.maximum_account_data_bytes > 1_048_576
+            || self.maximum_total_response_bytes < self.maximum_account_data_bytes
+            || self.maximum_total_response_bytes > 268_435_456
+            || self.maximum_subscriptions == 0
+            || self.maximum_subscriptions > 256
+        {
+            return Err(RpcIndexError::InvalidBound);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RpcCommitment {
+    Processed,
+    Finalized,
+}
+
+impl RpcCommitment {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Processed => "processed",
+            Self::Finalized => "finalized",
+        }
+    }
+}
+
+/// Complete read-only index acquisition policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RpcIndexPlan {
+    pub cluster: RpcClusterBinding,
+    pub releases: Vec<IndexedProgramRelease>,
+    pub bounds: RpcAcquisitionBounds,
+}
+
+impl RpcIndexPlan {
+    pub fn validate(&self) -> Result<()> {
+        self.cluster.validate()?;
+        self.bounds.validate()?;
+        if self.releases.is_empty() || self.releases.len() > self.bounds.maximum_subscriptions {
+            return Err(RpcIndexError::InvalidBound);
+        }
+        let mut programs = BTreeSet::new();
+        for release in &self.releases {
+            release.validate()?;
+            if !programs.insert(release.program_id) {
+                return Err(RpcIndexError::DuplicateRelease);
+            }
+        }
+        Ok(())
+    }
+
+    /// Construct one bounded finalized bootstrap scan per explicit release.
+    pub fn finalized_scan_requests(&self) -> Result<Vec<PlannedRpcRequest>> {
+        self.validate()?;
+        Ok(self
+            .releases
+            .iter()
+            .enumerate()
+            .map(|(index, release)| PlannedRpcRequest {
+                request_id: u64::try_from(index + 1).unwrap_or(u64::MAX),
+                release_key: release.key(),
+                program_id: release.program_id,
+                commitment: RpcCommitment::Finalized,
+                purpose: RpcRequestPurpose::ProgramScan,
+                body: json!({
+                    "jsonrpc": "2.0",
+                    "id": index + 1,
+                    "method": "getProgramAccounts",
+                    "params": [release.program_id.to_string(), {
+                        "commitment": "finalized",
+                        "encoding": "base64",
+                        "withContext": true
+                    }]
+                }),
+            })
+            .collect())
+    }
+
+    /// Construct processed account subscriptions plus slot/root topology feeds.
+    pub fn subscription_requests(&self) -> Result<Vec<PlannedRpcRequest>> {
+        self.validate()?;
+        let required = self
+            .releases
+            .len()
+            .checked_add(3)
+            .ok_or(RpcIndexError::InvalidBound)?;
+        if required > self.bounds.maximum_subscriptions {
+            return Err(RpcIndexError::InvalidBound);
+        }
+        let mut output = Vec::with_capacity(required);
+        for (index, release) in self.releases.iter().enumerate() {
+            output.push(PlannedRpcRequest {
+                request_id: u64::try_from(index + 1).unwrap_or(u64::MAX),
+                release_key: release.key(),
+                program_id: release.program_id,
+                commitment: RpcCommitment::Processed,
+                purpose: RpcRequestPurpose::ProgramSubscription,
+                body: json!({
+                    "jsonrpc": "2.0",
+                    "id": index + 1,
+                    "method": "programSubscribe",
+                    "params": [release.program_id.to_string(), {
+                        "commitment": "processed",
+                        "encoding": "base64"
+                    }]
+                }),
+            });
+        }
+        let base = self.releases.len() + 1;
+        for (offset, purpose, method, params) in [
+            (
+                0usize,
+                RpcRequestPurpose::BlockSubscription,
+                "blockSubscribe",
+                json!(["all", {
+                    "commitment": "processed",
+                    "encoding": "json",
+                    "transactionDetails": "none",
+                    "showRewards": false
+                }]),
+            ),
+            (
+                1usize,
+                RpcRequestPurpose::SlotSubscription,
+                "slotsUpdatesSubscribe",
+                json!([]),
+            ),
+            (
+                2usize,
+                RpcRequestPurpose::RootSubscription,
+                "rootSubscribe",
+                json!([]),
+            ),
+        ] {
+            output.push(PlannedRpcRequest {
+                request_id: u64::try_from(base + offset).unwrap_or(u64::MAX),
+                release_key: self.cluster.key(),
+                program_id: Address::default(),
+                commitment: RpcCommitment::Processed,
+                purpose,
+                body: json!({"jsonrpc": "2.0", "id": base + offset, "method": method, "params": params}),
+            });
+        }
+        Ok(output)
+    }
+
+    pub fn release(&self, key: &str) -> Result<&IndexedProgramRelease> {
+        self.releases
+            .iter()
+            .find(|release| release.key() == key)
+            .ok_or(RpcIndexError::WrongRequest)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcRequestPurpose {
+    ProgramScan,
+    ProgramSubscription,
+    BlockSubscription,
+    SlotSubscription,
+    RootSubscription,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlannedRpcRequest {
+    pub request_id: u64,
+    pub release_key: String,
+    pub program_id: Address,
+    pub commitment: RpcCommitment,
+    pub purpose: RpcRequestPurpose,
+    pub body: Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcObservationSource {
+    FinalizedScan,
+    ProcessedSubscription { subscription_id: u64 },
+}
+
+/// Processed fork identity obtained from a block subscription. Slot alone is
+/// never used as branch identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedSlot {
+    pub cluster_key: String,
+    pub slot: u64,
+    pub parent_slot: u64,
+    pub blockhash: String,
+    pub previous_blockhash: String,
+    pub commitment: RpcCommitment,
+    pub receive_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservedSlotUpdateKind {
+    FirstShred,
+    Completed,
+    CreatedBank,
+    Frozen,
+    Dead,
+    OptimisticConfirmation,
+    Root,
+}
+
+/// Slot lifecycle evidence has no blockhash and therefore cannot identify a
+/// fork by itself. It only refines branches learned from block notifications.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedSlotUpdate {
+    pub cluster_key: String,
+    pub slot: u64,
+    pub parent_slot: Option<u64>,
+    pub kind: ObservedSlotUpdateKind,
+    pub receive_sequence: u64,
+}
+
+fn require_topology_request(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    purpose: RpcRequestPurpose,
+) -> Result<()> {
+    plan.validate()?;
+    if request.purpose != purpose
+        || request.commitment != RpcCommitment::Processed
+        || request.release_key != plan.cluster.key()
+        || request.program_id != Address::default()
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    Ok(())
+}
+
+fn require_bounded_json(plan: &RpcIndexPlan, value: &Value) -> Result<()> {
+    if serde_json::to_vec(value)
+        .map_err(|_| RpcIndexError::MalformedResponse)?
+        .len()
+        > plan.bounds.maximum_total_response_bytes
+    {
+        Err(RpcIndexError::ResponseTooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+fn valid_blockhash(value: &str) -> bool {
+    (32..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() && !matches!(byte, b'0' | b'O' | b'I' | b'l'))
+}
+
+pub fn decode_block_notification(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    notification: &Value,
+    receive_sequence: u64,
+) -> Result<ObservedSlot> {
+    require_topology_request(plan, request, RpcRequestPurpose::BlockSubscription)?;
+    require_bounded_json(plan, notification)?;
+    let value = notification
+        .get("params")
+        .and_then(|value| value.get("result"))
+        .and_then(|value| value.get("value"))
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let slot = value
+        .get("slot")
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let block = value.get("block").ok_or(RpcIndexError::MalformedResponse)?;
+    let parent_slot = block
+        .get("parentSlot")
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let blockhash = block
+        .get("blockhash")
+        .and_then(Value::as_str)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let previous_blockhash = block
+        .get("previousBlockhash")
+        .and_then(Value::as_str)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if slot == 0
+        || parent_slot >= slot
+        || !valid_blockhash(blockhash)
+        || !valid_blockhash(previous_blockhash)
+        || blockhash == previous_blockhash
+    {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    Ok(ObservedSlot {
+        cluster_key: plan.cluster.key(),
+        slot,
+        parent_slot,
+        blockhash: blockhash.to_string(),
+        previous_blockhash: previous_blockhash.to_string(),
+        commitment: RpcCommitment::Processed,
+        receive_sequence,
+    })
+}
+
+pub fn decode_slot_update_notification(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    notification: &Value,
+    receive_sequence: u64,
+) -> Result<ObservedSlotUpdate> {
+    require_topology_request(plan, request, RpcRequestPurpose::SlotSubscription)?;
+    require_bounded_json(plan, notification)?;
+    let result = notification
+        .get("params")
+        .and_then(|value| value.get("result"))
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let slot = result
+        .get("slot")
+        .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let parent_slot = result.get("parent").and_then(Value::as_u64);
+    if parent_slot.is_some_and(|parent| parent >= slot) {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    let kind = match result.get("type").and_then(Value::as_str) {
+        Some("firstShredReceived") => ObservedSlotUpdateKind::FirstShred,
+        Some("completed") => ObservedSlotUpdateKind::Completed,
+        Some("createdBank") => ObservedSlotUpdateKind::CreatedBank,
+        Some("frozen") => ObservedSlotUpdateKind::Frozen,
+        Some("dead") => ObservedSlotUpdateKind::Dead,
+        Some("optimisticConfirmation") => ObservedSlotUpdateKind::OptimisticConfirmation,
+        Some("root") => ObservedSlotUpdateKind::Root,
+        _ => return Err(RpcIndexError::MalformedResponse),
+    };
+    Ok(ObservedSlotUpdate {
+        cluster_key: plan.cluster.key(),
+        slot,
+        parent_slot,
+        kind,
+        receive_sequence,
+    })
+}
+
+pub fn decode_root_notification(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    notification: &Value,
+) -> Result<u64> {
+    require_topology_request(plan, request, RpcRequestPurpose::RootSubscription)?;
+    require_bounded_json(plan, notification)?;
+    notification
+        .get("params")
+        .and_then(|value| value.get("result"))
+        .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
+        .ok_or(RpcIndexError::MalformedResponse)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RpcObservationProvenance {
+    pub cluster_key: String,
+    pub release_key: String,
+    pub slot: u64,
+    pub commitment: RpcCommitment,
+    pub source: RpcObservationSource,
+    pub receive_sequence: u64,
+}
+
+/// Hostile wire account after bounded base64 decoding and exact owner check.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedRpcAccount {
+    pub address: Address,
+    pub owner: Address,
+    pub lamports: u64,
+    pub executable: bool,
+    pub rent_epoch: u64,
+    pub data: Vec<u8>,
+    pub provenance: RpcObservationProvenance,
+}
+
+pub fn decode_program_scan_result(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    result: &Value,
+    receive_sequence_start: u64,
+) -> Result<Vec<ObservedRpcAccount>> {
+    plan.validate()?;
+    if request.purpose != RpcRequestPurpose::ProgramScan
+        || request.commitment != RpcCommitment::Finalized
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    let release = plan.release(&request.release_key)?;
+    if release.program_id != request.program_id {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    require_bounded_json(plan, result)?;
+    let slot = result
+        .get("context")
+        .and_then(|value| value.get("slot"))
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let values = result
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if values.len() > plan.bounds.maximum_accounts_per_scan {
+        return Err(RpcIndexError::ResponseTooLarge);
+    }
+    let mut total = 0usize;
+    let mut output = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let address = value
+            .get("pubkey")
+            .and_then(Value::as_str)
+            .ok_or(RpcIndexError::MalformedResponse)?;
+        let account = value
+            .get("account")
+            .ok_or(RpcIndexError::MalformedResponse)?;
+        let data = decode_account_value(account, release, plan.bounds)?;
+        total = total
+            .checked_add(data.data.len())
+            .ok_or(RpcIndexError::ResponseTooLarge)?;
+        if total > plan.bounds.maximum_total_response_bytes {
+            return Err(RpcIndexError::ResponseTooLarge);
+        }
+        output.push(ObservedRpcAccount {
+            address: Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?,
+            owner: data.owner,
+            lamports: data.lamports,
+            executable: data.executable,
+            rent_epoch: data.rent_epoch,
+            data: data.data,
+            provenance: RpcObservationProvenance {
+                cluster_key: plan.cluster.key(),
+                release_key: request.release_key.clone(),
+                slot,
+                commitment: RpcCommitment::Finalized,
+                source: RpcObservationSource::FinalizedScan,
+                receive_sequence: receive_sequence_start
+                    .checked_add(u64::try_from(index).map_err(|_| RpcIndexError::InvalidBound)?)
+                    .ok_or(RpcIndexError::InvalidBound)?,
+            },
+        });
+    }
+    Ok(output)
+}
+
+pub fn decode_program_notification(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    notification: &Value,
+    receive_sequence: u64,
+) -> Result<ObservedRpcAccount> {
+    plan.validate()?;
+    if request.purpose != RpcRequestPurpose::ProgramSubscription
+        || request.commitment != RpcCommitment::Processed
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    let release = plan.release(&request.release_key)?;
+    if release.program_id != request.program_id {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    require_bounded_json(plan, notification)?;
+    let params = notification
+        .get("params")
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let subscription_id = params
+        .get("subscription")
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let result = params
+        .get("result")
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let slot = result
+        .get("context")
+        .and_then(|value| value.get("slot"))
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let value = result
+        .get("value")
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let address = value
+        .get("pubkey")
+        .and_then(Value::as_str)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let account = value
+        .get("account")
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let data = decode_account_value(account, release, plan.bounds)?;
+    Ok(ObservedRpcAccount {
+        address: Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?,
+        owner: data.owner,
+        lamports: data.lamports,
+        executable: data.executable,
+        rent_epoch: data.rent_epoch,
+        data: data.data,
+        provenance: RpcObservationProvenance {
+            cluster_key: plan.cluster.key(),
+            release_key: request.release_key.clone(),
+            slot,
+            commitment: RpcCommitment::Processed,
+            source: RpcObservationSource::ProcessedSubscription { subscription_id },
+            receive_sequence,
+        },
+    })
+}
+
+struct DecodedAccountValue {
+    owner: Address,
+    lamports: u64,
+    executable: bool,
+    rent_epoch: u64,
+    data: Vec<u8>,
+}
+
+fn decode_account_value(
+    value: &Value,
+    release: &IndexedProgramRelease,
+    bounds: RpcAcquisitionBounds,
+) -> Result<DecodedAccountValue> {
+    let owner = value
+        .get("owner")
+        .and_then(Value::as_str)
+        .and_then(|value| Address::from_str(value).ok())
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if owner != release.program_id {
+        return Err(RpcIndexError::WrongOwner);
+    }
+    let tuple = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if tuple.len() != 2 || tuple.get(1).and_then(Value::as_str) != Some("base64") {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    let encoded = tuple
+        .first()
+        .and_then(Value::as_str)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let maximum_base64_bytes = bounds
+        .maximum_account_data_bytes
+        .checked_add(2)
+        .and_then(|value| value.checked_div(3))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or(RpcIndexError::InvalidBound)?;
+    if encoded.len() > maximum_base64_bytes {
+        return Err(RpcIndexError::ResponseTooLarge);
+    }
+    let data = BASE64
+        .decode(encoded)
+        .map_err(|_| RpcIndexError::InvalidAccount)?;
+    if data.len() > bounds.maximum_account_data_bytes {
+        return Err(RpcIndexError::ResponseTooLarge);
+    }
+    Ok(DecodedAccountValue {
+        owner,
+        lamports: value
+            .get("lamports")
+            .and_then(Value::as_u64)
+            .ok_or(RpcIndexError::MalformedResponse)?,
+        executable: value
+            .get("executable")
+            .and_then(Value::as_bool)
+            .ok_or(RpcIndexError::MalformedResponse)?,
+        rent_epoch: value
+            .get("rentEpoch")
+            .and_then(Value::as_u64)
+            .ok_or(RpcIndexError::MalformedResponse)?,
+        data,
+    })
+}
+
+fn hex(bytes: &[u8; 32]) -> String {
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        use core::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
