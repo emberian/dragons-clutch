@@ -595,9 +595,10 @@ mod tests {
         let mut compartments = [empty; RUNTIME_COMPARTMENT_COUNT_V1];
         let mut index = 0usize;
         while index < RUNTIME_COMPARTMENT_COUNT_V1 {
+            let identity_byte = 80u8.checked_add(u8::try_from(index).unwrap()).unwrap();
             compartments[index] = RuntimeCompartmentPolicyV1 {
                 kind: RUNTIME_COMPARTMENT_ORDER_V1[index],
-                quote_schedule_id: LivenessId::from_bytes([80 + index as u8; 32]),
+                quote_schedule_id: LivenessId::from_bytes([identity_byte; 32]),
                 receipt_program_id: facts.recovery_receipt_program_id,
                 maximum_calls: 1,
                 maximum_lamports_per_call: 1,
