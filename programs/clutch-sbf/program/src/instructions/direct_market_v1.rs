@@ -28,6 +28,7 @@ use clutch_direct_market_runtime::codec_v1::{
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
 use clutch_direct_market_runtime::reservation_v1::AuthenticatedDirectReservationAdmissionV1;
 use clutch_direct_market_runtime::settlement_v1::AuthenticatedDirectReservationCancelV1;
+use clutch_direct_market_runtime::settlement_v1::AuthenticatedDirectEconomicTerminalV1;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
 use clutch_direct_market_runtime::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
@@ -36,10 +37,11 @@ use clutch_direct_market_runtime::selection_v1::{
 };
 use clutch_direct_market_runtime::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
-    DirectRentOwnerV1, DirectRootReplayPostV1,
+    DirectRentOwnerV1, DirectRootReplayPostV1, DirectTerminalReasonV1,
 };
 use clutch_direct_market_runtime::settlement_v1::{
     prepare_direct_reservation_admission_with_replay_v1, prepare_direct_reservation_cancel_v1,
+    prepare_direct_economic_terminal_v1, DirectEndpointPrestateV1,
     DirectReservationOrderInputV1,
 };
 use clutch_collateral_adapter_v2::{
@@ -1004,6 +1006,288 @@ pub(crate) fn process_direct_cancel_order_v1(
         plan.state.root,
     )?;
     close_direct_program_account_v1(&accounts[2], source.observed_lamports)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DirectEconomicTerminalAuthoritySbfV1 {
+    state: DirectRootReplayPostV1,
+    selection: DirectSelectionV1,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    reason: DirectTerminalReasonV1,
+    sequence: u64,
+    slot: u64,
+}
+
+impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySbfV1 {
+    fn authenticate_terminal(
+        &self,
+        state: DirectRootReplayPostV1,
+        selection: DirectSelectionV1,
+        ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        reason: DirectTerminalReasonV1,
+        consumed_sequence: u64,
+        observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if state == self.state
+            && selection == self.selection
+            && *ordered_endpoints == self.endpoints
+            && reason == self.reason
+            && consumed_sequence == self.sequence
+            && observed_slot == self.slot
+        {
+            Ok(())
+        } else {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
+    }
+}
+
+/// Execute one of actions 9..=12 over the complete b2-owned endpoint prefix.
+///
+/// Fixed accounts 0..=12 are b1, b3, b2, Realm, Profile, collateral policy,
+/// token program, General MarketBindingV2, General runtime, MarketInstanceV2,
+/// GenesisV2, ResolutionV5, and Clock. Exactly `selection.reservation_count`
+/// triples follow in b2 order: b4, PositionV3, GEN1. No payload count or
+/// endpoint index is accepted. A repeated Position/GEN1 pair is admitted only
+/// when both exact b4 owners name that same pair; the pure composer then
+/// advances the second GEN1 ordinal from the first successor.
+pub(crate) fn process_direct_economic_terminal_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DirectMarketAction,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(accounts.len() >= 13, ClutchError::AccountCount)?;
+    decode_direct_empty_payload_v1(payload)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    let direct_replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[1],
+        root,
+    )?;
+    let selection = authenticate_direct_selection_writable_v1(
+        program_id,
+        &accounts[2],
+        root,
+    )?;
+    let endpoint_count = usize::from(selection.value().reservation_count());
+    let expected_count = endpoint_count
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(13))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    require_distinct(&accounts[..13])?;
+    require_direct_endpoint_alias_contract_v1(accounts, endpoint_count)?;
+    let observed_slot = read_clock_slot(&accounts[12])?;
+    authenticate_direct_resolution_v5(program_id, root, &accounts[11])?;
+    let bound = authenticate_direct_general_market_v1(
+        program_id,
+        root,
+        &accounts[3],
+        &accounts[4],
+        &accounts[5],
+        &accounts[6],
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+    )?;
+    let mut endpoints = [None; 2];
+    let mut index = 0usize;
+    while index < endpoint_count {
+        let first = direct_endpoint_first_v1(index)?;
+        let reservation = authenticate_direct_reservation_writable_v1(
+            program_id,
+            &accounts[first],
+            root,
+        )?;
+        let selection_index = u8::try_from(index)
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        require(
+            selection.value().reservation_account(selection_index)
+                .map_err(map_direct_error_v1)? == reservation.account().to_bytes()
+                && selection.value().reservation_semantic_id(selection_index)
+                    .map_err(map_direct_error_v1)? == reservation.semantic_id(),
+            ClutchError::MismatchedState,
+        )?;
+        let position_replay = authenticate_current_general_position_replay_v2(
+            program_id,
+            bound,
+            &accounts[7],
+            &accounts[8],
+            &accounts[first + 1],
+            &accounts[first + 2],
+            reservation.value().owner(),
+        )?;
+        endpoints[index] = Some(DirectEndpointPrestateV1 {
+            reservation: reservation.value(),
+            position_replay: position_replay.replay,
+        });
+        index += 1;
+    }
+    let reason = match action {
+        DirectMarketAction::SettlePair => DirectTerminalReasonV1::Settled,
+        DirectMarketAction::LapseEmpty => DirectTerminalReasonV1::EmptyLapse,
+        DirectMarketAction::LapseUnselected => DirectTerminalReasonV1::UnselectedLapse,
+        DirectMarketAction::LapseSelected => DirectTerminalReasonV1::SelectedLapse,
+        _ => return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+    };
+    let state = DirectRootReplayPostV1 {
+        root: root.value(),
+        replay: direct_replay.value(),
+    };
+    let authority = DirectEconomicTerminalAuthoritySbfV1 {
+        state,
+        selection: selection.value(),
+        endpoints,
+        reason,
+        sequence,
+        slot: observed_slot,
+    };
+    let plan = prepare_direct_economic_terminal_v1(
+        &authority,
+        state,
+        selection.value(),
+        endpoints,
+        reason,
+        sequence,
+        observed_slot,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+
+    index = 0;
+    while index < endpoint_count {
+        let first = direct_endpoint_first_v1(index)?;
+        let endpoint = plan.endpoints[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        write_position_post_v1(&accounts[first + 1], &endpoint.position_poststate)?;
+        write_general_replay_post_v1(&accounts[first + 2], &endpoint.replay_transition)?;
+        let reservation_data = authenticate_direct_reservation_writable_v1(
+            program_id,
+            &accounts[first],
+            root,
+        )?;
+        write_direct_reservation_v1(
+            &accounts[first],
+            reservation_data.bump(),
+            endpoint.reservation_post,
+            plan.state.root,
+        )?;
+        index += 1;
+    }
+    write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[1],
+        direct_replay.bump(),
+        plan.state.replay,
+        plan.state.root,
+    )?;
+    write_direct_selection_v1(
+        &accounts[2],
+        selection.bump(),
+        plan.selection,
+        plan.state.root,
+    )
+}
+
+fn require_direct_endpoint_alias_contract_v1(
+    accounts: &[AccountInfo<'_>],
+    endpoint_count: usize,
+) -> Outcome<()> {
+    let mut index = 0usize;
+    while index < endpoint_count {
+        let first = direct_endpoint_first_v1(index)?;
+        let mut fixed = 0usize;
+        while fixed < 13 {
+            require(
+                accounts[first].key != accounts[fixed].key
+                    && accounts[first + 1].key != accounts[fixed].key
+                    && accounts[first + 2].key != accounts[fixed].key,
+                ClutchError::AccountAlias,
+            )?;
+            fixed += 1;
+        }
+        require(
+            accounts[first].key != accounts[first + 1].key
+                && accounts[first].key != accounts[first + 2].key
+                && accounts[first + 1].key != accounts[first + 2].key,
+            ClutchError::AccountAlias,
+        )?;
+        index += 1;
+    }
+    if endpoint_count == 2 {
+        let left = 13usize;
+        let right = 16usize;
+        require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
+        let positions_alias = accounts[left + 1].key == accounts[right + 1].key;
+        let replays_alias = accounts[left + 2].key == accounts[right + 2].key;
+        require(positions_alias == replays_alias, ClutchError::AccountAlias)?;
+        require(
+            accounts[left].key != accounts[right + 1].key
+                && accounts[left].key != accounts[right + 2].key
+                && accounts[right].key != accounts[left + 1].key
+                && accounts[right].key != accounts[left + 2].key
+                && accounts[left + 1].key != accounts[right + 2].key
+                && accounts[left + 2].key != accounts[right + 1].key,
+            ClutchError::AccountAlias,
+        )?;
+    }
+    Ok(())
+}
+
+fn direct_endpoint_first_v1(index: usize) -> Outcome<usize> {
+    index
+        .checked_mul(3)
+        .and_then(|offset| offset.checked_add(13))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn authenticate_direct_resolution_v5(
+    program_id: &Pubkey,
+    root: AuthenticatedDirectMarketRootV1,
+    account: &AccountInfo<'_>,
+) -> Outcome<()> {
+    use clutch_collateral_adapter_v2::{ResolutionStateV5, ResolutionV5, RESOLUTION_V5_BYTES};
+    require(
+        account.owner == program_id
+            && !account.is_signer
+            && !account.executable
+            && !account.is_writable
+            && account.data_len() == RESOLUTION_V5_BYTES
+            && account.key.to_bytes() == root.value().binding.resolution_account,
+        ClutchError::MismatchedState,
+    )?;
+    let resolution = ResolutionV5::decode(&account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        account.key,
+        seeds::resolution_v5_pda(program_id, &root.value().binding.market_instance_id),
+        Some(resolution.stored_bump),
+    )?;
+    let account_id = CollateralId::from_bytes(account.key.to_bytes());
+    let semantic_id = resolution
+        .semantic_id(&DirectRuntimeSha256V1)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let data_id = resolution
+        .data_id(account_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let minimum_balance = resolution.rent
+        .refundable_principal()
+        .checked_add(resolution.rent.donation_floor())
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        resolution.state == ResolutionStateV5::Finalized
+            && resolution.facts.market_instance_id.bytes()
+                == root.value().binding.market_instance_id
+            && resolution.facts.generation == root.value().binding.generation
+            && resolution.facts.outcome_count == root.value().binding.outcome_count
+            && semantic_id.bytes() == root.value().binding.resolution_semantic_id
+            && data_id.bytes() == root.value().binding.resolution_data_id
+            && account.lamports() >= minimum_balance,
+        ClutchError::MismatchedState,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
