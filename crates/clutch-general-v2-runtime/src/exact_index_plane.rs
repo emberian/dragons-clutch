@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn maximum_compact_widths_remain_below_sbf_frame() {
+    fn maximum_compact_account_widths_remain_below_four_kibibytes() {
         assert_eq!(locator_data_len_v1(MAX_ORDERS as u8), Ok(528));
         assert_eq!(
             adjacency_data_len_v1(MAX_ORDERS as u8, MAX_EXACT_INDEX_SLICE_REFERENCES_V1 as u16),

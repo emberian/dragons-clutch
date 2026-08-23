@@ -44,6 +44,10 @@ The current upstream traversal implementation still materializes large
 fixed-capacity settlement facts before boxing them. Promotion therefore
 requires the pending streaming or heap-initialized traversal authority; merely
 keeping the compact index itself below the SBF frame limit is insufficient.
+The current pure builder also accepts the rent preparation (including two base
+root values) by value and constructs an indexed-root value while other local
+arrays are live. Its compiled SBF frame must be refactored or measured below the
+pinned limit before an adapter may call it.
 
 ## Compact active geometry
 
@@ -60,7 +64,7 @@ adjacency = 272 + live_order_count * 8 + slice_reference_count * 2
 `slice_reference_count` is one for a split or merge slice and two for a direct
 slice. It lies in `slice_count..=2*slice_count` and is at most 832. At the
 protocol maxima, the locator is 528 bytes and adjacency is 2,448 bytes. Both
-fit below 4 KiB and the Solana 10,240-byte per-instruction allocation-increase
+account bodies fit below 4 KiB and the Solana 10,240-byte per-instruction allocation-increase
 limit; no staged partial account or partial root liability is needed.
 
 ## Authenticated bounded reads
