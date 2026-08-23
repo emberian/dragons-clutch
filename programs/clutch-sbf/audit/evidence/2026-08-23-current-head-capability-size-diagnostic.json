@@ -1,0 +1,2577 @@
+{
+  "availability": "available",
+  "cargo_default_comparison": {
+    "byte_identical_to_explicit_profile": false,
+    "byte_identity_basis": "stripped_deployable_elf_sha256_only",
+    "cargo_default_reproducible": true,
+    "measurements": [
+      {
+        "backend_stack_diagnostic_lines": 39,
+        "backend_stack_diagnostic_survivors": 0,
+        "backend_stack_diagnostic_symbols": 29,
+        "build_mode": "cargo-default",
+        "elf_bytes": 2086224,
+        "elf_sha256": "0dfab671ed8fb528a60e5f2296cad8cc449d7ebc8ddf8e0499822bf635dbbce9",
+        "final_frame_audit": {
+          "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+          "deepest_direct_r10_offset": 4096,
+          "direct_frame_bounds": "PASS",
+          "direct_frame_limit_bytes": 4096,
+          "direct_r10_references": 66272,
+          "disassembled_function_regions": 1080,
+          "final_text_function_addresses": 1080,
+          "final_text_function_symbols": 1083
+        },
+        "loader": {
+          "buffer": {
+            "billable_bytes": 2086389,
+            "data_len_bytes": 2086261,
+            "lifetime": "transient-recyclable",
+            "rent_exempt_lamports": 14521267440,
+            "storage_overhead_bytes": 128
+          },
+          "chosen_programdata_max_len": 2086224,
+          "current_elf_len_bytes": 2086224,
+          "exact_size_allocation": true,
+          "persistent_program_plus_programdata_rent_lamports": 14522464560,
+          "program": {
+            "billable_bytes": 164,
+            "data_len_bytes": 36,
+            "lifetime": "persistent",
+            "rent_exempt_lamports": 1141440,
+            "storage_overhead_bytes": 128
+          },
+          "programdata": {
+            "billable_bytes": 2086397,
+            "data_len_bytes": 2086269,
+            "lifetime": "persistent",
+            "rent_exempt_lamports": 14521323120,
+            "storage_overhead_bytes": 128
+          },
+          "transient_buffer_rent_lamports": 14521267440
+        },
+        "rodata_bytes": 60521,
+        "run": 1,
+        "text_bytes": 1946096,
+        "text_symbol_attribution": {
+          "attributed_text_bytes": 1946096,
+          "canonical_union_end_exclusive": 1946384,
+          "canonical_union_exact_coverage": true,
+          "canonical_union_start": 288,
+          "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+          "function_regions": 1080,
+          "groups": [
+            {
+              "name": "clutch_solana_layout",
+              "text_bytes": 404336
+            },
+            {
+              "name": "clutch_sbf::instructions::orders_batch",
+              "text_bytes": 327944
+            },
+            {
+              "name": "clutch_batch",
+              "text_bytes": 171240
+            },
+            {
+              "name": "clutch_sbf::instructions::direct_selection_v3",
+              "text_bytes": 162544
+            },
+            {
+              "name": "clutch_sbf::instructions::observe_resolve",
+              "text_bytes": 103640
+            },
+            {
+              "name": "clutch_sbf::instructions::direct_selection",
+              "text_bytes": 94160
+            },
+            {
+              "name": "clutch_sbf::instructions::resolution_work",
+              "text_bytes": 73160
+            },
+            {
+              "name": "clutch_sbf::instructions::genesis",
+              "text_bytes": 50200
+            },
+            {
+              "name": "clutch_sbf::instructions::market_init",
+              "text_bytes": 44008
+            },
+            {
+              "name": "clutch_batch_policy_identity",
+              "text_bytes": 42368
+            },
+            {
+              "name": "clutch_solana_reference",
+              "text_bytes": 40840
+            },
+            {
+              "name": "clutch_bspline",
+              "text_bytes": 37688
+            },
+            {
+              "name": "clutch_sbf::instructions::split",
+              "text_bytes": 36368
+            },
+            {
+              "name": "clutch_kernel",
+              "text_bytes": 27000
+            },
+            {
+              "name": "clutch_sbf::instructions::source_ingest",
+              "text_bytes": 25848
+            },
+            {
+              "name": "clutch_sbf::instructions::external_exit",
+              "text_bytes": 22376
+            },
+            {
+              "name": "clutch_sbf::token",
+              "text_bytes": 21936
+            },
+            {
+              "name": "clutch_sbf::instructions::source_ingest_v2",
+              "text_bytes": 20376
+            },
+            {
+              "name": "clutch_sbf::instructions::artifact",
+              "text_bytes": 20336
+            },
+            {
+              "name": "clutch_sbf::source_archive_v2",
+              "text_bytes": 17160
+            },
+            {
+              "name": "clutch_bspline_accumulator",
+              "text_bytes": 17024
+            },
+            {
+              "name": "clutch_sbf::instructions::cash_exit",
+              "text_bytes": 16472
+            },
+            {
+              "name": "clutch_sbf::instructions::merge_materialize",
+              "text_bytes": 15256
+            },
+            {
+              "name": "clutch_sbf::source_archive",
+              "text_bytes": 13800
+            },
+            {
+              "name": "clutch_sbf::source_v2",
+              "text_bytes": 13744
+            },
+            {
+              "name": "clutch_accumulator",
+              "text_bytes": 13512
+            },
+            {
+              "name": "clutch_sbf::seeds",
+              "text_bytes": 13360
+            },
+            {
+              "name": "clutch_sbf::accounts",
+              "text_bytes": 12616
+            },
+            {
+              "name": "clutch_sbf::claim_truth",
+              "text_bytes": 10328
+            },
+            {
+              "name": "clutch_sbf::instructions_sysvar",
+              "text_bytes": 9888
+            },
+            {
+              "name": "core",
+              "text_bytes": 9384
+            },
+            {
+              "name": "clutch_sbf::instructions::construction",
+              "text_bytes": 7792
+            },
+            {
+              "name": "compiler_builtins",
+              "text_bytes": 7232
+            },
+            {
+              "name": "clutch_sbf::native_window",
+              "text_bytes": 6536
+            },
+            {
+              "name": "clutch_sbf::dispatch",
+              "text_bytes": 6248
+            },
+            {
+              "name": "rust-runtime-or-unattributed",
+              "text_bytes": 4368
+            },
+            {
+              "name": "clutch_sbf::source",
+              "text_bytes": 3832
+            },
+            {
+              "name": "clutch_sbf::pyth_receiver",
+              "text_bytes": 3496
+            },
+            {
+              "name": "clutch_sbf::source_generation",
+              "text_bytes": 3144
+            },
+            {
+              "name": "solana_program_entrypoint",
+              "text_bytes": 3120
+            },
+            {
+              "name": "alloc",
+              "text_bytes": 2976
+            },
+            {
+              "name": "solana_cpi",
+              "text_bytes": 2056
+            },
+            {
+              "name": "clutch_sbf::source_identity",
+              "text_bytes": 1824
+            },
+            {
+              "name": "solana_account_info",
+              "text_bytes": 1448
+            },
+            {
+              "name": "clutch_sbf::loader_state",
+              "text_bytes": 984
+            },
+            {
+              "name": "clutch_sbf::error",
+              "text_bytes": 856
+            },
+            {
+              "name": "solana_instruction",
+              "text_bytes": 368
+            },
+            {
+              "name": "clutch_sbf::capabilities",
+              "text_bytes": 328
+            },
+            {
+              "name": "clutch_liveness",
+              "text_bytes": 304
+            },
+            {
+              "name": "merged-aliases",
+              "text_bytes": 184
+            },
+            {
+              "name": "std",
+              "text_bytes": 88
+            }
+          ],
+          "matches_text_section": true,
+          "merged_alias_regions": 1,
+          "text_section_bytes": 1946096,
+          "text_section_end_exclusive": 1946384,
+          "text_section_start": 288
+        },
+        "undefined_dynamic_symbols": [
+          "abort",
+          "sol_invoke_signed_rust",
+          "sol_log_",
+          "sol_memcmp_",
+          "sol_memcpy_",
+          "sol_memmove_",
+          "sol_memset_",
+          "sol_panic_",
+          "sol_sha256",
+          "sol_try_find_program_address"
+        ]
+      },
+      {
+        "backend_stack_diagnostic_lines": 39,
+        "backend_stack_diagnostic_survivors": 0,
+        "backend_stack_diagnostic_symbols": 29,
+        "build_mode": "cargo-default",
+        "elf_bytes": 2086224,
+        "elf_sha256": "0dfab671ed8fb528a60e5f2296cad8cc449d7ebc8ddf8e0499822bf635dbbce9",
+        "final_frame_audit": {
+          "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+          "deepest_direct_r10_offset": 4096,
+          "direct_frame_bounds": "PASS",
+          "direct_frame_limit_bytes": 4096,
+          "direct_r10_references": 66272,
+          "disassembled_function_regions": 1080,
+          "final_text_function_addresses": 1080,
+          "final_text_function_symbols": 1083
+        },
+        "loader": {
+          "buffer": {
+            "billable_bytes": 2086389,
+            "data_len_bytes": 2086261,
+            "lifetime": "transient-recyclable",
+            "rent_exempt_lamports": 14521267440,
+            "storage_overhead_bytes": 128
+          },
+          "chosen_programdata_max_len": 2086224,
+          "current_elf_len_bytes": 2086224,
+          "exact_size_allocation": true,
+          "persistent_program_plus_programdata_rent_lamports": 14522464560,
+          "program": {
+            "billable_bytes": 164,
+            "data_len_bytes": 36,
+            "lifetime": "persistent",
+            "rent_exempt_lamports": 1141440,
+            "storage_overhead_bytes": 128
+          },
+          "programdata": {
+            "billable_bytes": 2086397,
+            "data_len_bytes": 2086269,
+            "lifetime": "persistent",
+            "rent_exempt_lamports": 14521323120,
+            "storage_overhead_bytes": 128
+          },
+          "transient_buffer_rent_lamports": 14521267440
+        },
+        "rodata_bytes": 60521,
+        "run": 2,
+        "text_bytes": 1946096,
+        "text_symbol_attribution": {
+          "attributed_text_bytes": 1946096,
+          "canonical_union_end_exclusive": 1946384,
+          "canonical_union_exact_coverage": true,
+          "canonical_union_start": 288,
+          "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+          "function_regions": 1080,
+          "groups": [
+            {
+              "name": "clutch_solana_layout",
+              "text_bytes": 404336
+            },
+            {
+              "name": "clutch_sbf::instructions::orders_batch",
+              "text_bytes": 327944
+            },
+            {
+              "name": "clutch_batch",
+              "text_bytes": 171240
+            },
+            {
+              "name": "clutch_sbf::instructions::direct_selection_v3",
+              "text_bytes": 162544
+            },
+            {
+              "name": "clutch_sbf::instructions::observe_resolve",
+              "text_bytes": 103640
+            },
+            {
+              "name": "clutch_sbf::instructions::direct_selection",
+              "text_bytes": 94160
+            },
+            {
+              "name": "clutch_sbf::instructions::resolution_work",
+              "text_bytes": 73160
+            },
+            {
+              "name": "clutch_sbf::instructions::genesis",
+              "text_bytes": 50200
+            },
+            {
+              "name": "clutch_sbf::instructions::market_init",
+              "text_bytes": 44008
+            },
+            {
+              "name": "clutch_batch_policy_identity",
+              "text_bytes": 42368
+            },
+            {
+              "name": "clutch_solana_reference",
+              "text_bytes": 40840
+            },
+            {
+              "name": "clutch_bspline",
+              "text_bytes": 37688
+            },
+            {
+              "name": "clutch_sbf::instructions::split",
+              "text_bytes": 36368
+            },
+            {
+              "name": "clutch_kernel",
+              "text_bytes": 27000
+            },
+            {
+              "name": "clutch_sbf::instructions::source_ingest",
+              "text_bytes": 25848
+            },
+            {
+              "name": "clutch_sbf::instructions::external_exit",
+              "text_bytes": 22376
+            },
+            {
+              "name": "clutch_sbf::token",
+              "text_bytes": 21936
+            },
+            {
+              "name": "clutch_sbf::instructions::source_ingest_v2",
+              "text_bytes": 20376
+            },
+            {
+              "name": "clutch_sbf::instructions::artifact",
+              "text_bytes": 20336
+            },
+            {
+              "name": "clutch_sbf::source_archive_v2",
+              "text_bytes": 17160
+            },
+            {
+              "name": "clutch_bspline_accumulator",
+              "text_bytes": 17024
+            },
+            {
+              "name": "clutch_sbf::instructions::cash_exit",
+              "text_bytes": 16472
+            },
+            {
+              "name": "clutch_sbf::instructions::merge_materialize",
+              "text_bytes": 15256
+            },
+            {
+              "name": "clutch_sbf::source_archive",
+              "text_bytes": 13800
+            },
+            {
+              "name": "clutch_sbf::source_v2",
+              "text_bytes": 13744
+            },
+            {
+              "name": "clutch_accumulator",
+              "text_bytes": 13512
+            },
+            {
+              "name": "clutch_sbf::seeds",
+              "text_bytes": 13360
+            },
+            {
+              "name": "clutch_sbf::accounts",
+              "text_bytes": 12616
+            },
+            {
+              "name": "clutch_sbf::claim_truth",
+              "text_bytes": 10328
+            },
+            {
+              "name": "clutch_sbf::instructions_sysvar",
+              "text_bytes": 9888
+            },
+            {
+              "name": "core",
+              "text_bytes": 9384
+            },
+            {
+              "name": "clutch_sbf::instructions::construction",
+              "text_bytes": 7792
+            },
+            {
+              "name": "compiler_builtins",
+              "text_bytes": 7232
+            },
+            {
+              "name": "clutch_sbf::native_window",
+              "text_bytes": 6536
+            },
+            {
+              "name": "clutch_sbf::dispatch",
+              "text_bytes": 6248
+            },
+            {
+              "name": "rust-runtime-or-unattributed",
+              "text_bytes": 4368
+            },
+            {
+              "name": "clutch_sbf::source",
+              "text_bytes": 3832
+            },
+            {
+              "name": "clutch_sbf::pyth_receiver",
+              "text_bytes": 3496
+            },
+            {
+              "name": "clutch_sbf::source_generation",
+              "text_bytes": 3144
+            },
+            {
+              "name": "solana_program_entrypoint",
+              "text_bytes": 3120
+            },
+            {
+              "name": "alloc",
+              "text_bytes": 2976
+            },
+            {
+              "name": "solana_cpi",
+              "text_bytes": 2056
+            },
+            {
+              "name": "clutch_sbf::source_identity",
+              "text_bytes": 1824
+            },
+            {
+              "name": "solana_account_info",
+              "text_bytes": 1448
+            },
+            {
+              "name": "clutch_sbf::loader_state",
+              "text_bytes": 984
+            },
+            {
+              "name": "clutch_sbf::error",
+              "text_bytes": 856
+            },
+            {
+              "name": "solana_instruction",
+              "text_bytes": 368
+            },
+            {
+              "name": "clutch_sbf::capabilities",
+              "text_bytes": 328
+            },
+            {
+              "name": "clutch_liveness",
+              "text_bytes": 304
+            },
+            {
+              "name": "merged-aliases",
+              "text_bytes": 184
+            },
+            {
+              "name": "std",
+              "text_bytes": 88
+            }
+          ],
+          "matches_text_section": true,
+          "merged_alias_regions": 1,
+          "text_section_bytes": 1946096,
+          "text_section_end_exclusive": 1946384,
+          "text_section_start": 288
+        },
+        "undefined_dynamic_symbols": [
+          "abort",
+          "sol_invoke_signed_rust",
+          "sol_log_",
+          "sol_memcmp_",
+          "sol_memcpy_",
+          "sol_memmove_",
+          "sol_memset_",
+          "sol_panic_",
+          "sol_sha256",
+          "sol_try_find_program_address"
+        ]
+      }
+    ],
+    "mismatches": {
+      "elf_sha256": {
+        "cargo_default": "0dfab671ed8fb528a60e5f2296cad8cc449d7ebc8ddf8e0499822bf635dbbce9",
+        "explicit": "053df6b05717e4be6ab5926ef47d05b2a8c64110f6e6691413e203602bcb7c89"
+      }
+    },
+    "profile": "full",
+    "strict_equivalence_basis": "measure_capability_profiles.comparable_measurement",
+    "strict_v2_default_equivalence_gate": "REFUSE"
+  },
+  "deployment_evidence": false,
+  "evidence_class": "source-derived-selected-commit-artifact",
+  "manifest_input_source_clean": null,
+  "pairwise_deltas": [
+    {
+      "elf_bytes_delta": -1026400,
+      "from": "full",
+      "persistent_loader_rent_lamports_delta": -7143744000,
+      "rodata_bytes_delta": -53064,
+      "text_bytes_delta": -932608,
+      "text_symbol_group_deltas": [
+        {
+          "name": "clutch_sbf::instructions::orders_batch",
+          "text_bytes_delta": -301168
+        },
+        {
+          "name": "clutch_solana_layout",
+          "text_bytes_delta": -173960
+        },
+        {
+          "name": "clutch_batch",
+          "text_bytes_delta": -170928
+        },
+        {
+          "name": "clutch_sbf::instructions::direct_selection",
+          "text_bytes_delta": -89536
+        },
+        {
+          "name": "clutch_sbf::instructions::resolution_work",
+          "text_bytes_delta": -73160
+        },
+        {
+          "name": "clutch_sbf::instructions::observe_resolve",
+          "text_bytes_delta": -24224
+        },
+        {
+          "name": "clutch_batch_policy_identity",
+          "text_bytes_delta": -18760
+        },
+        {
+          "name": "clutch_bspline_accumulator",
+          "text_bytes_delta": -17024
+        },
+        {
+          "name": "clutch_sbf::instructions::source_ingest",
+          "text_bytes_delta": -15360
+        },
+        {
+          "name": "clutch_sbf::source_archive",
+          "text_bytes_delta": -13256
+        },
+        {
+          "name": "clutch_sbf::instructions::split",
+          "text_bytes_delta": -9296
+        },
+        {
+          "name": "clutch_sbf::native_window",
+          "text_bytes_delta": -6536
+        },
+        {
+          "name": "clutch_sbf::instructions::genesis",
+          "text_bytes_delta": -4872
+        },
+        {
+          "name": "clutch_sbf::source",
+          "text_bytes_delta": -3832
+        },
+        {
+          "name": "clutch_sbf::seeds",
+          "text_bytes_delta": -3536
+        },
+        {
+          "name": "alloc",
+          "text_bytes_delta": -1664
+        },
+        {
+          "name": "clutch_sbf::accounts",
+          "text_bytes_delta": -1496
+        },
+        {
+          "name": "clutch_sbf::source_generation",
+          "text_bytes_delta": -1288
+        },
+        {
+          "name": "clutch_sbf::dispatch",
+          "text_bytes_delta": -1256
+        },
+        {
+          "name": "clutch_sbf::instructions::market_init",
+          "text_bytes_delta": -648
+        },
+        {
+          "name": "clutch_liveness",
+          "text_bytes_delta": -304
+        },
+        {
+          "name": "clutch_bspline",
+          "text_bytes_delta": -280
+        },
+        {
+          "name": "clutch_sbf::capabilities",
+          "text_bytes_delta": -80
+        },
+        {
+          "name": "clutch_accumulator",
+          "text_bytes_delta": -64
+        },
+        {
+          "name": "rust-runtime-or-unattributed",
+          "text_bytes_delta": -32
+        },
+        {
+          "name": "clutch_sbf::instructions::artifact",
+          "text_bytes_delta": -24
+        },
+        {
+          "name": "clutch_sbf::instructions::direct_selection_v3",
+          "text_bytes_delta": -16
+        },
+        {
+          "name": "clutch_sbf::instructions::external_exit",
+          "text_bytes_delta": -8
+        }
+      ],
+      "to": "direct-v3-source-v2-point"
+    },
+    {
+      "elf_bytes_delta": -648056,
+      "from": "full",
+      "persistent_loader_rent_lamports_delta": -4510469760,
+      "rodata_bytes_delta": -3600,
+      "text_bytes_delta": -623192,
+      "text_symbol_group_deltas": [
+        {
+          "name": "clutch_sbf::instructions::direct_selection_v3",
+          "text_bytes_delta": -157544
+        },
+        {
+          "name": "clutch_solana_layout",
+          "text_bytes_delta": -134032
+        },
+        {
+          "name": "clutch_sbf::instructions::direct_selection",
+          "text_bytes_delta": -94160
+        },
+        {
+          "name": "clutch_sbf::instructions::resolution_work",
+          "text_bytes_delta": -73160
+        },
+        {
+          "name": "clutch_sbf::instructions::orders_batch",
+          "text_bytes_delta": -36024
+        },
+        {
+          "name": "clutch_batch_policy_identity",
+          "text_bytes_delta": -33376
+        },
+        {
+          "name": "clutch_sbf::instructions::observe_resolve",
+          "text_bytes_delta": -24224
+        },
+        {
+          "name": "clutch_bspline_accumulator",
+          "text_bytes_delta": -17024
+        },
+        {
+          "name": "clutch_sbf::instructions::source_ingest",
+          "text_bytes_delta": -15360
+        },
+        {
+          "name": "clutch_sbf::source_archive",
+          "text_bytes_delta": -13256
+        },
+        {
+          "name": "clutch_sbf::native_window",
+          "text_bytes_delta": -6536
+        },
+        {
+          "name": "clutch_sbf::instructions::genesis",
+          "text_bytes_delta": -6160
+        },
+        {
+          "name": "clutch_sbf::source",
+          "text_bytes_delta": -3832
+        },
+        {
+          "name": "clutch_sbf::seeds",
+          "text_bytes_delta": -3496
+        },
+        {
+          "name": "clutch_sbf::dispatch",
+          "text_bytes_delta": -1584
+        },
+        {
+          "name": "clutch_sbf::source_generation",
+          "text_bytes_delta": -1288
+        },
+        {
+          "name": "clutch_sbf::accounts",
+          "text_bytes_delta": -664
+        },
+        {
+          "name": "clutch_sbf::instructions::market_init",
+          "text_bytes_delta": -648
+        },
+        {
+          "name": "clutch_solana_reference",
+          "text_bytes_delta": -336
+        },
+        {
+          "name": "clutch_bspline",
+          "text_bytes_delta": -280
+        },
+        {
+          "name": "clutch_batch",
+          "text_bytes_delta": -184
+        },
+        {
+          "name": "clutch_accumulator",
+          "text_bytes_delta": -64
+        },
+        {
+          "name": "clutch_sbf::capabilities",
+          "text_bytes_delta": 48
+        },
+        {
+          "name": "clutch_sbf::instructions::external_exit",
+          "text_bytes_delta": -8
+        }
+      ],
+      "to": "general-source-v2-point"
+    },
+    {
+      "elf_bytes_delta": 378344,
+      "from": "direct-v3-source-v2-point",
+      "persistent_loader_rent_lamports_delta": 2633274240,
+      "rodata_bytes_delta": 49464,
+      "text_bytes_delta": 309416,
+      "text_symbol_group_deltas": [
+        {
+          "name": "clutch_sbf::instructions::orders_batch",
+          "text_bytes_delta": 265144
+        },
+        {
+          "name": "clutch_batch",
+          "text_bytes_delta": 170744
+        },
+        {
+          "name": "clutch_sbf::instructions::direct_selection_v3",
+          "text_bytes_delta": -157528
+        },
+        {
+          "name": "clutch_solana_layout",
+          "text_bytes_delta": 39928
+        },
+        {
+          "name": "clutch_batch_policy_identity",
+          "text_bytes_delta": -14616
+        },
+        {
+          "name": "clutch_sbf::instructions::split",
+          "text_bytes_delta": 9296
+        },
+        {
+          "name": "clutch_sbf::instructions::direct_selection",
+          "text_bytes_delta": -4624
+        },
+        {
+          "name": "alloc",
+          "text_bytes_delta": 1664
+        },
+        {
+          "name": "clutch_sbf::instructions::genesis",
+          "text_bytes_delta": -1288
+        },
+        {
+          "name": "clutch_sbf::accounts",
+          "text_bytes_delta": 832
+        },
+        {
+          "name": "clutch_solana_reference",
+          "text_bytes_delta": -336
+        },
+        {
+          "name": "clutch_sbf::dispatch",
+          "text_bytes_delta": -328
+        },
+        {
+          "name": "clutch_liveness",
+          "text_bytes_delta": 304
+        },
+        {
+          "name": "clutch_sbf::capabilities",
+          "text_bytes_delta": 128
+        },
+        {
+          "name": "clutch_sbf::seeds",
+          "text_bytes_delta": 40
+        },
+        {
+          "name": "rust-runtime-or-unattributed",
+          "text_bytes_delta": 32
+        },
+        {
+          "name": "clutch_sbf::instructions::artifact",
+          "text_bytes_delta": 24
+        }
+      ],
+      "to": "general-source-v2-point"
+    }
+  ],
+  "producer": {
+    "imported_inputs": [
+      {
+        "path": "programs/clutch-sbf/scripts/measure_capability_profiles.py",
+        "sha256": "763301495bcd2c8e5ea4fca870555da222e2a12d17b25baf490b63c762b4374e"
+      },
+      {
+        "path": "programs/clutch-sbf/scripts/check_capability_profile.py",
+        "sha256": "83397755e046de32feb0feb45c571344eb80001fa8d0ce904984f8f7f2af9ab5"
+      }
+    ],
+    "path": "programs/clutch-sbf/scripts/measure_capability_profile_sizes.py",
+    "sha256": "05f11a3ef44b8a47afbb0b880cbbd17996227c7cd8701bde73e0d289fc36e9ed"
+  },
+  "profiles": [
+    {
+      "cargo_features": [
+        "custom-heap",
+        "profile-full"
+      ],
+      "measurements": [
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 2086224,
+          "elf_sha256": "053df6b05717e4be6ab5926ef47d05b2a8c64110f6e6691413e203602bcb7c89",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 66272,
+            "disassembled_function_regions": 1080,
+            "final_text_function_addresses": 1080,
+            "final_text_function_symbols": 1083
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 2086389,
+              "data_len_bytes": 2086261,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 14521267440,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 2086224,
+            "current_elf_len_bytes": 2086224,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 14522464560,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 2086397,
+              "data_len_bytes": 2086269,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 14521323120,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 14521267440
+          },
+          "rodata_bytes": 60521,
+          "run": 1,
+          "text_bytes": 1946096,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1946096,
+            "canonical_union_end_exclusive": 1946384,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 1080,
+            "groups": [
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 404336
+              },
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 327944
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 171240
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 162544
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 103640
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection",
+                "text_bytes": 94160
+              },
+              {
+                "name": "clutch_sbf::instructions::resolution_work",
+                "text_bytes": 73160
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 50200
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 44008
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 42368
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40840
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37688
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 36368
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 25848
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22376
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20336
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_bspline_accumulator",
+                "text_bytes": 17024
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 13800
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13512
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 13360
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 12616
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::native_window",
+                "text_bytes": 6536
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 6248
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4368
+              },
+              {
+                "name": "clutch_sbf::source",
+                "text_bytes": 3832
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 3144
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 2976
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 328
+              },
+              {
+                "name": "clutch_liveness",
+                "text_bytes": 304
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1946096,
+            "text_section_end_exclusive": 1946384,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memmove_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        },
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 2086224,
+          "elf_sha256": "053df6b05717e4be6ab5926ef47d05b2a8c64110f6e6691413e203602bcb7c89",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 66272,
+            "disassembled_function_regions": 1080,
+            "final_text_function_addresses": 1080,
+            "final_text_function_symbols": 1083
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 2086389,
+              "data_len_bytes": 2086261,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 14521267440,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 2086224,
+            "current_elf_len_bytes": 2086224,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 14522464560,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 2086397,
+              "data_len_bytes": 2086269,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 14521323120,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 14521267440
+          },
+          "rodata_bytes": 60521,
+          "run": 2,
+          "text_bytes": 1946096,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1946096,
+            "canonical_union_end_exclusive": 1946384,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 1080,
+            "groups": [
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 404336
+              },
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 327944
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 171240
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 162544
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 103640
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection",
+                "text_bytes": 94160
+              },
+              {
+                "name": "clutch_sbf::instructions::resolution_work",
+                "text_bytes": 73160
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 50200
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 44008
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 42368
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40840
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37688
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 36368
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 25848
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22376
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20336
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_bspline_accumulator",
+                "text_bytes": 17024
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 13800
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13512
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 13360
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 12616
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::native_window",
+                "text_bytes": 6536
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 6248
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4368
+              },
+              {
+                "name": "clutch_sbf::source",
+                "text_bytes": 3832
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 3144
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 2976
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 328
+              },
+              {
+                "name": "clutch_liveness",
+                "text_bytes": 304
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1946096,
+            "text_section_end_exclusive": 1946384,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memmove_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        }
+      ],
+      "name": "full",
+      "profile_manifest_linkage": "absent",
+      "reproducible_same_source_checkout": true
+    },
+    {
+      "cargo_features": [
+        "custom-heap",
+        "profile-direct-v3-source-v2-point"
+      ],
+      "measurements": [
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 1059824,
+          "elf_sha256": "47219fd0269ce0309f3bc1a25b97103744e34cf40bfb113bd394a9187dc0616c",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 35897,
+            "disassembled_function_regions": 663,
+            "final_text_function_addresses": 663,
+            "final_text_function_symbols": 665
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 1059989,
+              "data_len_bytes": 1059861,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 7377523440,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 1059824,
+            "current_elf_len_bytes": 1059824,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 7378720560,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 1059997,
+              "data_len_bytes": 1059869,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 7377579120,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 7377523440
+          },
+          "rodata_bytes": 7457,
+          "run": 1,
+          "text_bytes": 1013488,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1013488,
+            "canonical_union_end_exclusive": 1013776,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 663,
+            "groups": [
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 230376
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 162528
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 79416
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 45328
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 43360
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40840
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37408
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 27072
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 26776
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 23608
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22368
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20312
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13448
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 11120
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 10488
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 9824
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 4992
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection",
+                "text_bytes": 4624
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4336
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 1856
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 1312
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 544
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 312
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 248
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1013488,
+            "text_section_end_exclusive": 1013776,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        },
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 1059824,
+          "elf_sha256": "47219fd0269ce0309f3bc1a25b97103744e34cf40bfb113bd394a9187dc0616c",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 35897,
+            "disassembled_function_regions": 663,
+            "final_text_function_addresses": 663,
+            "final_text_function_symbols": 665
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 1059989,
+              "data_len_bytes": 1059861,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 7377523440,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 1059824,
+            "current_elf_len_bytes": 1059824,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 7378720560,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 1059997,
+              "data_len_bytes": 1059869,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 7377579120,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 7377523440
+          },
+          "rodata_bytes": 7457,
+          "run": 2,
+          "text_bytes": 1013488,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1013488,
+            "canonical_union_end_exclusive": 1013776,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 663,
+            "groups": [
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 230376
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 162528
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 79416
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 45328
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 43360
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40840
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37408
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 27072
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 26776
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 23608
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22368
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20312
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13448
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 11120
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 10488
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 9824
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 4992
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection",
+                "text_bytes": 4624
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4336
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 1856
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 1312
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 544
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 312
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 248
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1013488,
+            "text_section_end_exclusive": 1013776,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        }
+      ],
+      "name": "direct-v3-source-v2-point",
+      "profile_manifest_linkage": "absent",
+      "reproducible_same_source_checkout": true
+    },
+    {
+      "cargo_features": [
+        "custom-heap",
+        "profile-general-source-v2-point"
+      ],
+      "measurements": [
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 1438168,
+          "elf_sha256": "bf8027d332fb7cbbeb3fe9813d9c0a2a05eae0eb165734bdd192095ea2f7facd",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 43616,
+            "disassembled_function_regions": 792,
+            "final_text_function_addresses": 792,
+            "final_text_function_symbols": 795
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 1438333,
+              "data_len_bytes": 1438205,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 10010797680,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 1438168,
+            "current_elf_len_bytes": 1438168,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 10011994800,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 1438341,
+              "data_len_bytes": 1438213,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 10010853360,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 10010797680
+          },
+          "rodata_bytes": 56921,
+          "run": 1,
+          "text_bytes": 1322904,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1322904,
+            "canonical_union_end_exclusive": 1323192,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 792,
+            "groups": [
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 291920
+              },
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 270304
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 171056
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 79416
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 44040
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 43360
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40504
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37408
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 36368
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22368
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20336
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13448
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 11952
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 10488
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 9864
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 8992
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 5000
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 4664
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4368
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 2976
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 1856
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 544
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 376
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_liveness",
+                "text_bytes": 304
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1322904,
+            "text_section_end_exclusive": 1323192,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memmove_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        },
+        {
+          "backend_stack_diagnostic_lines": 39,
+          "backend_stack_diagnostic_survivors": 0,
+          "backend_stack_diagnostic_symbols": 29,
+          "build_mode": "explicit-profile",
+          "elf_bytes": 1438168,
+          "elf_sha256": "bf8027d332fb7cbbeb3fe9813d9c0a2a05eae0eb165734bdd192095ea2f7facd",
+          "final_frame_audit": {
+            "deepest_direct_r10_function": "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE",
+            "deepest_direct_r10_offset": 4096,
+            "direct_frame_bounds": "PASS",
+            "direct_frame_limit_bytes": 4096,
+            "direct_r10_references": 43616,
+            "disassembled_function_regions": 792,
+            "final_text_function_addresses": 792,
+            "final_text_function_symbols": 795
+          },
+          "loader": {
+            "buffer": {
+              "billable_bytes": 1438333,
+              "data_len_bytes": 1438205,
+              "lifetime": "transient-recyclable",
+              "rent_exempt_lamports": 10010797680,
+              "storage_overhead_bytes": 128
+            },
+            "chosen_programdata_max_len": 1438168,
+            "current_elf_len_bytes": 1438168,
+            "exact_size_allocation": true,
+            "persistent_program_plus_programdata_rent_lamports": 10011994800,
+            "program": {
+              "billable_bytes": 164,
+              "data_len_bytes": 36,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 1141440,
+              "storage_overhead_bytes": 128
+            },
+            "programdata": {
+              "billable_bytes": 1438341,
+              "data_len_bytes": 1438213,
+              "lifetime": "persistent",
+              "rent_exempt_lamports": 10010853360,
+              "storage_overhead_bytes": 128
+            },
+            "transient_buffer_rent_lamports": 10010797680
+          },
+          "rodata_bytes": 56921,
+          "run": 2,
+          "text_bytes": 1322904,
+          "text_symbol_attribution": {
+            "attributed_text_bytes": 1322904,
+            "canonical_union_end_exclusive": 1323192,
+            "canonical_union_exact_coverage": true,
+            "canonical_union_start": 288,
+            "classification": "canonical exact union of final .text address ranges; only identical folded aliases are deduplicated and cross-family aliases are named merged-aliases",
+            "function_regions": 792,
+            "groups": [
+              {
+                "name": "clutch_sbf::instructions::orders_batch",
+                "text_bytes": 291920
+              },
+              {
+                "name": "clutch_solana_layout",
+                "text_bytes": 270304
+              },
+              {
+                "name": "clutch_batch",
+                "text_bytes": 171056
+              },
+              {
+                "name": "clutch_sbf::instructions::observe_resolve",
+                "text_bytes": 79416
+              },
+              {
+                "name": "clutch_sbf::instructions::genesis",
+                "text_bytes": 44040
+              },
+              {
+                "name": "clutch_sbf::instructions::market_init",
+                "text_bytes": 43360
+              },
+              {
+                "name": "clutch_solana_reference",
+                "text_bytes": 40504
+              },
+              {
+                "name": "clutch_bspline",
+                "text_bytes": 37408
+              },
+              {
+                "name": "clutch_sbf::instructions::split",
+                "text_bytes": 36368
+              },
+              {
+                "name": "clutch_kernel",
+                "text_bytes": 27000
+              },
+              {
+                "name": "clutch_sbf::instructions::external_exit",
+                "text_bytes": 22368
+              },
+              {
+                "name": "clutch_sbf::token",
+                "text_bytes": 21936
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest_v2",
+                "text_bytes": 20376
+              },
+              {
+                "name": "clutch_sbf::instructions::artifact",
+                "text_bytes": 20336
+              },
+              {
+                "name": "clutch_sbf::source_archive_v2",
+                "text_bytes": 17160
+              },
+              {
+                "name": "clutch_sbf::instructions::cash_exit",
+                "text_bytes": 16472
+              },
+              {
+                "name": "clutch_sbf::instructions::merge_materialize",
+                "text_bytes": 15256
+              },
+              {
+                "name": "clutch_sbf::source_v2",
+                "text_bytes": 13744
+              },
+              {
+                "name": "clutch_accumulator",
+                "text_bytes": 13448
+              },
+              {
+                "name": "clutch_sbf::accounts",
+                "text_bytes": 11952
+              },
+              {
+                "name": "clutch_sbf::instructions::source_ingest",
+                "text_bytes": 10488
+              },
+              {
+                "name": "clutch_sbf::claim_truth",
+                "text_bytes": 10328
+              },
+              {
+                "name": "clutch_sbf::instructions_sysvar",
+                "text_bytes": 9888
+              },
+              {
+                "name": "clutch_sbf::seeds",
+                "text_bytes": 9864
+              },
+              {
+                "name": "core",
+                "text_bytes": 9384
+              },
+              {
+                "name": "clutch_batch_policy_identity",
+                "text_bytes": 8992
+              },
+              {
+                "name": "clutch_sbf::instructions::construction",
+                "text_bytes": 7792
+              },
+              {
+                "name": "compiler_builtins",
+                "text_bytes": 7232
+              },
+              {
+                "name": "clutch_sbf::instructions::direct_selection_v3",
+                "text_bytes": 5000
+              },
+              {
+                "name": "clutch_sbf::dispatch",
+                "text_bytes": 4664
+              },
+              {
+                "name": "rust-runtime-or-unattributed",
+                "text_bytes": 4368
+              },
+              {
+                "name": "clutch_sbf::pyth_receiver",
+                "text_bytes": 3496
+              },
+              {
+                "name": "solana_program_entrypoint",
+                "text_bytes": 3120
+              },
+              {
+                "name": "alloc",
+                "text_bytes": 2976
+              },
+              {
+                "name": "solana_cpi",
+                "text_bytes": 2056
+              },
+              {
+                "name": "clutch_sbf::source_generation",
+                "text_bytes": 1856
+              },
+              {
+                "name": "clutch_sbf::source_identity",
+                "text_bytes": 1824
+              },
+              {
+                "name": "solana_account_info",
+                "text_bytes": 1448
+              },
+              {
+                "name": "clutch_sbf::loader_state",
+                "text_bytes": 984
+              },
+              {
+                "name": "clutch_sbf::error",
+                "text_bytes": 856
+              },
+              {
+                "name": "clutch_sbf::source_archive",
+                "text_bytes": 544
+              },
+              {
+                "name": "clutch_sbf::capabilities",
+                "text_bytes": 376
+              },
+              {
+                "name": "solana_instruction",
+                "text_bytes": 368
+              },
+              {
+                "name": "clutch_liveness",
+                "text_bytes": 304
+              },
+              {
+                "name": "merged-aliases",
+                "text_bytes": 184
+              },
+              {
+                "name": "std",
+                "text_bytes": 88
+              }
+            ],
+            "matches_text_section": true,
+            "merged_alias_regions": 1,
+            "text_section_bytes": 1322904,
+            "text_section_end_exclusive": 1323192,
+            "text_section_start": 288
+          },
+          "undefined_dynamic_symbols": [
+            "abort",
+            "sol_invoke_signed_rust",
+            "sol_log_",
+            "sol_memcmp_",
+            "sol_memcpy_",
+            "sol_memmove_",
+            "sol_memset_",
+            "sol_panic_",
+            "sol_sha256",
+            "sol_try_find_program_address"
+          ]
+        }
+      ],
+      "name": "general-source-v2-point",
+      "profile_manifest_linkage": "absent",
+      "reproducible_same_source_checkout": true
+    }
+  ],
+  "promotion_gates": [
+    "not accepted as linked evidence by check_capability_profile.py",
+    "no semantic-owner or central-registry identity manifest",
+    "no runtime, deployment, public-cluster, release, or production evidence",
+    "loader rent is a formula over exact-size allocation, not a funded account observation"
+  ],
+  "refusals": [],
+  "release_declaration": false,
+  "rent_model": {
+    "account_storage_overhead_bytes": 128,
+    "buffer_metadata_data_len_bytes": 37,
+    "evidence_class": "model-only-derived-from-selected-commit-artifact-bytes",
+    "model": "upgradeable-loader-v3-exact-size-allocation",
+    "program_data_len_bytes": 36,
+    "programdata_metadata_data_len_bytes": 45,
+    "rent_exempt_lamports_per_billable_byte": 6960
+  },
+  "retained_workdir": null,
+  "schema": "dragons-clutch/capability-profile-size-diagnostic/v1",
+  "source": {
+    "git_commit": "0ba5cfa586c9d4065918e301ee6e1e978b188242",
+    "git_tree": "42a4a8cb8bcda8d80225e9d1631d40ba6d374cdb",
+    "input_method": "git-archive",
+    "reproducibility_scope": "two fresh target directories under a commit-keyed deterministic local archive path; cross-host temporary-root paths can still affect Cargo path-dependency crate disambiguators",
+    "selected_commit_was_head_at_measurement": true,
+    "source_checkout_path_sha256": "10d56d2a7daa1f7cc6496037b481af4afb727b9d9293a2eaba97c6707a607d7b",
+    "worktree_bytes_used": false
+  },
+  "toolchain": {
+    "cargo_build_sbf_sha256": "37c37d1a2ef0aa44065cde8c6ad07f0685bcef24699b4a9dd101372d7d4ef6e7",
+    "cargo_build_sbf_version": "cargo-build-sbf 4.0.0 | platform-tools v1.53 | rustc 1.89.0",
+    "cargo_profile": "release",
+    "codegen_units": 1,
+    "llvm_objdump_sha256": "9e1ee0abcd8a6aecb3b846dafe48b9f5601185d79219722a437b245be3c84a09",
+    "llvm_readobj_sha256": "ab7e88ef8c81a2ebce08e8a821579206f1d8ee9d7fcd8720538b0d3488417c5b",
+    "lto": "fat",
+    "overflow_checks": true,
+    "platform_rustc_sha256": "c58ec8ad482a40216152a4e4a6172f485be22a7f4482623e7e3cdf6c7085beb8",
+    "platform_rustc_version": "rustc 1.89.0-dev"
+  }
+}

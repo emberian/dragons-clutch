@@ -125,9 +125,9 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 34 and Dealer policy transport actions 1 through 4
-/// are allocated. Allocation alone never grants execution capability.
+/// Allocation does not imply execution capability. General V2, Dealer policy
+/// transport, and the bounded SourcePlane V3 portion of SourceSeries have
+/// registered local actions; each exact tuple has an independent activation gate.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -218,19 +218,28 @@ mod tests {
         for family_tag in u8::MIN..=u8::MAX {
             for family_version in u8::MIN..=3 {
                 for local_action in u8::MIN..=u8::MAX {
-                    let expected_allocated = (family_tag
+                    let general = family_tag
                         == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
-                            .contains(&local_action))
-                        || (family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                            && family_version
-                                == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                            && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
-                                ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                                .contains(&local_action));
+                            .contains(&local_action);
+                    let dealer = family_tag
+                        == clutch_solana_layout::registry::DEALER_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
+                            .contains(&local_action);
+                    let source = family_tag
+                        == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || dealer || source;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,

@@ -92,14 +92,75 @@ class MeasurementProducerTests(unittest.TestCase):
             ):
                 measure.require_clean_state(dirty, "fixture")
 
+    def test_executed_producer_and_checker_are_in_dirty_source_closure(self) -> None:
+        expected = {
+            "programs/clutch-sbf/scripts/check_capability_profile.py",
+            "programs/clutch-sbf/scripts/measure_capability_profiles.py",
+        }
+        self.assertTrue(expected.issubset(measure.SOURCE_CLOSURE))
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            for relative in expected:
+                path = repo / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"# {relative}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            commit = measure.run(["git", "rev-parse", "HEAD"], cwd=repo)
+            closure = sorted(expected)
+            self.assertEqual(
+                [row["path"] for row in measure.measurement_code_provenance(repo, commit)],
+                [path for _role, path in measure.checker.LINKED_MEASUREMENT_CODE_INPUTS],
+            )
+            for relative in expected:
+                with self.subTest(relative=relative):
+                    path = repo / relative
+                    original = path.read_text(encoding="utf-8")
+                    path.write_text(original + "# hostile dirty execution\n", encoding="utf-8")
+                    state = measure.source_state(repo, closure)
+                    with self.assertRaisesRegex(measure.MeasurementError, "closure is dirty"):
+                        measure.require_clean_state(state, "hostile")
+                    with self.assertRaisesRegex(
+                        measure.MeasurementError, "differs from selected Git blob"
+                    ):
+                        measure.measurement_code_provenance(repo, commit)
+                    path.write_text(original, encoding="utf-8")
+            untracked = repo / "programs/clutch-sbf/scripts/hostile_import.py"
+            untracked.write_text("raise RuntimeError('hostile')\n", encoding="utf-8")
+            state = measure.source_state(repo, ["programs/clutch-sbf/scripts"])
+            self.assertEqual(
+                state["untracked"],
+                ["programs/clutch-sbf/scripts/hostile_import.py"],
+            )
+            with self.assertRaisesRegex(measure.MeasurementError, "closure is dirty"):
+                measure.require_clean_state(state, "hostile")
+
     def test_section_and_syscall_parsers_are_exact(self) -> None:
         section_text = """
 Section {
   Name: .text (1)
+  Address: 0x120
   Size: 123
 }
 Section {
   Name: .rodata (2)
+  Address: 0x200
   Size: 45
 }
   Symbol {
@@ -111,6 +172,7 @@ Section {
     Section: Undefined
   }
 """
+        self.assertEqual(measure.section_extent(section_text, ".text"), (0x120, 123))
         self.assertEqual(measure.section_size(section_text, ".text"), 123)
         self.assertEqual(measure.section_size(section_text, ".rodata"), 45)
         self.assertEqual(
@@ -126,6 +188,14 @@ Section {
         bad = "0000000000000010 <test>:\n  ldxdw r1, [r10 - 0x1001]"
         with self.assertRaisesRegex(measure.MeasurementError, "out-of-frame"):
             measure.final_frame_audit(symbols, bad)
+
+    def test_final_frame_symbol_identity_omits_only_rustc_hash(self) -> None:
+        first = "_ZN10clutch_sbf11claim_truth21observe_outcome_mints17h0123456789abcdefE"
+        second = "_ZN10clutch_sbf11claim_truth21observe_outcome_mints17hfedcba9876543210E"
+        expected = "_ZN10clutch_sbf11claim_truth21observe_outcome_mintsE"
+        self.assertEqual(measure.stable_symbol_identity(first), expected)
+        self.assertEqual(measure.stable_symbol_identity(second), expected)
+        self.assertEqual(measure.stable_symbol_identity("plain_function"), "plain_function")
 
 
 if __name__ == "__main__":

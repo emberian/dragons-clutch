@@ -5,7 +5,7 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "check": "node --check app.js && node --check embedded-data.js && node --check native-bspline-v1.js && node --check tools/embed.mjs",
+    "check": "node --check app.js && node --check embedded-data.js && node --check protocol-contracts.js && node --check protocol-client.js && node --check native-bspline-v1.js && node --check tools/embed.mjs",
     "embed": "node tools/embed.mjs",
     "test": "node --test test/*.mjs"
   }
