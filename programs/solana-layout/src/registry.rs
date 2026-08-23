@@ -341,7 +341,7 @@ pub const DEALER_LEASE_V2_ACCOUNT_TAG: u8 = 0x99;
 /// Dealer Lease V2 account version.
 pub const DEALER_LEASE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Lease V2 account bytes.
-pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_068;
+pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_132;
 /// Three-stage Dealer SettlementPot V2 discriminator.
 pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG: u8 = 0x9a;
 /// Dealer SettlementPot V2 account version.
@@ -458,12 +458,20 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
 pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
 /// First reserved Product occurrence-root version.
 pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Counted Dealer CoveredDealer selection attachment discriminator.
+pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
+/// First Dealer CoveredDealer selection attachment version.
+pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// Exact attachment bytes including the Dealer global envelope.
+pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
 pub const MAX_EXTENSION_PAYLOAD_BYTES: usize = MAX_INTENT_BYTES - EXTENSION_ENVELOPE_BYTES;
 
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 74);
+const _: () = assert!(DEALER_COVERED_SELECTION_ACCOUNT_TAG == 0xae);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1476,6 +1484,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-occurrence-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+            version: DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-covered-selection-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

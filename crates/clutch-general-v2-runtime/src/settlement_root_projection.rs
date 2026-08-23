@@ -7,7 +7,8 @@
 //! not authenticate Solana account ownership, PDA absence, or rent funding.
 
 use clutch_fee_runtime_contract::{
-    projection::SelectedOwnerFeeBookV1, selected::SelectedCompositeFeeV1,
+    projection::{CertifiedRecipientAllocationV2, SelectedOwnerFeeBookV1},
+    selected::SelectedCompositeFeeV1,
 };
 use clutch_owner_settlement::{
     owner_credit_atoms, owner_debit_atoms, owner_rounding_residue_price_units,
@@ -92,6 +93,56 @@ pub fn derive_settlement_root_expectation_v1(
             (selected.fee_record().0, selected_fee_atoms)
         }
     };
+    derive_settlement_root_expectation_from_fee_total_v1(
+        traversal,
+        fee_record,
+        selected_fee_atoms,
+    )
+}
+
+/// Derive action-39 expectations from the immutable complete-book fee
+/// certificate authenticated by the SBF adapter.
+///
+/// This is the O(1) persistence successor to
+/// [`CandidateFeeAggregateProjectionV1::CandidateFee`]. The certificate's
+/// creation remains the only path that consumes the complete canonical owner
+/// fee book. This join neither reconstructs that book nor accepts a caller
+/// total: it reads the conserved collected total from the certified allocation
+/// and equality-binds its owner digest/count to the exhaustive traversal.
+pub fn derive_settlement_root_expectation_from_certified_fee_v2(
+    traversal: &SettlementTraversalProjectionV4,
+    selected: &SelectedCompositeFeeV1,
+    certified: &CertifiedRecipientAllocationV2,
+) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
+    let feed = traversal.feed();
+    let allocation = certified.allocation();
+    let selected_fee_atoms = allocation.collected_fee_atoms();
+    if selected_fee_atoms == 0
+        || allocation.fee_record() != selected.fee_record()
+        || certified.owner_order_set_digest().0
+            != traversal.owner_order_set_digest().bytes()
+        || certified.owner_count() != traversal.owner_basis().owner_count()
+        || selected.market().0 != feed.market.bytes()
+        || selected.epoch().0 != feed.epoch.bytes()
+        || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()
+        || selected.price_scale() != feed.price_scale
+        || selected.outcome_count() != feed.outcome_count
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    derive_settlement_root_expectation_from_fee_total_v1(
+        traversal,
+        selected.fee_record().0,
+        selected_fee_atoms,
+    )
+}
+
+fn derive_settlement_root_expectation_from_fee_total_v1(
+    traversal: &SettlementTraversalProjectionV4,
+    fee_record: [u8; 32],
+    selected_fee_atoms: u64,
+) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
+    let feed = traversal.feed();
     let cash = derive_cash_expectation_from_basis_v1(
         traversal.owner_basis(),
         fee_record,

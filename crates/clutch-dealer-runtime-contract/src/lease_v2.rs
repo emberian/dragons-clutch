@@ -17,7 +17,7 @@ pub const DEALER_LEASE_MAGIC_V2: [u8; 8] = *b"DCLSEV02";
 pub const DEALER_LEASE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical V2 lease body.
 pub const DEALER_LEASE_BYTES_V2: usize =
-    HEADER_BYTES + (29 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + (31 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Immutable authority for one funded `g -> g+1` Dealer settlement.
 ///
@@ -48,8 +48,12 @@ pub struct DealerLeaseV2 {
     pub epoch_binding_account_id: Id,
     /// Final SettlementCandidateId.
     pub settlement_candidate_id: Id,
-    /// Exact authenticated General V2 SelectedCandidate account.
-    pub selected_candidate_account_id: Id,
+    /// Exact counted General V2 SettlementRoot account.
+    pub settlement_root_account_id: Id,
+    /// Exact Dealer-owned CoveredDealer selection attachment account.
+    pub covered_dealer_selection_account_id: Id,
+    /// Semantic identity of the authenticated selection attachment.
+    pub covered_dealer_selection_id: Id,
     /// Exact upstream economic-candidate identity.
     pub upstream_economic_candidate_id: Id,
     /// Authenticated quote artifact.
@@ -117,7 +121,9 @@ impl DealerLeaseV2 {
             self.epoch_id,
             self.epoch_binding_account_id,
             self.settlement_candidate_id,
-            self.selected_candidate_account_id,
+            self.settlement_root_account_id,
+            self.covered_dealer_selection_account_id,
+            self.covered_dealer_selection_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
             self.dealer_leg_verdict_id,
@@ -153,6 +159,9 @@ impl DealerLeaseV2 {
             || self.dealer_state_account_id == self.lease_account_id
             || self.dealer_state_account_id == self.settlement_pot_id
             || self.lease_account_id == self.settlement_pot_id
+            || self.settlement_root_account_id == self.covered_dealer_selection_account_id
+            || self.covered_dealer_selection_account_id == self.lease_account_id
+            || self.covered_dealer_selection_account_id == self.settlement_pot_id
             || self.select_begin_receipt_account_id == self.dealer_state_account_id
             || self.select_begin_receipt_account_id == self.lease_account_id
             || self.select_begin_receipt_account_id == self.settlement_pot_id
@@ -272,7 +281,9 @@ impl FixedCodec for DealerLeaseV2 {
             self.epoch_id,
             self.epoch_binding_account_id,
             self.settlement_candidate_id,
-            self.selected_candidate_account_id,
+            self.settlement_root_account_id,
+            self.covered_dealer_selection_account_id,
+            self.covered_dealer_selection_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
             self.dealer_leg_verdict_id,
@@ -319,7 +330,9 @@ impl FixedCodec for DealerLeaseV2 {
         let epoch_id = reader.id();
         let epoch_binding_account_id = reader.id();
         let settlement_candidate_id = reader.id();
-        let selected_candidate_account_id = reader.id();
+        let settlement_root_account_id = reader.id();
+        let covered_dealer_selection_account_id = reader.id();
+        let covered_dealer_selection_id = reader.id();
         let upstream_economic_candidate_id = reader.id();
         let quote_id = reader.id();
         let dealer_leg_verdict_id = reader.id();
@@ -349,7 +362,9 @@ impl FixedCodec for DealerLeaseV2 {
             epoch_id,
             epoch_binding_account_id,
             settlement_candidate_id,
-            selected_candidate_account_id,
+            settlement_root_account_id,
+            covered_dealer_selection_account_id,
+            covered_dealer_selection_id,
             upstream_economic_candidate_id,
             quote_id,
             dealer_leg_verdict_id,
@@ -385,5 +400,5 @@ impl FixedCodec for DealerLeaseV2 {
     }
 }
 
-const _: () = assert!(DEALER_LEASE_BYTES_V2 == 1_068);
+const _: () = assert!(DEALER_LEASE_BYTES_V2 == 1_132);
 const _: () = assert!(DEALER_LEASE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

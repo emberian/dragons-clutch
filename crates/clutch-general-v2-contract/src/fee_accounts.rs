@@ -42,7 +42,8 @@ pub use clutch_fee_runtime_contract::Id as FeeRuntimeId;
 use clutch_fee_runtime_contract::MAX_FEE_ROWS_V1;
 
 use crate::{
-    CodecError, DeletableRentOwnerV1, Reader, Writer, OWNER_FEE_CARRY_ACCOUNT_BYTES,
+    CodecError, DeletableRentOwnerV1, Id32, Reader, Sha256BackendV1, Writer,
+    OWNER_FEE_CARRY_ACCOUNT_BYTES,
     OWNER_FEE_CARRY_ACCOUNT_BYTES_V3, OWNER_FEE_CARRY_ACCOUNT_TAG,
     OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4,
@@ -59,6 +60,9 @@ use crate::{
 
 const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 2;
 const DELETABLE_RENT_OWNER_BYTES: usize = 32 + 8 + 8;
+/// Exact key-bound semantic identity for one selected fee-record outer body.
+pub const SELECTED_FEE_RECORD_DATA_ID_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/selected-fee-record-data-id/v1\0";
 
 /// Convert exact persisted bytes into the fee semantic owner's identity type.
 pub const fn fee_runtime_id_from_bytes(bytes: [u8; 32]) -> FeeRuntimeId {
@@ -197,6 +201,26 @@ impl SelectedFeeRecordV1AccountV1 {
             semantic: map_fee_error(decode_fee_record_v1(&body, batch, revenue))?,
             stored_bump,
         })
+    }
+
+    /// Bind the exact constructor-authenticated outer bytes to their physical
+    /// selected-fee PDA. This is an immutable data identity, not a fee amount,
+    /// policy selector, or terminal receipt.
+    pub fn data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        account_id: Id32,
+    ) -> Result<Id32, CodecError> {
+        if account_id.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        let mut bytes = [0u8; SELECTED_FEE_RECORD_ACCOUNT_BYTES];
+        self.encode(&mut bytes)?;
+        Id32::new(backend.sha256(&[
+            SELECTED_FEE_RECORD_DATA_ID_DOMAIN_V1,
+            &account_id.bytes(),
+            &bytes,
+        ]))
     }
 }
 

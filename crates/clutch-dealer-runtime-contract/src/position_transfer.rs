@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::replay::{action_byte, decode_action};
 use crate::{
-    validate_padding_u64, DealerRuntimeActionV1, Error, FixedCodec, Id, Result, MAX_OUTCOMES,
+    validate_padding_u64, CoveredDealerSelectionV1, DealerRuntimeActionV1, Error, FixedCodec, Id,
+    Result, MAX_OUTCOMES,
 };
 
 /// Local magic for an exact single-transfer bundle.
@@ -680,6 +681,73 @@ pub fn prepare_dealer_sponsor_refund_transfer_v1(
 pub struct PreparedDealerPositionPotTransferV1 {
     bundle: DealerAssetTransferBundleV1,
     position_post: PositionAccountV3,
+}
+
+/// Deterministic facility Position identities surrounding one complete
+/// CoveredDealer Lease.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerCoveredPositionProjectionV1 {
+    leased: PositionAccountV3,
+    terminal: PositionAccountV3,
+}
+
+impl DealerCoveredPositionProjectionV1 {
+    /// Position postimage after Begin deposits dealer cash/Eggs into the Pot.
+    pub const fn leased(&self) -> PositionAccountV3 {
+        self.leased
+    }
+
+    /// Expected postimage after complete Finalize returns dealer proceeds and
+    /// rotates the facility generation exactly once.
+    pub const fn terminal(&self) -> PositionAccountV3 {
+        self.terminal
+    }
+}
+
+/// Derive both Position postimages solely from an authenticated persisted
+/// CoveredDealer selection. No caller-shaped Pot semantic ID or amount enters
+/// this constructor; the later atomic Begin transfer rederives and compares
+/// the same leased postimage against the actual Pot.
+pub fn project_covered_dealer_position_v1(
+    selection: &CoveredDealerSelectionV1,
+    market: DealerPositionMarketJoinV1,
+    facility_position: DealerTransferPositionV3,
+) -> Result<DealerCoveredPositionProjectionV1> {
+    selection.validate()?;
+    market.validate()?;
+    facility_position.validate(market)?;
+    if facility_position.kind() != DealerAssetEndpointKindV1::FacilityPosition
+        || market.market_instance_v2_id != selection.market_instance_v2_id
+        || market.outcome_count != selection.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let begin = DealerAssetTransferAmountsV1 {
+        cash_atoms: selection.receipt.dealer_net_cash_out_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs: selection.trade.sell_to_users,
+    };
+    let leased = if begin.is_zero() {
+        facility_position.position()
+    } else {
+        begin.validate(selection.outcome_count)?;
+        apply_position_debit(facility_position.position(), begin)?
+    };
+    let finalize = DealerAssetTransferAmountsV1 {
+        cash_atoms: selection.receipt.dealer_net_cash_in_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs: selection.trade.buy_from_users,
+    };
+    let credited = if finalize.is_zero() {
+        leased
+    } else {
+        finalize.validate(selection.outcome_count)?;
+        apply_position_credit(leased, finalize)?
+    };
+    let terminal = advance_position_generation(credited)?;
+    Ok(DealerCoveredPositionProjectionV1 { leased, terminal })
 }
 
 impl PreparedDealerPositionPotTransferV1 {

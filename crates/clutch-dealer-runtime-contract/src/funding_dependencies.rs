@@ -1298,6 +1298,76 @@ impl DealerFundedDependenciesV2 {
         Ok(())
     }
 
+    /// Validate the funded plane after initialization, when the content-derived
+    /// facility ID and Position-purpose binding are already persisted by State.
+    /// The one-time Genesis nonce is intentionally not a live-action input.
+    pub fn validate_live_bindings_v4(
+        &self,
+        binding: &crate::FacilityPositionBindingV2,
+        policy: &DealerPolicyV1,
+        schedule: &DealerLivenessScheduleV1,
+        runtime: &DealerRuntimeLivenessBindingV1,
+    ) -> Result<()> {
+        self.validate()?;
+        binding.validate()?;
+        policy.validate()?;
+        schedule.validate_for_facility_runtime()?;
+        runtime.validate()?;
+        let facility_id = binding.facility_id;
+        let binding_id = binding.binding_id()?;
+        if self.bindings.policy_id != policy.policy_id()?
+            || self.bindings.facility_id != facility_id
+            || binding.policy_id != self.bindings.policy_id
+            || binding.market_instance_v2_id != policy.market_instance_v2_id
+            || self.facility_position_binding_id != binding_id
+            || self.bindings.liveness_schedule_id != schedule.schedule_id()?.untyped()
+            || self.bindings.liveness_schedule_id != policy.liveness_policy_id
+            || self.bindings.runtime_liveness_policy_id != runtime.runtime_policy_id
+            || self.bindings.runtime_liveness_binding_digest != runtime.binding_digest()?
+            || runtime.realm_id != policy.realm_id
+            || runtime.lifecycle_id != facility_id
+            || runtime.neutral_sink != policy.neutral_sink
+            || self.bindings.fee_policy_id != policy.fee_policy_id
+            || self.bindings.collateral_mint != policy.collateral_mint
+            || self.bindings.token_program != policy.token_program
+            || self.bindings.asset_vault_authority_account_id != binding.dealer_state_account_id
+            || self.bindings.neutral_sink != policy.neutral_sink
+            || self.bindings.dealer_liveness_work_principal_lamports
+                != schedule.dealer_runtime_work_principal_lamports()?
+            || runtime.quote_schedule_ids[DealerLivenessCompartmentV1::Source.index()]
+                == self.bindings.liveness_schedule_id
+            || self.rent.neutral_sink != policy.neutral_sink
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut index = 0usize;
+        while index < DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1 {
+            if (index != DealerLivenessCompartmentV1::Source.index()
+                && runtime.owners[index] != binding.dealer_state_account_id)
+                || runtime.generations[index] != self.bindings.counted_generation
+                || runtime.account_ids[index] == self.bindings.runtime_liveness_policy_account_id
+                || runtime.account_ids[index] == self.bindings.asset_vault_authority_account_id
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            if index != DealerLivenessCompartmentV1::Source.index() {
+                let compartment = compartment_from_index(index)?;
+                if runtime.quote_schedule_ids[index] != self.bindings.liveness_schedule_id
+                    || runtime.work_principal_lamports[index]
+                        != schedule.compartment_work_principal_lamports(compartment)?
+                    || runtime.maximum_calls[index]
+                        != schedule.compartment_maximum_calls(compartment)?
+                    || runtime.maximum_lamports_per_call[index]
+                        != schedule.compartment_maximum_lamports_per_call(compartment)?
+                {
+                    return Err(Error::MismatchedBinding);
+                }
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+
     /// Canonical semantic identity retained by State V2 after child deletion.
     pub fn dependency_id(&self) -> Result<Id> {
         self.content_id(crate::DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V2)
