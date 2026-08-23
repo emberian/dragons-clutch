@@ -1527,6 +1527,24 @@ impl SettlementTraversalProjectionV4 {
             None
         }
     }
+
+    /// Exact canonical slice at one checked active Feed index.
+    pub fn slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
+        if slice_index < self.feed.slice_count {
+            Some(self.slices[usize::from(slice_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Exact canonical integer price at one checked active outcome.
+    pub fn price(&self, outcome: u8) -> Option<u64> {
+        if outcome < self.feed.outcome_count {
+            Some(self.prices[usize::from(outcome)])
+        } else {
+            None
+        }
+    }
 }
 
 /// Root-bound next-slice projection used only after action 39.
