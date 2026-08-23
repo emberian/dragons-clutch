@@ -1,5 +1,6 @@
 use super::portfolio_execution_v2::{
     authenticate_exact_portfolio_pair_v2, authenticate_portfolio_receipt_sibling_set_v2,
+    authenticate_selected_portfolio_order_for_materialization_v2,
     authenticate_selected_portfolio_order_v2, portfolio_pair_transition_commitment_v2,
     prepare_portfolio_pair_execution_borrowed_v2, prepare_portfolio_pair_execution_v2,
     AuthenticatedPortfolioPairV2, PortfolioAccountExpectationV2, PortfolioAccountRoleV2,
@@ -76,6 +77,50 @@ impl PortfolioAdapterV2 for TestAdapter {
             }
             Some(ids)
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AccessContractAdapter {
+    materialization: bool,
+}
+
+impl PortfolioAdapterV2 for AccessContractAdapter {
+    fn authenticate_account(&self, expected: &PortfolioAccountExpectationV2) -> bool {
+        match expected.role {
+            PortfolioAccountRoleV2::SettlementRoot => {
+                expected.writable == self.materialization
+            }
+            PortfolioAccountRoleV2::Position => {
+                expected.writable != self.materialization
+            }
+            PortfolioAccountRoleV2::RetainedFeed | PortfolioAccountRoleV2::OrderPage => {
+                !expected.writable
+            }
+            PortfolioAccountRoleV2::Reservation
+            | PortfolioAccountRoleV2::Replay
+            | PortfolioAccountRoleV2::SettlementReceipt => false,
+        }
+    }
+
+    fn authenticate_selection_membership(
+        &self,
+        _expected: &PortfolioSelectionMembershipExpectationV2,
+        _relation_order: &EconomicOrderV2,
+        _candidate: &EconomicCandidateV2,
+    ) -> bool {
+        true
+    }
+
+    fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
+        false
+    }
+
+    fn derive_settlement_receipt_v5_post_data_ids(
+        &self,
+        _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
+    ) -> Option<[[u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]> {
+        None
     }
 }
 
@@ -916,6 +961,66 @@ fn adapter_refusal_cannot_be_repackaged_as_a_private_capability() {
         ),
         Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
             role: PortfolioAccountRoleV2::SettlementReceipt,
+        })
+    );
+}
+
+#[test]
+fn materialization_selection_has_a_disjoint_root_and_position_access_contract() {
+    let fixture = pair_fixture(20);
+    let materialization = AccessContractAdapter {
+        materialization: true,
+    };
+    assert!(authenticate_selected_portfolio_order_for_materialization_v2(
+        &materialization,
+        id(200),
+        &fixture.domain,
+        &fixture.book,
+        &fixture.candidate,
+        fixture.candidate_digest,
+        fixture.buyer_record,
+    )
+    .is_ok());
+    assert_eq!(
+        authenticate_selected_portfolio_order_v2(
+            &materialization,
+            id(200),
+            &fixture.domain,
+            &fixture.book,
+            &fixture.candidate,
+            fixture.candidate_digest,
+            fixture.buyer_record,
+        ),
+        Err(PortfolioExecutionErrorV2::AuthenticationFailed {
+            role: PortfolioAccountRoleV2::SettlementRoot,
+        })
+    );
+
+    let delivery = AccessContractAdapter {
+        materialization: false,
+    };
+    assert!(authenticate_selected_portfolio_order_v2(
+        &delivery,
+        id(200),
+        &fixture.domain,
+        &fixture.book,
+        &fixture.candidate,
+        fixture.candidate_digest,
+        fixture.buyer_record,
+    )
+    .is_ok());
+    assert_eq!(
+        authenticate_selected_portfolio_order_for_materialization_v2(
+            &delivery,
+            id(200),
+            &fixture.domain,
+            &fixture.book,
+            &fixture.candidate,
+            fixture.candidate_digest,
+            fixture.buyer_record,
+        ),
+        Err(PortfolioExecutionErrorV2::AuthenticationFailed {
+            role: PortfolioAccountRoleV2::SettlementRoot,
         })
     );
 }
