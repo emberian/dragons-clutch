@@ -209,12 +209,12 @@ from every later Egg-delivery transition ID.
 
 Action 38 `FinalizeOwnerSettlement` has a strict disabled 192-byte selector
 `epoch || selected_candidate || owner_settlement || position ||
-settlement_cash_pot || owner_finalization_id`. It exists separately because a
+settlement_cash_pot || finalized_owner_row_data_id`. It exists separately because a
 last receipt fragment may leave a credit-bearing owner waiting for earlier
 buyer or merge liquidity. Net owner debits are admitted into the pot first;
 credits refuse and retry without consuming replay or liveness when liquidity
-is absent. The request identity must equal the adapter-authenticated data ID of
-the canonical finalized 288-byte row; it is not copied into the row. The
+is absent. `finalized_owner_row_data_id` must equal the adapter-recomputed data
+ID of the canonical finalized 288-byte row; it is not copied into the row. The
 one-way row state and in-place fee finalization receipt own persistent replay.
 No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per

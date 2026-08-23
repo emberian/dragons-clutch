@@ -339,7 +339,7 @@ and 36 through 38 do not create a success route.
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
 | 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
 | 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
-| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
+| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || finalized_owner_row_data_id[32]` (192 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -735,7 +735,7 @@ owner credits refuse without mutation when buyer or completed-merge liquidity
 is not yet present, and may be retried later without consuming replay or
 liveness funding. The owner row reaches state one only after the exact
 Position-to-pot or pot-to-Position transfer succeeds. The request-scoped
-`owner_finalization_id` must equal the adapter-authenticated data ID of that
+`finalized_owner_row_data_id` must equal the adapter-recomputed data ID of that
 canonical finalized 288-byte row; it is not copied into every row. The in-place
 fee finalization receipt and row state own persistent replay safety. No
 Reservation DTO is copied into this transition: its
