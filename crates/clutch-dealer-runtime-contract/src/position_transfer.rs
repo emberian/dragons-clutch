@@ -114,6 +114,13 @@ pub struct DealerAssetTransferAmountsV1 {
 }
 
 impl DealerAssetTransferAmountsV1 {
+    fn is_zero(self) -> bool {
+        self.cash_atoms == 0
+            && self.source_reserved_cash_atoms == 0
+            && self.destination_reserved_cash_atoms == 0
+            && self.native_eggs == [0; MAX_OUTCOMES]
+    }
+
     fn validate(self, outcome_count: u8) -> Result<()> {
         validate_padding_u64(outcome_count, &self.native_eggs)?;
         if self.source_reserved_cash_atoms > self.cash_atoms
@@ -167,13 +174,25 @@ impl DealerAssetTransferBundleV1 {
         ] {
             identity.validate_live()?;
         }
-        if self.source_account_id == self.destination_account_id
-            || self.source_pre_semantic_id == self.source_post_semantic_id
-            || self.destination_pre_semantic_id == self.destination_post_semantic_id
-        {
+        let zero_claim = self.action == DealerRuntimeActionV1::Claim && self.amounts.is_zero();
+        if self.source_account_id == self.destination_account_id {
             return Err(Error::MismatchedBinding);
         }
-        self.amounts.validate(self.market.outcome_count)?;
+        if zero_claim {
+            validate_padding_u64(self.market.outcome_count, &self.amounts.native_eggs)?;
+            if self.source_pre_semantic_id != self.source_post_semantic_id
+                || self.destination_pre_semantic_id != self.destination_post_semantic_id
+            {
+                return Err(Error::ConservationFailure);
+            }
+        } else {
+            if self.source_pre_semantic_id == self.source_post_semantic_id
+                || self.destination_pre_semantic_id == self.destination_post_semantic_id
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            self.amounts.validate(self.market.outcome_count)?;
+        }
         require_transfer_direction(self.action, self.source_kind, self.destination_kind)?;
         match (self.source_kind, self.destination_kind) {
             (
@@ -515,7 +534,12 @@ pub(crate) fn prepare_dealer_position_pair_transfer_v1(
     market.validate()?;
     source.validate(market)?;
     destination.validate(market)?;
-    amounts.validate(market.outcome_count)?;
+    let zero_claim = action == DealerRuntimeActionV1::Claim && amounts.is_zero();
+    if zero_claim {
+        validate_padding_u64(market.outcome_count, &amounts.native_eggs)?;
+    } else {
+        amounts.validate(market.outcome_count)?;
+    }
     require_transfer_direction(action, source.kind(), destination.kind())?;
     if source.account_id() == destination.account_id()
         || amounts.source_reserved_cash_atoms != 0
@@ -525,8 +549,16 @@ pub(crate) fn prepare_dealer_position_pair_transfer_v1(
     }
     let source_pre_id = source.semantic_id()?;
     let destination_pre_id = destination.semantic_id()?;
-    let source_post = apply_position_debit(source.position(), amounts)?;
-    let destination_post = apply_position_credit(destination.position(), amounts)?;
+    let source_post = if zero_claim {
+        source.position()
+    } else {
+        apply_position_debit(source.position(), amounts)?
+    };
+    let destination_post = if zero_claim {
+        destination.position()
+    } else {
+        apply_position_credit(destination.position(), amounts)?
+    };
     let source_post_id = position_semantic_id(source_post)?;
     let destination_post_id = position_semantic_id(destination_post)?;
     let bundle = DealerAssetTransferBundleV1 {
@@ -940,6 +972,10 @@ fn require_transfer_direction(
             source == DealerAssetEndpointKindV1::FacilityPosition
                 && destination == DealerAssetEndpointKindV1::GeneralPosition
         }
+        DealerRuntimeActionV1::Claim => {
+            source == DealerAssetEndpointKindV1::FacilityPosition
+                && destination == DealerAssetEndpointKindV1::GeneralPosition
+        }
         DealerRuntimeActionV1::SelectLeaseAndBegin => {
             source == DealerAssetEndpointKindV1::FacilityPosition
                 && destination == DealerAssetEndpointKindV1::SettlementPot
@@ -978,6 +1014,7 @@ const fn action_has_asset_transfer(action: DealerRuntimeActionV1) -> bool {
             | DealerRuntimeActionV1::Deliver
             | DealerRuntimeActionV1::FinalizeSettlement
             | DealerRuntimeActionV1::AbortBeforeCollection
+            | DealerRuntimeActionV1::Claim
     )
 }
 

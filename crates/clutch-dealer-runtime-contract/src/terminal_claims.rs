@@ -10,11 +10,13 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerActionLivenessAuthorizationV1, DealerChildKindV2, DealerLivenessScheduleV1,
-    DealerPhaseV2, DealerPolicyV1, DealerPositionObservationV3, DealerRuntimeActionV1,
-    DealerRuntimeLivenessBindingV1, DealerStateV2, DeletableRentOwnerV1, Error,
-    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, Result,
-    DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1, DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1,
+    prepare_dealer_position_pair_transfer_v1, DealerActionLivenessAuthorizationV1,
+    DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1, DealerChildKindV2,
+    DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1,
+    DealerPositionObservationV3, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
+    DealerStateV2, DealerTransferPositionV3, DeletableRentOwnerV1, Error,
+    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, PreparedDealerPositionPairTransferV1,
+    Result, DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1, DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1,
     DELETABLE_RENT_OWNER_BYTES, LP_ENTRIES_PER_PAGE, MAX_ATOMS, MAX_LP_PAGES,
 };
 use clutch_retirement::PositionLifecycleV3;
@@ -33,11 +35,8 @@ pub const DEALER_CLAIM_WORK_MAGIC_V1: [u8; 8] = *b"DCCLWMV1";
 /// Exact local semantic version.
 pub const DEALER_CLAIM_WORK_VERSION_V1: u16 = 1;
 /// Exact bytes in the streamed claim-work owner.
-pub const DEALER_CLAIM_WORK_BYTES_V1: usize = HEADER_BYTES
-    + (15 * 32)
-    + 56
-    + DEALER_PAGE_BITMAP_BYTES_V1
-    + DELETABLE_RENT_OWNER_BYTES;
+pub const DEALER_CLAIM_WORK_BYTES_V1: usize =
+    HEADER_BYTES + (15 * 32) + 56 + DEALER_PAGE_BITMAP_BYTES_V1 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Frozen terminal-allocation rounding policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,8 +362,8 @@ impl DealerClaimWorkV1 {
         {
             return Err(Error::InvalidParameter);
         }
-        let active_bits = usize::try_from(self.original_page_count)
-            .map_err(|_| Error::InvalidParameter)?;
+        let active_bits =
+            usize::try_from(self.original_page_count).map_err(|_| Error::InvalidParameter)?;
         let mut bit = active_bits;
         while bit < DEALER_PAGE_BITMAP_BYTES_V1 * 8 {
             if self.closed_pages[bit / 8] & (1u8 << (bit % 8)) != 0 {
@@ -540,8 +539,10 @@ pub(crate) fn begin_terminal_resolution_v1(
     position_resolved.validate_against(binding, binding_id, policy)?;
     let before = position_before.projection.position();
     let after = position_resolved.projection.position();
-    if !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
-        || current_slot < policy.maturity_slot
+    if !matches!(
+        state.phase,
+        DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly
+    ) || current_slot < policy.maturity_slot
         || state.children.epoch_bindings != 0
         || state.children.leases != 0
         || state.children.settlement_pots != 0
@@ -564,7 +565,11 @@ pub(crate) fn begin_terminal_resolution_v1(
         || work.terminal_cash_atoms != after.cash_atoms()
         || after.reserved_cash_atoms() != 0
         || after.native_eggs() != [0; crate::MAX_OUTCOMES]
-        || after.generation() != state.generation.checked_add(1).ok_or(Error::ArithmeticOverflow)?
+        || after.generation()
+            != state
+                .generation
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?
         || after.lifecycle() != PositionLifecycleV3::Open
         || Id::from_bytes(after.replay_account().bytes()) == state.facility_replay_account_id
         || resolve.action != DealerRuntimeActionV1::Resolve
@@ -769,7 +774,191 @@ fn validate_terminal_page_binding_v1(
     Ok(())
 }
 
-/// Claim one immutable LP entry and advance the shared Position/Replay generation.
+/// Prepared terminal claim with complete facility→LP Position V3 conservation.
+///
+/// Replay, State, allocation, and both Position writes must commit atomically.
+/// The preparation itself preserves both Position generations and Replay
+/// account identities; the Claim replay intent binds [`Self::transfer_bundle`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerTerminalClaimV2 {
+    transfer: PreparedDealerPositionPairTransferV1,
+    state_after: DealerStateV2,
+    allocation_after: DealerTerminalAllocationV1,
+    lp_owner: Id,
+    claimed_shares: u64,
+    claim_atoms: u64,
+    entry_index: u8,
+}
+
+impl PreparedDealerTerminalClaimV2 {
+    /// Exact Claim asset bundle whose ID enters the canonical Replay intent.
+    pub const fn transfer_bundle(self) -> DealerAssetTransferBundleV1 {
+        self.transfer.bundle()
+    }
+
+    /// Facility Position V3 postimage; generation and Replay are unchanged.
+    pub const fn facility_position_post(self) -> clutch_retirement::PositionAccountV3 {
+        self.transfer.source_post()
+    }
+
+    /// LP Position V3 postimage; generation and Replay are unchanged.
+    pub const fn lp_position_post(self) -> clutch_retirement::PositionAccountV3 {
+        self.transfer.destination_post()
+    }
+
+    /// Dealer State postimage to commit with the Replay intent.
+    pub const fn state_after(self) -> DealerStateV2 {
+        self.state_after
+    }
+
+    /// Page-allocation postimage with exactly this entry marked claimed.
+    pub const fn allocation_after(self) -> DealerTerminalAllocationV1 {
+        self.allocation_after
+    }
+
+    /// Exact LP owner authenticated from the sealed page and Position V3.
+    pub const fn lp_owner(self) -> Id {
+        self.lp_owner
+    }
+
+    /// Exact immutable LP shares consumed by this claim.
+    pub const fn claimed_shares(self) -> u64 {
+        self.claimed_shares
+    }
+
+    /// Exact terminal cash atoms delivered, including a canonical zero claim.
+    pub const fn claim_atoms(self) -> u64 {
+        self.claim_atoms
+    }
+
+    /// Exact sealed-page entry index.
+    pub const fn entry_index(self) -> u8 {
+        self.entry_index
+    }
+}
+
+/// Prepare one exact same-generation terminal claim over both Position V3s.
+///
+/// This is the sole public terminal-claim asset seam. It never performs a
+/// collateral token CPI, never changes Hoard custody, never consumes reserved
+/// cash, and never rotates either Position's Replay account. A zero allocation
+/// still produces a nonzero action-bound transfer-bundle identity so Replay can
+/// order the claim and the allocation bitmap can make it one-shot.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_dealer_terminal_claim_v2(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    work: &DealerClaimWorkV1,
+    page_account_id: Id,
+    page: &LpPageV2,
+    allocation: &DealerTerminalAllocationV1,
+    entry_index: u8,
+    market: DealerPositionMarketJoinV1,
+    facility_position: DealerTransferPositionV3,
+    lp_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerTerminalClaimV2> {
+    policy.validate()?;
+    state.validate_against_policy(policy)?;
+    validate_terminal_page_binding_v1(
+        policy,
+        state,
+        state_account_id,
+        work,
+        page_account_id,
+        page,
+        allocation,
+    )?;
+    let index = usize::from(entry_index);
+    if state.phase != DealerPhaseV2::Resolved
+        || index >= usize::from(page.entry_count)
+        || allocation.claimed_bitmap & (1u16 << index) != 0
+        || work.counted_generation != state.generation
+        || allocation.counted_generation != state.generation
+        || market.market_instance_v2_id != policy.market_instance_v2_id
+        || market.realm_id != policy.realm_id
+        || market.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let entry = page.entries[index];
+    let facility_before = match facility_position {
+        DealerTransferPositionV3::Facility {
+            account_id,
+            position,
+        } => {
+            let body = position.position();
+            if account_id != state.facility_position_account_id
+                || Id::from_bytes(body.purpose_binding_id().bytes())
+                    != state.facility_position_binding_id
+                || Id::from_bytes(body.replay_account().bytes()) != state.facility_replay_account_id
+                || body.generation() != state.generation
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            body
+        }
+        _ => return Err(Error::MismatchedBinding),
+    };
+    let lp_before = match lp_position {
+        DealerTransferPositionV3::General { position, .. } => {
+            let body = position.position();
+            if Id::from_bytes(body.owner().bytes()) != entry.owner {
+                return Err(Error::MismatchedBinding);
+            }
+            body
+        }
+        _ => return Err(Error::MismatchedBinding),
+    };
+    let claim_atoms = allocation.claim_atoms[index];
+    let transfer = prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::Claim,
+        market,
+        facility_position,
+        lp_position,
+        DealerAssetTransferAmountsV1 {
+            cash_atoms: claim_atoms,
+            source_reserved_cash_atoms: 0,
+            destination_reserved_cash_atoms: 0,
+            native_eggs: [0; crate::MAX_OUTCOMES],
+        },
+    )?;
+    let bundle = transfer.bundle();
+    if bundle.source_pre_semantic_id != state.facility_position_id
+        || transfer.source_post().generation() != facility_before.generation()
+        || transfer.source_post().replay_account() != facility_before.replay_account()
+        || transfer.destination_post().generation() != lp_before.generation()
+        || transfer.destination_post().replay_account() != lp_before.replay_account()
+    {
+        return Err(Error::ConservationFailure);
+    }
+    let mut allocation_after = *allocation;
+    allocation_after.claimed_bitmap |= 1u16 << index;
+    allocation_after.validate()?;
+    let mut state_after = *state;
+    state_after.children.unclaimed_lp_positions = state_after
+        .children
+        .unclaimed_lp_positions
+        .checked_sub(1)
+        .ok_or(Error::InvalidChildGraph)?;
+    state_after.terminal_claimed_shares = state_after
+        .terminal_claimed_shares
+        .checked_add(entry.shares)
+        .ok_or(Error::ArithmeticOverflow)?;
+    state_after.facility_position_id = bundle.source_post_semantic_id;
+    state_after.validate_against_policy(policy)?;
+    Ok(PreparedDealerTerminalClaimV2 {
+        transfer,
+        state_after,
+        allocation_after,
+        lp_owner: entry.owner,
+        claimed_shares: entry.shares,
+        claim_atoms,
+        entry_index,
+    })
+}
+
+/// Legacy claim projection retained only for internal transition migration.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn claim_terminal_entry_v1(
     policy: &DealerPolicyV1,
@@ -828,7 +1017,11 @@ pub(crate) fn claim_terminal_entry_v1(
             .ok_or(Error::ConservationFailure)?
         || after.reserved_cash_atoms() != before.reserved_cash_atoms()
         || after.native_eggs() != before.native_eggs()
-        || after.generation() != state.generation.checked_add(1).ok_or(Error::ArithmeticOverflow)?
+        || after.generation()
+            != state
+                .generation
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?
         || after.lifecycle() != PositionLifecycleV3::Open
         || Id::from_bytes(after.replay_account().bytes()) == state.facility_replay_account_id
     {
@@ -958,7 +1151,11 @@ pub fn close_claimed_lp_page_v1(
             work.rent.neutral_sink,
         ]
     } else {
-        [page.rent.neutral_sink, allocation.rent.neutral_sink, Id::ZERO]
+        [
+            page.rent.neutral_sink,
+            allocation.rent.neutral_sink,
+            Id::ZERO,
+        ]
     };
     let expected_refunds = if last {
         [
@@ -998,7 +1195,11 @@ pub fn close_claimed_lp_page_v1(
     let mut work_after = *work;
     work_after.mark_page_closed(page.page_ordinal)?;
     let mut state_after = *state;
-    state_after.children.lp_pages = state_after.children.lp_pages.checked_sub(1).ok_or(Error::InvalidChildGraph)?;
+    state_after.children.lp_pages = state_after
+        .children
+        .lp_pages
+        .checked_sub(1)
+        .ok_or(Error::InvalidChildGraph)?;
     state_after.children.terminal_allocations = state_after
         .children
         .terminal_allocations
