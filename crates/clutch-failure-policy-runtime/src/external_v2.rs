@@ -37,8 +37,9 @@ use clutch_source_plane_v3_runtime::{
 use sha2::{Digest, Sha256};
 
 use crate::{
+    relation_execution_v1::{ExecutedFailureRelationV1, FailureRelationDispositionV1},
     AcceptedResolutionId, Error, FailurePolicyBindingId, FailurePolicyBindingV1, FailureTriggerId,
-    FailureTriggerKindV1, FailureTriggerV1, RelationRefusalV1, Result,
+    FailureTriggerKindV1, FailureTriggerV1, Result,
 };
 
 const ADMISSION_DOMAIN: &[u8] = b"dragons-clutch/failure-external-admission/v2";
@@ -90,38 +91,6 @@ typed_external_id!(
     FailureRuntimeStateCommitmentV2,
     "Typed commitment to the complete canonical failure-runtime bytes."
 );
-
-/// Authenticated relation result over one source-owned success handoff.
-///
-/// The relation adapter constructs this only after executing the immutable
-/// relation program. This DTO never carries a payout and cannot replace the
-/// bound source handoff.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedRelationResultV2 {
-    /// Exact failure-policy binding.
-    binding_id: FailurePolicyBindingId,
-    /// Exact full-width occurrence.
-    market_instance_id: MarketInstanceV2Id,
-    /// Exact failure/recovery generation.
-    generation: u64,
-    /// Exact authenticated source success handoff.
-    source_success_handoff_id: SourceContentId,
-    /// Frozen relation policy implementation/content identity.
-    relation_policy_id: [u8; 32],
-    /// Nonzero authenticated relation record.
-    relation_record_id: [u8; 32],
-    /// Accepted relation or one closed deterministic refusal.
-    disposition: RelationDispositionV2,
-}
-
-/// Exhaustive relation disposition consumed by failure policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RelationDispositionV2 {
-    /// The frozen relation accepted the source result for normal resolution.
-    Accepted,
-    /// The frozen relation selected no value because evidence was unusable.
-    Refused(RelationRefusalV1),
-}
 
 /// Present-funding receipt consumed by Product/Series occurrence activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,6 +294,7 @@ pub struct AcceptedResolutionV2 {
     source_success_handoff_id: SourceContentId,
     window_id: SourceContentId,
     relation_record_id: [u8; 32],
+    clock: RecoveryClock,
 }
 
 impl AcceptedResolutionV2 {
@@ -695,10 +665,24 @@ impl FailureRuntimeExternalV2 {
     }
 
     /// Refuse new exposure after immutable maturity even before a crank.
-    pub fn check_new_exposure(&self, clock: RecoveryClock) -> Result<()> {
+    fn check_new_exposure(&self, clock: RecoveryClock) -> Result<()> {
         self.check()?;
         self.recovery.check_new_exposure(clock)?;
         Ok(())
+    }
+
+    /// Refuse new exposure from the admitted Source release's embedded Clock
+    /// policy and one authenticated Clock snapshot.
+    pub fn check_new_exposure_from_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+        clock: ClockSnapshotV1,
+    ) -> Result<()> {
+        self.authenticate_source_release(source_release)?;
+        self.check_new_exposure(recovery_clock_from_snapshot(
+            &source_release.clock_policy(),
+            clock,
+        )?)
     }
 
     /// Enter degraded recovery from an authenticated source failure fact.
@@ -728,18 +712,18 @@ impl FailureRuntimeExternalV2 {
     pub fn plan_trigger_relation_refusal(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<FailureExternalTransitionPlanV2> {
         let clock = self.validate_success_handoff(success, source_release, true)?;
-        let refusal = match relation.disposition {
-            RelationDispositionV2::Refused(value) => value,
-            RelationDispositionV2::Accepted => return Err(Error::BindingMismatch),
+        let refusal = match relation.disposition() {
+            FailureRelationDispositionV1::Refused(value) => value,
+            FailureRelationDispositionV1::Accepted => return Err(Error::BindingMismatch),
         };
-        self.validate_relation(success, relation)?;
+        self.validate_relation(success, relation, source_release)?;
         let trigger = self.make_trigger(
             FailureTriggerKindV1::ResolutionRelationRefused,
-            success.id().bytes(),
+            relation.id().bytes(),
             refusal.code(),
             clock,
         )?;
@@ -811,12 +795,12 @@ impl FailureRuntimeExternalV2 {
     pub fn accept_resolution(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<AcceptedResolutionV2> {
-        self.validate_success_handoff(success, source_release, false)?;
-        self.validate_relation(success, relation)?;
-        if relation.disposition != RelationDispositionV2::Accepted {
+        let clock = self.validate_success_handoff(success, source_release, false)?;
+        self.validate_relation(success, relation, source_release)?;
+        if relation.disposition() != FailureRelationDispositionV1::Accepted {
             return Err(Error::BindingMismatch);
         }
         let window_id = success.window_id();
@@ -827,26 +811,32 @@ impl FailureRuntimeExternalV2 {
         hasher.update(self.binding.generation.to_le_bytes());
         hasher.update(success.id().bytes());
         hasher.update(window_id.bytes());
-        hasher.update(relation.relation_policy_id);
-        hasher.update(relation.relation_record_id);
+        hasher.update(relation.relation_policy_id().bytes());
+        hasher.update(relation.record_id().bytes());
+        hasher.update(relation.id().bytes());
+        hasher.update(clock.slot.to_le_bytes());
+        hasher.update(clock.unix_timestamp.to_le_bytes());
+        hasher.update(clock.current_bucket.to_le_bytes());
         Ok(AcceptedResolutionV2 {
             id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
             source_success_handoff_id: success.id(),
             window_id,
-            relation_record_id: relation.relation_record_id,
+            relation_record_id: relation.record_id().bytes(),
+            clock,
         })
     }
 
     /// Resolve from accepted evidence without authorizing a work payment.
     pub fn plan_resolve_caller_funded(
         &self,
-        clock: RecoveryClock,
         accepted: AcceptedResolutionV2,
     ) -> Result<FailureExternalTransitionPlanV2> {
         self.validate_accepted_resolution(accepted)?;
         let evidence =
             EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(accepted.id.bytes()))?;
-        let recovery = self.recovery.plan_resolve_caller_funded(clock, evidence)?;
+        let recovery = self
+            .recovery
+            .plan_resolve_caller_funded(accepted.clock, evidence)?;
         self.wrap_plan(recovery, None, None)
     }
 
@@ -855,7 +845,7 @@ impl FailureRuntimeExternalV2 {
     pub fn plan_resolve_paid_repair(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
         reward_recipient: RecoveryIdentity,
         scheduled_ceiling_lamports: u64,
@@ -1053,14 +1043,22 @@ impl FailureRuntimeExternalV2 {
     fn validate_relation(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
+        source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<()> {
-        if relation.binding_id != self.binding_id
-            || relation.market_instance_id != self.binding.market_instance_id
-            || relation.generation != self.binding.generation
-            || relation.source_success_handoff_id != success.id()
-            || relation.relation_policy_id != self.binding.relation_policy_id
-            || relation.relation_record_id.iter().all(|byte| *byte == 0)
+        if relation.binding_id() != self.binding_id
+            || relation.market_instance_id() != self.binding.market_instance_id
+            || relation.generation() != self.binding.generation
+            || relation.source_success_handoff_id() != success.id()
+            || relation.statistic_result_id() != success.statistic_result_id()?
+            || relation.statistic_result_authentication_id()
+                != success.result_account_authentication_id()
+            || relation.source_release_authentication_id() != source_release.id()
+            || relation.relation_policy_id().bytes() != self.binding.relation_policy_id
+            || relation.record_id().bytes().iter().all(|byte| *byte == 0)
+            || relation.id().bytes().iter().all(|byte| *byte == 0)
+            || relation.source_policy_handoff_authentication_id().is_zero()
+            || relation.source_work_receipt_authentication_id().is_zero()
         {
             return Err(Error::BindingMismatch);
         }

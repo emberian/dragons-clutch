@@ -4,26 +4,28 @@
 //! This module owns the deterministic classification between one Source-owned
 //! successful evaluation and one immutable Product V2 partition. It does not
 //! own source ingestion, Product artifacts, a payout, a recovery transition,
-//! an SBF instruction, an account tag, or a concrete PDA seed recipe.
+//! an SBF instruction, an account tag, or account rent. The executed relation
+//! capability is intentionally ephemeral and non-decodable: an account adapter
+//! must construct it from authenticated Source/Product inputs and Failure must
+//! consume it in the same atomic instruction.
 //!
 //! Source V3 currently exposes only successful integer intervals. Therefore
-//! `AmbiguousDenominator` and `NoAcceptedCoverage` remain canonical persisted
+//! `AmbiguousDenominator` and `NoAcceptedCoverage` remain canonical stable
 //! refusal codes but are unreachable from a well-formed V3 success; those
 //! source conditions arrive through Source's own refused-result path. A later
 //! successful statistic schema may make them executable only under a new
 //! relation semantic version.
 
 use clutch_product_series::{
-    ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    MarketInstanceV2Id, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
-    QuantizedEdgePolicyV1, RegistryCapabilityProjectionV2,
+    CompiledOrdinalV2, ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstanceV2Id,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
+    RegistryCapabilityProjectionV2,
 };
 use clutch_source_plane_v3::{
     ContentId as SourceContentId, StatisticKeyV3, StatisticKindV3, StatisticResultStatusV3,
 };
 use clutch_source_plane_v3_runtime::{
-    account_data_id, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
-    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
+    RuntimeKey, SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -35,11 +37,7 @@ const POLICY_SCHEMA_V1: u16 = 1;
 const RELATION_SEMANTICS_V1: u16 = 1;
 const POLICY_ID_DOMAIN: &[u8] = b"dragons-clutch/failure-relation-policy/v1";
 const RECORD_ID_DOMAIN: &[u8] = b"dragons-clutch/failure-relation-record/v1";
-const RECORD_SLOT_DOMAIN: &[u8] = b"dragons-clutch/failure-relation-record-slot/v1";
-const RECORD_PDA_AUTH_DOMAIN: &[u8] =
-    b"dragons-clutch/failure-relation-record-pda-authentication/v1";
-const AUTHENTICATED_RECEIPT_DOMAIN: &[u8] =
-    b"dragons-clutch/authenticated-failure-relation-receipt/v1";
+const EXECUTED_RELATION_DOMAIN: &[u8] = b"dragons-clutch/executed-failure-relation/v1";
 
 /// Exact fixed width of one immutable Failure relation policy body.
 pub const FAILURE_RELATION_POLICY_V1_BYTES: usize = 128;
@@ -68,10 +66,6 @@ macro_rules! relation_id {
             pub const fn content_id(self) -> ProductContentId {
                 ProductContentId::from_bytes(self.0)
             }
-
-            fn is_zero(self) -> bool {
-                self.0.iter().all(|byte| *byte == 0)
-            }
         }
     };
 }
@@ -85,11 +79,11 @@ relation_id!(
     "Typed content identity of one canonical relation execution record."
 );
 relation_id!(
-    AuthenticatedFailureRelationReceiptIdV1,
-    "Typed identity of one persisted account-authenticated relation receipt."
+    ExecutedFailureRelationIdV1,
+    "Typed identity of one atomically executed Source/Product relation."
 );
 
-/// Fail-closed refusal from policy decoding, semantic execution, or account authentication.
+/// Fail-closed refusal from policy decoding or semantic execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureRelationExecutionErrorV1 {
     /// A fixed-layout body did not have its one exact canonical width.
@@ -110,14 +104,6 @@ pub enum FailureRelationExecutionErrorV1 {
     Product(clutch_product_series::Error),
     /// Source semantic content could not be re-identified.
     Source(clutch_source_plane_v3_runtime::Error),
-    /// The relation record account had the wrong owner.
-    WrongOwner,
-    /// The relation record account used forbidden runtime privileges or executable state.
-    WrongPrivilege,
-    /// The runtime-derived address observation did not match the canonical record slot.
-    WrongPda,
-    /// Complete relation-record account bytes differed from the canonical record.
-    WrongAccountData,
 }
 
 impl From<clutch_product_series::Error> for FailureRelationExecutionErrorV1 {
@@ -178,7 +164,7 @@ impl FailureRelationPolicyV1 {
         Ok(value)
     }
 
-    /// Runtime program that must own a persisted relation record.
+    /// Runtime program that must execute the atomic relation adapter.
     pub const fn executor_program_id(self) -> RuntimeKey {
         self.executor_program_id
     }
@@ -289,7 +275,7 @@ pub enum FailureRelationDispositionV1 {
 }
 
 impl FailureRelationDispositionV1 {
-    /// Stable persisted disposition code: zero for accepted, one through five for refusal.
+    /// Stable encoded disposition code: zero for accepted, one through five for refusal.
     pub const fn code(self) -> u8 {
         match self {
             Self::Accepted => 0,
@@ -322,7 +308,7 @@ impl FailureRelationDispositionV1 {
     }
 }
 
-/// Canonical semantic record emitted by the relation executor before persistence.
+/// Canonical auditable record emitted by the relation executor.
 ///
 /// Fields are private. The only constructor executes the complete Source and
 /// Product join, so callers cannot attach a chosen refusal code to otherwise
@@ -474,14 +460,6 @@ impl FailureRelationRecordV1 {
         )))
     }
 
-    /// Semantic slot identity a future SBF PDA recipe must consume verbatim.
-    pub fn pda_recipe_id(self) -> FailureRelationResultV1<SourceContentId> {
-        Ok(SourceContentId::from_bytes(domain_hash(
-            RECORD_SLOT_DOMAIN,
-            &self.id()?.bytes(),
-        )))
-    }
-
     fn validate(self) -> FailureRelationResultV1<()> {
         for id in [
             self.binding_id.bytes(),
@@ -504,6 +482,97 @@ impl FailureRelationRecordV1 {
     }
 }
 
+/// Non-decodable capability proving one canonical relation was executed.
+///
+/// A decoded [`FailureRelationRecordV1`] is an untrusted projection and cannot
+/// construct this type. The concrete account adapter must authenticate every
+/// input passed to [`execute_failure_relation_v1`] and consume this capability
+/// in the same atomic Failure transition; no relation account or rent is
+/// required.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecutedFailureRelationV1 {
+    record: FailureRelationRecordV1,
+    record_id: FailureRelationRecordIdV1,
+    execution_id: ExecutedFailureRelationIdV1,
+}
+
+impl ExecutedFailureRelationV1 {
+    /// Complete atomic execution identity.
+    pub const fn id(self) -> ExecutedFailureRelationIdV1 {
+        self.execution_id
+    }
+
+    /// Canonical record identity committed by Failure.
+    pub const fn record_id(self) -> FailureRelationRecordIdV1 {
+        self.record_id
+    }
+
+    /// Exact Failure policy binding.
+    pub const fn binding_id(self) -> FailurePolicyBindingId {
+        self.record.binding_id
+    }
+
+    /// Exact Product V2 occurrence.
+    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.record.market_instance_id
+    }
+
+    /// Exact shared Failure/Source generation.
+    pub const fn generation(self) -> u64 {
+        self.record.generation
+    }
+
+    /// Exact Source-owned successful handoff.
+    pub const fn source_success_handoff_id(self) -> SourceContentId {
+        self.record.source_success_handoff_id
+    }
+
+    /// Complete Source physical handoff authentication.
+    pub const fn source_policy_handoff_authentication_id(self) -> SourceContentId {
+        self.record.source_policy_handoff_authentication_id
+    }
+
+    /// Exact successful StatisticResult content identity.
+    pub const fn statistic_result_id(self) -> SourceContentId {
+        self.record.statistic_result_id
+    }
+
+    /// Exact result-account owner/PDA/full-body authentication identity.
+    pub const fn statistic_result_authentication_id(self) -> SourceContentId {
+        self.record.statistic_result_authentication_id
+    }
+
+    /// Exact admitted Source release authentication identity.
+    pub const fn source_release_authentication_id(self) -> SourceContentId {
+        self.record.source_release_authentication_id
+    }
+
+    /// Exact persisted Source work-receipt authentication identity.
+    pub const fn source_work_receipt_authentication_id(self) -> SourceContentId {
+        self.record.source_work_receipt_authentication_id
+    }
+
+    /// Immutable relation policy selected by Product and Failure.
+    pub const fn relation_policy_id(self) -> FailureRelationPolicyIdV1 {
+        self.record.relation_policy_id
+    }
+
+    /// Exact reviewed relation executor release.
+    pub const fn relation_executor_release_id(self) -> ProductContentId {
+        self.record.relation_executor_release_id
+    }
+
+    /// Deterministic accepted/refused classification.
+    pub const fn disposition(self) -> FailureRelationDispositionV1 {
+        self.record.disposition
+    }
+
+    /// Stable closed refusal code, or zero when accepted.
+    pub const fn refusal_code(self) -> u32 {
+        self.record.disposition.refusal_code()
+    }
+}
+
 /// Execute the canonical relation over one account-authenticated Source success.
 ///
 /// The Product adapter must supply bodies from its private authenticated
@@ -516,21 +585,21 @@ pub fn execute_failure_relation_v1(
     binding: FailurePolicyBindingV1,
     source_join: SourcePolicyHandoffJoinV1,
     success: SuccessfulEvaluationHandoffV1,
-    market: &MarketInstancePreimageV2,
+    compiled: &CompiledOrdinalV2,
     template: &ProductTemplateV4,
     basis: &NativeClaimBasisV1,
     price_policy: &PriceMeasurePolicyV1,
     genesis: &MarketGenesisProfileV2,
     statistic_key: &StatisticKeyV3,
     registry: &RegistryCapabilityProjectionV2,
-) -> FailureRelationResultV1<FailureRelationRecordV1> {
+) -> FailureRelationResultV1<ExecutedFailureRelationV1> {
     let policy_id = policy.id()?;
     validate_source_join(binding, source_join, success, statistic_key)?;
     validate_product_join(
         policy,
         policy_id,
         binding,
-        market,
+        compiled,
         template,
         basis,
         price_policy,
@@ -562,7 +631,7 @@ pub fn execute_failure_relation_v1(
         high,
     )?;
     let statistic_result_id = success.statistic_result_id()?;
-    Ok(FailureRelationRecordV1 {
+    let record = FailureRelationRecordV1 {
         binding_id: binding.id(),
         market_instance_id: binding.market_instance_id(),
         generation: binding.generation(),
@@ -575,182 +644,17 @@ pub fn execute_failure_relation_v1(
         source_release_authentication_id: source_join.release_authentication_id(),
         source_work_receipt_authentication_id: source_join.work_receipt_authentication_id(),
         disposition,
-    })
-}
-
-/// Privilege under which the persisted immutable relation record is authenticated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailureRelationRecordAccessV1 {
-    /// An existing immutable record consumed by a later instruction.
-    ExistingReadOnly,
-    /// The exact postimage created by the current atomic instruction.
-    CreatedMutable,
-}
-
-/// Private account-authenticated output consumed by Failure recovery.
-///
-/// Construction checks the canonical semantic record, exact full account
-/// bytes, runtime owner/program, canonical record slot, derived address, bump,
-/// and privilege. The receipt does not authorize a payout or recovery
-/// transition by itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedFailureRelationReceiptV1 {
-    record: FailureRelationRecordV1,
-    relation_record_id: FailureRelationRecordIdV1,
-    relation_record_account: RuntimeKey,
-    relation_record_owner_program: RuntimeKey,
-    relation_record_pda_authentication_id: SourceContentId,
-    relation_record_account_data_id: SourceContentId,
-    receipt_id: AuthenticatedFailureRelationReceiptIdV1,
-}
-
-impl AuthenticatedFailureRelationReceiptV1 {
-    /// Exact Failure policy binding.
-    pub const fn binding_id(self) -> FailurePolicyBindingId {
-        self.record.binding_id
-    }
-
-    /// Exact Product V2 market occurrence.
-    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
-        self.record.market_instance_id
-    }
-
-    /// Exact shared Failure/Source liveness generation.
-    pub const fn generation(self) -> u64 {
-        self.record.generation
-    }
-
-    /// Exact Source-owned successful handoff identity.
-    pub const fn source_success_handoff_id(self) -> SourceContentId {
-        self.record.source_success_handoff_id
-    }
-
-    /// Complete Source release/account/result/work join authentication identity.
-    pub const fn source_policy_handoff_authentication_id(self) -> SourceContentId {
-        self.record.source_policy_handoff_authentication_id
-    }
-
-    /// Content identity of the successful StatisticResult inspected by the relation.
-    pub const fn statistic_result_id(self) -> SourceContentId {
-        self.record.statistic_result_id
-    }
-
-    /// Exact relation policy selected by Product and Failure.
-    pub const fn relation_policy_id(self) -> FailureRelationPolicyIdV1 {
-        self.record.relation_policy_id
-    }
-
-    /// Exact reviewed executor release committed by the relation policy.
-    pub const fn relation_executor_release_id(self) -> ProductContentId {
-        self.record.relation_executor_release_id
-    }
-
-    /// Nonzero content identity of the persisted canonical relation record.
-    pub const fn relation_record_id(self) -> FailureRelationRecordIdV1 {
-        self.relation_record_id
-    }
-
-    /// Physical persisted relation-record account.
-    pub const fn relation_record_account(self) -> RuntimeKey {
-        self.relation_record_account
-    }
-
-    /// Runtime program which owns the relation-record account.
-    pub const fn relation_record_owner_program(self) -> RuntimeKey {
-        self.relation_record_owner_program
-    }
-
-    /// Exact program/slot/address/bump authentication identity.
-    pub const fn relation_record_pda_authentication_id(self) -> SourceContentId {
-        self.relation_record_pda_authentication_id
-    }
-
-    /// Digest of the complete physical record-account bytes and address.
-    pub const fn relation_record_account_data_id(self) -> SourceContentId {
-        self.relation_record_account_data_id
-    }
-
-    /// Exact result-account owner/PDA/full-body authentication identity.
-    pub const fn statistic_result_authentication_id(self) -> SourceContentId {
-        self.record.statistic_result_authentication_id
-    }
-
-    /// Deterministic accepted/refused classification.
-    pub const fn disposition(self) -> FailureRelationDispositionV1 {
-        self.record.disposition
-    }
-
-    /// Stable closed refusal code, or zero when accepted.
-    pub const fn refusal_code(self) -> u32 {
-        self.record.disposition.refusal_code()
-    }
-
-    /// Complete authenticated persisted-receipt identity.
-    pub const fn id(self) -> AuthenticatedFailureRelationReceiptIdV1 {
-        self.receipt_id
-    }
-}
-
-/// Authenticate the exact persisted postimage of one executed relation record.
-pub fn authenticate_failure_relation_record_v1(
-    policy: &FailureRelationPolicyV1,
-    expected: FailureRelationRecordV1,
-    account: RuntimeAccountViewV1<'_>,
-    derived_pda: RuntimeDerivedPdaV1,
-    access: FailureRelationRecordAccessV1,
-) -> FailureRelationResultV1<AuthenticatedFailureRelationReceiptV1> {
-    let expected_owner = policy.executor_program_id;
-    if account.owner != expected_owner {
-        return Err(FailureRelationExecutionErrorV1::WrongOwner);
-    }
-    if account.executable
-        || account.signer
-        || account.writable != (access == FailureRelationRecordAccessV1::CreatedMutable)
-    {
-        return Err(FailureRelationExecutionErrorV1::WrongPrivilege);
-    }
-    let expected_recipe_id = expected.pda_recipe_id()?;
-    if account.key.is_zero()
-        || derived_pda.program_id != expected_owner
-        || derived_pda.recipe_id != expected_recipe_id
-        || derived_pda.address != account.key
-    {
-        return Err(FailureRelationExecutionErrorV1::WrongPda);
-    }
-    let expected_bytes = expected.encode()?;
-    if account.data != expected_bytes.as_slice() {
-        return Err(FailureRelationExecutionErrorV1::WrongAccountData);
-    }
-    let account_data_id = account_data_id(account.key, account.data)?;
-    let record_id = expected.id()?;
-    if record_id.is_zero() {
-        return Err(FailureRelationExecutionErrorV1::ZeroIdentity);
-    }
-    let mut pda_bytes = [0_u8; 129];
-    pda_bytes[..32].copy_from_slice(&derived_pda.program_id.bytes());
-    pda_bytes[32..64].copy_from_slice(&derived_pda.recipe_id.bytes());
-    pda_bytes[64..96].copy_from_slice(&derived_pda.address.bytes());
-    pda_bytes[96] = derived_pda.bump;
-    pda_bytes[97..129].copy_from_slice(&record_id.bytes());
-    let pda_authentication_id =
-        SourceContentId::from_bytes(domain_hash(RECORD_PDA_AUTH_DOMAIN, &pda_bytes));
-    let mut receipt_bytes = [0_u8; 192];
-    receipt_bytes[..32].copy_from_slice(&record_id.bytes());
-    receipt_bytes[32..64].copy_from_slice(&account.key.bytes());
-    receipt_bytes[64..96].copy_from_slice(&expected_owner.bytes());
-    receipt_bytes[96..128].copy_from_slice(&account_data_id.bytes());
-    receipt_bytes[128..160].copy_from_slice(&pda_authentication_id.bytes());
-    receipt_bytes[160..192].copy_from_slice(&expected.source_success_handoff_id.bytes());
-    Ok(AuthenticatedFailureRelationReceiptV1 {
-        record: expected,
-        relation_record_id: record_id,
-        relation_record_account: account.key,
-        relation_record_owner_program: expected_owner,
-        relation_record_pda_authentication_id: pda_authentication_id,
-        relation_record_account_data_id: account_data_id,
-        receipt_id: AuthenticatedFailureRelationReceiptIdV1::from_bytes(domain_hash(
-            AUTHENTICATED_RECEIPT_DOMAIN,
-            &receipt_bytes,
+    };
+    let record_id = record.id()?;
+    let mut bytes = [0_u8; 64];
+    bytes[..32].copy_from_slice(&record_id.bytes());
+    bytes[32..].copy_from_slice(&source_join.id().bytes());
+    Ok(ExecutedFailureRelationV1 {
+        record,
+        record_id,
+        execution_id: ExecutedFailureRelationIdV1::from_bytes(domain_hash(
+            EXECUTED_RELATION_DOMAIN,
+            &bytes,
         )),
     })
 }
@@ -790,6 +694,7 @@ fn validate_source_join(
         || occurrence.series_plan_id().bytes() != binding.series_plan_id().bytes()
         || occurrence.ordinal() != binding.ordinal()
         || occurrence.market_instance_id().bytes() != binding.market_instance_id().bytes()
+        || occurrence.id() != binding.source_occurrence_receipt_id()
         || occurrence.source_plane_contract_id() != binding.source_plane_program_id()
         || occurrence.source_spec_id() != binding.source_spec_id()
         || occurrence.window_id() != success.window_id()
@@ -808,7 +713,7 @@ fn validate_product_join(
     policy: &FailureRelationPolicyV1,
     policy_id: FailureRelationPolicyIdV1,
     binding: FailurePolicyBindingV1,
-    market: &MarketInstancePreimageV2,
+    compiled: &CompiledOrdinalV2,
     template: &ProductTemplateV4,
     basis: &NativeClaimBasisV1,
     price_policy: &PriceMeasurePolicyV1,
@@ -816,6 +721,7 @@ fn validate_product_join(
     statistic_key: &StatisticKeyV3,
     registry: &RegistryCapabilityProjectionV2,
 ) -> FailureRelationResultV1<()> {
+    let market = &compiled.market;
     market.validate_bindings(template, basis, price_policy, genesis)?;
     genesis.validate_partition_bindings(basis, price_policy, policy.resolved_edge_policy)?;
     statistic_key
@@ -828,7 +734,10 @@ fn validate_product_join(
     let genesis_id = genesis.id()?;
     let relation_content_id = policy_id.content_id();
     let owners = registry.semantic_owners;
-    if market_id != binding.market_instance_id()
+    if compiled.series_plan_id != binding.series_plan_id()
+        || compiled.ordinal != binding.ordinal()
+        || compiled.market_instance_id != binding.market_instance_id()
+        || market_id != compiled.market_instance_id
         || template_id != binding.product_template_id()
         || market.product_template_id != template_id
         || market.market_genesis_profile_id != genesis_id
@@ -892,7 +801,7 @@ fn classify_interval(
                 ))
             }
         };
-        if degree_zero_cell(basis, low) != degree_zero_cell(basis, high) {
+        if !degree_zero_interval_selects_one_payout(basis, low, high) {
             return Ok(FailureRelationDispositionV1::Refused(
                 RelationRefusalV1::AmbiguousInterval,
             ));
@@ -945,6 +854,27 @@ fn degree_zero_cell(basis: &NativeClaimBasisV1, value: u128) -> usize {
         index += 1;
     }
     usize::from(basis.outcome_count - 1)
+}
+
+fn degree_zero_interval_selects_one_payout(
+    basis: &NativeClaimBasisV1,
+    low: u128,
+    high: u128,
+) -> bool {
+    let first = degree_zero_cell(basis, low);
+    let last = degree_zero_cell(basis, high);
+    let expected = basis.payout_map[first];
+    let mut cell = first;
+    loop {
+        if basis.payout_map[cell] != expected {
+            return false;
+        }
+        if cell == last {
+            break;
+        }
+        cell += 1;
+    }
+    true
 }
 
 fn apply_domain_edge(
