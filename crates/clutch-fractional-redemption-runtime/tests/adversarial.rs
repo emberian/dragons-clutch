@@ -112,7 +112,7 @@ fn external_context(
     locked_claim_principal_atoms: u64,
 ) -> (
     BoundFractionalContextV1,
-    FractionalPolicyV2,
+    FractionalPolicyV3,
     FractionalLedgerV1,
 ) {
     let catalog = AdapterCatalogV2::new(&COLLATERAL_RELEASES).unwrap();
@@ -200,7 +200,7 @@ fn external_context(
         deletable_rent(46),
     )
     .unwrap();
-    let policy = FractionalPolicyV2 {
+    let policy = FractionalPolicyV3 {
         market_instance: rid(20),
         resolution_account: rid(21),
         resolution_data_id: rid_from_collateral(resolution.data_id(cid(21)).unwrap()),
@@ -536,18 +536,23 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     supply[1] = 1;
     let (_context, policy, ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
     let policy_bytes = policy.encode().unwrap();
-    assert_eq!(policy_bytes[1], 2);
-    assert_eq!(FractionalPolicyV2::decode(&policy_bytes), Ok(policy));
+    assert_eq!(policy_bytes[1], 3);
+    assert_eq!(FractionalPolicyV3::decode(&policy_bytes), Ok(policy));
     let mut withdrawn_policy = policy_bytes;
     withdrawn_policy[1] = 1;
     assert_eq!(
-        FractionalPolicyV2::decode(&withdrawn_policy),
+        FractionalPolicyV3::decode(&withdrawn_policy),
+        Err(Error::WrongVersion)
+    );
+    withdrawn_policy[1] = 2;
+    assert_eq!(
+        FractionalPolicyV3::decode(&withdrawn_policy),
         Err(Error::WrongVersion)
     );
     let mut hostile = policy_bytes;
     hostile[6] = 1;
     assert_eq!(
-        FractionalPolicyV2::decode(&hostile),
+        FractionalPolicyV3::decode(&hostile),
         Err(Error::NonCanonicalPadding)
     );
     let ledger_bytes = ledger.encode().unwrap();
@@ -616,7 +621,19 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     );
     assert_eq!(
         policy.pda_seeds().prefix(),
-        b"fractional-redemption-policy:v2"
+        b"fractional-redemption-policy:v3"
+    );
+    let mut different_resolution_body = policy;
+    different_resolution_body.resolution_data_id = rid(199);
+    assert_eq!(
+        different_resolution_body.pda_seeds(),
+        policy.pda_seeds(),
+        "Foundation address must not depend on the future Resolution body"
+    );
+    assert_ne!(
+        different_resolution_body.state_id().unwrap(),
+        policy.state_id().unwrap(),
+        "the immutable body must still commit the exact Resolution data identity"
     );
     assert_eq!(
         credit.pda_seeds().prefix(),
@@ -1526,6 +1543,15 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
+    let initialize = fractional_account_contract_v1(FractionalRedemptionActionV1::Initialize);
+    assert_eq!(initialize.account_count, 31);
+    assert_eq!(initialize.foundation_core_accounts, 14);
+    assert_eq!(initialize.foundation_aux_accounts, 17);
+    assert!(initialize.foundation_outcome_pair_suffix);
+    assert_eq!(initialize.foundation_aux_writable_mask, 0);
+    assert_eq!(initialize.writable_mask, 0x1811);
+    assert_eq!(initialize.signer_mask, 0);
+
     let bearer = fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerExact);
     assert_eq!(bearer.account_count, 21);
     assert_eq!(bearer.writable_mask, 0x95300);
@@ -1586,4 +1612,14 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
     assert_eq!(seal.post_mint_accounts, 0);
     assert!(!seal.credit_creation_suffix);
     assert_eq!(seal.external_payout_extra_accounts, 0);
+
+    let terminal =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::CloseEmptyLedger);
+    assert_eq!(terminal.account_count, 29);
+    assert_eq!(terminal.foundation_core_accounts, 14);
+    assert_eq!(terminal.foundation_aux_accounts, 15);
+    assert!(terminal.foundation_outcome_pair_suffix);
+    assert_eq!(terminal.foundation_aux_writable_mask, 0x6000);
+    assert_eq!(terminal.writable_mask, 0x1811);
+    assert_eq!(terminal.signer_mask, 0);
 }

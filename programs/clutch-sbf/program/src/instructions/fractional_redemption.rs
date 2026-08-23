@@ -5,7 +5,8 @@
 //! Replay for claimant state, ClaimLedger V3 for native supply, Hoard V2 for
 //! locked-principal/cash classification, and `0xa5/v1` for the global
 //! fractional sequence and aggregate numerator credit. The immutable
-//! `0xa4/v2` policy commits the exact PDA-bound Resolution V5 data identity.
+//! `0xa4/v3` policy commits the exact Resolution V5 data identity while its
+//! Foundation-computable PDA remains stable before the outcome is known.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
@@ -33,7 +34,8 @@ use clutch_fractional_redemption_runtime::{
     CreditPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalFamilyAdmissionReceiptV1,
     FractionalFamilyTerminalReceiptV1, FractionalInitializationPlanV1, FractionalLedgerV1,
-    FractionalPolicyV2, FractionalRedeemIntentV1, FractionalRedemptionActionV1,
+    FractionalInitializeIntentV1, FractionalPolicyV3, FractionalRedeemIntentV1,
+    FractionalRedemptionActionV1,
     FractionalTerminalIntentV1, FractionalTransferIntentV1, FractionalCloseCreditIntentV1,
     InternalPositionV1, RedemptionSourcePoststateV1,
     VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
@@ -538,7 +540,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     let claim_ledger_data = claim_ledger_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
     let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -556,11 +558,10 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         policy_account.key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -739,7 +740,7 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     let claim_ledger_data = claim_ledger_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
     let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -754,11 +755,10 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         policy_account.key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -847,7 +847,7 @@ fn decode_fractional_accounts(
     policy_index: usize,
     ledger_index: usize,
     resolution_index: usize,
-) -> Outcome<(FractionalPolicyV2, FractionalLedgerV1)> {
+) -> Outcome<(FractionalPolicyV3, FractionalLedgerV1)> {
     require_program_state(
         program_id,
         &accounts[policy_index],
@@ -863,7 +863,7 @@ fn decode_fractional_accounts(
     let policy_data = accounts[policy_index]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     drop(policy_data);
     let ledger_data = accounts[ledger_index]
         .try_borrow_data()
@@ -873,11 +873,10 @@ fn decode_fractional_accounts(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         accounts[policy_index].key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -904,6 +903,15 @@ pub fn process(
     payload: &[u8],
 ) -> Outcome<()> {
     match action {
+        FractionalRedemptionActionV1::Initialize => {
+            let intent = FractionalInitializeIntentV1::decode(payload).map_err(map_fractional)?;
+            super::fractional_lifecycle::process_initialize(
+                program_id,
+                accounts,
+                envelope_sequence,
+                intent,
+            )
+        }
         FractionalRedemptionActionV1::RedeemInternalExact => {
             let intent = FractionalRedeemIntentV1::decode(payload).map_err(map_fractional)?;
             process_redeem_internal_exact(program_id, accounts, envelope_sequence, intent)
@@ -933,7 +941,15 @@ pub fn process(
             let intent = FractionalTerminalIntentV1::decode(payload).map_err(map_fractional)?;
             process_seal_claims_exhausted(program_id, accounts, envelope_sequence, intent)
         }
-        _ => Err(ClutchError::UnsupportedInstruction.into()),
+        FractionalRedemptionActionV1::CloseEmptyLedger => {
+            let intent = FractionalTerminalIntentV1::decode(payload).map_err(map_fractional)?;
+            super::fractional_lifecycle::process_close_empty_ledger(
+                program_id,
+                accounts,
+                envelope_sequence,
+                intent,
+            )
+        }
     }
 }
 
@@ -1576,12 +1592,14 @@ fn process_redeem_internal_credit(
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[IX_MARKET_LIFECYCLE_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -2149,12 +2167,14 @@ fn process_redeem_bearer_credit(
                 == accounts[bearer_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[root_index],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -2550,12 +2570,14 @@ fn process_credit_move(
                 == accounts[move_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[geometry.root],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -2965,12 +2987,14 @@ fn process_close_zero_credit(
                 == accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[close_credit_ix::MARKET_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(

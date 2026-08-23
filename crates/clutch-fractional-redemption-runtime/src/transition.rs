@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerPhaseV1,
-    FractionalLedgerV1, FractionalPolicyV2, PayoutVectorV1, Result, MAX_OUTCOMES,
+    FractionalLedgerV1, FractionalPolicyV3, PayoutVectorV1, Result, MAX_OUTCOMES,
 };
 
 /// Semantic domain for the unique Fractional child admission consumed by the
@@ -94,7 +94,7 @@ fn map_collateral<T>(result: clutch_collateral_adapter_v2::Result<T>) -> Result<
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundFractionalContextV1 {
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -114,7 +114,7 @@ impl BoundFractionalContextV1 {
         self.policy_account
     }
     /// Validated immutable policy.
-    pub const fn policy(self) -> FractionalPolicyV2 {
+    pub const fn policy(self) -> FractionalPolicyV3 {
         self.policy
     }
     /// Exact aggregate ledger PDA.
@@ -193,7 +193,7 @@ impl BoundFractionalContextV1 {
 #[allow(clippy::too_many_arguments)]
 fn validate_canonical_ledgers(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -235,7 +235,7 @@ fn validate_canonical_ledgers(
 /// Bind every semantic owner needed by one fractional action.
 pub fn bind_fractional_context_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -306,7 +306,7 @@ pub fn bind_fractional_context_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn bind_fractional_internal_context_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -408,11 +408,11 @@ impl FractionalFamilyAdmissionReceiptV1 {
     pub const fn claim_issuance_binding(self) -> Identity32V1 {
         self.claim_issuance_binding
     }
-    /// Exact immutable a4/v2 physical account.
+    /// Exact immutable a4/v3 physical account.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
-    /// Immutable a4/v2 state identity.
+    /// Immutable a4/v3 state identity.
     pub const fn policy_state_id(self) -> Identity32V1 {
         self.policy_state_id
     }
@@ -478,7 +478,7 @@ impl VerifiedFractionalFamilyAdmissionPostwriteV1 {
 pub fn verify_fractional_family_admission_postwrite_v1(
     plan: FractionalInitializationPlanV1,
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -548,7 +548,7 @@ pub fn verify_fractional_family_admission_postwrite_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_fractional_ledger_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     claim_ledger_account: Identity32V1,
     claim_ledger: ClaimLedgerV3,
@@ -2661,7 +2661,7 @@ impl FractionalDomainTerminalRequirementV1 {
         self.native_claim_basis_id
     }
 
-    /// Physical immutable `0xa4/v2` account to delete.
+    /// Physical immutable `0xa4/v3` account to delete.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
@@ -2729,7 +2729,7 @@ impl EmptyLedgerClosePlanV1 {
         self.terminal_requirement
     }
 
-    /// Independent rent-only disposition for immutable `0xa4/v2`.
+    /// Independent rent-only disposition for immutable `0xa4/v3`.
     pub const fn policy_funding(self) -> FractionalAccountCloseFundingV1 {
         self.policy_funding
     }
@@ -2839,7 +2839,7 @@ impl FractionalFamilyTerminalReceiptV1 {
         self.domain_generation
     }
 
-    /// Physical immutable a4/v2 account deleted atomically.
+    /// Physical immutable a4/v3 account deleted atomically.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
@@ -3001,7 +3001,7 @@ pub fn verify_fractional_family_terminal_postwrite_v1(
     close: EmptyLedgerClosePlanV1,
     terminal: FractionalFamilyTerminalReceiptV1,
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
