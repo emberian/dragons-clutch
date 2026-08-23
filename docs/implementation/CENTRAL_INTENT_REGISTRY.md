@@ -234,6 +234,23 @@ slot sequence plus the complete generation tail. The ordered page-set fold uses
 reinterpreted. Position and Reservation identities are authenticated adapter
 joins and are not persisted in the page.
 
+## General ClearWork V3 allocation
+
+The central ledger reserves `17/3` as `ReservedDisabled` for the resumable
+RelationV2 Work successor. It is not a reinterpretation of withdrawn `17/2`:
+the fresh PDA domain is `clear-work:v3`, and the hostile decoders refuse the
+other version.
+
+The exact account length is `710 + 16*O + 8*N*O` bytes, at most 9,158 bytes for
+16 outcomes and 64 dense live orders. The 710-byte header owns the immutable
+candidate bindings, frozen-page and dense-order cursors, the previous live
+order ID, a canonical SHA-256 continuation, and a checked
+Pending/Valid/Refused disposition. The active-width tail owns the aggregate
+buy/sell flow vectors and exactly one filled-leg row per dense live order.
+This reservation does not enable actions 10 through 14 or claim settlement;
+their adapter must authenticate V5 pages, the retained feed, exact Product and
+price artifacts, and present-funded liveness before capability admission.
+
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following

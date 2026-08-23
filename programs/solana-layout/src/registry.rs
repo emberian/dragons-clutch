@@ -52,6 +52,11 @@ pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG: u8 = 0x0f;
 /// General SettlementReceipt successor version.
 pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
+/// General SettlementReceipt V4 discriminator. V3 remains withdrawn and is
+/// never reinterpreted despite the shared tag and width.
+pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG: u8 = 0x0f;
+/// General SettlementReceipt V4 version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION: u8 = 4;
 /// General OrderPage successor discriminator. This deliberately reuses the
 /// historical OrderPage tag under a fresh version.
 pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
@@ -85,6 +90,8 @@ pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3: u8 = 3;
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION: u8 = 2;
+/// Resumable RelationV2 General ClearWork successor account version.
+pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3: u8 = 3;
 /// General V2 active-width sealed-feed successor account discriminator.
 pub const GENERAL_V2_FEED_ACCOUNT_TAG: u8 = 18;
 /// General V2 active-width sealed-feed successor account version.
@@ -230,8 +237,10 @@ pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
 pub const SOURCE_V3_HEAD_ACCOUNT_VERSION: u8 = 1;
 /// Durable SourcePlane V3 reopen-lineage account discriminator.
 pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG: u8 = 0x8c;
-/// SourcePlane V3 reopen-lineage account version.
-pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 1;
+/// SourcePlane V3 release/route-bound reopen-lineage account version.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 2;
+/// Exact SourcePlane V3 release/route-bound reopen-lineage account width.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_BYTES: usize = 352;
 /// Mutable SourcePlane V3 open-page account discriminator.
 pub const SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8d;
 /// SourcePlane V3 open-page account version.
@@ -343,12 +352,34 @@ pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 /// Permanent failure-generation replay tombstone version.
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Mutable exhaustive quantized interval-consensus work discriminator.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
+/// Interval-consensus work account version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Exact framed interval-consensus work account bytes.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES: usize = 1_088;
+/// Permanent interval-consensus transition/replay receipt discriminator.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
+/// Permanent interval-consensus replay account version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent interval-consensus replay account bytes.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 416;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer action receipt bytes including the global envelope.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 532;
+/// Counted General V2 candidate-scoped settlement root discriminator.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = 0xa9;
+/// First counted General V2 settlement-root version.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact fixed width of the counted General V2 settlement root.
+pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
+/// Reserved Product occurrence-scoped terminal root discriminator.
+pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
+/// First reserved Product occurrence-root version.
+pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -364,6 +395,8 @@ const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG == 15);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION == 4);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
@@ -382,6 +415,10 @@ const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
+const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
+const _: () = assert!(PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG == 0xaa);
+const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
+const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -523,6 +560,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
+            version: GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-settlement-receipt-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
             version: GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
         },
@@ -645,6 +691,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-clear-work-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+            version: GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-clear-work-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1132,6 +1187,42 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-action-receipt-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+            version: GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-settlement-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG,
+            version: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-occurrence-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-interval-consensus-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-interval-consensus-replay-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -1315,6 +1406,10 @@ pub enum GeneralV2Action {
     ConsumeVirtualMergeReceiptEggs = 37,
     /// Atomically realize one accounting-complete owner into the cash pot.
     FinalizeOwnerSettlement = 38,
+    /// Create the counted candidate-scoped settlement root and exact singleton children.
+    InitializeSettlementRoot = 39,
+    /// Complete one merge receipt's separately authenticated payment latch.
+    FinalizeMergeReceiptPayment = 40,
 }
 
 /// Dealer family-local policy-catalog transport actions.
@@ -1466,7 +1561,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 38;
+    pub const LAST_TAG: u8 = 40;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1509,6 +1604,8 @@ impl GeneralV2Action {
             Self::ConsumeVirtualSplitReceiptEggs => 36,
             Self::ConsumeVirtualMergeReceiptEggs => 37,
             Self::FinalizeOwnerSettlement => 38,
+            Self::InitializeSettlementRoot => 39,
+            Self::FinalizeMergeReceiptPayment => 40,
         }
     }
 
@@ -1553,6 +1650,8 @@ impl GeneralV2Action {
             36 => Some(Self::ConsumeVirtualSplitReceiptEggs),
             37 => Some(Self::ConsumeVirtualMergeReceiptEggs),
             38 => Some(Self::FinalizeOwnerSettlement),
+            39 => Some(Self::InitializeSettlementRoot),
+            40 => Some(Self::FinalizeMergeReceiptPayment),
             _ => None,
         }
     }
@@ -1746,13 +1845,21 @@ pub enum RecoveryAction {
     CloseRecoveryFunding = 8,
     /// Close the resolved semantic root after retirement/source/replay joins.
     CloseFailureRoot = 9,
+    /// Create one dedicated exhaustive interval-consensus work lifecycle.
+    BeginIntervalConsensus = 10,
+    /// Evaluate one bounded exact coordinate chunk and pay through liveness.
+    AdvanceIntervalConsensus = 11,
+    /// Restore the authenticated Product capability and resolve atomically.
+    ResolveIntervalConsensus = 12,
+    /// Close deletable consensus work while retaining permanent replay.
+    CloseIntervalConsensusWork = 13,
 }
 
 impl RecoveryAction {
     /// First Recovery-owned local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last Recovery-owned local action tag.
-    pub const LAST_TAG: u8 = 9;
+    pub const LAST_TAG: u8 = 13;
 
     /// Return the family-local action tag.
     pub const fn tag(self) -> u8 {
@@ -1771,6 +1878,10 @@ impl RecoveryAction {
             7 => Some(Self::ResolvePaidRecovery),
             8 => Some(Self::CloseRecoveryFunding),
             9 => Some(Self::CloseFailureRoot),
+            10 => Some(Self::BeginIntervalConsensus),
+            11 => Some(Self::AdvanceIntervalConsensus),
+            12 => Some(Self::ResolveIntervalConsensus),
+            13 => Some(Self::CloseIntervalConsensusWork),
             _ => None,
         }
     }
@@ -2029,6 +2140,10 @@ mod tests {
                 GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
             ),
@@ -2039,6 +2154,10 @@ mod tests {
             (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3,
             ),
             (GENERAL_V2_FEED_ACCOUNT_TAG, GENERAL_V2_FEED_ACCOUNT_VERSION),
             (
@@ -2132,6 +2251,10 @@ mod tests {
             (
                 GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
                 GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+                GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {

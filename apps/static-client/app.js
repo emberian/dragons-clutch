@@ -1,391 +1,456 @@
-/*
- * Glass offline client. This file deliberately has no network, wallet, RPC,
- * signing, or submission capability. It holds no copy of reviewed release
- * data: manifest.json and terms.json are mirrored once into embedded-data.js.
- */
-(function () {
+/* Chain-attached, read-only, unsigned Glass application. */
+(function (root) {
   "use strict";
 
-  const EMBEDDED = globalThis.GlassEmbeddedData;
-  const MANIFEST = EMBEDDED && EMBEDDED.manifest;
-  const TERMS = EMBEDDED && EMBEDDED.terms;
+  const CHAIN = root.GlassChainClient;
+  const BUILDER = root.GlassSuccessorBuilder;
+  const REGISTRY = root.GlassSuccessorRegistry;
+  const COMPILER = root.GlassCompilerProposal;
+  const state = { configuration: null, snapshot: null, compilerProposal: null, construction: null };
+  let compilerRevision = 0;
   const $ = (id) => document.getElementById(id);
-  const EVIDENCE = Object.freeze({
-    LOCAL_FIXTURE: Object.freeze({ label: "LOCAL FIXTURE", className: "local-chip" }),
-    PROVED_MODEL: Object.freeze({ label: "PROVED-MODEL", className: "evidence-chip" }),
-    CHECKED_RUST_SUBSET: Object.freeze({ label: "CHECKED-RUST-SUBSET", className: "evidence-chip" }),
-    CHECKED_FINITE: Object.freeze({ label: "CHECKED-FINITE", className: "evidence-chip" }),
-    HOST_TESTED: Object.freeze({ label: "HOST-TESTED", className: "evidence-chip" }),
-    SBF_EXECUTED: Object.freeze({ label: "SBF-EXECUTED", className: "evidence-chip" }),
-    MODEL_ONLY: Object.freeze({ label: "MODEL-ONLY", className: "proposed-chip" }),
-    PROPOSED: Object.freeze({ label: "PROPOSED", className: "proposed-chip" }),
-    IN_FLIGHT: Object.freeze({ label: "IN-FLIGHT", className: "proposed-chip" }),
-    STOP: Object.freeze({ label: "STOP", className: "stop-chip" }),
-    UNAVAILABLE: Object.freeze({ label: "UNAVAILABLE", className: "stop-chip" })
-  });
-  const EVIDENCE_KINDS = new Set(Object.keys(EVIDENCE));
-  const ARTIFACT_KINDS = new Set(["file-sha256", "elf-sha256", "source-revision", "unaccepted-worktree", "unavailable"]);
-  const DISPOSITIONS = new Set(["inspect-only", "blocked", "unavailable", "not-released"]);
-  const ACTIONS = new Set(["local-preview", "none"]);
-  const BOUNDARY_CATEGORIES = new Set(["trust", "semantic", "release", "lifecycle", "evidence"]);
-  const DISPLAY_SCHEMA = "dragon-clutch.glass-display-snapshot.v1";
-  const MAX = Object.freeze({ id: 80, label: 120, text: 900, path: 240, locator: 180, items: 48, lifecycle: 20, basis: 12, fixtures: 12, boundaries: 24 });
-  let integrityFault = null;
-  let lastIntent = null;
-
-  const canonicalize = (value) => {
-    if (Array.isArray(value)) return value.map(canonicalize);
-    if (value && typeof value === "object") {
-      return Object.keys(value).sort().reduce((out, key) => {
-        out[key] = canonicalize(value[key]);
-        return out;
-      }, {});
-    }
-    return value;
+  const create = (tag, className, value) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (value !== undefined) node.textContent = value;
+    return node;
   };
+  const reset = (node) => node.replaceChildren();
+  const definition = (term, value) => {
+    const row = create("div");
+    row.append(create("dt", null, term), create("dd", "mono", value === null || value === undefined ? "not exposed" : String(value)));
+    return row;
+  };
+  const setError = (id, message) => {
+    const node = $(id);
+    node.textContent = message;
+    node.hidden = false;
+  };
+  const clearError = (id) => {
+    const node = $(id);
+    node.textContent = "";
+    node.hidden = true;
+  };
+  const canonicalize = (value) => Array.isArray(value) ? value.map(canonicalize) : value && typeof value === "object"
+    ? Object.keys(value).sort().reduce((output, key) => { output[key] = canonicalize(value[key]); return output; }, {})
+    : value;
   const canonicalJson = (value) => JSON.stringify(canonicalize(value));
-  const create = (name, className, text) => {
-    const element = document.createElement(name);
-    if (className) element.className = className;
-    if (text !== undefined) element.textContent = text;
-    return element;
+  const digest = async (bytes) => {
+    if (!root.crypto || !root.crypto.subtle) return null;
+    const output = await root.crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(output), (byte) => byte.toString(16).padStart(2, "0")).join("");
   };
-  const reset = (element) => element.replaceChildren();
-  const definition = (term, description) => {
-    const pair = create("div");
-    pair.append(create("dt", null, term), create("dd", null, description));
-    return pair;
+  const fromHex = (value) => {
+    const output = new Uint8Array(value.length / 2);
+    for (let index = 0; index < value.length; index += 2) output[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
+    return output;
   };
-  const formatEvidence = (kind) => EVIDENCE[kind];
-  const badge = (kind) => {
-    const formatted = formatEvidence(kind);
-    return create("span", `evidence-chip ${formatted.className}`, formatted.label);
-  };
-  const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-  const plainRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-  const exactKeys = (value, keys) => plainRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => own(value, key));
-  const string = (value, limit) => typeof value === "string" && value.length > 0 && value.length <= limit;
-  const id = (value) => string(value, MAX.id) && /^[a-z0-9][a-z0-9-]*$/.test(value);
-  const commit = (value) => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
-  const digest = (value) => typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
-  const hash = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  const localPath = (value) => string(value, MAX.path) && /^[A-Za-z0-9._/-]+$/.test(value) && !value.startsWith("/") && !value.includes("..") && !value.includes("//");
-  const array = (value, maximum) => Array.isArray(value) && value.length > 0 && value.length <= maximum;
-  const unique = (values) => new Set(values).size === values.length;
-  const frozenCopy = (value) => {
-    if (Array.isArray(value)) return Object.freeze(value.map(frozenCopy));
-    if (plainRecord(value)) {
-      const copy = {};
-      Object.keys(value).forEach((key) => { copy[key] = frozenCopy(value[key]); });
-      return Object.freeze(copy);
-    }
-    return value;
-  };
-  const result = (ok, value) => ok ? Object.freeze({ ok: true, value: frozenCopy(value) }) : Object.freeze({ ok: false, reason: value });
+  const short = (value, head = 8, tail = 6) => value && value.length > head + tail + 2 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
 
-  const validateArtifact = (value) => exactKeys(value, ["kind", "value", "path"])
-    && ARTIFACT_KINDS.has(value.kind)
-    && string(value.value, MAX.text)
-    && (value.path === null || localPath(value.path));
-  const validateIdentity = (value) => exactKeys(value, ["sourceCommit", "artifact"])
-    && commit(value.sourceCommit) && validateArtifact(value.artifact);
-  const validateSourceRef = (value) => exactKeys(value, ["repositoryPath", "locator"])
-    && localPath(value.repositoryPath) && string(value.locator, MAX.locator);
-  const validateSubject = (value) => exactKeys(value, ["id", "label"])
-    && id(value.id) && string(value.label, MAX.label);
-  const validateRefs = (value, maximum) => array(value, maximum) && value.every(id) && unique(value);
-  const validateEvidence = (value) => exactKeys(value, ["id", "kind", "subject", "scope", "sourceRef", "negativeBoundary", "identity"])
-    && id(value.id) && EVIDENCE_KINDS.has(value.kind) && validateSubject(value.subject)
-    && string(value.scope, MAX.text) && validateSourceRef(value.sourceRef)
-    && string(value.negativeBoundary, MAX.text) && validateIdentity(value.identity);
-  const validateLifecycle = (value) => exactKeys(value, ["id", "label", "statement", "evidenceRefs", "prerequisiteIds", "boundaryRefs", "disposition", "action"])
-    && id(value.id) && string(value.label, MAX.label) && string(value.statement, MAX.text)
-    && validateRefs(value.evidenceRefs, MAX.items) && Array.isArray(value.prerequisiteIds) && value.prerequisiteIds.length <= MAX.lifecycle && value.prerequisiteIds.every(id) && unique(value.prerequisiteIds)
-    && validateRefs(value.boundaryRefs, MAX.boundaries) && DISPOSITIONS.has(value.disposition) && ACTIONS.has(value.action)
-    && ((value.disposition === "inspect-only") === (value.action === "local-preview"));
-  const validateBasis = (value) => exactKeys(value, ["id", "aspect", "nativeDegreeZero", "nativeSmoothDegreesOneToThree", "categoricalCompatibilityLowering", "boundaryRefs"])
-    && id(value.id) && string(value.aspect, MAX.label) && string(value.nativeDegreeZero, MAX.text)
-    && string(value.nativeSmoothDegreesOneToThree, MAX.text) && string(value.categoricalCompatibilityLowering, MAX.text)
-    && validateRefs(value.boundaryRefs, MAX.boundaries);
-  const validateFixture = (value) => exactKeys(value, ["id", "label", "localPath", "fileSha256", "producer", "evidenceRefs", "notChainState", "provenanceBoundary"])
-    && id(value.id) && string(value.label, MAX.label) && localPath(value.localPath) && hash(value.fileSha256)
-    && string(value.producer, MAX.label) && validateRefs(value.evidenceRefs, MAX.items)
-    && value.notChainState === true && string(value.provenanceBoundary, MAX.text);
-  const validateBoundary = (value) => exactKeys(value, ["id", "title", "category", "text", "evidenceRefs"])
-    && id(value.id) && string(value.title, MAX.label) && BOUNDARY_CATEGORIES.has(value.category)
-    && string(value.text, MAX.text) && validateRefs(value.evidenceRefs, MAX.items);
-  const cycleFree = (nodes) => {
-    const byId = new Map(nodes.map((node) => [node.id, node]));
-    const visiting = new Set();
-    const visited = new Set();
-    const visit = (nodeId) => {
-      if (visited.has(nodeId)) return true;
-      if (visiting.has(nodeId)) return false;
-      visiting.add(nodeId);
-      const node = byId.get(nodeId);
-      const valid = node.prerequisiteIds.every(visit);
-      visiting.delete(nodeId);
-      visited.add(nodeId);
-      return valid;
-    };
-    return nodes.every((node) => visit(node.id));
+  const readConfigurationForm = () => ({
+    operatorUrl: $("operator-url").value.trim(),
+    clusterName: $("cluster-name").value.trim(),
+    genesisHash: $("genesis-hash").value.trim(),
+    rpcHttpUrl: $("rpc-http-url").value.trim(),
+    rpcWebsocketUrl: $("rpc-websocket-url").value.trim(),
+    commitment: $("commitment").value,
+    release: {
+      programId: $("program-id").value.trim(),
+      programData: $("program-data").value.trim(),
+      deploymentSlot: $("deployment-slot").value.trim(),
+      elfSha256: $("elf-sha256").value.trim(),
+      releaseManifestSha256: $("release-manifest-sha256").value.trim(),
+      sourceCommit: $("source-commit").value.trim(),
+      capabilityProfileId: $("capability-profile-id").value.trim()
+    },
+    bounds: {
+      maximumAccounts: $("maximum-accounts").value.trim(),
+      maximumResponseBytes: $("maximum-response-bytes").value.trim(),
+      timeoutMilliseconds: $("timeout-milliseconds").value.trim(),
+      maximumSlotLag: $("maximum-slot-lag").value.trim()
+    }
+  });
+
+  const renderConfiguration = (configuration) => {
+    state.configuration = configuration;
+    state.snapshot = null;
+    state.compilerProposal = null;
+    state.construction = null;
+    const status = $("configuration-status");
+    status.className = "status-panel ready";
+    status.textContent = `Explicit target recorded for ${configuration.clusterKey}. No endpoint has been contacted yet.`;
+    $("configuration-json").textContent = JSON.stringify(configuration, null, 2);
+    $("read-chain").disabled = false;
+    $("export-configuration").disabled = false;
+    resetProjection("No operatord projection acquired for this configuration.");
+    resetCompiler("waiting for pure Rust compiler output");
   };
 
-  const validateDisplaySnapshot = (raw, context) => {
-    const manifest = context && context.manifest;
-    const terms = context && context.terms;
-    if (!plainRecord(manifest) || !plainRecord(terms) || !plainRecord(raw)) return result(false, "reviewed data is missing or not a plain record");
-    if (!exactKeys(raw, ["schema", "schemaVersion", "snapshotIdentity", "termsBinding", "evidence", "lifecycle", "basisComparison", "localFixtures", "boundaries"])) return result(false, "display snapshot has an unknown or missing top-level key");
-    if (raw.schema !== DISPLAY_SCHEMA || raw.schemaVersion !== 1) return result(false, "display snapshot schema is not recognized");
-    if (!exactKeys(raw.snapshotIdentity, ["reviewedTreeCommit", "releaseBinding", "releaseSourceCommit"])) return result(false, "snapshot identity is malformed");
-    if (!commit(raw.snapshotIdentity.reviewedTreeCommit) || raw.snapshotIdentity.releaseBinding !== "unbound-offline-snapshot" || raw.snapshotIdentity.releaseSourceCommit !== null) return result(false, "snapshot identity does not describe an unbound reviewed snapshot");
-    if (!exactKeys(raw.termsBinding, ["termsVersion", "digest"]) || !string(raw.termsBinding.termsVersion, MAX.label) || !digest(raw.termsBinding.digest)) return result(false, "terms binding is malformed");
-    if (!plainRecord(manifest.terms) || raw.termsBinding.digest !== manifest.terms.digest || raw.termsBinding.digest !== terms.digest || raw.termsBinding.termsVersion !== manifest.terms.termsVersion || raw.termsBinding.termsVersion !== terms.termsVersion) return result(false, "terms binding does not match reviewed manifest and terms data");
-    if (!exactKeys(manifest.application, ["name", "version", "releaseStatus", "official"]) || !string(manifest.application.name, MAX.label) || !string(manifest.application.version, MAX.label) || !string(manifest.application.releaseStatus, MAX.label) || manifest.application.official !== false || !/offline.*prototype/i.test(manifest.application.releaseStatus)) return result(false, "manifest application boundary is malformed");
-    if (!exactKeys(manifest.releaseIdentity, ["sourceRepository", "sourceCommit", "bundleSha256", "ipfsCid", "githubPagesMirror", "manifestSha256"]) || !string(manifest.releaseIdentity.sourceRepository, MAX.label) || !/^UNBOUND/.test(manifest.releaseIdentity.sourceCommit) || !string(manifest.releaseIdentity.bundleSha256, MAX.text) || !string(manifest.releaseIdentity.manifestSha256, MAX.text) || manifest.releaseIdentity.ipfsCid !== null || manifest.releaseIdentity.githubPagesMirror !== null) return result(false, "manifest release boundary is not offline and unbound");
-    if (!exactKeys(manifest.terms, ["path", "termsVersion", "digestAlgorithm", "digestScope", "digest"]) || !localPath(manifest.terms.path) || !string(manifest.terms.termsVersion, MAX.label) || manifest.terms.digestAlgorithm !== "sha256" || !string(manifest.terms.digestScope, MAX.text) || !digest(manifest.terms.digest)) return result(false, "manifest terms declaration is malformed");
-    if (!plainRecord(terms.canonicalTerms) || !string(terms.termsVersion, MAX.label) || !digest(terms.digest) || !string(terms.semanticsNote, MAX.text) || !string(terms.warning, MAX.text)) return result(false, "terms fixture is malformed");
-    if (!plainRecord(manifest.capabilities) || ["rpcReads", "walletConnection", "transactionSigning", "transactionSubmission", "backgroundWork"].some((key) => manifest.capabilities[key] !== false)) return result(false, "manifest declares a browser chain capability");
-    if (!array(raw.evidence, MAX.items) || !raw.evidence.every(validateEvidence) || !unique(raw.evidence.map((item) => item.id))) return result(false, "evidence records are malformed or duplicate");
-    if (!array(raw.lifecycle, MAX.lifecycle) || !raw.lifecycle.every(validateLifecycle) || !unique(raw.lifecycle.map((item) => item.id))) return result(false, "lifecycle records are malformed or duplicate");
-    if (!array(raw.basisComparison, MAX.basis) || !raw.basisComparison.every(validateBasis) || !unique(raw.basisComparison.map((item) => item.id))) return result(false, "basis comparison records are malformed or duplicate");
-    if (!array(raw.localFixtures, MAX.fixtures) || !raw.localFixtures.every(validateFixture) || !unique(raw.localFixtures.map((item) => item.id))) return result(false, "local fixture records are malformed or duplicate");
-    if (!array(raw.boundaries, MAX.boundaries) || !raw.boundaries.every(validateBoundary) || !unique(raw.boundaries.map((item) => item.id))) return result(false, "boundary records are malformed or duplicate");
-    const evidenceIds = new Set(raw.evidence.map((item) => item.id));
-    const boundaryIds = new Set(raw.boundaries.map((item) => item.id));
-    const lifecycleIds = new Set(raw.lifecycle.map((item) => item.id));
-    const refsExist = (refs, known) => refs.every((reference) => known.has(reference));
-    if (!raw.lifecycle.every((item) => refsExist(item.evidenceRefs, evidenceIds) && refsExist(item.boundaryRefs, boundaryIds) && refsExist(item.prerequisiteIds, lifecycleIds))) return result(false, "lifecycle has a dangling reference");
-    if (!raw.basisComparison.every((item) => refsExist(item.boundaryRefs, boundaryIds)) || !raw.localFixtures.every((item) => refsExist(item.evidenceRefs, evidenceIds)) || !raw.boundaries.every((item) => refsExist(item.evidenceRefs, evidenceIds))) return result(false, "display snapshot has a dangling evidence or boundary reference");
-    const evidenceById = new Map(raw.evidence.map((item) => [item.id, item]));
-    if (raw.lifecycle.some((item) => item.evidenceRefs.some((reference) => evidenceById.get(reference).kind === "IN_FLIGHT"))) return result(false, "in-flight evidence cannot create a lifecycle node");
-    if (!cycleFree(raw.lifecycle)) return result(false, "lifecycle prerequisites contain a cycle");
-    return result(true, raw);
+  const resetCompiler = (status) => {
+    state.compilerProposal = null;
+    $("compiler-status").textContent = status;
+    reset($("compiler-identities"));
+    reset($("compiler-bounds"));
+    $("compiler-output").textContent = "No compiler proposal bound.\n\nThe Rust compiler is not reimplemented in this page.\nRegistration remains authority.";
+    $("copy-compiler-output").disabled = true;
   };
 
-  const deriveDisplayView = (validated) => {
-    if (!validated || !validated.ok) return Object.freeze({ mode: "unavailable", headline: "Evidence snapshot unavailable", cards: Object.freeze([]), actionsDisabled: true });
-    const snapshot = validated.value;
-    const evidenceById = new Map(snapshot.evidence.map((item) => [item.id, item]));
-    const boundariesById = new Map(snapshot.boundaries.map((item) => [item.id, item]));
-    const byIds = (ids) => ids.map((item) => evidenceById.get(item));
-    const railIds = ["bspline-lean-model", "bspline-finite-bridge", "native-point-resolution", "release-evidence-stop"];
-    const rail = railIds.map((item) => evidenceById.get(item)).filter(Boolean);
-    const lifecycle = snapshot.lifecycle.map((node) => Object.freeze({ ...node, evidence: Object.freeze(byIds(node.evidenceRefs)), boundaries: Object.freeze(node.boundaryRefs.map((item) => boundariesById.get(item))) }));
-    const decorateBoundary = (item) => Object.freeze({ ...item, evidence: Object.freeze(byIds(item.evidenceRefs)) });
-    const currentBoundaries = snapshot.boundaries.filter((item) => item.category !== "evidence").map(decorateBoundary);
-    const worktreeBoundaries = snapshot.boundaries.filter((item) => item.category === "evidence").map(decorateBoundary);
-    return Object.freeze({
-      mode: "ready",
-      headline: "One basis. Exact state claims.",
-      cards: Object.freeze(rail),
-      rail: Object.freeze(rail),
-      lifecycle: Object.freeze(lifecycle),
-      basisComparison: snapshot.basisComparison,
-      boundaries: Object.freeze(currentBoundaries),
-      worktreeBoundaries: Object.freeze(worktreeBoundaries),
-      localFixtures: snapshot.localFixtures,
-      evidence: snapshot.evidence,
-      snapshot
-    });
+  const resetProjection = (message) => {
+    const status = $("projection-status");
+    status.className = "status-panel incomplete";
+    status.textContent = message;
+    reset($("release-identity"));
+    reset($("observation-metrics"));
+    reset($("capability-grid"));
+    reset($("state-groups"));
+    $("snapshot-json").textContent = "No chain projection loaded.";
+    $("copy-snapshot").disabled = true;
+    const keeper = $("keeper-action");
+    reset(keeper);
+    const option = create("option", null, "Manual explicit construction (no keeper cursor)");
+    option.value = "";
+    keeper.append(option);
+    keeper.disabled = true;
+    $("build-workflow").disabled = true;
   };
 
-  const renderEvidenceRail = (items) => {
-    const target = $("evidence-rail");
-    reset(target);
-    for (const item of items) {
-      const article = create("article", "rail-item");
-      const header = create("div", "rail-item-header");
-      header.append(badge(item.kind), create("h3", null, item.subject.label));
-      const boundary = create("p", "rail-boundary");
-      boundary.append(create("strong", null, "Does not establish: "), document.createTextNode(item.negativeBoundary));
-      article.append(header, create("p", "rail-fact", item.scope), boundary);
-      target.append(article);
-    }
+  const metric = (label, value, disposition) => {
+    const card = create("section", `metric ${disposition || ""}`.trim());
+    card.append(create("span", "metric-label", label), create("strong", "mono", value));
+    return card;
   };
-  const renderBasisComparison = (items) => {
-    const target = $("basis-table-body");
-    reset(target);
-    for (const item of items) {
-      const row = create("tr");
-      const heading = create("th", null, item.aspect);
-      heading.scope = "row";
-      row.append(heading, create("td", null, item.nativeDegreeZero), create("td", null, item.nativeSmoothDegreesOneToThree), create("td", null, item.categoricalCompatibilityLowering));
-      target.append(row);
-    }
-  };
-  const evidenceSummary = (items) => items.map((item) => `${formatEvidence(item.kind).label} · ${item.subject.label}`).join("; ");
-  const renderLifecycle = (items) => {
-    const target = $("evidence-path");
-    reset(target);
-    items.forEach((item, index) => {
-      const entry = create("li", "path-step");
-      entry.append(create("span", "path-number", String(index + 1).padStart(2, "0")));
-      const body = create("div", "path-body");
-      const heading = create("div", "path-heading");
-      heading.append(create("h3", null, item.label));
-      body.append(heading, create("p", null, item.statement), create("p", "boundary-copy", evidenceSummary(item.evidence)));
-      entry.append(body);
-      target.append(entry);
-    });
-  };
-  const renderBoundaries = (items, targetId) => {
-    const target = $(targetId);
-    reset(target);
-    for (const item of items) {
-      const article = create("article", targetId === "roadmap-list" ? "roadmap-card" : "boundary-card");
-      const header = create("div", "card-heading");
-      const chips = create("div", "evidence-chip-list");
-      item.evidence.forEach((evidence) => chips.append(badge(evidence.kind)));
-      header.append(create("h3", null, item.title), chips);
-      article.append(header, create("p", null, item.text));
-      target.append(article);
-    }
-  };
-  const renderReleaseIdentity = (snapshot) => {
+
+  const renderRelease = (snapshot) => {
     const target = $("release-identity");
-    const identity = MANIFEST.releaseIdentity;
     reset(target);
-    target.append(definition("Application", MANIFEST.application.name), definition("Release", `${MANIFEST.application.version} · ${MANIFEST.application.releaseStatus}`), definition("Bundle SHA-256", identity.bundleSha256), definition("IPFS CID", identity.ipfsCid || "not assigned"), definition("Release source", identity.sourceCommit), definition("Reviewed tree anchor", snapshot.snapshotIdentity.reviewedTreeCommit));
-    $("release-status").textContent = MANIFEST.application.releaseStatus;
-    $("snapshot-provenance").textContent = `Reviewed documentation snapshot: ${snapshot.snapshotIdentity.releaseBinding}. The tree anchor is evidence provenance only, not a release source commit, deployment identity, or official-client claim.`;
-  };
-  const renderFixtures = (items) => {
-    const target = $("evidence-vocabulary");
-    reset(target);
-    for (const item of items) target.append(definition(item.label, item.provenanceBoundary));
-    const termsFixture = items.find((item) => item.localPath === "terms.json");
-    $("fixture-inspector-note").textContent = termsFixture.provenanceBoundary;
-    $("terms-fixture-status").textContent = formatEvidence("LOCAL_FIXTURE").label;
+    const release = snapshot.release.observed;
+    target.append(
+      definition("Cluster identity", snapshot.configuration.clusterKey),
+      definition("Program", release.programId),
+      definition("ProgramData", release.programData),
+      definition("Deployment slot", release.deploymentSlot),
+      definition("ELF SHA-256", release.elfSha256),
+      definition("Release-manifest SHA-256", snapshot.release.declaredManifestSha256),
+      definition("Source commit", snapshot.release.declaredSourceCommit),
+      definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
+      definition("Decoded families", release.families.join(", ")),
+      definition("Manifest/capability authentication", snapshot.release.manifestSourceCapabilityAuthentication)
+    );
   };
 
-  const subtleAvailable = () => Boolean(globalThis.crypto && globalThis.crypto.subtle && globalThis.TextEncoder);
-  const sha256 = async (text) => {
-    const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return `sha256:${Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  const renderMetrics = (snapshot) => {
+    const target = $("observation-metrics");
+    reset(target);
+    const finality = snapshot.finality;
+    target.append(
+      metric("Commitment", finality.requestedCommitment, finality.requestedCommitment === "finalized" ? "good" : "warn"),
+      metric("Projected tip slot", finality.projectedTipSlot),
+      metric("Finalized root", finality.finalizedRootSlot || "not observed", finality.finalizedRootSlot ? "good" : "warn"),
+      metric("Selected accounts", snapshot.accountCounts.selectedRelease),
+      metric("Stale by policy", finality.staleAccountCount, finality.staleAccountCount === "0" ? "good" : "warn"),
+      metric("Unsafe fork rows", finality.unsafeForkAccountCount, finality.unsafeForkAccountCount === "0" ? "good" : "bad"),
+      metric("Bootstrap", snapshot.acquisition.bootstrapComplete ? "complete" : "incomplete", snapshot.acquisition.bootstrapComplete ? "good" : "warn"),
+      metric("Pending accounts", snapshot.acquisition.pendingAccounts, snapshot.acquisition.pendingAccounts === "0" ? "good" : "warn"),
+      metric("Response budget left", `${snapshot.acquisitionBounds.remainingResponseBytes} bytes`)
+    );
   };
-  const setDigestStatus = (text, tone) => {
-    const status = $("digest-status");
-    status.textContent = text;
-    status.className = `digest-status ${tone}`;
+
+  const renderCapabilities = (snapshot) => {
+    const target = $("capability-grid");
+    reset(target);
+    for (const capability of snapshot.capabilities) {
+      const card = create("section", "capability-card disabled");
+      const heading = create("div", "card-heading");
+      heading.append(create("h3", null, capability.label), create("span", "chip disabled-chip", capability.allocationStatus));
+      card.append(heading, create("p", null, capability.reason));
+      const footer = create("p", "micro");
+      footer.textContent = capability.indexedByRelease ? "Relevant decoder or projected state is visible for this release." : "Relevant decoder and projected state are absent from this bounded release view.";
+      card.append(footer);
+      target.append(card);
+    }
   };
-  const settleTermsCheck = () => {
-    $("build-intent").disabled = Boolean(integrityFault);
-    if (integrityFault) setFormError(`Refusing to render a local description: ${integrityFault}`);
+
+  const accountCard = (account) => {
+    const warning = account.stale || account.forkState === "dead-fork" || account.forkState === "unidentified-fork";
+    const row = create("article", `account-row ${warning ? "account-warning" : ""}`.trim());
+    const heading = create("div", "account-heading");
+    heading.append(create("strong", null, account.kind), create("span", "chip", account.forkState));
+    row.append(heading);
+    const facts = create("dl", "compact-facts");
+    facts.append(
+      definition("Address", account.address),
+      definition("Slot / lag", `${account.slot} / ${account.slotLag}`),
+      definition("Lamports", account.lamports),
+      definition("Data bytes", account.dataBytes),
+      definition("Generation", account.generation),
+      definition("Primary binding", account.primaryBinding),
+      definition("Secondary binding", account.secondaryBinding),
+      definition("Body SHA-256", account.dataSha256),
+      definition("Decode", account.decode.status === "requires-context" ? `requires context: ${account.decode.requirement}` : "canonical")
+    );
+    row.append(facts);
+    return row;
   };
-  const renderTerms = async () => {
-    const declared = TERMS.digest;
-    $("terms-digest").textContent = declared;
-    $("terms-json").textContent = JSON.stringify(TERMS.canonicalTerms, null, 2);
-    $("manifest-json").textContent = JSON.stringify(MANIFEST, null, 2);
-    $("term-template").textContent = TERMS.canonicalTerms.templateId;
-    $("term-outcomes").textContent = `${TERMS.canonicalTerms.outcomeCount} / ${TERMS.canonicalTerms.maxOutcomes}`;
-    $("term-rounding").textContent = TERMS.canonicalTerms.rounding;
-    $("term-redemption").textContent = TERMS.canonicalTerms.redemption;
-    $("terms-semantics").textContent = TERMS.semanticsNote;
-    if (MANIFEST.terms.digest !== declared) {
-      integrityFault = "manifest.json and terms.json declare different terms digests.";
-      setDigestStatus(integrityFault, "bad");
-    } else if (!subtleAvailable()) {
-      setDigestStatus("Declared fixture digest shown as published. Web Crypto is unavailable in this context, so it was not recomputed here — verify terms.json yourself.", "unknown");
+
+  const renderState = (snapshot) => {
+    const target = $("state-groups");
+    reset(target);
+    for (const groupName of CHAIN.groupOrder) {
+      if (groupName === "other" && snapshot.groups[groupName].length === 0) continue;
+      const section = create("section", "state-family");
+      const heading = create("div", "state-family-heading");
+      const title = create("div");
+      title.append(create("p", "eyebrow", "Untrusted indexed accounts"), create("h3", null, snapshot.groupLabels[groupName]));
+      heading.append(title, create("span", "count mono", snapshot.groups[groupName].length.toString()));
+      section.append(heading);
+      const rows = create("div", "account-list");
+      if (snapshot.groups[groupName].length === 0) {
+        rows.append(create("p", "empty-state", "No selected-release account of this family is present in the current bounded projection. This is not proof of global absence."));
+      } else {
+        for (const account of snapshot.groups[groupName]) rows.append(accountCard(account));
+      }
+      section.append(rows);
+      target.append(section);
+    }
+  };
+
+  const renderKeeper = (snapshot) => {
+    const select = $("keeper-action");
+    reset(select);
+    const manual = create("option", null, "Manual explicit construction (no keeper cursor)");
+    manual.value = "";
+    select.append(manual);
+    snapshot.keeperActions.forEach((action, index) => {
+      const option = create("option", null, `${action.action} · ${short(action.account)} · slot ${action.accountSlot}`);
+      option.value = String(index);
+      select.append(option);
+    });
+    select.disabled = false;
+    $("build-workflow").disabled = false;
+  };
+
+  const renderSnapshot = async (snapshot) => {
+    state.snapshot = snapshot;
+    state.construction = null;
+    const status = $("projection-status");
+    const unsafe = snapshot.finality.unsafeForkAccountCount !== "0";
+    const stale = snapshot.finality.staleAccountCount !== "0";
+    status.className = `status-panel ${unsafe ? "bad" : stale || !snapshot.acquisition.bootstrapComplete ? "incomplete" : "ready"}`;
+    status.textContent = `Loaded ${snapshot.accountCounts.selectedRelease} selected-release accounts at ${snapshot.finality.requestedCommitment} commitment. This is an untrusted operatord projection, not onchain authority.${unsafe ? " Dead or unidentified fork rows are present." : ""}${stale ? " The configured staleness policy is exceeded." : ""}`;
+    renderRelease(snapshot);
+    renderMetrics(snapshot);
+    renderCapabilities(snapshot);
+    renderState(snapshot);
+    renderKeeper(snapshot);
+    const serializable = { ...snapshot, groups: undefined, groupLabels: undefined };
+    $("snapshot-json").textContent = JSON.stringify(serializable, null, 2);
+    $("copy-snapshot").disabled = false;
+    const snapshotDigest = await digest(new TextEncoder().encode(canonicalJson(serializable)));
+    if (state.snapshot === snapshot) {
+      $("snapshot-digest").textContent = snapshotDigest ? `Local canonical projection SHA-256: ${snapshotDigest}` : "Web Crypto unavailable; no local projection digest was computed.";
+    }
+  };
+
+  const keeperForSelection = () => {
+    if (!state.snapshot || $("keeper-action").value === "") return null;
+    const index = Number.parseInt($("keeper-action").value, 10);
+    return state.snapshot.keeperActions[index] || null;
+  };
+
+  const requireKeeperJoin = (draft, keeper) => {
+    if (!keeper) return null;
+    const coordinate = REGISTRY.keeperCoordinates[keeper.action];
+    if (!coordinate) throw new Error(`Keeper action ${keeper.action} has no exact browser-side successor coordinate; construction refuses instead of guessing.`);
+    if (!draft.instructions || !draft.instructions[0] || draft.instructions[0].family !== coordinate.family || draft.instructions[0].localAction !== String(coordinate.localAction)) {
+      throw new Error(`The first draft instruction must be ${coordinate.family}/${coordinate.localAction} for keeper action ${keeper.action}.`);
+    }
+    const metas = new Set(draft.instructions.flatMap((instruction) => Array.isArray(instruction.accounts) ? instruction.accounts.map((meta) => meta.address) : []));
+    for (const required of [keeper.account, ...keeper.dependencies]) {
+      if (!metas.has(required)) throw new Error(`Keeper dependency ${required} is absent from the explicit transaction metas.`);
+      if (!state.snapshot.accounts.some((account) => account.address === required)) throw new Error(`Keeper dependency ${required} is absent from the acquired selected-release projection.`);
+    }
+    return coordinate;
+  };
+
+  const parseJsonField = (id, label) => {
+    try { return JSON.parse($(id).value); } catch (_) { throw new Error(`${label} is not valid JSON.`); }
+  };
+
+  const prepareCompilerRequest = async () => {
+    const configuration = state.configuration;
+    const revision = compilerRevision;
+    if (!configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
+    const definitionValue = COMPILER.validateDefinition(parseJsonField("compiler-definition", "Exact rational payoff definition"));
+    const compilerReleaseSha256 = $("compiler-release-sha256").value.trim();
+    const request = COMPILER.buildRequest(
+      compilerReleaseSha256,
+      definitionValue,
+      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs")
+    );
+    const inputCanonicalSha256 = await digest(new TextEncoder().encode(definitionValue.canonicalJson));
+    const requestCanonicalSha256 = await digest(new TextEncoder().encode(COMPILER.canonicalJson(request)));
+    if (inputCanonicalSha256 === null || requestCanonicalSha256 === null) throw new Error("Web Crypto SHA-256 is unavailable; the page refuses to bind compiler output without cryptographic input joins.");
+    if (state.configuration !== configuration || compilerRevision !== revision) throw new Error("Compiler target or inputs changed while their exact request identity was being prepared.");
+    return Object.freeze({ configuration, revision, definitionValue, compilerReleaseSha256, request, inputCanonicalSha256, requestCanonicalSha256 });
+  };
+
+  const bindCompilerProposal = async (rawProposal = null, prepared = null) => {
+    const context = prepared || await prepareCompilerRequest();
+    if (state.configuration !== context.configuration || compilerRevision !== context.revision) throw new Error("Compiler target or inputs changed while the proposal was in flight.");
+    const proposal = COMPILER.validateProposal(
+      rawProposal || parseJsonField("compiler-proposal", "operatord/CLI compiler proposal"),
+      context.requestCanonicalSha256,
+      context.inputCanonicalSha256,
+      context.compilerReleaseSha256,
+      context.definitionValue
+    );
+    const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
+    if (profileId !== context.configuration.release.capabilityProfileId) {
+      throw new Error("Compiler output capabilityProfileId differs from the explicitly selected release profile.");
+    }
+
+    state.compilerProposal = Object.freeze({
+      definition: Object.freeze({ canonicalJson: context.definitionValue.canonicalJson, canonicalSha256: context.inputCanonicalSha256 }),
+      requestCanonicalSha256: context.requestCanonicalSha256,
+      proposal,
+      authority: "untrusted-proposal; onchain registration remains authority"
+    });
+    const identities = $("compiler-identities");
+    reset(identities);
+    identities.append(
+      definition("Payoff classification", proposal.classification),
+      definition("Span status", proposal.spanStatus),
+      definition("Input canonical SHA-256", proposal.inputCanonicalSha256),
+      definition("Whole request canonical SHA-256", proposal.requestCanonicalSha256),
+      definition("Configured compiler release SHA-256", proposal.compilerReleaseSha256),
+      definition("Product Terms ID", proposal.productTermsId),
+      definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
+      definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
+      definition("Certification subdivision depth", proposal.subdivisionDepth),
+      definition("Bundle ID / bytes", `${proposal.compiledProductSeriesBundle.id} / ${proposal.compiledProductSeriesBundle.byteLength}`),
+      definition("Capability profile join", profileId),
+      definition("Registration authority", "false — every body and join must be recomputed onchain")
+    );
+    const bounds = $("compiler-bounds");
+    reset(bounds);
+    if (proposal.bounds.length === 0) {
+      bounds.append(create("p", "empty-state", "Exact output: no analytic approximation bounds apply."));
     } else {
-      const computed = await sha256(canonicalJson(TERMS.canonicalTerms));
-      if (computed === declared) setDigestStatus("Recomputed locally from bundled canonical terms; matches the declared fixture digest.", "good");
-      else {
-        integrityFault = `Declared terms digest does not match the locally recomputed ${computed}.`;
-        setDigestStatus(integrityFault, "bad");
+      for (const bound of proposal.bounds) {
+        const card = create("section", "bound-card");
+        card.append(create("span", "metric-label", bound.name), create("strong", "mono", `${bound.value.numerator} / ${bound.value.denominator}`));
+        bounds.append(card);
       }
     }
-    if (integrityFault) $("intent-state").textContent = "refused · integrity fault";
-    settleTermsCheck();
+    $("compiler-status").textContent = proposal.spanStatus === "certified-approximation" ? "certified approximation · registration pending" : "exact in named representation · registration pending";
+    $("compiler-output").textContent = JSON.stringify(state.compilerProposal, null, 2);
+    $("copy-compiler-output").disabled = false;
   };
 
-  const buildIntent = (kind, account, amount) => {
-    const normalizedAmount = amount === "" ? null : amount;
-    if (normalizedAmount !== null && !/^[0-9]+$/.test(normalizedAmount)) throw new Error("Collateral atoms must be an exact non-negative integer.");
-    if (account.length > 160) throw new Error("External reference is too long for a local description.");
-    return { schema: "dragon-clutch.transaction-intent.v0", mode: "offline-inspection-only", intent: kind, target: { externalReference: account || null }, quantities: { collateralAtoms: normalizedAmount }, termsVersion: TERMS.termsVersion, termsDigest: TERMS.digest, authorization: { wallet: "not-connected", signer: "none", signature: null, submission: "disabled" }, postcondition: "No chain state changes. This object is a local preview only." };
+  const compilePayoff = async () => {
+    const prepared = await prepareCompilerRequest();
+    const proposal = await COMPILER.compileRemote(
+      prepared.configuration.operatorUrl,
+      prepared.request,
+      prepared.configuration.bounds.maximumResponseBytes,
+      prepared.configuration.bounds.timeoutMilliseconds
+    );
+    await bindCompilerProposal(proposal, prepared);
   };
-  const setFormError = (message) => {
-    const error = $("form-error");
-    if (!error) return;
-    error.textContent = message;
-    error.hidden = false;
-    error.focus();
-  };
-  const renderIntent = (event) => {
-    event.preventDefault();
-    $("form-error").hidden = true;
-    try {
-      if (integrityFault) throw new Error(`Refusing to render a local description: ${integrityFault}`);
-      lastIntent = JSON.stringify(buildIntent($("intent-kind").value, $("account-ref").value.trim(), $("amount").value.trim()), null, 2);
-      $("intent-json").textContent = lastIntent;
-      $("intent-state").textContent = "local object created · unsigned";
-      $("copy-intent").disabled = false;
-    } catch (error) {
-      setFormError(error.message);
-      $("intent-state").textContent = "refused";
-      $("copy-intent").disabled = true;
-    }
-  };
-  const copyText = async (text, button, label) => {
-    if (!text) throw new Error("There is no local text to copy yet.");
-    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
-    else {
-      const area = document.createElement("textarea");
-      area.value = text;
-      area.setAttribute("readonly", "");
-      area.className = "copy-area";
-      document.body.appendChild(area);
-      area.select();
-      const copied = document.execCommand("copy");
-      area.remove();
-      if (!copied) throw new Error("The browser did not allow the local copy action.");
-    }
-    const original = button.textContent;
-    button.textContent = "Copied";
-    button.setAttribute("aria-label", `${label} copied`);
-    window.setTimeout(() => { button.textContent = original; button.setAttribute("aria-label", label); }, 1100);
-  };
-  const handleCopy = async (text, button, label) => {
-    try { await copyText(text, button, label); } catch (error) { setFormError(`Copy unavailable: ${error.message}`); }
-  };
-  const renderUnavailable = (reason) => {
-    const button = $("build-intent");
-    if (button) button.disabled = true;
-    const main = $("main");
-    reset(main);
-    const section = create("section", "unavailable-state");
-    section.append(create("p", "eyebrow", "Offline evidence lens"), create("h1", null, "Evidence snapshot unavailable"), create("p", null, reason));
-    main.append(section);
-  };
-  const init = () => {
-    const validated = validateDisplaySnapshot(MANIFEST && MANIFEST.displaySnapshot, { manifest: MANIFEST, terms: TERMS });
-    const view = deriveDisplayView(validated);
-    if (view.mode === "unavailable") {
-      renderUnavailable(validated.reason || view.headline);
-      return;
-    }
-    renderEvidenceRail(view.rail);
-    renderBasisComparison(view.basisComparison);
-    renderLifecycle(view.lifecycle);
-    renderBoundaries(view.boundaries, "boundary-ledger");
-    renderBoundaries(view.worktreeBoundaries, "roadmap-list");
-    renderReleaseIdentity(view.snapshot);
-    renderFixtures(view.localFixtures);
-    $("build-intent").disabled = true;
-    $("intent-form").addEventListener("submit", renderIntent);
-    $("copy-intent").addEventListener("click", () => handleCopy(lastIntent, $("copy-intent"), "Copy intent JSON"));
-    $("copy-digest").addEventListener("click", () => handleCopy($("terms-digest").textContent, $("copy-digest"), "Copy terms digest"));
-    renderTerms().catch((error) => {
-      integrityFault = `the terms digest check did not complete (${error.message}).`;
-      setDigestStatus(integrityFault, "bad");
-      settleTermsCheck();
+
+  const buildWorkflow = async () => {
+    if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
+    if (state.snapshot.configuration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
+    let draft;
+    try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
+    const keeper = keeperForSelection();
+    const coordinate = requireKeeperJoin(draft, keeper);
+    const transaction = BUILDER.build(draft, state.configuration, $("packet-limit").value.trim());
+    const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
+    const output = Object.freeze({
+      schema: "dragons-clutch/operator/resumable-workflow-node/v1",
+      authority: "untrusted-chain-projection-plus-explicit-semantic-owner-material",
+      release: transaction.release,
+      observation: Object.freeze({
+        commitment: state.snapshot.finality.requestedCommitment,
+        projectedTipSlot: state.snapshot.finality.projectedTipSlot,
+        finalizedRootSlot: state.snapshot.finality.finalizedRootSlot,
+        selectedReleaseKey: state.configuration.release.releaseKey,
+        staleAccountCount: state.snapshot.finality.staleAccountCount,
+        unsafeForkAccountCount: state.snapshot.finality.unsafeForkAccountCount
+      }),
+      keeperSelection: keeper ? Object.freeze({ ...keeper, expectedCoordinate: coordinate }) : null,
+      unsignedTransaction: Object.freeze({ ...transaction, serializedTransactionSha256: transactionSha256 }),
+      reloadAuthoritativeAccounts: true,
+      wallet: "absent",
+      recentBlockhash: "absent",
+      signatures: Object.freeze([]),
+      signing: "absent",
+      submission: "absent"
     });
+    state.construction = output;
+    $("workflow-output").textContent = JSON.stringify(output, null, 2);
+    $("workflow-status").textContent = "constructed · runtime disabled";
+    $("copy-workflow").disabled = false;
   };
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
+  const copy = async (value, button) => {
+    await navigator.clipboard.writeText(value);
+    const previous = button.textContent;
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = previous; }, 1100);
+  };
 
-  window.StaticClientOffline = Object.freeze({ buildIntent, canonicalJson, canonicalize, validateDisplaySnapshot, deriveDisplayView, formatEvidence });
-})();
+  const initialize = () => {
+    resetProjection("No configuration or account projection loaded. Nothing is inferred from fixtures or defaults.");
+    resetCompiler("waiting for pure Rust compiler output");
+    $("configuration-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      clearError("configuration-error");
+      try { renderConfiguration(CHAIN.validateConfiguration(readConfigurationForm())); } catch (error) { setError("configuration-error", error.message); }
+    });
+    $("read-chain").addEventListener("click", async () => {
+      clearError("configuration-error");
+      if (!state.configuration) return setError("configuration-error", "Apply an explicit configuration first.");
+      const button = $("read-chain");
+      button.disabled = true;
+      button.textContent = "Reading bounded endpoints…";
+      const configuration = state.configuration;
+      try {
+        const snapshot = await CHAIN.acquire(configuration);
+        if (state.configuration !== configuration) throw new Error("The explicit configuration changed while acquisition was in flight.");
+        await renderSnapshot(snapshot);
+      } catch (error) { resetProjection(`Acquisition refused: ${error.message}`); setError("configuration-error", error.message); }
+      finally { button.disabled = false; button.textContent = "Read bounded operatord state"; }
+    });
+    $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(state.configuration, null, 2), $("export-configuration")); });
+    $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
+    for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs"]) {
+      $(id).addEventListener("input", () => { compilerRevision += 1; });
+    }
+    $("compiler-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      clearError("compiler-error");
+      const button = $("compile-payoff");
+      button.disabled = true;
+      button.textContent = "Compiling through bounded endpoint…";
+      try { await compilePayoff(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
+      finally { button.disabled = false; button.textContent = "Compile through selected operatord"; }
+    });
+    $("bind-compiler-proposal").addEventListener("click", async () => {
+      clearError("compiler-error");
+      try { await bindCompilerProposal(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
+    });
+    $("copy-compiler-output").addEventListener("click", () => { if (state.compilerProposal) copy($("compiler-output").textContent, $("copy-compiler-output")); });
+    $("workflow-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      clearError("workflow-error");
+      try { await buildWorkflow(); } catch (error) { setError("workflow-error", error.message); }
+    });
+    $("copy-workflow").addEventListener("click", () => { if (state.construction) copy($("workflow-output").textContent, $("copy-workflow")); });
+  };
+
+  root.GlassChainApp = Object.freeze({ canonicalJson, readConfigurationForm });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize, { once: true });
+  else initialize();
+})(typeof globalThis === "object" ? globalThis : this);

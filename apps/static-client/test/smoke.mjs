@@ -1,195 +1,148 @@
-/*
- * Offline gates for the static client. No network, no install, no build step:
- * `node test/smoke.mjs` is the whole harness.
- *
- * These tests are named so the evidence ledger in
- * docs/implementation/ADVERSARIAL_REVIEW_V0.md section 6 can cite them.
- */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { createHash } from "node:crypto";
 
 const root = path.resolve(import.meta.dirname, "..");
 const read = (name) => fs.readFileSync(path.join(root, name), "utf8");
-const manifest = JSON.parse(read("manifest.json"));
-const terms = JSON.parse(read("terms.json"));
-const app = read("app.js");
-const embeddedSource = read("embedded-data.js");
-const nativeBsplineSource = read("native-bspline-v1.js");
 const html = read("index.html");
+const app = read("app.js");
+const chain = read("chain-client.js");
+const registry = read("successor-registry.js");
+const builder = read("successor-builder.js");
+const compiler = read("compiler-proposal.js");
 
-const canonicalize = (value) => {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((out, key) => {
-      out[key] = canonicalize(value[key]);
-      return out;
-    }, {});
-  }
-  return value;
-};
-const canonicalJson = (value) => JSON.stringify(canonicalize(value));
-const sha256Digest = (text) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
-
-// embedded-data.js is a classic browser script with no DOM dependency, so it
-// can be evaluated in a bare realm. Values are re-parsed into this realm
-// because cross-realm objects never satisfy deepStrictEqual prototype checks.
-const evaluateEmbeddedData = () => {
-  const context = vm.createContext({});
-  vm.runInContext(embeddedSource, context, { filename: "embedded-data.js" });
-  assert.ok(context.GlassEmbeddedData, "embedded-data.js must define GlassEmbeddedData");
-  return JSON.parse(JSON.stringify(context.GlassEmbeddedData));
+const browserRealm = (...scripts) => {
+  const context = vm.createContext({ URL, TextEncoder, TextDecoder, AbortController, Uint8Array, BigInt });
+  for (const name of scripts) vm.runInContext(read(name), context, { filename: name });
+  return context;
 };
 
-test("manifest_declares_every_chain_capability_unavailable", () => {
-  assert.equal(manifest.schemaVersion, "dragon-clutch.static-release-manifest.v0");
-  assert.ok(Array.isArray(manifest.clusters) && manifest.clusters.length >= 3);
-  assert.ok(manifest.clusters.every((cluster) => cluster.status === "unavailable" && cluster.endpoint === null));
-  assert.ok(manifest.programs.length > 0 && manifest.programs.every((program) => program.programId === null));
-  assert.ok(manifest.profiles.some((profile) => profile.id === "synthetic-six-decimal"));
-  assert.equal(manifest.capabilities.walletConnection, false);
-  assert.equal(manifest.capabilities.rpcReads, false);
-  assert.equal(manifest.capabilities.transactionSigning, false);
-  assert.equal(manifest.capabilities.transactionSubmission, false);
-});
-
-test("terms_digest_recomputes_from_canonical_terms", () => {
-  const digest = sha256Digest(canonicalJson(terms.canonicalTerms));
-  assert.equal(terms.digest, digest);
-  assert.equal(manifest.terms.digest, digest);
-  assert.equal(manifest.terms.termsVersion, terms.termsVersion);
-  assert.equal(manifest.terms.digestAlgorithm, "sha256");
-});
-
-test("terms_rounding_matches_kernel_refuse_on_remainder_semantics", () => {
-  // crates/clutch-kernel `redeem` returns Error::RemainderRequired when
-  // quantity * weight % denominator != 0; it never floors. `redeem_complete_set`
-  // is the always-exact exit. A terms surface that promises flooring would
-  // contradict the landed kernel (ADVERSARIAL_REVIEW_V0 P1-A).
-  const rounding = terms.canonicalTerms.rounding;
-  assert.doesNotMatch(rounding, /floor|truncat|round-(down|up|half)/i, "the kernel refuses a remainder rather than rounding it");
-  assert.match(rounding, /exact/);
-  assert.match(rounding, /refuse|remainder/);
-  assert.match(terms.canonicalTerms.redemption, /complete-set/);
-  assert.match(terms.semanticsNote, /refused, never floored/);
-});
-
-test("embedded_static_data_equals_reviewed_manifest_and_terms", () => {
-  const embedded = evaluateEmbeddedData();
-  assert.deepStrictEqual(embedded.manifest, manifest, "embedded-data.js manifest drifted from manifest.json; run `npm run embed`");
-  assert.deepStrictEqual(embedded.terms, terms, "embedded-data.js terms drifted from terms.json; run `npm run embed`");
-  // Key order is not load bearing, but a canonical-JSON comparison also catches
-  // a mirror that agrees only up to JSON.parse coercion.
-  assert.equal(canonicalJson(embedded.manifest), canonicalJson(manifest));
-  assert.equal(canonicalJson(embedded.terms), canonicalJson(terms));
-  // The digest the mirror carries must still be the one the terms hash to.
-  assert.equal(embedded.terms.digest, sha256Digest(canonicalJson(embedded.terms.canonicalTerms)));
-  assert.equal(embedded.manifest.terms.digest, embedded.terms.digest);
-});
-
-test("app_holds_no_second_copy_of_release_data_or_digest", () => {
-  // Every displayed binding must come from the mirrored release data. A
-  // re-stated digest, mint, program note, or commit here is exactly the drift
-  // the gate above cannot see.
-  assert.doesNotMatch(app, /sha256:[0-9a-f]{8}/i, "app.js must not hard-code a terms digest");
-  assert.doesNotMatch(app, /UNBOUND-OFFLINE-SNAPSHOT|UNPUBLISHED-BUNDLE-DIGEST/);
-  assert.doesNotMatch(app, /SYNTHETIC-MINT-NOT-ONCHAIN|XkeTXo1125vz5H9svJpGiw4JvLbN8VmMu9cmMvspump/);
-  assert.doesNotMatch(app, /mainnet-beta|devnet|localnet/);
-  assert.match(app, /globalThis\.GlassEmbeddedData/);
-  assert.match(html, /<script src="embedded-data\.js"><\/script>[\s\S]*<script src="app\.js"><\/script>/);
-});
-
-test("browser_scripts_reject_wallet_rpc_signing_and_submission_symbols", () => {
-  for (const [name, source] of [["app.js", app], ["embedded-data.js", embeddedSource], ["native-bspline-v1.js", nativeBsplineSource]]) {
-    assert.doesNotMatch(source, /window\.solana|window\.phantom|new\s+WebSocket|\bfetch\s*\(|XMLHttpRequest|EventSource|navigator\.sendBeacon|import\s*\(/, name);
-    assert.doesNotMatch(source, /signTransaction|signAllTransactions|sendRawTransaction|sendTransaction|@solana\//, name);
+test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
+  for (const id of ["operator-url", "cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
   }
-  assert.match(app, /mode:\s*["']offline-inspection-only["']/);
-  assert.match(app, /submission:\s*["']disabled["']/);
+  assert.doesNotMatch(html, /<script src="(?:embedded-data|protocol-client|protocol-contracts|native-bspline-v1)\.js"/);
+  assert.doesNotMatch(html, /value="(?:https?:\/\/|wss?:\/\/|[1-9][0-9]*|[1-9A-HJ-NP-Za-km-z]{32,44}|[0-9a-f]{40,64})"/);
+  assert.match(app, /Nothing is inferred from fixtures or defaults/);
+  assert.doesNotMatch(app, /manifest\.json|terms\.json|GlassEmbeddedData/);
 });
 
-test("meta_csp_carries_only_directives_a_meta_policy_can_enforce", () => {
-  const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(html);
-  assert.ok(csp, "index.html must carry a meta CSP");
-  const policy = csp[1];
-  assert.match(policy, /default-src 'none'/);
-  assert.match(policy, /script-src 'self'/);
-  assert.match(policy, /connect-src 'none'/);
-  // frame-ancestors, sandbox, and report-to are ignored in a meta policy.
-  // Promising them from this HTML would be a false claim about the host.
-  for (const headerOnly of ["frame-ancestors", "sandbox", "report-to", "report-uri"]) {
-    assert.doesNotMatch(policy, new RegExp(headerOnly), `${headerOnly} is header-only and must not appear in the meta CSP`);
-  }
+test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_configuration_only", () => {
+  assert.match(chain, /method:\s*"GET"/);
+  assert.match(chain, /credentials:\s*"omit"/);
+  assert.match(chain, /redirect:\s*"error"/);
+  assert.match(chain, /remainingResponseBytes/);
+  assert.match(chain, /operatord-only; browser does not call validator RPC/);
+  assert.doesNotMatch(chain, /method:\s*"(?:POST|PUT|PATCH|DELETE)"/);
+  for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
 });
 
-test("serving_note_states_the_header_only_protections", () => {
-  const serving = read("SERVING.md");
-  assert.match(serving, /frame-ancestors/);
-  assert.match(serving, /X-Content-Type-Options: nosniff/);
-  assert.match(serving, /Referrer-Policy/);
-  assert.match(serving, /meta/i);
-});
-
-test("every_shipped_asset_is_present_and_non_empty", () => {
-  for (const file of ["index.html", "styles.css", "app.js", "embedded-data.js", "native-bspline-v1.js", "native-bspline-market-creation-v1.schema.json", "manifest.json", "terms.json", "SERVING.md", "README.md"]) {
-    assert.ok(fs.statSync(path.join(root, file)).size > 0, `${file} should not be empty`);
-  }
-});
-
-test("html_references_only_local_assets", () => {
-  const urls = html.match(/(?:src|href)="([^"]+)"/g) || [];
-  for (const url of urls) {
-    assert.doesNotMatch(url, /^(?:src|href)="(?:https?:)?\/\//, `${url} is a remote reference`);
-  }
-});
-
-test("app_only_addresses_element_ids_present_in_index_html", () => {
-  const declared = new Set(Array.from(html.matchAll(/\bid="([^"]+)"/g), (match) => match[1]));
-  const addressed = Array.from(app.matchAll(/\$\("([^"]+)"\)/g), (match) => match[1]);
-  assert.ok(addressed.length > 10, "expected the app to address the inspection surface by id");
-  for (const id of new Set(addressed)) {
-    assert.ok(declared.has(id), `app.js addresses #${id}, which index.html does not declare`);
-  }
-});
-
-test("display_snapshot_is_digest_bound_and_fails_closed_on_hostile_metadata", () => {
-  // Evaluate only the pure exported snapshot API. Keeping DOMContentLoaded
-  // pending avoids rendering and preserves the same no-dependency test setup
-  // used for embedded-data.js above.
-  const context = vm.createContext({
-    document: { readyState: "loading", addEventListener() {} },
-    window: {}
-  });
-  context.input = JSON.stringify({ manifest, terms, snapshot: manifest.displaySnapshot });
-  vm.runInContext(app, context, { filename: "app.js" });
-  const api = context.window.StaticClientOffline;
-  assert.ok(api, "app.js must expose its pure local snapshot API");
-
-  const accepted = vm.runInContext(`(() => {
-    const input = JSON.parse(globalThis.input);
-    return window.StaticClientOffline.validateDisplaySnapshot(input.snapshot, {
-      manifest: input.manifest,
-      terms: input.terms
+test("explicit_configuration_preserves_full_width_fields_as_decimal_strings", () => {
+  const context = browserRealm("successor-registry.js", "successor-builder.js", "chain-client.js");
+  const output = vm.runInContext(`(() => {
+    const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
+    return GlassChainClient.validateConfiguration({
+      operatorUrl: "http://127.0.0.1:9898",
+      clusterName: "private-local",
+      genesisHash: bytes(4),
+      rpcHttpUrl: "http://127.0.0.1:8899",
+      rpcWebsocketUrl: "ws://127.0.0.1:8900",
+      commitment: "processed",
+      release: {
+        programId: bytes(2), programData: bytes(3), deploymentSlot: "18446744073709551615",
+        elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32),
+        sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32)
+      },
+      bounds: { maximumAccounts: "4096", maximumResponseBytes: "8388608", timeoutMilliseconds: "10000", maximumSlotLag: "150" }
     });
   })()`, context);
-  assert.equal(accepted.ok, true, "the reviewed display snapshot must validate");
-  assert.equal(accepted.value.termsBinding.digest, terms.digest);
-  assert.equal(accepted.value.snapshotIdentity.releaseSourceCommit, null);
+  assert.equal(output.release.deploymentSlot, "18446744073709551615");
+  assert.equal(output.bounds.maximumResponseBytes, "8388608");
+  assert.equal(output.commitment, "processed");
+  assert.match(output.release.releaseKey, /:18446744073709551615:/);
+});
 
-  const rejected = vm.runInContext(`(() => {
-    const input = JSON.parse(globalThis.input);
-    input.snapshot.termsBinding.digest = "sha256:${"0".repeat(64)}";
-    return window.StaticClientOffline.deriveDisplayView(
-      window.StaticClientOffline.validateDisplaySnapshot(input.snapshot, {
-        manifest: input.manifest,
-        terms: input.terms
-      })
-    );
+test("outer_builder_emits_zero_signature_blockhash_free_reserved_disabled_transaction", () => {
+  const context = browserRealm("successor-registry.js", "successor-builder.js");
+  const output = vm.runInContext(`(() => {
+    const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
+    const programId = bytes(2);
+    return GlassSuccessorBuilder.build({
+      payer: bytes(1),
+      instructions: [{
+        flow: "market-epoch-creation", family: "general", localAction: "1", actionName: "CreateMarket",
+        payloadHex: "aabb", semanticOwner: { package: "clutch-market", schema: "create-market/v1", releaseSha256: "09".repeat(32) },
+        accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
+      }]
+    }, {
+      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
+    }, "1232");
   })()`, context);
-  assert.equal(rejected.mode, "unavailable");
-  assert.equal(rejected.cards.length, 0);
-  assert.equal(rejected.actionsDisabled, true);
+  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v3");
+  assert.equal(output.message.recentBlockhash, "11111111111111111111111111111111");
+  assert.equal(output.hasRecentBlockhash, false);
+  assert.equal(output.signed, false);
+  assert.equal(output.submitted, false);
+  assert.deepEqual([...output.runtimeAdmissions], ["reserved-disabled"]);
+  assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);
+  assert.equal(output.exactEquations[0].left, "340282366920938463463374607431768211455");
+});
+
+test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
+  assert.doesNotMatch(builder, /runtimeAdmission\s*=|raw\.runtimeAdmission|enabled\s*:\s*raw/);
+  assert.match(builder, /Unbalanced exact equation/);
+  assert.match(builder, /central allocation ledger is ReservedDisabled/);
+});
+
+test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
+  assert.match(html, /compile_production_payoff_v1/);
+  assert.match(html, /canonical Product\/Series bundle assembler/);
+  assert.match(compiler, /production-payoff-definition\/v1/);
+  assert.match(compiler, /production-payoff-proposal\/v1/);
+  assert.match(compiler, /exact-categorical.*exact-smooth.*analytic-smooth/s);
+  assert.match(compiler, /Compiled Product\/Series bundle must expose the exact sixteen typed identities/);
+  assert.doesNotMatch(compiler, /Math\.(?:exp|pow|sqrt)|parseFloat|Number\([^)]*(?:numerator|denominator|coordinate|payout)/);
+});
+
+test("compiler_transport_joins_definition_class_terms_bytes_and_sixteen_bundle_ids", () => {
+  const context = browserRealm("compiler-proposal.js");
+  const output = vm.runInContext(`(() => {
+    const productTermsId = "01".repeat(32);
+    const definition = GlassCompilerProposal.validateDefinition({
+      schema: "dragons-clutch/compiler/production-payoff-definition/v1",
+      productTermsId,
+      kind: "exact-categorical",
+      definition: {
+        coordinateDomainMin: "0", coordinateDomainMax: "9", knots: [],
+        cellPayouts: [[{ numerator: "1", denominator: "1" }]],
+        ambiguityPolicyRegistryValue: "1", edgePolicyRegistryValue: "1"
+      }
+    });
+    const identities = {};
+    for (const name of GlassCompilerProposal.bundleIdentityNames) identities[name] = "04".repeat(32);
+    identities.nativeClaimBasisId = "05".repeat(32);
+    return GlassCompilerProposal.validateProposal({
+      schema: "dragons-clutch/compiler/production-payoff-proposal/v1",
+      authority: "untrusted-compiler-proposal", registrationAuthority: false,
+      compilerReleaseSha256: "03".repeat(32), inputCanonicalSha256: "02".repeat(32),
+      productTermsId, classification: "exact-categorical", spanStatus: "exact-in-span",
+      nativeClaimBasis: { id: "05".repeat(32), bytesHex: "00".repeat(2352) },
+      certificate: null, bounds: [], subdivisionDepth: null,
+      compiledProductSeriesBundle: { id: "06".repeat(32), bytesHex: "00".repeat(528), identities }
+    }, "02".repeat(32), "03".repeat(32), definition);
+  })()`, context);
+  assert.equal(output.productTermsId, "01".repeat(32));
+  assert.equal(output.classification, "exact-categorical");
+  assert.equal(Object.keys(output.compiledProductSeriesBundle.identities).length, 16);
+  assert.equal(output.nativeClaimBasis.byteLength, "2352");
+  assert.equal(output.compiledProductSeriesBundle.byteLength, "528");
+});
+
+test("no_shipped_script_contains_wallet_sign_or_submit_capability", () => {
+  for (const [name, source] of [["app.js", app], ["chain-client.js", chain], ["successor-registry.js", registry], ["successor-builder.js", builder], ["compiler-proposal.js", compiler]]) {
+    assert.doesNotMatch(source, /window\.(?:solana|phantom)|signTransaction|signAllTransactions|sendRawTransaction|sendTransaction|@solana\//, name);
+    assert.doesNotMatch(source, /new\s+WebSocket|XMLHttpRequest|EventSource|navigator\.sendBeacon|serviceWorker/, name);
+  }
 });

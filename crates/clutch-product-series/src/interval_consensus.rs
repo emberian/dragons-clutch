@@ -27,7 +27,8 @@ use crate::{
     MarketGenesisProfileV2Id, MarketInstancePreimageV2, MarketInstanceV2Id, NativeClaimBasisId,
     NativeClaimBasisV1, PriceMeasurePolicyV1, PriceMeasurePolicyV1Id, ProductTemplateId,
     ProductTemplateV4, QuantizedEdgePolicyV1, QuantizedIntervalConsensusCertificateV1Id,
-    QuantizedIntervalConsensusProfileV1Id, Result, SourceOccurrenceV1Id, MAX_OUTCOMES,
+    QuantizedIntervalConsensusProfileV1Id, QuantizedIntervalConsensusWorkV1Id, Result,
+    SourceOccurrenceV1Id, MAX_OUTCOMES,
 };
 
 const PROFILE_MAGIC_V1: [u8; 8] = *b"DCQICP1\0";
@@ -41,6 +42,7 @@ const TRANSCRIPT_INITIAL_DOMAIN_V1: &[u8] =
 const TRANSCRIPT_STEP_DOMAIN_V1: &[u8] =
     b"dragons-clutch/quantized-interval-consensus-transcript-step/v1";
 const PROFILE_DOMAIN_V1: &[u8] = b"dragons-clutch/quantized-interval-consensus-profile/v1";
+const WORK_DOMAIN_V1: &[u8] = b"dragons-clutch/quantized-interval-consensus-work/v1";
 const CERTIFICATE_DOMAIN_V1: &[u8] = b"dragons-clutch/quantized-interval-consensus-certificate/v1";
 const ROUNDING_POLICY_PREIMAGE_V1: &[u8] =
     b"WEIGHT-ROUND-01/floor-largest-remainders/lowest-outcome-index-ties/v1";
@@ -309,6 +311,19 @@ impl QuantizedIntervalConsensusWorkV1 {
     /// Current canonical rolling transcript commitment.
     pub const fn transcript(&self) -> ContentId {
         self.transcript
+    }
+
+    /// Typed content identity of every canonical structural-work byte.
+    ///
+    /// This identity does not authenticate an account or mint a payout
+    /// capability. It is the exact pre/post commitment used by the adapter's
+    /// durable transition chain.
+    pub fn id(&self) -> Result<QuantizedIntervalConsensusWorkV1Id> {
+        let mut bytes = [0; QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1];
+        self.encode_into(&mut bytes)?;
+        Ok(QuantizedIntervalConsensusWorkV1Id::from_bytes(
+            content_id(WORK_DOMAIN_V1, &bytes).bytes(),
+        ))
     }
 
     /// Structurally latched payout, absent until at least one coordinate ran.
@@ -901,6 +916,78 @@ impl VerifiedQuantizedIntervalPayoutV1 {
     pub const fn payout(&self) -> WeightVector {
         self.certificate.payout
     }
+}
+
+/// Complete expected facts at the persisted-history restoration boundary.
+///
+/// This is not authority. A live adapter must compare every field to its
+/// authenticated work PDA and permanent transition/replay account before its
+/// private authority type accepts the restoration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedIntervalConsensusRestorationV1 {
+    /// Complete terminal structural-work identity.
+    pub work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Exact exhaustive certificate identity derived from that work.
+    pub certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+    /// Full-width economic occurrence.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Immutable Source result which supplied the interval.
+    pub source_interval_id: ContentId,
+    /// Product-selected bounded work profile.
+    pub interval_profile_id: QuantizedIntervalConsensusProfileV1Id,
+    /// Inclusive number of evaluated integer coordinates.
+    pub checked_coordinates: u64,
+    /// Canonical terminal rolling transcript.
+    pub transcript: ContentId,
+}
+
+/// Adapter-owned authority for restoring one private Product payout capability.
+///
+/// Implementations must be private types constructible only after authenticating
+/// the dedicated work PDA, owner, generation/lifecycle, exact work pre/post
+/// succession, liveness receipts, and permanent replay account. The default
+/// refuses so an accidental empty implementation cannot authorize restoration.
+pub trait AuthenticatedQuantizedIntervalConsensusHistoryV1 {
+    /// Authenticate every exact terminal fact against durable history.
+    fn authenticate_complete_history(
+        &self,
+        _expected: QuantizedIntervalConsensusRestorationV1,
+    ) -> Result<()> {
+        Err(Error::UnauthenticatedAuthority)
+    }
+}
+
+/// Restore the private exhaustive-payout capability from adapter-authenticated
+/// durable history.
+///
+/// Product revalidates the full canonical context, complete work postimage,
+/// certificate, and identities. The adapter remains the explicitly named trust
+/// boundary for account ownership and the transition/replay chain; raw decoded
+/// work or replay bytes cannot call this function without an authority.
+pub fn restore_verified_quantized_interval_payout_v1<
+    A: AuthenticatedQuantizedIntervalConsensusHistoryV1 + ?Sized,
+>(
+    authority: &A,
+    work: &QuantizedIntervalConsensusWorkV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
+) -> Result<VerifiedQuantizedIntervalPayoutV1> {
+    let validated = validate_context(context)?;
+    work.validate_against(validated)?;
+    if !work.is_complete() {
+        return Err(Error::WorkIncomplete);
+    }
+    let certificate = QuantizedIntervalConsensusCertificateV1::from_complete_work(*work)?;
+    let expected = QuantizedIntervalConsensusRestorationV1 {
+        work_id: work.id()?,
+        certificate_id: certificate.id()?,
+        market_instance_id: work.market_instance_id(),
+        source_interval_id: work.source_interval_id(),
+        interval_profile_id: work.interval_profile_id(),
+        checked_coordinates: work.checked_coordinates(),
+        transcript: work.transcript(),
+    };
+    authority.authenticate_complete_history(expected)?;
+    Ok(VerifiedQuantizedIntervalPayoutV1 { certificate })
 }
 
 fn validate_context(

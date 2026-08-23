@@ -10,6 +10,8 @@ use clutch_solana_layout::registry::{
     AllocationStatus, ExtensionAction, ExtensionEnvelope, ExtensionFamily, RegistryError,
     EXTENSION_ENVELOPE_BYTES, MAX_EXTENSION_PAYLOAD_BYTES,
 };
+use clutch_solana_layout::source_series::{validate_account_metas_v2, ObservedSourceAccountMetaV2};
+use clutch_solana_reference::ExtensionRequest;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_transaction::Transaction;
@@ -20,8 +22,6 @@ pub type Result<T> = std::result::Result<T, ConstructionError>;
 /// Construction artifact schema. This is not a release or execution receipt.
 pub const CONSTRUCTION_PLAN_SCHEMA: &str =
     "dragons-clutch/operator/unsigned-protocol-transaction/v3";
-/// SourcePlane V3 adapter intent magic owned by that adapter's codec.
-pub const SOURCE_PLANE_V3_INTENT_MAGIC: [u8; 8] = *b"DCSP3INT";
 /// Runtime liveness intent magic owned by the liveness adapter codec.
 pub const LIVENESS_RUNTIME_V1_INTENT_MAGIC: [u8; 8] = *b"DCLINT01";
 
@@ -32,6 +32,7 @@ pub enum ConstructionError {
     EmptyActionName,
     EmptyInstructionData,
     DuplicateAccount,
+    InvalidAccountContract,
     DuplicateSigner,
     MissingSignerMeta,
     ForeignProgram,
@@ -55,6 +56,9 @@ impl core::fmt::Display for ConstructionError {
             Self::EmptyActionName => "construction action name is empty",
             Self::EmptyInstructionData => "construction instruction data is empty",
             Self::DuplicateAccount => "construction instruction aliases an account role",
+            Self::InvalidAccountContract => {
+                "construction instruction violates its exact account-role contract"
+            }
             Self::DuplicateSigner => "construction signer list contains a duplicate",
             Self::MissingSignerMeta => "required signer is neither the payer nor a signer meta",
             Self::ForeignProgram => "instruction program differs from the bound release",
@@ -97,15 +101,17 @@ pub enum ProtocolFlow {
 
 /// Runtime status carried into every construction artifact.
 ///
-/// This construction-only crate cannot promote an instruction to an enabled
-/// route. A future executable launcher must derive admission from a checked
-/// release manifest and the central registry rather than accepting a caller
-/// assertion here.
+/// Admission is assigned by closed constructors, never accepted as a caller
+/// argument. It still is not an execution receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeAdmission {
     /// Dispatcher capability is known to be disabled. Bytes are useful only
     /// for integration work and must not be represented as executable.
     ReservedDisabled,
+    /// The exact SourceSeries coordinate is enabled by the release-bound
+    /// Clutch dispatcher and encoded in its strict replay request. This says
+    /// nothing about signing, submission, or successful onchain execution.
+    ReleaseBoundEnabled,
 }
 
 /// Central-registry provenance for a main-program successor envelope.
@@ -209,13 +215,18 @@ impl ExactEquation {
 /// How the semantic owner encoded the instruction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnedWireContract {
-    /// Exact SourcePlane V3 intent preimage, including `DCSP3INT`.
-    SourcePlaneV3 { exact_bytes: usize },
     /// Exact liveness runtime intent, including `DCLINT01`.
     LivenessRuntimeV1 { exact_bytes: usize },
     /// Main-program successor envelope. The central registry owns family tag
     /// and version; the named semantic package owns action and payload bytes.
     MainSuccessor { binding: SuccessorRegistryBinding },
+    /// Exact outer Clutch replay request carrying a centrally allocated
+    /// SourceSeries successor envelope. The sequence is the Source work-call
+    /// ordinal and therefore cannot be silently supplied by a launcher.
+    MainSuccessorRequest {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
 }
 
 /// One semantic-owner-produced instruction ready for outer construction.
@@ -235,31 +246,6 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
-    /// Wrap an exact SourcePlane V3 adapter preimage without re-encoding it.
-    pub fn source_plane_v3(
-        action_name: impl Into<String>,
-        semantic_owner: SemanticOwner,
-        program_id: Address,
-        accounts: Vec<AccountMeta>,
-        required_signers: Vec<Address>,
-        equations: Vec<ExactEquation>,
-        exact_bytes: usize,
-        data: Vec<u8>,
-    ) -> Result<Self> {
-        Self::owned_bytes(
-            ProtocolFlow::SourcePlaneV3,
-            action_name,
-            semantic_owner,
-            program_id,
-            accounts,
-            required_signers,
-            equations,
-            OwnedWireContract::SourcePlaneV3 { exact_bytes },
-            data,
-            None,
-        )
-    }
-
     /// Wrap an exact liveness runtime intent without creating a parallel codec.
     pub fn liveness(
         action_name: impl Into<String>,
@@ -322,6 +308,67 @@ impl OwnedInstructionDraft {
             data,
             Some(binding),
         )
+    }
+
+    /// Assemble an enabled SourceSeries request through the exact outer
+    /// Clutch replay codec. Only coordinates whose dispatcher implementation
+    /// is complete may be admitted here.
+    pub fn enabled_source_successor(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        action: clutch_solana_layout::registry::SourceSeriesAction,
+        call_ordinal: u32,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_solana_layout::registry::SourceSeriesAction;
+
+        if call_ordinal == 0
+            || !matches!(
+                action,
+                SourceSeriesAction::InitializeHead | SourceSeriesAction::OpenRawPage
+            )
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        let central_action = ExtensionAction::SourceV3(action);
+        let family = central_action.family();
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let envelope = ExtensionEnvelope {
+            family,
+            action: central_action,
+            payload,
+        };
+        let request = ExtensionRequest {
+            sequence: u64::from(call_ordinal),
+            envelope,
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::SourcePlaneV3,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainSuccessorRequest {
+                binding,
+                sequence: u64::from(call_ordinal),
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
     }
 
     /// Assemble a production-inert structured-claim successor whose local
@@ -417,10 +464,17 @@ impl OwnedInstructionDraft {
         for equation in &self.equations {
             equation.validate()?;
         }
-        let mut accounts = BTreeSet::new();
-        for account in &self.accounts {
-            if !accounts.insert(account.pubkey) {
-                return Err(ConstructionError::DuplicateAccount);
+        let source_request = matches!(
+            self.wire,
+            OwnedWireContract::MainSuccessorRequest { binding, .. }
+                if binding.family == ExtensionFamily::SourceSeries
+        );
+        if !source_request {
+            let mut accounts = BTreeSet::new();
+            for account in &self.accounts {
+                if !accounts.insert(account.pubkey) {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
             }
         }
         let mut signers = BTreeSet::new();
@@ -433,20 +487,6 @@ impl OwnedInstructionDraft {
             }
         }
         match self.wire {
-            OwnedWireContract::SourcePlaneV3 { exact_bytes } => {
-                if self.registry_binding.is_some() {
-                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
-                }
-                if self.flow != ProtocolFlow::SourcePlaneV3 {
-                    return Err(ConstructionError::WrongFlow);
-                }
-                if self.data.len() != exact_bytes {
-                    return Err(ConstructionError::WrongWireLength);
-                }
-                if !self.data.starts_with(&SOURCE_PLANE_V3_INTENT_MAGIC) {
-                    return Err(ConstructionError::WrongWirePrefix);
-                }
-            }
             OwnedWireContract::LivenessRuntimeV1 { exact_bytes } => {
                 if self.registry_binding.is_some() {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
@@ -504,6 +544,48 @@ impl OwnedInstructionDraft {
                 if !family_matches {
                     return Err(ConstructionError::WrongFlow);
                 }
+            }
+            OwnedWireContract::MainSuccessorRequest { binding, sequence } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if sequence == 0
+                    || request.sequence != sequence
+                    || request.envelope.family != binding.family
+                    || request.envelope.action.local_tag() != binding.local_action
+                    || self.registry_binding != Some(binding)
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || binding.family != ExtensionFamily::SourceSeries
+                    || self.flow != ProtocolFlow::SourcePlaneV3
+                    || !matches!(
+                        binding.central_action,
+                        Some(ExtensionAction::SourceV3(action))
+                            if request.envelope.action == ExtensionAction::SourceV3(action)
+                    )
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let ExtensionAction::SourceV3(action) = request.envelope.action else {
+                    return Err(ConstructionError::WrongFlow);
+                };
+                if !matches!(
+                    action,
+                    clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
+                        | clutch_solana_layout::registry::SourceSeriesAction::OpenRawPage
+                ) {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let observed = self
+                    .accounts
+                    .iter()
+                    .map(|account| ObservedSourceAccountMetaV2 {
+                        key: account.pubkey.to_bytes(),
+                        writable: account.is_writable,
+                        signer: account.is_signer,
+                    })
+                    .collect::<Vec<_>>();
+                validate_account_metas_v2(action, &observed)
+                    .map_err(|_| ConstructionError::InvalidAccountContract)?;
             }
         }
         Ok(())
@@ -642,8 +724,11 @@ impl ProtocolTransactionBuilder {
 
         for draft in drafts {
             draft.validate()?;
-            if matches!(draft.wire, OwnedWireContract::MainSuccessor { .. })
-                && draft.program_id != self.clutch_program
+            if matches!(
+                draft.wire,
+                OwnedWireContract::MainSuccessor { .. }
+                    | OwnedWireContract::MainSuccessorRequest { .. }
+            ) && draft.program_id != self.clutch_program
             {
                 return Err(ConstructionError::ForeignProgram);
             }
@@ -803,7 +888,8 @@ const fn map_registry_error(error: RegistryError) -> ConstructionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clutch_solana_layout::registry::GeneralV2Action;
+    use clutch_solana_layout::registry::{GeneralV2Action, SourceSeriesAction};
+    use clutch_solana_layout::source_series::account_contract_v2;
 
     fn owner() -> SemanticOwner {
         SemanticOwner {
@@ -811,6 +897,94 @@ mod tests {
             schema: "structured-claim/v1".into(),
             release_sha256: [7; 32],
         }
+    }
+
+    fn source_accounts(
+        action: SourceSeriesAction,
+        coalesce_payer_keeper: bool,
+    ) -> Vec<AccountMeta> {
+        let contract = account_contract_v2(action);
+        let keeper_index = match action {
+            SourceSeriesAction::InitializeHead => 14,
+            SourceSeriesAction::OpenRawPage => 15,
+            _ => unreachable!(),
+        };
+        let payer_index = keeper_index + 1;
+        (0..contract.len())
+            .map(|index| {
+                let required = contract.meta(index).unwrap();
+                let identity_index = if coalesce_payer_keeper && index == payer_index {
+                    keeper_index
+                } else {
+                    index
+                };
+                AccountMeta {
+                    pubkey: Address::new_from_array(
+                        [u8::try_from(identity_index + 10).unwrap(); 32],
+                    ),
+                    is_signer: required.signer,
+                    is_writable: required.writable,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enabled_source_request_carries_exact_call_ordinal_and_allowed_alias() {
+        let action = SourceSeriesAction::InitializeHead;
+        let draft = OwnedInstructionDraft::enabled_source_successor(
+            "initialize-source-head",
+            owner(),
+            Address::new_from_array([2; 32]),
+            source_accounts(action, true),
+            vec![Address::new_from_array([24; 32])],
+            vec![ExactEquation {
+                name: "source call quote".into(),
+                unit: IntegerUnit::Lamports,
+                left: 9,
+                right: 9,
+            }],
+            action,
+            7,
+            &[8; 160],
+        )
+        .unwrap();
+        let decoded = ExtensionRequest::decode(draft.data()).unwrap();
+        assert_eq!(decoded.sequence, 7);
+        assert_eq!(decoded.envelope.action, ExtensionAction::SourceV3(action));
+        assert_eq!(
+            draft.runtime_admission,
+            RuntimeAdmission::ReleaseBoundEnabled
+        );
+    }
+
+    #[test]
+    fn enabled_source_request_refuses_unlisted_role_alias() {
+        let action = SourceSeriesAction::OpenRawPage;
+        let mut accounts = source_accounts(action, false);
+        accounts[1].pubkey = accounts[0].pubkey;
+        assert_eq!(
+            OwnedInstructionDraft::enabled_source_successor(
+                "open-raw-page",
+                owner(),
+                Address::new_from_array([2; 32]),
+                accounts,
+                vec![
+                    Address::new_from_array([25; 32]),
+                    Address::new_from_array([26; 32])
+                ],
+                vec![ExactEquation {
+                    name: "source call quote".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                action,
+                8,
+                &[8; 160],
+            ),
+            Err(ConstructionError::InvalidAccountContract)
+        );
     }
 
     #[test]

@@ -91,7 +91,7 @@ impl TransitionActionV3 {
     }
 }
 
-/// One exact adapter account state named by family, semantic PDA recipe,
+/// One exact promoted account state named by family, semantic PDA recipe,
 /// terminal generation, and canonical full account-image digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountStateV3 {
@@ -119,7 +119,7 @@ impl AccountStateV3 {
         self.binding_id
     }
 
-    /// Digest of the canonical adapter prefix and semantic core body.
+    /// Digest of the exact promoted runtime envelope and semantic core body.
     pub const fn state_digest(self) -> ContentId {
         self.state_digest
     }
@@ -315,7 +315,12 @@ impl AccountCreationV3 {
 
     fn validate(&self) -> Result<()> {
         self.state.validate()?;
-        if self.payer.is_zero() || self.rent_principal_lamports == 0 {
+        // A fully prefunded PDA has no transaction-payer principal and must
+        // therefore carry the zero payer identity.  Conversely, any positive
+        // rent shortfall must name the exact payer.  Treating a prefund as
+        // caller principal would manufacture a refund authority that does not
+        // exist in the runtime funding ledger.
+        if self.payer.is_zero() != (self.rent_principal_lamports == 0) {
             return Err(Error::InvalidParameter);
         }
         // These compartments have distinct units and ownership. In
@@ -777,6 +782,95 @@ pub fn project_initialize_source_head(
         output: head,
         plan: plan.finish()?,
     })
+}
+
+/// Recompute the action-2 transition commitment from the exact runtime
+/// postimage and prefund-safe funding partition produced by the live adapter.
+///
+/// Unlike the historical research account envelope, the promoted runtime
+/// permits a fully prefunded PDA.  Such a creation intentionally records no
+/// payer and zero payer principal; every prefunded lamport remains neutral
+/// donation.  The exact runtime account-data digest is committed directly so
+/// an intent cannot authorize a different promoted account image.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_initialize_source_head(
+    source_plane: &SourcePlaneProgramV3,
+    head: &SourceHeadV3,
+    semantic_binding_id: ContentId,
+    runtime_account_data_id: ContentId,
+    generation: u64,
+    authorization_digest: ContentId,
+    payer: ContentId,
+    rent_principal_lamports: u64,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    head.validate()?;
+    if semantic_binding_id.is_zero()
+        || runtime_account_data_id.is_zero()
+        || authorization_digest.is_zero()
+        || generation == 0
+        || payer.is_zero() != (rent_principal_lamports == 0)
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let mut plan = TransitionPlanV3::new(
+        TransitionActionV3::InitializeSourceHead,
+        authorization_digest,
+    );
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::SourceHead,
+            semantic_binding_id,
+            runtime_account_data_id,
+            generation,
+        )?,
+        payer,
+        rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
+    })?;
+    plan.finish()
+}
+
+/// Recompute the action-3 creation commitment from an authenticated SourceHead
+/// and the exact promoted OpenRawPage postimage.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_open_raw_page(
+    source_plane: &SourcePlaneProgramV3,
+    head: &SourceHeadV3,
+    open: &OpenRawPageV3,
+    semantic_binding_id: ContentId,
+    runtime_account_data_id: ContentId,
+    generation: u64,
+    payer: ContentId,
+    rent_principal_lamports: u64,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    head.validate()?;
+    open.validate_against_head(head)?;
+    if semantic_binding_id.is_zero()
+        || runtime_account_data_id.is_zero()
+        || generation == 0
+        || payer.is_zero() != (rent_principal_lamports == 0)
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let mut plan = TransitionPlanV3::new(TransitionActionV3::OpenRawPage, ContentId::ZERO);
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::OpenRawPage,
+            semantic_binding_id,
+            runtime_account_data_id,
+            generation,
+        )?,
+        payer,
+        rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
+    })?;
+    plan.finish()
 }
 
 /// Create page work at the exact state-owned head cursor.

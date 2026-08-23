@@ -161,6 +161,8 @@ pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-au
 pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 /// Immutable SourcePlane V3 occurrence-provenance record prefix.
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
+/// Immutable Source-selected runtime-liveness policy account prefix.
+pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -212,6 +214,8 @@ pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NO
 pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
 /// General V2 active-width ClearWork seed prefix.
 pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// Disabled resumable RelationV2 ClearWork V3 seed prefix.
+pub const SEED_GENERAL_V2_WORK_V3: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V3;
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
@@ -244,6 +248,9 @@ pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
 /// Disabled buyer-first candidate settlement cash-pot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+/// Counted candidate-scoped General V2 SettlementRoot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -253,6 +260,10 @@ pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 /// Permanent failure-generation replay tombstone.
 pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
+/// Dedicated exhaustive interval-consensus work lifecycle.
+pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
+/// Permanent exhaustive interval-consensus replay receipt.
+pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -373,6 +384,38 @@ pub fn failure_replay_tombstone_pda(
     )
 }
 
+/// Canonical mutable interval-consensus work PDA for one Failure generation.
+pub fn failure_interval_consensus_work_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent interval-consensus replay PDA for one Failure generation.
+pub fn failure_interval_consensus_replay_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical market-wide supply-ledger address and bump.
 ///
 /// One ledger per market, not per position: the two-term ledger is a
@@ -481,6 +524,11 @@ pub fn general_v2_feed_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8)
 /// Canonical General V2 ClearWork PDA inherited from its AdmissionNode.
 pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_GENERAL_V2_WORK, node])
+}
+
+/// Disabled canonical General V2 resumable ClearWork V3 PDA.
+pub fn general_v2_work_v3_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK_V3, node])
 }
 
 /// Canonical General V2 selected settlement-authority PDA.
@@ -675,6 +723,18 @@ pub fn general_v2_settlement_cash_pot_pda(
     )
 }
 
+/// Canonical counted General V2 SettlementRoot PDA.
+pub fn general_v2_settlement_root_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
+    )
+}
+
 /// Canonical immutable-terms address and bump.
 ///
 /// Terms are content-addressed by their own digest and namespaced by the Realm
@@ -831,6 +891,14 @@ pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]
 /// Canonical immutable successor Product/Series artifact address.
 pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
+}
+
+/// Canonical immutable liveness policy selected by a Source release.
+pub fn source_liveness_policy_pda(
+    program_id: &Pubkey,
+    policy_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SOURCE_LIVENESS_POLICY_V1, policy_id])
 }
 
 /// Canonical immutable registered-Series address.

@@ -45,6 +45,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -84,19 +93,22 @@ name = "clutch-candidate-lifecycle"
 version = "0.1.0"
 
 [[package]]
-name = "clutch-dealer-runtime-contract"
-version = "0.1.0"
-dependencies = [
- "clutch-fee-runtime-contract",
- "clutch-liveness",
- "clutch-retirement",
- "sha2",
-]
-
-[[package]]
 name = "clutch-collateral-adapter-v2"
 version = "0.1.0"
 dependencies = [
+ "clutch-retirement",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-fee-runtime-contract",
+ "clutch-general-v2-contract",
+ "clutch-liveness",
+ "clutch-price-measure",
  "clutch-retirement",
  "sha2 0.10.9",
 ]
@@ -150,6 +162,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-fee-runtime-contract",
  "clutch-owner-settlement",
+ "clutch-retirement",
 ]
 
 [[package]]
@@ -157,6 +170,7 @@ name = "clutch-general-v2-runtime"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
  "clutch-fee-runtime-contract",
  "clutch-general-v2-contract",
@@ -194,6 +208,9 @@ version = "0.1.0"
 [[package]]
 name = "clutch-owner-settlement"
 version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+]
 
 [[package]]
 name = "clutch-price-measure"
@@ -228,8 +245,8 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
- "clutch-dealer-runtime-contract",
  "clutch-collateral-adapter-v2",
+ "clutch-dealer-runtime-contract",
  "clutch-evidence-recovery",
  "clutch-failure-policy-adapter",
  "clutch-failure-policy-runtime",
@@ -237,16 +254,20 @@ dependencies = [
  "clutch-general-v2-runtime",
  "clutch-kernel",
  "clutch-liveness",
+ "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",
  "clutch-source-plane-v3",
  "clutch-source-plane-v3-adapter",
  "clutch-source-plane-v3-runtime",
  "solana-account-info",
+ "solana-clock",
  "solana-cpi",
  "solana-define-syscall 5.1.0",
+ "solana-get-sysvar",
  "solana-instruction",
  "solana-program-entrypoint",
  "solana-program-error",
@@ -278,6 +299,8 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
  "clutch-product-series",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
  "solana-sha256-hasher",
 ]
 
@@ -874,6 +897,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-clock"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0acdace90d96e2c9e70d681465b4fe888b6bcf27c354ae9774e9f8a3b72923d"
+dependencies = [
+ "solana-get-sysvar",
+ "solana-sdk-ids",
+ "solana-sdk-macro",
+ "solana-sysvar-id",
+]
+
+[[package]]
 name = "solana-cpi"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -915,6 +950,17 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "solana-get-sysvar"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef3bc859fc036ed490146793557386cbfae614ebba4adc704c37d94350824ed4"
+dependencies = [
+ "solana-address",
+ "solana-define-syscall 5.1.0",
+ "solana-program-error",
 ]
 
 [[package]]
@@ -1012,6 +1058,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-sdk-macro"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8765316242300c48242d84a41614cb3388229ec353ba464f6fe62a733e41806f"
+dependencies = [
+ "bs58",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "solana-seed-phrase"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,6 +1123,16 @@ checksum = "c9f6a291ba063a37780af29e7db14bdd3dc447584d8ba5b3fc4b88e2bbc982fa"
 dependencies = [
  "solana-instruction",
  "solana-pubkey",
+]
+
+[[package]]
+name = "solana-sysvar-id"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17358d1e9a13e5b9c2264d301102126cf11a47fd394cdf3dec174fe7bc96e1de"
+dependencies = [
+ "solana-address",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1140,6 +1208,21 @@ dependencies = [
  "quote",
  "syn 3.0.3",
 ]
+
+[[package]]
+name = "tinyvec"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "typenum"

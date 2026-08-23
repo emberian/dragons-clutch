@@ -1,112 +1,159 @@
-# Glass static client
+# Glass chain console
 
-This is the dependency-free, offline-first unsigned protocol console for
-Dragon's Clutch. It is a static-hostable untrusted projection with no network,
-wallet, signing, or submission capability. It is no longer limited to fixture
-description: it can validate user-supplied protocol projections, reconcile
-exact owner-level settlement/fee arithmetic, and export bytes for the protocol
-contracts that own an exact wire.
+Glass is the dependency-free, static-hostable read-only console for Dragon's
+Clutch. It has no configured network, program, release, wallet, signer, or
+transaction submission path at startup. A user must explicitly select every
+chain and release coordinate before the page can make a bounded read.
 
-> **Historical snapshot:** the bundled capability/evidence ledger predates the
-> 2026-08-22 architecture review. Its offline fixtures and byte compiler remain
-> testable, but its lifecycle-status prose is not current repository truth. See
-> the root `CURRENT_TRUTH.md` and `docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`.
+The application has three narrow jobs:
 
-- `manifest.json` preserves the historical evidence snapshot, profiles, and
-  unpublished release identity.
-- `protocol-contracts.js` is the present contract inventory. It names explicit
-  localnet/devnet/testnet/mainnet-beta construction targets, the exact source
-  revisions for General V2 owner settlement, fees, SourcePlane V3, liveness,
-  Product/Series, and structured claims, and a reason for every disabled
-  capability. These branch anchors are implementation provenance, not a joined
-  release manifest.
-- `terms.json` contains the canonical display fixture and its SHA-256 digest.
-- `embedded-data.js` is a generated verbatim mirror of both files, so the page
-  works from `file://` under a `default-src 'none'` policy that permits no
-  network connection. `npm test` fails if the mirror drifts.
-- `index.html` / `styles.css` provide the protocol control, projection,
-  construction, and historical evidence surfaces.
-- `protocol-client.js` owns the real-protocol UI. Its cluster/program/release
-  configuration is local and ephemeral; even a complete form remains
-  user-supplied and non-official. It accepts no private keys and never contacts
-  the displayed endpoint.
-- `app.js` retains the bundled historical evidence and terms-fixture inspector.
-- `native-bspline-v1.js` is a dependency-free offline inspection SDK for the
-  native degree-0 through degree-3 basis. It consumes the Rust-generated
-  compiler fixture, projects canonical Terms bytes, structurally checks a
-  shape certificate, and emits exactly 11 Terms-upload intent-data strings
-  (one BeginArtifact, nine WriteArtifact, one SealArtifact) plus a separate
-  CreateMarket intent-data string. It still has no account-meta/message
-  builder, wallet, RPC, signer, or submit path. The analytic certificate
-  remains offline evidence and is not committed by current Terms.
-- `native-bspline-market-creation-v1.schema.json` describes the unsigned JSON
-  preview. Digests cover the documented binary codecs, not this JSON object.
-- [`SERVING.md`](SERVING.md) states which protections require serve-time HTTP
-  headers, with an example header set.
+1. read the fork-aware untrusted account index exposed by `operatord`;
+2. bind and display exact Product compiler proposals emitted by Rust; and
+3. assemble the outer blockhash-free Solana transaction around exact bytes and
+   account roles supplied by their semantic owner.
 
-## Projection boundary
+It is not an explorer, index authority, compiler implementation, wallet, or
+release manifest.
 
-The protocol state importer accepts
-`dragons-clutch.account-projection.v1`. A separate collector must supply the
-cluster, observation slot, release/ProgramData binding, and one provenance row
-per account containing its address, owner program, complete body SHA-256, slot,
-and semantic kind. The browser checks the envelope and protocol relationships;
-it does not authenticate any of those observations against a validator.
+## Explicit target
 
-Recognized state surfaces are:
+The form requires these values and embeds none of them as defaults:
 
-- owner-sorted General V2 settlement rows, including aggregate buy/sell price
-  units, the single owner-level ceil/floor boundary, explicit seller zero-fee
-  rows, reservation funding, and projected Position cash;
-- the selected fee record, exact recipient conservation, and ordinary treasury
-  Position custody;
-- SourcePlane V3 release/parser/spec/generation and head/page/window/result
-  lineage;
-- all seven prepaid liveness compartments in canonical order, with principal,
-  work, rent, and donation quantities kept distinct;
-- the five Series funding components, ordinal/lapse phase, and principal versus
-  donation balances;
-- structured descriptor, Token-2022 supply, backing, surplus, and retirement
-  visibility.
+- operatord base URL;
+- cluster name and genesis hash;
+- validator HTTP and WebSocket URLs used by the daemon's acquisition plan;
+- processed or finalized commitment;
+- program and ProgramData addresses, deployment slot, ELF SHA-256;
+- release-manifest SHA-256, source commit, capability-profile identity; and
+- browser account, response-byte, timeout, and slot-lag bounds.
 
-All exact quantities are decimal strings. Semantic 32-byte identities are
-lowercase hex so owner row order is byte order rather than locale or base58
-text order. Static clients and indexes remain untrusted projections of onchain
-state.
+The validator URLs are configuration bindings only. Browser code contacts the
+selected operatord URL and only with sequential `GET` requests to:
+
+```text
+/v1/health
+/v1/acquisition
+/v1/releases
+/v1/accounts?commitment={processed|finalized}
+/v1/keeper/next?commitment={processed|finalized}
+/v1/forks
+```
+
+Response bodies are byte-budgeted while streaming and then shape-bounded.
+Account quantities remain canonical decimal strings. The release join requires
+exact program, ProgramData, deployment-slot, ELF, and release-key equality.
+Rows from other releases are counted and ignored rather than blended.
+
+`operatord chain-serve --config FILE` is the live owner of these routes. Before
+binding HTTP it checks `getGenesisHash`, hostile-decodes each selected
+Program/ProgramData loader pair, checks the decoded deployment slot, and hashes
+the observed ProgramData ELF. It then repeatedly admits bounded finalized
+`getProgramAccounts` responses through `RpcIndexEngine`. Processed queries fail
+closed because this first transport does not yet own the required program,
+block, slot-update, and root WebSocket subscriptions. See
+[`CHAIN_SERVE.md`](CHAIN_SERVE.md).
+
+## Projection semantics
+
+The console groups chain-derived account rows into Market, Product, Source,
+Series, candidate/clearing, settlement/position, covered-liquidity, recovery,
+and unknown-release surfaces. It preserves account body digests, generation
+and binding IDs, observed/effective commitment, slot/lag, and one of these fork
+states:
+
+- `finalized-scan`;
+- `processed-frozen` or `processed-unfrozen`;
+- `dead-fork`; or
+- `unidentified-fork`.
+
+No absence statement is global: an empty family means only that the current
+bounded selected-release projection contained no row. All displayed state and
+keeper cursors are untrusted projections. The program must reload and
+authenticate complete accounts.
+
+Successor coordinates are mirrored from the central registry only to label and
+frame construction material. Every family remains `reserved-disabled` in this
+client. A decoded family is not executable capability admission, and the
+current operatord API does not authenticate the user-declared manifest, source
+commit, or capability-profile identity.
+
+Product/Series registration and Owner/Position V3 lifecycle appear as separate
+`not-authenticated` capability cards. This avoids treating Product compiler
+proposals, Position/Replay codecs, or owner-settlement rows as runtime
+admission. Dealer likewise stays visible as indexed liquidity state while its
+successor actions remain independently disabled.
+
+## Product compiler boundary
+
+JavaScript performs no payout, spline, approximation, or Product/Series bundle
+math. The compiler form accepts:
+
+- an exact rational definition JSON object in which all integers and rational
+  components are strings;
+- exact canonical fixed-codec Product/Series bundle inputs; and
+- an explicit expected compiler-release SHA-256 pinned by operatord.
+
+The form calls the pure bounded `POST /v1/compiler/production-payoff` endpoint.
+The same implementation is available through `operatord compile-payoff` for
+stdin/stdout proposal import. Both call Rust `compile_production_payoff_v1` and
+`assemble_compiled_product_series_bundle_v1`.
+
+The page computes SHA-256 over both canonical sorted-key UTF-8 definition JSON
+and the complete validated request, and requires the proposal to bind both plus
+the configured expected compiler-release SHA-256. That release hash is a
+configuration join, not a measurement of the running binary. It
+then displays exact-in-span versus certified-approximation status, all exact
+rational error bounds, the canonical 2,352-byte native-basis proposal, its
+  certificate, and the 528-byte bundle plus all sixteen typed identities. The
+bundle capability-profile ID must match the explicit release selection. An
+analytic result also carries its exact certification subdivision depth.
+
+The compiler endpoint is loopback-only and has no RPC, wallet, signing,
+submission, registration, or persistence path. Registration remains authority
+and must reopen the registry, Source release, and every canonical artifact and
+recompute their joins.
 
 ## Unsigned construction boundary
 
-The constructor emits three deliberately different products:
+`successor-builder.js` is the browser counterpart to the Rust outer
+`ProtocolTransactionBuilder`. It accepts one to sixteen explicit instructions.
+Each draft names its flow, successor family and action, semantic-owner package,
+schema and release digest, lowercase payload bytes, ordered account roles,
+required signer public keys, and at least one balanced exact `u128` equation.
+Equation units use the Rust categories rather than free text: lamports;
+collateral, fee, or wrapper atoms bound to a mint; price units bound to a
+positive scale; or Egg atoms bound to a Market identity and outcome.
 
-- Source/Series V2 actions emit the complete exact successor request envelope
-  and action payload. The central executable capability set is still empty, so
-  the output states that the runtime is expected to refuse it.
-- `DCLINT01` liveness transitions emit the exact 272-byte inner contract. No
-  outer action or account-meta table is claimed.
-- structured-claim actions emit their exact 192-, 72-, or 48-byte family-local
-  payload. The central registry has not allocated those local actions or the
-  proposed `0x88/1` descriptor account, so no outer request is fabricated.
+The builder validates those declarations, adds the three-byte successor
+envelope, compiles the canonical legacy Solana message key order, installs an
+all-zero recent blockhash, and serializes one zero signature per required
+message signer. It emits hex and base64 bytes with an explicit packet-size
+limit. It cannot decide semantic payloads, infer account metas, enable a route,
+obtain a recent blockhash, sign, or submit.
 
-General V2 settlement/fees and SourcePlane V3 remain construction-disabled
-until their central payload, account-meta, and runtime contracts are frozen
-together. Every output has an absent signer, an empty signature list, and no
-submission path.
+A selected keeper cursor adds exact joins: the draft's first successor
+coordinate must match the known keeper action, and the driver/dependencies must
+appear both in explicit metas and the acquired selected-release projection.
+Every workflow node states that authoritative accounts must be reloaded.
 
-Run the local checks without installing anything:
+## Files
 
-```sh
-npm test        # named offline gates, including Rust-fixture byte equality
-npm run check   # host JavaScript syntax check
-npm run embed   # regenerate embedded-data.js after editing manifest/terms JSON
-```
+- `chain-client.js`: explicit configuration and bounded operatord transport.
+- `successor-registry.js`: non-authoritative coordinate mirror and disabled
+  capability reasons.
+- `successor-builder.js`: exact outer message and unsigned transaction bytes.
+- `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
+  validation; no compiler math.
+- [`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md): exact Rust adapter JSON
+  contract and canonicalization rule.
+- [`CHAIN_SERVE.md`](CHAIN_SERVE.md): explicit bounded RPC/index configuration
+  and finalized-only live acquisition boundary.
+- `app.js`, `index.html`, `styles.css`: DOM presentation.
+- `manifest.json` and `terms.json`: retained historical evidence records; no
+  shipped script loads them and they are not application defaults.
+- [`SERVING.md`](SERVING.md): same-origin/CORS and response-header guidance.
 
-Editing `manifest.json` or `terms.json` means running `npm run embed`; editing
-`canonicalTerms` also means recomputing the digest in both `terms.json` and
-`manifest.json`. `npm test` refuses every one of those omissions.
-
-Open `index.html` directly or serve this directory with any static file server.
-The page never requires that server for protocol behavior, but a plain `file://`
-open has no Web Crypto, so the digest is displayed as declared and labeled as
-not recomputed. See [`SERVING.md`](SERVING.md) for the difference a host makes
-and [`docs/implementation/STATIC_CLIENT.md`](../../docs/implementation/STATIC_CLIENT.md)
-for the trust boundary and promotion gates.
+There are no runtime dependencies or asset build step. The repository keeps
+local mechanical checks under `test/`, but this implementation was deliberately
+not run against a browser, validator, RPC, wallet, or test command as part of
+the implementation-only swarm cycle.

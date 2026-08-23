@@ -11,8 +11,10 @@
 
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_retirement::{
-    PositionAccountV3, PositionPurposeV3, PositionV3Fields, PositionV3Sha256Backend,
-    ReplayV3Envelope, ReplayV3EnvelopeHeader, ReplayV3HashBackend, ReplayV3Lifecycle,
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+    PositionV3Fields, PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope,
+    ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema, ReplayV3HashBackend,
+    ReplayV3Lifecycle, MAX_OUTCOMES,
 };
 
 use crate::{CodecError, Id32, Reader, Writer};
@@ -26,6 +28,9 @@ pub const GENERAL_REPLAY_ACCOUNT_V1_BYTES: usize =
     clutch_retirement::PURPOSE_REPLAY_V3_PREFIX_BYTES + GENERAL_REPLAY_EXTENSION_V1_BYTES;
 /// Domain for one exact General Position pre/post delta.
 pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] = b"dragons-clutch/general-replay/delta/v1\0";
+
+/// Canonical founding generation for a fresh ordinary General Position.
+pub const GENERAL_POSITION_FOUNDING_GENERATION_V1: u64 = 1;
 
 const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
@@ -382,6 +387,149 @@ pub struct GeneralPositionReplayPrestateV1 {
     replay_semantic_id: Id32,
     replay_header: ReplayV3EnvelopeHeader,
     extension: GeneralReplayExtensionV1,
+}
+
+/// Exact pure founding plan for one canonical General Position/Replay pair.
+///
+/// The runtime remains responsible for authenticating both absent PDAs,
+/// immutable Market/Realm collateral facts, rent calculations, payer funding,
+/// and account creation. Private fields ensure those callers cannot replace
+/// either semantic body after this constructor has joined the complete facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralPositionReplayFoundingPlanV1 {
+    position: PositionAccountV3,
+    position_semantic_id: Id32,
+    position_body: [u8; clutch_retirement::POSITION_V3_BYTES],
+    replay_semantic_id: Id32,
+    replay_body: [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
+}
+
+impl GeneralPositionReplayFoundingPlanV1 {
+    /// Canonical zero-balance Position body at founding generation one.
+    pub const fn position(self) -> PositionAccountV3 {
+        self.position
+    }
+
+    /// Internally derived semantic identity of the founding Position body.
+    pub const fn position_semantic_id(self) -> Id32 {
+        self.position_semantic_id
+    }
+
+    /// Exact canonical 480-byte founding Position body.
+    pub const fn position_body(&self) -> &[u8; clutch_retirement::POSITION_V3_BYTES] {
+        &self.position_body
+    }
+
+    /// Internally derived semantic identity of the founding Replay body.
+    pub const fn replay_semantic_id(self) -> Id32 {
+        self.replay_semantic_id
+    }
+
+    /// Exact canonical 344-byte founding Replay body.
+    pub const fn replay_body(&self) -> &[u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES] {
+        &self.replay_body
+    }
+}
+
+/// Construct the unique zero-liability General Position and sequence-zero
+/// GEN1 Replay pair for complete authenticated external founding facts.
+#[allow(clippy::too_many_arguments)]
+pub fn found_general_position_replay_v1<B>(
+    position_account: Identity32V1,
+    replay_account: Identity32V1,
+    market_instance_id: Identity32V1,
+    realm_id: Identity32V1,
+    collateral_policy_id: Identity32V1,
+    collateral_release_id: Identity32V1,
+    owner: Identity32V1,
+    general_market_runtime: Identity32V1,
+    outcome_count: u8,
+    position_bump: u8,
+    replay_bump: u8,
+    position_rent: RentSplitV2,
+    replay_rent: DeletableRentOwnerV1,
+    backend: &B,
+) -> Result<GeneralPositionReplayFoundingPlanV1, CodecError>
+where
+    B: PositionV3Sha256Backend + ReplayV3HashBackend,
+{
+    if position_account == replay_account
+        || owner == replay_account
+        || general_market_runtime == replay_account
+        || usize::from(outcome_count) == 0
+        || usize::from(outcome_count) > MAX_OUTCOMES
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let position = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::General,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count,
+        stored_bump: position_bump,
+        generation: GENERAL_POSITION_FOUNDING_GENERATION_V1,
+        market_instance_id,
+        realm_id,
+        collateral_policy_id,
+        collateral_release_id,
+        owner,
+        controller: owner,
+        replay_account,
+        purpose_binding_id: general_market_runtime,
+        cash_atoms: 0,
+        reserved_cash_atoms: 0,
+        native_eggs: [0; MAX_OUTCOMES],
+        outstanding_reservations: 0,
+        rent: position_rent,
+    })
+    .map_err(|_| CodecError::InvalidState)?;
+    let position_semantic_id = Id32::new(
+        position
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let position_body = position.encode().map_err(|_| CodecError::InvalidState)?;
+    let extension = GeneralReplayExtensionV1::initial(
+        Id32::new(general_market_runtime.bytes())?,
+        position_semantic_id,
+    )?
+    .encode()?;
+    let header = ReplayV3EnvelopeHeader::new_live(
+        ReplayV3EnvelopeFields {
+            position_account,
+            replay_account,
+            purpose: PositionPurposeV3::General,
+            purpose_binding_id: general_market_runtime,
+            position_generation: GENERAL_POSITION_FOUNDING_GENERATION_V1,
+            next_sequence: 0,
+            stored_bump: replay_bump,
+            rent: replay_rent,
+        },
+        ReplayV3ExtensionSchema::new(GENERAL_REPLAY_EXTENSION_SCHEMA_V1)
+            .map_err(|_| CodecError::InvalidState)?,
+        &extension,
+        backend,
+    )
+    .map_err(|_| CodecError::InvalidState)?;
+    let envelope = ReplayV3Envelope::from_header(header, &extension, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    let replay_semantic_id = Id32::new(
+        envelope
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let mut replay_body = [0_u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES];
+    envelope
+        .encode_into(&mut replay_body, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    Ok(GeneralPositionReplayFoundingPlanV1 {
+        position,
+        position_semantic_id,
+        position_body,
+        replay_semantic_id,
+        replay_body,
+    })
 }
 
 impl GeneralPositionReplayPrestateV1 {

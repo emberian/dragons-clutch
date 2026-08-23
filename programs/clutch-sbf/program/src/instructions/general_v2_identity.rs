@@ -1,12 +1,10 @@
-//! Non-production General V2 empty-book candidate-identity laboratory.
+//! Non-production General V2 candidate execution laboratory.
 //!
-//! This module deliberately exposes only the twelve extension actions admitted
-//! by its mutually exclusive capability profile. It proves a signed,
-//! committing local-SBF identity lifecycle over one genesis-assisted Product
-//! market and an empty RelationV2 book. It creates no orders, positions,
-//! entitlements, receipts, pots, token accounts, trades, or settlement. The
-//! additional actions pay only the present-funded solver prize and retire the
-//! completed Work/node accounts along their pure, counted close graph.
+//! Every route remains behind the mutually exclusive non-production capability
+//! profile. The successor path can authenticate frozen nonempty OrderPage V5
+//! sets and resume owner-blind RelationV2 verification, but it still creates no
+//! positions, entitlements, receipts, pots, token accounts, trades, or
+//! settlement. Rewards are paid only from the present-funded Work compartment.
 
 use crate::accounts::{require, require_count, require_signer, Outcome};
 use crate::capabilities;
@@ -24,14 +22,13 @@ use clutch_general_v2_contract::{
     IdentityLabPayloadV1, Sha256BackendV1, WriteCandidateFeedPayloadV1,
 };
 use clutch_general_v2_runtime::{
-    relation_v2_policy_id_v1, score_v2_q_policy_id_v1, verify_smooth_direct_candidate_v1,
-    GeneralV2RuntimeError,
+    advance_clear_order_v1, relation_v2_policy_id_v1, score_v2_q_policy_id_v1,
+    verify_smooth_direct_candidate_v1, GeneralV2RuntimeError, GeneralV2WorkErrorV1,
 };
 use clutch_product_series::{
     FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1, BASIS_BYTES,
-    MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES, PRICE_MEASURE_POLICY_BYTES,
-    PRODUCT_TEMPLATE_BYTES,
+    MARKET_GENESIS_PROFILE_V2_BYTES, PRICE_MEASURE_POLICY_BYTES, PRODUCT_TEMPLATE_BYTES,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::{account_len, PriceGridAccount};
@@ -39,6 +36,8 @@ use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Native Solana SHA-256 adapter for the pure contract's byte-exact backend seam.
 #[derive(Clone, Copy, Debug)]
@@ -80,6 +79,9 @@ pub fn process(
         }
         IdentityLabPayloadV1::InitClearWork(request) => {
             init_clear_work(program_id, accounts, request)
+        }
+        IdentityLabPayloadV1::AdvanceClearOrders(request) => {
+            advance_clear_orders(program_id, accounts, request)
         }
         IdentityLabPayloadV1::CompleteCandidateVerification(request) => {
             complete_candidate_verification(program_id, accounts, request)
@@ -1114,8 +1116,6 @@ fn open_candidate_feed(
             && request.outcome_count == binding.outcome_count
             && request.basis_degree == binding.basis_degree
             && request.price_scale == binding.price_scale
-            && request.order_count == 0
-            && request.slice_count == 0
             && request.candidate_kind == contract::SettlementCandidateKindV1::Direct
             && binding.candidate_kind_mask & 1 == 1
             && slot >= window.reveal_opens_slot
@@ -1131,12 +1131,7 @@ fn open_candidate_feed(
     require(
         domain.transcript.relation_policy_id == binding.relation_policy_id
             && domain.transcript.price_measure_policy_v1_id == binding.price_measure_policy_v1_id
-            && domain.transcript.native_claim_basis_id == binding.native_claim_basis_id
-            && epoch.order_set
-                == contract::empty_order_set_digest_v1(
-                    &RuntimeSha256,
-                    contract::economic_domain_digest_v2(&RuntimeSha256, domain.transcript)?,
-                )?,
+            && domain.transcript.native_claim_basis_id == binding.native_claim_basis_id,
         ClutchError::MismatchedState,
     )?;
     let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[6].key.to_bytes());
@@ -1147,7 +1142,7 @@ fn open_candidate_feed(
         request.atom_count,
         request.slice_count,
     )?;
-    let work_len = contract::clear_work_account_len(request.outcome_count, request.order_count)?;
+    let work_len = contract::clear_work_v3_account_len(request.outcome_count, request.order_count)?;
     let feed_rent = rent_owner(&accounts[0], &accounts[7], &rent, feed_len)?;
     let work_rent = DeletableRentOwnerV1 {
         payer: id(accounts[0].key),
@@ -1342,6 +1337,34 @@ fn seal_candidate(
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[6])?)?;
     let feed_data = borrow_data(&accounts[4])?;
     let header = contract::CandidateFeedHeaderV2::decode_account(&feed_data, false)?;
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[5].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[5].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[1].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[2].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[1].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[3].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let domain_pda = seeds::general_v2_economic_domain_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[6].key == domain_pda.0 && domain.stored_bump == domain_pda.1,
+        ClutchError::WrongPda,
+    )?;
     require_compartment_balance(&accounts[4], header.rent, &[header.close_reward_lamports])?;
     require(
         request.epoch == id(accounts[1].key)
@@ -1356,8 +1379,6 @@ fn seal_candidate(
             && header.market == epoch.market_runtime
             && header.order_set == epoch.order_set
             && header.candidate_kind == contract::SettlementCandidateKindV1::Direct
-            && header.order_count == 0
-            && header.slice_count == 0
             && node.candidate_bundle_digest != Id32::ZERO
             && slot >= window.reveal_opens_slot
             && slot < window.submission_closes_slot,
@@ -1368,13 +1389,14 @@ fn seal_candidate(
         *accounts[4].key == feed_pda.0 && header.stored_bump == feed_pda.1,
         ClutchError::WrongPda,
     )?;
-    let sealed = contract::seal_empty_book_candidate_v1(
+    let sealed = contract::seal_candidate_v2(
         &RuntimeSha256,
         id(accounts[4].key),
         &feed_data,
         node,
         binding,
         domain,
+        epoch,
     )?;
     drop(feed_data);
     encode_account(&accounts[4], |out| {
@@ -1463,6 +1485,34 @@ fn init_clear_work(
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[4])?)?;
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[5])?)?;
     let feed = contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[6])?, true)?;
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[3].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[3].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[1].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[2].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let domain_pda = seeds::general_v2_economic_domain_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[4].key == domain_pda.0 && domain.stored_bump == domain_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[1].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[5].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
     require_compartment_balance(
         &accounts[5],
         node.rent,
@@ -1490,8 +1540,6 @@ fn init_clear_work(
             && feed.epoch == request.epoch
             && feed.node == request.node
             && feed.market == epoch.market_runtime
-            && feed.order_count == 0
-            && feed.slice_count == 0
             && basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
                 == binding.native_claim_basis_id.bytes()
             && slot >= window.submission_closes_slot
@@ -1503,15 +1551,15 @@ fn init_clear_work(
         *accounts[6].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
         ClutchError::WrongPda,
     )?;
-    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[5].key.to_bytes());
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[5].key.to_bytes());
     require(*accounts[8].key == work_pda.0, ClutchError::WrongPda)?;
-    let work_len = contract::clear_work_account_len(feed.outcome_count, feed.order_count)?;
+    let work_len = contract::clear_work_v3_account_len(feed.outcome_count, feed.order_count)?;
     let work_rent = DeletableRentOwnerV1 {
         payer: node.payer,
         refundable_principal: rent.minimum_balance(work_len)?,
         donation_floor: accounts[8].lamports(),
     };
-    let post = contract::init_clear_work_poststate_v1(contract::InitClearWorkTransitionV1 {
+    let post = contract::init_clear_work_v3_poststate_v1(contract::InitClearWorkV3TransitionV1 {
         epoch_id: id(accounts[1].key),
         feed_id: id(accounts[6].key),
         work_id: id(accounts[8].key),
@@ -1527,7 +1575,7 @@ fn init_clear_work(
         ClutchError::MismatchedState,
     )?;
     let work_seeds: [&[u8]; 3] = [
-        seeds::SEED_GENERAL_V2_WORK,
+        seeds::SEED_GENERAL_V2_WORK_V3,
         &accounts[5].key.to_bytes(),
         &[work_pda.1],
     ];
@@ -1544,10 +1592,279 @@ fn init_clear_work(
     )?;
     encode_account(&accounts[8], |out| {
         post.work
-            .encode(&mut out[..contract::CLEAR_WORK_HEADER_BYTES])
+            .encode(&mut out[..contract::CLEAR_WORK_V3_HEADER_BYTES])
     })?;
     encode_account(&accounts[5], |out| post.node.encode(out))?;
     encode_account(&accounts[1], |out| post.epoch.encode(out))
+}
+
+#[inline(never)]
+fn advance_clear_orders(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    request: contract::EpochNodePayloadV1,
+) -> Outcome<()> {
+    require(accounts.len() >= 10, ClutchError::WrongAccountCount)?;
+    require_writable_destination(&accounts[0])?;
+    require_role(
+        program_id,
+        &accounts[1],
+        false,
+        contract::GENERAL_EPOCH_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[2],
+        false,
+        contract::WINDOW_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[3],
+        false,
+        contract::MARKET_BINDING_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[4],
+        false,
+        contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[5],
+        false,
+        contract::ADMISSION_NODE_ACCOUNT_BYTES,
+    )?;
+    require(
+        accounts[6].owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
+    require(!accounts[6].is_writable, ClutchError::UnexpectedWritable)?;
+    require(
+        accounts[7].owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
+    require_writable_destination(&accounts[7])?;
+
+    let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[1])?)?;
+    let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[2])?)?;
+    let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[3])?)?;
+    let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[4])?)?;
+    let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[5])?)?;
+    let feed = contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[6])?, true)?;
+    let work = contract::ClearWorkV3AccountV1::decode_account(&borrow_data(&accounts[7])?)?;
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[3].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[3].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[1].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[2].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let domain_pda = seeds::general_v2_economic_domain_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[4].key == domain_pda.0 && domain.stored_bump == domain_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[1].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[5].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let page_count = if work.phase == 0 {
+        let first = clutch_solana_layout::order_page_v5::OrderPageHeaderV5::decode(&borrow_data(
+            &accounts[8],
+        )?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+        first.page_count
+    } else {
+        work.page_count
+    };
+    require(
+        (1..=4).contains(&page_count) && accounts.len() == 9usize + usize::from(page_count),
+        ClutchError::WrongAccountCount,
+    )?;
+    let clock_index = 8usize + usize::from(page_count);
+    let slot = read_clock_slot(&accounts[clock_index])?;
+    require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
+    require_compartment_balance(&accounts[7], work.rent, &[work.reward_remaining])?;
+    require(
+        request.epoch == id(accounts[1].key)
+            && request.node == id(accounts[5].key)
+            && epoch.phase == GeneralEpochPhaseV1::Frozen
+            && epoch.window == id(accounts[2].key)
+            && epoch.market_binding == id(accounts[3].key)
+            && epoch.economic_domain == id(accounts[4].key)
+            && node.epoch == request.epoch
+            && node.status == contract::AdmissionNodeStatusV1::Revealed
+            && node.work_escrow_lamports == 0
+            && feed.epoch == request.epoch
+            && feed.node == request.node
+            && feed.order_count != 0
+            && work.epoch == request.epoch
+            && work.node == request.node
+            && work.feed == id(accounts[6].key)
+            && work.order_cursor < work.order_count
+            && slot >= window.submission_closes_slot
+            && slot < window.verification_closes_slot,
+        ClutchError::MismatchedState,
+    )?;
+    let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[5].key.to_bytes());
+    require(
+        *accounts[6].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[5].key.to_bytes());
+    require(
+        *accounts[7].key == work_pda.0 && work.stored_bump == work_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let mut page = 0u16;
+    while page < page_count {
+        let at = 8usize + usize::from(page);
+        require_role(
+            program_id,
+            &accounts[at],
+            false,
+            clutch_solana_layout::order_page_v5::ORDER_PAGE_V5_BYTES,
+        )?;
+        let header = clutch_solana_layout::order_page_v5::OrderPageHeaderV5::decode(&borrow_data(
+            &accounts[at],
+        )?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+        let pda =
+            seeds::general_v2_order_page_v5_pda(program_id, &accounts[1].key.to_bytes(), page);
+        require(
+            *accounts[at].key == pda.0
+                && header.stored_bump == pda.1
+                && header.page_index == page
+                && header.page_count == page_count
+                && header.market.bytes() == epoch.market_runtime.bytes()
+                && header.epoch.bytes() == request.epoch.bytes()
+                && header.order_set.bytes() == epoch.order_set.bytes(),
+            ClutchError::WrongPda,
+        )?;
+        page += 1;
+    }
+    // Only the keeper and the reward-bearing Work account are both writable.
+    // The remaining prohibited aliases are already ruled out by exact,
+    // domain-separated PDA derivations plus mutually incompatible roles.
+    require(
+        accounts[0].key != accounts[7].key,
+        ClutchError::AccountAlias,
+    )?;
+
+    let feed_data = borrow_data(&accounts[6])?;
+    let work_data = borrow_data(&accounts[7])?;
+    let plan = advance_order_with_page_borrows(
+        id(accounts[6].key),
+        &feed_data,
+        &work_data,
+        &domain,
+        &binding,
+        &accounts[8..clock_index],
+    )?;
+    drop(work_data);
+    drop(feed_data);
+    move_lamports(&accounts[7], &accounts[0], plan.keeper_reward())?;
+    {
+        let mut data = accounts[7]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        plan.write_account(&mut data).map_err(map_work_error)?;
+    }
+    Ok(())
+}
+
+fn advance_order_with_page_borrows(
+    feed_identity: Id32,
+    feed_data: &[u8],
+    work_data: &[u8],
+    domain: &contract::EconomicDomainV2AccountV1,
+    binding: &contract::MarketBindingV1,
+    pages: &[AccountInfo],
+) -> Outcome<clutch_general_v2_runtime::AdvanceClearOrderPlanV1> {
+    match pages.len() {
+        1 => {
+            let page0 = borrow_data(&pages[0])?;
+            advance_clear_order_v1(
+                feed_identity,
+                feed_data,
+                work_data,
+                domain,
+                binding,
+                &[&*page0],
+            )
+            .map_err(map_work_error)
+        }
+        2 => {
+            let page0 = borrow_data(&pages[0])?;
+            let page1 = borrow_data(&pages[1])?;
+            advance_clear_order_v1(
+                feed_identity,
+                feed_data,
+                work_data,
+                domain,
+                binding,
+                &[&*page0, &*page1],
+            )
+            .map_err(map_work_error)
+        }
+        3 => {
+            let page0 = borrow_data(&pages[0])?;
+            let page1 = borrow_data(&pages[1])?;
+            let page2 = borrow_data(&pages[2])?;
+            advance_clear_order_v1(
+                feed_identity,
+                feed_data,
+                work_data,
+                domain,
+                binding,
+                &[&*page0, &*page1, &*page2],
+            )
+            .map_err(map_work_error)
+        }
+        4 => {
+            let page0 = borrow_data(&pages[0])?;
+            let page1 = borrow_data(&pages[1])?;
+            let page2 = borrow_data(&pages[2])?;
+            let page3 = borrow_data(&pages[3])?;
+            advance_clear_order_v1(
+                feed_identity,
+                feed_data,
+                work_data,
+                domain,
+                binding,
+                &[&*page0, &*page1, &*page2, &*page3],
+            )
+            .map_err(map_work_error)
+        }
+        _ => Err(ClutchError::WrongAccountCount.into()),
+    }
+}
+
+fn map_work_error(error: GeneralV2WorkErrorV1) -> Refusal {
+    match error {
+        GeneralV2WorkErrorV1::Contract(error) => error.into(),
+        GeneralV2WorkErrorV1::Layout(_) | GeneralV2WorkErrorV1::Builder(_) => {
+            ClutchError::NonCanonical.into()
+        }
+        GeneralV2WorkErrorV1::RelationProtocol(_) | GeneralV2WorkErrorV1::BindingMismatch => {
+            ClutchError::MismatchedState.into()
+        }
+        GeneralV2WorkErrorV1::ArithmeticOverflow => ClutchError::Arithmetic.into(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1595,11 +1912,6 @@ fn checked_empty_book_verdict(
     require_readonly_artifact(program_id, basis_account, BASIS_BYTES)?;
     require_readonly_artifact(program_id, genesis_account, MARKET_GENESIS_PROFILE_V2_BYTES)?;
     require_readonly_artifact(program_id, policy_account, PRICE_MEASURE_POLICY_BYTES)?;
-    require_readonly_artifact(
-        program_id,
-        market_instance_account,
-        MARKET_INSTANCE_PREIMAGE_V2_BYTES,
-    )?;
     let price_grid = PriceGridAccount::decode(&borrow_data(price_grid_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
     let price_grid_pda = seeds::grid_pda(
@@ -1619,8 +1931,12 @@ fn checked_empty_book_verdict(
         .map_err(|_| ClutchError::NonCanonical)?;
     let policy = PriceMeasurePolicyV1::decode(&borrow_data(policy_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
-    let market_instance = MarketInstancePreimageV2::decode(&borrow_data(market_instance_account)?)
-        .map_err(|_| ClutchError::NonCanonical)?;
+    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        binding.market_instance_v2_id.content_id(),
+    )?;
+    let market_instance = *market_instance_artifact.value();
     require(
         genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
             && basis.edge_policy_registry_value == 1,
@@ -1737,7 +2053,35 @@ fn complete_candidate_verification(
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[5])?)?;
     let feed_data = borrow_data(&accounts[6])?;
     let feed = contract::CandidateFeedHeaderV2::decode_account(&feed_data, true)?;
-    let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[13])?)?;
+    let work = contract::ClearWorkV3AccountV1::decode_account(&borrow_data(&accounts[13])?)?;
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[3].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[3].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[1].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[2].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let domain_pda = seeds::general_v2_economic_domain_pda(program_id, &accounts[1].key.to_bytes());
+    require(
+        *accounts[4].key == domain_pda.0 && domain.stored_bump == domain_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[1].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[5].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
     require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
     require_compartment_balance(&accounts[13], work.rent, &[work.reward_remaining])?;
     require(
@@ -1761,7 +2105,7 @@ fn complete_candidate_verification(
             && slot < window.verification_closes_slot,
         ClutchError::MismatchedState,
     )?;
-    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[5].key.to_bytes());
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[5].key.to_bytes());
     require(
         *accounts[13].key == work_pda.0 && work.stored_bump == work_pda.1,
         ClutchError::WrongPda,
@@ -1785,8 +2129,8 @@ fn complete_candidate_verification(
         CheckedVerdict::Valid { expected_rank, .. } => Some(expected_rank),
         CheckedVerdict::Refused => None,
     };
-    let post = contract::complete_candidate_verification_poststate_v1(
-        contract::CompleteCandidateVerificationTransitionV1 {
+    let post = contract::complete_empty_book_work_v3_poststate_v1(
+        contract::CompleteEmptyBookWorkV3TransitionV1 {
             current_slot: slot,
             verdict: match verdict {
                 CheckedVerdict::Valid { score, .. } => {
@@ -1807,7 +2151,7 @@ fn complete_candidate_verification(
     move_lamports(&accounts[13], &accounts[0], post.keeper_reward)?;
     encode_account(&accounts[13], |out| {
         post.work
-            .encode(&mut out[..contract::CLEAR_WORK_HEADER_BYTES])
+            .encode(&mut out[..contract::CLEAR_WORK_V3_HEADER_BYTES])
     })?;
     encode_account(&accounts[5], |out| post.node.encode(out))?;
     encode_account(&accounts[2], |out| post.window.encode(out))
@@ -2035,7 +2379,7 @@ fn close_clear_work(
     let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[0])?)?;
     let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[1])?)?;
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[2])?)?;
-    let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[3])?)?;
+    let work = contract::ClearWorkV3AccountV1::decode_account(&borrow_data(&accounts[3])?)?;
 
     let binding_pda =
         seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
@@ -2055,7 +2399,7 @@ fn close_clear_work(
         *accounts[2].key == node_pda.0 && node.stored_bump == node_pda.1,
         ClutchError::WrongPda,
     )?;
-    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[2].key.to_bytes());
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[2].key.to_bytes());
     require(
         *accounts[3].key == work_pda.0 && work.stored_bump == work_pda.1,
         ClutchError::WrongPda,
@@ -2079,20 +2423,21 @@ fn close_clear_work(
     }
     require_compartment_balance(&accounts[3], work.rent, &[work.reward_remaining])?;
 
-    let post = contract::close_clear_work_poststate_v1(contract::CloseClearWorkTransitionV1 {
-        epoch_id: id(accounts[0].key),
-        node_id: id(accounts[2].key),
-        work_id: id(accounts[3].key),
-        derived_feed_id: id(&feed_pda.0),
-        keeper_destination_id: id(accounts[4].key),
-        payer_destination_id: id(accounts[5].key),
-        neutral_sink_id: id(accounts[6].key),
-        payload: request,
-        epoch: &epoch,
-        node: &node,
-        work: &work,
-        binding: &binding,
-    })?;
+    let post =
+        contract::close_clear_work_v3_poststate_v1(contract::CloseClearWorkV3TransitionV1 {
+            epoch_id: id(accounts[0].key),
+            node_id: id(accounts[2].key),
+            work_id: id(accounts[3].key),
+            derived_feed_id: id(&feed_pda.0),
+            keeper_destination_id: id(accounts[4].key),
+            payer_destination_id: id(accounts[5].key),
+            neutral_sink_id: id(accounts[6].key),
+            payload: request,
+            epoch: &epoch,
+            node: &node,
+            work: &work,
+            binding: &binding,
+        })?;
     require(post.close_work, ClutchError::MismatchedState)?;
     let mut credited_lamports = 0u64;
     for credit in post.credits.as_slice() {
@@ -2251,7 +2596,7 @@ fn cleanup_candidate(
         ClutchError::WrongPda,
     )?;
     let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[3].key.to_bytes());
-    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[3].key.to_bytes());
+    let work_pda = seeds::general_v2_work_v3_pda(program_id, &accounts[3].key.to_bytes());
     require_canonical_absence(&accounts[5], &work_pda.0, false)?;
     let previous = if node.ordinal == 1 {
         Id32::ZERO
