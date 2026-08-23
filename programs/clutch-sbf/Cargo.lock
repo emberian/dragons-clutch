@@ -230,6 +230,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-pyth-parser-v1"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-retirement"
 version = "0.1.0"
 dependencies = [
@@ -257,6 +261,7 @@ dependencies = [
  "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-pyth-parser-v1",
  "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",

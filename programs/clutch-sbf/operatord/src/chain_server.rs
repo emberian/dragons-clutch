@@ -2,11 +2,16 @@
 //!
 //! This mode checks the selected genesis and every Program/ProgramData/slot/
 //! ELF tuple through the configured untrusted RPC before exposing a release,
-//! then repeatedly admits finalized
-//! `getProgramAccounts` scans through `RpcIndexEngine`. It deliberately does
-//! not claim a processed projection: no WebSocket transport is hidden here.
+//! then repeatedly admits finalized `getProgramAccounts` scans through
+//! `RpcIndexEngine`. A separately bounded, ordered WebSocket owner publishes a
+//! processed generation only after complete subscription registration,
+//! release-bracketed scan, and notification replay.
 
-use crate::{bus::Bus, index_api::SharedIndexApi, payoff_compiler, Result};
+use crate::{
+    bus::Bus,
+    index_api::{ProcessedTransportState, SharedIndexApi},
+    payoff_compiler, processed_ws, Result,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clutch_local_real_pyth::account_index::{CanonicalDecoderContext, IndexCapacity};
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
@@ -25,7 +30,7 @@ use solana_address::Address;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -44,6 +49,8 @@ struct ChainConfigWire {
     bounds: BoundsWire,
     polling_interval_milliseconds: String,
     rpc_timeout_seconds: String,
+    websocket_reconnect_initial_milliseconds: String,
+    websocket_reconnect_maximum_milliseconds: String,
     compiler_release_sha256: String,
 }
 
@@ -85,6 +92,8 @@ struct ChainConfig {
     selector: ResumableKeeperSelector,
     polling_interval: Duration,
     rpc_timeout_seconds: u64,
+    websocket_reconnect_initial: Duration,
+    websocket_reconnect_maximum: Duration,
     compiler_release_sha256: String,
 }
 
@@ -246,6 +255,12 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
             "bounds.maximumForkNodes",
         )?,
     };
+    if capacity.maximum_addresses > 262_144
+        || capacity.maximum_versions_per_address > 64
+        || capacity.maximum_fork_nodes > 262_144
+    {
+        return Err("index capacity exceeds maximumAddresses=262144, maximumVersionsPerAddress=64, or maximumForkNodes=262144".into());
+    }
     let polling_interval_ms: u64 = parse_unsigned(
         &wire.polling_interval_milliseconds,
         "pollingIntervalMilliseconds",
@@ -256,6 +271,20 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
     let rpc_timeout_seconds: u64 = parse_unsigned(&wire.rpc_timeout_seconds, "rpcTimeoutSeconds")?;
     if !(1..=120).contains(&rpc_timeout_seconds) {
         return Err("rpcTimeoutSeconds must be in 1..=120".into());
+    }
+    let reconnect_initial_ms: u64 = parse_unsigned(
+        &wire.websocket_reconnect_initial_milliseconds,
+        "websocketReconnectInitialMilliseconds",
+    )?;
+    let reconnect_maximum_ms: u64 = parse_unsigned(
+        &wire.websocket_reconnect_maximum_milliseconds,
+        "websocketReconnectMaximumMilliseconds",
+    )?;
+    if !(100..=10_000).contains(&reconnect_initial_ms)
+        || reconnect_maximum_ms < reconnect_initial_ms
+        || reconnect_maximum_ms > 60_000
+    {
+        return Err("WebSocket reconnect bounds require initial 100..=10000ms and initial<=maximum<=60000ms".into());
     }
     let selector = ResumableKeeperSelector {
         workflow_id: hash32(&wire.workflow_id, "workflowId")?,
@@ -271,6 +300,8 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
         selector,
         polling_interval: Duration::from_millis(polling_interval_ms),
         rpc_timeout_seconds,
+        websocket_reconnect_initial: Duration::from_millis(reconnect_initial_ms),
+        websocket_reconnect_maximum: Duration::from_millis(reconnect_maximum_ms),
         compiler_release_sha256: wire.compiler_release_sha256,
     })
 }
@@ -372,7 +403,7 @@ fn rpc_account(value: &Value, maximum_data_bytes: usize, name: &str) -> Result<R
     })
 }
 
-fn verify_chain_bindings(plan: &RpcIndexPlan, timeout_seconds: u64) -> Result<()> {
+pub(crate) fn verify_chain_bindings(plan: &RpcIndexPlan, timeout_seconds: u64) -> Result<()> {
     let maximum = plan.bounds.maximum_total_response_bytes;
     let genesis_response = rpc_call(
         &plan.cluster.rpc_http_url,
@@ -477,48 +508,62 @@ fn spawn_finalized_poller(
     plan: RpcIndexPlan,
     timeout_seconds: u64,
     interval: Duration,
+    scan_gate: Arc<Mutex<()>>,
     ready: Arc<RwLock<bool>>,
 ) {
     thread::spawn(move || loop {
         thread::sleep(interval);
-        if let Ok(mut state) = ready.write() {
-            *state = false;
-        }
-        let outcome = verify_chain_bindings(&plan, timeout_seconds).and_then(|()| {
-            let mut guard = engine
-                .write()
-                .map_err(|_| "operator index write lock is unavailable")?;
-            if guard.bootstrap_complete() {
-                guard.begin_finalized_rescan()?;
-            }
-            drop(guard);
-            admit_scans(
-                &engine,
-                &plan.cluster.rpc_http_url,
-                plan.bounds.maximum_total_response_bytes,
-                timeout_seconds,
-            )?;
-            // Keep the projection withdrawn unless one complete scan is
-            // bracketed by the configured release observations. An upgrade
-            // between the first observation and the scan must fail closed.
-            verify_chain_bindings(&plan, timeout_seconds)
-        });
+        let outcome =
+            refresh_finalized_projection(&engine, &plan, timeout_seconds, &scan_gate, &ready);
         if let Err(error) = outcome {
             eprintln!("operatord chain poller: {error}");
-        } else if let Ok(mut state) = ready.write() {
-            *state = true;
         }
     });
+}
+
+/// Execute one serialized release-check → finalized scan → release-check
+/// cycle. Every caller shares `scan_gate`, including the WebSocket generation
+/// bootstrap that buffers notifications while this cycle runs.
+pub(crate) fn refresh_finalized_projection(
+    engine: &Arc<RwLock<RpcIndexEngine>>,
+    plan: &RpcIndexPlan,
+    timeout_seconds: u64,
+    scan_gate: &Arc<Mutex<()>>,
+    ready: &Arc<RwLock<bool>>,
+) -> Result<()> {
+    let _scan = scan_gate
+        .lock()
+        .map_err(|_| "finalized scan gate is unavailable")?;
+    *ready
+        .write()
+        .map_err(|_| "release readiness lock is unavailable")? = false;
+    verify_chain_bindings(plan, timeout_seconds)?;
+    {
+        let mut guard = engine
+            .write()
+            .map_err(|_| "operator index write lock is unavailable")?;
+        if guard.bootstrap_complete() {
+            guard.begin_finalized_rescan()?;
+        }
+    }
+    admit_scans(
+        engine,
+        &plan.cluster.rpc_http_url,
+        plan.bounds.maximum_total_response_bytes,
+        timeout_seconds,
+    )?;
+    verify_chain_bindings(plan, timeout_seconds)?;
+    *ready
+        .write()
+        .map_err(|_| "release readiness lock is unavailable")? = true;
+    Ok(())
 }
 
 /// Verify explicit chain coordinates, bootstrap the untrusted index, and serve
 /// only Glass static files, GET projections, and the pure payoff compiler.
 pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
     let config = parse_config(config_path)?;
-    verify_chain_bindings(&config.plan, config.rpc_timeout_seconds)?;
     let polling_plan = config.plan.clone();
-    let rpc_url = config.plan.cluster.rpc_http_url.clone();
-    let maximum_bytes = config.plan.bounds.maximum_total_response_bytes;
     let engine = Arc::new(RwLock::new(RpcIndexEngine::new(
         config.plan,
         CanonicalDecoderContext {
@@ -526,11 +571,19 @@ pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
         },
         config.capacity,
     )?));
-    admit_scans(&engine, &rpc_url, maximum_bytes, config.rpc_timeout_seconds)?;
-    verify_chain_bindings(&polling_plan, config.rpc_timeout_seconds)?;
+    let scan_gate = Arc::new(Mutex::new(()));
+    let ready = Arc::new(RwLock::new(false));
+    refresh_finalized_projection(
+        &engine,
+        &polling_plan,
+        config.rpc_timeout_seconds,
+        &scan_gate,
+        &ready,
+    )?;
+    let processed = Arc::new(RwLock::new(ProcessedTransportState::default()));
     let base_read_api =
-        SharedIndexApi::finalized_only(Arc::clone(&engine), config.selector).read_api();
-    let ready = Arc::new(RwLock::new(true));
+        SharedIndexApi::processed(Arc::clone(&engine), config.selector, Arc::clone(&processed))
+            .read_api();
     let read_ready = Arc::clone(&ready);
     let read_api: crate::http::ReadApi = Arc::new(move |method, target| {
         if !read_ready.read().map(|state| *state).unwrap_or(false) {
@@ -544,17 +597,28 @@ pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
         base_read_api(method, target)
     });
     let post_api = payoff_compiler::post_api(config.compiler_release_sha256)?;
+    processed_ws::spawn(
+        Arc::clone(&engine),
+        polling_plan.clone(),
+        config.rpc_timeout_seconds,
+        config.websocket_reconnect_initial,
+        config.websocket_reconnect_maximum,
+        Arc::clone(&scan_gate),
+        Arc::clone(&ready),
+        processed,
+    );
     spawn_finalized_poller(
         engine,
         polling_plan,
         config.rpc_timeout_seconds,
         config.polling_interval,
+        scan_gate,
         ready,
     );
     let server =
         crate::http::Server::bind_pure(port, Bus::new(), statics, Some(read_api), Some(post_api))?;
     println!(
-        "Glass chain reader listening on http://127.0.0.1:{} (configured release coordinates checked through an untrusted RPC, finalized polling, untrusted projection, no wallet/sign/submit/persist)",
+        "Glass chain reader listening on http://127.0.0.1:{} (configured HTTP+WebSocket coordinates, finalized polling plus rollbackable processed subscriptions, untrusted projection, no wallet/sign/submit/persist)",
         server.port()?
     );
     server.serve_forever();

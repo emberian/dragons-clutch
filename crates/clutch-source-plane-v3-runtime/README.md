@@ -1,7 +1,7 @@
 # SourcePlane V3 runtime account contract
 
-Status: **implemented pure runtime contract; not wired to the central SBF
-dispatcher and not a deployment claim**.
+Status: **pure runtime contract with SourceSeries actions 1 through 4 wired to
+the central SBF dispatcher; not a deployment claim**.
 
 This crate replaces the old opaque/default-deny SourcePlane V3 seams with
 fixed-memory contracts that a small Solana adapter can execute. It does not
@@ -18,6 +18,9 @@ and refuses partial or mismatched joins.
 - the runtime adapter executable, its linked ProgramData account, complete
   account-byte digests, loader, and frozen deployment slot;
 - the reviewed parser executable and ProgramData under the same checks;
+- the Pyth receiver executable, linked ProgramData, complete account-byte
+  digests, loader, and frozen deployment slot, authenticated again at ingest;
+- the exact receiver Config address, owner, and complete current byte digest;
 - immutable parser configuration and existing SourceSpec accounts, including
   address, owner, and complete byte digest;
 - the mutable feed address and owner;
@@ -30,11 +33,14 @@ The deployment checks read the ProgramData link and deployment slot from exact
 manifest offsets. They do not call a host release registry or accept a version
 number as a substitute for reviewed bytes.
 
-`authenticate_boundary` then joins one complete feed account, reviewed parser
-invocation/return-data facts, the exact parser output, and an authenticated
-Clock snapshot. A boundary is admitted only after its canonical bucket closes,
-before its immutable lateness deadline, and while publication time and slot are
-inside the frozen freshness bounds.
+`authenticate_boundary` then joins the authenticated receiver release and
+Config, one complete feed account, reviewed parser invocation/return-data
+facts, the exact parser output, and an authenticated Clock snapshot. A
+boundary is admitted only after its canonical bucket closes, before its
+immutable lateness deadline, and while publication time and slot are inside
+the frozen freshness bounds. Pinning the current Config selects an acceptable
+governance state at read time; it does not claim action 4 posted the update or
+prove which Config governed an older post.
 
 SourceHead creation consumes an exact 168-byte immutable generation request
 owned by the frozen Product/failure program. It binds SourcePlane, SourceSpec,
@@ -103,11 +109,11 @@ liveness runtime.
 
 ## Remaining adapter integration
 
-The central SBF program still needs dispatcher tags, exact account-meta tables,
-construction of runtime PDA/invocation/sysvar attestations, atomic application
-of these pure transitions, and a checked release manifest. Until that lands,
-this crate is executable contract work, not evidence that SourcePlane V3 is
-live on any cluster.
+Actions 5 through 12 still need their exact SBF state, CPI, funding, and
+operator joins before their independently disabled capability tuples may be
+enabled. Actions 1 through 4 now have exact account-meta tables, release-bound
+runtime attestations, and atomic state/work/liveness handling, but remain code
+rather than evidence that SourcePlane V3 is live on any cluster.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this
 implementation slice.

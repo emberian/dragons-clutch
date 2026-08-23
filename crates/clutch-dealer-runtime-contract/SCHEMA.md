@@ -22,6 +22,7 @@ dragons-clutch/dealer-runtime/root-tombstone/v1\0
 dragons-clutch/dealer-runtime/liveness-schedule/v1\0
 dragons-clutch/dealer-runtime/funded-dependencies/v1\0
 dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0
+dragons-clutch/dealer-runtime/runtime-liveness-policy/v1\0
 dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0
 dragons-clutch/dealer-runtime/action-receipt-slot/v1\0
 dragons-clutch/dealer-runtime/state/v1\0
@@ -87,6 +88,8 @@ All seed components are nonempty and at most 32 bytes.
 | Facility Position | `b"dc-dealer-position-v1"`, `facility_id[32]` |
 | Facility Replay | `b"dc-dealer-replay-v1"`, `facility_id[32]` |
 | Liveness schedule | `b"dc-dealer-live-sched-v1"`, `schedule_id[32]` |
+| Generic runtime-liveness policy | `b"dc-dealer-runtime-liveness-policy-v1"`, `policy_id[32]` |
+| Facility runtime-liveness compartment | `b"dc-dealer-live-account-v1"`, `facility_id[32]`, canonical compartment byte |
 | Funded dependencies | `b"dc-dealer-funded-v1"`, `facility_id[32]` |
 | State | `b"dc-dealer-state-v1"`, `facility_id[32]` |
 | LP page | `b"dc-dealer-lp-page-v1"`, `facility_id[32]`, `page_ordinal_le[4]` |
@@ -142,6 +145,22 @@ program and physical immutable runtime-policy account. These are account
 authority facts and therefore are not folded into the pure seven-body
 projection; the live adapter must require that exact program to own the exact
 policy account and all seven compartment accounts on every transition.
+
+The Dealer catalog computes the immutable runtime-policy identity as
+`SHA256("dragons-clutch/dealer-runtime/runtime-liveness-policy/v1\0" ||
+canonical_policy_body_with_policy_id_zeroed)`. The embedded policy ID must equal
+that digest. This is the sole nonrecursive publication recipe; the live adapter
+recomputes it before accepting the physical policy PDA.
+
+Initialize atomically creates all seven facility-scoped runtime compartments.
+The named liveness payer signs and supplies each policy compartment's exact
+`work_capital + current_rent_minimum` lamports even when the predictable PDA was
+prefunded; the prefund remains the compartment's neutral-sink donation. Source
+uses the immutable Source receipt program as semantic owner, while Candidate,
+Clearing, Settlement, Resolution, Retirement, and Recovery use the new Dealer
+State account. All seven share the full facility lifecycle ID and retain
+distinct quote-schedule and receipt-program joins from the published runtime
+policy.
 
 Each successful funded Dealer transition additionally authenticates one
 `DealerActionLivenessAuthorizationV1`. Its semantic digest commits the action,

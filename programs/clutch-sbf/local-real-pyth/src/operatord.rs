@@ -433,7 +433,7 @@ impl<'index> OperatorJsonApi<'index> {
             .collect();
         response(
             200,
-            json!({"cluster": self.index.cluster_key(), "releases": releases}),
+            json!({"cluster": self.index.cluster_key(), "authorityEligible": false, "releases": releases}),
         )
     }
 
@@ -449,6 +449,8 @@ impl<'index> OperatorJsonApi<'index> {
             json!({
                 "cluster": self.index.cluster_key(),
                 "effectiveCommitment": commitment.name(),
+                "finalityDisposition": if commitment == RpcCommitment::Processed { "nonfinal-rollbackable" } else { "finalized-projection" },
+                "authorityEligible": false,
                 "accounts": accounts
             }),
         )
@@ -481,6 +483,7 @@ impl<'index> OperatorJsonApi<'index> {
                 200,
                 json!({
                     "effectiveCommitment": commitment.name(),
+                    "authorityEligible": false,
                     "actions": selections.iter().map(selection_json).collect::<Vec<_>>()
                 }),
             ),
@@ -513,6 +516,8 @@ impl<'index> OperatorJsonApi<'index> {
             200,
             json!({
                 "finalizedRoot": finalized,
+                "authorityEligible": false,
+                "processedTopology": true,
                 "frozenSlots": self.index.forks().frozen_slots().into_iter().map(|slot| slot.to_string()).collect::<Vec<_>>(),
                 "deadSlots": self.index.forks().dead_slots().into_iter().map(|slot| slot.to_string()).collect::<Vec<_>>(),
                 "nodes": nodes
@@ -545,6 +550,8 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
         "slot": version.account.provenance.slot.to_string(),
         "observedCommitment": version.account.provenance.commitment.name(),
         "effectiveCommitment": effective.name(),
+        "finalityDisposition": if effective == RpcCommitment::Processed { "nonfinal-rollbackable" } else { "finalized-projection" },
+        "authorityEligible": false,
         "lamports": version.account.lamports.to_string(),
         "rentEpoch": version.account.rent_epoch.to_string(),
         "dataBytes": version.account.data.len().to_string(),
