@@ -21,11 +21,11 @@ use clutch_batch::portfolio_execution_v2::{
     SelectedPortfolioOrderRecordV2, PORTFOLIO_EXECUTION_VERSION_V2,
     PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
 };
-use clutch_batch::relation_v1::{MAX_ORDERS, MAX_OUTCOMES};
+use clutch_batch::relation_v1::MAX_OUTCOMES;
 use clutch_batch::relation_v2::{
     EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2,
 };
-use clutch_batch::Side;
+use clutch_batch::{Side, MAX_ORDERS};
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
