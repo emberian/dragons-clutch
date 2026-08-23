@@ -15,9 +15,10 @@ use clutch_source_plane_v3::{
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, CapabilitySemanticOwnersV2, ContentId, Error, EvidenceOnlyRecoveryPolicyId,
-    FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, QuantizedIntervalConsensusProfileV1,
-    RealmCollateralProjectionV1, RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2,
-    RegistryProgramReleaseV1Id, Result,
+    FixedCodec, MarketFamilyV1, NativeClaimBasisId, PriceMeasurePolicyV1Id,
+    QuantizedIntervalConsensusProfileV1, RealmCollateralProjectionV1,
+    RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id,
+    Result, SeriesLinkObligationV1,
 };
 
 const PROFILE_MAGIC: [u8; 8] = *b"DCRCAPV2";
@@ -159,6 +160,8 @@ pub struct RegistryCapabilityProfileV2 {
     pub maximum_interval_width: u64,
     /// Largest coordinate count evaluated by one paid advance.
     pub maximum_coordinates_per_advance: u16,
+    /// Capability switches for `[Dealer, Fractional, Structured]` occurrence families.
+    pub enabled_optional_occurrence_families: [bool; 3],
     /// Exact admitted semantic-owner identities.
     pub semantic_owners: CapabilitySemanticOwnersV2,
     /// Exact reviewed evaluator semantics named by `semantic_owners`.
@@ -193,6 +196,32 @@ impl RegistryCapabilityProfileV2 {
         };
         profile.validate()?;
         Ok(profile)
+    }
+
+    /// Whether one occurrence family must emit a live terminal summary.
+    ///
+    /// Required families always return true. The only V2 optional families are
+    /// Dealer, Fractional, and Structured; false requires a live adapter to
+    /// authenticate their canonical zero-admission absence summary.
+    pub const fn market_family_enabled(&self, family: MarketFamilyV1) -> bool {
+        match family {
+            MarketFamilyV1::Fractional => self.enabled_optional_occurrence_families[1],
+            MarketFamilyV1::ClaimLedger
+            | MarketFamilyV1::Hoard
+            | MarketFamilyV1::General
+            | MarketFamilyV1::Failure
+            | MarketFamilyV1::Source
+            | MarketFamilyV1::Position => true,
+        }
+    }
+
+    /// Whether one Series-link-scoped attachment family is enabled.
+    pub const fn series_link_obligation_enabled(&self, obligation: SeriesLinkObligationV1) -> bool {
+        match obligation {
+            SeriesLinkObligationV1::Dealer => self.enabled_optional_occurrence_families[0],
+            SeriesLinkObligationV1::Structured => self.enabled_optional_occurrence_families[2],
+            SeriesLinkObligationV1::Liquidity | SeriesLinkObligationV1::Wrapper => true,
+        }
     }
 
     fn projection_with_id(
@@ -289,7 +318,16 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
         writer.u32(self.max_series_instance_count);
         writer.u64(self.maximum_interval_width);
         writer.u16(self.maximum_coordinates_per_advance);
-        writer.reserved(2);
+        let mut optional_bitmap = 0u8;
+        let mut optional = 0usize;
+        while optional < self.enabled_optional_occurrence_families.len() {
+            if self.enabled_optional_occurrence_families[optional] {
+                optional_bitmap |= 1u8 << optional;
+            }
+            optional += 1;
+        }
+        writer.u8(optional_bitmap);
+        writer.reserved(1);
         encode_semantic_owners(&mut writer, self.semantic_owners);
         encode_realm_collateral(&mut writer, self.realm_collateral);
         let mut summary = [0; SUMMARY_PROGRAM_BYTES];
@@ -342,7 +380,16 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
         let max_series_instance_count = reader.u32();
         let maximum_interval_width = reader.u64();
         let maximum_coordinates_per_advance = reader.u16();
-        reader.reserved(2)?;
+        let optional_bitmap = reader.u8();
+        if optional_bitmap & !0x07 != 0 {
+            return Err(Error::NonCanonicalReserved);
+        }
+        let enabled_optional_occurrence_families = [
+            optional_bitmap & 1 != 0,
+            optional_bitmap & 2 != 0,
+            optional_bitmap & 4 != 0,
+        ];
+        reader.reserved(1)?;
         let semantic_owners = decode_semantic_owners(&mut reader);
         let realm_collateral = decode_realm_collateral(&mut reader);
         let summary_program = SourceFixedCodec::decode(&reader.bytes::<SUMMARY_PROGRAM_BYTES>())
@@ -368,6 +415,7 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
             max_series_instance_count,
             maximum_interval_width,
             maximum_coordinates_per_advance,
+            enabled_optional_occurrence_families,
             semantic_owners,
             summary_program,
             realm_collateral,
