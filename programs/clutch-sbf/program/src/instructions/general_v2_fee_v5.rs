@@ -32,16 +32,18 @@ use clutch_fee_runtime_contract::projection::{
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
 use clutch_general_v2_contract::{
-    payer_allocation_account_data_id_v1, GeneralPositionReplayPrestateV1, Id32,
-    OwnerFeeCarryV1AccountV1, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
-    OwnerSettlementV5AccountV1, PayerAllocationV1AccountV1, SelectedFeeRecordV1AccountV1,
-    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
-    Sha256BackendV1,
+    payer_allocation_account_data_id_v1, project_general_replay_transition_v1,
+    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
+    GeneralReplayTransitionPlanV1, Id32, OwnerFeeCarryV1AccountV1, DeletableRentOwnerV1,
+    OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1, PayerAllocationV1AccountV1,
+    SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
+    SettlementRootV1AccountV1, Sha256BackendV1,
     OWNER_FEE_CARRY_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
 };
 use clutch_general_v2_runtime::{
-    derive_root_owner_basis_v4, prepare_realize_owner_cash_v5,
+    derive_root_owner_basis_v4, derive_zero_fee_owner_finalization_evidence_v5,
+    prepare_realize_owner_cash_v5,
     project_owner_settlement_account_v5, CandidateEntitlementProjectionV4,
     OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV4, OwnerSettlementAccountProjectionV5,
     OwnerSettlementAccountViewV5, SettlementTraversalProjectionV4,
@@ -50,6 +52,7 @@ use clutch_owner_settlement::{
     OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, OwnerSettlementStateV4,
     SelectedOwnerFeeV1, SettlementCashPotV1,
 };
+use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -64,6 +67,18 @@ struct RuntimeSha256;
 
 impl Sha256BackendV1 for RuntimeSha256 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+impl PositionV3Sha256Backend for RuntimeSha256 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(&[domain, body]).to_bytes()
+    }
+}
+
+impl ReplayV3HashBackend for RuntimeSha256 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
         solana_sha256_hasher::hashv(parts).to_bytes()
     }
 }
@@ -253,15 +268,17 @@ impl PreparedOwnerFeeAction38V5 {
 
 /// Complete current semantic action-38 composition before atomic SBF writes.
 ///
-/// The General handler must still authenticate and advance GEN1 Replay and,
-/// for the candidate-fee branch only, replace the carry with its `0x83/2`
-/// terminal receipt while deleting the payer snapshot. This plan already owns
-/// the exact row, Position, pot, and counted-root successors; it cannot be
+/// The General handler must atomically apply the returned GEN1 Replay and, for
+/// the candidate-fee branch only, replace the carry with its `0x83/2` terminal
+/// receipt while deleting the payer snapshot. This plan already owns the exact
+/// row, Position, pot, Replay, and counted-root successors; it cannot be
 /// constructed from a caller balance summary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedOwnerSettlementAction38V5 {
     fee: PreparedOwnerFeeAction38V5,
     realization: OwnerCashRealizationPlanV5,
+    transition_evidence_id: Id32,
+    replay: GeneralReplayTransitionPlanV1,
 }
 
 impl PreparedOwnerSettlementAction38V5 {
@@ -273,6 +290,16 @@ impl PreparedOwnerSettlementAction38V5 {
     /// Canonical V5 row/Position/pot/root successor plan.
     pub const fn realization(&self) -> &OwnerCashRealizationPlanV5 {
         &self.realization
+    }
+
+    /// Exact payer-prestate or plan-derived zero-fee evidence committed by GEN1.
+    pub const fn transition_evidence_id(&self) -> Id32 {
+        self.transition_evidence_id
+    }
+
+    /// Canonical purpose-owned Replay successor paired with the Position write.
+    pub const fn replay(&self) -> GeneralReplayTransitionPlanV1 {
+        self.replay
     }
 
     /// Whether this atomic transition must mint a real `0x83/2` successor.
@@ -942,6 +969,19 @@ pub fn compose_owner_settlement_action38_v5(
         pot_before,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let transition_evidence_id = match fee.payer_allocation_data_id() {
+        Some(value) => Id32::from_bytes(value.0),
+        None => derive_zero_fee_owner_finalization_evidence_v5(&realization)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    };
+    let replay = project_general_replay_transition_v1(
+        position_replay,
+        realization.position(),
+        GeneralReplayTransitionKindV1::FinalizeOwnerSettlement,
+        realization.finalized_owner_row_data_id(),
+        transition_evidence_id,
+        &RuntimeSha256,
+    )?;
     let expected_fee_atoms = fee.evidence().expectation().selected_fee_atoms();
     require(
         realization.settlement_root_account() == authenticated_root.account()
@@ -956,7 +996,12 @@ pub fn compose_owner_settlement_action38_v5(
                 == realization.fee_finalization_required(),
         ClutchError::MismatchedState,
     )?;
-    Ok(PreparedOwnerSettlementAction38V5 { fee, realization })
+    Ok(PreparedOwnerSettlementAction38V5 {
+        fee,
+        realization,
+        transition_evidence_id,
+        replay,
+    })
 }
 
 #[cfg(test)]
