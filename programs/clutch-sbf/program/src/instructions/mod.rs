@@ -61,6 +61,8 @@ pub mod dealer_policy;
 pub mod dealer_runtime;
 pub mod direct_selection;
 pub mod direct_selection_v3;
+/// Capability-disabled current Direct `80/1` account/authentication plane.
+pub(crate) mod direct_market_v1;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.

@@ -1,0 +1,526 @@
+//! Disabled current Direct `80/1` account authentication and writeback plane.
+//!
+//! This module is intentionally not routed by `dispatch` or admitted by a
+//! capability profile. It owns the hostile Solana boundary for the fresh
+//! `0xb1..=0xb4/v1` family while economic state and transition identities stay
+//! exclusively in `clutch-direct-market-runtime`.
+
+use crate::accounts::{expect_pda, require, Outcome};
+use crate::error::{ClutchError, Refusal};
+use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::seeds;
+use clutch_direct_market_runtime::codec_v1::{
+    decode_direct_action_replay_body_v1, decode_direct_market_root_body_v1,
+    decode_direct_reservation_body_v1, decode_direct_selection_body_v1,
+    encode_direct_action_replay_body_v1, encode_direct_market_root_body_v1,
+    encode_direct_reservation_body_v1, encode_direct_selection_body_v1,
+    DIRECT_ACTION_REPLAY_BODY_BYTES_V1 as RUNTIME_REPLAY_BODY_BYTES,
+    DIRECT_MARKET_ROOT_BODY_BYTES_V1 as RUNTIME_ROOT_BODY_BYTES,
+    DIRECT_RESERVATION_BODY_BYTES_V1 as RUNTIME_RESERVATION_BODY_BYTES,
+    DIRECT_SELECTION_BODY_BYTES_V1 as RUNTIME_SELECTION_BODY_BYTES,
+};
+use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
+use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
+use clutch_direct_market_runtime::{
+    DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
+};
+use clutch_solana_layout::direct_market_v1::{
+    DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
+    DirectSelectionAccountV1, DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
+    DIRECT_MARKET_ROOT_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
+    DIRECT_SELECTION_BODY_BYTES_V1,
+};
+use clutch_solana_layout::registry::{
+    DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, DIRECT_MARKET_ROOT_ACCOUNT_BYTES,
+    DIRECT_RESERVATION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_BYTES,
+};
+use solana_account_info::AccountInfo;
+use solana_pubkey::Pubkey;
+
+const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/account-authentication/v1\0";
+
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
+const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == RUNTIME_SELECTION_BODY_BYTES);
+const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == RUNTIME_REPLAY_BODY_BYTES);
+const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == RUNTIME_RESERVATION_BODY_BYTES);
+
+/// Runtime SHA-256 implementation for all current Direct semantic identities.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DirectRuntimeSha256V1;
+
+impl DirectHashBackendV1 for DirectRuntimeSha256V1 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+/// Exact authenticated `0xb1/1` Direct root prestate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectMarketRootV1 {
+    account: Pubkey,
+    value: DirectMarketRootV1,
+    bump: u8,
+    data_id: [u8; 32],
+    semantic_id: [u8; 32],
+    observed_lamports: u64,
+}
+
+impl AuthenticatedDirectMarketRootV1 {
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    pub(crate) const fn value(self) -> DirectMarketRootV1 { self.value }
+    pub(crate) const fn bump(self) -> u8 { self.bump }
+    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
+    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
+    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+}
+
+/// Exact authenticated permanent `0xb3/1` Direct replay/receipt prestate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectActionReplayV1 {
+    account: Pubkey,
+    value: DirectActionReplayV1,
+    bump: u8,
+    data_id: [u8; 32],
+    semantic_id: [u8; 32],
+    observed_lamports: u64,
+}
+
+impl AuthenticatedDirectActionReplayV1 {
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    pub(crate) const fn value(self) -> DirectActionReplayV1 { self.value }
+    pub(crate) const fn bump(self) -> u8 { self.bump }
+    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
+    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
+    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+}
+
+/// Exact authenticated `0xb2/1` Selection prestate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectSelectionV1 {
+    account: Pubkey,
+    value: DirectSelectionV1,
+    bump: u8,
+    data_id: [u8; 32],
+    semantic_id: [u8; 32],
+    observed_lamports: u64,
+}
+
+impl AuthenticatedDirectSelectionV1 {
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    pub(crate) const fn value(self) -> DirectSelectionV1 { self.value }
+    pub(crate) const fn bump(self) -> u8 { self.bump }
+    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
+    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
+    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+}
+
+/// Exact authenticated `0xb4/1` funded Reservation prestate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectReservationV1 {
+    account: Pubkey,
+    value: DirectReservationV1,
+    bump: u8,
+    data_id: [u8; 32],
+    semantic_id: [u8; 32],
+    observed_lamports: u64,
+}
+
+impl AuthenticatedDirectReservationV1 {
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    pub(crate) const fn value(self) -> DirectReservationV1 { self.value }
+    pub(crate) const fn bump(self) -> u8 { self.bump }
+    pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
+    pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
+    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectAccountAccessV1 { ReadOnly, Writable }
+
+impl DirectAccountAccessV1 {
+    const fn writable(self) -> bool { matches!(self, Self::Writable) }
+}
+
+#[inline(never)]
+fn authenticate_root_with_access_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    access: DirectAccountAccessV1,
+) -> Outcome<AuthenticatedDirectMarketRootV1> {
+    require_program_state_v1(program_id, account, access, DIRECT_MARKET_ROOT_ACCOUNT_BYTES)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bytes = exact_array::<DIRECT_MARKET_ROOT_ACCOUNT_BYTES>(&data)?;
+    let frame = DirectMarketRootAccountV1::decode(&bytes)?;
+    let value = decode_direct_market_root_body_v1(frame.semantic_body())
+        .map_err(map_direct_error_v1)?;
+    let (expected, bump) = seeds::direct_market_root_v1_pda(
+        program_id,
+        &value.binding.market_instance_id,
+        value.binding.generation,
+    );
+    expect_pda(account.key, (expected, bump), Some(frame.bump()))?;
+    require(
+        value.binding.direct_root_account == account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let observed_lamports = account.lamports();
+    require_rent_coverage_v1(
+        value.root_rent.principal_lamports,
+        value.root_rent.donation_floor_lamports,
+        observed_lamports,
+    )?;
+    let data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
+    drop(data);
+    let semantic_id = value
+        .semantic_id(&DirectRuntimeSha256V1)
+        .map_err(map_direct_error_v1)?;
+    require_live_id_v1(data_id)?;
+    require_live_id_v1(semantic_id)?;
+    Ok(AuthenticatedDirectMarketRootV1 {
+        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+    })
+}
+
+pub(crate) fn authenticate_direct_market_root_readonly_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedDirectMarketRootV1> {
+    authenticate_root_with_access_v1(program_id, account, DirectAccountAccessV1::ReadOnly)
+}
+
+pub(crate) fn authenticate_direct_market_root_writable_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedDirectMarketRootV1> {
+    authenticate_root_with_access_v1(program_id, account, DirectAccountAccessV1::Writable)
+}
+
+#[inline(never)]
+pub(crate) fn authenticate_direct_action_replay_writable_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+) -> Outcome<AuthenticatedDirectActionReplayV1> {
+    require_program_state_v1(
+        program_id,
+        account,
+        DirectAccountAccessV1::Writable,
+        DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bytes = exact_array::<DIRECT_ACTION_REPLAY_ACCOUNT_BYTES>(&data)?;
+    let frame = DirectActionReplayAccountV1::decode(&bytes)?;
+    let value = decode_direct_action_replay_body_v1(frame.semantic_body(), root.value())
+        .map_err(map_direct_error_v1)?;
+    let (expected, bump) = seeds::direct_action_replay_v1_pda(program_id, &root.account());
+    expect_pda(account.key, (expected, bump), Some(frame.bump()))?;
+    require(
+        value.replay_account == account.key.to_bytes()
+            && value.direct_root_account == root.account().to_bytes()
+            && root.value().binding.action_replay_account == account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let observed_lamports = account.lamports();
+    require_rent_coverage_v1(
+        value.rent.principal_lamports,
+        value.rent.donation_floor_lamports,
+        observed_lamports,
+    )?;
+    let data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
+    drop(data);
+    let semantic_id = value
+        .semantic_id(root.value(), &DirectRuntimeSha256V1)
+        .map_err(map_direct_error_v1)?;
+    Ok(AuthenticatedDirectActionReplayV1 {
+        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+    })
+}
+
+#[inline(never)]
+fn authenticate_selection_with_access_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+    access: DirectAccountAccessV1,
+) -> Outcome<AuthenticatedDirectSelectionV1> {
+    require_program_state_v1(program_id, account, access, DIRECT_SELECTION_ACCOUNT_BYTES)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bytes = exact_array::<DIRECT_SELECTION_ACCOUNT_BYTES>(&data)?;
+    let frame = DirectSelectionAccountV1::decode(&bytes)?;
+    let value = decode_direct_selection_body_v1(frame.semantic_body(), root.value())
+        .map_err(map_direct_error_v1)?;
+    let (expected, bump) = seeds::direct_selection_v1_pda(program_id, &root.account());
+    expect_pda(account.key, (expected, bump), Some(frame.bump()))?;
+    require(
+        value.account() == account.key.to_bytes()
+            && root.value().selection_account == account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let observed_lamports = account.lamports();
+    require_rent_coverage_v1(
+        value.rent().principal_lamports,
+        value.rent().donation_floor_lamports,
+        observed_lamports,
+    )?;
+    let data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
+    drop(data);
+    let semantic_id = value
+        .semantic_id(root.value(), &DirectRuntimeSha256V1)
+        .map_err(map_direct_error_v1)?;
+    Ok(AuthenticatedDirectSelectionV1 {
+        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+    })
+}
+
+pub(crate) fn authenticate_direct_selection_readonly_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+) -> Outcome<AuthenticatedDirectSelectionV1> {
+    authenticate_selection_with_access_v1(
+        program_id, account, root, DirectAccountAccessV1::ReadOnly,
+    )
+}
+
+pub(crate) fn authenticate_direct_selection_writable_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+) -> Outcome<AuthenticatedDirectSelectionV1> {
+    authenticate_selection_with_access_v1(
+        program_id, account, root, DirectAccountAccessV1::Writable,
+    )
+}
+
+#[inline(never)]
+fn authenticate_reservation_with_access_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+    access: DirectAccountAccessV1,
+) -> Outcome<AuthenticatedDirectReservationV1> {
+    require_program_state_v1(program_id, account, access, DIRECT_RESERVATION_ACCOUNT_BYTES)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bytes = exact_array::<DIRECT_RESERVATION_ACCOUNT_BYTES>(&data)?;
+    let frame = DirectReservationAccountV1::decode(&bytes)?;
+    let value = decode_direct_reservation_body_v1(frame.semantic_body(), root.value())
+        .map_err(map_direct_error_v1)?;
+    let (expected, bump) = seeds::direct_reservation_v1_pda(
+        program_id,
+        &root.account(),
+        &value.order_id,
+    );
+    expect_pda(account.key, (expected, bump), Some(frame.bump()))?;
+    require(
+        value.reservation_account == account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let observed_lamports = account.lamports();
+    require_rent_coverage_v1(
+        value.rent.principal_lamports,
+        value.rent.donation_floor_lamports,
+        observed_lamports,
+    )?;
+    let data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
+    drop(data);
+    let semantic_id = value
+        .semantic_id(&DirectRuntimeSha256V1)
+        .map_err(map_direct_error_v1)?;
+    Ok(AuthenticatedDirectReservationV1 {
+        account: *account.key, value, bump, data_id, semantic_id, observed_lamports,
+    })
+}
+
+pub(crate) fn authenticate_direct_reservation_readonly_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+) -> Outcome<AuthenticatedDirectReservationV1> {
+    authenticate_reservation_with_access_v1(
+        program_id, account, root, DirectAccountAccessV1::ReadOnly,
+    )
+}
+
+pub(crate) fn authenticate_direct_reservation_writable_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedDirectMarketRootV1,
+) -> Outcome<AuthenticatedDirectReservationV1> {
+    authenticate_reservation_with_access_v1(
+        program_id, account, root, DirectAccountAccessV1::Writable,
+    )
+}
+
+/// Authenticate a fresh System-owned, zero-data current Direct PDA and return
+/// its hostile prefund donation floor. The caller still must calculate rent,
+/// fund principal without discounting the prefund, allocate, assign, and write.
+pub(crate) fn authenticate_fresh_direct_pda_v1(
+    account: &AccountInfo<'_>,
+    expected: (Pubkey, u8),
+) -> Outcome<(u8, u64)> {
+    expect_pda(account.key, expected, None)?;
+    require(
+        !account.is_signer
+            && account.is_writable
+            && !account.executable
+            && account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && account.data_len() == 0,
+        ClutchError::AlreadyInitialized,
+    )?;
+    Ok((expected.1, account.lamports()))
+}
+
+pub(crate) fn write_direct_market_root_v1(
+    account: &AccountInfo<'_>,
+    bump: u8,
+    value: DirectMarketRootV1,
+) -> Outcome<()> {
+    let body = encode_direct_market_root_body_v1(value).map_err(map_direct_error_v1)?;
+    let frame = DirectMarketRootAccountV1::new(bump, body)?;
+    let mut output = [0u8; DIRECT_MARKET_ROOT_ACCOUNT_BYTES];
+    frame.encode_into(&mut output)?;
+    write_exact_v1(account, &output)
+}
+
+pub(crate) fn write_direct_action_replay_v1(
+    account: &AccountInfo<'_>,
+    bump: u8,
+    value: DirectActionReplayV1,
+    root: DirectMarketRootV1,
+) -> Outcome<()> {
+    let body = encode_direct_action_replay_body_v1(value, root).map_err(map_direct_error_v1)?;
+    let frame = DirectActionReplayAccountV1::new(bump, body)?;
+    let mut output = [0u8; DIRECT_ACTION_REPLAY_ACCOUNT_BYTES];
+    frame.encode_into(&mut output)?;
+    write_exact_v1(account, &output)
+}
+
+pub(crate) fn write_direct_selection_v1(
+    account: &AccountInfo<'_>,
+    bump: u8,
+    value: DirectSelectionV1,
+    root: DirectMarketRootV1,
+) -> Outcome<()> {
+    let body = encode_direct_selection_body_v1(value, root).map_err(map_direct_error_v1)?;
+    let frame = DirectSelectionAccountV1::new(bump, body)?;
+    let mut output = [0u8; DIRECT_SELECTION_ACCOUNT_BYTES];
+    frame.encode_into(&mut output)?;
+    write_exact_v1(account, &output)
+}
+
+pub(crate) fn write_direct_reservation_v1(
+    account: &AccountInfo<'_>,
+    bump: u8,
+    value: DirectReservationV1,
+    root: DirectMarketRootV1,
+) -> Outcome<()> {
+    let body = encode_direct_reservation_body_v1(value, root).map_err(map_direct_error_v1)?;
+    let frame = DirectReservationAccountV1::new(bump, body)?;
+    let mut output = [0u8; DIRECT_RESERVATION_ACCOUNT_BYTES];
+    frame.encode_into(&mut output)?;
+    write_exact_v1(account, &output)
+}
+
+fn require_program_state_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    access: DirectAccountAccessV1,
+    expected_len: usize,
+) -> Outcome<()> {
+    require(
+        !account.is_signer
+            && !account.executable
+            && account.owner == program_id
+            && account.is_writable == access.writable()
+            && account.data_len() == expected_len,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn require_rent_coverage_v1(
+    principal: u64,
+    donation_floor: u64,
+    observed: u64,
+) -> Outcome<()> {
+    let floor = principal
+        .checked_add(donation_floor)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(principal != 0 && observed >= floor, ClutchError::MismatchedState)
+}
+
+fn require_live_id_v1(id: [u8; 32]) -> Outcome<()> {
+    require(id != [0; 32], ClutchError::MismatchedState)
+}
+
+fn exact_array<const N: usize>(input: &[u8]) -> Outcome<[u8; N]> {
+    require(input.len() == N, ClutchError::WrongDataLength)?;
+    let mut output = [0u8; N];
+    output.copy_from_slice(input);
+    Ok(output)
+}
+
+fn write_exact_v1<const N: usize>(account: &AccountInfo<'_>, value: &[u8; N]) -> Outcome<()> {
+    require(
+        account.is_writable && !account.executable && account.data_len() == N,
+        ClutchError::MismatchedState,
+    )?;
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    data.copy_from_slice(value);
+    Ok(())
+}
+
+fn map_direct_error_v1(error: DirectMarketErrorV1) -> Refusal {
+    let adapter = match error {
+        DirectMarketErrorV1::Arithmetic => ClutchError::Arithmetic,
+        DirectMarketErrorV1::Replay => ClutchError::Replay,
+        DirectMarketErrorV1::WrongPhase => ClutchError::NotActive,
+        DirectMarketErrorV1::UnauthenticatedAuthority => ClutchError::AuthorizationUnavailable,
+        _ => ClutchError::MismatchedState,
+    };
+    Refusal::Adapter(adapter)
+}
+
+fn direct_account_authentication_id_v1(
+    account: [u8; 32],
+    data_id: [u8; 32],
+    semantic_id: [u8; 32],
+    observed_lamports: u64,
+) -> [u8; 32] {
+    solana_sha256_hasher::hashv(&[
+        DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1,
+        &account,
+        &data_id,
+        &semantic_id,
+        &observed_lamports.to_le_bytes(),
+    ])
+    .to_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_authentication_transcript_is_role_sensitive() {
+        let root = direct_account_authentication_id_v1([1; 32], [2; 32], [3; 32], 4);
+        let changed_account = direct_account_authentication_id_v1([9; 32], [2; 32], [3; 32], 4);
+        let changed_data = direct_account_authentication_id_v1([1; 32], [9; 32], [3; 32], 4);
+        let changed_semantic = direct_account_authentication_id_v1([1; 32], [2; 32], [9; 32], 4);
+        let changed_lamports = direct_account_authentication_id_v1([1; 32], [2; 32], [3; 32], 9);
+        assert_ne!(root, changed_account);
+        assert_ne!(root, changed_data);
+        assert_ne!(root, changed_semantic);
+        assert_ne!(root, changed_lamports);
+    }
+}
