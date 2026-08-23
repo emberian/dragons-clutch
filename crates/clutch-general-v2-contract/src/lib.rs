@@ -136,6 +136,8 @@ pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V2: &[u8] = b"owner-settlement:v2";
 /// Canonical Reservation-handoff owner-settlement PDA seed domain.
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V3: &[u8] = b"owner-settlement:v3";
+/// Delivery-complete owner-settlement successor PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V4: &[u8] = b"owner-settlement:v4";
 /// Fresh selected composite-fee record PDA seed domain.
 pub const SELECTED_FEE_RECORD_SEED_DOMAIN_V1: &[u8] = b"selected-fee-record:v1";
 /// Fresh owner-scoped fee carry PDA seed domain.
@@ -266,6 +268,55 @@ impl OwnerSettlementSeedTupleV3 {
     /// First seed: fresh non-aliasing V3 owner-row domain.
     pub const fn domain(&self) -> &'static [u8] {
         OWNER_SETTLEMENT_SEED_DOMAIN_V3
+    }
+
+    /// Second seed: full authenticated Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: final selected SettlementCandidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: semantic Position owner.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
+
+/// Validated ordered seed tuple for the delivery-complete OwnerSettlement V4 PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV4 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
+impl OwnerSettlementSeedTupleV4 {
+    /// Construct the canonical owner-row tuple.
+    pub fn new(
+        epoch: Id32,
+        settlement_candidate: Id32,
+        owner: Id32,
+    ) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: fresh non-aliasing V4 owner-row domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V4
     }
 
     /// Second seed: full authenticated Epoch PDA bytes.
@@ -653,8 +704,10 @@ pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V2: u8 = 2;
 /// Canonical Reservation-handoff owner-settlement envelope version.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
-/// Current owner-settlement envelope version; an alias only for V3.
-pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = OWNER_SETTLEMENT_ACCOUNT_VERSION_V3;
+/// Delivery-complete owner-settlement envelope version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V4: u8 = 4;
+/// Current owner-settlement envelope version; an alias only for V4.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = OWNER_SETTLEMENT_ACCOUNT_VERSION_V4;
 /// Exact outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
 /// Fresh disabled selected composite-fee record envelope tag.
