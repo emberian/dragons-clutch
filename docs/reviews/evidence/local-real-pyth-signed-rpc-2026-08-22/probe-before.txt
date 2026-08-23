@@ -1,0 +1,39 @@
+loopback listener probe: PASS
+pid: 22136
+binary: /Users/ember/dev/dragons-clutch/.cache/agave-loopback-validator/bin/solana-test-validator
+rpc: 127.0.0.1:18537
+websocket: 127.0.0.1:18538
+faucet: 127.0.0.1:18539
+non_loopback_addresses_tested: 10.211.55.2
+100.123.20.111
+192.168.50.242
+tcp listeners:
+solana-te 22136 ember   10u  IPv4 0xbe257806ccf0a920      0t0  TCP 127.0.0.1:18539 (LISTEN)
+solana-te 22136 ember   17u  IPv4 0xd494be0f30fda95c      0t0  TCP 127.0.0.1:18540 (LISTEN)
+solana-te 22136 ember   70u  IPv4 0x2bf6ad7a788a4e9d      0t0  TCP 127.0.0.1:18537 (LISTEN)
+solana-te 22136 ember   75u  IPv4 0x36c81a87699e3f15      0t0  TCP 127.0.0.1:18538 (LISTEN)
+udp sockets:
+solana-te 22136 ember   15u  IPv4 0x739f186a3783c595      0t0  UDP 127.0.0.1:18540
+solana-te 22136 ember   18u  IPv4 0x45a338f3311ad280      0t0  UDP 127.0.0.1:18541
+solana-te 22136 ember   19u  IPv4 0x21416e275e45ef08      0t0  UDP 127.0.0.1:18542
+solana-te 22136 ember   20u  IPv4 0xdb385c64896bfcf7      0t0  UDP 127.0.0.1:18543
+solana-te 22136 ember   21u  IPv4   0x1c21af2205c33a      0t0  UDP 127.0.0.1:18544
+solana-te 22136 ember   22u  IPv4 0x803b505e27b14e00      0t0  UDP 127.0.0.1:18545
+solana-te 22136 ember   23u  IPv4 0x74d45700f87a87b9      0t0  UDP 127.0.0.1:18546
+solana-te 22136 ember   24u  IPv4 0xbbfc024d1b6c9f78      0t0  UDP 127.0.0.1:18547
+solana-te 22136 ember   25u  IPv4 0xd5c6ea40aacdcc5f      0t0  UDP 127.0.0.1:18548
+solana-te 22136 ember   26u  IPv4 0x3e802f646eb4af4a      0t0  UDP 127.0.0.1:18549
+solana-te 22136 ember   27u  IPv4 0x58d4bb968b8fd61a      0t0  UDP 127.0.0.1:18550
+solana-te 22136 ember   28u  IPv4 0xb5d1d59c0e14aa36      0t0  UDP 127.0.0.1:18551
+solana-te 22136 ember   29u  IPv4 0x87c7b7c0b7ae1fe8      0t0  UDP 127.0.0.1:18551
+solana-te 22136 ember   30u  IPv4 0x86938dfe486b1879      0t0  UDP 127.0.0.1:18551
+solana-te 22136 ember   31u  IPv4 0xbd735c2f22179020      0t0  UDP 127.0.0.1:18551
+solana-te 22136 ember   32u  IPv4  0x95463049555b5e6      0t0  UDP 127.0.0.1:18552
+solana-te 22136 ember   33u  IPv4 0x83a31c756e3beb09      0t0  UDP 127.0.0.1:18553
+solana-te 22136 ember   34u  IPv4 0x9c1ebee13a5829ba      0t0  UDP 127.0.0.1:18554
+solana-te 22136 ember   35u  IPv4 0x1105b49fc27e33cb      0t0  UDP 127.0.0.1:18555
+solana-te 22136 ember   36u  IPv4 0xb33ab5a80f6e85cd      0t0  UDP 127.0.0.1:18556
+solana-te 22136 ember   38u  IPv4 0x5f1b666a6f693df3      0t0  UDP 127.0.0.1:18558
+solana-te 22136 ember   39u  IPv4 0x157eded4f2d33994      0t0  UDP 127.0.0.1:18559
+solana-te 22136 ember   55u  IPv4 0x98265e0a3bfc70e5      0t0  UDP 127.0.0.1:8001
+solana-te 22136 ember   84u  IPv4 0xbbfc024d1b6c9f78      0t0  UDP 127.0.0.1:18547

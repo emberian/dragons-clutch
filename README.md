@@ -132,6 +132,11 @@ test-only signers.
   fixture state. This is real deployed provider-program/ABI/crypto execution
   over a synthetic local observation, not devnet price evidence or a
   same-market source-to-redemption lifecycle.
+  A separate signed-RPC campaign now proves the same seam through a patched,
+  listener-audited Agave validator: 13 confirmed transactions initialize and
+  verify the provider path, assert two exact atomic refusals, accept adjacent
+  `PostUpdate` + append, seal, and resolve. Its committed transcripts are in
+  [the local-real review](docs/reviews/LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md).
   Production provider, feed-profile, stability, and trust-floor identities
   remain deliberately unpinned.
 - Fixed bounds are one measured capacity profile, not a claim that the concept
@@ -223,8 +228,24 @@ records the clean input-closure ELF identity, complete offline artifact audit,
 final-LTO stack check, exact local rent arithmetic, bank matrix, and keeper
 restart gate; it is not a release artifact.
 
-To run the reproducible local-real provider seam without any public RPC or
-faucet SOL:
+To run the reproducible signed-RPC provider seam without any public RPC or
+faucet SOL, first prepare the pinned loopback Agave binary as documented under
+`tools/agave-loopback-validator/`, then run:
+
+```sh
+CLUTCH_LOOPBACK_TEST_VALIDATOR="$PWD/.cache/agave-loopback-validator/bin/solana-test-validator" \
+  programs/clutch-sbf/scripts/run_local_real_pyth.sh
+```
+
+This starts a fresh listener-audited validator, injects 36 exact genesis
+accounts including reconstructed deployed Pyth loader bodies and the test-only
+Clutch ProgramData account, signs every transaction with disposable local
+keys, and removes the ledger and keys afterward. It never reads a default
+wallet or Solana CLI config. The retained clean-HEAD campaign and exact claim
+boundary are in
+[the signed-RPC review](docs/reviews/LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md).
+
+The faster in-process bank version remains available:
 
 ```sh
 programs/clutch-sbf/svm-tests/run_svm_tests.sh \

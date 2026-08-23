@@ -1,0 +1,254 @@
+{
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "clock": {
+    "epoch": 1065,
+    "epoch_start_timestamp": 1787448729,
+    "leader_schedule_epoch": 1066,
+    "slot": 460336372,
+    "unix_timestamp": 1787525640
+  },
+  "confidence": 6357,
+  "exponent": -8,
+  "genesis_hash": "31sGLHw6Z82iyWL9FCisnFfUJidyWehVJjXXQBsG7EDS",
+  "interval": {
+    "lower": "99980929",
+    "upper": "100019071"
+  },
+  "joined_post_append_signature": "5NrczHsKf14Df2hien2rxzDFyYsKQVVeQmGoXf5BYxdBSjyPYEzmsrs3LTAttbpyJhr19gCJiYTH2XSbiw94bLbf",
+  "network": "loopback validator only",
+  "price": 100000000,
+  "provider_feed_id": [
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42
+  ],
+  "publish_time": 1787525400,
+  "resolve_signature": "3nEibDNtQEWxWEs9ombDs8ST54rtFxTffqiqcnD6MT5CKYf2aB2crrtbDNgQmEKqhaGP79YzVMj87rEnExnyZhVr",
+  "resolved_payout": 1,
+  "seal_signature": "5qJzq5JUc8TWJJhoJTPVNgLTEEtvYnZ8sVKms5dMFYo4186vBny3Ra5Si2QBQ6xfTdsEfrWqSZZ65GZdEwnMxyYp",
+  "sealed": true,
+  "steps": [
+    {
+      "compute_units_consumed": 34183,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "5KV2EWLDfA7oBiWD1gnVTfsPoXCqQtWwFNkzDuF8KgcyxvDDdArE5xjeiMAf88XwvCXeay7FSw5shyRCYkELipsT",
+      "signed_wire_sha256": "3daf1dcd41718413b465398a128c195cfa33517ed86e260e349b0364a46928ef",
+      "slot": 460336357
+    },
+    {
+      "compute_units_consumed": 3038,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "router-init-and-write-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "3Sp7WJNmhTqGasTUDJmyfzB8o1tYBMvivvZxZHswdQEBFJmHUFTTpMhMwABZ6psXxYVJSki6xv8FjxvjrgDY37US",
+      "signed_wire_sha256": "9ba742e305d9fa2cd5dd679b115effb93b1e2575be8337baac12185a2060578e",
+      "slot": 460336358
+    },
+    {
+      "compute_units_consumed": 336652,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-write-and-verify-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "4w1SUbXQju7m3N1FUcrJsKWiAdzAfWfqhLug5VgFWazC1kRsy89DwzzHjiSNrBHJUHXANwgffTaLfJ99jcDiK3hC",
+      "signed_wire_sha256": "cb9d2dd475f89eb23b6b9df4d366a214018f31be189596c16ae3f2c6e794f09e",
+      "slot": 460336359
+    },
+    {
+      "compute_units_consumed": 7931,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "receiver-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+      ],
+      "signature": "o2DPqYWnsxnNsjBaENxBcNeyshj6UPhhNgCiC6LYZKrRkzF2tdP9YU2H4CSsFYpDny7BWTrYk6h3bSm7pqAsEYJ",
+      "signed_wire_sha256": "5bc9c295110effbf3c415ee0a19bb11d22db3194c5db0624d2fc18748301ab77",
+      "slot": 460336360
+    },
+    {
+      "compute_units_consumed": 31216,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-spec-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4PHUTrWtn6UhFeosmnjK3hVVtoKQFjy3neCeyFUMpiEYB1ih7Y6mkJKM6y5AiJhc6tgadncGtETT7EGN8HrWLUwW",
+      "signed_wire_sha256": "cab4d2c9982c72d4eacf53601109d50831bff513a85f2b55b5741e5b9f2dbe1e",
+      "slot": 460336362
+    },
+    {
+      "compute_units_consumed": 30493,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4xkriGsYPBUAJr557dPjrpPtv7wtU2jk6dKpuT8YzrQBTDjJhhX6yjjAvGowWiBBjZqQhttUmf4fbd2rkaHNB2ZA",
+      "signed_wire_sha256": "65eb7c5b9cd4e557145a0eccae51bb00400e935c0aadc31679be6308c7f069e1",
+      "slot": 460336363
+    },
+    {
+      "compute_units_consumed": 34216,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "wrong-feed-init-source-spec-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3mG1FK32xybFUSpnnYSyuzVZzFEb4pyizcqQfFbtRuJD29YhUrgqmJGuMJHLZVgdWGt2HRDUc9vu46Mza16pyaYC",
+      "signed_wire_sha256": "a5cf5dd7b850baf3b12c858564ceebeed78917b265ea8f9efd1a04873e2792e6",
+      "slot": 460336364
+    },
+    {
+      "compute_units_consumed": 33493,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "wrong-feed-init-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "36AZWMPoUcxYfvieNJAqQmVayRL1fC8PdhZZaGsd7RoHNBcm3nhQrftfj3kSf93pjSKzkjpZwkNas5WFgaweqhJw",
+      "signed_wire_sha256": "be733715cc8e0d958f6a6b4edc280c65c3ee574c6c3779434373cb9fc677477e",
+      "slot": 460336365
+    },
+    {
+      "compute_units_consumed": 70673,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-config-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3G5cJv5iyc5xL1mCTvaFSP5UHMo9ekUsDXmPLHNxhsJ33s6btTPkeUPh4LvhM3WQXLtDbnURdszymCKHmg1rFRxz",
+      "signed_wire_sha256": "fbf45ae618dc8f96a92092bf3f7d4dcfcadf32c2e1e830367e9f01f0d540402b",
+      "slot": 460336367
+    },
+    {
+      "compute_units_consumed": 74729,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-feed-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "c2oa6Twd5L5dEcKfwzQiap7hSSBFbWbzhuGHhDP4MtRhVKPG8w7FiDjRboi6XXSzU8nA7hrHaPmy5yTwfW4bMTx",
+      "signed_wire_sha256": "5c81c737b0ff5ea756d70219d576abe15a8230ed37a28a8ff6d2a5f10ababb2e",
+      "slot": 460336368
+    },
+    {
+      "compute_units_consumed": 75261,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "real-post-update-plus-clutch-append-atomic",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5NrczHsKf14Df2hien2rxzDFyYsKQVVeQmGoXf5BYxdBSjyPYEzmsrs3LTAttbpyJhr19gCJiYTH2XSbiw94bLbf",
+      "signed_wire_sha256": "a277d85c3273b403b548186420b5dc7da19ac59b9d254caa0be0e1cc89f4f081",
+      "slot": 460336369
+    },
+    {
+      "compute_units_consumed": 67727,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "seal-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5qJzq5JUc8TWJJhoJTPVNgLTEEtvYnZ8sVKms5dMFYo4186vBny3Ra5Si2QBQ6xfTdsEfrWqSZZ65GZdEwnMxyYp",
+      "signed_wire_sha256": "e7ab70f3becce187d52bd8e4063745c9236f61b15f79ed1df956db6ddf73e282",
+      "slot": 460336370
+    },
+    {
+      "compute_units_consumed": 166825,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "categorical-resolve-cell-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3nEibDNtQEWxWEs9ombDs8ST54rtFxTffqiqcnD6MT5CKYf2aB2crrtbDNgQmEKqhaGP79YzVMj87rEnExnyZhVr",
+      "signed_wire_sha256": "7173926531594a6f8f739ce2ac97d5030051175847ea674132248f9f82328fc5",
+      "slot": 460336372
+    }
+  ],
+  "update_account": "k2iqXE4kadhKmFs5N5yMR1xrLeYNonJdRBTK9AYeojA",
+  "verified_vaa_account": "5DaJbZw9J2AvM6ZCoNWjQGfT79Xap2XtYdP9UNW7Wc44",
+  "wrong_config_rollback": true,
+  "wrong_feed_rollback": true
+}

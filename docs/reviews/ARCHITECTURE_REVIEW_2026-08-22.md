@@ -150,6 +150,17 @@ state is freshly initialized local fixture state. This is real provider-program
 and ABI/crypto execution over a synthetic local observation, not devnet price
 evidence. Redemption and a multi-boundary shared window remain separate claims.
 
+Commit `361eafd` additionally runs that provider seam through signed JSON-RPC
+transactions on a pinned, patched, listener-audited Agave validator. The clean
+committed campaign confirms 13 transactions: real router verification, two
+exact atomic rollback negatives, adjacent receiver PostUpdate plus Clutch
+append, archive seal, and categorical resolution. This removes in-process
+`ProgramTest` as the only execution substrate for the seam. It still uses
+synthetic local guardians and a synthetic observation, so it does not establish
+provider availability, a network-signed upgraded 3-of-5 payload, or production
+source admission. Exact hashes and compute units are in
+`LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md`.
+
 The current repair wave passed three byte-identical artifact builds, including
 a relocated Cargo home: ELF
 `193c08723eaefeff9a1c2aa53c9e3feb58960a919fb0bbb7ca5da3bd817aa95b`,

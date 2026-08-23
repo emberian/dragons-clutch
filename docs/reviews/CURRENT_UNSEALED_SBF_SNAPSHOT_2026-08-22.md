@@ -72,6 +72,7 @@ evidence.
 | default production-inert bank | `193c0872…`, `2,082,320` bytes | `165 passed`, `0 failed` |
 | `non-production-mock-source` bank | `342fdfcb0e6b0836ec9ecd492d9a8577c87f493b49fd8c35e3cb47c448d06112`, `2,110,240` bytes | `168 passed`, `0 failed` |
 | `non-production-real-pyth-lab` R2 bank | `38442c94c4ce25c18e8487f551a427e553b17db0d48cb31324b47a8a299ff902`, `2,084,264` bytes | `10 passed`, `0 failed` |
+| `non-production-real-pyth-lab` signed-RPC campaign | `834562d8417bec2b62d7add17ed3a68839943bcc94c2eb3832442287e25f8e6f` | 13 confirmed transactions; 11 accepted and 2 exact rollback refusals; PASS |
 | keeper crash/resume gate, mock profile | `342fdfcb…` | PASS |
 
 Reproduction commands:
@@ -85,6 +86,8 @@ programs/clutch-sbf/svm-tests/run_svm_tests.sh \
 (cd programs/clutch-sbf/svm-tests && \
   cargo test --locked --features non-production-real-pyth-lab \
     --test r2_v2_wire -- --nocapture --test-threads=1)
+CLUTCH_LOOPBACK_TEST_VALIDATOR="$PWD/.cache/agave-loopback-validator/bin/solana-test-validator" \
+  programs/clutch-sbf/scripts/run_local_real_pyth.sh
 programs/clutch-sbf/scripts/run_keeper_gate.sh
 ```
 
@@ -111,6 +114,15 @@ cell 1 because the entire admitted conservative interval
 `[99,980,929, 100,019,071]` lies in that cell. This does not establish a current
 network price, provider availability, the upgraded 3-of-5 trust substrate,
 redemption, a multi-boundary shared window, or production source admission.
+
+Commit `361eafd` adds a separate external signed-RPC campaign. Its clean-HEAD
+run injected the reconstructed provider and Clutch loader accounts into the
+pinned loopback-only Agave validator, confirmed 13 signed transactions, bound
+each returned signature to the submitted wire hash and program order, and
+repeated the wrong-Config/feed rollback, append, seal, and resolution results.
+The retained transcripts and exact negative boundary are recorded in
+`LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md`. The broad laboratory freshness and
+confidence limits are not thereby promoted to production policy.
 
 ## Current persistent deployment rent
 
