@@ -472,11 +472,15 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
         false, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false,
     ];
-    let writable = [
+    let mut writable = [
         false, true, false, false, false, false, false, false, false, false, true, true, true,
-        true, false, false, false, false, false, false, false, false, false, false, true, true,
+        true, false, false, false, false, false, false, false, false, false, false, true, false,
         false, false,
     ];
+    writable[CREATE_SERIES_LINK] = structured_root_requires_product_write(
+        accounts[CREATE_STRUCTURED_ROOT].owner,
+        accounts[CREATE_STRUCTURED_ROOT].data_len(),
+    );
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
         false, true, false, true, false, true, false, false, false, false, false, false, false,
@@ -1129,12 +1133,8 @@ fn invoke_base_create(
             is_signer: index == VAULT_AUTHORITY || index == PAYER,
             is_writable: matches!(
                 index,
-                PAYER
-                    | CREATE_POSITION
-                    | CREATE_REPLAY
-                    | CREATE_STRUCTURED_ROOT
-                    | CREATE_SERIES_LINK
-            ),
+                PAYER | CREATE_POSITION | CREATE_REPLAY | CREATE_STRUCTURED_ROOT
+            ) || (index == CREATE_SERIES_LINK && accounts[index].is_writable),
         });
         infos.push(accounts[index].clone());
         index += 1;
@@ -1236,7 +1236,7 @@ fn invoke_token_plan<'a>(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum StructuredRootPrestateV1 {
     Empty {
         hostile_prefund_lamports: u64,
@@ -1449,7 +1449,8 @@ fn reconcile_structured_root(
     {
         return Err(WrapperError::BaseCustody);
     }
-    reconcile_product_series_link(accounts, &root)?;
+    let link_should_be_writable = matches!(&before, StructuredRootPrestateV1::Empty { .. });
+    reconcile_product_series_link(accounts, &root, link_should_be_writable)?;
     match before {
         StructuredRootPrestateV1::Empty {
             hostile_prefund_lamports,
@@ -1529,12 +1530,13 @@ fn reconcile_structured_root(
 fn reconcile_product_series_link(
     accounts: &[AccountInfo<'_>],
     root: &StructuredMarketRootV1,
+    expected_writable: bool,
 ) -> Result<()> {
     let account = &accounts[CREATE_SERIES_LINK];
     if account.owner != accounts[CREATE_BASE_PROGRAM].key
         || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V1
         || account.is_signer
-        || !account.is_writable
+        || account.is_writable != expected_writable
         || account.executable
         || account.key.to_bytes() != root.binding.link_account
     {
@@ -1544,9 +1546,9 @@ fn reconcile_product_series_link(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let framed_data_id = hashv(&[&data[..]]).to_bytes();
-    let link = Box::new(
-        SeriesMarketLinkAccountV1::decode(&data).map_err(|_| WrapperError::Identity)?,
-    );
+    let mut link = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    SeriesMarketLinkAccountV1::decode_into(&data, &mut link)
+        .map_err(|_| WrapperError::Identity)?;
     drop(data);
     let binding = link.state.binding();
     let semantic_id = link
@@ -1667,4 +1669,23 @@ fn product_artifact_pda(program_id: &Pubkey, kind: u8, id: [u8; 32]) -> Pubkey {
         program_id,
     )
     .0
+}
+
+fn structured_root_requires_product_write(owner: &Pubkey, data_len: usize) -> bool {
+    owner == &system_program::ID && data_len == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn later_root_refuses_product_link_write_privilege() {
+        assert!(structured_root_requires_product_write(&system_program::ID, 0));
+        assert!(!structured_root_requires_product_write(&system_program::ID, 1));
+        assert!(!structured_root_requires_product_write(
+            &Pubkey::new_from_array([92; 32]),
+            0,
+        ));
+    }
 }

@@ -62,7 +62,16 @@ impl StructuredClaimActionV1 {
 
     /// Return the exact family-local wire byte.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::CreateDescriptor => 1,
+            Self::WrapCanonical => 2,
+            Self::WrapFull => 3,
+            Self::UnwrapCanonical => 4,
+            Self::UnwrapFull => 5,
+            Self::CompactDonation => 6,
+            Self::RedeemTerminal => 7,
+            Self::RetireDescriptor => 8,
+        }
     }
 }
 
