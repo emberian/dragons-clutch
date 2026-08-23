@@ -112,7 +112,7 @@ The first-spine tuples are exact ordered seeds:
 | OwnerSettlement V2 | `owner-settlement:v2`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
-| temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner |
+| temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner; immutable envelope-derived allocation snapshot until atomic action-38 close, never cash evidence |
 | temporary recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA |
 | treasury ledger | `fee-treasury-ledger:v1`, selected fee-record PDA |
 | settlement cash pot | `settlement-cash-pot:v1`, Epoch PDA, final `SettlementCandidateId` |

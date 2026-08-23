@@ -92,6 +92,17 @@ facts without creating parallel semantic owners. `DealerFeeTerminalProjectionV1`
 exposes only fee policy/candidate/outcome identity and returns zero for fee,
 Hoard, or liveness funding availability.
 
+The V3 action-24 path does not reread every Reservation. Snapshot creation is
+the unique point that rederives all signed envelopes, proves cumulative
+post-debit equals the closed carry's `paid_atoms`, and persists the canonical
+`DCFEEPAY` outer. Later `project_pre_row_owner_fee_v3` reauthenticates those
+unchanged bytes, exposes their complete-data ID, binds the same fee record,
+candidate, policy, owner, denominator, terminal boundary, fresh `0x81/3` row
+PDA, and exact owner-order count, then returns `(owner, fee_atoms)`. This is
+allocation evidence only. Action 25 accumulates actual buy Reservation cash
+handoffs in the V3 owner row; action 38 alone checks that cash covers exact
+consideration plus the selected fee.
+
 ## Typed identity joins
 
 The generic `AccountIdV1<Kind>` has distinct marker types for fee record,

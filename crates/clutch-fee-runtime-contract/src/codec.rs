@@ -226,6 +226,54 @@ pub fn decode_payer_allocation_v1(
     Ok(allocation)
 }
 
+/// Structurally decode a canonical persisted payer allocation.
+///
+/// This proves only the self-consistency of the semantic body. It does not
+/// prove account ownership, PDA identity, or that signed envelopes authorized
+/// the allocation. The General adapter must establish those facts before using
+/// this decoder for reauthentication.
+pub fn decode_persisted_payer_allocation_v1(input: &[u8]) -> Result<PayerAllocationV1> {
+    exact_len(input, PAYER_ALLOCATION_ACCOUNT_V1_BYTES)?;
+    let mut cursor = 0usize;
+    take_header(input, &mut cursor, PAYER_ALLOCATION_MAGIC_V1)?;
+    let fee_record = read_id(input, &mut cursor)?;
+    let owner = read_id(input, &mut cursor)?;
+    let len = read_u8(input, &mut cursor)?;
+    let boundary = match read_u8(input, &mut cursor)? {
+        0 => crate::selected::AssessmentBoundaryV1::FragmentFloor,
+        1 => crate::selected::AssessmentBoundaryV1::TerminalCeil,
+        _ => return Err(Error::InvalidAccountData),
+    };
+    require_zero(take(input, &mut cursor, 2)?)?;
+    let total_debit_atoms = read_u64(input, &mut cursor)?;
+    let next_carry = read_u128(input, &mut cursor)?;
+    let carry_denominator = read_u128(input, &mut cursor)?;
+    let mut intents = [Id([0; 32]); MAX_FEE_ROWS_V1];
+    let mut debit_atoms = [0u64; MAX_FEE_ROWS_V1];
+    let mut index = 0usize;
+    while index < MAX_FEE_ROWS_V1 {
+        intents[index] = read_id(input, &mut cursor)?;
+        debit_atoms[index] = read_u64(input, &mut cursor)?;
+        index += 1;
+    }
+    finish(cursor, input.len())?;
+    let allocation = PayerAllocationV1::restore_persisted(
+        fee_record,
+        owner,
+        len,
+        intents,
+        debit_atoms,
+        total_debit_atoms,
+        next_carry,
+        carry_denominator,
+        boundary,
+    )?;
+    if encode_payer_allocation_v1(&allocation)?.as_slice() != input {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(allocation)
+}
+
 pub fn encode_recipient_allocation_v1(
     allocation: &RecipientAllocationV1,
 ) -> Result<[u8; RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES]> {
