@@ -66,7 +66,7 @@ use crate::instructions::general_v2_identity;
 use crate::instructions::product_series;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
+    fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -748,14 +748,16 @@ fn process_merge_materialize(
 
 #[inline(never)]
 fn process_market_init(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> Outcome<()> {
     let request = Request::decode(instruction_data)?;
     match request.action {
+        // Withdrawn lowered Market/Hoard/Kernel creator. Shared-Market
+        // founding is reachable only through Product's private phased writer.
         Action::Layout(Intent::CreateMarket { .. }) => {
-            market_init::process(program_id, accounts, &request)
+            Err(ClutchError::AuthorizationUnavailable.into())
         }
         _ => unexpected_route(),
     }
@@ -773,8 +775,11 @@ fn process_observe_resolve(
         Action::Layout(Intent::FeedAdvance { .. }) => {
             observe_resolve::process(program_id, accounts, &request)
         }
+        // Withdrawn lowered Resolution/Kernel/SupplyLedger writers. Product's
+        // ResolutionV5 writer and Fractional's full-width redemption family
+        // are the only future authorities for these transitions.
         Action::Resolve { .. } | Action::RedeemInternal { .. } => {
-            observe_resolve::process(program_id, accounts, &request)
+            Err(ClutchError::ResolutionEvidenceUnavailable.into())
         }
         _ => unexpected_route(),
     }
@@ -1644,6 +1649,35 @@ mod tests {
             })
         );
         assert_eq!(route_hint(&redeem), Route::ObserveResolve);
+    }
+
+    #[test]
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
+    fn withdrawn_lowered_collateral_routes_refuse_at_dispatch() {
+        let create = layout_request(
+            7,
+            Intent::CreateMarket {
+                realm: hash(1),
+                profile: hash(2),
+                market_nonce: 3,
+                outcome_count: 2,
+                terms: hash(4),
+                feed: hash(5),
+            },
+        );
+        assert_eq!(
+            process_without_accounts(&create),
+            ProgramError::from(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+        );
+
+        for action in [ACTION_RESOLVE_HINT, ACTION_REDEEM_INTERNAL_HINT] {
+            assert_eq!(
+                process_without_accounts(&non_layout_request(action)),
+                ProgramError::from(Refusal::Adapter(
+                    ClutchError::ResolutionEvidenceUnavailable
+                ))
+            );
+        }
     }
 
     #[test]
