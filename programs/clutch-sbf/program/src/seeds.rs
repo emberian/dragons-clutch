@@ -169,8 +169,12 @@ pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Immutable Source-selected runtime-liveness policy account prefix.
 pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
-/// Occurrence-scoped Product whole-Market lifecycle root prefix.
-pub const SEED_PRODUCT_OCCURRENCE_ROOT_V1: &[u8] = b"dc:product-occurrence-root:v1";
+/// Shared Product-owned Market lifecycle root prefix.
+pub const SEED_MARKET_LIFECYCLE_ROOT_V1: &[u8] = b"dc:market-lifecycle-root:v1";
+/// System-owned Market foundation principal vault prefix.
+pub const SEED_MARKET_FOUNDATION_VAULT_V1: &[u8] = b"dc:market-foundation-vault:v1";
+/// Per-Series, per-ordinal Market admission link prefix.
+pub const SEED_SERIES_MARKET_LINK_V1: &[u8] = b"dc:series-market-link:v1";
 /// Full-width Product/Failure-owned Resolution V5 prefix.
 pub const SEED_RESOLUTION_V5: &[u8] = b"dc:resolution:v5";
 /// Direct candidate-window account seed prefix.
@@ -1081,7 +1085,7 @@ pub fn source_occurrence_pda(program_id: &Pubkey, source_occurrence_id: &[u8; 32
 }
 
 /// Canonical Product occurrence root for one full-width Market generation.
-pub fn product_occurrence_root_pda(
+pub fn market_lifecycle_root_pda(
     program_id: &Pubkey,
     market_instance_id: &[u8; 32],
     generation: u64,
@@ -1089,9 +1093,41 @@ pub fn product_occurrence_root_pda(
     find(
         program_id,
         &[
-            SEED_PRODUCT_OCCURRENCE_ROOT_V1,
+            SEED_MARKET_LIFECYCLE_ROOT_V1,
             market_instance_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical zero-data System-owned FoundationVault for one Market generation.
+pub fn market_foundation_vault_pda(
+    program_id: &Pubkey,
+    market_instance_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_MARKET_FOUNDATION_VAULT_V1,
+            market_instance_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical replay-safe link for one recurring Series ordinal.
+pub fn series_market_link_pda(
+    program_id: &Pubkey,
+    series_plan_id: &[u8; 32],
+    ordinal: u32,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_SERIES_MARKET_LINK_V1,
+            series_plan_id,
+            &ordinal.to_le_bytes(),
         ],
     )
 }

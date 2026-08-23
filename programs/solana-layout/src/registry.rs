@@ -452,10 +452,14 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = 0xa9;
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact fixed width of the counted General V2 settlement root.
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
-/// Reserved Product occurrence-scoped terminal root discriminator.
-pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
-/// First reserved Product occurrence-root version.
-pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Shared Product-owned Market lifecycle root discriminator.
+pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
+/// First shared Market lifecycle-root version.
+pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Per-Series, per-ordinal Market admission-link discriminator.
+pub const SERIES_MARKET_LINK_ACCOUNT_TAG: u8 = 0xad;
+/// First SeriesMarketLink account version.
+pub const SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -521,7 +525,8 @@ const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
-const _: () = assert!(PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG == 0xaa);
+const _: () = assert!(MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
+const _: () = assert!(SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 
@@ -1460,11 +1465,20 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
-            tag: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG,
-            version: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION,
+            tag: MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+            version: MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-occurrence-root-v1-account",
+        name: "market-lifecycle-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SERIES_MARKET_LINK_ACCOUNT_TAG,
+            version: SERIES_MARKET_LINK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "series-market-link-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

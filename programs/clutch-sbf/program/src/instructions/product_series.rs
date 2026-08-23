@@ -24,12 +24,6 @@ use crate::instructions::product_artifact::{
     authenticate_registry_capability_v2, authenticate_series_registry_capability_refs_v1,
     AuthenticatedRegistryCapabilityReleaseV2, AuthenticatedRegistryCapabilityV2,
 };
-use crate::instructions::product_occurrence::{
-    create_product_occurrence_root_v1, mint_product_occurrence_initialization_v1,
-    AuthenticatedProductOccurrenceCapitalizationV1,
-    AuthenticatedProductOccurrenceFailureCapitalJoinV1,
-    AuthenticatedProductOccurrenceInitializationV1, AuthenticatedProductOccurrenceRootV1,
-};
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
 };
@@ -49,17 +43,15 @@ use clutch_collateral_adapter_v2::{
     TransferAuthorityV2,
 };
 use clutch_product_series::{
-    compile_ordinal_v2, compile_source_occurrence_v3, AuthenticatedSeriesFundingAuthorityV1,
+    compile_source_occurrence_v3, AuthenticatedSeriesFundingAuthorityV1,
     AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
     CompiledProductSeriesBundleV1Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
-    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductOccurrenceBindingV1,
-    ProductOccurrenceCapitalizationV1, ProductOccurrenceRootV1, ProductTemplateV4,
-    RegistryCapabilityProjectionV2, SeriesActivationContextV1, SeriesAttachmentPlanV1,
-    SeriesFundingComponentV1, SeriesFundingQuoteV1, SeriesFundingRequirementsV1,
-    SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SeriesFundingTermsV2,
-    SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    SERIES_FUNDING_COMPONENT_COUNT,
+    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, RegistryCapabilityProjectionV2, SeriesActivationContextV1,
+    SeriesAttachmentPlanV1, SeriesFundingComponentV1, SeriesFundingQuoteV1,
+    SeriesFundingRequirementsV1, SeriesFundingStateV1, SeriesFundingTerminalProjectionV1,
+    SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
+    SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT,
 };
 use clutch_solana_layout::product_series::{
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
@@ -1027,238 +1019,6 @@ pub fn authenticate_registered_compiled_product_series_bundle_v1(
         bundle: expected,
         bundle_id: expected_id,
     })
-}
-
-/// Join canonical kind-46 Market identity, Product/Series compiler output,
-/// Source occurrence authentication, and Failure capitalization authority.
-#[allow(clippy::too_many_arguments)]
-pub fn authenticate_product_occurrence_initialization_v1(
-    program_id: &Pubkey,
-    registry: AuthenticatedRegistryCapabilityV2,
-    source_release: AuthenticatedSourceReleaseV1,
-    artifacts: &AuthenticatedSeriesArtifactsV1,
-    compiler: AuthenticatedCompiledProductSeriesBundleV1,
-    market_artifact: &AccountInfo<'_>,
-    source_receipt: OccurrenceSourceReceiptV1,
-    failure: AuthenticatedProductOccurrenceFailureCapitalJoinV1,
-    capitalization: ProductOccurrenceCapitalizationV1,
-) -> Outcome<AuthenticatedProductOccurrenceInitializationV1> {
-    let series_plan_id = artifacts
-        .series
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let funding_terms_id = artifacts
-        .funding_terms
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let quote_id = artifacts
-        .quote
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let interval_profile = registry
-        .profile()
-        .interval_consensus_profile()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let interval_profile_id = interval_profile
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        registry.series_plan_id() == series_plan_id
-            && compiler.bundle().series_plan_id == series_plan_id
-            && compiler.bundle().funding_terms_id == funding_terms_id
-            && compiler.bundle().registry_release_id == registry.registry_release_id()
-            && compiler.bundle().capability_profile_id == registry.capability_profile_id()
-            && compiler.bundle().source_release_manifest_id == source_release.manifest_id()
-            && failure.series_plan_id() == series_plan_id
-            && failure.ordinal() == source_receipt.ordinal(),
-        ClutchError::MismatchedState,
-    )?;
-    artifacts.validate_registry_projection(&registry.projection())?;
-    let compiled = compile_ordinal_v2(
-        &artifacts.series,
-        &artifacts.template,
-        &artifacts.basis,
-        &artifacts.recovery,
-        &artifacts.price_policy,
-        &artifacts.genesis,
-        &artifacts.attachment,
-        &registry.projection(),
-        failure.ordinal(),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        compiled.series_plan_id == series_plan_id
-            && compiled.market_instance_id == failure.market_instance_id()
-            && source_receipt.market_instance_id().bytes() == compiled.market_instance_id.bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    let market = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        market_artifact,
-        compiled.market_instance_id.content_id(),
-    )?;
-    require(
-        *market.value() == compiled.market,
-        ClutchError::MismatchedState,
-    )?;
-
-    let source_authority =
-        AuthenticatedProductSourceAuthorityV1::from_series_registry(registry, source_release)?;
-    let occurrence = compile_source_occurrence_v3(
-        &source_authority,
-        &artifacts.series,
-        &artifacts.template,
-        &artifacts.basis,
-        &artifacts.recovery,
-        &artifacts.price_policy,
-        &artifacts.genesis,
-        &artifacts.attachment,
-        &registry.projection(),
-        failure.ordinal(),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let source_occurrence_id = occurrence
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let source_plane_contract_id = source_release
-        .source_plane()
-        .id()
-        .map(|id| ContentId::from_bytes(id.bytes()))
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        source_receipt.occurrence_record_id().bytes() == source_occurrence_id.bytes()
-            && source_receipt.series_plan_id().bytes() == series_plan_id.bytes()
-            && source_receipt.ordinal() == occurrence.ordinal
-            && source_receipt.market_instance_id().bytes() == occurrence.market_instance_id.bytes()
-            && source_receipt.attachment_plan_id().bytes() == occurrence.attachment_plan_id.bytes()
-            && source_receipt.source_plane_contract_id().bytes()
-                == source_plane_contract_id.bytes()
-            && source_receipt.source_spec_id().bytes() == artifacts.template.source_spec_id.bytes()
-            && source_receipt.window_id().bytes() == occurrence.source_window_id.bytes()
-            && source_receipt.statistic_key_id().bytes() == occurrence.statistic_key_id.bytes()
-            && source_receipt.repair_generation() != 0
-            && failure.generation() != 0
-            && failure.recovery_payer() == artifacts.funding_terms.lamport_principal_refund
-            && failure.neutral_lamport_sink() == artifacts.funding_terms.neutral_lamport_sink,
-        ClutchError::MismatchedState,
-    )?;
-    let (interval_work, _) = seeds::failure_interval_consensus_work_pda(
-        program_id,
-        &compiled.market_instance_id.bytes(),
-        failure.generation(),
-    );
-    let (interval_replay, _) = seeds::failure_interval_consensus_replay_pda(
-        program_id,
-        &compiled.market_instance_id.bytes(),
-        failure.generation(),
-    );
-    let (resolution, _) =
-        seeds::resolution_v5_pda(program_id, &compiled.market_instance_id.bytes());
-    let source_occurrence_account =
-        Pubkey::new_from_array(source_receipt.occurrence_account().bytes());
-    let binding = ProductOccurrenceBindingV1 {
-        market_instance_id: compiled.market_instance_id,
-        series_plan_id,
-        ordinal: failure.ordinal(),
-        generation: failure.generation(),
-        product_template_id: artifacts
-            .template
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        native_claim_basis_id: artifacts
-            .basis
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        recovery_policy_id: artifacts
-            .recovery
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        price_measure_policy_id: artifacts
-            .price_policy
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        market_genesis_profile_id: artifacts
-            .genesis
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        funding_terms_id: funding_terms_id.content_id(),
-        funding_quote_id: quote_id.content_id(),
-        attachment_plan_id: artifacts
-            .attachment
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .content_id(),
-        compiler_output_id: compiler.bundle_id().content_id(),
-        source_occurrence_id,
-        source_occurrence_account_id: ContentId::from_bytes(source_occurrence_account.to_bytes()),
-        source_occurrence_account_authentication_id: source_receipt
-            .occurrence_account_authentication_id(),
-        source_occurrence_receipt_id: source_receipt.id(),
-        source_release_manifest_id: source_release.manifest_id(),
-        source_route_id: source_receipt.route_id(),
-        source_clock_policy_id: source_receipt.clock_policy_id(),
-        source_plane_contract_id,
-        source_spec_id: source_receipt.source_spec_id(),
-        window_spec_id: source_receipt.window_id(),
-        statistic_key_id: source_receipt.statistic_key_id(),
-        source_repair_generation: source_receipt.repair_generation(),
-        failure_interval_work_account_id: ContentId::from_bytes(interval_work.to_bytes()),
-        failure_interval_replay_account_id: ContentId::from_bytes(interval_replay.to_bytes()),
-        resolution_account_id: ContentId::from_bytes(resolution.to_bytes()),
-        failure_policy_binding_id: failure.failure_policy_binding_id(),
-        recovery_state_id: failure.recovery_state_id(),
-        interval_consensus_profile_id: interval_profile_id.content_id(),
-        maximum_interval_width: interval_profile.maximum_interval_width,
-        maximum_coordinates_per_advance: interval_profile.maximum_coordinates_per_advance,
-        registry_release_id: registry.registry_release_id(),
-        capability_profile_id: registry.capability_profile_id(),
-        rent_payer: failure.recovery_payer(),
-        neutral_lamport_sink: failure.neutral_lamport_sink(),
-    };
-    let state = ProductOccurrenceRootV1::initialize(binding, capitalization)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    mint_product_occurrence_initialization_v1(
-        state,
-        *market_artifact.key,
-        source_occurrence_account,
-        source_receipt.occurrence_account_authentication_id(),
-    )
-}
-
-/// Execute action15's atomic external-payer capitalization after all joins.
-#[allow(clippy::too_many_arguments)]
-pub fn capitalize_product_occurrence_v1<'a>(
-    program_id: &Pubkey,
-    authorization: AuthenticatedProductOccurrenceInitializationV1,
-    payer: &AccountInfo<'a>,
-    root: &AccountInfo<'a>,
-    interval_work: &AccountInfo<'a>,
-    interval_replay: &AccountInfo<'a>,
-    resolution: &AccountInfo<'a>,
-    neutral_sink: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
-    rent_sysvar: &AccountInfo<'a>,
-) -> Outcome<(
-    AuthenticatedProductOccurrenceRootV1,
-    AuthenticatedProductOccurrenceCapitalizationV1,
-)> {
-    create_product_occurrence_root_v1(
-        program_id,
-        payer,
-        root,
-        interval_work,
-        interval_replay,
-        resolution,
-        neutral_sink,
-        system_program,
-        rent_sysvar,
-        authorization,
-    )
 }
 
 /// Authenticate and decode the exact nine immutable Product/Series artifacts.

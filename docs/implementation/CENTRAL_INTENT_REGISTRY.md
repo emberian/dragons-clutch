@@ -228,7 +228,7 @@ The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
 backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
 accounts, and claim backing all to be zero. It then closes both `0xa4` and
-`0xa5` under one private ProductOccurrenceRoot terminal authorization, refunds
+`0xa5` under one private MarketLifecycleRoot terminal authorization, refunds
 each account's stored rent payer independently, and routes only hostile or
 unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
 principal, reinterpret donation surplus as revenue, strand policy rent, permit

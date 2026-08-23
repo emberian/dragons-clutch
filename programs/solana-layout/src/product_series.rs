@@ -5,7 +5,7 @@
 //! PDA, rent, or token balance. Those are SBF adapter obligations. In
 //! particular, decoding [`RegisterSeriesIntentV1`] cannot turn its registry
 //! fields into authority, and decoding [`SeriesFundingAccountV1`] cannot prove
-//! that its five physical custody compartments hold the balances in its pure
+//! that its physical custody compartments hold the balances in its pure
 //! state.
 //!
 //! The six Series local action tags `13..=18` are allocated by
@@ -15,9 +15,10 @@
 //! wired.
 
 use clutch_product_series::{
-    ContentId, FixedCodec, MarketInstanceV2Id, ProductOccurrenceRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingTermsV2Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    PRODUCT_OCCURRENCE_ROOT_BYTES_V1, SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_STATE_BYTES,
+    ContentId, FixedCodec, MarketInstanceV2Id, MarketLifecycleRootV1, SeriesFundingComponentV1,
+    SeriesFundingStateV1, SeriesFundingTermsV2Id, SeriesMarketLinkV1, SeriesPlanV5Id,
+    SourceOccurrenceV1Id, MARKET_LIFECYCLE_ROOT_BYTES_V1, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
@@ -27,8 +28,10 @@ pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact mutable Series-funding account width.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
     4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES;
-/// Exact persisted Product occurrence root width, including account framing.
-pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_BYTES_V1: usize = 16 + PRODUCT_OCCURRENCE_ROOT_BYTES_V1;
+/// Exact persisted shared Market lifecycle root width, including framing.
+pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize = 16 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
+/// Exact persisted per-Series Market link width, including framing.
+pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize = 16 + SERIES_MARKET_LINK_BYTES_V1;
 
 /// Exact `RegisterSeries` payload width.
 pub const REGISTER_SERIES_PAYLOAD_BYTES_V1: usize = 4 * HASH_BYTES;
@@ -96,35 +99,44 @@ fn map_product_error(error: clutch_product_series::Error) -> CodecError {
     }
 }
 
-/// Program-owned framing for the complete Product occurrence semantic root.
+/// Program-owned framing for the complete shared Market lifecycle root.
 ///
 /// The embedded pure body remains the sole owner of Market/Product/Series/
 /// Source identities and family-boundary expected/live/terminal counts. This
 /// wrapper adds only the central `0xaa/1` discriminator and canonical PDA
 /// bump. Principal and donation floors have one owner in the embedded state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProductOccurrenceRootAccountV1 {
-    /// Complete Product-owned occurrence lifecycle state.
-    pub state: ProductOccurrenceRootV1,
-    /// Canonical Product occurrence root PDA bump.
+pub struct MarketLifecycleRootAccountV1 {
+    /// Complete Product-owned shared Market lifecycle state.
+    pub state: MarketLifecycleRootV1,
+    /// Canonical Market root PDA bump.
     pub stored_bump: u8,
+    /// Exact refundable rent principal funded for this physical account.
+    pub rent_principal_lamports: u64,
 }
 
-impl ProductOccurrenceRootAccountV1 {
+impl MarketLifecycleRootAccountV1 {
     /// Validate the complete account frame and pure semantic body.
     pub fn validate(&self) -> Result<()> {
-        let mut body = [0; PRODUCT_OCCURRENCE_ROOT_BYTES_V1];
-        self.state.encode_into(&mut body).map_err(map_product_error)
+        let mut body = [0; MARKET_LIFECYCLE_ROOT_BYTES_V1];
+        self.state
+            .encode_into(&mut body)
+            .map_err(map_product_error)?;
+        if self.rent_principal_lamports == 0 {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(())
     }
 
-    /// Encode exactly [`PRODUCT_OCCURRENCE_ROOT_ACCOUNT_BYTES_V1`] bytes.
+    /// Encode exactly [`MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1`] bytes.
     pub fn encode(&self, out: &mut [u8]) -> Result<()> {
         self.validate()?;
-        require_exact(out, PRODUCT_OCCURRENCE_ROOT_ACCOUNT_BYTES_V1)?;
+        require_exact(out, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
         out.fill(0);
-        out[0] = registry::PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG;
-        out[1] = registry::PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION;
+        out[0] = registry::MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG;
+        out[1] = registry::MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION;
         out[2] = self.stored_bump;
+        out[8..16].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
         self.state
             .encode_into(&mut out[16..])
             .map_err(map_product_error)
@@ -132,16 +144,67 @@ impl ProductOccurrenceRootAccountV1 {
 
     /// Hostile-decode the exact frame and complete embedded semantic state.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        require_exact(input, PRODUCT_OCCURRENCE_ROOT_ACCOUNT_BYTES_V1)?;
-        if input[0] != registry::PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG {
+        require_exact(input, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION {
+        if input[1] != registry::MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: MarketLifecycleRootV1::decode(&input[16..]).map_err(map_product_error)?,
+            stored_bump: input[2],
+            rent_principal_lamports: u64::from_le_bytes(
+                input[8..16].try_into().map_err(|_| CodecError::Truncated)?,
+            ),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Program-owned framing for one replay-safe `(SeriesPlanV5, ordinal)` link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesMarketLinkAccountV1 {
+    /// Complete link state.
+    pub state: SeriesMarketLinkV1,
+    /// Canonical `0xad` PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesMarketLinkAccountV1 {
+    /// Validate the exact semantic body.
+    pub fn validate(&self) -> Result<()> {
+        let mut body = [0; SERIES_MARKET_LINK_BYTES_V1];
+        self.state.encode_into(&mut body).map_err(map_product_error)
+    }
+
+    /// Encode exactly [`SERIES_MARKET_LINK_ACCOUNT_BYTES_V1`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        require_exact(out, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
+        out.fill(0);
+        out[0] = registry::SERIES_MARKET_LINK_ACCOUNT_TAG;
+        out[1] = registry::SERIES_MARKET_LINK_ACCOUNT_VERSION;
+        out[2] = self.stored_bump;
+        self.state
+            .encode_into(&mut out[16..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact frame and body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::SERIES_MARKET_LINK_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::SERIES_MARKET_LINK_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..16])?;
         let value = Self {
-            state: ProductOccurrenceRootV1::decode(&input[16..]).map_err(map_product_error)?,
+            state: SeriesMarketLinkV1::decode(&input[16..]).map_err(map_product_error)?,
             stored_bump: input[2],
         };
         value.validate()?;
