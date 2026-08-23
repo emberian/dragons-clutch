@@ -53,6 +53,22 @@ must authenticate the opaque complete-transition identity, bind it by equality
 to its payload, and write both Positions, both Reservations, both owner rows,
 and the receipt latch atomically.
 
+Virtual split and merge use separate typed contracts and cannot pass through
+the paired-direct API. Their default-deny authority records bind a checked
+relation witness, selected candidate, exact amount or receipt, direction, and
+complete transition identity. Inventory split consumes FinalPot cash principal,
+adds the same collateral principal to the Hoard, and adds one internal claim of
+every active outcome to both the FinalPot and aggregate supply. Inventory merge
+is the exact inverse. Separately, a virtual-split receipt moves one selected Egg
+from FinalPot inventory to its sole real buyer; a virtual-merge receipt moves
+one selected Egg from its sole real seller into FinalPot inventory. Only the
+real end advances a Reservation, owner row, and independent receipt latch.
+
+The virtual cash field is principal attributed inside pooled Realm collateral.
+It is never classified as a fee, donation, revenue, rent, or liveness funding.
+Terminal FinalPot disposition and its exact join to owner cash realization
+remain separately owned integration work.
+
 This crate contains no Solana SDK, account memory, hashing implementation,
 dynamic allocation, fee policy selection, or persisted DTO. It does not make
 General V1 accept shapes that its current per-order realization cannot settle;
