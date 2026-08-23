@@ -433,7 +433,7 @@ pub struct GeneralReplayTransitionPlanV1 {
     position_poststate_semantic_id: Id32,
     kind: GeneralReplayTransitionKindV1,
     transition_id: Id32,
-    transition_authority_data_id: Id32,
+    transition_evidence_id: Id32,
     delta_id: Id32,
     consumed_sequence: u64,
     next_sequence: u64,
@@ -485,9 +485,9 @@ impl GeneralReplayTransitionPlanV1 {
         self.transition_id
     }
 
-    /// Data ID of the semantic owner that must authenticate the transition.
-    pub const fn transition_authority_data_id(&self) -> Id32 {
-        self.transition_authority_data_id
+    /// Exact semantic evidence digest that must authenticate the transition.
+    pub const fn transition_evidence_id(&self) -> Id32 {
+        self.transition_evidence_id
     }
 
     /// Domain-separated Position delta identity.
@@ -508,7 +508,7 @@ impl GeneralReplayTransitionPlanV1 {
 
 /// Project one exact structural General Replay successor.
 ///
-/// `transition_id` and `transition_authority_data_id` are committed but not
+/// `transition_id` and `transition_evidence_id` are committed but not
 /// authenticated here. A live action-specific composer must obtain them from
 /// its private receipt/finalized-row plan and then rederive this whole result.
 pub fn project_general_replay_transition_v1<B>(
@@ -516,13 +516,13 @@ pub fn project_general_replay_transition_v1<B>(
     position_poststate: PositionSettlementPoststateV3,
     kind: GeneralReplayTransitionKindV1,
     transition_id: Id32,
-    transition_authority_data_id: Id32,
+    transition_evidence_id: Id32,
     backend: &B,
 ) -> Result<GeneralReplayTransitionPlanV1, CodecError>
 where
     B: PositionV3Sha256Backend + ReplayV3HashBackend,
 {
-    if transition_id.is_zero() || transition_authority_data_id.is_zero() {
+    if transition_id.is_zero() || transition_evidence_id.is_zero() {
         return Err(CodecError::ZeroIdentity);
     }
     let position_prestate = prestate.position;
@@ -578,7 +578,7 @@ where
         &[role],
         &consumed_sequence.to_le_bytes(),
         &transition_id.bytes(),
-        &transition_authority_data_id.bytes(),
+        &transition_evidence_id.bytes(),
         &position_prestate.account,
         &position_prestate.semantic_id,
         &position_poststate_semantic_id.bytes(),
@@ -618,7 +618,7 @@ where
         position_poststate_semantic_id,
         kind,
         transition_id,
-        transition_authority_data_id,
+        transition_evidence_id,
         delta_id,
         consumed_sequence,
         next_sequence: replay_header.next_sequence(),
