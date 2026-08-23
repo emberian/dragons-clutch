@@ -306,6 +306,7 @@ pub(crate) struct AuthenticatedGeneralFamilyAdmissionProjectionV1 {
     general_postwrite_data_id: ContentId,
     general_postwrite_authentication_id: ContentId,
     market_lifecycle_root_post_semantic_id: ContentId,
+    market_lifecycle_root_post_data_id: ContentId,
     market_lifecycle_root_post_authentication_id: ContentId,
     family_admission_transition_id: ContentId,
     projection_id: ContentId,
@@ -327,6 +328,9 @@ impl AuthenticatedGeneralFamilyAdmissionProjectionV1 {
     pub(crate) const fn market_lifecycle_root_post_semantic_id(self) -> ContentId {
         self.market_lifecycle_root_post_semantic_id
     }
+    pub(crate) const fn market_lifecycle_root_post_data_id(self) -> ContentId {
+        self.market_lifecycle_root_post_data_id
+    }
     pub(crate) const fn market_lifecycle_root_post_authentication_id(self) -> ContentId {
         self.market_lifecycle_root_post_authentication_id
     }
@@ -338,6 +342,35 @@ impl AuthenticatedGeneralFamilyAdmissionProjectionV1 {
 
 fn hash_id(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn general_family_admission_projection_id_v1(
+    preauthorization_id: ContentId,
+    general_postwrite_semantic_id: ContentId,
+    general_postwrite_data_id: ContentId,
+    general_postwrite_authentication_id: ContentId,
+    root_pre_semantic_id: ContentId,
+    root_post_semantic_id: ContentId,
+    root_post_data_id: ContentId,
+    root_post_authentication_id: ContentId,
+    family_admission_transition_id: ContentId,
+) -> Outcome<ContentId> {
+    let id = hash_id(&[
+        GENERAL_FAMILY_ADMISSION_PROJECTION_DOMAIN_V1,
+        &preauthorization_id.bytes(),
+        &general_postwrite_semantic_id.bytes(),
+        &general_postwrite_data_id.bytes(),
+        &general_postwrite_authentication_id.bytes(),
+        &root_pre_semantic_id.bytes(),
+        &root_post_semantic_id.bytes(),
+        &root_post_data_id.bytes(),
+        &root_post_authentication_id.bytes(),
+        &family_admission_transition_id.bytes(),
+    ]);
+    id.validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(id)
 }
 
 /// Private equality surface derived only from authenticated Product bodies.
@@ -1392,31 +1425,30 @@ pub(crate) fn admit_authenticated_general_family_postwrite_v1<
         .state()
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_post_data_id = rebound.data_id();
     let family_admission_transition_id = rebound
         .state()
         .product_families()
         .family(MarketFamilyV1::General)
         .last_admission_transition_id();
-    let projection_id = hash_id(&[
-        GENERAL_FAMILY_ADMISSION_PROJECTION_DOMAIN_V1,
-        &preauthorization.preauthorization_id.bytes(),
-        &postwrite.semantic_id().bytes(),
-        &postwrite.data_id().bytes(),
-        &postwrite.authentication_id().bytes(),
-        &root_pre_semantic_id.bytes(),
-        &root_post_semantic_id.bytes(),
-        &rebound.authentication_id().bytes(),
-        &family_admission_transition_id.bytes(),
-    ]);
-    projection_id
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection_id = general_family_admission_projection_id_v1(
+        preauthorization.preauthorization_id,
+        postwrite.semantic_id(),
+        postwrite.data_id(),
+        postwrite.authentication_id(),
+        root_pre_semantic_id,
+        root_post_semantic_id,
+        root_post_data_id,
+        rebound.authentication_id(),
+        family_admission_transition_id,
+    )?;
     Ok(AuthenticatedGeneralFamilyAdmissionProjectionV1 {
         preauthorization,
         general_postwrite_semantic_id: postwrite.semantic_id(),
         general_postwrite_data_id: postwrite.data_id(),
         general_postwrite_authentication_id: postwrite.authentication_id(),
         market_lifecycle_root_post_semantic_id: root_post_semantic_id,
+        market_lifecycle_root_post_data_id: root_post_data_id,
         market_lifecycle_root_post_authentication_id: rebound.authentication_id(),
         family_admission_transition_id,
         projection_id,
@@ -1855,6 +1887,35 @@ mod adversarial_tests {
                 runtime_authority.lineage.graph.general_founding_capability_id,
             )
             .is_err());
+    }
+
+    #[test]
+    fn general_admission_projection_commits_root_post_data_id() {
+        let exact = general_family_admission_projection_id_v1(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            id(8),
+            id(9),
+        )
+        .unwrap();
+        let substituted = general_family_admission_projection_id_v1(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(10),
+            id(8),
+            id(9),
+        )
+        .unwrap();
+        assert_ne!(exact, substituted);
     }
 
     #[test]
