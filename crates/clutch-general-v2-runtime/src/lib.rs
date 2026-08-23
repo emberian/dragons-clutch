@@ -65,12 +65,14 @@ use sha2::{Digest, Sha256};
 
 mod builder;
 mod candidate_cost;
+mod quantized_relation_v2;
 mod settlement;
 mod settlement_root_projection;
 mod work;
 
 pub use builder::*;
 pub use candidate_cost::*;
+pub use quantized_relation_v2::*;
 pub use settlement::*;
 pub use settlement_root_projection::*;
 pub use work::*;
