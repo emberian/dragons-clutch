@@ -598,23 +598,23 @@ pub struct AuthenticatedSeriesArtifactsV1 {
 #[derive(Debug)]
 pub struct AuthenticatedSeriesArtifactsV4 {
     /// Finite recurring Series plan.
-    pub series: Box<SeriesPlanV5>,
+    series: Box<SeriesPlanV5>,
     /// Immutable principal/refund/sink/mint/program ownership.
-    pub funding_terms: Box<SeriesFundingTermsV2>,
+    funding_terms: Box<SeriesFundingTermsV2>,
     /// Reusable relative Product semantics.
-    pub template: Box<ProductTemplateV4>,
+    template: Box<ProductTemplateV4>,
     /// Exact canonical payout partition.
-    pub basis: Box<NativeClaimBasisV1>,
+    basis: Box<NativeClaimBasisV1>,
     /// Exact evidence-only recovery schedule.
-    pub recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
+    recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
     /// Exact quantized price-measure semantics.
-    pub price_policy: Box<PriceMeasurePolicyV1>,
+    price_policy: Box<PriceMeasurePolicyV1>,
     /// Immutable Realm/Profile and venue semantics.
-    pub genesis: Box<MarketGenesisProfileV2>,
+    genesis: Box<MarketGenesisProfileV2>,
     /// Current per-occurrence and 46-slot foundation funding quote.
-    pub quote: Box<SeriesFundingQuoteV4>,
+    quote: Box<SeriesFundingQuoteV4>,
     /// Current QuoteV4-bound operational attachment.
-    pub attachment: Box<SeriesAttachmentPlanV4>,
+    attachment: Box<SeriesAttachmentPlanV4>,
 }
 
 /// Authenticated typed compiler output for one exact Product/Series artifact graph.
