@@ -293,6 +293,31 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
 }
 
 #[test]
+fn exact_bearer_path_refuses_a_sub_lot_before_any_successor_exists() {
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[1] = 1;
+    let mut materialized = [0; MAX_OUTCOMES];
+    materialized[0] = 1;
+    let (context, _policy, ledger) = external_context(0, 0, internal, materialized, 1);
+    let source = BearerClaimSourceV1 {
+        claimant: rid(50),
+        claim_token_account: rid(51),
+        claim_mint: rid(52),
+        collateral_destination: rid(53),
+        claim_issuance_binding: context.policy().claim_issuance_binding,
+        source_claim_atoms: 1,
+        accepted_collateral: None,
+    };
+    assert_eq!(
+        redeem_bearer_exact_v1(context, 1, source, 0, 1),
+        Err(Error::NonIntegralLot)
+    );
+    assert_eq!(context.ledger(), ledger);
+    assert_eq!(context.claim_ledger().aggregate_materialized_supply[0], 1);
+    assert_eq!(context.hoard().locked_claim_principal_atoms, 1);
+}
+
+#[test]
 fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     let mut internal = [0; MAX_OUTCOMES];
     internal[1] = 1;
