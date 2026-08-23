@@ -6,6 +6,120 @@ explicitly labeled `UNSEALED_CURRENT_TREE` and name their own ELF and source
 closure; they do not rewrite Cycle-G evidence. Re-measure before and after any
 change—a number without its ELF hash is a rumor.
 
+## Codex swarmcycle update — 2026-08-23
+
+This handoff is now being executed, but the central promotion is not complete.
+The following distinctions supersede any reading of the older queue that would
+treat a native model, isolated adapter, historical ELF, or local fixture as a
+joined release:
+
+- `e2d5f13` and `27332c2` provide a real active-width ClearWork V2 engine and a
+  broad exact V1/V2 equivalence corpus. The engine does not expand to V1, but it
+  is not yet the central SBF account/dispatcher path.
+- `a13af02`, `19772ab`, and `916a4d8` provide production-bound candidate,
+  counted-retirement, and structured-claim seams. They remain isolated from the
+  central dispatcher and therefore have no linked-program CU/rent claim.
+- `d085dbd` separates continuous B-spline coherence from the current quantized
+  settlement cone. The exact finite quantized atom-mixture verifier is the
+  relevant live-semantics certificate; the continuous Hankel witness is not a
+  substitute for it. No central SBF price-certificate route exists yet.
+- `8b92bb1` provides a fail-closed SourcePlane V3/Series adapter seam. Runtime
+  authentication, durable reopen lineage, evaluator authority, typed asset and
+  refund graphs, and live CPI/Clock enforcement remain unreachable rather than
+  mocked.
+- `2f3575f` provides a fully covered signed-inventory dealer model with exact
+  first-loss capital, bid financing, mixed-corner price checks, custody,
+  activation/refunds, unwind, maturity, and Hamilton claims. It is not yet a
+  Token-2022/Hoard adapter or a live liquidity venue.
+- `8c2d96f` closes a source-release identity bug: a compiled PullRelease now
+  binds the entire canonical SourceSpec, not merely adapter/parser/receiver
+  fields that allowed caller-selected ProgramData, Config, and feed identities
+  to remain self-consistent.
+- `0d12c6e` changes Operator Bench wide integers to canonical decimal strings
+  and refuses unsafe or malformed numeric projections. The running Trade Bench
+  still needs a chain-derived attach/restart model and a real-source default.
+
+The current signed local-Pyth campaign is pinned to `2a68fdd`: one registered
+SourceSpec/archive, two independent deterministic guardian-signed VAAs, exact
+wrong-Config and wrong-feed receiver-plus-append rollback, signed PriceGrid and
+policy uploads, two funded owners, real orders, candidate verification,
+selection, settlement, resolution, redemption, and withdrawal. Passing it will
+be strong local-validator evidence for that exact path, not mainnet evidence
+and not evidence for the isolated successor adapters.
+
+### Revised macro order
+
+1. **Retain the exact joined local-validator transcript first.** It is the last
+   clean baseline for the legacy general account family before changing
+   ClearWork, candidate, and retirement wire state.
+2. **Promote one new General V2 family, not three in-place patches.** It must
+   join the two-window candidate lifecycle, an owner-blind relation profile,
+   ScoreV2-Q, active-width ClearWork V2, active-width CandidateFeed, mandatory
+   rent ownership, and counted retirement. Legacy tags/accounts remain exact
+   and fail closed.
+3. **Freeze the funding and retirement roots before structured claims.** General
+   Reservation V5 needs an embedded payer/principal/donation tail rather than an
+   optional sibling ledger. Position retirement must authenticate and consume
+   its current-generation Replay account. Structured custody then composes the
+   authoritative Position/Market tails instead of immediately rewriting them.
+4. **Fix the live client contract before claiming general settlement liveness.**
+   Keeper and Operator currently omit or misclassify valid potted, virtual,
+   mixed single/portfolio, non-exclusive portfolio, and churned settlement
+   shapes. One shared host transaction builder must own exact account roles and
+   capability-profile admission.
+5. **Measure a newly linked V2-only product graph.** Historical full/general/
+   direct profile sizes are comparison data only under the seven-slot semantic
+   identity gate. Exact ELF digest, loader rent, final-LTO frames, syscall set,
+   CU, metas, packet bytes, account rent, and terminal refunds must be produced
+   twice from the same current closure.
+6. **Promote real infrastructure outward.** Operator needs explicit local
+   session manifests, chain-derived discovery/restart state, selected-candidate
+   and receipt projections decoded from accounts, and an authentic receiver/
+   router source default. Mock-source remains only a named compatibility test.
+
+### Highest-value measured and structural rent work
+
+- At `(outcomes, orders, owners) = (2, 4, 3)`, active-width ClearWork is
+  2,326 bytes rather than 50,054, saving 332,186,880 lamports per candidate at
+  the recorded rent arithmetic. A two-order/one-slice active feed is 263 bytes
+  rather than 6,266, saving 41,780,880. Across three candidates the combined
+  structural saving is about 1.12190328 SOL. These are account-rent arithmetic,
+  not a linked SBF measurement.
+- Paging 416 receipts is projected to reduce their rent from about 1.6156 SOL
+  to 0.6804 SOL and can reduce a 44-meta entitlement shape. Contention and append
+  CU must be measured before adoption.
+- Embedding one mandatory 56-byte funding tail instead of an 85-byte sibling
+  account saves 1,092,720 lamports and one meta per governed group while also
+  removing an unowned-refund state.
+- Four eagerly created candidate-index pages cost 18,931,200 lamports. Compare
+  lazy program-funded pages and one packed 64-entry index without shifting rent
+  to candidate callers or losing bounded enumeration.
+- A Position tombstone remains necessary for generation-safe reopen. An Epoch
+  tombstone may be removable if the Market cursor is proven to be the sole
+  non-reuse authority; that decision saves 1,475,520 lamports per terminal
+  epoch but needs a deliberate inspectability policy.
+
+### New correctness STOPs found during optimization review
+
+- The live `FullScoreV1` selection rewards complete-set wash flow and distinct
+  owner keys. General clearing stays experimental until an owner-blind relation
+  profile and ScoreV2-Q are the actual verified/ranked path. Re-labeling a V1
+  summary is not acceptable: the current relation engine still computes
+  ScoreV1 and its self-cross policies are owner-dependent.
+- Degree-two/three evaluation and redemption are meaningful, but the current
+  general clearing price gate is not a complete quantized coherence decision
+  procedure. A deployable coupled profile must either route the exact quantized
+  certificate or explicitly admit only the degrees its live verifier decides.
+- Terms persist failure-policy identity and a failure payout index, but no live
+  transition executes that policy. Unusable source evidence can therefore
+  strand a market unresolved until this path is implemented and funded.
+- The current full-profile SBF build still emits broad historical frame/
+  overwrite diagnostics. A successful compile or historical ELF size is not a
+  deployability statement.
+- Future fee revenue is not liveness capitalization. Hoard principal is never
+  fee, bounty, rent, reserve, or dealer capital. Every new keeper, source,
+  retirement, or liquidity expense needs a presently funded typed compartment.
+
 ## Review corrections — 2026-08-22
 
 The sealed rows below remain evidence for their named shapes. Several proposed
