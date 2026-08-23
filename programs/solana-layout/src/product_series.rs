@@ -2085,7 +2085,6 @@ mod tests {
             Err(CodecError::ZeroIdentity)
         );
     }
-
     #[test]
     fn close_account_contract_is_exact_and_has_no_alias_exception() {
         assert_eq!(
