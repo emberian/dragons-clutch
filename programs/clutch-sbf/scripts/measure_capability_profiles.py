@@ -31,6 +31,7 @@ MAX_ELF_BYTES_UNDER_TEN_SOL = (
     - PROGRAM_ACCOUNT_BYTES
     - PROGRAMDATA_METADATA_BYTES
 )
+CANONICAL_SOURCE_ROOT = "/dragons-clutch"
 
 COMMON_TAGS = [*range(1, 6), 7, *range(10, 22), 68, *range(70, 74)]
 
@@ -169,6 +170,7 @@ def build_once(
         env.pop(hostile, None)
     env["CARGO_NET_OFFLINE"] = "true"
     env["CARGO_TARGET_DIR"] = str(target)
+    env["RUSTFLAGS"] = f"--remap-path-prefix={repo}={CANONICAL_SOURCE_ROOT}"
     command = [
         str(cargo_build_sbf),
         "--manifest-path",
@@ -322,6 +324,7 @@ def main() -> None:
             "lto": "fat",
             "codegen_units": 1,
             "overflow_checks": True,
+            "rustflags": f"--remap-path-prefix=<source-worktree>={CANONICAL_SOURCE_ROOT}",
         },
         "rent_model": {
             "model": "upgradeable-loader-v3-program-plus-programdata",
