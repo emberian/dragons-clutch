@@ -9,13 +9,17 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = false
-description = "NON-PRODUCTION synthetic local-only signed-RPC Pyth-to-Clutch campaign"
+description = "Fail-closed SourceSeries operator construction with an opt-in local Pyth laboratory"
 
 [features]
-default = ["campaign", "operator"]
+default = ["operator"]
 builder = ["dep:solana-keypair"]
 operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2"]
 campaign = [
+  "dep:clutch-sbf",
+  "dep:clutch-sbf-svm-tests",
+  "clutch-sbf/laboratory-fixtures",
+  "clutch-sbf/non-production-real-pyth-lab",
   "dep:base64",
   "dep:borsh",
   "dep:byteorder",
@@ -39,10 +43,11 @@ campaign = [
 [[bin]]
 name = "clutch-local-real-pyth"
 path = "src/main.rs"
+required-features = ["campaign"]
 
 [dependencies]
-clutch-sbf = { path = "../program", features = ["laboratory-fixtures", "non-production-real-pyth-lab"] }
-clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real-pyth-lab"] }
+clutch-sbf = { path = "../program", default-features = false, features = ["profile-full"], optional = true }
+clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real-pyth-lab"], optional = true }
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }

@@ -1,4 +1,14 @@
-# Local-real Pyth signed-RPC laboratory
+# SourceSeries operator construction and local-real Pyth laboratory
+
+The default library is the construction-only, fail-closed operator surface. It
+indexes canonical Source release/head/lineage/open/page/work/seal/result/receipt
+codecs and emits SourceSeries family `77`, version `2` envelopes to the released
+Clutch program. It has no mock-source provider, fixture signer, captured
+executable loader, RPC submission, or wallet access.
+
+The historical campaign below is available only with the explicit `campaign`
+feature. It remains laboratory evidence and is not a fallback for missing real
+infrastructure.
 
 This is an opt-in **NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR
 ONLY / NO VALUE** campaign. Its shell runner starts one explicitly selected
@@ -54,13 +64,15 @@ The builder feature now also exposes two reusable boundaries:
   balance equations, and assembles unsigned blockhash-free Solana transactions.
   Its flow inventory covers SourcePlane V3, General V2 candidate construction,
   owner settlement, fees, direct Eggs, liveness, Product Series, and structured
-  claims. General V2 and recurring-Series successor envelopes consume typed
+  claims. General V2, SourceSeries, and recurring-Series successor envelopes consume typed
   action coordinates and allocation status directly from the central registry;
   structured-claim local actions remain explicitly semantic-owner-bound until
-  centrally allocated. Every route stays production-inert until the dispatcher
-  and a checked release manifest admit it. SourcePlane and liveness keep their
-  separately owned codecs. The resulting object always reports `signed=false`,
-  `submitted=false`, and `ReservedDisabled`. `build_current_workflow` refuses
+  centrally allocated. Source transitions consume the guarded V3 transition
+  contract and target the embedded Clutch facility; there is no second Source
+  adapter deployment. Every route stays production-inert until the dispatcher
+  and a checked release manifest admit it. Liveness keeps its separately owned
+  codec. The resulting object always reports `signed=false`, `submitted=false`,
+  and the capability-derived admission state. `build_current_workflow` refuses
   to substitute any missing flow: it requires SourcePlane V3, General V2
   candidate work, settlement, fees, direct Eggs, liveness, Series, and
   structured claims. Cursor-bearing work remains an ordered unsigned sequence;

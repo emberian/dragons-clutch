@@ -38,6 +38,10 @@ use clutch_product_series::{
     FixedCodec, RegistryCapabilityProfileV2, RegistryProgramReleaseV1,
     REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
 };
+use clutch_source_plane_v3_runtime::{
+    SourceReleaseManifestV1, SourceWorkScheduleBindingV1, SOURCE_RELEASE_MANIFEST_BYTES,
+    SOURCE_WORK_SCHEDULE_BYTES,
+};
 
 const PRODUCT_BASIS_BYTES: usize = 2_352;
 const PRODUCT_RECOVERY_BYTES: usize = 208;
@@ -53,6 +57,7 @@ const COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES: usize = 528;
 const _: () = {
     assert!(REGISTRY_PROGRAM_RELEASE_V1_BYTES == 160);
     assert!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES == 800);
+    assert!(SOURCE_RELEASE_MANIFEST_BYTES == 1_008);
 };
 
 #[cfg(feature = "non-production-product-series-lab")]
@@ -146,6 +151,10 @@ pub enum ArtifactKind {
     CompiledProductSeriesBundleV1 = 42,
     /// Shared immutable central-registry capability profile V2.
     RegistryCapabilityProfileV2 = 43,
+    /// Complete reviewed SourcePlane V3 release manifest.
+    SourceReleaseManifestV1 = 44,
+    /// Immutable Source-selected paid-work schedule.
+    SourceWorkScheduleV1 = 45,
 }
 
 impl ArtifactKind {
@@ -184,6 +193,8 @@ impl ArtifactKind {
             #[cfg(feature = "non-production-product-series-lab")]
             42 => Ok(Self::CompiledProductSeriesBundleV1),
             43 => Ok(Self::RegistryCapabilityProfileV2),
+            44 => Ok(Self::SourceReleaseManifestV1),
+            45 => Ok(Self::SourceWorkScheduleV1),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -213,6 +224,8 @@ impl ArtifactKind {
             Self::RegistryProgramReleaseV1 => REGISTRY_PROGRAM_RELEASE_V1_BYTES,
             Self::CompiledProductSeriesBundleV1 => COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
             Self::RegistryCapabilityProfileV2 => REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
+            Self::SourceReleaseManifestV1 => SOURCE_RELEASE_MANIFEST_BYTES,
+            Self::SourceWorkScheduleV1 => SOURCE_WORK_SCHEDULE_BYTES,
         }
     }
 
@@ -237,6 +250,8 @@ impl ArtifactKind {
                 | Self::RegistryProgramReleaseV1
                 | Self::CompiledProductSeriesBundleV1
                 | Self::RegistryCapabilityProfileV2
+                | Self::SourceReleaseManifestV1
+                | Self::SourceWorkScheduleV1
         )
     }
 }
@@ -758,6 +773,34 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::SourceReleaseManifestV1 => {
+            let value = SourceReleaseManifestV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SourceWorkScheduleV1 => {
+            let value = SourceWorkScheduleBindingV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1117,7 +1160,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=43).contains(&tag) {
+            let expected = if (32..=45).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1131,6 +1174,8 @@ mod tests {
                     41 => ArtifactKind::RegistryProgramReleaseV1,
                     42 => ArtifactKind::CompiledProductSeriesBundleV1,
                     43 => ArtifactKind::RegistryCapabilityProfileV2,
+                    44 => ArtifactKind::SourceReleaseManifestV1,
+                    45 => ArtifactKind::SourceWorkScheduleV1,
                     _ => unreachable!(),
                 })
             } else {
@@ -1138,7 +1183,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=43).contains(&tag) {
+            if (32..=45).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -1287,6 +1332,20 @@ mod tests {
         assert_eq!(
             ArtifactKind::from_byte(43),
             Ok(ArtifactKind::RegistryCapabilityProfileV2)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(44),
+            Ok(ArtifactKind::SourceReleaseManifestV1)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(45),
+            Ok(ArtifactKind::SourceWorkScheduleV1)
+        );
+        let source = binding(ArtifactKind::SourceReleaseManifestV1);
+        assert_eq!(source.exact_len, 1_008);
+        assert_eq!(
+            validate_artifact(source, &[0; SOURCE_RELEASE_MANIFEST_BYTES]),
+            Err(CodecError::MismatchedBinding)
         );
     }
 
