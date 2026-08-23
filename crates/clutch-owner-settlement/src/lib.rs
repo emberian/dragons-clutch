@@ -14,6 +14,7 @@
 mod adapter;
 mod builder;
 mod direct;
+mod virtual_claim;
 
 pub use adapter::{
     authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
@@ -36,6 +37,17 @@ pub use direct::{
     AuthenticatedOrderMembershipV1, AuthenticatedPositionV1, AuthenticatedReservationV1,
     DirectEggSettlementInputV1, DirectEggSettlementPlanV1, DirectEggTransferAuditV1, OrderKindV1,
     ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
+};
+
+pub use virtual_claim::{
+    prepare_virtual_merge_inventory_v1, prepare_virtual_merge_receipt_v1,
+    prepare_virtual_split_inventory_v1, prepare_virtual_split_receipt_v1,
+    AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
+    AuthenticatedVirtualInventoryBudgetV1, AuthenticatedVirtualMergeReceiptV1,
+    AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
+    VirtualInventoryPlanV1, VirtualInventoryStateV1, VirtualMergeReceiptInputV1,
+    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitReceiptInputV1,
+    VirtualSplitReceiptPlanV1,
 };
 
 /// Maximum orders in one frozen General book.

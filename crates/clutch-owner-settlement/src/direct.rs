@@ -76,7 +76,7 @@ pub struct AuthenticatedOrderMembershipV1 {
 }
 
 impl AuthenticatedOrderMembershipV1 {
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         for key in [
             self.market,
             self.epoch,
@@ -147,7 +147,7 @@ pub struct AuthenticatedPositionV1 {
 }
 
 impl AuthenticatedPositionV1 {
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         if self.position == [0; 32]
             || self.market == [0; 32]
             || self.owner == [0; 32]
@@ -222,7 +222,7 @@ pub struct AuthenticatedReservationV1 {
 }
 
 impl AuthenticatedReservationV1 {
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         for key in [
             self.account,
             self.reservation,
@@ -523,9 +523,17 @@ pub fn prepare_direct_egg_settlement_v1(
     }
 
     let (mut next_buy_reservation, buyer_completes) =
-        advance_reservation(input.buyer_reservation, input.receipt)?;
+        advance_reservation(
+            input.buyer_reservation,
+            input.receipt.quantity,
+            input.receipt.consideration_price_units,
+        )?;
     let (mut next_sell_reservation, seller_completes) =
-        advance_reservation(input.seller_reservation, input.receipt)?;
+        advance_reservation(
+            input.seller_reservation,
+            input.receipt.quantity,
+            input.receipt.consideration_price_units,
+        )?;
     let outcome = usize::from(input.receipt.outcome);
     next_sell_reservation.remaining_internal[outcome] = next_sell_reservation
         .remaining_internal[outcome]
@@ -674,22 +682,23 @@ fn aliases_writable_account(input: &DirectEggSettlementInputV1) -> bool {
     false
 }
 
-fn advance_reservation(
+pub(crate) fn advance_reservation(
     reservation: AuthenticatedReservationV1,
-    receipt: AuthenticatedDirectSettlementReceiptV1,
+    quantity: Amount,
+    consideration_price_units: u128,
 ) -> Result<(AuthenticatedReservationV1, bool)> {
     let mut next = reservation;
     next.consumed_units = next
         .consumed_units
-        .checked_add(receipt.quantity)
+        .checked_add(quantity)
         .ok_or(Error::ArithmeticOverflow)?;
     next.accounted_units = next
         .accounted_units
-        .checked_add(receipt.quantity)
+        .checked_add(quantity)
         .ok_or(Error::ArithmeticOverflow)?;
     next.accounted_consideration_price_units = next
         .accounted_consideration_price_units
-        .checked_add(receipt.consideration_price_units)
+        .checked_add(consideration_price_units)
         .ok_or(Error::ArithmeticOverflow)?;
     if next.consumed_units > next.entitled_units
         || next.accounted_consideration_price_units > next.entitled_consideration_price_units
