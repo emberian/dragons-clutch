@@ -2525,7 +2525,7 @@ pub fn finalize_market_lifecycle_terminal_v1(
 }
 
 /// Persist a pure successor and immediately reauthenticate the full root bytes.
-pub fn write_market_lifecycle_root_v1<'next>(
+fn write_market_lifecycle_root_v1<'next>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
@@ -2586,7 +2586,7 @@ pub fn write_market_lifecycle_root_v1<'next>(
 }
 
 /// Persist a pure per-Series link successor and reauthenticate exact bytes.
-pub fn write_series_market_link_v1<'next>(
+fn write_series_market_link_v1<'next>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
