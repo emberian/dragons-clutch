@@ -1,0 +1,13 @@
+[package]
+name = "clutch-deletion-replay-v2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Model-only exact-once accounting for replay-safe Position and general Epoch retirement"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

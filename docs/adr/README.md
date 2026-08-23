@@ -30,3 +30,7 @@ Initial records:
 - [0006](0006-two-window-candidate-lifecycle.md): proposed two-window general
   candidate lifecycle with an enumerable sealed set, prepaid permissionless
   verification, hard expiry, and score-policy-independent rank keys.
+- [0007](0007-counted-retirement-and-monotone-epoch-identity.md): proposed
+  exact-once reservation and epoch-child accounting, monotone epoch allocation,
+  and permanent compact tombstones required before Position or general Epoch
+  deletion can be re-enabled for new account versions.
