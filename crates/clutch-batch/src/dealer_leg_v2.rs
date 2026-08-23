@@ -96,10 +96,11 @@ pub const EMPTY_DEALER_FILL_ROW_V2: DealerFillRowV2 = DealerFillRowV2 {
 
 /// One upstream-quoted order envelope aligned to a dealer-fill row.
 ///
-/// The authenticated upstream fee relation derives `maximum_cash_in_atoms`
-/// and `minimum_cash_out_atoms` after all non-dealer consideration and exact
-/// fees. `external_fee_atoms` remains explicit economic content but is never
-/// added to or subtracted from dealer cash.
+/// The upstream fee projection supplies `maximum_cash_in_atoms` and
+/// `minimum_cash_out_atoms` after all non-dealer consideration and quoted fees.
+/// `external_fee_atoms` is digest-bound economic content but is never added to
+/// or subtracted from dealer cash. This layer establishes no fee recipient,
+/// funding, custody, or transfer conservation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerQuoteRowV2 {
     /// Exact RelationV2 order identity; must match the fill row at this index.
@@ -108,7 +109,7 @@ pub struct DealerQuoteRowV2 {
     pub maximum_cash_in_atoms: u64,
     /// Residual minimum a seller must receive from the dealer.
     pub minimum_cash_out_atoms: u64,
-    /// Exact separately conserved fee charged outside dealer assets.
+    /// Exact upstream-quoted, digest-bound external fee amount.
     pub external_fee_atoms: u64,
 }
 
@@ -146,6 +147,8 @@ pub struct AggregateDealerTradeV2 {
 /// certificate, signer, and account bytes are deliberately absent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerQuotePreconditionV2 {
+    /// Exact RelationV2 candidate identity for which this quote was produced.
+    pub upstream_economic_candidate_digest: [u8; 32],
     /// Immutable facility and generation binding.
     pub facility: DealerFacilityBindingV2,
     /// Frozen deterministic cash rule.
@@ -173,7 +176,7 @@ pub struct DealerCashAllocationV2 {
     pub user_cash_in_atoms: u64,
     /// Cash the dealer pays to this user.
     pub user_cash_out_atoms: u64,
-    /// Separately conserved fee; never dealer cash.
+    /// Upstream-quoted, digest-bound external fee; never dealer cash.
     pub external_fee_atoms: u64,
 }
 
@@ -200,7 +203,7 @@ pub struct DealerLegVerdictV2 {
     pub allocations: [DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
     /// Active allocation count.
     pub allocation_count: u8,
-    /// Exact fee total kept outside dealer conservation.
+    /// Exact sum of quoted external fees; this is not a custody verdict.
     pub total_external_fee_atoms: u128,
     /// User plus dealer demand flow supplied to ScoreV2.
     pub aggregate_buy_flow: [u64; MAX_OUTCOMES],
@@ -241,6 +244,8 @@ pub enum DealerErrorV2 {
     QuoteRowMismatch { row: u8 },
     /// The facility quote named a different aggregate dealer trade.
     QuoteTradeMismatch,
+    /// The quote was produced for a different RelationV2 candidate identity.
+    UpstreamEconomicCandidateDigestMismatch,
     /// The quote's semantic digest did not match exact recomputation.
     DealerQuoteSemanticDigestMismatch,
     /// A row named no active RelationV2 order.
@@ -277,6 +282,20 @@ impl From<EconomicErrorV2> for DealerErrorV2 {
     }
 }
 
+/// Recompute the RelationV2 identity to which a dealer quote must bind.
+///
+/// Unlike [`crate::relation_v2::verify_economic_candidate_v2`], this helper
+/// does not require owner-blind flow to conserve without the dealer. It still
+/// performs every RelationV2 domain, book, price, order, and fill check.
+pub fn dealer_upstream_economic_candidate_digest_v2(
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    price: &PricePreconditionV2,
+    candidate: &EconomicCandidateV2,
+) -> Result<[u8; 32], DealerErrorV2> {
+    Ok(derive_unbalanced_economics_v2(domain, book, price, candidate)?.economic_candidate_digest)
+}
+
 /// Recompute the proof-independent identity of one canonical dealer quote.
 ///
 /// This function checks canonical shape, but not an upstream proof or account.
@@ -291,6 +310,7 @@ pub fn dealer_quote_semantics_digest_v2(
     validate_quote_content(domain, dealer, quote)?;
     let mut hash = Sha256V2::new();
     hash.update(DEALER_QUOTE_SEMANTICS_DIGEST_DOMAIN_V2)?;
+    hash.update(&quote.upstream_economic_candidate_digest)?;
     hash.update(&domain.relation_version.to_le_bytes())?;
     hash.update(&domain.market_semantics_digest)?;
     hash.update(&domain.epoch_semantics_digest)?;
@@ -349,7 +369,13 @@ pub fn verify_economic_candidate_with_dealer_v2(
         candidate.virtual_split,
         candidate.virtual_merge,
     )?;
-    validate_quote_precondition(domain, dealer, quote, &trade)?;
+    validate_quote_precondition(
+        domain,
+        dealer,
+        quote,
+        &trade,
+        &unbalanced.economic_candidate_digest,
+    )?;
     let row_economics = validate_rows(domain, book, candidate, dealer, quote, &trade)?;
     let cash = allocate_cash(dealer, quote, &row_economics)?;
 
@@ -532,10 +558,14 @@ fn validate_quote_precondition(
     dealer: &DealerLegCandidateV2,
     quote: &DealerQuotePreconditionV2,
     derived_trade: &AggregateDealerTradeV2,
+    upstream_economic_candidate_digest: &[u8; 32],
 ) -> Result<(), DealerErrorV2> {
     validate_quote_content(domain, dealer, quote)?;
     if quote.trade != *derived_trade {
         return Err(DealerErrorV2::QuoteTradeMismatch);
+    }
+    if quote.upstream_economic_candidate_digest != *upstream_economic_candidate_digest {
+        return Err(DealerErrorV2::UpstreamEconomicCandidateDigestMismatch);
     }
     if quote.semantic_quote_digest != dealer_quote_semantics_digest_v2(domain, dealer, quote)? {
         return Err(DealerErrorV2::DealerQuoteSemanticDigestMismatch);
@@ -862,6 +892,10 @@ fn hamilton_allocate(
 
 /// Compute `(multiplicand * multiplier) / denominator` and its remainder
 /// without requiring a double-width product.
+///
+/// Modular doubling keeps intermediate remainders below `denominator`, even
+/// for hostile `u128` inputs. The result refuses only if the mathematical
+/// quotient itself cannot fit `u128` or the denominator is zero.
 pub(crate) fn exact_mul_div_rem(
     multiplicand: u128,
     multiplier: u128,
@@ -872,23 +906,37 @@ pub(crate) fn exact_mul_div_rem(
     }
     let mut quotient = 0u128;
     let mut remainder = 0u128;
+    let multiplicand_quotient = multiplicand / denominator;
+    let multiplicand_remainder = multiplicand % denominator;
     let mut bit = 1u128 << 127;
     loop {
         quotient = quotient
             .checked_mul(2)
             .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-        let mut expanded_remainder = remainder
-            .checked_mul(2)
-            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+        let double_complement = denominator - remainder;
+        let (mut carry, mut next_remainder) = if remainder >= double_complement {
+            (1u128, remainder - double_complement)
+        } else {
+            (0u128, remainder + remainder)
+        };
         if multiplier & bit != 0 {
-            expanded_remainder = expanded_remainder
-                .checked_add(multiplicand)
+            carry = carry
+                .checked_add(multiplicand_quotient)
                 .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+            let add_complement = denominator - next_remainder;
+            if multiplicand_remainder >= add_complement {
+                carry = carry
+                    .checked_add(1)
+                    .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+                next_remainder = multiplicand_remainder - add_complement;
+            } else {
+                next_remainder += multiplicand_remainder;
+            }
         }
         quotient = quotient
-            .checked_add(expanded_remainder / denominator)
+            .checked_add(carry)
             .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-        remainder = expanded_remainder % denominator;
+        remainder = next_remainder;
         if bit == 1 {
             break;
         }

@@ -3,8 +3,8 @@
 extern crate std;
 
 use crate::dealer_leg_v2::{
-    dealer_quote_semantics_digest_v2, exact_mul_div_rem,
-    verify_claimed_dealer_allocations_v2 as verify_claimed_core,
+    dealer_quote_semantics_digest_v2, dealer_upstream_economic_candidate_digest_v2,
+    exact_mul_div_rem, verify_claimed_dealer_allocations_v2 as verify_claimed_core,
     verify_economic_candidate_with_dealer_v2 as verify_join_core, AggregateDealerTradeV2,
     DealerCashAllocationV2, DealerCashPolicyV2, DealerErrorV2, DealerFacilityBindingV2,
     DealerFillRowV2, DealerLegCandidateV2, DealerLegVerdictV2, DealerQuotePreconditionV2,
@@ -47,6 +47,10 @@ fn exact_mul_div_matches_small_products_and_a_double_width_case() {
     assert_eq!(
         exact_mul_div_rem(multiplicand, weight, denominator).unwrap(),
         (weight - 1, denominator - weight)
+    );
+    assert_eq!(
+        exact_mul_div_rem(u128::MAX, u128::MAX - 1, u128::MAX).unwrap(),
+        (u128::MAX - 1, 0)
     );
 }
 
@@ -208,6 +212,17 @@ fn dealer_of(
     cash_in: u64,
     cash_out: u64,
 ) -> DealerFixture {
+    dealer_of_with_price(book, economic, &price(), rows, cash_in, cash_out)
+}
+
+fn dealer_of_with_price(
+    book: &EconomicBookV2,
+    economic: &EconomicCandidateV2,
+    quoted_price: &PricePreconditionV2,
+    rows: &[FixtureDealerRow],
+    cash_in: u64,
+    cash_out: u64,
+) -> DealerFixture {
     let mut fill_rows = [EMPTY_DEALER_FILL_ROW_V2; MAX_DEALER_ROWS_V2];
     let mut quote_rows = [EMPTY_DEALER_QUOTE_ROW_V2; MAX_DEALER_ROWS_V2];
     let mut index = 0usize;
@@ -230,6 +245,13 @@ fn dealer_of(
         row_count: u8::try_from(rows.len()).expect("fixture rows fit"),
     };
     let mut quote = DealerQuotePreconditionV2 {
+        upstream_economic_candidate_digest: dealer_upstream_economic_candidate_digest_v2(
+            &domain(),
+            book,
+            quoted_price,
+            economic,
+        )
+        .expect("fixture RelationV2 projection is canonical"),
         facility: DealerFacilityBindingV2 {
             version: DEALER_LEG_VERSION_V2,
             facility_semantics_digest: id(20),
@@ -686,6 +708,63 @@ fn fixed_authenticated_quote_identity_refuses_free_cash_and_digest_grinding() {
 }
 
 #[test]
+fn quote_for_same_fill_and_trade_cannot_replay_across_price_semantics() {
+    let book = book_of(&[order(1, Side::Buy, 1, 0, 1)]);
+    let economic = candidate(&[1]);
+    let baseline_price = price();
+    let baseline = dealer_of_with_price(
+        &book,
+        &economic,
+        &baseline_price,
+        &[row(1, 1, 5, 0, 0)],
+        5,
+        0,
+    );
+
+    let mut alternate_prices = [0u64; 16];
+    alternate_prices[0] = 6_000;
+    alternate_prices[1] = 4_000;
+    let alternate_price = price_with(alternate_prices);
+    assert_eq!(baseline.quote.trade, derived_trade(&book, &economic));
+    assert_eq!(
+        verify_economic_candidate_with_dealer_v2(
+            &domain(),
+            &book,
+            &alternate_price,
+            &economic,
+            &baseline,
+        ),
+        Err(DealerErrorV2::UpstreamEconomicCandidateDigestMismatch)
+    );
+
+    let alternate = dealer_of_with_price(
+        &book,
+        &economic,
+        &alternate_price,
+        &[row(1, 1, 5, 0, 0)],
+        5,
+        0,
+    );
+    let accepted = verify_economic_candidate_with_dealer_v2(
+        &domain(),
+        &book,
+        &alternate_price,
+        &economic,
+        &alternate,
+    )
+    .unwrap();
+    assert_eq!(baseline.quote.trade, alternate.quote.trade);
+    assert_ne!(
+        baseline.quote.upstream_economic_candidate_digest,
+        alternate.quote.upstream_economic_candidate_digest
+    );
+    assert_ne!(
+        baseline.quote.semantic_quote_digest,
+        accepted.dealer_quote_semantics_digest
+    );
+}
+
+#[test]
 fn proof_body_is_not_an_economic_or_rank_coordinate() {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct ExternalProofBody {
@@ -829,11 +908,19 @@ fn full_width_u64_rows_use_exact_wide_aggregates_and_mul_div() {
     let huge_economic = candidate(&[1]);
     let mut endpoint_prices = [0u64; 16];
     endpoint_prices[1] = SCALE;
-    let wide_weight = dealer_of(&huge_portfolio, &huge_economic, &[row(1, 1, 0, 0, 0)], 0, 1);
+    let endpoint_price = price_with(endpoint_prices);
+    let wide_weight = dealer_of_with_price(
+        &huge_portfolio,
+        &huge_economic,
+        &endpoint_price,
+        &[row(1, 1, 0, 0, 0)],
+        0,
+        1,
+    );
     let weighted = verify_economic_candidate_with_dealer_v2(
         &domain(),
         &huge_portfolio,
-        &price_with(endpoint_prices),
+        &endpoint_price,
         &huge_economic,
         &wide_weight,
     )

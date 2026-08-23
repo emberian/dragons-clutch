@@ -115,6 +115,8 @@ seller excess above exact minima is Hamilton-allocated by native Egg atoms.
 Equal remainders prefer the smaller order ID. Candidate-supplied per-user cash
 does not exist, and any settlement copy can be checked against recomputation.
 Fees are summed and digest-bound separately and never enter dealer cash.
+This relation does not establish their recipient, funding source, custody, or
+transfer conservation; those are fee-transition and adapter obligations.
 The pure relation admits the full 64-order RelationV2 book; any smaller runtime
 chunk or LP-roster width is an adapter concern, not a market restriction.
 Gross cash, fee totals, and Hamilton weights use checked `u128`, so individually
