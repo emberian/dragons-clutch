@@ -14,12 +14,12 @@ use crate::{
     DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1, DealerChildKindV2,
     DealerFacilityReplayV1, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
     DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
-    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
-    DealerTransferPositionV3, DealerTransitionIntentV1, DealerTransitionLivenessModeV1,
-    DeletableRentOwnerV1, Error, FacilityPositionBindingV2, FixedCodec, Id, LpPageV2,
-    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1, Result,
-    DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1, DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1,
-    DELETABLE_RENT_OWNER_BYTES, LP_ENTRIES_PER_PAGE, MAX_ATOMS, MAX_LP_PAGES,
+    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransferPositionV3,
+    DealerTransitionIntentV1, DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error,
+    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, PreparedDealerPositionPairTransferV1,
+    PreparedDealerReplayTransitionV1, Result, DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1,
+    DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1, DELETABLE_RENT_OWNER_BYTES, LP_ENTRIES_PER_PAGE,
+    MAX_ATOMS, MAX_LP_PAGES,
 };
 use clutch_retirement::PositionLifecycleV3;
 
@@ -963,10 +963,20 @@ pub fn prepare_dealer_terminal_claim_v2(
 /// Atomic Claim capability binding assets, State, allocation, liveness, and Replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedDealerTerminalClaimReplayV2 {
+    claim: PreparedDealerTerminalClaimV2,
+    replay: PreparedDealerReplayTransitionV1,
+}
+
+impl PreparedDealerTerminalClaimReplayV2 {
     /// Exact facility-to-LP transfer and State/allocation postimages.
-    pub claim: PreparedDealerTerminalClaimV2,
+    pub const fn claim(self) -> PreparedDealerTerminalClaimV2 {
+        self.claim
+    }
+
     /// Same-generation canonical Replay advance binding the Claim bundle.
-    pub replay: PreparedDealerReplayTransitionV1,
+    pub const fn replay(self) -> PreparedDealerReplayTransitionV1 {
+        self.replay
+    }
 }
 
 /// Prepare the sole public terminal Claim transition over one stable Replay.

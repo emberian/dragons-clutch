@@ -1035,9 +1035,37 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
     )
 }
 
-/// Fail-closed placeholder called only if dispatch is incorrectly widened.
-pub fn process_disabled_v1() -> Result<(), Refusal> {
-    Err(ClutchError::UnsupportedInstruction.into())
+/// Route every centrally allocated Dealer facility action to its reserved-disabled refusal.
+///
+/// This boundary is deliberately account-free and payload-free. Dispatch calls
+/// it before account inspection or payload decoding. The exhaustive match makes
+/// a future Dealer action a compile-time review point instead of letting it
+/// inherit a partially implemented facility route.
+#[inline(never)]
+pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
+    match action {
+        DealerFacilityAction::Initialize
+        | DealerFacilityAction::CreateLpPage
+        | DealerFacilityAction::Contribute
+        | DealerFacilityAction::WithdrawFunding
+        | DealerFacilityAction::Activate
+        | DealerFacilityAction::CancelFunding
+        | DealerFacilityAction::RefundCancelledSponsor
+        | DealerFacilityAction::BindEpoch
+        | DealerFacilityAction::LapseEpoch
+        | DealerFacilityAction::SelectLeaseAndBegin
+        | DealerFacilityAction::Collect
+        | DealerFacilityAction::Deliver
+        | DealerFacilityAction::FinalizeSettlement
+        | DealerFacilityAction::AbortBeforeCollection
+        | DealerFacilityAction::QueueExit
+        | DealerFacilityAction::SponsorHalt
+        | DealerFacilityAction::EnterUnwind
+        | DealerFacilityAction::TimedClose
+        | DealerFacilityAction::Resolve
+        | DealerFacilityAction::Claim
+        | DealerFacilityAction::Retire => Err(ClutchError::UnsupportedInstruction.into()),
+    }
 }
 
 const fn action_uses_page(action: DealerFacilityAction) -> bool {
