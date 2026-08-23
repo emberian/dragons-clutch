@@ -1,7 +1,8 @@
 # Structured-claim SBF successor adapter
 
-Status: **implemented disabled source seam; not routed, built, measured,
-deployed, or validated** (2026-08-23).
+Status: **base Position custody is routed only in an explicit non-production
+laboratory; wrapper-family actions remain disabled; neither artifact has been
+built, measured, deployed, or validated** (2026-08-23).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the only
 owner of structured-claim descriptor bytes, family-local payload codecs, and
@@ -48,7 +49,8 @@ Activation must be atomic with all of the following:
   actions and descriptor account `0x88/1`;
 - an exact capability-profile tuple and new profile/release identity;
 - main-dispatcher routing to this crate;
-- a live base handler for the concrete Position V3 action-35 CPI below;
+- promotion of the laboratory-only base Position V3 action-35 handler into a
+  checked release identity;
 - the supplied parser plans wired into the pinned Token-2022 byte parser;
 - linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
   SVM, and local-validator evidence; and
@@ -215,11 +217,13 @@ capability from caller-authored fields.
 
 The adapter implementation is intentionally honest about work owned elsewhere:
 
-- the base program does not yet route the authenticated Position V3 action-35
-  handler, empty-vault creation, atomic full-vector wrap/unwind,
-  beneficiary-free compaction, exact terminal redemption, and close receipt
-  interfaces staged here;
-- the main dispatcher has no structured-claim account loader or route arm; and
+- the base program routes the authenticated Position V3 action-35 handler only
+  in `non-production-structured-custody-lab`; it still lacks empty-vault
+  creation, atomic full-vector wrap/unwind, beneficiary-free compaction, exact
+  terminal redemption, and close-receipt interfaces staged here;
+- the separately deployed wrapper still has no live dispatcher/account loader,
+  so no Structured family action can create a descriptor, mint, burn, compact,
+  redeem, or retire; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
 

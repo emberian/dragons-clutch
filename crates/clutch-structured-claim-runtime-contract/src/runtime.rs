@@ -7,7 +7,7 @@ use clutch_structured_claim::{
 use crate::{
     prepare_atomic_position_asset_transfer_v1, Amount, AssetTransferPhasePolicyV1,
     AtomicPositionAssetTransferRequestV1, DescriptorIdentityV1, DescriptorStateV1, Error,
-    PositionProjectionV1, Result, StructuredClaimDescriptorV1,
+    PositionProjectionV1, Result, StructuredClaimDescriptorV2,
 };
 
 /// Canonical addresses derived by the SBF adapter from wrapper product identity.
@@ -273,7 +273,7 @@ pub struct AuthenticatedVaultRetirementV1 {
 #[repr(C)]
 pub struct DescriptorRetirementPlanV1 {
     /// Prospective permanent descriptor image.
-    pub descriptor: StructuredClaimDescriptorV1,
+    pub descriptor: StructuredClaimDescriptorV2,
     /// Actual mint supply, necessarily zero.
     pub mint_supply: Amount,
     /// Mint authority before Token-2022 SetAuthority.
@@ -760,7 +760,7 @@ pub fn prepare_redeem_terminal_v1(
 
 /// Prepare permanent zero-supply retirement and mint-authority revocation.
 pub fn prepare_retire_descriptor_v1(
-    mut descriptor: StructuredClaimDescriptorV1,
+    mut descriptor: StructuredClaimDescriptorV2,
     identity: &DescriptorIdentityV1,
     market: &MarketLedger,
     addresses: StructuredClaimRuntimeAddressesV1,

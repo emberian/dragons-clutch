@@ -279,8 +279,10 @@ pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 /// StructuredClaim immutable descriptor envelope discriminator.
 pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
-/// StructuredClaim immutable descriptor envelope version.
-pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn StructuredClaim descriptor version with one ambiguous authority bump.
+pub const HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1: u8 = 1;
+/// Live StructuredClaim descriptor version with distinct authority bumps.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 2;
 /// General V2 final settlement-pot account discriminator.
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
 /// General V2 final settlement-pot account version.
@@ -1294,10 +1296,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+            version: HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-structured-claim-descriptor-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
             version: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
-        name: "structured-claim-descriptor-v1-account",
+        status: AllocationStatus::NonProductionLab,
+        name: "structured-claim-descriptor-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3142,10 +3153,6 @@ mod tests {
                 GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
             ),
             (
-                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
-                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
-            ),
-            (
                 GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
                 GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
             ),
@@ -3159,6 +3166,30 @@ mod tests {
                 Some(AllocationStatus::ReservedDisabled)
             );
         }
+        let historical_descriptor = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+                HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1,
+            )
+        });
+        assert_eq!(
+            historical_descriptor.map(|entry| entry.status),
+            Some(AllocationStatus::Withdrawn)
+        );
+        let live_descriptor = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            live_descriptor.map(|entry| entry.status),
+            Some(AllocationStatus::NonProductionLab)
+        );
     }
 
     #[test]
