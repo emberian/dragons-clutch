@@ -46,6 +46,8 @@ pub enum Error {
     MismatchedPortfolioDomain = 9,
     /// A checked product or sum does not fit its frozen integer width.
     ArithmeticOverflow = 10,
+    /// An internally derived compression relation failed reconstruction.
+    InvariantViolation = 11,
 }
 
 /// Result type for exact market-quality arithmetic.
@@ -262,6 +264,80 @@ pub struct PortfolioValueRiskV1 {
     pub contingent_range_atoms: u128,
 }
 
+/// Frozen atom-unit interpretation of a canonical portfolio compression.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum CompressionUnitModelV1 {
+    /// One complete set contains one atom of every active Egg and Merge returns
+    /// one collateral atom for each complete set.
+    NativeEggAtomParity = 0,
+}
+
+/// Canonical maximal complete-set decomposition of one native Egg position.
+///
+/// Fields are private so external code cannot forge a checked decomposition.
+/// This remains an arithmetic capability only: it proves no market phase,
+/// Position balance, custody balance, signer, PDA, or Merge authorization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioCompressionV1 {
+    domain: PortfolioDomainV1,
+    unit_model: CompressionUnitModelV1,
+    position_units: u64,
+    complete_set_layer_per_unit: u64,
+    complete_set_atoms: u64,
+    source_position_egg_atoms: [u64; MAX_OUTCOMES],
+    residual_egg_coefficients_per_unit: [u64; MAX_OUTCOMES],
+    residual_position_egg_atoms: [u64; MAX_OUTCOMES],
+}
+
+impl PortfolioCompressionV1 {
+    /// Immutable Market/Terms/width binding inherited from the source vector.
+    pub const fn domain(&self) -> PortfolioDomainV1 {
+        self.domain
+    }
+
+    /// Frozen complete-set and collateral atom interpretation.
+    pub const fn unit_model(&self) -> CompressionUnitModelV1 {
+        self.unit_model
+    }
+
+    /// Number of source coefficient-vector units compressed.
+    pub const fn position_units(&self) -> u64 {
+        self.position_units
+    }
+
+    /// Maximal complete-set coefficient removed from each portfolio unit.
+    pub const fn complete_set_layer_per_unit(&self) -> u64 {
+        self.complete_set_layer_per_unit
+    }
+
+    /// Complete-set quantity available to one canonical Merge.
+    pub const fn mergeable_complete_sets(&self) -> u64 {
+        self.complete_set_atoms
+    }
+
+    /// Collateral atoms returned if an authorized canonical Merge consumes the
+    /// complete-set quantity.
+    pub const fn recoverable_collateral_atoms(&self) -> u64 {
+        self.complete_set_atoms
+    }
+
+    /// Checked source Egg-atom position before compression.
+    pub const fn source_position_egg_atoms(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.source_position_egg_atoms
+    }
+
+    /// Canonical residual coefficient vector per source portfolio unit.
+    pub const fn residual_egg_coefficients_per_unit(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.residual_egg_coefficients_per_unit
+    }
+
+    /// Checked residual Egg-atom position after removing complete sets.
+    pub const fn residual_position_egg_atoms(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.residual_position_egg_atoms
+    }
+}
+
 /// Certify the exact simplex mark and full-simplex payoff bounds of a position.
 ///
 /// The mark is the exact rational
@@ -349,6 +425,86 @@ pub fn certify_portfolio_value_risk_v1(
         guaranteed_floor_atoms,
         worst_case_cap_atoms,
         contingent_range_atoms,
+    })
+}
+
+/// Derive the unique maximal complete-set layer of a native Egg position.
+///
+/// Every active source coefficient is decomposed as
+/// `complete_set_layer_per_unit + residual_coefficient`. The layer is the
+/// minimum active coefficient, so every residual is nonnegative and at least
+/// one active residual coordinate is zero. The function then scales both
+/// sides by `position_units` with checked `u64` arithmetic and verifies every
+/// reconstruction equation before returning the private-field capability.
+///
+/// Under [`CompressionUnitModelV1::NativeEggAtomParity`], the scaled layer is
+/// both the complete-set quantity consumed by Merge and the collateral atoms
+/// Merge would return. This is not execution authority: phase, authenticated
+/// Position ownership, Hoard custody, and program signing remain adapter work.
+pub fn certify_portfolio_compression_v1(
+    source: NativeEggPortfolioV1,
+    position_units: u64,
+) -> Result<PortfolioCompressionV1> {
+    if position_units == 0 {
+        return Err(Error::ZeroPositionUnits);
+    }
+
+    let active = usize::from(source.domain.outcome_count);
+    let mut complete_set_layer_per_unit = u64::MAX;
+    let mut outcome = 0usize;
+    while outcome < active {
+        let coefficient = source.egg_coefficients[outcome];
+        if coefficient < complete_set_layer_per_unit {
+            complete_set_layer_per_unit = coefficient;
+        }
+        outcome += 1;
+    }
+
+    let complete_set_atoms = complete_set_layer_per_unit
+        .checked_mul(position_units)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let mut source_position_egg_atoms = [0u64; MAX_OUTCOMES];
+    let mut residual_egg_coefficients_per_unit = [0u64; MAX_OUTCOMES];
+    let mut residual_position_egg_atoms = [0u64; MAX_OUTCOMES];
+    let mut has_zero_active_residual = false;
+    outcome = 0;
+    while outcome < active {
+        let coefficient = source.egg_coefficients[outcome];
+        let residual_coefficient = coefficient
+            .checked_sub(complete_set_layer_per_unit)
+            .ok_or(Error::InvariantViolation)?;
+        let source_atoms = coefficient
+            .checked_mul(position_units)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let residual_atoms = residual_coefficient
+            .checked_mul(position_units)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let reconstructed = complete_set_atoms
+            .checked_add(residual_atoms)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if reconstructed != source_atoms {
+            return Err(Error::InvariantViolation);
+        }
+
+        source_position_egg_atoms[outcome] = source_atoms;
+        residual_egg_coefficients_per_unit[outcome] = residual_coefficient;
+        residual_position_egg_atoms[outcome] = residual_atoms;
+        has_zero_active_residual |= residual_coefficient == 0;
+        outcome += 1;
+    }
+    if !has_zero_active_residual {
+        return Err(Error::InvariantViolation);
+    }
+
+    Ok(PortfolioCompressionV1 {
+        domain: source.domain,
+        unit_model: CompressionUnitModelV1::NativeEggAtomParity,
+        position_units,
+        complete_set_layer_per_unit,
+        complete_set_atoms,
+        source_position_egg_atoms,
+        residual_egg_coefficients_per_unit,
+        residual_position_egg_atoms,
     })
 }
 
@@ -534,6 +690,113 @@ mod tests {
             NativeEggPortfolioV1::new(domain_two, cells(u64::MAX, 0)).unwrap();
         assert_eq!(
             certify_portfolio_value_risk_v1(widest_prices, widest_payoff, u64::MAX),
+            Err(Error::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn compression_extracts_the_unique_maximal_complete_set_layer() {
+        let domain = domain(3);
+        let mut coefficients = [0u64; MAX_OUTCOMES];
+        coefficients[0] = 3;
+        coefficients[1] = 5;
+        coefficients[2] = 8;
+        let source = NativeEggPortfolioV1::new(domain, coefficients).unwrap();
+        let compression = certify_portfolio_compression_v1(source, 4).unwrap();
+
+        assert_eq!(compression.domain(), domain);
+        assert_eq!(
+            compression.unit_model(),
+            CompressionUnitModelV1::NativeEggAtomParity
+        );
+        assert_eq!(compression.position_units(), 4);
+        assert_eq!(compression.complete_set_layer_per_unit(), 3);
+        assert_eq!(compression.mergeable_complete_sets(), 12);
+        assert_eq!(compression.recoverable_collateral_atoms(), 12);
+        assert_eq!(
+            &compression.source_position_egg_atoms()[..3],
+            &[12, 20, 32]
+        );
+        assert_eq!(
+            &compression.residual_egg_coefficients_per_unit()[..3],
+            &[0, 2, 5]
+        );
+        assert_eq!(
+            &compression.residual_position_egg_atoms()[..3],
+            &[0, 8, 20]
+        );
+
+        let mut outcome = 0usize;
+        while outcome < 3 {
+            assert_eq!(
+                compression.source_position_egg_atoms()[outcome],
+                compression.mergeable_complete_sets()
+                    + compression.residual_position_egg_atoms()[outcome]
+            );
+            outcome += 1;
+        }
+    }
+
+    #[test]
+    fn tied_minima_and_pure_complete_sets_have_canonical_zero_residuals() {
+        let domain = domain(3);
+        let mut tied = [0u64; MAX_OUTCOMES];
+        tied[0] = 4;
+        tied[1] = 4;
+        tied[2] = 7;
+        let tied_source = NativeEggPortfolioV1::new(domain, tied).unwrap();
+        let tied_compression = certify_portfolio_compression_v1(tied_source, 2).unwrap();
+        assert_eq!(
+            &tied_compression.residual_egg_coefficients_per_unit()[..3],
+            &[0, 0, 3]
+        );
+
+        let complete_set_source = NativeEggPortfolioV1::new(domain, {
+            let mut values = [0u64; MAX_OUTCOMES];
+            values[0] = 7;
+            values[1] = 7;
+            values[2] = 7;
+            values
+        })
+        .unwrap();
+        let complete_set = certify_portfolio_compression_v1(complete_set_source, 3).unwrap();
+        assert_eq!(complete_set.mergeable_complete_sets(), 21);
+        assert_eq!(
+            &complete_set.residual_position_egg_atoms()[..3],
+            &[0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn zero_minimum_is_a_valid_proof_that_no_merge_capital_is_available() {
+        let domain = domain(3);
+        let mut coefficients = [0u64; MAX_OUTCOMES];
+        coefficients[0] = 0;
+        coefficients[1] = 2;
+        coefficients[2] = 9;
+        let source = NativeEggPortfolioV1::new(domain, coefficients).unwrap();
+        let compression = certify_portfolio_compression_v1(source, 5).unwrap();
+
+        assert_eq!(compression.complete_set_layer_per_unit(), 0);
+        assert_eq!(compression.recoverable_collateral_atoms(), 0);
+        assert_eq!(
+            &compression.source_position_egg_atoms()[..3],
+            &compression.residual_position_egg_atoms()[..3]
+        );
+    }
+
+    #[test]
+    fn compression_refuses_zero_units_and_nonrepresentable_position_atoms() {
+        let domain = domain(2);
+        let source = NativeEggPortfolioV1::new(domain, cells(1, 2)).unwrap();
+        assert_eq!(
+            certify_portfolio_compression_v1(source, 0),
+            Err(Error::ZeroPositionUnits)
+        );
+
+        let widest = NativeEggPortfolioV1::new(domain, cells(u64::MAX, u64::MAX)).unwrap();
+        assert_eq!(
+            certify_portfolio_compression_v1(widest, 2),
             Err(Error::ArithmeticOverflow)
         );
     }
