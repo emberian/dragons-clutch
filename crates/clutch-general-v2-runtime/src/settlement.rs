@@ -12,7 +12,7 @@
 use core::cmp::min;
 
 use clutch_batch::{
-    AuthenticatedPortfolioReceiptSiblingSetV2, Side, MAX_ORDERS,
+    AuthenticatedPortfolioReceiptSiblingSetV2, PartialPolicy, Side, MAX_ORDERS,
     PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
 };
 use clutch_collateral_adapter_v2::{BoundCollateralProfileV2, Error as CollateralError};
@@ -1403,7 +1403,414 @@ struct FeedSettlementFactsV3 {
     end_count: [u16; MAX_ORDERS],
     merge_delivery_count: [u16; MAX_ORDERS],
     first_slice: [u16; MAX_ORDERS],
-    receipt_end_count: u16,
+}
+
+/// Reconstruct exact settlement entitlements from one sealed current Feed.
+///
+/// No SelectedCandidate body, mutable Reservation, or caller-authored count is
+/// accepted here. The already-authenticated V5 book is the sole order owner;
+/// the Feed supplies only its exact active prices, fills, and canonical slice
+/// transcript. Per-order totals are not sufficient: every active outcome is
+/// checked independently so equal prices cannot collapse two distinct payoff
+/// vectors into one admissible entitlement.
+#[inline(never)]
+fn derive_feed_settlement_facts_v3(
+    feed: CandidateFeedHeaderV2,
+    prices_le: &[u8],
+    fills_le: &[u8],
+    slices_le: &[u8],
+    current_projection: &OwnerBlindBookProjectionV2,
+) -> Result<FeedSettlementFactsV3, SettlementAdapterErrorV1> {
+    let projection = current_projection.base();
+    let expected_price_bytes = usize::from(feed.outcome_count)
+        .checked_mul(8)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let expected_fill_bytes = usize::from(feed.order_count)
+        .checked_mul(8)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let expected_slice_bytes = usize::from(feed.slice_count)
+        .checked_mul(SETTLEMENT_SLICE_BYTES)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if projection.book().len != feed.order_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    if prices_le.len() != expected_price_bytes
+        || fills_le.len() != expected_fill_bytes
+        || slices_le.len() != expected_slice_bytes
+    {
+        return Err(SettlementAdapterErrorV1::OutputLengthMismatch);
+    }
+
+    let mut prices = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < usize::from(feed.outcome_count) {
+        prices[outcome] = read_feed_u64(prices_le, outcome)?;
+        outcome += 1;
+    }
+    let mut price_sum = 0u64;
+    outcome = 0;
+    while outcome < usize::from(feed.outcome_count) {
+        if prices[outcome] > feed.price_scale {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        price_sum = price_sum
+            .checked_add(prices[outcome])
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        outcome += 1;
+    }
+    if price_sum != feed.price_scale {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut slices = [CanonicalSettlementSliceV1::EMPTY; MAX_SLICES];
+    let mut entitled_units = [0u64; MAX_ORDERS];
+    let mut consideration_price_units = [0u128; MAX_ORDERS];
+    let mut end_count = [0u16; MAX_ORDERS];
+    let mut merge_delivery_count = [0u16; MAX_ORDERS];
+    let mut first_slice = [u16::MAX; MAX_ORDERS];
+    let mut slice_index = 0u16;
+    while slice_index < feed.slice_count {
+        let record = read_feed_slice_v3(slices_le, slice_index)?;
+        if record.outcome >= feed.outcome_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        let route = record.route()?;
+        let (buy, sell) = match route {
+            SettlementReceiptRouteV2::Direct => (
+                SettlementLegV1::Order(record.buy_index),
+                SettlementLegV1::Order(record.sell_index),
+            ),
+            SettlementReceiptRouteV2::SplitToBuy => (
+                SettlementLegV1::Order(record.buy_index),
+                SettlementLegV1::Split,
+            ),
+            SettlementReceiptRouteV2::SellToMerge => (
+                SettlementLegV1::Merge,
+                SettlementLegV1::Order(record.sell_index),
+            ),
+        };
+        let canonical = CanonicalSettlementSliceV1 {
+            buy,
+            sell,
+            route: match route {
+                SettlementReceiptRouteV2::Direct => SettlementRouteV1::Direct,
+                SettlementReceiptRouteV2::SplitToBuy => SettlementRouteV1::SplitToBuy,
+                SettlementReceiptRouteV2::SellToMerge => SettlementRouteV1::SellToMerge,
+            },
+            outcome: record.outcome,
+            quantity: record.quantity,
+        };
+        slices[usize::from(slice_index)] = canonical;
+        if let SettlementLegV1::Order(order_index) = buy {
+            accumulate_feed_order_end_v3(
+                projection,
+                order_index,
+                SettlementSideV1::Buy,
+                slice_index,
+                record.outcome,
+                record.quantity,
+                &prices,
+                &mut entitled_units,
+                &mut consideration_price_units,
+                &mut end_count,
+                &mut first_slice,
+            )?;
+        }
+        if let SettlementLegV1::Order(order_index) = sell {
+            accumulate_feed_order_end_v3(
+                projection,
+                order_index,
+                SettlementSideV1::Sell,
+                slice_index,
+                record.outcome,
+                record.quantity,
+                &prices,
+                &mut entitled_units,
+                &mut consideration_price_units,
+                &mut end_count,
+                &mut first_slice,
+            )?;
+            if route == SettlementReceiptRouteV2::SellToMerge {
+                let order = usize::from(order_index);
+                merge_delivery_count[order] = merge_delivery_count[order]
+                    .checked_add(1)
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            }
+        }
+        if let (SettlementLegV1::Order(buy_index), SettlementLegV1::Order(sell_index)) =
+            (buy, sell)
+        {
+            let buy_owner = projection
+                .order_membership(buy_index)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .owner();
+            let sell_owner = projection
+                .order_membership(sell_index)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .owner();
+            if buy_owner == sell_owner {
+                return Err(SettlementAdapterErrorV1::OwnerPairingInfeasible);
+            }
+        }
+        slice_index = slice_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+
+    validate_feed_virtual_legs_v3(feed, &slices)?;
+    let mut order = 0usize;
+    while order < usize::from(feed.order_count) {
+        let fill = read_feed_u64(fills_le, order)?;
+        let economic_order = &projection.book().orders[order];
+        let honored_aon = feed.honored_aon_mask & (1u64 << order) != 0;
+        let partial_valid = match economic_order.partial_policy {
+            PartialPolicy::Allow => !honored_aon
+                && (fill == 0 || fill >= economic_order.minimum_fill),
+            PartialPolicy::AllOrNone => {
+                (fill == 0 || fill == economic_order.quantity)
+                    && honored_aon == (fill != 0)
+            }
+        };
+        let mut unit_price = 0u128;
+        outcome = 0;
+        while outcome < usize::from(feed.outcome_count) {
+            unit_price = unit_price
+                .checked_add(
+                    u128::from(economic_order.coefficients[outcome])
+                        .checked_mul(u128::from(prices[outcome]))
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?,
+                )
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            outcome += 1;
+        }
+        let price_valid = fill == 0
+            || match economic_order.side {
+                Side::Buy => unit_price <= economic_order.limit_value_price_units_per_unit,
+                Side::Sell => unit_price >= economic_order.limit_value_price_units_per_unit,
+            };
+        if fill > economic_order.quantity || !partial_valid || !price_valid {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        validate_feed_order_entitlement_v3(
+            economic_order.coefficients,
+            fill,
+            feed.outcome_count,
+            u8::try_from(order).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
+            feed.slice_count,
+            &slices,
+            &prices,
+            entitled_units[order],
+            consideration_price_units[order],
+            end_count[order],
+            first_slice[order],
+        )?;
+        order += 1;
+    }
+    Ok(FeedSettlementFactsV3 {
+        prices,
+        slices,
+        entitled_units,
+        consideration_price_units,
+        end_count,
+        merge_delivery_count,
+        first_slice,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_feed_order_end_v3(
+    projection: &OwnerBlindBookProjectionV1,
+    order_index: u8,
+    expected_side: SettlementSideV1,
+    slice_index: u16,
+    outcome: u8,
+    quantity: u64,
+    prices: &[u64; MAX_OUTCOMES],
+    entitled_units: &mut [u64; MAX_ORDERS],
+    consideration_price_units: &mut [u128; MAX_ORDERS],
+    end_count: &mut [u16; MAX_ORDERS],
+    first_slice: &mut [u16; MAX_ORDERS],
+) -> Result<(), SettlementAdapterErrorV1> {
+    let index = usize::from(order_index);
+    if index >= usize::from(projection.book().len)
+        || usize::from(outcome) >= MAX_OUTCOMES
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let actual_side = match projection.book().orders[index].side {
+        Side::Buy => SettlementSideV1::Buy,
+        Side::Sell => SettlementSideV1::Sell,
+    };
+    if actual_side != expected_side {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    entitled_units[index] = entitled_units[index]
+        .checked_add(quantity)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let consideration = u128::from(quantity)
+        .checked_mul(u128::from(prices[usize::from(outcome)]))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    consideration_price_units[index] = consideration_price_units[index]
+        .checked_add(consideration)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    end_count[index] = end_count[index]
+        .checked_add(1)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if first_slice[index] == u16::MAX {
+        first_slice[index] = slice_index;
+    }
+    Ok(())
+}
+
+fn validate_feed_virtual_legs_v3(
+    feed: CandidateFeedHeaderV2,
+    slices: &[CanonicalSettlementSliceV1; MAX_SLICES],
+) -> Result<(), SettlementAdapterErrorV1> {
+    if usize::from(feed.outcome_count) > MAX_OUTCOMES
+        || usize::from(feed.slice_count) > MAX_SLICES
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut outcome = 0u8;
+    while outcome < feed.outcome_count {
+        let mut split = 0u64;
+        let mut merge = 0u64;
+        let mut slice_index = 0u16;
+        while slice_index < feed.slice_count {
+            let slice = slices[usize::from(slice_index)];
+            if slice.outcome == outcome {
+                match slice.route {
+                    SettlementRouteV1::SplitToBuy => {
+                        split = split
+                            .checked_add(slice.quantity)
+                            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                    }
+                    SettlementRouteV1::SellToMerge => {
+                        merge = merge
+                            .checked_add(slice.quantity)
+                            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                    }
+                    SettlementRouteV1::Direct => {}
+                }
+            }
+            slice_index = slice_index
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if split != feed.virtual_split || merge != feed.virtual_merge {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        outcome = outcome
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_feed_order_entitlement_v3(
+    coefficients: [u64; MAX_OUTCOMES],
+    fill: u64,
+    outcome_count: u8,
+    order_index: u8,
+    slice_count: u16,
+    slices: &[CanonicalSettlementSliceV1; MAX_SLICES],
+    prices: &[u64; MAX_OUTCOMES],
+    entitled_units: u64,
+    consideration_price_units: u128,
+    end_count: u16,
+    first_slice: u16,
+) -> Result<(), SettlementAdapterErrorV1> {
+    if usize::from(outcome_count) > MAX_OUTCOMES
+        || usize::from(slice_count) > MAX_SLICES
+        || coefficients[usize::from(outcome_count)..]
+            .iter()
+            .any(|coefficient| *coefficient != 0)
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut observed_end_count = 0u16;
+    let mut observed_first_slice = u16::MAX;
+    let mut slice_index = 0u16;
+    while slice_index < slice_count {
+        let slice = slices[usize::from(slice_index)];
+        let mut occurrences = 0u8;
+        if slice.buy == SettlementLegV1::Order(order_index) {
+            occurrences = occurrences
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if slice.sell == SettlementLegV1::Order(order_index) {
+            occurrences = occurrences
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if occurrences != 0 {
+            observed_end_count = observed_end_count
+                .checked_add(u16::from(occurrences))
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            if observed_first_slice == u16::MAX {
+                observed_first_slice = slice_index;
+            }
+        }
+        slice_index = slice_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+
+    let mut expected_units = 0u64;
+    let mut expected_consideration = 0u128;
+    let mut outcome = 0u8;
+    while outcome < outcome_count {
+        let expected_outcome_units = coefficients[usize::from(outcome)]
+            .checked_mul(fill)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        let mut observed_outcome_units = 0u64;
+        slice_index = 0;
+        while slice_index < slice_count {
+            let slice = slices[usize::from(slice_index)];
+            if slice.outcome == outcome {
+                if slice.buy == SettlementLegV1::Order(order_index) {
+                    observed_outcome_units = observed_outcome_units
+                        .checked_add(slice.quantity)
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                }
+                if slice.sell == SettlementLegV1::Order(order_index) {
+                    observed_outcome_units = observed_outcome_units
+                        .checked_add(slice.quantity)
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                }
+            }
+            slice_index = slice_index
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if observed_outcome_units != expected_outcome_units {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        expected_units = expected_units
+            .checked_add(expected_outcome_units)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        expected_consideration = expected_consideration
+            .checked_add(
+                u128::from(expected_outcome_units)
+                    .checked_mul(u128::from(prices[usize::from(outcome)]))
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?,
+            )
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        outcome = outcome
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    if entitled_units != expected_units
+        || consideration_price_units != expected_consideration
+        || end_count != observed_end_count
+        || first_slice != observed_first_slice
+        || (fill == 0) != (end_count == 0)
+        || (fill == 0) != (first_slice == u16::MAX)
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(())
 }
 
 
@@ -1693,7 +2100,7 @@ pub fn derive_settlement_traversal_projection_v4(
         tail.prices_le(),
         tail.fills_le(),
         tail.slices_le(),
-        projection,
+        order_projection,
     )?;
     let owner_order_set_digest = derive_owner_order_set_digest_v2(
         order_projection,
@@ -7229,6 +7636,108 @@ mod scalable_receipt_end_tests {
         assert_eq!(
             read_feed_slice_v3(&slice_bytes(0, 3, 0, 7, 11)[..12], 0),
             Err(SettlementAdapterErrorV1::OutputLengthMismatch)
+        );
+    }
+
+    fn one_order_slice(outcome: u8, quantity: u64) -> CanonicalSettlementSliceV1 {
+        CanonicalSettlementSliceV1 {
+            buy: SettlementLegV1::Order(0),
+            sell: SettlementLegV1::Split,
+            route: SettlementRouteV1::SplitToBuy,
+            outcome,
+            quantity,
+        }
+    }
+
+    #[test]
+    fn equal_price_outcomes_do_not_collapse_distinct_entitlements() {
+        let mut coefficients = [0u64; MAX_OUTCOMES];
+        coefficients[0] = 1;
+        coefficients[1] = 2;
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = 5;
+        prices[1] = 5;
+        let mut slices = [CanonicalSettlementSliceV1::EMPTY; MAX_SLICES];
+        slices[0] = one_order_slice(0, 10);
+        slices[1] = one_order_slice(1, 20);
+        assert_eq!(
+            validate_feed_order_entitlement_v3(
+                coefficients,
+                10,
+                2,
+                0,
+                2,
+                &slices,
+                &prices,
+                30,
+                150,
+                2,
+                0,
+            ),
+            Ok(())
+        );
+
+        /* Aggregate units and consideration are unchanged, but the payoff
+         * vector is not. The old aggregate-only check accepted this splice. */
+        slices[0] = one_order_slice(0, 15);
+        slices[1] = one_order_slice(1, 15);
+        assert_eq!(
+            validate_feed_order_entitlement_v3(
+                coefficients,
+                10,
+                2,
+                0,
+                2,
+                &slices,
+                &prices,
+                30,
+                150,
+                2,
+                0,
+            ),
+            Err(SettlementAdapterErrorV1::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn entitlement_check_refuses_padding_and_exact_integer_overflow() {
+        let prices = [1u64; MAX_OUTCOMES];
+        let slices = [CanonicalSettlementSliceV1::EMPTY; MAX_SLICES];
+        let mut padded = [0u64; MAX_OUTCOMES];
+        padded[2] = 1;
+        assert_eq!(
+            validate_feed_order_entitlement_v3(
+                padded,
+                0,
+                2,
+                0,
+                0,
+                &slices,
+                &prices,
+                0,
+                0,
+                0,
+                u16::MAX,
+            ),
+            Err(SettlementAdapterErrorV1::BindingMismatch)
+        );
+        let mut overflowing = [0u64; MAX_OUTCOMES];
+        overflowing[0] = u64::MAX;
+        assert_eq!(
+            validate_feed_order_entitlement_v3(
+                overflowing,
+                2,
+                2,
+                0,
+                0,
+                &slices,
+                &prices,
+                0,
+                0,
+                0,
+                u16::MAX,
+            ),
+            Err(SettlementAdapterErrorV1::ArithmeticOverflow)
         );
     }
 
