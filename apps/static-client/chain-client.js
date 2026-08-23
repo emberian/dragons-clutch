@@ -197,9 +197,9 @@
   const validateSourceProfile = (profile, count, name) => {
     const sourceProfile = text(profile, `${name}.sourceProfile`, 64);
     if (!Object.prototype.hasOwnProperty.call(SOURCE_PROFILE_RELEASE_COUNTS, sourceProfile)) throw new Error(`${name}.sourceProfile is not a checked compiled Source identity.`);
-    const registeredSourceReleaseCount = decimal(count, `${name}.registeredSourceReleaseCount`, 1n).toString();
-    if (registeredSourceReleaseCount !== SOURCE_PROFILE_RELEASE_COUNTS[sourceProfile]) throw new Error(`${name}.registeredSourceReleaseCount differs from its compiled Source identity.`);
-    return Object.freeze({ sourceProfile, registeredSourceReleaseCount });
+    const compiledSourceReleaseCount = decimal(count, `${name}.compiledSourceReleaseCount`, 1n).toString();
+    if (compiledSourceReleaseCount !== SOURCE_PROFILE_RELEASE_COUNTS[sourceProfile]) throw new Error(`${name}.compiledSourceReleaseCount differs from its compiled Source identity.`);
+    return Object.freeze({ sourceProfile, compiledSourceReleaseCount });
   };
 
   const validateWireSurface = (raw, name) => {
@@ -442,10 +442,10 @@
     const enabledIntents = validateEnabledIntents(boundRelease.enabledIntents, "transportBinding.release.enabledIntents");
     const wireSurface = validateWireSurface(boundRelease.wireSurface, "transportBinding.release.wireSurface");
     if (enabledIntents.some((intent) => !families.includes(intent.family))) throw new Error("transportBinding release enables an intent whose canonical family is absent from its decoder set.");
-    const source = validateSourceProfile(boundRelease.sourceProfile, boundRelease.registeredSourceReleaseCount, "transportBinding.release");
+    const source = validateSourceProfile(boundRelease.sourceProfile, boundRelease.compiledSourceReleaseCount, "transportBinding.release");
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
-    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, sourceProfile: source.sourceProfile, registeredSourceReleaseCount: source.registeredSourceReleaseCount, wireSurface, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, sourceProfile: source.sourceProfile, compiledSourceReleaseCount: source.compiledSourceReleaseCount, wireSurface, enabledIntents, families, releaseKey: expectedReleaseKey });
     const configuration = Object.freeze({
       ...target,
       schema: "dragons-clutch/browser-daemon-chain-projection/v4",
@@ -536,7 +536,7 @@
         releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
-        ...validateSourceProfile(release.sourceProfile, release.registeredSourceReleaseCount, `releases[${index}]`),
+        ...validateSourceProfile(release.sourceProfile, release.compiledSourceReleaseCount, `releases[${index}]`),
         wireSurface: validateWireSurface(release.wireSurface, `releases[${index}].wireSurface`),
         enabledIntents: validateEnabledIntents(release.enabledIntents, `releases[${index}].enabledIntents`),
         families: validateFamilies(release.families, `releases[${index}].families`)
@@ -547,7 +547,7 @@
     if (new Set(releases.map((release) => release.releaseKey)).size !== releases.length) throw new Error("operatord release endpoint repeats a release key.");
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || selected.sourceProfile !== configuration.release.sourceProfile || selected.registeredSourceReleaseCount !== configuration.release.registeredSourceReleaseCount || JSON.stringify(selected.wireSurface) !== JSON.stringify(configuration.release.wireSurface) || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || selected.sourceProfile !== configuration.release.sourceProfile || selected.compiledSourceReleaseCount !== configuration.release.compiledSourceReleaseCount || JSON.stringify(selected.wireSurface) !== JSON.stringify(configuration.release.wireSurface) || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });

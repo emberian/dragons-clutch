@@ -65,7 +65,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
-  assert.match(chain, /registeredSourceReleaseCount differs from its compiled Source identity/);
+  assert.match(chain, /compiledSourceReleaseCount differs from its compiled Source identity/);
   assert.match(chain, /dragons-clutch\/wire-surface\/v1/);
   assert.match(chain, /admits one intent through two strict decoders/);
   assert.match(chain, /JSON\.stringify\(selected\.wireSurface\).*JSON\.stringify\(configuration\.release\.wireSurface\)/);
@@ -106,7 +106,7 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
         accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
       }]
     }, {
-      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32), sourceProfile: "production-inert", registeredSourceReleaseCount: "0", wireSurface: { schema: "dragons-clutch/wire-surface/v1", identitySha256: "05".repeat(32) } }
+      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32), sourceProfile: "production-inert", compiledSourceReleaseCount: "0", wireSurface: { schema: "dragons-clutch/wire-surface/v1", identitySha256: "05".repeat(32) } }
     }, "1232");
   })()`, context);
   assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v5");
@@ -116,7 +116,7 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
   assert.equal(output.submitted, false);
   assert.equal(output.runtimeCapability, "not-authenticated");
   assert.equal(output.release.sourceProfile, "production-inert");
-  assert.equal(output.release.registeredSourceReleaseCount, "0");
+  assert.equal(output.release.compiledSourceReleaseCount, "0");
   assert.equal(output.release.wireSurfaceIdentitySha256, "05".repeat(32));
   assert.equal(output.instructionCoordinates[0].source, "explicit-semantic-owner-draft; not runtime capability admission");
   assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);

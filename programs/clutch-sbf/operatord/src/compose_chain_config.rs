@@ -747,7 +747,7 @@ pub(crate) fn compose_checked_chain_config(
             "capabilityProfileId": hex(checked.profile_identity),
             "sourceCommit": checked.source_commit.as_str(),
             "sourceProfile": checked.source_profile.name(),
-            "registeredSourceReleaseCount": checked.source_profile.registered_release_count().to_string(),
+            "compiledSourceReleaseCount": checked.source_profile.compiled_release_count().to_string(),
             "wireSurface": {
                 "schema": WIRE_SURFACE_SCHEMA_V1,
                 "identitySha256": hex(checked.wire_surface.identity_sha256),

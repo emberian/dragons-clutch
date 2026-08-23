@@ -446,7 +446,7 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
                 "capabilityProfileId": hex32(release.capability_profile_id),
                 "sourceCommit": release.source_commit,
                 "sourceProfile": release.source_profile.name(),
-                "registeredSourceReleaseCount": release.source_profile.registered_release_count().to_string(),
+                "compiledSourceReleaseCount": release.source_profile.compiled_release_count().to_string(),
                 "wireSurface": {
                     "schema": clutch_local_real_pyth::rpc_index::WIRE_SURFACE_SCHEMA_V1,
                     "identitySha256": hex32(release.wire_surface.identity_sha256),

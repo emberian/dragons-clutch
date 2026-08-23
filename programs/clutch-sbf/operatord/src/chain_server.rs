@@ -78,7 +78,7 @@ struct ReleaseWire {
     capability_profile_id: String,
     source_commit: String,
     source_profile: String,
-    registered_source_release_count: String,
+    compiled_source_release_count: String,
     wire_surface: WireSurfaceWire,
     enabled_intents: Vec<IntentWire>,
     families: Vec<String>,
@@ -365,11 +365,11 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
             source_profile: {
                 let profile = CompiledSourceProfile::parse(&release.source_profile)
                     .map_err(|_| format!("releases[{index}].sourceProfile is unsupported"))?;
-                if release.registered_source_release_count
-                    != profile.registered_release_count().to_string()
+                if release.compiled_source_release_count
+                    != profile.compiled_release_count().to_string()
                 {
                     return Err(format!(
-                        "releases[{index}].registeredSourceReleaseCount differs from the compiled Source profile"
+                        "releases[{index}].compiledSourceReleaseCount differs from the compiled Source profile"
                     )
                     .into());
                 }

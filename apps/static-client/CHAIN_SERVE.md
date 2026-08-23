@@ -89,7 +89,7 @@ Rust-emitted family/kind catalog; unknown, historical, cross-family, or
 placeholder labels fail closed.
 
 The checked release also publishes the exact `source_identity` compiled into
-that ELF. `production-inert` reports zero registered Source releases and Glass
+that ELF. `production-inert` reports zero compiled Source releases and Glass
 refuses Source actions. `runtime-real-pyth-release` also compiles zero provider
 identities: it permits only checked Source 77/v2 actions 1–4, beginning with an
 exact onchain `SourceReleaseManifestV2`; actions 5–12 and every legacy Source

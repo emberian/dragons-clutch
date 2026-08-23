@@ -89,8 +89,10 @@ impl CanonicalFamily {
 /// Exact compiled Source identity class from the checked capability profile.
 ///
 /// This is release identity, not an operator or browser-selected mode. In
-/// particular, `ProductionInert` means the ELF has no registered Source
-/// release and every Source-value route must remain unavailable.
+/// particular, `ProductionInert` means the ELF has no compiled Source release
+/// and every Source-value route must remain unavailable. `RuntimeRealPythRelease`
+/// also compiles no provider identity; it accepts only an exact onchain release
+/// through the checked Source successor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompiledSourceProfile {
     ProductionInert,
@@ -100,6 +102,8 @@ pub enum CompiledSourceProfile {
 }
 
 impl CompiledSourceProfile {
+    /// Number of provider identities compiled into this exact ELF. This is not
+    /// a count of releases registered in onchain state.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -111,7 +115,7 @@ impl CompiledSourceProfile {
     }
 
     #[must_use]
-    pub const fn registered_release_count(self) -> u8 {
+    pub const fn compiled_release_count(self) -> u8 {
         match self {
             Self::ProductionInert | Self::RuntimeRealPythRelease => 0,
             Self::NonProductionMockSourceLab | Self::NonProductionRealPythLab => 1,
@@ -284,6 +288,10 @@ pub struct ManifestWireSurfaceV1 {
 impl ManifestWireSurfaceV1 {
     pub fn validate(&self) -> Result<()> {
         if self.identity_sha256 == [0; 32]
+            || self.legacy_intent_pairs.len() > 256
+            || self.dedicated_direct_intent_pairs.len() > 256
+            || self.outer_request_actions.len() > 256
+            || self.source_generation_discriminants.len() > 256
             || !canonical_wire_pairs(&self.legacy_intent_pairs)
             || !canonical_wire_pairs(&self.dedicated_direct_intent_pairs)
             || self
@@ -292,6 +300,7 @@ impl ManifestWireSurfaceV1 {
                 .any(|pair| self.dedicated_direct_intent_pairs.binary_search(pair).is_ok())
             || !strictly_increasing(&self.outer_request_actions)
             || !strictly_increasing(&self.source_generation_discriminants)
+            || self.source_generation_discriminants.contains(&0)
         {
             return Err(RpcIndexError::InvalidRelease);
         }
@@ -1251,19 +1260,19 @@ mod tests {
             CompiledSourceProfile::ProductionInert
         );
         assert_eq!(
-            CompiledSourceProfile::ProductionInert.registered_release_count(),
+            CompiledSourceProfile::ProductionInert.compiled_release_count(),
             0
         );
         assert_eq!(
-            CompiledSourceProfile::RuntimeRealPythRelease.registered_release_count(),
+            CompiledSourceProfile::RuntimeRealPythRelease.compiled_release_count(),
             0
         );
         assert_eq!(
-            CompiledSourceProfile::NonProductionMockSourceLab.registered_release_count(),
+            CompiledSourceProfile::NonProductionMockSourceLab.compiled_release_count(),
             1
         );
         assert_eq!(
-            CompiledSourceProfile::NonProductionRealPythLab.registered_release_count(),
+            CompiledSourceProfile::NonProductionRealPythLab.compiled_release_count(),
             1
         );
         assert_eq!(
@@ -1307,6 +1316,10 @@ mod tests {
 
         value.wire_surface.dedicated_direct_intent_pairs.clear();
         value.wire_surface.outer_request_actions = vec![2, 1];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+
+        value.wire_surface.outer_request_actions.clear();
+        value.wire_surface.source_generation_discriminants = vec![0];
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 

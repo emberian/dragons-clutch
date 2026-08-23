@@ -355,7 +355,7 @@
       sourceCommit: configuration.release.sourceCommit,
       capabilityProfileId: configuration.release.capabilityProfileId,
       sourceProfile: configuration.release.sourceProfile,
-      registeredSourceReleaseCount: configuration.release.registeredSourceReleaseCount,
+      compiledSourceReleaseCount: configuration.release.compiledSourceReleaseCount,
       wireSurfaceIdentitySha256
     });
     return Object.freeze({
