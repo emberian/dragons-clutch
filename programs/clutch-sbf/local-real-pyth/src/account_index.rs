@@ -2801,6 +2801,10 @@ mod processed_fork_tests {
             program_data: Address::new_from_array([0x32; 32]),
             elf_sha256: [0x33; 32],
             deployment_slot: 1,
+            release_manifest_sha256: [0x34; 32],
+            capability_profile_id: [0x35; 32],
+            source_commit: "36".repeat(20),
+            enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         };
         let release_key = release.key();
