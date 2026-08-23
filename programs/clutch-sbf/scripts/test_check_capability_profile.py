@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Deterministic adversarial tests for the offline capability-profile gate."""
+"""Deterministic adversarial tests for the capability-profile V2 gate."""
 
 from __future__ import annotations
 
@@ -22,32 +22,51 @@ import check_capability_profile as checker  # noqa: E402
 HISTORICAL_EVIDENCE = Path(
     "programs/clutch-sbf/audit/evidence/2026-08-22-capability-profiles.json"
 )
+SYSCALLS = ["abort", "sol_log_"]
 
 
-def semantic_digest(slot: str) -> str:
-    """Return an unmistakably synthetic test-only semantic digest."""
-    return hashlib.sha256(f"test-only/{slot}".encode("utf-8")).hexdigest()
+def digest(label: str) -> str:
+    return hashlib.sha256(f"test-only/{label}".encode("utf-8")).hexdigest()
 
 
-def capabilities(linkage: str = "planned") -> list[dict[str, str]]:
-    return [
-        {
-            "slot": slot,
-            "owner": owner,
-            "linkage": linkage,
-            "semantic_version": f"{slot}-test-v1",
-            "semantic_digest_sha256": semantic_digest(slot),
-        }
-        for slot, owner in checker.CAPABILITY_OWNERS
-    ]
+def capabilities(linkage: str = "planned") -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, (slot, owner) in enumerate(checker.CAPABILITY_OWNERS, start=1):
+        rows.append(
+            {
+                "slot": slot,
+                "owner": owner,
+                "linkage": linkage,
+                "semantic_version": f"{slot}-test-v1",
+                "semantic_digest_sha256": digest(slot),
+                "required_intent_triples": [[index, 3, 0]],
+                "required_account_coordinates": [[index, 1]],
+            }
+        )
+    return rows
+
+
+def linked_coverage(rows: list[dict[str, object]]) -> dict[str, object]:
+    intents: list[list[int]] = []
+    accounts: list[list[int]] = []
+    for row in rows:
+        if row["linkage"] == "linked":
+            intents.extend(row["required_intent_triples"])  # type: ignore[arg-type]
+            accounts.extend(row["required_account_coordinates"])  # type: ignore[arg-type]
+    return {
+        "semantic_version": "central-registry-test-v1",
+        "semantic_digest_sha256": digest("central-registry"),
+        "enabled_intent_triples": sorted(intents),
+        "linked_account_coordinates": sorted(accounts),
+    }
 
 
 def limits() -> dict[str, int]:
-    # Fixture arithmetic only; these values are not program measurements.
     return {
         "max_elf_bytes": 2_000,
         "max_text_bytes": 1_500,
-        "max_total_loader_rent_lamports": 20_000,
+        "programdata_max_len": 2_000,
+        "max_persistent_loader_rent_lamports": 10_000,
     }
 
 
@@ -58,21 +77,35 @@ def manifest(
     measurement_class: str = "planned",
     evidence_path: str | None = None,
     evidence_profile_name: str | None = None,
+    source_identity: str = "production-inert",
+    profile_feature: str = "profile-general-source-v2-point",
     budget_limits: dict[str, int] | None = None,
 ) -> dict[str, object]:
     rows = capabilities(linkage)
+    registry = linked_coverage(rows)
     declared_limits = limits() if budget_limits is None else budget_limits
-    label = "dragons-clutch/capability-profile/test-fixture/v1"
-    identity = checker.profile_identity(label, rows, declared_limits)
+    name = "test-profile"
+    label = "dragons-clutch/capability-profile/test-fixture/v2"
+    build_contract = {
+        "cargo_profile_feature": profile_feature,
+        "source_identity": source_identity,
+        "expected_undefined_dynamic_symbols": SYSCALLS,
+    }
+    identity = checker.profile_identity(
+        name, label, build_contract, rows, registry, declared_limits
+    )
     return {
         "schema": checker.MANIFEST_SCHEMA,
         "release_declaration": False,
         "profile": {
+            "name": name,
             "label": label,
             "classification": classification,
             "identity_sha256": identity,
         },
+        "build_contract": build_contract,
         "capabilities": rows,
+        "central_registry": registry,
         "artifact_budget": {
             "limits": declared_limits,
             "measurement_class": measurement_class,
@@ -82,163 +115,230 @@ def manifest(
     }
 
 
-def measurement_document(
-    profile_identity: str,
+def loader(elf_bytes: int = 1_000, chosen_max_len: int = 2_000) -> dict[str, object]:
+    rate = 2
+    overhead = 128
+
+    def account(role: str, data_len: int) -> dict[str, object]:
+        billable = data_len + overhead
+        return {
+            "lifetime": "transient-recyclable" if role == "buffer" else "persistent",
+            "data_len_bytes": data_len,
+            "storage_overhead_bytes": overhead,
+            "billable_bytes": billable,
+            "rent_exempt_lamports": billable * rate,
+        }
+
+    program = account("program", 36)
+    programdata = account("programdata", 45 + chosen_max_len)
+    buffer = account("buffer", 37 + chosen_max_len)
+    return {
+        "current_elf_len_bytes": elf_bytes,
+        "chosen_programdata_max_len": chosen_max_len,
+        "exact_size_allocation": elf_bytes == chosen_max_len,
+        "program": program,
+        "programdata": programdata,
+        "buffer": buffer,
+        "persistent_program_plus_programdata_rent_lamports": (
+            program["rent_exempt_lamports"] + programdata["rent_exempt_lamports"]  # type: ignore[operator]
+        ),
+        "transient_buffer_rent_lamports": buffer["rent_exempt_lamports"],
+    }
+
+
+def measurement_run(
+    run: int,
     *,
+    build_mode: str = "explicit-profile",
     elf_bytes: int = 1_000,
     text_bytes: int = 800,
+    chosen_max_len: int = 2_000,
 ) -> dict[str, object]:
-    rent_model = {
-        "model": "upgradeable-loader-v3-program-plus-programdata",
-        "rent_lamports_per_byte": 2,
-        "program_account_bytes": 100,
-        "programdata_metadata_bytes": 50,
-    }
-    measurement = {
-        "elf_sha256": hashlib.sha256(b"test-only-elf").hexdigest(),
+    return {
+        "run": run,
+        "build_mode": build_mode,
+        "elf_sha256": digest("elf"),
         "elf_bytes": elf_bytes,
         "text_bytes": text_bytes,
-        "total_loader_rent_lamports": (
-            elf_bytes
-            + rent_model["program_account_bytes"]
-            + rent_model["programdata_metadata_bytes"]
-        )
-        * rent_model["rent_lamports_per_byte"],
+        "rodata_bytes": 100,
+        "undefined_dynamic_symbols": SYSCALLS,
+        "backend_stack_diagnostic_lines": 2,
+        "backend_stack_diagnostic_symbols": 2,
+        "backend_stack_diagnostic_survivors": 0,
+        "final_frame_audit": {
+            "final_text_function_symbols": 10,
+            "final_text_function_addresses": 10,
+            "disassembled_function_regions": 10,
+            "direct_r10_references": 4,
+            "deepest_direct_r10_offset": 256,
+            "deepest_direct_r10_function": "test_function",
+            "direct_frame_limit_bytes": 4096,
+            "direct_frame_bounds": "PASS",
+        },
+        "loader": loader(elf_bytes, chosen_max_len),
     }
+
+
+def measurement_document(value: dict[str, object]) -> dict[str, object]:
+    identity = value["profile"]["identity_sha256"]  # type: ignore[index]
+    contract = value["build_contract"]
+    default_equivalence = None
+    if (
+        contract["cargo_profile_feature"] == "profile-full"  # type: ignore[index]
+        and contract["source_identity"] == "production-inert"  # type: ignore[index]
+    ):
+        default_equivalence = {
+            "capability_profile_identity_sha256": identity,
+            "measurement": measurement_run(3, build_mode="cargo-default"),
+            "matches_explicit": True,
+        }
     return {
         "schema": checker.LINKED_MEASUREMENT_SCHEMA,
+        "availability": "available",
         "release_declaration": False,
         "manifest_input_source_clean": True,
-        "rent_model": rent_model,
+        "source": {
+            "git_commit": digest("commit"),
+            "git_tree": digest("tree"),
+            "closure_paths": ["crates", "programs/clutch-sbf/program"],
+            "closure_file_count": 2,
+            "closure_digest_sha256": digest("closure"),
+            "cleanliness": {
+                "tracked_before": [],
+                "untracked_before": [],
+                "tracked_after": [],
+                "untracked_after": [],
+            },
+        },
+        "toolchain": {
+            "cargo_build_sbf": {"version": "test", "sha256": digest("builder")},
+            "platform_rustc": {"version": "test", "sha256": digest("rustc")},
+            "llvm_readobj": {"version": "test", "sha256": digest("readobj")},
+            "llvm_objdump": {"version": "test", "sha256": digest("objdump")},
+            "platform_tools": "v-test",
+            "cargo_profile": "release",
+            "lto": "fat",
+            "codegen_units": 1,
+            "overflow_checks": True,
+        },
+        "rent_model": {
+            "model": "upgradeable-loader-v3",
+            "rent_exempt_lamports_per_billable_byte": 2,
+            "account_storage_overhead_bytes": 128,
+            "program_data_len_bytes": 36,
+            "programdata_metadata_data_len_bytes": 45,
+            "buffer_metadata_data_len_bytes": 37,
+        },
         "profiles": [
             {
-                "name": "test-profile",
-                "capability_profile_identity_sha256": profile_identity,
+                "name": value["profile"]["name"],  # type: ignore[index]
+                "label": value["profile"]["label"],  # type: ignore[index]
+                "source_identity": contract["source_identity"],  # type: ignore[index]
+                "cargo_features": checker.cargo_features(contract),  # type: ignore[arg-type]
+                "capability_profile_identity_sha256": identity,
+                "identity_manifest_sha256": checker.measurement_input_manifest_sha256(
+                    value
+                ),
+                "semantic_owners": copy.deepcopy(value["capabilities"]),
+                "central_registry": copy.deepcopy(value["central_registry"]),
                 "reproducible": True,
-                "measurements": [
-                    {"run": 1, **measurement},
-                    {"run": 2, **measurement},
-                ],
+                "measurements": [measurement_run(1), measurement_run(2)],
+                "default_feature_equivalence": default_equivalence,
+                "retained_workdirs": [],
             }
         ],
+        "refusals": [],
     }
 
 
 class CapabilityProfileTests(unittest.TestCase):
-    def test_identity_is_deterministic_and_binds_every_semantic_slot_and_budget(self) -> None:
+    def test_identity_binds_owner_registry_build_identity_and_budget(self) -> None:
         value = manifest()
-        rows = value["capabilities"]
-        declared_limits = value["artifact_budget"]["limits"]  # type: ignore[index]
-        label = value["profile"]["label"]  # type: ignore[index]
-        first = checker.profile_identity(label, rows, declared_limits)  # type: ignore[arg-type]
-        self.assertEqual(
-            first,
-            checker.profile_identity(label, rows, declared_limits),  # type: ignore[arg-type]
-        )
-
-        for index in range(len(rows)):  # type: ignore[arg-type]
-            changed = copy.deepcopy(rows)
-            changed[index]["semantic_digest_sha256"] = hashlib.sha256(
-                f"changed/{index}".encode("utf-8")
-            ).hexdigest()
-            self.assertNotEqual(
-                first,
-                checker.profile_identity(label, changed, declared_limits),  # type: ignore[arg-type]
+        original = value["profile"]["identity_sha256"]  # type: ignore[index]
+        mutations = []
+        for path, replacement in (
+            (("capabilities", 0, "semantic_digest_sha256"), digest("changed-owner")),
+            (
+                ("central_registry", "semantic_digest_sha256"),
+                digest("changed-registry"),
+            ),
+            (("build_contract", "source_identity"), "non-production-real-pyth-lab"),
+            (("artifact_budget", "limits", "programdata_max_len"), 2_001),
+        ):
+            changed = copy.deepcopy(value)
+            target: object = changed
+            for key in path[:-1]:
+                target = target[key]  # type: ignore[index]
+            target[path[-1]] = replacement  # type: ignore[index]
+            mutations.append(changed)
+        for changed in mutations:
+            summary = checker.validate_manifest(
+                {
+                    **changed,
+                    "profile": {
+                        **changed["profile"],  # type: ignore[arg-type]
+                        "identity_sha256": checker.profile_identity(
+                            changed["profile"]["name"],  # type: ignore[index]
+                            changed["profile"]["label"],  # type: ignore[index]
+                            changed["build_contract"],  # type: ignore[arg-type]
+                            changed["capabilities"],  # type: ignore[arg-type]
+                            changed["central_registry"],  # type: ignore[arg-type]
+                            changed["artifact_budget"]["limits"],  # type: ignore[index,arg-type]
+                        ),
+                    },
+                },
+                repo=ROOT,
             )
+            self.assertNotEqual(original, summary["profile_identity_sha256"])
 
-        changed_version = copy.deepcopy(rows)
-        changed_version[0]["semantic_version"] = "score-test-v2"
-        self.assertNotEqual(
-            first,
-            checker.profile_identity(
-                label, changed_version, declared_limits  # type: ignore[arg-type]
-            ),
-        )
-        changed_linkage = copy.deepcopy(rows)
-        changed_linkage[0]["linkage"] = "linked"
-        self.assertNotEqual(
-            first,
-            checker.profile_identity(
-                label, changed_linkage, declared_limits  # type: ignore[arg-type]
-            ),
-        )
+    def test_all_eleven_semantic_owners_are_mandatory_and_ordered(self) -> None:
+        value = manifest()
+        value["capabilities"].pop()  # type: ignore[union-attr]
+        with self.assertRaisesRegex(checker.ProfileError, "missing capability slots"):
+            checker.validate_manifest(value, repo=ROOT)
 
-        changed_limits = dict(declared_limits)  # type: ignore[arg-type]
-        changed_limits["max_elf_bytes"] += 1
-        self.assertNotEqual(
-            first,
-            checker.profile_identity(label, rows, changed_limits),  # type: ignore[arg-type]
+        value = manifest()
+        value["capabilities"][0], value["capabilities"][1] = (  # type: ignore[index]
+            value["capabilities"][1],  # type: ignore[index]
+            value["capabilities"][0],  # type: ignore[index]
         )
+        with self.assertRaisesRegex(checker.ProfileError, "noncanonical order"):
+            checker.validate_manifest(value, repo=ROOT)
 
-    def test_planned_profile_is_valid_but_never_deployment_eligible(self) -> None:
+    def test_missing_linked_intent_or_account_coverage_refuses(self) -> None:
+        value = manifest(linkage="linked")
+        value["central_registry"]["enabled_intent_triples"].pop()  # type: ignore[index,union-attr]
+        with self.assertRaisesRegex(
+            checker.ProfileError, "missing linked intent triples"
+        ):
+            checker.validate_manifest(value, repo=ROOT)
+
+        value = manifest(linkage="linked")
+        value["central_registry"]["linked_account_coordinates"].pop()  # type: ignore[index,union-attr]
+        with self.assertRaisesRegex(
+            checker.ProfileError, "missing linked account coordinates"
+        ):
+            checker.validate_manifest(value, repo=ROOT)
+
+    def test_unowned_enabled_registry_rows_refuse(self) -> None:
+        value = manifest()
+        value["central_registry"]["enabled_intent_triples"] = [[99, 1, 1]]  # type: ignore[index]
+        with self.assertRaisesRegex(
+            checker.ProfileError, "lack a linked semantic owner"
+        ):
+            checker.validate_manifest(value, repo=ROOT)
+
+    def test_model_only_profile_is_valid_planning_but_never_deployable(self) -> None:
         summary = checker.validate_manifest(manifest(), repo=ROOT)
         self.assertEqual(summary["linked_capabilities"], [])
-        self.assertEqual(summary["planned_capabilities"], list(checker.CAPABILITY_SLOTS))
-        self.assertFalse(summary["budget_evaluated"])
-        self.assertIsNone(summary["budget_within_limits"])
+        self.assertEqual(
+            summary["planned_capabilities"], list(checker.CAPABILITY_SLOTS)
+        )
         self.assertFalse(summary["deployment_eligible"])
         with self.assertRaisesRegex(checker.ProfileError, "deployment eligibility"):
             checker.validate_manifest(manifest(), repo=ROOT, require_deployable=True)
 
-    def test_missing_unknown_and_duplicate_capability_owners_refuse(self) -> None:
-        missing = manifest()
-        missing["capabilities"].pop()  # type: ignore[union-attr]
-        with self.assertRaisesRegex(checker.ProfileError, "missing capability slots"):
-            checker.validate_manifest(missing, repo=ROOT)
-
-        unknown = manifest()
-        unknown["capabilities"][0]["owner"] = (  # type: ignore[index]
-            "dragons-clutch/semantic-owner/unknown"
-        )
-        with self.assertRaisesRegex(checker.ProfileError, "unknown capability owner"):
-            checker.validate_manifest(unknown, repo=ROOT)
-
-        duplicate = manifest()
-        duplicate["capabilities"][1]["owner"] = (  # type: ignore[index]
-            duplicate["capabilities"][0]["owner"]  # type: ignore[index]
-        )
-        with self.assertRaisesRegex(checker.ProfileError, "duplicate capability owner"):
-            checker.validate_manifest(duplicate, repo=ROOT)
-
-    def test_unknown_duplicate_and_noncanonical_capability_slots_refuse(self) -> None:
-        unknown = manifest()
-        unknown["capabilities"][0]["slot"] = "unknown"  # type: ignore[index]
-        with self.assertRaisesRegex(checker.ProfileError, "unknown capability slot"):
-            checker.validate_manifest(unknown, repo=ROOT)
-
-        duplicate = manifest()
-        duplicate["capabilities"][1]["slot"] = (  # type: ignore[index]
-            duplicate["capabilities"][0]["slot"]  # type: ignore[index]
-        )
-        with self.assertRaisesRegex(checker.ProfileError, "duplicate capability slot"):
-            checker.validate_manifest(duplicate, repo=ROOT)
-
-        reordered = manifest()
-        reordered["capabilities"][0], reordered["capabilities"][1] = (  # type: ignore[index]
-            reordered["capabilities"][1],  # type: ignore[index]
-            reordered["capabilities"][0],  # type: ignore[index]
-        )
-        with self.assertRaisesRegex(checker.ProfileError, "noncanonical order"):
-            checker.validate_manifest(reordered, repo=ROOT)
-
-    def test_semantic_version_and_digest_are_mandatory(self) -> None:
-        missing = manifest()
-        del missing["capabilities"][0]["semantic_version"]  # type: ignore[index]
-        with self.assertRaisesRegex(checker.ProfileError, "keys"):
-            checker.validate_manifest(missing, repo=ROOT)
-
-        zero = manifest()
-        zero["capabilities"][0]["semantic_digest_sha256"] = "0" * 64  # type: ignore[index]
-        with self.assertRaisesRegex(checker.ProfileError, "zero digest"):
-            checker.validate_manifest(zero, repo=ROOT)
-
-    def test_identity_drift_refuses_before_evidence_is_considered(self) -> None:
-        changed = manifest()
-        changed["capabilities"][0]["semantic_version"] = "score-test-v2"  # type: ignore[index]
-        with self.assertRaisesRegex(checker.ProfileError, "canonical preimage mismatch"):
-            checker.validate_manifest(changed, repo=ROOT)
-
-    def test_linked_clean_v2_measurement_can_qualify_a_deployable_profile(self) -> None:
+    def test_linked_v2_measurement_can_qualify(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             value = manifest(
@@ -248,25 +348,22 @@ class CapabilityProfileTests(unittest.TestCase):
                 evidence_path="measurement.json",
                 evidence_profile_name="test-profile",
             )
-            identity = value["profile"]["identity_sha256"]  # type: ignore[index]
             (repo / "measurement.json").write_text(
-                json.dumps(
-                    measurement_document(identity), sort_keys=True  # type: ignore[arg-type]
-                ),
-                encoding="utf-8",
+                json.dumps(measurement_document(value)), encoding="utf-8"
             )
-            summary = checker.validate_manifest(value, repo=repo, require_deployable=True)
-            self.assertTrue(summary["budget_evaluated"])
-            self.assertTrue(summary["budget_within_limits"])
+            summary = checker.validate_manifest(
+                value, repo=repo, require_deployable=True
+            )
             self.assertTrue(summary["deployment_eligible"])
-            self.assertEqual(summary["planned_capabilities"], [])
+            self.assertEqual(
+                summary["measurement"]["persistent_loader_rent_lamports"], 4_674
+            )
+            self.assertEqual(
+                summary["measurement"]["transient_buffer_rent_lamports"], 4_330
+            )
+            self.assertFalse(summary["measurement"]["exact_size_allocation"])
 
-    def test_deployable_profile_refuses_one_planned_component(self) -> None:
-        value = manifest(classification="deployable")
-        with self.assertRaisesRegex(checker.ProfileError, "planned capabilities"):
-            checker.validate_manifest(value, repo=ROOT)
-
-    def test_linked_evidence_must_bind_the_exact_profile_identity(self) -> None:
+    def test_unavailable_v2_record_never_qualifies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             value = manifest(
@@ -276,58 +373,156 @@ class CapabilityProfileTests(unittest.TestCase):
                 evidence_path="measurement.json",
                 evidence_profile_name="test-profile",
             )
-            wrong = hashlib.sha256(b"wrong-profile").hexdigest()
+            evidence = measurement_document(value)
+            evidence["availability"] = "unavailable"
             (repo / "measurement.json").write_text(
-                json.dumps(measurement_document(wrong), sort_keys=True), encoding="utf-8"
+                json.dumps(evidence), encoding="utf-8"
             )
-            with self.assertRaisesRegex(checker.ProfileError, "identity mismatch"):
+            with self.assertRaisesRegex(
+                checker.ProfileError, "linked evidence is unavailable"
+            ):
                 checker.validate_manifest(value, repo=repo)
 
-    def test_each_exact_budget_boundary_passes_and_one_byte_over_refuses(self) -> None:
+    def test_semantic_owner_and_registry_bodies_must_match_identity_manifest(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            boundary_limits = {
-                "max_elf_bytes": 2_000,
-                "max_text_bytes": 1_500,
-                "max_total_loader_rent_lamports": 4_300,
-            }
             value = manifest(
                 linkage="linked",
                 classification="deployable",
                 measurement_class="linked",
                 evidence_path="measurement.json",
                 evidence_profile_name="test-profile",
-                budget_limits=boundary_limits,
             )
-            identity = value["profile"]["identity_sha256"]  # type: ignore[index]
+            evidence = measurement_document(value)
+            evidence["profiles"][0]["semantic_owners"][0]["semantic_version"] = "forged-v2"  # type: ignore[index]
             (repo / "measurement.json").write_text(
-                json.dumps(
-                    measurement_document(
-                        identity,  # type: ignore[arg-type]
-                        elf_bytes=2_000,
-                        text_bytes=1_500,
-                    ),
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+                json.dumps(evidence), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                checker.ProfileError, "semantic-owner manifest mismatch"
+            ):
+                checker.validate_manifest(value, repo=repo)
+
+    def test_producer_input_manifest_digest_is_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            value = manifest(
+                linkage="linked",
+                classification="deployable",
+                measurement_class="linked",
+                evidence_path="measurement.json",
+                evidence_profile_name="test-profile",
+            )
+            evidence = measurement_document(value)
+            evidence["profiles"][0]["identity_manifest_sha256"] = digest(  # type: ignore[index]
+                "different-input-manifest"
+            )
+            (repo / "measurement.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                checker.ProfileError, "producer identity-manifest"
+            ):
+                checker.validate_manifest(value, repo=repo)
+
+    def test_tracked_or_untracked_dirty_source_evidence_refuses(self) -> None:
+        for key in (
+            "tracked_before",
+            "untracked_before",
+            "tracked_after",
+            "untracked_after",
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                value = manifest(
+                    linkage="linked",
+                    classification="deployable",
+                    measurement_class="linked",
+                    evidence_path="measurement.json",
+                    evidence_profile_name="test-profile",
+                )
+                evidence = measurement_document(value)
+                evidence["source"]["cleanliness"][key] = ["dirty"]  # type: ignore[index]
+                (repo / "measurement.json").write_text(
+                    json.dumps(evidence), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(
+                    checker.ProfileError, "linked input closure is dirty"
+                ):
+                    checker.validate_manifest(value, repo=repo)
+
+    def test_loader_data_lengths_overhead_and_lifetimes_are_recomputed(self) -> None:
+        mutations = (
+            ("program", "data_len_bytes"),
+            ("programdata", "storage_overhead_bytes"),
+            ("buffer", "rent_exempt_lamports"),
+        )
+        for role, field in mutations:
+            with self.subTest(
+                role=role, field=field
+            ), tempfile.TemporaryDirectory() as directory:
+                repo = Path(directory)
+                value = manifest(
+                    linkage="linked",
+                    classification="deployable",
+                    measurement_class="linked",
+                    evidence_path="measurement.json",
+                    evidence_profile_name="test-profile",
+                )
+                evidence = measurement_document(value)
+                for run in evidence["profiles"][0]["measurements"]:  # type: ignore[index]
+                    run["loader"][role][field] += 1
+                (repo / "measurement.json").write_text(
+                    json.dumps(evidence), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(checker.ProfileError, "mismatch"):
+                    checker.validate_manifest(value, repo=repo)
+
+    def test_mock_and_real_pyth_lab_identities_cannot_alias(self) -> None:
+        mock = manifest(source_identity="non-production-mock-source-lab")
+        real = manifest(source_identity="non-production-real-pyth-lab")
+        mock_summary = checker.validate_manifest(mock, repo=ROOT)
+        real_summary = checker.validate_manifest(real, repo=ROOT)
+        self.assertNotEqual(
+            mock_summary["profile_identity_sha256"],
+            real_summary["profile_identity_sha256"],
+        )
+        self.assertIn("non-production-mock-source", mock_summary["cargo_features"])
+        self.assertIn("non-production-real-pyth-lab", real_summary["cargo_features"])
+
+    def test_default_equals_explicit_full_only_under_the_same_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            value = manifest(
+                linkage="linked",
+                classification="deployable",
+                measurement_class="linked",
+                evidence_path="measurement.json",
+                evidence_profile_name="test-profile",
+                profile_feature="profile-full",
+            )
+            evidence = measurement_document(value)
+            (repo / "measurement.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
             )
             checker.validate_manifest(value, repo=repo, require_deployable=True)
 
-            (repo / "measurement.json").write_text(
-                json.dumps(
-                    measurement_document(
-                        identity,  # type: ignore[arg-type]
-                        elf_bytes=2_001,
-                        text_bytes=1_500,
-                    ),
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+            evidence["profiles"][0]["default_feature_equivalence"][  # type: ignore[index]
+                "capability_profile_identity_sha256"
+            ] = digest(
+                "other-identity"
             )
-            with self.assertRaisesRegex(checker.ProfileError, "exceeds max_elf_bytes"):
+            (repo / "measurement.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                checker.ProfileError, "identity-manifest mismatch"
+            ):
                 checker.validate_manifest(value, repo=repo)
 
-    def test_nonreproducible_two_run_measurement_refuses(self) -> None:
+    def test_lab_full_profile_cannot_reuse_default_equivalence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             value = manifest(
@@ -336,68 +531,45 @@ class CapabilityProfileTests(unittest.TestCase):
                 measurement_class="linked",
                 evidence_path="measurement.json",
                 evidence_profile_name="test-profile",
+                profile_feature="profile-full",
+                source_identity="non-production-real-pyth-lab",
             )
-            identity = value["profile"]["identity_sha256"]  # type: ignore[index]
-            evidence = measurement_document(identity)  # type: ignore[arg-type]
-            evidence["profiles"][0]["measurements"][1]["text_bytes"] += 1  # type: ignore[index]
+            evidence = measurement_document(value)
+            evidence["profiles"][0]["default_feature_equivalence"] = {  # type: ignore[index]
+                "capability_profile_identity_sha256": value["profile"]["identity_sha256"],  # type: ignore[index]
+                "measurement": measurement_run(3, build_mode="cargo-default"),
+                "matches_explicit": True,
+            }
             (repo / "measurement.json").write_text(
-                json.dumps(evidence, sort_keys=True), encoding="utf-8"
+                json.dumps(evidence), encoding="utf-8"
             )
-            with self.assertRaisesRegex(checker.ProfileError, "non-reproducible text_bytes"):
+            with self.assertRaisesRegex(
+                checker.ProfileError, "distinct profile/lab identity"
+            ):
                 checker.validate_manifest(value, repo=repo)
 
-    def test_loader_rent_is_recomputed_from_the_recorded_model(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            repo = Path(directory)
-            value = manifest(
-                linkage="linked",
-                classification="deployable",
-                measurement_class="linked",
-                evidence_path="measurement.json",
-                evidence_profile_name="test-profile",
-            )
-            identity = value["profile"]["identity_sha256"]  # type: ignore[index]
-            evidence = measurement_document(identity)  # type: ignore[arg-type]
-            for run in evidence["profiles"][0]["measurements"]:  # type: ignore[index]
-                run["total_loader_rent_lamports"] += 1
-            (repo / "measurement.json").write_text(
-                json.dumps(evidence, sort_keys=True), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(checker.ProfileError, "rent does not match"):
-                checker.validate_manifest(value, repo=repo)
-
-    def test_existing_v1_measurement_is_historical_only_without_copying_sizes(self) -> None:
+    def test_historical_v1_measurement_remains_comparison_only(self) -> None:
         evidence = json.loads((ROOT / HISTORICAL_EVIDENCE).read_text(encoding="utf-8"))
-        selected = next(profile for profile in evidence["profiles"] if profile["name"] == "full")
+        selected = next(
+            profile for profile in evidence["profiles"] if profile["name"] == "full"
+        )
         measured = selected["measurements"][0]
-        historical_limits = {
-            "max_elf_bytes": measured["elf_bytes"],
-            "max_text_bytes": measured["text_bytes"],
-            "max_total_loader_rent_lamports": measured["total_loader_rent_lamports"],
-        }
         value = manifest(
             measurement_class="historical",
             evidence_path=str(HISTORICAL_EVIDENCE),
             evidence_profile_name="full",
-            budget_limits=historical_limits,
+            budget_limits={
+                "max_elf_bytes": measured["elf_bytes"],
+                "max_text_bytes": measured["text_bytes"],
+                "programdata_max_len": measured["elf_bytes"],
+                "max_persistent_loader_rent_lamports": measured[
+                    "total_loader_rent_lamports"
+                ],
+            },
         )
         summary = checker.validate_manifest(value, repo=ROOT)
-        self.assertEqual(summary["measurement_class"], "historical")
         self.assertTrue(summary["budget_evaluated"])
-        self.assertTrue(summary["budget_within_limits"])
         self.assertFalse(summary["deployment_eligible"])
-        with self.assertRaisesRegex(checker.ProfileError, "deployment eligibility"):
-            checker.validate_manifest(value, repo=ROOT, require_deployable=True)
-
-    def test_v1_measurement_cannot_be_relabelled_as_linked(self) -> None:
-        value = manifest(
-            linkage="linked",
-            measurement_class="linked",
-            evidence_path=str(HISTORICAL_EVIDENCE),
-            evidence_profile_name="full",
-        )
-        with self.assertRaisesRegex(checker.ProfileError, "linked requires"):
-            checker.validate_manifest(value, repo=ROOT)
 
     def test_duplicate_json_object_key_refuses_at_parse_time(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
