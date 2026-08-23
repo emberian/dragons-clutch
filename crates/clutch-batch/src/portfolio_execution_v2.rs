@@ -20,9 +20,10 @@
 //! Egg effects without changing their stable incarnation generations, both
 //! purpose Replay V3 accounts advance by one, and the canonical hash of one
 //! replay-sensitive vector receipt preimage is exposed as a typed commitment
-//! required from the counted 298-byte SettlementReceipt V5 successor. Its typed
-//! kind-1 prestate is pending with a zero commitment; delivery sets the nonzero
-//! commitment exactly once in the same transition. A live adapter must apply every named postimage and CPI
+//! required from the complete counted active prefix of one through sixteen
+//! 298-byte SettlementReceipt V5 siblings. Every typed kind-1 prestate is
+//! pending with a zero commitment; delivery sets the same nonzero commitment
+//! exactly once across the complete set. A live adapter must apply every named postimage and CPI
 //! atomically or apply none of them.
 
 use crate::relation_v1::MAX_OUTCOMES;
@@ -38,6 +39,8 @@ pub const PORTFOLIO_EXECUTION_VERSION_V2: u8 = 2;
 pub const SELECTED_PORTFOLIO_ORDER_V2_BYTES: usize = 560;
 /// Canonical bytes of one exact-pair transition receipt preimage.
 pub const PORTFOLIO_PAIR_RECEIPT_V2_BYTES: usize = 680;
+/// Maximum scalar Receipt V5 siblings in one exact coefficient pair.
+pub const PORTFOLIO_PAIR_MAX_RECEIPTS_V2: usize = MAX_OUTCOMES;
 
 const SELECTED_ORDER_MAGIC_V2: [u8; 8] = *b"DCPSEL2\0";
 const PAIR_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCPRCP2\0";
@@ -52,6 +55,8 @@ pub const PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2: &[u8; 44] =
     b"dragons-clutch/portfolio-pair-transition/v2\0";
 const PAIR_EFFECTS_TRANSITION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/portfolio-pair-effects/v2\0";
+const PAIR_RECEIPT_SET_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/portfolio-pair-receipt-set/v2\0";
 
 const SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5: u8 = 0b0000_0011;
 
@@ -345,13 +350,13 @@ pub trait PortfolioAdapterV2 {
         candidate: &EconomicCandidateV2,
     ) -> bool;
     fn authenticate_transition(&self, expected: &PortfolioTransitionExpectationV2) -> bool;
-    /// Decode the exact V5 pre-data identity, reproduce canonical
-    /// `commit_portfolio_pair_delivery`, and authenticate the resulting
-    /// post-data identity and typed commitment.
-    fn derive_settlement_receipt_v5_post_data_id(
+    /// Decode every exact V5 sibling pre-data identity, reproduce canonical
+    /// `commit_portfolio_pair_delivery` on the complete ordered set, and
+    /// authenticate every resulting post-data identity and typed commitment.
+    fn derive_settlement_receipt_v5_post_data_ids(
         &self,
         expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> Option<PortfolioIdentityV2>;
+    ) -> Option<[PortfolioIdentityV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]>;
 }
 
 /// Capability proving selected page membership was joined to one RelationV2 row.
@@ -497,6 +502,7 @@ pub struct AuthenticatedPortfolioPairV2 {
     unit_value_price_units: u128,
     total_value_price_units: u128,
     consideration_atoms: u64,
+    prices: [u64; MAX_OUTCOMES],
     payoff: [u64; MAX_OUTCOMES],
 }
 
@@ -528,6 +534,122 @@ impl AuthenticatedPortfolioPairV2 {
     pub const fn payoff(&self) -> &[u64; MAX_OUTCOMES] {
         &self.payoff
     }
+
+    pub const fn prices(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.prices
+    }
+}
+
+/// One hostile retained-Feed scalar row projected without account identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioReceiptSiblingTraversalV2 {
+    pub slice_index: u16,
+    pub sequence: u64,
+    pub buy_order_index: u8,
+    pub sell_order_index: u8,
+    pub outcome: u8,
+    pub quantity: u64,
+    pub price: u64,
+}
+
+impl PortfolioReceiptSiblingTraversalV2 {
+    /// Canonical inactive traversal padding.
+    pub const EMPTY: Self = Self {
+        slice_index: 0,
+        sequence: 0,
+        buy_order_index: 0,
+        sell_order_index: 0,
+        outcome: 0,
+        quantity: 0,
+        price: 0,
+    };
+}
+
+/// Hostile bounded active-prefix projection of retained Feed traversal rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioReceiptSiblingTraversalSetV2 {
+    pub sibling_count: u8,
+    pub siblings: [PortfolioReceiptSiblingTraversalV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+}
+
+/// Private capability proving the complete scalar sibling set for one pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedPortfolioReceiptSiblingSetV2 {
+    pair: AuthenticatedPortfolioPairV2,
+    traversal: PortfolioReceiptSiblingTraversalSetV2,
+}
+
+impl AuthenticatedPortfolioReceiptSiblingSetV2 {
+    pub const fn pair(&self) -> AuthenticatedPortfolioPairV2 {
+        self.pair
+    }
+
+    pub const fn sibling_count(&self) -> u8 {
+        self.traversal.sibling_count
+    }
+
+    pub fn sibling(&self, index: u8) -> Option<&PortfolioReceiptSiblingTraversalV2> {
+        let at = usize::from(index);
+        if at < usize::from(self.traversal.sibling_count) {
+            self.traversal.siblings.get(at)
+        } else {
+            None
+        }
+    }
+}
+
+/// Authenticate the exhaustive, ordered retained-Feed scalar decomposition.
+///
+/// The count is derived from the nonzero exact payoff coordinates. The first
+/// row must be the traversal coordinate already authenticated by both selected
+/// endpoints, every row must name those same two dense order indices, and the
+/// inactive tail must be canonical zero. Packet counts are never authority.
+pub fn authenticate_portfolio_receipt_sibling_set_v2(
+    pair: AuthenticatedPortfolioPairV2,
+    traversal: PortfolioReceiptSiblingTraversalSetV2,
+) -> Result<AuthenticatedPortfolioReceiptSiblingSetV2, PortfolioExecutionErrorV2> {
+    let count = usize::from(traversal.sibling_count);
+    if count == 0 || count > PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+    }
+    let mut sibling_index = 0usize;
+    let mut outcome = 0usize;
+    while outcome < usize::from(pair.buyer.record.outcome_count) {
+        if pair.payoff[outcome] != 0 {
+            if sibling_index >= count {
+                return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+            }
+            let sibling = traversal.siblings[sibling_index];
+            let expected_outcome = u8::try_from(outcome)
+                .map_err(|_| PortfolioExecutionErrorV2::ArithmeticOverflow)?;
+            if sibling.sequence != u64::from(sibling.slice_index) + 1
+                || sibling.buy_order_index != pair.buyer.record.order_index
+                || sibling.sell_order_index != pair.seller.record.order_index
+                || sibling.outcome != expected_outcome
+                || sibling.quantity != pair.payoff[outcome]
+                || sibling.price != pair.prices[outcome]
+                || (sibling_index == 0
+                    && sibling.slice_index != pair.buyer.record.traversal_index)
+                || (sibling_index != 0
+                    && sibling.slice_index
+                        <= traversal.siblings[sibling_index - 1].slice_index)
+            {
+                return Err(PortfolioExecutionErrorV2::FeedTraversalMismatch);
+            }
+            sibling_index += 1;
+        }
+        outcome += 1;
+    }
+    if sibling_index != count {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+    }
+    while sibling_index < PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        if traversal.siblings[sibling_index] != PortfolioReceiptSiblingTraversalV2::EMPTY {
+            return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
+        }
+        sibling_index += 1;
+    }
+    Ok(AuthenticatedPortfolioReceiptSiblingSetV2 { pair, traversal })
 }
 
 /// Compose two authenticated selections into the only atomic pair shape.
@@ -632,6 +754,7 @@ pub fn authenticate_exact_portfolio_pair_v2(
         unit_value_price_units: unit_value,
         total_value_price_units: total,
         consideration_atoms: consideration,
+        prices: price.prices,
         payoff,
     })
 }
@@ -655,6 +778,12 @@ pub struct PortfolioReservationPrestateV2 {
     pub order_id: PortfolioIdentityV2,
     pub position_account_id: PortfolioIdentityV2,
     pub position_generation: u64,
+    /// Exact whole-order fill stamped by General entitlement.
+    pub entitled_units: u64,
+    /// Cumulative Egg-delivery ledger before this indivisible full-pair step.
+    pub consumed_units: u64,
+    /// Cumulative consideration-payment ledger before this step.
+    pub paid_units: u64,
     pub remaining_cash_atoms: u64,
     pub remaining_claim_atoms: [u64; MAX_OUTCOMES],
     pub maximum_fee_atoms: u64,
@@ -690,11 +819,11 @@ pub struct PortfolioPairPostSemanticIdsV2 {
     pub seller_position: PortfolioIdentityV2,
     pub buyer_replay: PortfolioIdentityV2,
     pub seller_replay: PortfolioIdentityV2,
-    /// Canonical rent-owned SettlementReceipt V5 postimage/data identity.
-    /// Hostile execution input must leave this zero because the layout owner
-    /// can derive it only after the portfolio commitment is known. The
-    /// prepared output replaces zero with that adapter-derived exact identity.
-    pub settlement_receipt: PortfolioIdentityV2,
+    /// Canonical active-prefix Receipt V5 postimage/data identities. Hostile
+    /// execution input must leave every cell zero because layout derives them
+    /// only after the shared portfolio commitment is known. Prepared output
+    /// fills exactly the active sibling prefix and leaves the tail zero.
+    pub settlement_receipts: [PortfolioIdentityV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
 }
 
 /// Exact authenticated SettlementReceipt V5 prestate needed by this action.
@@ -711,6 +840,9 @@ pub struct PortfolioSettlementReceiptV5Prestate {
     pub pre_data_id: PortfolioIdentityV2,
     pub slice_index: u16,
     pub sequence: u64,
+    pub outcome: u8,
+    pub quantity: u64,
+    pub price: u64,
     pub accounted_end_mask: u8,
     pub delivered_end_mask: u8,
     pub expected_end_mask: u8,
@@ -721,10 +853,38 @@ pub struct PortfolioSettlementReceiptV5Prestate {
     pub rent_donation_floor_lamports: u64,
 }
 
+impl PortfolioSettlementReceiptV5Prestate {
+    /// Canonical inactive sibling padding.
+    pub const EMPTY: Self = Self {
+        account_id: [0; 32],
+        pre_data_id: [0; 32],
+        slice_index: 0,
+        sequence: 0,
+        outcome: 0,
+        quantity: 0,
+        price: 0,
+        accounted_end_mask: 0,
+        delivered_end_mask: 0,
+        expected_end_mask: 0,
+        transition_kind: SettlementReceiptTransitionKindV2::None,
+        transition_commitment: [0; 32],
+        rent_owner_id: [0; 32],
+        rent_principal_lamports: 0,
+        rent_donation_floor_lamports: 0,
+    };
+}
+
+/// Complete canonical active-prefix set of scalar Receipt V5 siblings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioSettlementReceiptV5SetPrestate {
+    pub receipt_count: u8,
+    pub receipts: [PortfolioSettlementReceiptV5Prestate; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+}
+
 /// Exact generationless Receipt V5 transition the General adapter must prove.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioSettlementReceiptV5TransitionExpectationV2 {
-    pub prestate: PortfolioSettlementReceiptV5Prestate,
+    pub prestate: PortfolioSettlementReceiptV5SetPrestate,
     pub post_transition_kind: SettlementReceiptTransitionKindV2,
     pub transition_commitment: PortfolioIdentityV2,
 }
@@ -732,7 +892,7 @@ pub struct PortfolioSettlementReceiptV5TransitionExpectationV2 {
 /// Complete hostile input for the atomic account transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioPairExecutionInputV2 {
-    pub settlement_receipt: PortfolioSettlementReceiptV5Prestate,
+    pub settlement_receipts: PortfolioSettlementReceiptV5SetPrestate,
     pub buyer_reservation: PortfolioReservationPrestateV2,
     pub seller_reservation: PortfolioReservationPrestateV2,
     pub buyer_position: PortfolioPositionPrestateV2,
@@ -817,6 +977,7 @@ pub struct PortfolioPairReceiptV2 {
     version: u8,
     outcome_count: u8,
     boundary: PortfolioValuationBoundaryV2,
+    receipt_count: u8,
     slice_index: u16,
     sequence: u64,
     pair_units: u64,
@@ -835,8 +996,8 @@ pub struct PortfolioPairReceiptV2 {
     sell_order_id: PortfolioIdentityV2,
     buyer_owner_id: PortfolioIdentityV2,
     seller_owner_id: PortfolioIdentityV2,
-    settlement_receipt_account_id: PortfolioIdentityV2,
-    settlement_receipt_pre_data_id: PortfolioIdentityV2,
+    entry_settlement_receipt_account_id: PortfolioIdentityV2,
+    settlement_receipt_set_digest: PortfolioIdentityV2,
     retained_feed_semantic_id: PortfolioIdentityV2,
     transition_id: PortfolioIdentityV2,
 }
@@ -848,6 +1009,14 @@ impl PortfolioPairReceiptV2 {
 
     pub const fn sequence(&self) -> u64 {
         self.sequence
+    }
+
+    pub const fn receipt_count(&self) -> u8 {
+        self.receipt_count
+    }
+
+    pub const fn settlement_receipt_set_digest(&self) -> PortfolioIdentityV2 {
+        self.settlement_receipt_set_digest
     }
 
     pub const fn consideration_atoms(&self) -> u64 {
@@ -862,7 +1031,7 @@ impl PortfolioPairReceiptV2 {
         self.transition_id
     }
 
-    /// Exact receipt account body. Bytes `11..16` are canonical zero padding.
+    /// Exact receipt account body. Bytes `14..16` are canonical zero padding.
     pub fn encode_into(
         &self,
         output: &mut [u8; PORTFOLIO_PAIR_RECEIPT_V2_BYTES],
@@ -873,8 +1042,7 @@ impl PortfolioPairReceiptV2 {
         output[8] = self.version;
         output[9] = self.outcome_count;
         output[10] = valuation_boundary_byte(self.boundary);
-        // Route byte 0 is the only admitted exact direct portfolio pair.
-        output[11] = 0;
+        output[11] = self.receipt_count;
         output[12..14].copy_from_slice(&self.slice_index.to_le_bytes());
         output[16..24].copy_from_slice(&self.sequence.to_le_bytes());
         output[24..32].copy_from_slice(&self.pair_units.to_le_bytes());
@@ -908,7 +1076,7 @@ impl PortfolioPairReceiptV2 {
         {
             return Err(PortfolioExecutionErrorV2::InvalidCodec);
         }
-        if input[11] != 0 || input[14..16].iter().any(|byte| *byte != 0) {
+        if input[14..16].iter().any(|byte| *byte != 0) {
             return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
         }
         let boundary = match input[10] {
@@ -939,6 +1107,7 @@ impl PortfolioPairReceiptV2 {
             version: input[8],
             outcome_count: input[9],
             boundary,
+            receipt_count: input[11],
             slice_index: read_u16(input, 12)?,
             sequence: read_u64(input, 16)?,
             pair_units: read_u64(input, 24)?,
@@ -957,8 +1126,8 @@ impl PortfolioPairReceiptV2 {
             sell_order_id: next_identity()?,
             buyer_owner_id: next_identity()?,
             seller_owner_id: next_identity()?,
-            settlement_receipt_account_id: next_identity()?,
-            settlement_receipt_pre_data_id: next_identity()?,
+            entry_settlement_receipt_account_id: next_identity()?,
+            settlement_receipt_set_digest: next_identity()?,
             retained_feed_semantic_id: next_identity()?,
             transition_id: next_identity()?,
         };
@@ -982,8 +1151,8 @@ impl PortfolioPairReceiptV2 {
             &self.sell_order_id,
             &self.buyer_owner_id,
             &self.seller_owner_id,
-            &self.settlement_receipt_account_id,
-            &self.settlement_receipt_pre_data_id,
+            &self.entry_settlement_receipt_account_id,
+            &self.settlement_receipt_set_digest,
             &self.retained_feed_semantic_id,
             &self.transition_id,
         ]
@@ -995,6 +1164,8 @@ impl PortfolioPairReceiptV2 {
         }
         if !(2..=MAX_OUTCOMES).contains(&usize::from(self.outcome_count))
             || self.sequence != u64::from(self.slice_index) + 1
+            || self.receipt_count == 0
+            || usize::from(self.receipt_count) > usize::from(self.outcome_count)
             || self.pair_units == 0
         {
             return Err(PortfolioExecutionErrorV2::InvalidGenerationOrUnits);
@@ -1007,7 +1178,20 @@ impl PortfolioPairReceiptV2 {
             }
             index += 1;
         }
-        let mut outcome = usize::from(self.outcome_count);
+        let mut nonzero_receipts = 0usize;
+        let mut outcome = 0usize;
+        while outcome < usize::from(self.outcome_count) {
+            if self.payoff[outcome] != 0 {
+                nonzero_receipts = nonzero_receipts
+                    .checked_add(1)
+                    .ok_or(PortfolioExecutionErrorV2::ArithmeticOverflow)?;
+            }
+            outcome += 1;
+        }
+        if nonzero_receipts != usize::from(self.receipt_count) {
+            return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+        }
+        outcome = usize::from(self.outcome_count);
         while outcome < MAX_OUTCOMES {
             if self.payoff[outcome] != 0 {
                 return Err(PortfolioExecutionErrorV2::NonCanonicalClaimPadding);
@@ -1062,11 +1246,26 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
     pair: AuthenticatedPortfolioPairV2,
     input: PortfolioPairExecutionInputV2,
 ) -> Result<PreparedPortfolioPairExecutionV2, PortfolioExecutionErrorV2> {
+    prepare_portfolio_pair_execution_borrowed_v2(adapter, owner_program_id, &pair, &input)
+}
+
+/// Frame-bounded form of [`prepare_portfolio_pair_execution_v2`].
+///
+/// Runtime adapters keep the maximum-width pair and hostile transition input
+/// in bounded heap or account-backed storage and lend them here. The semantic
+/// checks and resulting capability are byte-identical to the owned host API.
+pub fn prepare_portfolio_pair_execution_borrowed_v2<A: PortfolioAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioIdentityV2,
+    pair: &AuthenticatedPortfolioPairV2,
+    input: &PortfolioPairExecutionInputV2,
+) -> Result<PreparedPortfolioPairExecutionV2, PortfolioExecutionErrorV2> {
     if is_zero_identity(&owner_program_id) {
         return Err(PortfolioExecutionErrorV2::ZeroIdentity);
     }
-    validate_settlement_receipt_v5_prestate(&input.settlement_receipt)?;
-    if input.settlement_receipt.slice_index != pair.buyer.record.traversal_index {
+    validate_settlement_receipt_v5_set_prestate(&input.settlement_receipts, &pair)?;
+    let entry_receipt = input.settlement_receipts.receipts[0];
+    if entry_receipt.slice_index != pair.buyer.record.traversal_index {
         return Err(PortfolioExecutionErrorV2::FeedTraversalMismatch);
     }
     validate_distinct_execution_accounts(&pair, &input)?;
@@ -1165,6 +1364,25 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         }
         account_index += 1;
     }
+    let mut receipt_index = 0usize;
+    while receipt_index < usize::from(input.settlement_receipts.receipt_count) {
+        let receipt = input.settlement_receipts.receipts[receipt_index];
+        let expected = account_expectation(
+            PortfolioAccountRoleV2::SettlementReceipt,
+            receipt.account_id,
+            owner_program_id,
+            receipt.pre_data_id,
+            None,
+            true,
+            true,
+        );
+        if !adapter.authenticate_account(&expected) {
+            return Err(PortfolioExecutionErrorV2::AuthenticationFailed {
+                role: PortfolioAccountRoleV2::SettlementReceipt,
+            });
+        }
+        receipt_index += 1;
+    }
     let transition_id = portfolio_transition_id_v2(
         &pair,
         &input,
@@ -1180,8 +1398,9 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         version: PORTFOLIO_EXECUTION_VERSION_V2,
         outcome_count: buyer_record.outcome_count,
         boundary: pair.boundary,
-        slice_index: input.settlement_receipt.slice_index,
-        sequence: input.settlement_receipt.sequence,
+        receipt_count: input.settlement_receipts.receipt_count,
+        slice_index: entry_receipt.slice_index,
+        sequence: entry_receipt.sequence,
         pair_units: pair.pair_units,
         consideration_atoms: pair.consideration_atoms,
         unit_value_price_units: pair.unit_value_price_units,
@@ -1198,44 +1417,47 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         sell_order_id: seller_record.order_id,
         buyer_owner_id: buyer_record.owner_id,
         seller_owner_id: seller_record.owner_id,
-        settlement_receipt_account_id: input.settlement_receipt.account_id,
-        settlement_receipt_pre_data_id: input.settlement_receipt.pre_data_id,
+        entry_settlement_receipt_account_id: entry_receipt.account_id,
+        settlement_receipt_set_digest: portfolio_settlement_receipt_v5_set_digest_v2(
+            &input.settlement_receipts,
+        )?,
         retained_feed_semantic_id: buyer_record.retained_feed_semantic_id,
         transition_id,
     };
     let transition_commitment = portfolio_pair_transition_commitment_v2(&receipt)?;
-    let transitions = execution_transition_expectations(
+    authenticate_execution_transitions(
+        adapter,
         &input,
         &effects,
         buyer_replay_post,
         seller_replay_post,
-    );
-    let mut transition_index = 0usize;
-    while transition_index < transitions.len() {
-        if !adapter.authenticate_transition(&transitions[transition_index]) {
-            return Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
-                role: transitions[transition_index].role,
-            });
-        }
-        transition_index += 1;
-    }
+    )?;
     let receipt_transition = PortfolioSettlementReceiptV5TransitionExpectationV2 {
-        prestate: input.settlement_receipt,
+        prestate: input.settlement_receipts,
         post_transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
         transition_commitment,
     };
-    let settlement_receipt_post_data_id = adapter
-        .derive_settlement_receipt_v5_post_data_id(&receipt_transition)
+    let settlement_receipt_post_data_ids = adapter
+        .derive_settlement_receipt_v5_post_data_ids(&receipt_transition)
         .ok_or(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
             role: PortfolioAccountRoleV2::SettlementReceipt,
         })?;
-    if is_zero_identity(&settlement_receipt_post_data_id)
-        || settlement_receipt_post_data_id == input.settlement_receipt.pre_data_id
-    {
-        return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
+    let mut receipt_index = 0usize;
+    while receipt_index < PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        if receipt_index < usize::from(input.settlement_receipts.receipt_count) {
+            if is_zero_identity(&settlement_receipt_post_data_ids[receipt_index])
+                || settlement_receipt_post_data_ids[receipt_index]
+                    == input.settlement_receipts.receipts[receipt_index].pre_data_id
+            {
+                return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
+            }
+        } else if !is_zero_identity(&settlement_receipt_post_data_ids[receipt_index]) {
+            return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
+        }
+        receipt_index += 1;
     }
     let post_semantic_ids = PortfolioPairPostSemanticIdsV2 {
-        settlement_receipt: settlement_receipt_post_data_id,
+        settlement_receipts: settlement_receipt_post_data_ids,
         ..input.post_semantic_ids
     };
     Ok(PreparedPortfolioPairExecutionV2 {
@@ -1301,6 +1523,7 @@ pub enum PortfolioExecutionErrorV2 {
     ReplayMismatch,
     ReplayOverflow,
     SettlementReceiptMismatch,
+    SettlementReceiptSetMismatch,
     FeedTraversalMismatch,
     PostSemanticMismatch,
     ArithmeticOverflow,
@@ -1346,6 +1569,9 @@ fn validate_reservation_prestate(
         || reservation.order_id != record.order_id
         || reservation.position_account_id != record.position_account_id
         || reservation.position_generation != record.position_generation
+        || reservation.entitled_units != selected.record.selected_fill_units
+        || reservation.consumed_units != 0
+        || reservation.paid_units != 0
     {
         return Err(PortfolioExecutionErrorV2::ReservationMismatch);
     }
@@ -1411,6 +1637,8 @@ fn validate_settlement_receipt_v5_prestate(
         || is_zero_identity(&receipt.pre_data_id)
         || is_zero_identity(&receipt.rent_owner_id)
         || receipt.rent_principal_lamports == 0
+        || receipt.quantity == 0
+        || usize::from(receipt.outcome) >= MAX_OUTCOMES
         || receipt.sequence != u64::from(receipt.slice_index) + 1
         || receipt.accounted_end_mask != receipt.expected_end_mask
         || receipt.delivered_end_mask != 0
@@ -1421,6 +1649,135 @@ fn validate_settlement_receipt_v5_prestate(
         return Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch);
     }
     Ok(())
+}
+
+fn validate_settlement_receipt_v5_set_prestate(
+    receipt_set: &PortfolioSettlementReceiptV5SetPrestate,
+    pair: &AuthenticatedPortfolioPairV2,
+) -> Result<(), PortfolioExecutionErrorV2> {
+    let count = usize::from(receipt_set.receipt_count);
+    if count == 0
+        || count > PORTFOLIO_PAIR_MAX_RECEIPTS_V2
+        || count > usize::from(pair.buyer.record.outcome_count)
+    {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+    }
+    let mut receipt_index = 0usize;
+    let mut expected_outcome = 0usize;
+    while expected_outcome < usize::from(pair.buyer.record.outcome_count) {
+        if pair.payoff[expected_outcome] != 0 {
+            if receipt_index >= count {
+                return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+            }
+            let receipt = receipt_set.receipts[receipt_index];
+            validate_settlement_receipt_v5_prestate(&receipt)?;
+            if usize::from(receipt.outcome) != expected_outcome
+                || receipt.quantity != pair.payoff[expected_outcome]
+                || receipt.price != pair.prices[expected_outcome]
+                || (receipt_index != 0
+                    && receipt.slice_index
+                        <= receipt_set.receipts[receipt_index - 1].slice_index)
+            {
+                return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+            }
+            let mut earlier = 0usize;
+            while earlier < receipt_index {
+                if receipt_set.receipts[earlier].account_id == receipt.account_id
+                    || receipt_set.receipts[earlier].pre_data_id == receipt.pre_data_id
+                {
+                    return Err(PortfolioExecutionErrorV2::AliasedAccount);
+                }
+                earlier += 1;
+            }
+            receipt_index += 1;
+        }
+        expected_outcome += 1;
+    }
+    if receipt_index != count {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+    }
+    while receipt_index < PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        if receipt_set.receipts[receipt_index] != PortfolioSettlementReceiptV5Prestate::EMPTY {
+            return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
+        }
+        receipt_index += 1;
+    }
+    Ok(())
+}
+
+/// Commit the complete ordered hostile Receipt V5 prestate set. The active
+/// prefix is already validated against the exact pair payoff and simplex;
+/// inactive cells are canonical zero and therefore omitted from the hash.
+pub fn portfolio_settlement_receipt_v5_set_digest_v2(
+    receipt_set: &PortfolioSettlementReceiptV5SetPrestate,
+) -> Result<PortfolioIdentityV2, PortfolioExecutionErrorV2> {
+    let count = usize::from(receipt_set.receipt_count);
+    if count == 0 || count > PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+    }
+    let mut hash = Sha256V2::new();
+    hash.update(PAIR_RECEIPT_SET_DOMAIN_V2)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&[PORTFOLIO_EXECUTION_VERSION_V2, receipt_set.receipt_count])
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    let mut index = 0usize;
+    while index < count {
+        let receipt = receipt_set.receipts[index];
+        validate_settlement_receipt_v5_prestate(&receipt)?;
+        if index != 0 {
+            let prior = receipt_set.receipts[index - 1];
+            if receipt.slice_index <= prior.slice_index || receipt.outcome <= prior.outcome {
+                return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+            }
+        }
+        let mut earlier = 0usize;
+        while earlier < index {
+            if receipt_set.receipts[earlier].account_id == receipt.account_id
+                || receipt_set.receipts[earlier].pre_data_id == receipt.pre_data_id
+                || receipt_set.receipts[earlier].outcome == receipt.outcome
+            {
+                return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
+            }
+            earlier += 1;
+        }
+        hash.update(&receipt.account_id)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.pre_data_id)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.slice_index.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.sequence.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&[receipt.outcome])
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.quantity.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.price.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&[
+            receipt.accounted_end_mask,
+            receipt.delivered_end_mask,
+            receipt.expected_end_mask,
+            receipt_transition_kind_byte(receipt.transition_kind),
+        ])
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.transition_commitment)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.rent_owner_id)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.rent_principal_lamports.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        hash.update(&receipt.rent_donation_floor_lamports.to_le_bytes())
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        index += 1;
+    }
+    while index < PORTFOLIO_PAIR_MAX_RECEIPTS_V2 {
+        if receipt_set.receipts[index] != PortfolioSettlementReceiptV5Prestate::EMPTY {
+            return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
+        }
+        index += 1;
+    }
+    hash.finalize().map_err(PortfolioExecutionErrorV2::Economic)
 }
 
 fn validate_post_ids(
@@ -1440,7 +1797,10 @@ fn validate_post_ids(
         || post.seller_reservation == input.seller_reservation.semantic_id
         || post.buyer_replay == input.buyer_replay.semantic_id
         || post.seller_replay == input.seller_replay.semantic_id
-        || !is_zero_identity(&post.settlement_receipt)
+        || post
+            .settlement_receipts
+            .iter()
+            .any(|identity| !is_zero_identity(identity))
     {
         return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
     }
@@ -1480,7 +1840,6 @@ fn validate_distinct_execution_accounts(
         input.seller_reservation.account_id,
         input.buyer_replay.account_id,
         input.seller_replay.account_id,
-        input.settlement_receipt.account_id,
     ];
     let mut left = 0usize;
     while left < accounts.len() {
@@ -1499,6 +1858,28 @@ fn validate_distinct_execution_accounts(
         }
         left += 1;
     }
+    let mut receipt_index = 0usize;
+    while receipt_index < usize::from(input.settlement_receipts.receipt_count) {
+        let receipt_account = input.settlement_receipts.receipts[receipt_index].account_id;
+        if is_zero_identity(&receipt_account) {
+            return Err(PortfolioExecutionErrorV2::ZeroIdentity);
+        }
+        let mut account_index = 0usize;
+        while account_index < accounts.len() {
+            if receipt_account == accounts[account_index] {
+                return Err(PortfolioExecutionErrorV2::AliasedAccount);
+            }
+            account_index += 1;
+        }
+        let mut earlier = 0usize;
+        while earlier < receipt_index {
+            if receipt_account == input.settlement_receipts.receipts[earlier].account_id {
+                return Err(PortfolioExecutionErrorV2::AliasedAccount);
+            }
+            earlier += 1;
+        }
+        receipt_index += 1;
+    }
     Ok(())
 }
 
@@ -1506,7 +1887,7 @@ fn execution_account_expectations(
     pair: &AuthenticatedPortfolioPairV2,
     input: &PortfolioPairExecutionInputV2,
     owner_program_id: PortfolioIdentityV2,
-) -> [PortfolioAccountExpectationV2; 8] {
+) -> [PortfolioAccountExpectationV2; 7] {
     [
         account_expectation(
             PortfolioAccountRoleV2::SettlementRoot,
@@ -1571,15 +1952,6 @@ fn execution_account_expectations(
             true,
             true,
         ),
-        account_expectation(
-            PortfolioAccountRoleV2::SettlementReceipt,
-            input.settlement_receipt.account_id,
-            owner_program_id,
-            input.settlement_receipt.pre_data_id,
-            None,
-            true,
-            true,
-        ),
     ]
 }
 
@@ -1603,13 +1975,27 @@ fn account_expectation(
     }
 }
 
-fn execution_transition_expectations(
+fn authenticate_execution_transition<A: PortfolioAdapterV2>(
+    adapter: &A,
+    expected: PortfolioTransitionExpectationV2,
+) -> Result<(), PortfolioExecutionErrorV2> {
+    if !adapter.authenticate_transition(&expected) {
+        return Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
+            role: expected.role,
+        });
+    }
+    Ok(())
+}
+
+fn authenticate_execution_transitions<A: PortfolioAdapterV2>(
+    adapter: &A,
     input: &PortfolioPairExecutionInputV2,
     effects: &PortfolioPairEffectsV2,
     buyer_replay_post: u64,
     seller_replay_post: u64,
-) -> [PortfolioTransitionExpectationV2; 6] {
-    [
+) -> Result<(), PortfolioExecutionErrorV2> {
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Reservation,
             account_id: input.buyer_reservation.account_id,
@@ -1625,6 +2011,9 @@ fn execution_transition_expectations(
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: true,
         },
+    )?;
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Reservation,
             account_id: input.seller_reservation.account_id,
@@ -1640,6 +2029,9 @@ fn execution_transition_expectations(
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: true,
         },
+    )?;
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Position,
             account_id: input.buyer_position.account_id,
@@ -1655,6 +2047,9 @@ fn execution_transition_expectations(
             claim_credits: effects.claim_credits,
             reservation_consumed: false,
         },
+    )?;
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Position,
             account_id: input.seller_position.account_id,
@@ -1670,6 +2065,9 @@ fn execution_transition_expectations(
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
         },
+    )?;
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Replay,
             account_id: input.buyer_replay.account_id,
@@ -1685,6 +2083,9 @@ fn execution_transition_expectations(
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
         },
+    )?;
+    authenticate_execution_transition(
+        adapter,
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Replay,
             account_id: input.seller_replay.account_id,
@@ -1700,7 +2101,8 @@ fn execution_transition_expectations(
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
         },
-    ]
+    )?;
+    Ok(())
 }
 
 fn portfolio_transition_id_v2(
@@ -1726,53 +2128,30 @@ fn portfolio_transition_id_v2(
             .map_err(PortfolioExecutionErrorV2::Economic)?;
         record_index += 1;
     }
-    hash.update(&input.settlement_receipt.slice_index.to_le_bytes())
+    let entry_receipt = input.settlement_receipts.receipts[0];
+    let receipt_set_digest =
+        portfolio_settlement_receipt_v5_set_digest_v2(&input.settlement_receipts)?;
+    hash.update(&[input.settlement_receipts.receipt_count])
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.sequence.to_le_bytes())
+    hash.update(&entry_receipt.slice_index.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.account_id)
+    hash.update(&entry_receipt.sequence.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.pre_data_id)
+    hash.update(&entry_receipt.account_id)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    let receipt_pre_accounted_end_mask = input.settlement_receipt.accounted_end_mask;
-    let receipt_pre_delivered_end_mask = input.settlement_receipt.delivered_end_mask;
-    let receipt_pre_expected_end_mask = input.settlement_receipt.expected_end_mask;
-    let receipt_pre_transition_kind =
-        receipt_transition_kind_byte(input.settlement_receipt.transition_kind);
-    // General V5's canonical `commit_portfolio_pair_delivery` preserves both
-    // accounted ends, delivers both direct ends, and preserves the direct
-    // expected-end mask. These are three distinct semantic fields even though
-    // their canonical post-transition byte values are equal.
-    let receipt_post_accounted_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
-    let receipt_post_delivered_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
-    let receipt_post_expected_end_mask = SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5;
-    let receipt_post_transition_kind =
-        receipt_transition_kind_byte(SettlementReceiptTransitionKindV2::PortfolioPairV2);
+    hash.update(&receipt_set_digest)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    // Every active sibling has the same canonical direct pre/post lifecycle;
+    // the complete prestate of each is already transitively bound by the set
+    // digest. These named post fields apply exhaustively to the active prefix.
     let receipt_lifecycle_transcript = [
-        receipt_pre_accounted_end_mask,
-        receipt_pre_delivered_end_mask,
-        receipt_pre_expected_end_mask,
-        receipt_pre_transition_kind,
-        receipt_post_accounted_end_mask,
-        receipt_post_delivered_end_mask,
-        receipt_post_expected_end_mask,
-        receipt_post_transition_kind,
+        SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5,
+        SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5,
+        SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5,
+        receipt_transition_kind_byte(SettlementReceiptTransitionKindV2::PortfolioPairV2),
     ];
     hash.update(&receipt_lifecycle_transcript)
-    .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.transition_commitment)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.rent_owner_id)
-        .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt.rent_principal_lamports.to_le_bytes())
-        .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(
-        &input
-            .settlement_receipt
-            .rent_donation_floor_lamports
-            .to_le_bytes(),
-    )
-    .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&pair.price_semantics_digest)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&[valuation_boundary_byte(pair.boundary)])
@@ -1854,6 +2233,12 @@ fn hash_transition_side(
         index += 1;
     }
     hash.update(&reservation.generation.to_le_bytes())
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&reservation.entitled_units.to_le_bytes())
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&reservation.consumed_units.to_le_bytes())
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&reservation.paid_units.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&position.generation.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;

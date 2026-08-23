@@ -36,10 +36,11 @@ pub const RECEIPT_PAYMENT_ID_DOMAIN_V5: &[u8] =
     b"dragons-clutch/general-settlement-receipt/payment/v5\0";
 /// Domain of the exact portfolio-pair transition preimage.
 ///
-/// The preimage includes the V5 pre-data ID and every exact economic,
-/// Position, Reservation, Replay, and post-semantic field, but deliberately
-/// excludes only the resulting V5 post-data ID. Including the post-data ID
-/// would be self-referential because it commits this stored hash.
+/// The preimage includes the canonical digest of the complete ordered active
+/// prefix of V5 sibling account/pre-data identities and every exact economic,
+/// Position, Reservation, Replay, and post-semantic field. It deliberately
+/// excludes every resulting V5 post-data ID: each would be self-referential
+/// because every sibling postimage stores this shared hash.
 pub const PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/portfolio-pair-transition/v2\0";
 /// Frozen exact portfolio-pair transition preimage width.

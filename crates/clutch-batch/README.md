@@ -158,6 +158,11 @@ count. It is not a second persisted coefficient owner; Dealer may consume the
 private capability to derive its allocation order set, but it may not accept
 caller-shaped rows or coefficients.
 
+`authenticate_complete_portfolio_book_ref_v2` is the frame-bounded equivalent
+for SBF. It borrows the exact book from adapter-owned bounded heap storage, so
+the 64-row projection is neither caller input nor copied into a 4-KiB frame;
+the original owned constructor remains available to host consumers.
+
 ## Account-ready exact portfolio pair (`portfolio_execution_v2`)
 
 `src/portfolio_execution_v2.rs` replaces the old content-only atomic portfolio
@@ -177,20 +182,28 @@ remainder refuses instead of selecting an unnamed beneficiary.
 
 The prepared account transition is indivisible. It authenticates the exact
 counted SettlementRoot/retained-Feed traversal, both ENTITLED Reservations,
-both Position V3 prestates, both purpose Replay V3 prestates, and the
-counted/rent-owned 298-byte SettlementReceipt V5 through a private adapter
-capability seam. It derives exact cash
+both Position V3 prestates, both purpose Replay V3 prestates, and the complete
+canonical active prefix of one through sixteen counted/rent-owned 298-byte
+SettlementReceipt V5 siblings through a private adapter capability seam. It derives exact cash
 debit/refund/credit and the
 16-wide native-Egg debit/credit, requires both Reservations' canonical CONSUMED
 postimages, keeps Position incarnation generations stable, advances each Replay
-ordinal once, and commits all pre/post semantic identities into a canonical
-680-byte replay-sensitive vector-transition preimage. The receipt must enter
-delivery as `PortfolioPairPending` (kind `1`, zero commitment); its exact
-V5-domain hash is set once as `PortfolioPairCommitted` in the SettlementReceipt
-V5 postimage, so this slice creates no
+ordinal once, and commits all pre/post semantic identities plus the complete
+sibling-set digest into a canonical 680-byte replay-sensitive vector-transition
+preimage. Every sibling must enter delivery as `PortfolioPairPending` (kind
+`1`, zero commitment); the shared exact V5-domain hash is set once as
+`PortfolioPairCommitted` in every sibling postimage, so this pair creates no
 uncounted account or liability. Persisted records and decoded receipt preimages
 are untrusted projections; only the private prepared capability authorizes an
 adapter to compose writes and CPIs.
+
+The same module exposes a nonpersisted
+`AuthenticatedPortfolioReceiptSiblingSetV2` producer/consumer capability. It
+derives the exhaustive active sibling prefix from the authenticated exact pair
+and retained-Feed traversal facts; strict slice/outcome order, both dense order
+indices, exact quantity/price, and the zero tail are checked before General may
+materialize any sibling as `PortfolioPairPending`. Hostile packet counts are
+only frame delimiters.
 
 This is account-ready pure contract code, not a routed SBF instruction or
 deployment result. The remaining live work is listed in
