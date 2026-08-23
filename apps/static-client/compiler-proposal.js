@@ -29,6 +29,17 @@
     "marketGenesisProfileId", "fundingQuoteId", "attachmentPlanId",
     "seriesPlanId", "fundingTermsId"
   ]);
+  const BUNDLE_INPUT_BYTES = Object.freeze({
+    registryCapabilityProfileV2BytesHex: 800,
+    evidenceOnlyRecoveryPolicyV1BytesHex: 208,
+    productTemplateV4BytesHex: 256,
+    priceMeasurePolicyV1BytesHex: 96,
+    marketGenesisProfileV2BytesHex: 416,
+    seriesFundingQuoteV1BytesHex: 280,
+    seriesAttachmentPlanV1BytesHex: 112,
+    seriesPlanV5BytesHex: 152,
+    seriesFundingTermsV2BytesHex: 240
+  });
 
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
   const hash = (value, name) => {
@@ -186,13 +197,88 @@
     return Object.freeze({ value, canonicalJson: encoded, productTermsId, classification: raw.kind });
   };
 
-  const validateProposal = (raw, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition) => {
-    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundle"], "compiler proposal");
+  const validateBundleInputs = (raw) => {
+    const names = ["registryCapabilityProfileV2BytesHex", "sourceReleaseManifestId", "evidenceOnlyRecoveryPolicyV1BytesHex", "productTemplateV4BytesHex", "priceMeasurePolicyV1BytesHex", "marketGenesisProfileV2BytesHex", "seriesFundingQuoteV1BytesHex", "seriesAttachmentPlanV1BytesHex", "seriesPlanV5BytesHex", "seriesFundingTermsV2BytesHex"];
+    exactKeys(raw, names, "bundle inputs");
+    const output = { sourceReleaseManifestId: hash(raw.sourceReleaseManifestId, "bundleInputs.sourceReleaseManifestId") };
+    for (const [name, length] of Object.entries(BUNDLE_INPUT_BYTES)) output[name] = bytes(raw[name], `bundleInputs.${name}`, length, null);
+    return Object.freeze(output);
+  };
+
+  const buildRequest = (compilerReleaseSha256, definition, bundleInputs) => Object.freeze({
+    schema: "dragons-clutch/compiler/production-payoff-request/v1",
+    expectedCompilerReleaseSha256: hash(compilerReleaseSha256, "compiler release SHA-256"),
+    definition: definition.value,
+    bundleInputs: validateBundleInputs(bundleInputs)
+  });
+
+  const compileRemote = async (operatorUrl, request, maximumResponseBytes, timeoutMilliseconds) => {
+    exactKeys(request, ["schema", "expectedCompilerReleaseSha256", "definition", "bundleInputs"], "compiler request");
+    const encoded = new TextEncoder().encode(JSON.stringify(request));
+    if (encoded.byteLength > 327_680) throw new Error("Compiler request exceeds the operatord 327680-byte request bound.");
+    const maximum = BigInt(maximumResponseBytes);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Number(timeoutMilliseconds));
+    try {
+      const response = await fetch(`${operatorUrl}/v1/compiler/production-payoff`, {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: encoded,
+        signal: controller.signal
+      });
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().startsWith("application/json")) throw new Error("Compiler endpoint did not return application/json.");
+      const declared = response.headers.get("content-length");
+      if (declared !== null && BigInt(decimal(declared, "compiler Content-Length", U64_MAX)) > maximum) throw new Error("Compiler response exceeds the selected response-byte budget.");
+      const chunks = [];
+      let length = 0n;
+      if (response.body && typeof response.body.getReader === "function") {
+        const reader = response.body.getReader();
+        for (;;) {
+          const item = await reader.read();
+          if (item.done) break;
+          length += BigInt(item.value.byteLength);
+          if (length > maximum) {
+            await reader.cancel();
+            throw new Error("Compiler response exceeded the selected response-byte budget while reading.");
+          }
+          chunks.push(item.value);
+        }
+      } else {
+        const body = new Uint8Array(await response.arrayBuffer());
+        length = BigInt(body.byteLength);
+        if (length > maximum) throw new Error("Compiler response exceeds the selected response-byte budget.");
+        chunks.push(body);
+      }
+      const body = new Uint8Array(Number(length));
+      let offset = 0;
+      for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+      let parsed;
+      try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)); } catch (_) { throw new Error("Compiler endpoint did not return valid UTF-8 JSON."); }
+      if (!response.ok) {
+        const detail = plain(parsed) && typeof parsed.detail === "string" && parsed.detail.length <= 4096 ? parsed.detail : `HTTP ${response.status}`;
+        throw new Error(`Compiler refused: ${detail}`);
+      }
+      return parsed;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const validateProposal = (raw, expectedRequestSha256, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition) => {
+    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundle"], "compiler proposal");
     if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/production-payoff-proposal/v1" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
       throw new Error("Compiler result is not an untrusted production-payoff proposal v1.");
     }
     const compilerReleaseSha256 = hash(raw.compilerReleaseSha256, "compilerReleaseSha256");
     if (compilerReleaseSha256 !== expectedCompilerReleaseSha256) throw new Error("Compiler result names a different explicit compiler release.");
+    const requestCanonicalSha256 = hash(raw.requestCanonicalSha256, "requestCanonicalSha256");
+    if (requestCanonicalSha256 !== expectedRequestSha256) throw new Error("Compiler result is not bound to the exact definition and Product/Series bundle inputs shown in this page.");
     const inputCanonicalSha256 = hash(raw.inputCanonicalSha256, "inputCanonicalSha256");
     if (inputCanonicalSha256 !== expectedInputSha256) throw new Error("Compiler result is not bound to the exact rational definition shown in this page.");
     if (!CLASSES.has(raw.classification) || !STATUSES.has(raw.spanStatus)) throw new Error("Compiler classification or span status is unknown.");
@@ -247,6 +333,7 @@
       authority: raw.authority,
       registrationAuthority: false,
       compilerReleaseSha256,
+      requestCanonicalSha256,
       inputCanonicalSha256,
       productTermsId,
       classification: raw.classification,
@@ -267,7 +354,10 @@
 
   root.GlassCompilerProposal = Object.freeze({
     validateDefinition,
+    validateBundleInputs,
+    buildRequest,
     validateProposal,
+    compileRemote,
     canonicalJson,
     boundNames: BOUND_NAMES,
     bundleIdentityNames: BUNDLE_IDENTITY_NAMES

@@ -28,14 +28,14 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-sou
 /// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
-/// Dealer-policy catalog laboratory. This identity is non-production and
+/// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
     feature = "profile-non-production-dealer-policy-catalog-lab",
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-policy-catalog-lab/v1";
+    "dragons-clutch/capability-profile/non-production-dealer-facility-init-bind-lab/v1";
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
@@ -79,8 +79,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0xcb, 0x80, 0x25, 0xae, 0x72, 0xa0, 0xbc, 0x86, 0x66, 0xd9, 0x31, 0x9b, 0xe6, 0xfb, 0x67, 0x82,
-    0x82, 0xd5, 0xa9, 0x12, 0x96, 0x9e, 0x6a, 0x10, 0xdf, 0xcd, 0xdd, 0x84, 0x06, 0x23, 0x7d, 0x72,
+    0x5a, 0xbd, 0xf5, 0x65, 0xa7, 0x09, 0x52, 0xe1, 0x15, 0xb5, 0x20, 0xa1, 0xe1, 0xd1, 0x9c, 0x50,
+    0xbd, 0xd3, 0x81, 0x43, 0x1b, 0x67, 0x63, 0xd2, 0x70, 0xe2, 0x13, 0x3b, 0x86, 0xa3, 0x11, 0x4e,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -207,10 +207,16 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2),
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// The laboratory enables only the bounded immutable policy-catalog transport.
+/// The laboratory enables policy publication plus exact facility initialization and Epoch binding.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
-    &[(76, 1, 1), (76, 1, 2), (76, 1, 3), (76, 1, 4)];
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (76, 1, 1),
+    (76, 1, 2),
+    (76, 1, 3),
+    (76, 1, 4),
+    (76, 1, 5),
+    (76, 1, 12),
+];
 
 /// Exact non-production General V2 laboratory action set.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -333,8 +339,19 @@ mod tests {
                         && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
                             .contains(&local_action);
-                    let expected_allocated =
-                        general || dealer || structured || source_or_series || recovery;
+                    let fractional = family_tag
+                        == clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::FractionalRedemptionAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::FractionalRedemptionAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general
+                        || dealer
+                        || structured
+                        || source_or_series
+                        || recovery
+                        || fractional;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
@@ -342,10 +359,12 @@ mod tests {
                     );
                     let dealer_enabled = DEALER_POLICY_CATALOG_LAB
                         && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                        && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                        && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                            .contains(&local_action);
+                            .contains(&local_action)
+                            || matches!(local_action, 5 | 12));
                     let general_enabled = GENERAL_V2_IDENTITY_LAB
                         && family_tag == 74
                         && family_version == 1

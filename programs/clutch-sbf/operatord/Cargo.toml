@@ -49,6 +49,16 @@ clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity
 # Shared untrusted projection vocabulary and the fail-closed settlement-shape
 # classifier. This crate owns no account bytes and submits no transactions.
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
+# Pure, offline Product payoff compilation. These remain host-only dependencies:
+# the daemon accepts exact rational JSON and emits canonical Product artifacts,
+# but owns no account, signer, RPC client, or registration authority.
+clutch-bspline-shape-compiler = { path = "../../../research/bspline-shape-compiler" }
+clutch-bspline = { path = "../../../crates/clutch-bspline" }
+clutch-product-series = { path = "../../../crates/clutch-product-series" }
+clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v3-runtime" }
+num-bigint = "0.4.6"
+num-rational = "0.4.2"
+solana-address = { version = "=2.6.1", features = ["curve25519"] }
 # Hashing the ELF the validator is actually about to load, in process, so the
 # banner cannot show a digest a stale manifest remembers.  Same pin and same
 # host-only `sha2` selection the harness uses.

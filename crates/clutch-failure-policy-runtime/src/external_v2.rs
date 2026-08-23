@@ -296,7 +296,7 @@ pub struct AcceptedResolutionV2 {
     id: AcceptedResolutionId,
     source_success_handoff_id: SourceContentId,
     window_id: SourceContentId,
-    relation_record_id: [u8; 32],
+    resolution_evidence_id: [u8; 32],
     clock: RecoveryClock,
 }
 
@@ -316,9 +316,10 @@ impl AcceptedResolutionV2 {
         self.window_id
     }
 
-    /// Exact relation result record.
-    pub const fn relation_record_id(self) -> [u8; 32] {
-        self.relation_record_id
+    /// Exact relation record or exhaustive interval certificate consumed by
+    /// this accepted resolution.
+    pub const fn resolution_evidence_id(self) -> [u8; 32] {
+        self.resolution_evidence_id
     }
 }
 
@@ -882,7 +883,7 @@ impl FailureRuntimeExternalV2 {
             id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
             source_success_handoff_id: success.id(),
             window_id,
-            relation_record_id: relation.record_id().bytes(),
+            resolution_evidence_id: relation.record_id().bytes(),
             clock,
         })
     }
@@ -932,7 +933,7 @@ impl FailureRuntimeExternalV2 {
                 id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
                 source_success_handoff_id: success.id(),
                 window_id,
-                relation_record_id: certificate_id.bytes(),
+                resolution_evidence_id: certificate_id.bytes(),
                 clock,
             },
             certificate_id,
@@ -1184,7 +1185,10 @@ impl FailureRuntimeExternalV2 {
         if accepted.id.bytes().iter().all(|byte| *byte == 0)
             || accepted.source_success_handoff_id.is_zero()
             || accepted.window_id.is_zero()
-            || accepted.relation_record_id.iter().all(|byte| *byte == 0)
+            || accepted
+                .resolution_evidence_id
+                .iter()
+                .all(|byte| *byte == 0)
         {
             return Err(Error::BindingMismatch);
         }

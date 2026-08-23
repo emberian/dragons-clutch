@@ -1,11 +1,11 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **MODEL-ONLY / HOST-TESTED DESIGN** (2026-08-19). The executable model
-is `research/fractional-redemption`. It is safe `no_std`, no-allocation,
-float-free Rust with fixed arrays and checked integer arithmetic. It changes no
-production kernel, SBF instruction, account codec, market terms, or release
-claim. In particular, the currently integrated runtime must continue to refuse
-a non-integral redemption until one complete policy below is promoted.
+Status: **RUNTIME CONTRACT PROMOTED / SBF DISABLED** (2026-08-23).
+`crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
+no-allocation, fixed-layout transition and account contract. Intent family
+79/v1 and account tags `0xa4..=0xa7` remain `ReservedDisabled`; no Solana route
+or release capability is enabled. `research/fractional-redemption` remains the
+derivation and exhaustive small-domain model, not a second runtime truth.
 
 ## 1. The obligation
 
@@ -278,12 +278,11 @@ that aggregate deliberately and refuses the state.
 
 ### 3.4 Internal and bearer implications
 
-For an internal Position, redemption can use the owner's credit PDA (or a
-future Position field), debit the local Egg balance, credit internal cash by
-whole atoms, and update `K`. A Position field is smaller in account count but
-makes credit transfer, close/reopen, and multi-Position aggregation depend on
-Position generation. A separate credit PDA is more explicit and lets internal
-and bearer paths share one liability owner.
+For an internal Position, the promoted runtime uses the owner's credit PDA,
+debits the canonical Position V3 Egg balance, credits internal cash by whole
+atoms, reclassifies the same amount of Hoard V2 locked principal into cash
+liability, and updates `K`. The separate credit PDA lets internal and bearer
+paths share one liability owner without adding another Position field.
 
 For an external bearer Egg, fractional redemption is no longer positionless.
 The claimant must present or create the credit PDA. In one Solana transaction:
@@ -291,10 +290,12 @@ The claimant must present or create the credit PDA. In one Solana transaction:
 1. authenticate Market, terms, immutable native Resolution, complete mint
    vector, Hoard, claimant source/destination, credit, aggregate credit ledger,
    and replay state;
-2. synchronize prior direct bearer burns as forfeitures;
+2. bind canonical ClaimLedger V3 materialized supply and reject any unprocessed
+   direct-burn donation delta;
 3. compute and validate the entire prospective state;
 4. burn exactly `q` bearer Eggs with claimant authority;
-5. transfer exactly `paid` collateral atoms from the Hoard (zero is allowed);
+5. externally transfer exactly `paid` collateral atoms from the Hoard under an
+   accepted release-selected receipt (zero emits no CPI);
 6. commit claim supply, Hoard accounting, credit numerator, aggregate `K`, and
    replay sequence; and
 7. re-read exact token deltas.
@@ -306,7 +307,8 @@ credit account because no collateral moved is silent confiscation.
 For a structured wrapper, the safest path remains unwrap then redeem native
 Eggs. An optimized aggregate redemption may use the same claimant credit,
 adding `q*dot(a,w)` to its numerator, only after the wrapper burn, native vault
-debit, base SupplyLedger debit, payout, and credit update form one checked
+debit, canonical ClaimLedger V3 debit, Hoard V2 reclassification/withdrawal,
+payout, and credit update form one checked
 transaction. Direct wrapper burns remain donations and create no credit.
 
 ## 4. Direct burns and donation surplus
@@ -359,69 +361,45 @@ None exists today, and Hoard principal cannot fund one. The model's
 `terminal_facts` reports whole aggregatable atoms and the irreducible numerator;
 it has no sweep operation by construction.
 
-## 6. Smallest V1 runtime path
+When every claim, credit, and locked claim-principal atom is exactly zero, the
+runtime prepares one terminal family close for immutable policy `0xa4` and
+aggregate ledger `0xa5`. ClaimLedger first commits the exact transient `0xa5`
+retirement-state identity. A private ProductOccurrenceRoot authorization must
+bind the Market, generation, both physical accounts, both terminal state IDs,
+and the ClaimLedger retirement transition before either account is deleted.
+Each account refunds only its own stored rent payer; hostile or unsolicited
+lamports go to the frozen neutral sink. The executable route remains disabled
+until that typed Product authorization seam is integrated.
 
-The smallest immediate runtime policy is:
+## 6. Selected runtime contract and activation boundary
 
-1. keep the existing one-raw-claim Token-2022 atom and arbitrary transfers;
-2. after resolution, derive and expose each exact `L(w_i)` from the immutable
-   vector;
-3. accept only quantities divisible by that outcome's lot; and
-4. let holders transfer and aggregate fragments until one account presents an
-   exact lot.
+The promoted runtime deliberately supports both useful paths:
 
-This requires no new persistent state and matches the kernel's current
-exact-or-refuse arithmetic. It is terminally honest because it never creates a
-credit it later erases. It is **not per-wallet exit-total**: an owner of a
-sub-lot fragment needs voluntary aggregation, and an abandoned fragment can
-keep the Market from retiring. The public terms and client must say that
-plainly.
+1. an exact redemption path that creates no credit and reports whether the
+   resolved common-lot fast path was used; and
+2. an arbitrary-quantity path that carries the exact residue in one
+   owner-scoped credit and updates the sole aggregate `K` owner atomically.
 
-If V1 requires every ordinary bearer token atom to be independently
-redeemable, the next-smallest zero-credit path is a **proved pre-resolution lot
-profile**:
+This selection preserves arbitrary raw-claim trading and does not force a lot
+quantum into Split, transfer, reservation, fill, Materialize, or
+Dematerialize. Credits are custom same-domain accounting objects, not a second
+Token-2022 instrument. Their transfer and merge routes require explicit source
+authority and destination acceptance and pay every newly aggregated whole atom
+in the same transition.
 
-```text
-L_i = D / gcd(D, every terms-reachable weight of outcome i)
-L_common = lcm_i L_i                 (optional uniform bearer scale)
-```
+A zero-credit deployment profile remains possible: it can expose only the
+exact actions and use either resolved lots or a separately proved
+pre-resolution lot profile. That is a capability/product choice, not a second
+arithmetic truth. The runtime does not claim that a particular reachable
+B-spline family has a smaller universal lot without the corresponding gcd
+evidence.
 
-The compiler must establish the reachable family. `D` may be used as a
-conservative common lot when the policy quantifies over the full integer
-simplex, but it is not called minimal for a particular B-spline instance
-without a gcd-1 reachability proof. Enforce `L_i` (or `L_common`) at every
-claim-separating kernel and venue boundary listed in §2.2. A lot-scaled bearer
-atom represents that many raw claims, so creating it normally requires the
-same number of collateral-backed raw complete sets; the scaling is not a free
-change of units.
-
-Complete-set redemption remains exact at arbitrary quantity, but allowing an
-arbitrary Split is safe only while its components cannot later be separated
-below their frozen lots. The simple closure rule gates Split itself; a more
-permissive balanced-bundle state would be a new object and is not the smallest
-path.
-
-This recommendation is narrower than saying credits are a bad design. Credits
-are the correct experiment if arbitrary sub-lot raw fills are a product
-requirement: they
-preserve exact conservation and avoid leaking lot alignment into the batch
-relation. But they also add a second transferable accounting object and have an
-irreducible terminal state under indivisible collateral. That cost should not
-enter the first native runtime accidentally.
-
-Promotion gates for the lot path are still substantial:
-
-1. freeze either recombinable post-resolution lots or a proved
-   pre-resolution raw-to-bearer quantity mapping in terms and SDK fixtures;
-2. prove every Split/Merge/transfer/reservation/fill/materialize/dematerialize
-   path preserves the quantum or a balanced complete set;
-3. add internal and real Token-2022 SBF tests for minimum lot, multiple lots,
-   sub-lot refusal, transfer, direct burn donation, and terminal withdrawal;
-4. bind every redemption to the immutable native Resolution vector and `D`;
-5. differential-test kernel, reference, and SBF refusal atomicity; and
-6. measure transaction/account/compute impact before changing current truth.
-
-Until those gates close, exact fractional native redemption remains **STOP**.
+The runtime contract is present, but **SBF activation remains STOP**. Activation
+still requires the real Token-2022 burn adapter, Realm-selected collateral CPI
+composer, canonical Resolution projection, Position/Replay V3 writer,
+ClaimLedger V3/Hoard V2 atomic writeback, rent admission, release capability,
+and local-bank adversarial execution. Family 79/v1 stays
+`ReservedDisabled` until those boundaries are integrated and reviewed.
 
 ## 7. Executed evidence
 

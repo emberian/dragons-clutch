@@ -113,14 +113,18 @@ pub struct FailureIntervalConsensusFundingFactsV1 {
     pub work_rent_principal_lamports: u64,
     /// Exact permanent replay-account rent principal supplied now.
     pub replay_rent_principal_lamports: u64,
-    /// Work-PDA balance before the payer's principal transfer.
-    pub work_prior_donation_lamports: u64,
-    /// Work-PDA balance immediately after the transfer.
-    pub work_post_funding_lamports: u64,
-    /// Replay-PDA balance before the payer's principal transfer.
-    pub replay_prior_donation_lamports: u64,
-    /// Replay-PDA balance immediately after the transfer.
-    pub replay_post_funding_lamports: u64,
+    /// Work-PDA donation floor observed before the creation transfer.
+    pub work_creation_donation_floor_lamports: u64,
+    /// Work-PDA donation observed when Begin authenticates the prefund.
+    pub work_observed_donation_lamports: u64,
+    /// Work-PDA balance observed by Begin.
+    pub work_observed_balance_lamports: u64,
+    /// Replay-PDA donation floor observed before the creation transfer.
+    pub replay_creation_donation_floor_lamports: u64,
+    /// Replay-PDA donation observed when Begin authenticates the prefund.
+    pub replay_observed_donation_lamports: u64,
+    /// Replay-PDA balance observed by Begin.
+    pub replay_observed_balance_lamports: u64,
     /// Sole external liveness Recovery work-capital account.
     pub recovery_compartment_account_id: LivenessId,
     /// Immutable liveness policy.
@@ -422,6 +426,16 @@ impl FailureIntervalConsensusStateV1 {
         {
             return Err(Error::BindingMismatch);
         }
+        let advanced = self.transition_nonce != 0;
+        if advanced
+            != (live(self.last_transition_receipt_id.bytes())
+                && live(self.last_liveness_receipt_id.bytes()))
+            || (!advanced
+                && (self.checked_coordinates != 0 || self.current_work_id != self.initial_work_id))
+            || (advanced && self.checked_coordinates == 0)
+        {
+            return Err(Error::BindingMismatch);
+        }
         match self.phase {
             FailureIntervalConsensusPhaseV1::Active => {
                 if live(self.certificate_id.bytes())
@@ -616,7 +630,7 @@ pub fn begin_failure_interval_consensus_v1(
         neutral_sink: facts.neutral_sink,
         work_rent_principal_lamports: facts.work_rent_principal_lamports,
         replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
-        replay_preserved_lamports: facts.replay_post_funding_lamports,
+        replay_preserved_lamports: facts.replay_observed_balance_lamports,
         initial_work_id,
         current_work_id: initial_work_id,
         current_transcript: work.transcript(),
@@ -770,7 +784,7 @@ pub struct FailureIntervalConsensusResolutionPlanV1 {
     failure_plan: FailureExternalTransitionPlanV2,
     verified_payout: VerifiedQuantizedIntervalPayoutV1,
     certificate_id: QuantizedIntervalConsensusCertificateV1Id,
-    resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1,
+    resolution_receipt: FailureIntervalConsensusResolutionReceiptV1,
     replay: FailureIntervalConsensusReplayV1,
 }
 
@@ -792,7 +806,12 @@ impl FailureIntervalConsensusResolutionPlanV1 {
 
     /// Exact once-only Failure resolution receipt.
     pub const fn resolution_receipt_id(&self) -> FailureIntervalConsensusResolutionReceiptIdV1 {
-        self.resolution_receipt_id
+        self.resolution_receipt.id
+    }
+
+    /// Private-field authority consumed by the atomic Resolution writer.
+    pub const fn resolution_receipt(&self) -> FailureIntervalConsensusResolutionReceiptV1 {
+        self.resolution_receipt
     }
 
     /// Permanent replay postimage sealing certificate consumption.
@@ -842,11 +861,11 @@ pub fn plan_resolve_failure_interval_consensus_v1<
     if failure_plan.resulting_phase() != RecoveryPhase::Resolved || failure_plan.work().is_some() {
         return Err(Error::BindingMismatch);
     }
-    let resolution_receipt_id = resolution_receipt(state, accepted.id(), certificate_id);
+    let resolution_receipt = resolution_receipt(state, accepted.id(), certificate_id);
     let mut after = *state;
     after.phase = FailureIntervalConsensusPhaseV1::Resolved;
     after.certificate_id = certificate_id;
-    after.resolution_receipt_id = resolution_receipt_id;
+    after.resolution_receipt_id = resolution_receipt.id;
     after.check()?;
     let replay = replay_from_state(after);
     Ok(FailureIntervalConsensusResolutionPlanV1 {
@@ -857,9 +876,124 @@ pub fn plan_resolve_failure_interval_consensus_v1<
         failure_plan,
         verified_payout,
         certificate_id,
-        resolution_receipt_id,
+        resolution_receipt,
         replay,
     })
+}
+
+/// Private complete authority that binds Failure resolution to one exact
+/// Product certificate and authenticated interval-account history.
+///
+/// There is deliberately no public constructor or account codec. The live
+/// adapter may receive this value only from
+/// [`plan_resolve_failure_interval_consensus_v1`] and must consume it in the
+/// same atomic instruction that writes the full-width Resolution successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureIntervalConsensusResolutionReceiptV1 {
+    id: FailureIntervalConsensusResolutionReceiptIdV1,
+    interval_binding_id: FailureIntervalConsensusBindingIdV1,
+    failure_policy_binding_id: FailurePolicyBindingId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    source_success_handoff_id: SourceContentId,
+    source_interval_id: SourceContentId,
+    interval_profile_id: QuantizedIntervalConsensusProfileV1Id,
+    work_account: FailureIntervalConsensusAccountIdV1,
+    replay_account: FailureIntervalConsensusAccountIdV1,
+    terminal_work_id: QuantizedIntervalConsensusWorkV1Id,
+    terminal_transcript: SourceContentId,
+    transition_nonce: u64,
+    last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1,
+    last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2,
+    product_certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+    accepted_resolution_id: AcceptedResolutionId,
+}
+
+impl FailureIntervalConsensusResolutionReceiptV1 {
+    /// Complete receipt identity.
+    pub const fn id(self) -> FailureIntervalConsensusResolutionReceiptIdV1 {
+        self.id
+    }
+
+    /// Failure-owned interval lifecycle identity.
+    pub const fn interval_binding_id(self) -> FailureIntervalConsensusBindingIdV1 {
+        self.interval_binding_id
+    }
+
+    /// Immutable parent Failure policy binding.
+    pub const fn failure_policy_binding_id(self) -> FailurePolicyBindingId {
+        self.failure_policy_binding_id
+    }
+
+    /// Full-width Product Market identity.
+    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    /// Exact occurrence generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Source-owned successful-evaluation handoff.
+    pub const fn source_success_handoff_id(self) -> SourceContentId {
+        self.source_success_handoff_id
+    }
+
+    /// Exact Source result that owned the interval.
+    pub const fn source_interval_id(self) -> SourceContentId {
+        self.source_interval_id
+    }
+
+    /// Central-profile-derived bounded work identity.
+    pub const fn interval_profile_id(self) -> QuantizedIntervalConsensusProfileV1Id {
+        self.interval_profile_id
+    }
+
+    /// Authenticated mutable work account.
+    pub const fn work_account(self) -> FailureIntervalConsensusAccountIdV1 {
+        self.work_account
+    }
+
+    /// Authenticated permanent replay account.
+    pub const fn replay_account(self) -> FailureIntervalConsensusAccountIdV1 {
+        self.replay_account
+    }
+
+    /// Complete terminal Product work postimage identity.
+    pub const fn terminal_work_id(self) -> QuantizedIntervalConsensusWorkV1Id {
+        self.terminal_work_id
+    }
+
+    /// Complete terminal Product transcript.
+    pub const fn terminal_transcript(self) -> SourceContentId {
+        self.terminal_transcript
+    }
+
+    /// Final nonzero bounded-transition nonce.
+    pub const fn transition_nonce(self) -> u64 {
+        self.transition_nonce
+    }
+
+    /// Last Failure transition receipt in the authenticated chain.
+    pub const fn last_transition_receipt_id(self) -> FailureIntervalConsensusTransitionReceiptIdV1 {
+        self.last_transition_receipt_id
+    }
+
+    /// Last exact liveness work receipt in the authenticated chain.
+    pub const fn last_liveness_receipt_id(self) -> FailureRecoveryWorkReceiptIdV2 {
+        self.last_liveness_receipt_id
+    }
+
+    /// Exact exhaustive Product certificate.
+    pub const fn product_certificate_id(self) -> QuantizedIntervalConsensusCertificateV1Id {
+        self.product_certificate_id
+    }
+
+    /// Exact Failure accepted-resolution semantic transition.
+    pub const fn accepted_resolution_id(self) -> AcceptedResolutionId {
+        self.accepted_resolution_id
+    }
 }
 
 /// Exact close movements for the mutable work account only.
@@ -918,6 +1052,7 @@ impl FailureIntervalConsensusClosePlanV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureIntervalConsensusTerminalReceiptV1 {
     id: FailureIntervalConsensusTerminalReceiptIdV1,
+    interval_binding_id: FailureIntervalConsensusBindingIdV1,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     failure_policy_binding_id: FailurePolicyBindingId,
@@ -926,9 +1061,15 @@ pub struct FailureIntervalConsensusTerminalReceiptV1 {
     product_certificate_id: QuantizedIntervalConsensusCertificateV1Id,
     failure_resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1,
     work_close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
+    permanent_replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
 }
 
 impl FailureIntervalConsensusTerminalReceiptV1 {
+    /// Exact Failure-owned interval lifecycle.
+    pub const fn interval_binding_id(self) -> FailureIntervalConsensusBindingIdV1 {
+        self.interval_binding_id
+    }
+
     /// Full-width V2 economic occurrence.
     pub const fn market_instance_id(self) -> MarketInstanceV2Id {
         self.market_instance_id
@@ -971,6 +1112,11 @@ impl FailureIntervalConsensusTerminalReceiptV1 {
         self,
     ) -> FailureIntervalConsensusCloseAuthorizationIdV1 {
         self.work_close_authorization_id
+    }
+
+    /// Exact permanent replay postimage retained after work-account closure.
+    pub const fn permanent_replay_receipt_id(self) -> FailureIntervalConsensusReplayReceiptIdV1 {
+        self.permanent_replay_receipt_id
     }
 
     /// Complete terminal receipt identity.
@@ -1063,22 +1209,24 @@ fn validate_funding_facts(
     runtime: &FailureRuntimeExternalV2,
     facts: FailureIntervalConsensusFundingFactsV1,
 ) -> Result<()> {
-    let work_expected = facts
-        .work_prior_donation_lamports
-        .checked_add(facts.work_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
-    let replay_expected = facts
-        .replay_prior_donation_lamports
-        .checked_add(facts.replay_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
+    validate_prefund_observation(
+        facts.work_rent_principal_lamports,
+        facts.work_creation_donation_floor_lamports,
+        facts.work_observed_donation_lamports,
+        facts.work_observed_balance_lamports,
+    )?;
+    validate_prefund_observation(
+        facts.replay_rent_principal_lamports,
+        facts.replay_creation_donation_floor_lamports,
+        facts.replay_observed_donation_lamports,
+        facts.replay_observed_balance_lamports,
+    )?;
     if facts.failure_policy_binding_id != runtime.binding_id()
         || facts.market_instance_id != runtime.binding().market_instance_id()
         || facts.generation != runtime.binding().generation()
         || facts.generation == 0
         || facts.work_rent_principal_lamports == 0
         || facts.replay_rent_principal_lamports == 0
-        || facts.work_post_funding_lamports != work_expected
-        || facts.replay_post_funding_lamports != replay_expected
         || facts.recovery_compartment_account_id != runtime.recovery_compartment_account_id()
         || facts.liveness_policy_id != runtime.liveness_policy_id()
         || facts.liveness_lifecycle_id != runtime.liveness_lifecycle_id()
@@ -1099,6 +1247,24 @@ fn validate_funding_facts(
         || facts.replay_account.bytes() == facts.recovery_compartment_account_id.bytes()
         || facts.work_account.bytes() == runtime.semantic_state_id().bytes()
         || facts.replay_account.bytes() == runtime.semantic_state_id().bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_prefund_observation(
+    principal_lamports: u64,
+    creation_donation_floor_lamports: u64,
+    observed_donation_lamports: u64,
+    observed_balance_lamports: u64,
+) -> Result<()> {
+    if principal_lamports == 0
+        || observed_donation_lamports < creation_donation_floor_lamports
+        || observed_donation_lamports
+            .checked_add(principal_lamports)
+            .ok_or(Error::BindingMismatch)?
+            != observed_balance_lamports
     {
         return Err(Error::BindingMismatch);
     }
@@ -1202,16 +1368,44 @@ fn resolution_receipt(
     state: &FailureIntervalConsensusStateV1,
     accepted_resolution_id: AcceptedResolutionId,
     certificate_id: QuantizedIntervalConsensusCertificateV1Id,
-) -> FailureIntervalConsensusResolutionReceiptIdV1 {
+) -> FailureIntervalConsensusResolutionReceiptV1 {
     let mut hasher = Sha256::new();
     hasher.update(RESOLUTION_DOMAIN);
     hasher.update(state.binding_id.bytes());
+    hasher.update(state.failure_policy_binding_id.bytes());
+    hasher.update(state.market_instance_id.bytes());
+    hasher.update(state.generation.to_le_bytes());
+    hasher.update(state.source_success_handoff_id.bytes());
+    hasher.update(state.source_interval_id.bytes());
+    hasher.update(state.interval_profile_id.bytes());
+    hasher.update(state.work_account.bytes());
+    hasher.update(state.replay_account.bytes());
     hasher.update(state.current_work_id.bytes());
     hasher.update(state.current_transcript.bytes());
     hasher.update(state.transition_nonce.to_le_bytes());
+    hasher.update(state.last_transition_receipt_id.bytes());
+    hasher.update(state.last_liveness_receipt_id.bytes());
     hasher.update(certificate_id.bytes());
     hasher.update(accepted_resolution_id.bytes());
-    FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(hasher.finalize().into())
+    FailureIntervalConsensusResolutionReceiptV1 {
+        id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(hasher.finalize().into()),
+        interval_binding_id: state.binding_id,
+        failure_policy_binding_id: state.failure_policy_binding_id,
+        market_instance_id: state.market_instance_id,
+        generation: state.generation,
+        source_success_handoff_id: state.source_success_handoff_id,
+        source_interval_id: state.source_interval_id,
+        interval_profile_id: state.interval_profile_id,
+        work_account: state.work_account,
+        replay_account: state.replay_account,
+        terminal_work_id: state.current_work_id,
+        terminal_transcript: state.current_transcript,
+        transition_nonce: state.transition_nonce,
+        last_transition_receipt_id: state.last_transition_receipt_id,
+        last_liveness_receipt_id: state.last_liveness_receipt_id,
+        product_certificate_id: certificate_id,
+        accepted_resolution_id,
+    }
 }
 
 fn terminal_receipt(
@@ -1232,6 +1426,7 @@ fn terminal_receipt(
     hasher.update(replay.id.bytes());
     FailureIntervalConsensusTerminalReceiptV1 {
         id: FailureIntervalConsensusTerminalReceiptIdV1::from_bytes(hasher.finalize().into()),
+        interval_binding_id: state.binding_id,
         market_instance_id: state.market_instance_id,
         generation: state.generation,
         failure_policy_binding_id: state.failure_policy_binding_id,
@@ -1240,6 +1435,7 @@ fn terminal_receipt(
         product_certificate_id: state.certificate_id,
         failure_resolution_receipt_id: state.resolution_receipt_id,
         work_close_authorization_id: state.close_authorization_id,
+        permanent_replay_receipt_id: replay.id,
     }
 }
 
@@ -1253,10 +1449,12 @@ fn hash_funding_facts(hasher: &mut Sha256, facts: FailureIntervalConsensusFundin
     hasher.update(facts.neutral_sink.bytes());
     hasher.update(facts.work_rent_principal_lamports.to_le_bytes());
     hasher.update(facts.replay_rent_principal_lamports.to_le_bytes());
-    hasher.update(facts.work_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.work_post_funding_lamports.to_le_bytes());
-    hasher.update(facts.replay_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.replay_post_funding_lamports.to_le_bytes());
+    hasher.update(facts.work_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.replay_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_balance_lamports.to_le_bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
@@ -1344,5 +1542,73 @@ mod tests {
             first,
             project_failure_interval_consensus_replay_id_v1(sibling).unwrap()
         );
+    }
+
+    #[test]
+    fn later_prefund_donations_cannot_grief_begin_or_discount_principal() {
+        assert_eq!(validate_prefund_observation(100, 3, 9, 109), Ok(()));
+        assert_eq!(
+            validate_prefund_observation(100, 3, 2, 102),
+            Err(Error::BindingMismatch)
+        );
+        assert_eq!(
+            validate_prefund_observation(100, 3, 9, 108),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn replay_projection_refuses_a_half_recorded_paid_transition() {
+        let facts = FailureIntervalConsensusPersistedFactsV1 {
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([0; 32]),
+            ..active_facts()
+        };
+        assert_eq!(
+            project_failure_interval_consensus_replay_id_v1(facts),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn resolution_receipt_binds_the_complete_authenticated_history() {
+        let first_state = state_from_persisted_facts(active_facts()).unwrap();
+        let accepted_resolution_id = AcceptedResolutionId::from_bytes([30; 32]);
+        let certificate_id = QuantizedIntervalConsensusCertificateV1Id::from_bytes([31; 32]);
+        let first = resolution_receipt(&first_state, accepted_resolution_id, certificate_id);
+        assert_eq!(first.market_instance_id(), first_state.market_instance_id);
+        assert_eq!(first.product_certificate_id(), certificate_id);
+        assert_eq!(first.accepted_resolution_id(), accepted_resolution_id);
+
+        let changed_state = state_from_persisted_facts(FailureIntervalConsensusPersistedFactsV1 {
+            source_interval_id: SourceContentId::from_bytes([29; 32]),
+            ..active_facts()
+        })
+        .unwrap();
+        assert_ne!(
+            first.id(),
+            resolution_receipt(&changed_state, accepted_resolution_id, certificate_id,).id()
+        );
+    }
+
+    #[test]
+    fn terminal_receipt_exposes_the_exact_permanent_replay_postimage() {
+        let state = state_from_persisted_facts(FailureIntervalConsensusPersistedFactsV1 {
+            phase: FailureIntervalConsensusPhaseV1::Closed,
+            checked_coordinates: 2,
+            certificate_id: QuantizedIntervalConsensusCertificateV1Id::from_bytes([40; 32]),
+            resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(
+                [41; 32],
+            ),
+            close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1::from_bytes(
+                [42; 32],
+            ),
+            ..active_facts()
+        })
+        .unwrap();
+        let replay = replay_from_state(state);
+        let receipt = terminal_receipt(state, replay);
+        assert_eq!(receipt.interval_binding_id(), state.binding_id);
+        assert_eq!(receipt.permanent_replay_receipt_id(), replay.id());
+        assert!(live(receipt.terminal_receipt_id().bytes()));
     }
 }
