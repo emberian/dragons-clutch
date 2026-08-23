@@ -151,6 +151,8 @@ pub mod orders_batch;
 pub mod product_artifact;
 /// Disabled narrow Product authority for founding the current General Market owner.
 pub(crate) mod product_general_family;
+/// Capability-disabled atomic Fractional family postwrite promotion into Product.
+pub(crate) mod product_fractional_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
 /// Always-compiled current Product/Series authority. Dispatcher tuples remain
