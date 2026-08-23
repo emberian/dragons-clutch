@@ -282,9 +282,19 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
 pub(crate) fn write_failure_market_interval_cell_plan_v2(
     program_id: &Pubkey,
     cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     plan: FailureMarketIntervalCellPlanV2,
 ) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    authenticate_unchanged_account_prestate(
+        program_id,
+        history_account,
+        authenticated.history_account,
+        authenticated.history_data_id,
+        authenticated.history_observed_lamports,
+        FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+        false,
+    )?;
     let mut next = authenticated.cell;
     next.commit_plan(plan)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -435,11 +445,25 @@ pub(crate) fn write_failure_market_interval_archive_v2<'a>(
 /// history-only writer and must use the paired archive writer above.
 pub(crate) fn write_failure_market_interval_family_seal_v2(
     program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     plan: FailureMarketIntervalHistoryPlanV2,
     seal: FailureMarketIntervalFamilySealReceiptV2,
 ) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    authenticate_unchanged_account_prestate(
+        program_id,
+        cell_account,
+        authenticated.cell_account,
+        authenticated.cell_data_id,
+        authenticated.cell_observed_lamports,
+        FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
+        false,
+    )?;
+    require(
+        authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Idle,
+        ClutchError::MismatchedState,
+    )?;
     let mut next = authenticated.history;
     next.commit_plan(plan)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -529,6 +553,54 @@ fn authenticate_write_prestate<const N: usize>(
                     .as_ref(),
             ) == expected_data_id
             && output.iter().any(|byte| *byte != 0),
+        ClutchError::MismatchedState,
+    )
+}
+
+fn authenticate_close_account_prestate(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_account: Pubkey,
+    expected_data_id: ProductContentId,
+    expected_lamports: u64,
+) -> Outcome<()> {
+    require(
+        account.owner == program_id
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && *account.key == expected_account
+            && account.lamports() == expected_lamports
+            && framed_data_id(
+                account
+                    .try_borrow_data()
+                    .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                    .as_ref(),
+            ) == expected_data_id,
+        ClutchError::MismatchedState,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_unchanged_account_prestate(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_account: Pubkey,
+    expected_data_id: ProductContentId,
+    expected_lamports: u64,
+    expected_len: usize,
+    writable: bool,
+) -> Outcome<()> {
+    authenticate_account_metadata(program_id, account, expected_len, writable)?;
+    require(
+        *account.key == expected_account
+            && account.lamports() == expected_lamports
+            && framed_data_id(
+                account
+                    .try_borrow_data()
+                    .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                    .as_ref(),
+            ) == expected_data_id,
         ClutchError::MismatchedState,
     )
 }
