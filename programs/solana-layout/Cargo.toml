@@ -18,6 +18,10 @@ default = ["profile-full"]
 profile-full = []
 profile-direct-v3-source-v2-point = []
 profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point"]
+# Current chain-attached request/account surface.  The exact admitted wire
+# coordinates live in the program capability table and checked manifest; this
+# feature exists here so strict hostile decoders can compile the same closure.
+profile-successor-chain-attached-v1 = []
 # Host-only forensic parser for the withdrawn General V3 request family. No
 # deployable checked profile forwards this feature, and the SBF program refuses
 # those tags before hostile payload decoding.

@@ -88,7 +88,7 @@ profile.
 | Identity | Additional Cargo feature | Meaning |
 | --- | --- | --- |
 | `production-inert` | none | Ordinary artifact identity; this name does not claim a production source release. |
-| `runtime-real-pyth-release` | none | Checked full-profile identity for a separately authenticated SourceReleaseManifestV2/real-Pyth route; it compiles no fixture row. |
+| `runtime-real-pyth-release` | none | Checked `profile-successor-chain-attached-v1` identity for a separately authenticated SourceReleaseManifestV2/real-Pyth route; it compiles no fixture row. |
 | `non-production-mock-source-lab` | `non-production-mock-source` | Fabricated-provider laboratory ELF. |
 | `non-production-real-pyth-lab` | `non-production-real-pyth-lab` | Captured real-program/local-synthetic-observation laboratory ELF. |
 
@@ -97,19 +97,32 @@ ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
 
-`runtime-real-pyth-release` is admitted only with `profile-full`, whose current
-SourceSeries authority is the `77/v2` Source V3 family. The checked-profile
-gate refuses both laboratory identities as deployable; the runtime also gates
-legacy Source V1 tags `23..=26` and Source V2 tags `70..=73` on those explicit
-non-production features. A release-class ELF therefore has no fixture or
-legacy Source fallback.
+`runtime-real-pyth-release` is admitted only with
+`profile-successor-chain-attached-v1`, whose current SourceSeries authority is
+the `77/v2` Source V3 family. That profile in turn requires this exact Source
+identity; `production-inert` cannot be relabeled as the chain-attached
+successor. The checked-profile gate refuses both laboratory identities as
+deployable; the runtime also gates legacy Source V1 tags `23..=26` and Source
+V2 tags `70..=73` on those explicit non-production features. A release-class
+ELF therefore has no fixture or legacy Source fallback.
 
-For a full successor profile the Source semantic-owner requirements are
+For the chain-attached successor profile the Source semantic-owner requirements are
 exactly `(77,2,1)` through `(77,2,4)`. When that owner is linked, the enabled
 central-registry Source subset must be exactly the same four triples. Reserved
 actions 5 through 12 refuse; narrow profiles must expose no Source V3 action.
 Every release-class wire surface has no legacy Source pair and an empty
 `source_generation_discriminants` array.
+
+The successor's complete legacy intent projection is version 3 of tags
+`2..=5`, `7`, `10`, `11`, `14..=21`, and `68`. This is the current Collateral
+value plane, current Direct V4's shared tags `7` and `14`, the Realm/Profile,
+artifact, and exact close paths still used by the chain-attached product. Its
+dedicated Direct projection is version 3 of tags `36..=46`. No market-founding,
+General value/clearing, historical Direct, legacy Source, or Dealer intent is
+admitted. The checker compares both arrays to these exact constants after
+proving that their union exhausts central-registry local-action-zero coverage;
+adding a merely decodable historical DTO therefore cannot silently widen a
+checked release.
 
 The separately named
 `profile-non-production-dealer-policy-catalog-lab` is a capability profile,
@@ -260,6 +273,7 @@ python3 programs/clutch-sbf/scripts/measure_capability_profile_sizes.py \
   --profile full=profile-full \
   --profile direct-v3-source-v2-point=profile-direct-v3-source-v2-point \
   --profile general-source-v2-point=profile-general-source-v2-point \
+  --profile successor-chain-attached=profile-successor-chain-attached-v1 \
   --cargo-default-profile full \
   --output path/to/size-diagnostic.json
 

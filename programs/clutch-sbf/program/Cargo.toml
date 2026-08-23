@@ -69,6 +69,15 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# First checked chain-attached successor surface.  It retains only current
+# Collateral and Direct wire families, shared construction/artifact/close
+# actions, current Product account schemas, and SourceSeries 77/v2 actions
+# 1--4.  General successor actions remain absent until their Product-rooted
+# founding and retirement chain is executable end to end.
+profile-successor-chain-attached-v1 = [
+    "clutch-solana-layout/profile-successor-chain-attached-v1",
+    "clutch-solana-reference/profile-successor-chain-attached-v1",
+]
 # A distinct non-production Dealer product containing the immutable policy and
 # liveness catalogs plus exact facility Initialize and BindEpoch transitions. The hostile
 # wire dependencies use their full decoders, while this crate's capability
