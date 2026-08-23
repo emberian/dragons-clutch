@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "check": "node --check action.js && node --check app.js && node --check bench.js && node --check dom.js && node --check evidence.js && node --check market.js && node --check pyth.js && node --check stream.js && node --check trade.js && node --check walk.js",
+    "check": "node --check action.js && node --check app.js && node --check bench.js && node --check dom.js && node --check evidence.js && node --check live-pyth.js && node --check market.js && node --check pyth.js && node --check stream.js && node --check trade.js && node --check walk.js",
     "test": "node --test test/*.mjs"
   }
 }

@@ -19,7 +19,7 @@ loopback_tools="$repo/tools/agave-loopback-validator"
 loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
 validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
 python3 "$loopback_tools/verify-runtime.py" --binary "$validator"
-for command in awk cargo cargo-build-sbf cp curl git grep ln lsof mktemp rustc sed seq shasum tee tr; do
+for command in awk cargo cargo-build-sbf cp curl dirname find git grep ln lsof mktemp rm rustc sed seq shasum tee touch tr; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "FAIL: required command is absent: $command" >&2
     exit 1
@@ -156,7 +156,46 @@ for named in "$rpc_port" "$ws_port" "$faucet_port" "$gossip_port"; do
 done
 
 url="http://127.0.0.1:$rpc_port"
-work="$(mktemp -d "${TMPDIR:-/tmp}/clutch-local-real-pyth.XXXXXX")"
+caller_work="${CLUTCH_LOCAL_REAL_PYTH_CALLER_WORK_DIR:-}"
+control_dir="${CLUTCH_LOCAL_REAL_PYTH_CONTROL_DIR:-}"
+caller_owns_work=0
+if [ -n "$caller_work" ]; then
+  [ "${CLUTCH_LOCAL_REAL_PYTH_CALLER_OWNS_WORK:-0}" = 1 ] || {
+    echo "FAIL: explicit campaign work requires caller-owned-work=1" >&2
+    exit 1
+  }
+  [ -d "$caller_work" ] && [ ! -L "$caller_work" ] || {
+    echo "FAIL: caller campaign work must be an existing non-symlink directory" >&2
+    exit 1
+  }
+  grep -qx 'dragons-clutch/operator/local-session-owner/v1' \
+    "$(dirname "$caller_work")/owner-v1" 2>/dev/null || {
+    echo "FAIL: caller campaign work has no local-session owner marker" >&2
+    exit 1
+  }
+  [ -z "$(find "$caller_work" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+    echo "FAIL: caller campaign work is not empty" >&2
+    exit 1
+  }
+  work="$caller_work"
+  caller_owns_work=1
+else
+  work="$(mktemp -d "${TMPDIR:-/tmp}/clutch-local-real-pyth.XXXXXX")"
+fi
+if [ -n "$control_dir" ]; then
+  [ "$caller_owns_work" = 1 ] && [ -d "$control_dir" ] && [ ! -L "$control_dir" ] || {
+    echo "FAIL: local-session control requires caller-owned non-symlink directories" >&2
+    exit 1
+  }
+  [ "$(dirname "$control_dir")" = "$(dirname "$work")" ] || {
+    echo "FAIL: control and campaign work do not share one session owner" >&2
+    exit 1
+  }
+  [ -z "$(find "$control_dir" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+    echo "FAIL: local-session control directory is not empty" >&2
+    exit 1
+  }
+fi
 validator_pid=""
 keep="${CLUTCH_LOCAL_REAL_PYTH_KEEP_WORK:-0}"
 
@@ -200,6 +239,9 @@ wait_ready() {
 
 cleanup() {
   stop_validator
+  if [ "$caller_owns_work" = 1 ]; then
+    return
+  fi
   case "$work" in
     "${TMPDIR:-/tmp}"/clutch-local-real-pyth.*)
       if [ "$keep" = 1 ]; then
@@ -347,47 +389,54 @@ echo "campaign_clock_settled=$campaign_clock_time"
 echo "== real provider / joined Clutch campaign =="
 "$driver" run --work "$work" --repository-head "$repository_head" \
   --url "$url" --validator "$validator" --campaign-mode "$campaign_mode"
+if [ -n "$control_dir" ]; then
+  touch "$control_dir/ready"
+  echo "local_session_owner=ready"
+  while [ ! -e "$control_dir/stop" ]; do
+    kill -0 "$validator_pid" 2>/dev/null || {
+      echo "FAIL: owned validator exited while the local session was held" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  rm -f -- "$control_dir/ready"
+  echo "local_session_owner=stopping"
+fi
 # Some validator client pools create UDP/QUIC sockets lazily only after the
 # bank processes traffic. Re-run the exact strong isolation proof before a
 # successful transcript can leave the temporary directory.
 "$repo/tools/agave-loopback-validator/probe-listeners.sh" \
   "$validator_pid" "$rpc_port" "$faucet_port" "$validator" \
   | tee "$work/probe-after.txt"
-probe_before_sha="$(shasum -a 256 "$work/probe-before.txt" | awk '{print $1}')"
-probe_after_sha="$(shasum -a 256 "$work/probe-after.txt" | awk '{print $1}')"
 validator_log_sha="$(shasum -a 256 "$work/validator.log" | awk '{print $1}')"
 validator_sha="$(shasum -a 256 "$validator" | awk '{print $1}')"
-cat >"$work/probe-evidence.json" <<EOF
-{
-  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
-  "selected_validator_sha256": "$validator_sha",
-  "rpc": "127.0.0.1:$rpc_port",
-  "websocket": "127.0.0.1:$ws_port",
-  "faucet": "127.0.0.1:$faucet_port",
-  "gossip": "127.0.0.1:$gossip_port",
-  "configured_dynamic_port_range": "$dynamic_port_range",
-  "probe_before_sha256": "$probe_before_sha",
-  "probe_after_sha256": "$probe_after_sha",
-  "validator_log_sha256": "$validator_log_sha",
-  "scope": "proves all child TCP listeners and UDP sockets observed by lsof were loopback-bound; does not claim every loopback socket fell inside the configurable service ranges"
-}
-EOF
+public_transcript="$work/public-transcript"
+mkdir "$public_transcript"
+python3 "$crate/public_transcript.py" build \
+  --work "$work" --output "$public_transcript" \
+  --validator-sha256 "$validator_sha" --validator-log-sha256 "$validator_log_sha" \
+  --rpc-port "$rpc_port" --websocket-port "$ws_port" \
+  --faucet-port "$faucet_port" --gossip-port "$gossip_port" \
+  --dynamic-port-range "$dynamic_port_range"
+# This is deliberately a second, independent pass over all five final bytes.
+# Unsafe raw process/socket rows and validator logs never leave $work.
+python3 "$crate/public_transcript.py" check --directory "$public_transcript"
 transcript_dir="${CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR:-}"
 if [ -n "$transcript_dir" ]; then
   mkdir -p "$transcript_dir"
-  if [ -e "$transcript_dir/campaign.json" ] || [ -e "$transcript_dir/result.json" ] || \
-     [ -e "$transcript_dir/probe-evidence.json" ] || \
-     [ -e "$transcript_dir/probe-before.txt" ] || [ -e "$transcript_dir/probe-after.txt" ]; then
-    echo "FAIL: refusing to overwrite an existing retained transcript" >&2
-    exit 1
-  fi
-  cp "$work/campaign.json" "$transcript_dir/campaign.json"
-  cp "$work/result.json" "$transcript_dir/result.json"
-  cp "$work/probe-evidence.json" "$transcript_dir/probe-evidence.json"
-  cp "$work/probe-before.txt" "$transcript_dir/probe-before.txt"
-  cp "$work/probe-after.txt" "$transcript_dir/probe-after.txt"
+  for retained_name in campaign.json result.json probe-evidence.json probe-before.txt probe-after.txt; do
+    if [ -e "$transcript_dir/$retained_name" ] || [ -L "$transcript_dir/$retained_name" ]; then
+      echo "FAIL: refusing to overwrite existing retained target $retained_name" >&2
+      exit 1
+    fi
+  done
+  cp "$public_transcript/campaign.json" "$transcript_dir/campaign.json"
+  cp "$public_transcript/result.json" "$transcript_dir/result.json"
+  cp "$public_transcript/probe-evidence.json" "$transcript_dir/probe-evidence.json"
+  cp "$public_transcript/probe-before.txt" "$transcript_dir/probe-before.txt"
+  cp "$public_transcript/probe-after.txt" "$transcript_dir/probe-after.txt"
   echo "PASS; public truth-labeled transcripts copied to $transcript_dir"
 else
   echo "PASS; result transcript (set CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR to retain):"
-  sed -n '1,240p' "$work/result.json"
+  sed -n '1,240p' "$public_transcript/result.json"
 fi

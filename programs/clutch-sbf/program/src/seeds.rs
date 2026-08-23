@@ -136,6 +136,52 @@ pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
 /// Program-owned prepaid Reserve bound to one deterministic Work PDA.
 pub const SEED_RESOLUTION_RESERVE: &[u8] = b"resolution-reserve-v1";
 
+/// Immutable General V2 MarketBinding seed prefix.
+pub const SEED_GENERAL_V2_MARKET_BINDING: &[u8] =
+    clutch_general_v2_contract::MARKET_BINDING_SEED_DOMAIN_V1;
+/// Genesis-assisted General V2 mutable Market runtime seed prefix.
+pub const SEED_GENERAL_V2_MARKET_RUNTIME: &[u8] =
+    clutch_general_v2_contract::MARKET_RUNTIME_SEED_DOMAIN_V1;
+/// Counted General V2 Epoch seed prefix.
+pub const SEED_GENERAL_V2_EPOCH: &[u8] = clutch_general_v2_contract::EPOCH_SEED_DOMAIN_V1;
+/// General V2 EconomicDomain artifact seed prefix.
+pub const SEED_GENERAL_V2_ECONOMIC_DOMAIN: &[u8] =
+    clutch_general_v2_contract::ECONOMIC_DOMAIN_SEED_DOMAIN_V1;
+/// General V2 candidate Window seed prefix.
+pub const SEED_GENERAL_V2_WINDOW: &[u8] = clutch_general_v2_contract::WINDOW_SEED_DOMAIN_V1;
+/// General V2 root Budget seed prefix.
+pub const SEED_GENERAL_V2_BUDGET: &[u8] = clutch_general_v2_contract::EPOCH_BUDGET_SEED_DOMAIN_V1;
+/// General V2 ordinal-owned AdmissionNode seed prefix.
+pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NODE_SEED_DOMAIN_V1;
+/// General V2 active-width Feed/Stage seed prefix.
+pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
+/// General V2 active-width ClearWork seed prefix.
+pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// General V2 selected settlement-authority seed prefix.
+pub const SEED_GENERAL_V2_SELECTED: &[u8] =
+    clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 owner-aggregated settlement seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+/// Disabled selected composite-fee record seed prefix.
+pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
+    clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
+/// Disabled owner-scoped fee-carry seed prefix.
+pub const SEED_GENERAL_V2_OWNER_FEE_CARRY: &[u8] =
+    clutch_general_v2_contract::OWNER_FEE_CARRY_SEED_DOMAIN_V1;
+/// Disabled owner payer-allocation seed prefix.
+pub const SEED_GENERAL_V2_PAYER_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::PAYER_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled candidate-wide recipient-allocation seed prefix.
+pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::RECIPIENT_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled selected-record treasury-ledger seed prefix.
+pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
+    clutch_general_v2_contract::TREASURY_LEDGER_SEED_DOMAIN_V1;
+/// Disabled buyer-first candidate settlement cash-pot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_REALM, realm])
@@ -237,6 +283,174 @@ pub fn resolution_reserve_pda(
     work: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(program_id, &[SEED_RESOLUTION_RESERVE, market, work])
+}
+
+/// Canonical immutable General V2 MarketBinding PDA.
+pub fn general_v2_market_binding_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_BINDING, market_instance_v2_id],
+    )
+}
+
+/// Canonical genesis-assisted General V2 Market runtime PDA.
+pub fn general_v2_market_runtime_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_RUNTIME, market_binding],
+    )
+}
+
+/// Canonical counted General V2 Epoch PDA.
+pub fn general_v2_epoch_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+    epoch_index: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_EPOCH,
+            market_binding,
+            &epoch_index.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical General V2 EconomicDomain artifact PDA.
+pub fn general_v2_economic_domain_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_ECONOMIC_DOMAIN, epoch])
+}
+
+/// Canonical General V2 candidate Window PDA.
+pub fn general_v2_window_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WINDOW, epoch])
+}
+
+/// Canonical General V2 root Budget PDA.
+pub fn general_v2_budget_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_BUDGET, epoch])
+}
+
+/// Canonical General V2 ordinal-owned AdmissionNode PDA.
+pub fn general_v2_node_pda(program_id: &Pubkey, epoch: &[u8; 32], ordinal: u64) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_NODE, epoch, &ordinal.to_le_bytes()],
+    )
+}
+
+/// Canonical General V2 Feed/Stage PDA inherited from its AdmissionNode.
+pub fn general_v2_feed_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_FEED, node])
+}
+
+/// Canonical General V2 ClearWork PDA inherited from its AdmissionNode.
+pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK, node])
+}
+
+/// Canonical General V2 selected settlement-authority PDA.
+pub fn general_v2_selected_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED, epoch, settlement_candidate_id],
+    )
+}
+
+/// Canonical disabled owner-settlement address for one selected owner row.
+pub fn general_v2_owner_settlement_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical disabled selected fee-record address for one SelectedCandidate.
+pub fn general_v2_selected_fee_record_pda(
+    program_id: &Pubkey,
+    selected_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED_FEE_RECORD, selected_candidate],
+    )
+}
+
+/// Canonical disabled carry address keyed only by fee record and owner.
+pub fn general_v2_owner_fee_carry_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_OWNER_FEE_CARRY, fee_record, owner],
+    )
+}
+
+/// Canonical disabled temporary payer-allocation address for one owner.
+pub fn general_v2_payer_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_PAYER_ALLOCATION, fee_record, owner],
+    )
+}
+
+/// Canonical disabled candidate-wide recipient-allocation address.
+pub fn general_v2_recipient_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RECIPIENT_ALLOCATION, fee_record],
+    )
+}
+
+/// Canonical disabled treasury-ledger address for one selected fee record.
+pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
+}
+
+/// Canonical disabled buyer-first cash-pot address for one final candidate.
+pub fn general_v2_settlement_cash_pot_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
+            epoch,
+            settlement_candidate,
+        ],
+    )
 }
 
 /// Canonical immutable-terms address and bump.
