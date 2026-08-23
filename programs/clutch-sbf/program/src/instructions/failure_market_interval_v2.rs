@@ -14,6 +14,11 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
     authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
 };
+use crate::instructions::failure_market_runtime::{
+    write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+};
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
@@ -45,6 +50,10 @@ use clutch_failure_policy_runtime::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use clutch_failure_policy_runtime::market_runtime_v1::{
+    plan_close_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
+    FailureMarketSessionCloseFactsV1,
+};
 use clutch_product_series::{
     ContentId as ProductContentId, MarketFoundationSlotV2, SourceOccurrenceV1Id,
 };
@@ -70,6 +79,63 @@ const CLOSE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-physical-close/v2";
 const ARCHIVE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-archive-postwrite/v2";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeArchiveAuthorityV1 {
+    expected: FailureMarketSessionCloseFactsV1,
+}
+
+impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimeArchiveAuthorityV1 {
+    fn authenticate_failure_market_session_close(
+        &self,
+        expected: FailureMarketSessionCloseFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.runtime_before != self.expected.runtime_before
+            || expected.series_link_before != self.expected.series_link_before
+            || expected.series_link_after != self.expected.series_link_after
+            || expected.session_before != self.expected.session_before
+            || expected.session_after != self.expected.session_after
+            || expected.interval_terminal_receipt_id != self.expected.interval_terminal_receipt_id
+            || expected.previous_session_history != self.expected.previous_session_history
+            || expected.resulting_session_history != self.expected.resulting_session_history
+            || expected.history_append_receipt_id != self.expected.history_append_receipt_id
+            || expected.history_before != self.expected.history_before
+            || expected.history_after != self.expected.history_after
+            || expected.completed_session_count != self.expected.completed_session_count
+            || expected.transition_receipt_id.bytes() == [0; 32]
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeArchiveWriteV1 {
+    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    archive_idle_state: ProductContentId,
+    runtime_idle_state: ProductContentId,
+    release_link_after: ProductContentId,
+    runtime_link_after: ProductContentId,
+    release_terminal_receipt_id: ProductContentId,
+    runtime_terminal_receipt_id: ProductContentId,
+}
+
+impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimeArchiveWriteV1 {
+    fn authenticate_failure_market_runtime_session_write_v1(
+        &self,
+        expected: FailureMarketRuntimeSessionWriteFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected
+            || self.archive_idle_state != self.runtime_idle_state
+            || self.release_link_after != self.runtime_link_after
+            || self.release_terminal_receipt_id != self.runtime_terminal_receipt_id
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
 
 const _: () =
     assert!(FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2 == FAILURE_MARKET_INTERVAL_CELL_BYTES_V2);
@@ -1201,11 +1267,15 @@ fn write_failure_market_interval_archive_v2<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root_account: &AccountInfo<'a>,
     cell_account: &AccountInfo<'a>,
     history_account: &AccountInfo<'a>,
     series_link_account: &AccountInfo<'a>,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     history_plan: FailureMarketIntervalHistoryPlanV2,
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     cell_plan: FailureMarketIntervalCellPlanV2,
@@ -1214,12 +1284,48 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
 ) -> Outcome<(
     FailureMarketIntervalArchivePostwriteV2,
     AuthenticatedSeriesFailureSessionReleaseV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
 )> {
     require_distinct(&[
+        admission_root_account.clone(),
+        runtime_root_account.clone(),
         cell_account.clone(),
         history_account.clone(),
         series_link_account.clone(),
     ])?;
+    let expected_close = FailureMarketSessionCloseFactsV1 {
+        runtime_before: runtime_before.state_commitment(),
+        series_link_before: link_before
+            .state()
+            .semantic_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_link_after: link_before
+            .state()
+            .release_failure_session(append.session_terminal_receipt_id())
+            .and_then(|link| link.semantic_id())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        session_before: ProductContentId::from_bytes(append.terminal_state_commitment().bytes()),
+        session_after: ProductContentId::from_bytes(append.idle_state_commitment().bytes()),
+        interval_terminal_receipt_id: append.session_terminal_receipt_id(),
+        previous_session_history: append.previous_root(),
+        resulting_session_history: append.resulting_root(),
+        history_append_receipt_id: append.id(),
+        history_before: append.history_before(),
+        history_after: append.history_after(),
+        completed_session_count: append.completed_session_count(),
+        transition_receipt_id: clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]),
+    };
+    let runtime_authority = FailureMarketRuntimeArchiveAuthorityV1 {
+        expected: expected_close,
+    };
+    let runtime_plan = plan_close_failure_market_session_v1(
+        &runtime_authority,
+        runtime_before.state(),
+        admission.state(),
+        *link_before.state(),
+        append,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let archive = write_failure_market_interval_archive_v2(
         program_id,
         cell_account,
@@ -1237,7 +1343,67 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
         &archive,
         link_rebound_output,
     )?;
-    Ok((archive, release))
+    let runtime_link_after = runtime_plan
+        .series_link_after()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        release.link_semantic_before().bytes()
+            == runtime_plan
+                .series_link_before()
+                .semantic_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+            && release.link_semantic_after().bytes() == runtime_link_after.bytes()
+            && release.archive_postwrite_id() == archive.id()
+            && release.append_receipt_id().bytes() == archive.append().id().bytes()
+            && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
+            && release.session_terminal_receipt_id()
+                == archive.append().session_terminal_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before: runtime_before.state_commitment(),
+        runtime_after: runtime_plan
+            .resulting_runtime()
+            .commitment()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        transition_receipt_id: runtime_plan.receipt_id(),
+    };
+    let runtime_write_authority = FailureMarketRuntimeArchiveWriteV1 {
+        expected: runtime_write_facts,
+        archive_idle_state: ProductContentId::from_bytes(
+            archive.accounts().cell_state_id().bytes(),
+        ),
+        runtime_idle_state: runtime_plan.resulting_runtime().session_state_commitment(),
+        release_link_after: release.link_semantic_after(),
+        runtime_link_after: ProductContentId::from_bytes(runtime_link_after.bytes()),
+        release_terminal_receipt_id: release.session_terminal_receipt_id(),
+        runtime_terminal_receipt_id: runtime_plan
+            .resulting_runtime()
+            .interval_terminal_receipt_id(),
+    };
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v1(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        admission,
+        runtime_before,
+        runtime_plan,
+        &runtime_write_authority,
+    )?;
+    require(
+        runtime_postwrite.transition_receipt_id() == runtime_write_facts.transition_receipt_id
+            && runtime_postwrite.root().state().completed_session_count()
+                == archive.append().completed_session_count()
+            && runtime_postwrite
+                .root()
+                .state()
+                .session_history_commitment()
+                == archive.append().resulting_root(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((archive, release, runtime_postwrite))
 }
 
 /// Persist the exhaustive family seal. Session appends cannot use this
@@ -1790,5 +1956,32 @@ mod adversarial_account_tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn archive_orders_append_reset_link_release_and_runtime_transcript_atomically() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let outer = source
+            .find("pub(crate) fn archive_failure_market_interval_session_v2")
+            .unwrap();
+        let archive = source[outer..]
+            .find("let archive = write_failure_market_interval_archive_v2")
+            .unwrap();
+        let release = source[outer..]
+            .find("let release = release_series_market_link_failure_v1")
+            .unwrap();
+        let runtime = source[outer..]
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
+            .unwrap();
+        let success = source[outer..]
+            .find("Ok((archive, release, runtime_postwrite))")
+            .unwrap();
+        assert!(archive < release && release < runtime && runtime < success);
+        assert_eq!(
+            source
+                .matches("pub(crate) fn archive_failure_market_interval_session_v2")
+                .count(),
+            1
+        );
     }
 }

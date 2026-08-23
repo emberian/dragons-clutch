@@ -382,9 +382,13 @@ pub struct FailureMarketSessionBeginFactsV1 {
     pub interval_history_state_id: FailureMarketIntervalHistoryStateIdV2,
     /// Exact number of already folded sessions.
     pub completed_session_count: u64,
+    /// Noncircular Product/Failure preauthorization passed to the link pin.
+    pub begin_preauthorization_id: ProductContentId,
+    /// Exact Product post-pin transcript retained by the cell and runtime.
+    pub session_binding_id: ProductContentId,
     /// Complete subordinate descriptor.
     pub session: FailureMarketSessionDescriptorV1,
-    /// Receipt consumed by Product's link pin.
+    /// Unique shared-runtime begin transition receipt.
     pub begin_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
 }
 
@@ -1061,6 +1065,7 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     runtime: FailureMarketRuntimeV1,
     admission: FailureMarketAdmissionStateV1,
     series_link: SeriesMarketLinkV1,
+    begin_preauthorization_id: ProductContentId,
     session: FailureMarketSessionDescriptorV1,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     interval_history: FailureMarketIntervalHistoryV2,
@@ -1071,6 +1076,7 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     {
         return Err(Error::WrongPhase);
     }
+    require_live(begin_preauthorization_id.bytes())?;
     validate_session_descriptor(
         runtime,
         admission,
@@ -1098,12 +1104,23 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     {
         return Err(Error::WrongPhase);
     }
+    let series_link_after_value = series_link.pin_failure_session(begin_preauthorization_id)?;
+    let series_link_after = series_link_after_value.semantic_id()?;
+    let session_binding_id = series_link_after_value.failure_session_transcript_id();
+    require_live(session_binding_id.bytes())?;
+    if session_binding_id == begin_preauthorization_id
+        || session_binding_id == session.session_state_commitment
+    {
+        return Err(Error::BindingMismatch);
+    }
     let mut hasher = Sha256::new();
     hasher.update(SESSION_BEGIN_DOMAIN_V1);
     hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
     hasher.update(series_link_before.bytes());
     hasher.update(previous_session_history.bytes());
     hasher.update(previous_interval_terminal_receipt_id.bytes());
+    hasher.update(begin_preauthorization_id.bytes());
+    hasher.update(session_binding_id.bytes());
     hasher.update(interval_funding.id().bytes());
     hasher.update(interval_history.id()?.bytes());
     hasher.update(interval_history.completed_session_count().to_le_bytes());
@@ -1113,9 +1130,6 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     let begin_receipt_id =
         FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
     require_live(begin_receipt_id.bytes())?;
-    let series_link_after_value =
-        series_link.pin_failure_session(ProductContentId::from_bytes(begin_receipt_id.bytes()))?;
-    let series_link_after = series_link_after_value.semantic_id()?;
     let facts = FailureMarketSessionBeginFactsV1 {
         runtime_before,
         series_link_before,
@@ -1126,6 +1140,8 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
         interval_history_account: interval_funding.facts().history_account,
         interval_history_state_id: interval_history.id()?,
         completed_session_count: runtime.completed_session_count,
+        begin_preauthorization_id,
+        session_binding_id,
         session,
         begin_receipt_id,
     };
@@ -1140,8 +1156,7 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
     after.session_ids[ACTIVE_INTERVAL_FUNDING_RECEIPT_INDEX_V1] =
         ProductContentId::from_bytes(interval_funding.id().bytes());
-    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] =
-        ProductContentId::from_bytes(begin_receipt_id.bytes());
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = session_binding_id;
     after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
         ProductContentId::from_bytes(series_link_after.bytes());
     after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session.session_state_commitment;
@@ -2355,6 +2370,7 @@ mod tests {
                 runtime,
                 admission,
                 active_series_link(),
+                ProductContentId::from_bytes([125; 32]),
                 session,
                 interval_funding,
                 interval_history,
@@ -2373,12 +2389,23 @@ mod tests {
             runtime,
             admission,
             active_series_link(),
+            ProductContentId::from_bytes([125; 32]),
             session(126, interval_funding.id()),
             interval_funding,
             interval_history,
         )
         .unwrap();
         let first_begin_receipt = first_begin.receipt_id();
+        assert_eq!(
+            first_begin.resulting_runtime().active_session_pin_id(),
+            first_begin
+                .series_link_after()
+                .failure_session_transcript_id()
+        );
+        assert_ne!(
+            first_begin.resulting_runtime().active_session_pin_id(),
+            ProductContentId::from_bytes([125; 32])
+        );
         runtime.commit_plan(first_begin).unwrap();
         let first_link = first_begin.series_link_after();
 
@@ -2437,6 +2464,7 @@ mod tests {
             runtime,
             admission,
             active_series_link(),
+            ProductContentId::from_bytes([149; 32]),
             session(150, interval_funding.id()),
             interval_funding,
             interval_history,
@@ -2444,6 +2472,16 @@ mod tests {
         .unwrap();
         assert_ne!(second_begin.receipt_id(), first_begin_receipt);
         let second_active = second_begin.resulting_runtime();
+        assert_eq!(
+            second_active.active_session_pin_id(),
+            second_begin
+                .series_link_after()
+                .failure_session_transcript_id()
+        );
+        assert_ne!(
+            second_active.active_session_pin_id(),
+            ProductContentId::from_bytes([149; 32])
+        );
         assert_eq!(second_active.session_history_commitment(), first_history);
         assert!(second_active.session_resolution_receipt_id().is_zero());
         assert!(second_active.interval_terminal_receipt_id().is_zero());

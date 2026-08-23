@@ -14,6 +14,11 @@ use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_begin_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketIntervalBeginV2,
 };
+use crate::instructions::failure_market_runtime::{
+    write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+};
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedProductArtifactV1,
     AuthenticatedRegistryCapabilityV3,
@@ -28,6 +33,11 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
     plan_activate_failure_market_interval_cell_v2,
     AuthenticatedFailureMarketIntervalCellActivationV2, FailureMarketIntervalCellActivationFactsV2,
     FailureMarketIntervalCellActivationReceiptV2,
+};
+use clutch_failure_policy_runtime::market_runtime_v1::{
+    plan_begin_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
+    FailureMarketSessionBeginFactsV1, FailureMarketSessionDescriptorV1,
+    FailureMarketSessionScheduleIdV1,
 };
 use clutch_product_series::{
     begin_quantized_interval_consensus_v1, compile_ordinal_v5,
@@ -141,6 +151,8 @@ pub(crate) struct AuthenticatedProductFailureBeginScheduleV1 {
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
     compiler_bundle_id: ContentId,
+    edge_policy_registry_value: u8,
+    resolved_edge_policy: clutch_product_series::QuantizedEdgePolicyV1,
 }
 
 impl AuthenticatedProductFailureBeginScheduleV1 {
@@ -202,6 +214,14 @@ impl AuthenticatedProductFailureBeginScheduleV1 {
 
     pub(crate) const fn compiler_bundle_id(self) -> ContentId {
         self.compiler_bundle_id
+    }
+
+    pub(crate) const fn edge_policy_registry_value(self) -> u8 {
+        self.edge_policy_registry_value
+    }
+
+    pub(crate) const fn resolved_edge_policy(self) -> clutch_product_series::QuantizedEdgePolicyV1 {
+        self.resolved_edge_policy
     }
 }
 
@@ -271,6 +291,80 @@ struct ProductFailureSessionPinPostwriteV2 {
     activation: FailureMarketIntervalCellActivationReceiptV2,
 }
 
+/// Exact pure shared-runtime Begin authority derived before any account write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeBeginAuthorityV1 {
+    runtime_before:
+        clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
+    series_link_before: clutch_product_series::SeriesMarketLinkV1Id,
+    series_link_after: clutch_product_series::SeriesMarketLinkV1Id,
+    previous_session_history:
+        clutch_failure_policy_runtime::market_interval_history_v2::FailureMarketIntervalHistoryRootV2,
+    previous_interval_terminal_receipt_id: ContentId,
+    interval_work_account:
+        clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1,
+    interval_history_account:
+        clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1,
+    interval_history_state_id: clutch_failure_policy_runtime::market_interval_history_v2::FailureMarketIntervalHistoryStateIdV2,
+    completed_session_count: u64,
+    begin_preauthorization_id: ContentId,
+    session_binding_id: ContentId,
+    session: FailureMarketSessionDescriptorV1,
+}
+
+impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimeBeginAuthorityV1 {
+    fn authenticate_failure_market_session_begin(
+        &self,
+        expected: FailureMarketSessionBeginFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.runtime_before != self.runtime_before
+            || expected.series_link_before != self.series_link_before
+            || expected.series_link_after != self.series_link_after
+            || expected.previous_session_history != self.previous_session_history
+            || expected.previous_interval_terminal_receipt_id
+                != self.previous_interval_terminal_receipt_id
+            || expected.interval_work_account != self.interval_work_account
+            || expected.interval_history_account != self.interval_history_account
+            || expected.interval_history_state_id != self.interval_history_state_id
+            || expected.completed_session_count != self.completed_session_count
+            || expected.begin_preauthorization_id != self.begin_preauthorization_id
+            || expected.session_binding_id != self.session_binding_id
+            || expected.session != self.session
+            || expected.begin_receipt_id.bytes() == [0; 32]
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Exact physical shared-runtime write admitted after cell and link postwrites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeBeginWriteV1 {
+    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    cell_state_after: ContentId,
+    runtime_session_state_after: ContentId,
+    link_state_after: clutch_product_series::SeriesMarketLinkV1,
+    planned_link_state_after: clutch_product_series::SeriesMarketLinkV1,
+    session_binding_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimeBeginWriteV1 {
+    fn authenticate_failure_market_runtime_session_write_v1(
+        &self,
+        expected: FailureMarketRuntimeSessionWriteFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected
+            || self.cell_state_after != self.runtime_session_state_after
+            || self.link_state_after != self.planned_link_state_after
+            || self.link_state_after.failure_session_transcript_id() != self.session_binding_id
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 impl AuthenticatedSeriesFailureSessionBeginV2 for ProductFailureSessionPinPostwriteV2 {
     fn authenticate_series_failure_session_begin_v2(
         &self,
@@ -316,6 +410,7 @@ pub(crate) struct AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
     cell_authentication_after: ContentId,
     link_authentication_before: ContentId,
     link_authentication_after: ContentId,
+    runtime_postwrite_id: ContentId,
 }
 
 impl AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
@@ -354,6 +449,10 @@ impl AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
     pub(crate) const fn link_authentication_after(self) -> ContentId {
         self.link_authentication_after
     }
+
+    pub(crate) const fn runtime_postwrite_id(self) -> ContentId {
+        self.runtime_postwrite_id
+    }
 }
 
 /// Atomically activate one reusable Failure cell and pin its exact Series link.
@@ -368,9 +467,12 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
     link_account: &AccountInfo<'_>,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
     root_before: AuthenticatedMarketLifecycleRootV1<'_>,
     link_before: AuthenticatedSeriesMarketLinkV1<'_>,
     admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     schedule: AuthenticatedProductFailureBeginScheduleV1,
     source_join: SourcePolicyHandoffJoinV1,
@@ -382,12 +484,15 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
     AuthenticatedFailureMarketIntervalBeginPostwriteV2,
     AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedSeriesMarketLinkV1<'next>,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
 )> {
     require_distinct_product_failure_begin_transition_accounts_v2(
         root_account,
         link_account,
         cell_account,
         history_account,
+        admission_root_account,
+        runtime_root_account,
         admission,
         source_join,
     )?;
@@ -425,6 +530,10 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
                 == source_success.occurrence().repair_generation(),
         ClutchError::MismatchedState,
     )?;
+    require_exact_resolved_edge_policy_v1(
+        context.resolved_edge_policy,
+        schedule.resolved_edge_policy(),
+    )?;
     let initial_work = *begin_quantized_interval_consensus_v1(context)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .work();
@@ -435,6 +544,7 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
         root_before,
         link_before,
         admission,
+        runtime_before,
         interval_before,
         schedule,
         source_join,
@@ -494,6 +604,61 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
         activation.facts() == activation_facts,
         ClutchError::MismatchedState,
     )?;
+    let cell_state_after = cell_plan
+        .resulting_cell()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let session = FailureMarketSessionDescriptorV1 {
+        series_plan_id: link_binding.series_plan_id,
+        ordinal: link_binding.ordinal,
+        source_occurrence_id: link_binding.source_occurrence_id,
+        schedule_id: FailureMarketSessionScheduleIdV1::from_bytes(
+            schedule.schedule_projection_id().bytes(),
+        ),
+        interval_funding_receipt_id: interval_before.funding().id(),
+        session_state_commitment: ContentId::from_bytes(cell_state_after.bytes()),
+    };
+    let runtime_begin_authority = FailureMarketRuntimeBeginAuthorityV1 {
+        runtime_before: runtime_before.state_commitment(),
+        series_link_before: link_before
+            .state()
+            .semantic_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_link_after: predicted_link
+            .semantic_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        previous_session_history: runtime_before.state().session_history_commitment(),
+        previous_interval_terminal_receipt_id: runtime_before
+            .state()
+            .interval_terminal_receipt_id(),
+        interval_work_account: interval_before.funding().facts().work_account,
+        interval_history_account: interval_before.funding().facts().history_account,
+        interval_history_state_id: interval_before.history_state_id(),
+        completed_session_count: interval_before.history().completed_session_count(),
+        begin_preauthorization_id: preauthorization_id,
+        session_binding_id: predicted_session_transcript_id,
+        session,
+    };
+    let runtime_plan = plan_begin_failure_market_session_v1(
+        &runtime_begin_authority,
+        runtime_before.state(),
+        admission.state(),
+        *link_before.state(),
+        preauthorization_id,
+        session,
+        interval_before.funding(),
+        interval_before.history(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        runtime_plan.series_link_before() == *link_before.state()
+            && runtime_plan.series_link_after() == predicted_link
+            && runtime_plan.resulting_runtime().active_session_pin_id()
+                == predicted_session_transcript_id
+            && runtime_plan.resulting_runtime().session_state_commitment()
+                == ContentId::from_bytes(cell_state_after.bytes()),
+        ClutchError::MismatchedState,
+    )?;
     let cell_authentication_before = interval_before.cell_authentication_id();
     let interval_after = write_failure_market_interval_begin_plan_v2(
         program_id,
@@ -543,6 +708,33 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
                 == predicted_session_transcript_id.bytes(),
         ClutchError::MismatchedState,
     )?;
+    let runtime_after_commitment = runtime_plan
+        .resulting_runtime()
+        .commitment()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before: runtime_before.state_commitment(),
+        runtime_after: runtime_after_commitment,
+        transition_receipt_id: runtime_plan.receipt_id(),
+    };
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v1(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        admission,
+        runtime_before,
+        runtime_plan,
+        &FailureMarketRuntimeBeginWriteV1 {
+            expected: runtime_write_facts,
+            cell_state_after: ContentId::from_bytes(interval_after.cell_state_id().bytes()),
+            runtime_session_state_after: runtime_plan
+                .resulting_runtime()
+                .session_state_commitment(),
+            link_state_after: *link_after.state(),
+            planned_link_state_after: runtime_plan.series_link_after(),
+            session_binding_id: predicted_session_transcript_id,
+        },
+    )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             PRODUCT_FAILURE_BEGIN_POSTWRITE_DOMAIN_V2,
@@ -554,6 +746,8 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
             &cell_authentication_after.bytes(),
             &link_before.authentication_id().bytes(),
             &link_after.authentication_id().bytes(),
+            &runtime_postwrite.id().bytes(),
+            &runtime_postwrite.transition_receipt_id().bytes(),
         ])
         .to_bytes(),
     );
@@ -569,9 +763,11 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
             cell_authentication_after,
             link_authentication_before: link_before.authentication_id(),
             link_authentication_after: link_after.authentication_id(),
+            runtime_postwrite_id: runtime_postwrite.id(),
         },
         interval_after,
         link_after,
+        runtime_postwrite,
     ))
 }
 
@@ -715,6 +911,7 @@ fn derive_failure_market_interval_begin_preauthorization_id_v2(
     root: AuthenticatedMarketLifecycleRootV1<'_>,
     link: AuthenticatedSeriesMarketLinkV1<'_>,
     admission: AuthenticatedFailureMarketRootV2,
+    runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     schedule: AuthenticatedProductFailureBeginScheduleV1,
     source_join: SourcePolicyHandoffJoinV1,
@@ -740,6 +937,8 @@ fn derive_failure_market_interval_begin_preauthorization_id_v2(
             &link.state().transition_sequence().to_le_bytes(),
             admission.account().as_ref(),
             &admission_state_id.bytes(),
+            runtime.account().as_ref(),
+            &runtime.state_commitment().bytes(),
             interval.cell_account().as_ref(),
             &interval.cell_authentication_id().bytes(),
             &interval.cell_state_id().bytes(),
@@ -781,6 +980,8 @@ fn require_distinct_product_failure_begin_transition_accounts_v2(
     link_account: &AccountInfo<'_>,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
     admission: AuthenticatedFailureMarketRootV2,
     source_join: SourcePolicyHandoffJoinV1,
 ) -> Outcome<()> {
@@ -789,15 +990,20 @@ fn require_distinct_product_failure_begin_transition_accounts_v2(
         *link_account.key,
         *cell_account.key,
         *history_account.key,
-        admission.account(),
+        *admission_root_account.key,
+        *runtime_root_account.key,
         Pubkey::new_from_array(source_join.occurrence_account().bytes()),
         Pubkey::new_from_array(source_join.result_or_absence_account().bytes()),
         Pubkey::new_from_array(source_join.work_receipt_account().bytes()),
     ];
+    require(
+        *admission_root_account.key == admission.account(),
+        ClutchError::MismatchedState,
+    )?;
     require_distinct_begin_transition_keys_v2(accounts)
 }
 
-fn require_distinct_begin_transition_keys_v2(accounts: [Pubkey; 8]) -> Outcome<()> {
+fn require_distinct_begin_transition_keys_v2(accounts: [Pubkey; 10]) -> Outcome<()> {
     let mut index = 0_usize;
     while index < accounts.len() {
         let mut other = index + 1;
@@ -1006,6 +1212,7 @@ pub(crate) fn authenticate_product_failure_begin_schedule_v1<'root, 'link>(
             market.account().as_ref(),
             &link_binding.source_occurrence_id.bytes(),
             &root_binding.generation.to_le_bytes(),
+            &[registry.edge_policy_registry_value()],
         ])
         .to_bytes(),
     );
@@ -1026,6 +1233,8 @@ pub(crate) fn authenticate_product_failure_begin_schedule_v1<'root, 'link>(
         registry_release_id: provenance.registry_release_id,
         capability_profile_id: provenance.capability_profile_id,
         compiler_bundle_id: provenance.compiler_bundle_id,
+        edge_policy_registry_value: registry.edge_policy_registry_value(),
+        resolved_edge_policy: registry.resolved_edge_policy(),
     })
 }
 
@@ -1195,6 +1404,13 @@ fn require_distinct_product_failure_begin_accounts(
 fn require_live_content_id(id: ContentId) -> Outcome<()> {
     id.validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+pub(crate) fn require_exact_resolved_edge_policy_v1(
+    supplied: clutch_product_series::QuantizedEdgePolicyV1,
+    authenticated: clutch_product_series::QuantizedEdgePolicyV1,
+) -> Outcome<()> {
+    require(supplied == authenticated, ClutchError::MismatchedState)
 }
 
 #[cfg(test)]
@@ -1391,6 +1607,20 @@ mod tests {
     }
 
     #[test]
+    fn resolved_edge_substitution_refuses() {
+        assert!(require_exact_resolved_edge_policy_v1(
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+        )
+        .is_ok());
+        assert!(require_exact_resolved_edge_policy_v1(
+            clutch_product_series::QuantizedEdgePolicyV1::Refuse,
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn every_begin_transition_account_alias_refuses() {
         let original = [
             Pubkey::new_from_array([1; 32]),
@@ -1401,6 +1631,8 @@ mod tests {
             Pubkey::new_from_array([6; 32]),
             Pubkey::new_from_array([7; 32]),
             Pubkey::new_from_array([8; 32]),
+            Pubkey::new_from_array([9; 32]),
+            Pubkey::new_from_array([10; 32]),
         ];
         assert!(require_distinct_begin_transition_keys_v2(original).is_ok());
         let mut left = 0_usize;
@@ -1428,7 +1660,10 @@ mod tests {
         let product_pin = source[outer..]
             .find("let link_after = pin_series_market_link_failure_v1")
             .unwrap();
-        assert!(cell_write < product_pin);
+        let runtime_write = source[outer..]
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
+            .unwrap();
+        assert!(cell_write < product_pin && product_pin < runtime_write);
         assert_eq!(
             source
                 .matches("pub(crate) fn begin_failure_market_interval_session_v2")

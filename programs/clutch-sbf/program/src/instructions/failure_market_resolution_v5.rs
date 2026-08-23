@@ -16,9 +16,15 @@ use crate::instructions::collateral_position_v3::{
     AuthenticatedMarketResolutionActivationPostwriteV5, GeneralMarketLiabilityAuthorityV2,
     RuntimeSha256,
 };
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
 use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_resolution_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketProductResolutionV2,
+};
+use crate::instructions::failure_market_runtime::{
+    write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
 };
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
@@ -41,6 +47,10 @@ use clutch_collateral_adapter_v2::{
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellResolutionPlanV2, FailureMarketIntervalCellResolutionReceiptV2,
 };
+use clutch_failure_policy_runtime::market_runtime_v1::{
+    plan_resolve_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
+    FailureMarketSessionResolutionFactsV1,
+};
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, ContentId, MarketFoundationSlotV2, MarketLifecyclePhaseV1,
     MarketResolutionActivationV1, SeriesAttachmentPlanV4Id, SeriesFundingQuoteV4Id,
@@ -59,6 +69,8 @@ const FAILURE_MARKET_RESOLUTION_ACTIVATION_AUTHENTICATION_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/failure-market-resolution-activation/v5\0";
 const FAILURE_MARKET_RESOLUTION_FINALIZATION_EVIDENCE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/failure-market-resolution-finalization-evidence/v5\0";
+const FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/failure-market-resolution-postwrite/v5\0";
 
 /// Stable byte committed for the only disposition admitted by this composer.
 const RESOLVED_DISPOSITION_BYTE_V2: u8 = 1;
@@ -133,6 +145,122 @@ impl AuthenticatedFailureMarketResolutionActivationV5 {
 
     pub(crate) const fn series_link_authentication(self) -> ContentId {
         self.series_link_authentication
+    }
+
+    /// Exact private Failure resolution consumed by Product and the cell.
+    pub(crate) const fn failure_resolution(self) -> FailureMarketIntervalCellResolutionReceiptV2 {
+        self.failure_resolution
+    }
+}
+
+/// Exact pure shared-runtime resolution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeResolutionAuthorityV1 {
+    runtime_before:
+        clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
+    series_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    session_before: ContentId,
+    session_after: ContentId,
+    resolution_receipt_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimeResolutionAuthorityV1 {
+    fn authenticate_failure_market_session_resolution(
+        &self,
+        expected: FailureMarketSessionResolutionFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.runtime_before != self.runtime_before
+            || expected.series_link_state_id != self.series_link_state_id
+            || expected.session_before != self.session_before
+            || expected.session_after != self.session_after
+            || expected.session_resolution_receipt_id != self.resolution_receipt_id
+            || expected.transition_receipt_id.bytes() == [0; 32]
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Runtime write authority minted only after Product, collateral, and cell writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimeResolutionWriteV1 {
+    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    cell_state_after: ContentId,
+    runtime_session_state_after: ContentId,
+    activation_failure_receipt_id: ContentId,
+    runtime_resolution_receipt_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimeResolutionWriteV1 {
+    fn authenticate_failure_market_runtime_session_write_v1(
+        &self,
+        expected: FailureMarketRuntimeSessionWriteFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected
+            || self.cell_state_after != self.runtime_session_state_after
+            || self.activation_failure_receipt_id != self.runtime_resolution_receipt_id
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Final post-cell/post-runtime Resolution V5 capability for Source terminalization.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AuthenticatedFailureMarketResolutionPostwriteV5 {
+    id: ContentId,
+    activation: AuthenticatedFailureMarketResolutionActivationV5,
+    cell_account: Pubkey,
+    cell_authentication_after: ContentId,
+    cell_state_after: ContentId,
+    runtime_postwrite_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketResolutionPostwriteV5 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn activation(self) -> AuthenticatedFailureMarketResolutionActivationV5 {
+        self.activation
+    }
+
+    pub(crate) const fn failure_resolution(self) -> FailureMarketIntervalCellResolutionReceiptV2 {
+        self.activation.failure_resolution
+    }
+
+    pub(crate) const fn product_activation(self) -> MarketResolutionActivationV1 {
+        self.activation.product_activation
+    }
+
+    pub(crate) const fn resolution_semantic_id(self) -> ContentId {
+        self.activation.product_activation.resolution_semantic_id()
+    }
+
+    pub(crate) const fn resolution_data_id(self) -> ContentId {
+        self.activation.product_activation.resolution_data_id()
+    }
+
+    pub(crate) const fn resolution_account_id(self) -> ContentId {
+        self.activation.product_activation.resolution_account_id()
+    }
+
+    pub(crate) const fn cell_account(self) -> Pubkey {
+        self.cell_account
+    }
+
+    pub(crate) const fn cell_authentication_after(self) -> ContentId {
+        self.cell_authentication_after
+    }
+
+    pub(crate) const fn cell_state_after(self) -> ContentId {
+        self.cell_state_after
+    }
+
+    pub(crate) const fn runtime_postwrite_id(self) -> ContentId {
+        self.runtime_postwrite_id
     }
 }
 
@@ -567,6 +695,8 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root_account: &AccountInfo<'a>,
     market_root_account: &AccountInfo<'a>,
     series_link_account: &AccountInfo<'a>,
     interval_cell_account: &AccountInfo<'a>,
@@ -578,6 +708,8 @@ pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
     system_program: &AccountInfo<'a>,
     root_before: AuthenticatedMarketLifecycleRootV1<'root>,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     registry: AuthenticatedRegistryCapabilityV3,
     bundle: AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
@@ -588,10 +720,13 @@ pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
     link_decode_before: &'link mut SeriesMarketLinkAccountV1,
     root_decode_after: &'post mut MarketLifecycleRootAccountV1,
 ) -> Outcome<(
-    AuthenticatedFailureMarketResolutionActivationV5,
+    AuthenticatedFailureMarketResolutionPostwriteV5,
     AuthenticatedFailureMarketIntervalAccountsV2,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
 )> {
     require_distinct_resolution_role_keys_v5([
+        *admission_root_account.key,
+        *runtime_root_account.key,
         *market_root_account.key,
         *series_link_account.key,
         *interval_cell_account.key,
@@ -602,6 +737,40 @@ pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
         *rent_sysvar.key,
         *system_program.key,
     ])?;
+    let failure_resolution = resolution.receipt();
+    let failure_facts = failure_resolution.facts();
+    let session_after = ContentId::from_bytes(failure_facts.cell_after.bytes());
+    let runtime_resolution_receipt_id = ContentId::from_bytes(failure_resolution.id().bytes());
+    let link_state_id = link_before
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_authority = FailureMarketRuntimeResolutionAuthorityV1 {
+        runtime_before: runtime_before.state_commitment(),
+        series_link_state_id: link_state_id,
+        session_before: ContentId::from_bytes(failure_facts.cell_before.bytes()),
+        session_after,
+        resolution_receipt_id: runtime_resolution_receipt_id,
+    };
+    let runtime_plan = plan_resolve_failure_market_session_v1(
+        &runtime_authority,
+        runtime_before.state(),
+        admission.state(),
+        *link_before.state(),
+        session_after,
+        runtime_resolution_receipt_id,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        runtime_plan.series_link_before() == *link_before.state()
+            && runtime_plan.series_link_after() == *link_before.state()
+            && runtime_plan.resulting_runtime().session_state_commitment() == session_after
+            && runtime_plan
+                .resulting_runtime()
+                .session_resolution_receipt_id()
+                == runtime_resolution_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
     let activation = activate_failure_market_resolution_v5(
         program_id,
         market_root_account,
@@ -617,7 +786,7 @@ pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
         bundle,
         slot10,
         liabilities,
-        resolution.receipt(),
+        failure_resolution,
         root_decode_before,
         link_decode_before,
         root_decode_after,
@@ -630,7 +799,78 @@ pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
         resolution,
         &activation,
     )?;
-    Ok((activation, interval_after))
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before: runtime_before.state_commitment(),
+        runtime_after: runtime_plan
+            .resulting_runtime()
+            .commitment()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        transition_receipt_id: runtime_plan.receipt_id(),
+    };
+    let runtime_write_authority = FailureMarketRuntimeResolutionWriteV1 {
+        expected: runtime_write_facts,
+        cell_state_after: ContentId::from_bytes(interval_after.cell_state_id().bytes()),
+        runtime_session_state_after: runtime_plan.resulting_runtime().session_state_commitment(),
+        activation_failure_receipt_id: ContentId::from_bytes(
+            activation.failure_resolution().id().bytes(),
+        ),
+        runtime_resolution_receipt_id,
+    };
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v1(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        admission,
+        runtime_before,
+        runtime_plan,
+        &runtime_write_authority,
+    )?;
+    require(
+        runtime_postwrite.transition_receipt_id() == runtime_write_facts.transition_receipt_id
+            && runtime_postwrite.root().state().session_state_commitment() == session_after
+            && runtime_postwrite
+                .root()
+                .state()
+                .session_resolution_receipt_id()
+                == runtime_resolution_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let postwrite_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5,
+            admission_root_account.key.as_ref(),
+            runtime_root_account.key.as_ref(),
+            market_root_account.key.as_ref(),
+            series_link_account.key.as_ref(),
+            interval_cell_account.key.as_ref(),
+            &activation.id().bytes(),
+            &activation.market_root_authentication_after().bytes(),
+            &interval_after.cell_authentication_id().bytes(),
+            &interval_after.cell_state_id().bytes(),
+            &runtime_postwrite.id().bytes(),
+            &runtime_postwrite.transition_receipt_id().bytes(),
+            &activation
+                .product_activation()
+                .resolution_semantic_id()
+                .bytes(),
+            &activation.product_activation().resolution_data_id().bytes(),
+            &activation
+                .product_activation()
+                .resolution_account_id()
+                .bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(postwrite_id)?;
+    let postwrite = AuthenticatedFailureMarketResolutionPostwriteV5 {
+        id: postwrite_id,
+        activation,
+        cell_account: interval_after.cell_account(),
+        cell_authentication_after: interval_after.cell_authentication_id(),
+        cell_state_after: ContentId::from_bytes(interval_after.cell_state_id().bytes()),
+        runtime_postwrite_id: runtime_postwrite.id(),
+    };
+    Ok((postwrite, interval_after, runtime_postwrite))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1015,7 +1255,7 @@ fn require_program_owned_writable(
     )
 }
 
-fn require_distinct_resolution_role_keys_v5(keys: [Pubkey; 9]) -> Outcome<()> {
+fn require_distinct_resolution_role_keys_v5<const N: usize>(keys: [Pubkey; N]) -> Outcome<()> {
     let mut index = 0usize;
     while index < keys.len() {
         let mut prior = 0usize;
@@ -1316,6 +1556,8 @@ mod adversarial_tests {
             key(7),
             key(8),
             key(9),
+            key(10),
+            key(11),
         ];
         assert!(require_distinct_resolution_role_keys_v5(distinct).is_ok());
         let mut left = 0usize;
@@ -1524,7 +1766,7 @@ mod adversarial_tests {
     }
 
     #[test]
-    fn final_cell_write_remains_inside_the_only_atomic_resolution_entrypoint() {
+    fn product_cell_and_market_runtime_writes_remain_in_one_atomic_resolution_entrypoint() {
         let source = include_str!("failure_market_resolution_v5.rs");
         let outer = source
             .split("pub(crate) fn resolve_failure_market_interval_v5")
@@ -1536,10 +1778,13 @@ mod adversarial_tests {
         let final_cell = outer
             .find("let interval_after = write_failure_market_interval_resolution_plan_v2")
             .expect("final Failure cell stage");
+        let runtime_write = outer
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
+            .expect("shared Failure runtime stage");
         let success = outer
-            .find("Ok((activation, interval_after))")
+            .find("Ok((postwrite, interval_after, runtime_postwrite))")
             .expect("success");
-        assert!(activation < final_cell && final_cell < success);
+        assert!(activation < final_cell && final_cell < runtime_write && runtime_write < success);
         let forbidden_partial = concat!("pub(crate) fn activate_", "failure_market_resolution_v5");
         assert!(!source.contains(forbidden_partial));
     }

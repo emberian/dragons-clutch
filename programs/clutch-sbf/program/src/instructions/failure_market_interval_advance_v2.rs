@@ -14,9 +14,16 @@ use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_paid_advance_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketIntervalPaidAdvanceV2,
 };
+use crate::instructions::failure_market_runtime::{
+    write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::product_artifact::AuthenticatedRegistryCapabilityV3;
 use crate::instructions::product_failure_begin::{
-    require_cached_root_and_link, require_exact_successful_source_join_v2,
+    require_cached_root_and_link, require_exact_resolved_edge_policy_v1,
+    require_exact_successful_source_join_v2,
 };
 use crate::instructions::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
@@ -27,6 +34,10 @@ use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     plan_advance_failure_market_interval_cell_v2, AuthenticatedFailureMarketIntervalCellAdvanceV2,
     FailureMarketIntervalCellAdvanceFactsV2, FailureMarketIntervalCellAdvanceReceiptV2,
+};
+use clutch_failure_policy_runtime::market_runtime_v1::{
+    plan_advance_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
+    FailureMarketSessionAdvanceFactsV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, plan_runtime_transition_v1, RuntimeAtomicTransitionV1,
@@ -143,6 +154,63 @@ struct FailureMarketPaidAdvanceCellWriteV2 {
     advance: FailureMarketIntervalCellAdvanceReceiptV2,
 }
 
+/// Exact pure shared-runtime authority for one paid subordinate advance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimePaidAdvanceAuthorityV1 {
+    runtime_before:
+        clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
+    series_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    session_before: ContentId,
+    session_after: ContentId,
+    liveness_work_receipt_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimePaidAdvanceAuthorityV1 {
+    fn authenticate_failure_market_session_advance(
+        &self,
+        expected: FailureMarketSessionAdvanceFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.runtime_before != self.runtime_before
+            || expected.series_link_state_id != self.series_link_state_id
+            || expected.session_before != self.session_before
+            || expected.session_after != self.session_after
+            || expected.liveness_work_receipt_id != self.liveness_work_receipt_id
+            || expected.transition_receipt_id.bytes() == [0; 32]
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Physical runtime write admitted only after Recovery and cell postwrites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketRuntimePaidAdvanceWriteV1 {
+    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    cell_state_after: ContentId,
+    runtime_session_state_after: ContentId,
+    live_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    planned_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    liveness_receipt_id: ContentId,
+    advance_liveness_receipt_id: ContentId,
+}
+
+impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimePaidAdvanceWriteV1 {
+    fn authenticate_failure_market_runtime_session_write_v1(
+        &self,
+        expected: FailureMarketRuntimeSessionWriteFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected
+            || self.cell_state_after != self.runtime_session_state_after
+            || self.live_link_state_id != self.planned_link_state_id
+            || self.liveness_receipt_id != self.advance_liveness_receipt_id
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 impl AuthenticatedFailureMarketIntervalPaidAdvanceV2 for FailureMarketPaidAdvanceCellWriteV2 {
     fn authenticate_failure_market_interval_paid_advance_v2(
         &self,
@@ -170,11 +238,12 @@ impl AuthenticatedFailureMarketIntervalPaidAdvanceV2 for FailureMarketPaidAdvanc
 pub(crate) struct AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
     id: ContentId,
     advance: FailureMarketIntervalCellAdvanceReceiptV2,
-    runtime_postwrite_id: ContentId,
+    recovery_runtime_postwrite_id: ContentId,
     cell_authentication_before: ContentId,
     cell_authentication_after: ContentId,
     recovery_data_before_id: ContentId,
     recovery_data_after_id: ContentId,
+    runtime_postwrite_id: ContentId,
 }
 
 impl AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
@@ -186,8 +255,8 @@ impl AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
         self.advance
     }
 
-    pub(crate) const fn runtime_postwrite_id(self) -> ContentId {
-        self.runtime_postwrite_id
+    pub(crate) const fn recovery_runtime_postwrite_id(self) -> ContentId {
+        self.recovery_runtime_postwrite_id
     }
 
     pub(crate) const fn cell_authentication_before(self) -> ContentId {
@@ -205,6 +274,10 @@ impl AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
     pub(crate) const fn recovery_data_after_id(self) -> ContentId {
         self.recovery_data_after_id
     }
+
+    pub(crate) const fn runtime_postwrite_id(self) -> ContentId {
+        self.runtime_postwrite_id
+    }
 }
 
 /// Apply one exact priced Product advance through the sole Recovery custody.
@@ -215,13 +288,17 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     link_account: &AccountInfo<'_>,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
     liveness_policy_account: &AccountInfo<'_>,
     recovery_account: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
+    registry: AuthenticatedRegistryCapabilityV3,
     root_before: AuthenticatedMarketLifecycleRootV1<'_>,
     link_before: AuthenticatedSeriesMarketLinkV1<'_>,
     admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     source_join: SourcePolicyHandoffJoinV1,
     source_success: SuccessfulEvaluationHandoffV1,
@@ -232,12 +309,15 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
 ) -> Outcome<(
     AuthenticatedFailureMarketPaidAdvancePostwriteV2,
     AuthenticatedFailureMarketIntervalAccountsV2,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
 )> {
     require_distinct_paid_advance_accounts_v2(
         root_account,
         link_account,
         cell_account,
         history_account,
+        admission_root_account,
+        runtime_root_account,
         liveness_policy_account,
         recovery_account,
         keeper,
@@ -299,11 +379,23 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         root_binding,
         policy,
     )?;
+    require(
+        registry.series_plan_id() == link_binding.series_plan_id
+            && registry.registry_release_id() == root_binding.registry_release_id
+            && registry.capability_profile_id() == root_binding.capability_profile_id
+            && registry.compiler_bundle_id() == link_binding.compiler_output_id,
+        ClutchError::MismatchedState,
+    )?;
+    require_exact_resolved_edge_policy_v1(
+        context.resolved_edge_policy,
+        registry.resolved_edge_policy(),
+    )?;
     let liveness = authenticate_failure_recovery_liveness_prestate_v2(
         program_id,
         liveness_policy_account,
         recovery_account,
         payer_refund,
+        keeper,
         admission,
         interval_before,
     )?;
@@ -324,6 +416,12 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             &liveness.recovery.identity.account_id.bytes(),
             &liveness.recovery.last_work_receipt_id.bytes(),
             &liveness.recovery.completed_calls.to_le_bytes(),
+            registry.series_registry_account().as_ref(),
+            registry.program_account().as_ref(),
+            registry.programdata_account().as_ref(),
+            registry.release_artifact_account().as_ref(),
+            registry.profile_artifact_account().as_ref(),
+            &[registry.edge_policy_registry_value()],
             keeper.key.as_ref(),
             &requested_coordinates.to_le_bytes(),
             &source_join.id().bytes(),
@@ -359,6 +457,40 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let advance_receipt = advance.receipt();
+    let advance_facts = advance_receipt.facts();
+    let cell_state_after = advance
+        .resulting_cell()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_state_id = live_link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_advance_authority = FailureMarketRuntimePaidAdvanceAuthorityV1 {
+        runtime_before: runtime_before.state_commitment(),
+        series_link_state_id: link_state_id,
+        session_before: runtime_before.state().session_state_commitment(),
+        session_after: ContentId::from_bytes(cell_state_after.bytes()),
+        liveness_work_receipt_id: ContentId::from_bytes(
+            advance_facts.runtime_work_receipt_id.bytes(),
+        ),
+    };
+    let runtime_plan = plan_advance_failure_market_session_v1(
+        &runtime_advance_authority,
+        runtime_before.state(),
+        admission.state(),
+        *live_link.state(),
+        ContentId::from_bytes(cell_state_after.bytes()),
+        ContentId::from_bytes(advance_facts.runtime_work_receipt_id.bytes()),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        runtime_plan.series_link_before() == *live_link.state()
+            && runtime_plan.series_link_after() == *live_link.state()
+            && runtime_plan.resulting_runtime().session_state_commitment()
+                == ContentId::from_bytes(cell_state_after.bytes()),
+        ClutchError::MismatchedState,
+    )?;
     let runtime = apply_failure_recovery_paid_advance_v2(
         program_id,
         liveness_policy_account,
@@ -383,6 +515,40 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         },
     )?;
     let cell_authentication_after = interval_after.cell_authentication_id();
+    let runtime_after_commitment = runtime_plan
+        .resulting_runtime()
+        .commitment()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v1(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        admission,
+        runtime_before,
+        runtime_plan,
+        &FailureMarketRuntimePaidAdvanceWriteV1 {
+            expected: FailureMarketRuntimeSessionWriteFactsV1 {
+                runtime_before: runtime_before.state_commitment(),
+                runtime_after: runtime_after_commitment,
+                transition_receipt_id: runtime_plan.receipt_id(),
+            },
+            cell_state_after: ContentId::from_bytes(interval_after.cell_state_id().bytes()),
+            runtime_session_state_after: runtime_plan
+                .resulting_runtime()
+                .session_state_commitment(),
+            live_link_state_id: link_state_id,
+            planned_link_state_id: runtime_plan
+                .series_link_after()
+                .semantic_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            liveness_receipt_id: ContentId::from_bytes(
+                advance_facts.runtime_work_receipt_id.bytes(),
+            ),
+            advance_liveness_receipt_id: ContentId::from_bytes(
+                runtime.transition.state_after.last_work_receipt_id.bytes(),
+            ),
+        },
+    )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             FAILURE_MARKET_PAID_ADVANCE_POSTWRITE_DOMAIN_V2,
@@ -393,6 +559,8 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             &cell_authentication_after.bytes(),
             &runtime.recovery_data_before_id.bytes(),
             &runtime.recovery_data_after_id.bytes(),
+            &runtime_postwrite.id().bytes(),
+            &runtime_postwrite.transition_receipt_id().bytes(),
         ])
         .to_bytes(),
     );
@@ -401,13 +569,15 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
             id,
             advance: advance_receipt,
-            runtime_postwrite_id: runtime.id,
+            recovery_runtime_postwrite_id: runtime.id,
             cell_authentication_before,
             cell_authentication_after,
             recovery_data_before_id: runtime.recovery_data_before_id,
             recovery_data_after_id: runtime.recovery_data_after_id,
+            runtime_postwrite_id: runtime_postwrite.id(),
         },
         interval_after,
+        runtime_postwrite,
     ))
 }
 
@@ -425,6 +595,7 @@ fn authenticate_failure_recovery_liveness_prestate_v2(
     policy_account: &AccountInfo<'_>,
     recovery_account: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
+    keeper: &AccountInfo<'_>,
     admission: AuthenticatedFailureMarketRootV2,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
 ) -> Outcome<AuthenticatedFailureRecoveryLivenessPrestateV2> {
@@ -841,6 +1012,8 @@ fn require_distinct_paid_advance_accounts_v2(
     link: &AccountInfo<'_>,
     cell: &AccountInfo<'_>,
     history: &AccountInfo<'_>,
+    admission_root: &AccountInfo<'_>,
+    runtime_root: &AccountInfo<'_>,
     policy: &AccountInfo<'_>,
     recovery: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
@@ -848,15 +1021,20 @@ fn require_distinct_paid_advance_accounts_v2(
     admission: AuthenticatedFailureMarketRootV2,
     source_join: SourcePolicyHandoffJoinV1,
 ) -> Outcome<()> {
+    require(
+        *admission_root.key == admission.account(),
+        ClutchError::MismatchedState,
+    )?;
     require_distinct_paid_advance_keys_v2(
         [
             *root.key,
             *link.key,
             *cell.key,
             *history.key,
+            *admission_root.key,
+            *runtime_root.key,
             *policy.key,
             *recovery.key,
-            admission.account(),
             Pubkey::new_from_array(source_join.occurrence_account().bytes()),
             Pubkey::new_from_array(source_join.result_or_absence_account().bytes()),
             Pubkey::new_from_array(source_join.work_receipt_account().bytes()),
@@ -867,7 +1045,7 @@ fn require_distinct_paid_advance_accounts_v2(
 }
 
 fn require_distinct_paid_advance_keys_v2(
-    fixed: [Pubkey; 10],
+    fixed: [Pubkey; 11],
     keeper: Pubkey,
     payer: Pubkey,
 ) -> Outcome<()> {
@@ -969,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn sole_outer_paid_advance_orders_runtime_before_final_cell_write() {
+    fn sole_outer_paid_advance_orders_recovery_cell_and_market_runtime_atomically() {
         let source = include_str!("failure_market_interval_advance_v2.rs");
         let outer = source
             .find("pub(crate) fn advance_failure_market_interval_paid_v2")
@@ -980,7 +1158,10 @@ mod tests {
         let cell_write = source[outer..]
             .find("let interval_after = write_failure_market_interval_paid_advance_v2")
             .unwrap();
-        assert!(runtime_write < cell_write);
+        let market_runtime_write = source[outer..]
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
+            .unwrap();
+        assert!(runtime_write < cell_write && cell_write < market_runtime_write);
         assert_eq!(
             source
                 .matches("pub(crate) fn advance_failure_market_interval_paid_v2")
@@ -1093,9 +1274,10 @@ mod tests {
             Pubkey::new_from_array([8; 32]),
             Pubkey::new_from_array([9; 32]),
             Pubkey::new_from_array([10; 32]),
+            Pubkey::new_from_array([11; 32]),
         ];
-        let keeper = Pubkey::new_from_array([11; 32]);
-        let payer = Pubkey::new_from_array([12; 32]);
+        let keeper = Pubkey::new_from_array([12; 32]);
+        let payer = Pubkey::new_from_array([13; 32]);
         assert!(require_distinct_paid_advance_keys_v2(canonical, keeper, payer).is_ok());
         assert!(require_distinct_paid_advance_keys_v2(canonical, keeper, keeper).is_ok());
 
@@ -1128,5 +1310,21 @@ mod tests {
         assert!(cell_source.contains("authenticate_unchanged_account_prestate"));
         assert!(cell_source.contains("authenticate_write_prestate"));
         assert!(source.contains("any later refusal rolls the whole SVM instruction back"));
+    }
+
+    #[test]
+    fn paid_advance_refuses_resolved_edge_substitution() {
+        assert!(require_exact_resolved_edge_policy_v1(
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+        )
+        .is_ok());
+        assert!(require_exact_resolved_edge_policy_v1(
+            clutch_product_series::QuantizedEdgePolicyV1::Clamp,
+            clutch_product_series::QuantizedEdgePolicyV1::Refuse,
+        )
+        .is_err());
+        let source = include_str!("failure_market_interval_advance_v2.rs");
+        assert!(source.contains("registry.resolved_edge_policy()"));
     }
 }
