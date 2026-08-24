@@ -114,21 +114,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "clutch-evidence-recovery"
-version = "0.1.0"
-dependencies = [
- "clutch-product-series",
-]
-
-[[package]]
 name = "clutch-direct-market-runtime"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-batch-policy-identity",
  "clutch-general-v2-contract",
+ "clutch-liveness",
  "clutch-owner-settlement",
  "clutch-product-series",
  "clutch-retirement",
+]
+
+[[package]]
+name = "clutch-evidence-recovery"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
 ]
 
 [[package]]
@@ -163,6 +165,17 @@ dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
  "clutch-owner-settlement",
+]
+
+[[package]]
+name = "clutch-fractional-redemption-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-collateral-adapter-v2",
+ "clutch-general-v2-contract",
+ "clutch-retirement",
+ "clutch-solana-layout",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -235,6 +248,7 @@ name = "clutch-product-series"
 version = "0.1.0"
 dependencies = [
  "clutch-bspline",
+ "clutch-liveness",
  "clutch-price-measure",
  "clutch-source-plane-v3",
  "sha2 0.10.9",
@@ -277,6 +291,8 @@ dependencies = [
  "clutch-evidence-recovery",
  "clutch-failure-policy-adapter",
  "clutch-failure-policy-runtime",
+ "clutch-fee-runtime-contract",
+ "clutch-fractional-redemption-runtime",
  "clutch-general-v2-contract",
  "clutch-general-v2-runtime",
  "clutch-kernel",
@@ -293,6 +309,7 @@ dependencies = [
  "clutch-source-plane-v3-runtime",
  "clutch-structured-claim",
  "clutch-structured-claim-adapter",
+ "clutch-structured-claim-runtime-contract",
  "solana-account-info",
  "solana-clock",
  "solana-cpi",
@@ -328,9 +345,11 @@ dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
  "clutch-collateral-adapter-v2",
+ "clutch-liveness",
  "clutch-product-series",
  "clutch-source-plane-v3-adapter",
  "clutch-source-plane-v3-runtime",
+ "clutch-structured-claim-runtime-contract",
  "solana-sha256-hasher",
 ]
 
@@ -365,6 +384,7 @@ dependencies = [
 name = "clutch-source-plane-v3-runtime"
 version = "0.1.0"
 dependencies = [
+ "clutch-liveness",
  "clutch-product-series",
  "clutch-source-plane-v3",
  "clutch-source-plane-v3-adapter",
@@ -382,9 +402,6 @@ dependencies = [
 [[package]]
 name = "clutch-structured-claim"
 version = "0.1.0"
-dependencies = [
- "clutch-kernel",
-]
 
 [[package]]
 name = "clutch-structured-claim-adapter"
@@ -392,13 +409,10 @@ version = "0.1.0"
 dependencies = [
  "clutch-collateral-adapter-v2",
  "clutch-general-v2-contract",
- "clutch-kernel",
  "clutch-owner-settlement",
- "clutch-product-series",
  "clutch-retirement",
  "clutch-retirement-adapter",
  "clutch-solana-layout",
- "clutch-solana-reference",
  "clutch-structured-claim",
  "clutch-structured-claim-runtime-contract",
  "sha2 0.10.9",
