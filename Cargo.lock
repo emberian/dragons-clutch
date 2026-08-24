@@ -337,9 +337,11 @@ version = "0.1.0"
 name = "dclutch-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-kernel",
+ "dclutch-product-contract",
  "dclutch-pyth-contract",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",

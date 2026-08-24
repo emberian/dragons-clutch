@@ -49,6 +49,14 @@ pub enum AdapterError {
     RealmCreateCpi = 19,
     /// Realm creation or persistence did not produce exact postconditions.
     RealmPostcondition = 20,
+    /// Immutable founding records, identities, or prepaid balances did not authenticate.
+    FoundingAuthentication = 21,
+    /// The System Program refused exact Market PDA creation.
+    MarketCreateCpi = 22,
+    /// The System Program refused exact resolution-Fund PDA creation.
+    FundCreateCpi = 23,
+    /// Founding did not persist exact Market, Fund, owner, rent, and debit postconditions.
+    FoundingPostcondition = 24,
 }
 
 impl From<AdapterError> for ProgramError {

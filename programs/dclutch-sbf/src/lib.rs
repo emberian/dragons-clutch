@@ -2,13 +2,15 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Atomic dClutch categorical-Pyth resolution adapter.
+//! Atomic dClutch categorical-Pyth founding and resolution adapter.
 //!
-//! The adapter authenticates one immutable provider release, posts and checks
-//! a fully verified Pyth update, folds it through the total kernel, persists a
-//! terminal Market receipt, reclaims the temporary update, and closes the
-//! prepaid resolution Fund in one transaction.  The body-free failure route is
-//! permissionless strictly after the immutable price window.
+//! The adapter creates content-addressed collateral Realms and atomically
+//! founds a fully authenticated Market with its prepaid resolution Fund. It
+//! also authenticates one immutable provider release, posts and checks a fully
+//! verified Pyth update, folds it through the total kernel, persists a terminal
+//! Market receipt, reclaims the temporary update, and closes the Fund in one
+//! transaction. The body-free failure route is permissionless strictly after
+//! the immutable price window.
 
 extern crate alloc;
 
@@ -27,6 +29,7 @@ use solana_program::{
 mod authenticate;
 mod close_fund;
 mod error;
+mod found_market;
 mod provider;
 mod realm;
 mod resolution;
@@ -52,12 +55,16 @@ pub fn process_instruction(
         RoutedInstruction::CreateRealm(instruction) => {
             realm::process_create_realm(program_id, accounts, instruction)
         }
+        RoutedInstruction::FoundMarketAndFund(instruction) => {
+            found_market::process_found_market_and_fund(program_id, accounts, instruction)
+        }
     }
 }
 
 enum RoutedInstruction<'a> {
     Resolve(ResolveCategoricalInstructionV1<'a>),
     CreateRealm(dclutch_collateral_contract::CreateRealmV1),
+    FoundMarketAndFund(dclutch_collateral_contract::FoundMarketAndFundV1),
 }
 
 fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, ProgramError> {
@@ -70,6 +77,9 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
             CollateralInstructionV1::CreateRealm(instruction) => {
                 Ok(RoutedInstruction::CreateRealm(instruction))
             }
+            CollateralInstructionV1::FoundMarketAndFund(instruction) => {
+                Ok(RoutedInstruction::FoundMarketAndFund(instruction))
+            }
             _ => Err(AdapterError::InvalidInstruction.into()),
         };
     }
@@ -81,8 +91,10 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
 #[cfg(test)]
 mod tests {
     use dclutch_collateral_contract::{
-        CREATE_REALM_BYTES, CreateRealmV1, OPEN_COLLATERAL_VAULT_BYTES, OpenCollateralVaultV1,
+        CREATE_REALM_BYTES, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
+        OPEN_COLLATERAL_VAULT_BYTES, OpenCollateralVaultV1,
     };
+    use dclutch_core_contract::{ContentId, MarketIdentity};
     use dclutch_pyth_contract::instruction::{RESOLVE_FAILURE_BYTES, ResolveCategoricalFailureV1};
     use dclutch_realm_contract::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
@@ -103,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_preserves_resolution_and_adds_only_create_realm() {
+    fn dispatch_preserves_resolution_and_routes_implemented_collateral_slices() {
         let mut create = [0; CREATE_REALM_BYTES];
         CreateRealmV1::new(realm())
             .encode(&mut create)
@@ -111,6 +123,24 @@ mod tests {
         assert!(matches!(
             decode_instruction(&create),
             Ok(RoutedInstruction::CreateRealm(_))
+        ));
+
+        let identity = MarketIdentity::new(
+            ContentId::new([1; 32]).expect("identity"),
+            ContentId::new([2; 32]).expect("identity"),
+            ContentId::new([3; 32]).expect("identity"),
+            ContentId::new([4; 32]).expect("identity"),
+            ContentId::new([5; 32]).expect("identity"),
+            7,
+        );
+        let mut found = [0; FOUND_MARKET_AND_FUND_BYTES];
+        FoundMarketAndFundV1::new(identity, 2, 3, 5)
+            .expect("valid founding")
+            .encode(&mut found)
+            .expect("exact encoding");
+        assert!(matches!(
+            decode_instruction(&found),
+            Ok(RoutedInstruction::FoundMarketAndFund(_))
         ));
 
         let mut failure = [0; RESOLVE_FAILURE_BYTES];

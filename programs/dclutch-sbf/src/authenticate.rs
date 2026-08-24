@@ -14,8 +14,8 @@ use solana_program::{
 
 use crate::AdapterError;
 
-const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
-const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
+pub(crate) const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
+pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_CONFIG_SEED: &[u8] = b"config";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
 const UPGRADEABLE_LOADER: Pubkey = Pubkey::new_from_array([
