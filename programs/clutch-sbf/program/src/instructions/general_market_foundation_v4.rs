@@ -13,8 +13,8 @@ use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_general_v2_contract::{
-    CurrentMarketAuthorityV4, Id32, MarketBindingV2, MarketBindingV4,
-    MarketRuntimeV3AccountV1,
+    CurrentMarketAuthorityV4, GeneralFoundingPolicyV1, Id32, MarketBindingV2,
+    MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
 };
 use clutch_product_series::ContentId;
 use solana_pubkey::Pubkey;
@@ -26,6 +26,15 @@ use super::revenue_policy_v2::{
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/general/current-founding-join/v4\0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeSha256;
+
+impl Sha256BackendV1 for RuntimeSha256 {
+    fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
 
 /// Product-owned current founding authority consumed by the General join.
 ///
@@ -39,6 +48,7 @@ pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4 {
         _program_id: &Pubkey,
         _market_binding_account: Pubkey,
         _market_runtime_account: Pubkey,
+        _policy: GeneralFoundingPolicyV1,
         _base: &MarketBindingV2,
         _revenue: &AuthenticatedRevenuePolicyRecordV2,
         _treasury: &RevenueMarketTreasuryDerivationV1,
@@ -70,6 +80,7 @@ pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4 {
 /// Private exact plan retained across General's atomic account creation.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedGeneralMarketFoundingPlanV4 {
+    founding_policy: GeneralFoundingPolicyV1,
     base: MarketBindingV2,
     authority: CurrentMarketAuthorityV4,
     revenue: AuthenticatedRevenuePolicyRecordV2,
@@ -85,6 +96,9 @@ pub(crate) struct AuthenticatedGeneralMarketFoundingPlanV4 {
 }
 
 impl AuthenticatedGeneralMarketFoundingPlanV4 {
+    pub(crate) const fn founding_policy(&self) -> GeneralFoundingPolicyV1 {
+        self.founding_policy
+    }
     pub(crate) const fn base(&self) -> &MarketBindingV2 { &self.base }
     pub(crate) const fn authority(&self) -> CurrentMarketAuthorityV4 { self.authority }
     pub(crate) const fn revenue(&self) -> AuthenticatedRevenuePolicyRecordV2 { self.revenue }
@@ -103,13 +117,17 @@ impl AuthenticatedGeneralMarketFoundingPlanV4 {
 pub(crate) fn prepare_general_market_founding_v4<P>(
     program_id: &Pubkey,
     product: &P,
+    founding_policy_bytes: &[u8],
     base: MarketBindingV2,
     revenue: AuthenticatedRevenuePolicyRecordV2,
 ) -> Outcome<AuthenticatedGeneralMarketFoundingPlanV4>
 where
     P: AuthenticatedCurrentProductGeneralFoundingV4 + ?Sized,
 {
+    let founding_policy = GeneralFoundingPolicyV1::decode(founding_policy_bytes)?;
+    let founding_policy_id = founding_policy.semantic_id(&RuntimeSha256)?;
     base.validate()?;
+    founding_policy.binds_market(base.base())?;
     let relation = base.base();
     let market_instance = relation.market_instance_v2_id.bytes();
     let (market_binding_account, market_binding_bump) =
@@ -120,6 +138,7 @@ where
         relation.market == Id32::from_bytes(market_runtime_account.to_bytes())
             && relation.stored_bump == market_binding_bump
             && product.product_generation() != 0
+            && product.general_founding_capability_id() == founding_policy_id
             && product.realm_id().bytes() == revenue.realm().bytes(),
         ClutchError::MismatchedState,
     )?;
@@ -133,6 +152,7 @@ where
         program_id,
         market_binding_account,
         market_runtime_account,
+        founding_policy,
         &base,
         &revenue,
         &treasury,
@@ -184,6 +204,7 @@ where
     );
     require(!join_id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedGeneralMarketFoundingPlanV4 {
+        founding_policy,
         base,
         authority,
         revenue,
