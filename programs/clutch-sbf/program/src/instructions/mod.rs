@@ -141,6 +141,8 @@ pub mod general_v2_settlement_producer_v5;
 ))]
 pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
+/// Private pre-root Product/Collateral join for the current General V3 founder.
+pub(crate) mod general_market_foundation_v3;
 #[cfg(test)]
 pub mod market_init;
 #[cfg(test)]
