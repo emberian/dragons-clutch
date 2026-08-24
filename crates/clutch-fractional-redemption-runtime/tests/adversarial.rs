@@ -482,7 +482,7 @@ fn dealer_vector_prestate(
     native_eggs: [u64; MAX_OUTCOMES],
     generation: u64,
     replay_ordinal: u64,
-) -> BoundDealerFacilityVectorPrestateV1 {
+) -> Result<BoundDealerFacilityVectorPrestateV1> {
     let facility_id = rid(60);
     let state_account = rid(61);
     let position_account = rid(62);
@@ -529,7 +529,6 @@ fn dealer_vector_prestate(
         rid(72),
         rid(73),
     )
-    .unwrap()
 }
 
 #[test]
@@ -551,7 +550,7 @@ fn dealer_vector_divides_once_and_retains_the_exact_remainder() {
         full.collateral(),
     )
     .unwrap();
-    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12);
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12).unwrap();
     let mut quantities = [0u64; MAX_OUTCOMES];
     quantities[0] = 1;
     quantities[1] = 1;
@@ -635,6 +634,9 @@ fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
         DealerFacilityVectorRequestV1::decode(&hostile_tail),
         Err(Error::NonCanonicalPadding)
     );
+    let mut founding_replay = request;
+    founding_replay.expected_replay_ordinal = 0;
+    assert_eq!(founding_replay.encode(), Err(Error::MismatchedBinding));
 
     let mut internal_supply = [0; MAX_OUTCOMES];
     internal_supply[0] = 7;
@@ -652,7 +654,11 @@ fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
         full.collateral(),
     )
     .unwrap();
-    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12);
+    assert_eq!(
+        dealer_vector_prestate(context, internal_supply, 9, 0),
+        Err(Error::MismatchedBinding)
+    );
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12).unwrap();
     let mut wrong_generation = request;
     wrong_generation.expected_position_generation = 10;
     assert_eq!(

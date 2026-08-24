@@ -43,7 +43,8 @@ use clutch_fractional_redemption_runtime::{
     FractionalTerminalIntentV1, FractionalTransferIntentV1, FractionalCloseCreditIntentV1,
     InternalPositionV1, RedemptionSourcePoststateV1,
     VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
-    FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_VERSION,
+    FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64,
+    FRACTIONAL_CREDIT_ACCOUNT_VERSION,
     FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
@@ -305,7 +306,7 @@ pub(crate) fn accept_dealer_facility_credit_funding_v1(
             &rent.payer.bytes(),
             &neutral_sink.bytes(),
             &required_lamports.to_le_bytes(),
-            &(FRACTIONAL_CREDIT_ACCOUNT_BYTES as u64).to_le_bytes(),
+            &FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64.to_le_bytes(),
             &[FRACTIONAL_CREDIT_ACCOUNT_VERSION],
             &[stored_bump],
         ])
@@ -331,7 +332,7 @@ pub(crate) trait AuthenticatedDealerFacilityVectorAuthorityV1 {
     /// Consume the one-shot prefund, allocate/assign the real a6/v2 PDA, and
     /// return the Fractional-accepted funding postcondition.
     fn consume_future_credit_prefund_v1(
-        &self,
+        self,
         program_id: &Pubkey,
         fractional_policy_account: Identity32V1,
         credit_account: &AccountInfo<'_>,
@@ -439,7 +440,7 @@ pub(crate) fn apply_dealer_facility_vector_transition_v1<A>(
     program_id: &Pubkey,
     accounts: DealerFacilityVectorAccountsV1<'_, '_>,
     request: DealerFacilityVectorRequestV1,
-    authority: &A,
+    authority: A,
 ) -> Outcome<AcceptedDealerFacilityVectorTransitionV1>
 where
     A: AuthenticatedDealerFacilityVectorAuthorityV1,

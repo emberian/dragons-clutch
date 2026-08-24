@@ -157,7 +157,8 @@ pub struct DealerFacilityVectorRequestV1 {
     pub expected_credit_sequence: u64,
     /// Exact facility Position generation authenticated by Dealer.
     pub expected_position_generation: u64,
-    /// Exact Dealer Replay ordinal authenticated by Dealer.
+    /// Exact post-initialization Dealer Replay ordinal authenticated by Dealer.
+    /// Zero is the founding prestate and cannot enter Resolve.
     pub expected_replay_ordinal: u64,
     /// Active Market outcome width.
     pub outcome_count: u8,
@@ -189,6 +190,7 @@ impl DealerFacilityVectorRequestV1 {
         if value.expected_ledger_sequence == 0
             || value.expected_credit_sequence == 0
             || value.expected_position_generation == 0
+            || value.expected_replay_ordinal == 0
             || value.outcome_count == 0
             || usize::from(value.outcome_count) > crate::MAX_OUTCOMES
             || !any
@@ -210,6 +212,7 @@ impl DealerFacilityVectorRequestV1 {
         if self.expected_ledger_sequence == 0
             || self.expected_credit_sequence == 0
             || self.expected_position_generation == 0
+            || self.expected_replay_ordinal == 0
             || self.outcome_count == 0
             || usize::from(self.outcome_count) > crate::MAX_OUTCOMES
         {

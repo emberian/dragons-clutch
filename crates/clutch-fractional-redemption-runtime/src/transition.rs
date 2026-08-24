@@ -1391,6 +1391,7 @@ pub fn bind_dealer_facility_vector_prestate_v1(
         || fields.controller != dealer_state_account
         || fields.purpose_binding_id != facility_position_binding_id
         || fields.replay_account != dealer_replay_account
+        || dealer_replay_ordinal == 0
         || fields.generation == 0
         || fields.reserved_cash_atoms != 0
         || fields.outstanding_reservations != 0
