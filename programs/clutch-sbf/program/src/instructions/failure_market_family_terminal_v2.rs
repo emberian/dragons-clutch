@@ -354,27 +354,6 @@ impl AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
     }
 }
 
-impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
-    for AuthenticatedFailureMarketFamilyTerminalPostwriteV2
-{
-    fn source_funding_custody_lifecycle_terminal_facts_v1(
-        &self,
-        founder: SourceFundingCustodyLiveFounderFactsV1,
-    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
-        successful_source_custody_terminal_facts_v1(
-            self.admission.state().binding().facts(),
-            self.family_terminal
-                .facts()
-                .source_resolution_terminal_receipt_id,
-            self.family_terminal.facts().source_result_close_receipt_id,
-            self.family_terminal.facts().source_product_release_binding_id,
-            self.family_terminal.facts().source_product_link_account_id,
-            ContentId::from_bytes(self.family_terminal.id().bytes()),
-            founder,
-        )
-    }
-}
-
 /// Hostile-reopened durable terminal owner used after Product enters
 /// `Retiring`. The resolution instruction cannot carry its private postwrite
 /// across transactions, so the later Product latch authenticates the unique
