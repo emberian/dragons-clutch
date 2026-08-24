@@ -8,6 +8,9 @@
 //! accounting. It contains no Solana accounts, token operations, oracle SDK,
 //! execution venue, fees, rent, or operator policy.
 
+/// Deterministic, SDK-free resolution policies for categorical markets.
+pub mod resolution;
+
 /// Maximum categorical width in the first measured implementation profile.
 ///
 /// This is a provisional profile bound, not a conceptual protocol limit.
