@@ -12,7 +12,7 @@
 use clutch_batch::relation_v1::{FrozenPolicyV1, SelfCrossPolicyV1, MAX_OUTCOMES};
 use clutch_batch::{Side, MAX_ORDERS};
 use clutch_batch_policy_identity::batch_policy_digest;
-pub use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
+pub use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV2;
 pub use clutch_fee_runtime_contract::weight_v2::{
     CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2,
 };
@@ -69,7 +69,7 @@ impl PortfolioFeeWeightPositionAccessV2 for AuthenticatedSettlementPositionBookV
 pub struct DerivedPortfolioFeeWeightStreamV2<'a> {
     traversal: &'a dyn SettlementTraversalAccessV5,
     positions: &'a dyn PortfolioFeeWeightPositionAccessV2,
-    selected: &'a SelectedCompositeFeeV1,
+    selected: &'a SelectedCompositeFeeV2,
     market: Id32,
     epoch: Id32,
     settlement_candidate: Id32,
@@ -79,13 +79,51 @@ pub struct DerivedPortfolioFeeWeightStreamV2<'a> {
     transcript: CompositeFeeWeightTranscriptV2,
 }
 
+/// Compact facts returned after one owner-ordered traversal of exact weights.
+///
+/// This summary is deliberately not an authenticated row cache. The private
+/// SBF adapter must store every callback row, sort by Position, and pass that
+/// exact compact cache through
+/// `composite_fee_weight_transcript_from_indexed_rows_v2` before it can mint
+/// the V3 recipient-allocation authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioFeeWeightVisitSummaryV2 {
+    market: Id32,
+    epoch: Id32,
+    settlement_candidate: Id32,
+    owner_order_set_digest: Id32,
+    batch_policy_id: Id32,
+    common_denominator: u128,
+    traversed_owner_count: u16,
+    nonzero_weight_row_count: u8,
+}
+
+impl PortfolioFeeWeightVisitSummaryV2 {
+    /// Canonical Market identity from the retained Feed.
+    pub const fn market(self) -> Id32 { self.market }
+    /// Canonical Epoch identity from the retained Feed.
+    pub const fn epoch(self) -> Id32 { self.epoch }
+    /// Exact selected settlement-candidate identity.
+    pub const fn settlement_candidate(self) -> Id32 { self.settlement_candidate }
+    /// Complete immutable owner/order-set digest from the traversal.
+    pub const fn owner_order_set_digest(self) -> Id32 { self.owner_order_set_digest }
+    /// Batch-policy identity rebound to the selected-fee semantic.
+    pub const fn batch_policy_id(self) -> Id32 { self.batch_policy_id }
+    /// Exact common fee denominator used by every owner quote.
+    pub const fn common_denominator(self) -> u128 { self.common_denominator }
+    /// Distinct owners with nonzero selected execution before zero omission.
+    pub const fn traversed_owner_count(self) -> u16 { self.traversed_owner_count }
+    /// Exact number of nonzero callback rows requiring Position sorting.
+    pub const fn nonzero_weight_row_count(self) -> u8 { self.nonzero_weight_row_count }
+}
+
 const _: () = assert!(
     core::mem::size_of::<DerivedPortfolioFeeWeightStreamV2<'static>>() <= 512
 );
 
 impl DerivedPortfolioFeeWeightStreamV2<'_> {
     /// Exact selected fee semantic used for every row quote.
-    pub const fn selected(&self) -> &SelectedCompositeFeeV1 { self.selected }
+    pub const fn selected(&self) -> &SelectedCompositeFeeV2 { self.selected }
     /// Canonical Market identity from the retained Feed.
     pub const fn market(&self) -> Id32 { self.market }
     /// Canonical Epoch identity from the retained Feed.
@@ -208,47 +246,13 @@ impl DerivedPortfolioFeeWeightStreamV2<'_> {
 pub fn derive_portfolio_fee_weight_stream_v2<'a>(
     traversal: &'a dyn SettlementTraversalAccessV5,
     positions: &'a dyn PortfolioFeeWeightPositionAccessV2,
-    selected: &'a SelectedCompositeFeeV1,
+    selected: &'a SelectedCompositeFeeV2,
     batch_policy: &FrozenPolicyV1,
 ) -> Result<DerivedPortfolioFeeWeightStreamV2<'a>, SettlementAdapterErrorV1> {
     let projection = traversal.projection();
     let feed = projection.feed();
-    batch_policy
-        .validate()
-        .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?;
-    let batch_policy_id = Id32::new(
-        batch_policy_digest(batch_policy)
-            .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?
-            .0,
-    )?;
-    if batch_policy.self_cross != SelfCrossPolicyV1::RefuseOverlap
-        || selected.batch_policy().0 != batch_policy_id.bytes()
-        || selected.realm().0 != projection.realm().bytes()
-        || selected.market().0 != feed.market.bytes()
-        || selected.epoch().0 != feed.epoch.bytes()
-        || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()
-        || selected.price_scale() != feed.price_scale
-        || selected.outcome_count() != feed.outcome_count
-        || positions.market_binding() != projection.position_market_binding()
-    {
-        return Err(SettlementAdapterErrorV1::BindingMismatch);
-    }
-    require_posted_owner_overlap_refusal(traversal)?;
-
-    let executed_owner_count = count_executed_owners(traversal)?;
-    if executed_owner_count != projection.expected_owner_count() {
-        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
-    }
-
-    let prices = traversal_prices(traversal)?;
-    let zero_quote = selected.quote_owner(&[0u64; MAX_OUTCOMES], &prices, 0)?;
-    if zero_quote.base_numerator != 0
-        || zero_quote.exact_numerator != 0
-        || zero_quote.base_denominator != zero_quote.exact_denominator
-    {
-        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
-    }
-    let common_denominator = zero_quote.base_denominator;
+    let (batch_policy_id, executed_owner_count, prices, common_denominator) =
+        portfolio_fee_weight_preflight_v2(traversal, positions, selected, batch_policy)?;
     require_unique_weight_positions(
         traversal,
         positions,
@@ -292,6 +296,115 @@ pub fn derive_portfolio_fee_weight_stream_v2<'a>(
         expected_executed_owner_count: executed_owner_count,
         transcript,
     })
+}
+
+/// Visit each traversal-derived nonzero owner weight exactly once.
+///
+/// Rows arrive in canonical owner order because owner netting is performed
+/// once per executed owner. Position order is intentionally left to the
+/// private adapter's compact heap cache. After sorting, the adapter must call
+/// `composite_fee_weight_transcript_from_indexed_rows_v2`; that pure helper
+/// detects duplicate Positions, omissions, extras, zero rows, and order
+/// changes before the cache can feed Hamilton or the V3 encoder. No caller
+/// owner, Position, weight, consideration, posted size, or count enters here.
+#[inline(never)]
+pub fn visit_portfolio_fee_weight_rows_v2<F>(
+    traversal: &dyn SettlementTraversalAccessV5,
+    positions: &dyn PortfolioFeeWeightPositionAccessV2,
+    selected: &SelectedCompositeFeeV2,
+    batch_policy: &FrozenPolicyV1,
+    mut visit: F,
+) -> Result<PortfolioFeeWeightVisitSummaryV2, SettlementAdapterErrorV1>
+where
+    F: FnMut(CompositeFeeWeightRowV2) -> Result<(), SettlementAdapterErrorV1>,
+{
+    let projection = traversal.projection();
+    let feed = projection.feed();
+    let (batch_policy_id, traversed_owner_count, prices, common_denominator) =
+        portfolio_fee_weight_preflight_v2(traversal, positions, selected, batch_policy)?;
+    let mut nonzero_weight_row_count = 0u8;
+    let mut prior_owner = None;
+    while let Some(owner) = next_executed_owner_after(traversal, prior_owner)? {
+        if let Some(row) = owner_weight_row(
+            traversal,
+            positions,
+            selected,
+            &prices,
+            common_denominator,
+            owner,
+        )? {
+            visit(row)?;
+            nonzero_weight_row_count = nonzero_weight_row_count
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        prior_owner = Some(owner);
+    }
+    if usize::from(nonzero_weight_row_count) > MAX_ORDERS {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    Ok(PortfolioFeeWeightVisitSummaryV2 {
+        market: feed.market,
+        epoch: feed.epoch,
+        settlement_candidate: feed.settlement_candidate_id,
+        owner_order_set_digest: projection.owner_order_set_digest(),
+        batch_policy_id,
+        common_denominator,
+        traversed_owner_count,
+        nonzero_weight_row_count,
+    })
+}
+
+fn portfolio_fee_weight_preflight_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    positions: &dyn PortfolioFeeWeightPositionAccessV2,
+    selected: &SelectedCompositeFeeV2,
+    batch_policy: &FrozenPolicyV1,
+) -> Result<
+    (Id32, u16, [u64; MAX_OUTCOMES], u128),
+    SettlementAdapterErrorV1,
+> {
+    let projection = traversal.projection();
+    let feed = projection.feed();
+    batch_policy
+        .validate()
+        .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?;
+    let batch_policy_id = Id32::new(
+        batch_policy_digest(batch_policy)
+            .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?
+            .0,
+    )?;
+    if batch_policy.self_cross != SelfCrossPolicyV1::RefuseOverlap
+        || selected.batch_policy().0 != batch_policy_id.bytes()
+        || selected.realm().0 != projection.realm().bytes()
+        || selected.market().0 != feed.market.bytes()
+        || selected.epoch().0 != feed.epoch.bytes()
+        || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()
+        || selected.price_scale() != feed.price_scale
+        || selected.outcome_count() != feed.outcome_count
+        || positions.market_binding() != projection.position_market_binding()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    require_posted_owner_overlap_refusal(traversal)?;
+    let traversed_owner_count = count_executed_owners(traversal)?;
+    if traversed_owner_count != projection.expected_owner_count() {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let prices = traversal_prices(traversal)?;
+    let zero_quote = selected.quote_owner(&[0u64; MAX_OUTCOMES], &prices, 0)?;
+    if zero_quote.base_numerator != 0
+        || zero_quote.exact_numerator != 0
+        || zero_quote.base_denominator != zero_quote.exact_denominator
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    Ok((
+        batch_policy_id,
+        traversed_owner_count,
+        prices,
+        zero_quote.base_denominator,
+    ))
 }
 
 fn traversal_prices(
@@ -359,7 +472,7 @@ fn count_executed_owners(
 fn owner_weight_row(
     traversal: &dyn SettlementTraversalAccessV5,
     positions: &dyn PortfolioFeeWeightPositionAccessV2,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,
     owner: Id32,
@@ -388,7 +501,7 @@ fn owner_weight_row(
 fn next_position_weight_row(
     traversal: &dyn SettlementTraversalAccessV5,
     positions: &dyn PortfolioFeeWeightPositionAccessV2,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,
     prior_position: Option<FeeId>,
@@ -423,7 +536,7 @@ fn next_position_weight_row(
 fn require_unique_weight_positions(
     traversal: &dyn SettlementTraversalAccessV5,
     positions: &dyn PortfolioFeeWeightPositionAccessV2,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,
 ) -> Result<(), SettlementAdapterErrorV1> {
