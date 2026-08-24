@@ -5,24 +5,28 @@
 //! identity is recomputed from a hostile-decoded canonical record.
 
 use dclutch_capability_contract::{
-    CapabilityManifestV1, ContentId as CapabilityContentId, RequiredFoundingEntryV1,
+    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
+    RequiredFoundingEntryV1,
 };
 use dclutch_collateral_contract::{
-    frame::{AccountRole, Role, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME},
-    CreateRealmV1, FoundMarketAndFundV1, CREATE_REALM_BYTES, FOUND_MARKET_AND_FUND_BYTES,
+    CREATE_REALM_BYTES, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
+    frame::{AccountRole, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME, Role},
 };
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot};
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
 use dclutch_product_contract::{
-    capacity::CapacityProfileV1, claim::CategoricalUnitV1, product::InstanceV1,
-    ContentId as ProductContentId,
+    ContentId as ProductContentId, capacity::CapacityProfileV1, claim::CategoricalUnitV1,
+    product::InstanceV1,
 };
 use dclutch_pyth_contract::{
     funding::FUNDING_BYTES, resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input, REALM_BYTES,
-    REALM_PDA_DOMAIN,
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_PDA_DOMAIN, RealmV1,
+    RealmV1Input,
+};
+use dclutch_record_contract::{
+    ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
 use dclutch_token_svm::{CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
 use solana_program::{
@@ -30,11 +34,11 @@ use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    sysvar::{rent::Rent, SysvarSerialize},
+    sysvar::{SysvarSerialize, rent::Rent},
 };
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
-use crate::{Finality, Observation, ObservedAccount, FUND_SEED, MARKET_SEED};
+use crate::{Finality, MARKET_SEED, Observation, ObservedAccount, authenticate_rent_credit};
 
 /// Initial Market generation created by this foundation workflow.
 ///
@@ -53,6 +57,19 @@ pub struct ObservedVacancy {
     pub key: Pubkey,
     /// Observation at which absence was reported.
     pub observation: Observation,
+}
+
+/// Chain-observed finalization proof paired with one immutable raw record.
+///
+/// The schema/release identifier and content digest derive both the raw record
+/// and its now-vacant staging cursor.  A builder never treats a decoded record
+/// at an arbitrary program-owned address as finalized evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinalizedRecordProof {
+    /// Schema/release identity used in the raw and cursor PDA derivations.
+    pub schema_release_id: [u8; 32],
+    /// Full finalized observation of the paired, vacant staging cursor.
+    pub staging_cursor: ObservedAccount,
 }
 
 /// Same-observation records needed to create an immutable Realm.
@@ -116,20 +133,34 @@ pub struct FoundMarketState {
     pub sponsor: ObservedAccount,
     /// Proved-vacant derived Market address.
     pub market_destination: ObservedVacancy,
-    /// Proved-vacant derived resolution-Fund address.
+    /// Proved-vacant derived generic capability-FundingState address.
     pub fund_destination: ObservedVacancy,
+    /// Pre-existing permanent RentCredit bound to the Market beneficiary.
+    pub rent_credit: ObservedAccount,
     /// Canonical immutable Realm record.
     pub realm: ObservedAccount,
+    /// Canonical finalized-record proof for the Realm raw bytes.
+    pub realm_finalization: FinalizedRecordProof,
     /// Canonical occurrence-specific Product Instance record.
     pub product_instance: ObservedAccount,
+    /// Canonical finalized-record proof for the Product Instance raw bytes.
+    pub product_instance_finalization: FinalizedRecordProof,
     /// Canonical categorical ClaimBasis record.
     pub claim_basis: ObservedAccount,
+    /// Canonical finalized-record proof for the ClaimBasis raw bytes.
+    pub claim_basis_finalization: FinalizedRecordProof,
     /// Canonical Product capacity profile record.
     pub capacity_profile: ObservedAccount,
+    /// Canonical finalized-record proof for the CapacityProfile raw bytes.
+    pub capacity_profile_finalization: FinalizedRecordProof,
     /// Canonical Pyth resolution material record.
     pub resolution_material: ObservedAccount,
+    /// Canonical finalized-record proof for the resolution-material raw bytes.
+    pub resolution_material_finalization: FinalizedRecordProof,
     /// Canonical capability manifest record.
     pub capability_manifest: ObservedAccount,
+    /// Canonical finalized-record proof for the capability-manifest raw bytes.
+    pub capability_manifest_finalization: FinalizedRecordProof,
     /// Canonical executable System Program account.
     pub system_program: ObservedAccount,
     /// Canonical Rent sysvar account.
@@ -185,7 +216,7 @@ pub struct FoundMarketReport {
     pub identity: MarketIdentity,
     /// Canonical Market PDA.
     pub market_address: Pubkey,
-    /// Canonical resolution-Fund PDA.
+    /// Canonical generic capability-FundingState PDA.
     pub fund_address: Pubkey,
     /// Exact exhaustive categorical outcome count.
     pub outcome_count: u8,
@@ -359,12 +390,31 @@ pub fn build_found_market_and_fund_v1(
         state.sponsor.observation,
         state.market_destination.observation,
         state.fund_destination.observation,
+        state.rent_credit.observation,
         state.realm.observation,
+        state.realm_finalization.staging_cursor.observation,
         state.product_instance.observation,
+        state
+            .product_instance_finalization
+            .staging_cursor
+            .observation,
         state.claim_basis.observation,
+        state.claim_basis_finalization.staging_cursor.observation,
         state.capacity_profile.observation,
+        state
+            .capacity_profile_finalization
+            .staging_cursor
+            .observation,
         state.resolution_material.observation,
+        state
+            .resolution_material_finalization
+            .staging_cursor
+            .observation,
         state.capability_manifest.observation,
+        state
+            .capability_manifest_finalization
+            .staging_cursor
+            .observation,
         state.system_program.observation,
         state.rent_sysvar.observation,
     ])?;
@@ -375,35 +425,48 @@ pub fn build_found_market_and_fund_v1(
         state.sponsor.key,
         state.market_destination.key,
         state.fund_destination.key,
+        state.rent_credit.key,
         state.realm.key,
+        state.realm_finalization.staging_cursor.key,
         state.product_instance.key,
+        state.product_instance_finalization.staging_cursor.key,
         state.claim_basis.key,
+        state.claim_basis_finalization.staging_cursor.key,
         state.capacity_profile.key,
+        state.capacity_profile_finalization.staging_cursor.key,
         state.resolution_material.key,
+        state.resolution_material_finalization.staging_cursor.key,
         state.capability_manifest.key,
+        state.capability_manifest_finalization.staging_cursor.key,
         state.system_program.key,
         state.rent_sysvar.key,
     ])?;
-    for record in [
-        &state.realm,
-        &state.product_instance,
-        &state.claim_basis,
-        &state.capacity_profile,
-        &state.resolution_material,
-        &state.capability_manifest,
+    for (record, proof) in [
+        (&state.realm, &state.realm_finalization),
+        (
+            &state.product_instance,
+            &state.product_instance_finalization,
+        ),
+        (&state.claim_basis, &state.claim_basis_finalization),
+        (
+            &state.capacity_profile,
+            &state.capacity_profile_finalization,
+        ),
+        (
+            &state.resolution_material,
+            &state.resolution_material_finalization,
+        ),
+        (
+            &state.capability_manifest,
+            &state.capability_manifest_finalization,
+        ),
     ] {
-        authenticate_protocol_record(program_id, &rent, record)?;
+        authenticate_finalized_record(program_id, &rent, record, proof)?;
     }
 
     let realm = RealmV1::decode(&state.realm.data).map_err(|_| FoundationError::InvalidRecord)?;
     require_canonical(&state.realm.data, &realm.to_bytes())?;
     let realm_id = hash(&state.realm.data).to_bytes();
-    let (realm_address, _) =
-        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_id], &program_id);
-    if realm_address != state.realm.key {
-        return Err(FoundationError::AddressMismatch);
-    }
-
     let capacity = CapacityProfileV1::decode(&state.capacity_profile.data)
         .map_err(|_| FoundationError::InvalidRecord)?;
     require_canonical(&state.capacity_profile.data, &capacity.to_bytes())?;
@@ -483,9 +546,28 @@ pub fn build_found_market_and_fund_v1(
     let (market_address, _) =
         Pubkey::find_program_address(&[MARKET_SEED, &identity_id], &program_id);
     authenticate_vacancy(state.market_destination, market_address)?;
+    let funding = dclutch_pyth_contract::funding::construct_required_resolution_funding(
+        core_id(manifest_id).map_err(|_| FoundationError::ContentLinkMismatch)?,
+        manifest,
+        resolution_funding,
+        fund_rent,
+        observation.slot,
+    )
+    .map_err(|_| FoundationError::InvalidFundingAuthority)?;
+    let derivation = CapabilityFundingDerivationV1::new(
+        market_address.to_bytes(),
+        FOUNDATION_GENERATION,
+        core_id(manifest_id).map_err(|_| FoundationError::ContentLinkMismatch)?,
+        manifest,
+        funding,
+    )
+    .map_err(|_| FoundationError::InvalidFundingAuthority)?;
     let (fund_address, _) =
-        Pubkey::find_program_address(&[FUND_SEED, market_address.as_ref()], &program_id);
+        Pubkey::find_program_address(&derivation.seed_components(), &program_id);
     authenticate_vacancy(state.fund_destination, fund_address)?;
+
+    authenticate_rent_credit(program_id, &state.rent_credit, state.sponsor.key)
+        .map_err(|_| FoundationError::InvalidOwner)?;
 
     let mut root = MarketRoot::founding(identity, state.sponsor.key.to_bytes())
         .map_err(|_| FoundationError::InvalidRecord)?;
@@ -561,13 +643,28 @@ fn exact_found_market_metas(
             let key = match role.role() {
                 Role::Sponsor => state.sponsor.key,
                 Role::Market => market_address,
-                Role::ResolutionFund => fund_address,
+                Role::FundingState => fund_address,
+                Role::RentCredit => state.rent_credit.key,
                 Role::Realm => state.realm.key,
                 Role::ProductInstance => state.product_instance.key,
                 Role::ClaimBasis => state.claim_basis.key,
                 Role::CapacityProfile => state.capacity_profile.key,
                 Role::ResolutionPolicy => state.resolution_material.key,
                 Role::CapabilityManifest => state.capability_manifest.key,
+                Role::RealmStagingCursor => state.realm_finalization.staging_cursor.key,
+                Role::ProductInstanceStagingCursor => {
+                    state.product_instance_finalization.staging_cursor.key
+                }
+                Role::ClaimBasisStagingCursor => state.claim_basis_finalization.staging_cursor.key,
+                Role::CapacityProfileStagingCursor => {
+                    state.capacity_profile_finalization.staging_cursor.key
+                }
+                Role::ResolutionPolicyStagingCursor => {
+                    state.resolution_material_finalization.staging_cursor.key
+                }
+                Role::CapabilityManifestStagingCursor => {
+                    state.capability_manifest_finalization.staging_cursor.key
+                }
                 Role::SystemProgram => system_program::ID,
                 Role::RentSysvar => sysvar::rent::ID,
                 _ => return Err(FoundationError::InstructionEncoding),
@@ -629,15 +726,52 @@ fn authenticate_token_program(account: &ObservedAccount) -> Result<(), Foundatio
     Ok(())
 }
 
-fn authenticate_protocol_record(
+pub(crate) fn authenticate_finalized_record(
     program_id: Pubkey,
     rent: &Rent,
     account: &ObservedAccount,
+    proof: &FinalizedRecordProof,
 ) -> Result<(), FoundationError> {
     if account.owner != program_id || account.executable {
         return Err(FoundationError::InvalidOwner);
     }
-    require_rent_exempt(rent, account)
+    require_rent_exempt(rent, account)?;
+    let schema = SchemaReleaseId::new(proof.schema_release_id)
+        .map_err(|_| FoundationError::AddressMismatch)?;
+    let digest = ContentDigest::new(hash(&account.data).to_bytes())
+        .map_err(|_| FoundationError::ContentLinkMismatch)?;
+    let schema_bytes = schema.to_bytes();
+    let digest_bytes = digest.to_bytes();
+    let (expected_raw, _) = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            schema_bytes.as_slice(),
+            digest_bytes.as_slice(),
+        ],
+        &program_id,
+    );
+    let (expected_cursor, _) = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            schema_bytes.as_slice(),
+            digest_bytes.as_slice(),
+        ],
+        &program_id,
+    );
+    let cursor = &proof.staging_cursor;
+    if account.key != expected_raw
+        || cursor.key != expected_cursor
+        || cursor.owner != system_program::ID
+        || cursor.executable
+        || cursor.lamports != 0
+        || !cursor.data.is_empty()
+    {
+        return Err(FoundationError::AddressMismatch);
+    }
+    if cursor.observation != account.observation {
+        return Err(FoundationError::ObservationMismatch);
+    }
+    Ok(())
 }
 
 fn authenticate_vacancy(vacancy: ObservedVacancy, expected: Pubkey) -> Result<(), FoundationError> {
@@ -660,7 +794,7 @@ fn authenticate_distinct(keys: &[Pubkey]) -> Result<(), FoundationError> {
     Ok(())
 }
 
-fn decode_rent(account: &ObservedAccount) -> Result<Rent, FoundationError> {
+pub(crate) fn decode_rent(account: &ObservedAccount) -> Result<Rent, FoundationError> {
     if account.key != sysvar::rent::ID
         || account.owner != sysvar::ID
         || account.executable

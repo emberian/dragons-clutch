@@ -22,6 +22,8 @@ dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.0.0"

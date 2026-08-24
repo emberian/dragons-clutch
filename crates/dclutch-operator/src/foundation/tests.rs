@@ -1,20 +1,22 @@
 use dclutch_capability_contract::{
-    ActivationPolicy, CapabilityEntryV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+    ContentId as CapabilityContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES,
 };
 use dclutch_collateral_contract::{CreateRealmV1, FoundMarketAndFundV1};
 use dclutch_kernel::resolution::categorical_pyth_v1::{
     CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
 };
 use dclutch_product_contract::{
+    ContentId as ProductContentId,
     capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
     claim::CategoricalUnitV1Input,
     product::InstanceV1Input,
-    ContentId as ProductContentId,
 };
 use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1, policy::CategoricalPythPolicyRecordV1,
+    feed_profile::PythFeedProfileV1, funding::construct_required_resolution_funding,
+    policy::CategoricalPythPolicyRecordV1,
 };
+use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use solana_program::sysvar::SysvarSerialize;
 
 use super::*;
@@ -42,6 +44,34 @@ fn observed(
         executable,
         data,
     }
+}
+
+fn finalized_record(
+    program_id: Pubkey,
+    schema_byte: u8,
+    data: Vec<u8>,
+) -> (ObservedAccount, FinalizedRecordProof) {
+    let schema = [schema_byte; 32];
+    let digest = hash(&data).to_bytes();
+    let (raw, _) = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+        &program_id,
+    );
+    let (cursor, _) = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            schema.as_slice(),
+            digest.as_slice(),
+        ],
+        &program_id,
+    );
+    (
+        observed(raw, program_id, u64::MAX, data, false),
+        FinalizedRecordProof {
+            schema_release_id: schema,
+            staging_cursor: observed(cursor, system_program::ID, 0, Vec::new(), false),
+        },
+    )
 }
 
 fn rent_account() -> ObservedAccount {
@@ -213,8 +243,9 @@ impl FoundFixture {
         let sponsor = Pubkey::new_from_array([91; 32]);
         let mint = Pubkey::new_from_array([92; 32]);
         let token_program = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
-        let (realm, realm_key) = expected_realm(program_id, mint, token_program);
+        let (realm, _) = expected_realm(program_id, mint, token_program);
         let realm_data = realm.to_bytes().to_vec();
+        let (realm, realm_finalization) = finalized_record(program_id, 1, realm_data.clone());
 
         let capacity = capacity(max_partition_cells);
         let capacity_data = capacity.to_bytes().to_vec();
@@ -239,12 +270,19 @@ impl FoundFixture {
         })
         .expect("instance");
         let instance_data = instance.to_bytes().to_vec();
+        let (product_instance, product_instance_finalization) =
+            finalized_record(program_id, 2, instance_data.clone());
+        let (claim_basis, claim_basis_finalization) = finalized_record(program_id, 3, claim_data);
+        let (capacity_profile, capacity_profile_finalization) =
+            finalized_record(program_id, 4, capacity_data);
 
         let feed_profile = PythFeedProfileV1::new([5; 32], [6; 32], [7; 32]).expect("feed profile");
         let policy = policy(outcome_count, hash(&feed_profile.to_bytes()).to_bytes());
         let material = CategoricalPythResolutionMaterialV1::new(policy, feed_profile)
             .expect("resolution material");
         let material_data = material.to_bytes().to_vec();
+        let (resolution_material, resolution_material_finalization) =
+            finalized_record(program_id, 5, material_data);
         let policy_id_bytes = hash(&policy.to_bytes()).to_bytes();
         let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
         let funding_quote =
@@ -255,6 +293,8 @@ impl FoundFixture {
             [23; 32],
             funding_quote,
         );
+        let (capability_manifest, capability_manifest_finalization) =
+            finalized_record(program_id, 6, manifest_data.clone());
         let identity = MarketIdentity::new(
             core_id(hash(&realm_data).to_bytes()).expect("realm ID"),
             core_id(hash(&instance_data).to_bytes()).expect("instance ID"),
@@ -266,9 +306,37 @@ impl FoundFixture {
         let identity_id = hash(&identity.to_bytes()).to_bytes();
         let (market_key, _) =
             Pubkey::find_program_address(&[MARKET_SEED, &identity_id], &program_id);
+        let manifest = CapabilityManifestV1::decode(&manifest_data).expect("manifest decode");
+        let manifest_id =
+            CapabilityContentId::new(hash(manifest.as_bytes()).to_bytes()).expect("manifest ID");
+        let selected = manifest
+            .required_founding_entry_for_config(
+                CapabilityContentId::new(policy_id_bytes).expect("policy"),
+            )
+            .expect("selected");
+        let funding = construct_required_resolution_funding(
+            manifest_id,
+            manifest,
+            selected,
+            fund_rent,
+            observation().slot,
+        )
+        .expect("funding");
+        let derivation = dclutch_capability_contract::CapabilityFundingDerivationV1::new(
+            market_key.to_bytes(),
+            FOUNDATION_GENERATION,
+            manifest_id,
+            manifest,
+            funding,
+        )
+        .expect("derivation");
         let (fund_key, _) =
-            Pubkey::find_program_address(&[FUND_SEED, market_key.as_ref()], &program_id);
-        let record_lamports = u64::MAX;
+            Pubkey::find_program_address(&derivation.seed_components(), &program_id);
+        let authority = RefundAuthority::new(sponsor.to_bytes()).expect("authority");
+        let (rent_credit_key, rent_credit_bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, sponsor.as_ref()],
+            &program_id,
+        );
         Self {
             program_id,
             state: FoundMarketState {
@@ -281,42 +349,27 @@ impl FoundFixture {
                     key: fund_key,
                     observation: observation(),
                 },
-                realm: observed(realm_key, program_id, record_lamports, realm_data, false),
-                product_instance: observed(
-                    Pubkey::new_from_array([80; 32]),
+                rent_credit: observed(
+                    rent_credit_key,
                     program_id,
-                    record_lamports,
-                    instance_data,
+                    u64::MAX,
+                    RentCreditV1::new(authority, rent_credit_bump)
+                        .to_bytes()
+                        .to_vec(),
                     false,
                 ),
-                claim_basis: observed(
-                    Pubkey::new_from_array([81; 32]),
-                    program_id,
-                    record_lamports,
-                    claim_data,
-                    false,
-                ),
-                capacity_profile: observed(
-                    Pubkey::new_from_array([82; 32]),
-                    program_id,
-                    record_lamports,
-                    capacity_data,
-                    false,
-                ),
-                resolution_material: observed(
-                    Pubkey::new_from_array([83; 32]),
-                    program_id,
-                    record_lamports,
-                    material_data,
-                    false,
-                ),
-                capability_manifest: observed(
-                    Pubkey::new_from_array([84; 32]),
-                    program_id,
-                    record_lamports,
-                    manifest_data,
-                    false,
-                ),
+                realm,
+                realm_finalization,
+                product_instance,
+                product_instance_finalization,
+                claim_basis,
+                claim_basis_finalization,
+                capacity_profile,
+                capacity_profile_finalization,
+                resolution_material,
+                resolution_material_finalization,
+                capability_manifest,
+                capability_manifest_finalization,
                 system_program: system_program_account(),
                 rent_sysvar: rent_account(),
             },
@@ -416,12 +469,50 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
             AccountMeta::new(fixture.state.sponsor.key, true),
             AccountMeta::new(report.market_address, false),
             AccountMeta::new(report.fund_address, false),
+            AccountMeta::new_readonly(fixture.state.rent_credit.key, false),
             AccountMeta::new_readonly(fixture.state.realm.key, false),
             AccountMeta::new_readonly(fixture.state.product_instance.key, false),
             AccountMeta::new_readonly(fixture.state.claim_basis.key, false),
             AccountMeta::new_readonly(fixture.state.capacity_profile.key, false),
             AccountMeta::new_readonly(fixture.state.resolution_material.key, false),
             AccountMeta::new_readonly(fixture.state.capability_manifest.key, false),
+            AccountMeta::new_readonly(fixture.state.realm_finalization.staging_cursor.key, false),
+            AccountMeta::new_readonly(
+                fixture
+                    .state
+                    .product_instance_finalization
+                    .staging_cursor
+                    .key,
+                false,
+            ),
+            AccountMeta::new_readonly(
+                fixture.state.claim_basis_finalization.staging_cursor.key,
+                false,
+            ),
+            AccountMeta::new_readonly(
+                fixture
+                    .state
+                    .capacity_profile_finalization
+                    .staging_cursor
+                    .key,
+                false,
+            ),
+            AccountMeta::new_readonly(
+                fixture
+                    .state
+                    .resolution_material_finalization
+                    .staging_cursor
+                    .key,
+                false,
+            ),
+            AccountMeta::new_readonly(
+                fixture
+                    .state
+                    .capability_manifest_finalization
+                    .staging_cursor
+                    .key,
+                false,
+            ),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
         ]
@@ -507,7 +598,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
     let before = wrong_rent.clone();
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_rent),
-        Err(FoundationError::InvalidFundingAuthority)
+        Err(FoundationError::AddressMismatch)
     );
     assert_eq!(wrong_rent, before);
 
@@ -517,7 +608,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
         resolution_manifest(release_id, [71; 32], capability_capacity_id, exact_quote);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_config),
-        Err(FoundationError::InvalidFundingAuthority)
+        Err(FoundationError::AddressMismatch)
     );
 
     let mut wrong_release = fixture.state.clone();
@@ -525,7 +616,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
         resolution_manifest([72; 32], config_id, capability_capacity_id, exact_quote);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_release),
-        Err(FoundationError::ContentLinkMismatch)
+        Err(FoundationError::AddressMismatch)
     );
 
     let zero_bounty = FundingQuoteV1::new(fund_rent, 0, 0, 17, 0, 0, 0)
@@ -535,7 +626,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
         resolution_manifest(release_id, config_id, capability_capacity_id, zero_bounty);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &missing_bounty),
-        Err(FoundationError::InvalidFundingAuthority)
+        Err(FoundationError::AddressMismatch)
     );
 }
 
@@ -573,7 +664,7 @@ fn wrong_pda_owner_and_content_link_refuse_without_partial_plan() {
     wrong_link.product_instance.data = replacement.to_bytes().to_vec();
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_link),
-        Err(FoundationError::ContentLinkMismatch)
+        Err(FoundationError::AddressMismatch)
     );
 }
 
@@ -609,7 +700,7 @@ fn unsupported_outcome_width_refuses_before_instruction_construction() {
     fixture.state.product_instance.data = instance.to_bytes().to_vec();
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &fixture.state),
-        Err(FoundationError::InvalidOutcomeCount)
+        Err(FoundationError::AddressMismatch)
     );
 }
 
@@ -633,6 +724,7 @@ fn rent_funding_finality_and_observation_mismatch_refuse() {
     let mut nonfinal = fixture.state.clone();
     for account in [
         &mut nonfinal.sponsor,
+        &mut nonfinal.rent_credit,
         &mut nonfinal.realm,
         &mut nonfinal.product_instance,
         &mut nonfinal.claim_basis,
@@ -643,6 +735,16 @@ fn rent_funding_finality_and_observation_mismatch_refuse() {
         &mut nonfinal.rent_sysvar,
     ] {
         account.observation.finality = Finality::Confirmed;
+    }
+    for vacancy in [
+        &mut nonfinal.realm_finalization.staging_cursor,
+        &mut nonfinal.product_instance_finalization.staging_cursor,
+        &mut nonfinal.claim_basis_finalization.staging_cursor,
+        &mut nonfinal.capacity_profile_finalization.staging_cursor,
+        &mut nonfinal.resolution_material_finalization.staging_cursor,
+        &mut nonfinal.capability_manifest_finalization.staging_cursor,
+    ] {
+        vacancy.observation.finality = Finality::Confirmed;
     }
     nonfinal.market_destination.observation.finality = Finality::Confirmed;
     nonfinal.fund_destination.observation.finality = Finality::Confirmed;
