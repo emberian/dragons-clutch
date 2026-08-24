@@ -11,12 +11,24 @@ pub const STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1: usize = 241;
 /// Domain for the exact transfer delta accepted by both Position Replay envelopes.
 pub const STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/replay-delta/v1\0";
+/// Exact single-vault compaction delta width, excluding its hash domain.
+pub const STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1: usize = 137;
+/// Domain for a beneficiary-free single-vault compaction delta.
+pub const STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/vault-replay-delta/v1\0";
+/// Exact terminal-vault delta width, excluding its hash domain.
+pub const STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1: usize = 137;
+/// Domain for the final Structured Position/Replay retirement transition.
+pub const STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-replay-delta/v1\0";
 
 const EXTENSION_MAGIC: [u8; 8] = *b"DCSCRPV1";
 const EXTENSION_VERSION: u16 = 1;
 
 const _: () = assert!(STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1 == 16 + (6 * 32));
 const _: () = assert!(STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1 == 1 + (2 * 8) + (7 * 32));
+const _: () = assert!(STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1 == 1 + 8 + (4 * 32));
+const _: () = assert!(STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1 == 1 + 8 + (4 * 32));
 
 /// Lifecycle of the structured-claim purpose extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +38,8 @@ pub enum StructuredClaimReplayExtensionStateV1 {
     Founding = 0,
     /// At least one exact transition has advanced the common Replay envelope.
     Advanced = 1,
+    /// The purpose owner authenticated empty backing and sealed retirement.
+    Terminal = 2,
 }
 
 impl StructuredClaimReplayExtensionStateV1 {
@@ -33,7 +47,16 @@ impl StructuredClaimReplayExtensionStateV1 {
         match value {
             0 => Ok(Self::Founding),
             1 => Ok(Self::Advanced),
+            2 => Ok(Self::Terminal),
             _ => Err(Error::InvalidReplayExtension),
+        }
+    }
+
+    const fn encode(self) -> u8 {
+        match self {
+            Self::Founding => 0,
+            Self::Advanced => 1,
+            Self::Terminal => 2,
         }
     }
 }
@@ -103,7 +126,15 @@ impl StructuredClaimReplayExtensionV1 {
                 }
             }
             StructuredClaimReplayExtensionStateV1::Advanced => {
-                if !is_custody_action(self.last_action)
+                if !is_live_replay_action(self.last_action)
+                    || self.last_transition_id == [0; 32]
+                    || self.last_delta_id == [0; 32]
+                {
+                    return Err(Error::InvalidReplayExtension);
+                }
+            }
+            StructuredClaimReplayExtensionStateV1::Terminal => {
+                if self.last_action != StructuredClaimActionV1::RetireDescriptor.tag()
                     || self.last_transition_id == [0; 32]
                     || self.last_delta_id == [0; 32]
                 {
@@ -124,7 +155,7 @@ impl StructuredClaimReplayExtensionV1 {
         put(
             &mut output,
             &mut cursor,
-            &[self.state as u8, self.last_action],
+            &[self.state.encode(), self.last_action],
         )?;
         put(&mut output, &mut cursor, &[0; 4])?;
         for identity in [
@@ -180,7 +211,8 @@ impl StructuredClaimReplayExtensionV1 {
     pub fn advanced(self, transition: StructuredClaimReplayTransitionV1) -> Result<Self> {
         self.validate()?;
         transition.validate()?;
-        if self.descriptor_account != transition.descriptor_account
+        if self.state == StructuredClaimReplayExtensionStateV1::Terminal
+            || self.descriptor_account != transition.descriptor_account
             || self.wrapper_product_id != transition.wrapper_product_id
             || self.vault_authority != transition.vault_authority
             || self.current_position_semantic_id != transition.position_pre_semantic_id
@@ -193,6 +225,31 @@ impl StructuredClaimReplayExtensionV1 {
             last_delta_id: transition.delta_id,
             state: StructuredClaimReplayExtensionStateV1::Advanced,
             last_action: transition.action.tag(),
+            ..self
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Seal the purpose extension after the exact empty Position successor and
+    /// terminal delta have been authenticated by the Structured owner.
+    pub fn terminalized(self, transition: StructuredClaimReplayTransitionV1) -> Result<Self> {
+        self.validate()?;
+        transition.validate_terminal()?;
+        if self.state == StructuredClaimReplayExtensionStateV1::Terminal
+            || self.descriptor_account != transition.descriptor_account
+            || self.wrapper_product_id != transition.wrapper_product_id
+            || self.vault_authority != transition.vault_authority
+            || self.current_position_semantic_id != transition.position_pre_semantic_id
+        {
+            return Err(Error::InvalidReplayExtension);
+        }
+        let value = Self {
+            current_position_semantic_id: transition.position_post_semantic_id,
+            last_transition_id: transition.transition_id,
+            last_delta_id: transition.delta_id,
+            state: StructuredClaimReplayExtensionStateV1::Terminal,
+            last_action: StructuredClaimActionV1::RetireDescriptor.tag(),
             ..self
         };
         value.validate()?;
@@ -223,7 +280,30 @@ pub struct StructuredClaimReplayTransitionV1 {
 
 impl StructuredClaimReplayTransitionV1 {
     fn validate(self) -> Result<()> {
-        if !is_custody_action(self.action.tag()) {
+        if !is_live_replay_action(self.action.tag()) {
+            return Err(Error::InvalidReplayExtension);
+        }
+        for identity in [
+            self.descriptor_account,
+            self.wrapper_product_id,
+            self.vault_authority,
+            self.transition_id,
+            self.delta_id,
+            self.position_pre_semantic_id,
+            self.position_post_semantic_id,
+        ] {
+            if identity == [0; 32] {
+                return Err(Error::InvalidReplayExtension);
+            }
+        }
+        if self.position_pre_semantic_id == self.position_post_semantic_id {
+            return Err(Error::InvalidReplayExtension);
+        }
+        Ok(())
+    }
+
+    fn validate_terminal(self) -> Result<()> {
+        if self.action != StructuredClaimActionV1::RetireDescriptor {
             return Err(Error::InvalidReplayExtension);
         }
         for identity in [
@@ -274,7 +354,7 @@ pub struct StructuredClaimReplayDeltaV1 {
 impl StructuredClaimReplayDeltaV1 {
     /// Encode the exact digest body; adapters hash `domain || body`.
     pub fn encode(&self) -> Result<[u8; STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1]> {
-        if !is_custody_action(self.action.tag())
+        if !is_pair_action(self.action.tag())
             || self.source_sequence == u64::MAX
             || self.destination_sequence == u64::MAX
             || self.source_position_account == self.destination_position_account
@@ -331,9 +411,128 @@ impl StructuredClaimReplayDeltaV1 {
     }
 }
 
-const fn is_custody_action(action: u8) -> bool {
-    action == StructuredClaimActionV1::WrapCanonical as u8
-        || action == StructuredClaimActionV1::UnwrapCanonical as u8
+/// Exact compaction delta for the sole Structured Position/Replay pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredClaimVaultReplayDeltaV1 {
+    /// Vault-only action; currently exactly `CompactDonation`.
+    pub action: StructuredClaimActionV1,
+    /// Structured Replay ordinal consumed by this mutation.
+    pub sequence: u64,
+    /// Complete authenticated current transition receipt.
+    pub transition_id: [u8; 32],
+    /// Exact Structured Position V3 account.
+    pub position_account: [u8; 32],
+    /// Position semantic identity before compaction.
+    pub position_pre_semantic_id: [u8; 32],
+    /// Position semantic identity after compaction.
+    pub position_post_semantic_id: [u8; 32],
+}
+
+impl StructuredClaimVaultReplayDeltaV1 {
+    /// Encode the exact single-vault digest body; adapters hash `domain || body`.
+    pub fn encode(&self) -> Result<[u8; STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1]> {
+        if self.action != StructuredClaimActionV1::CompactDonation || self.sequence == u64::MAX {
+            return Err(Error::InvalidReplayExtension);
+        }
+        for identity in [
+            self.transition_id,
+            self.position_account,
+            self.position_pre_semantic_id,
+            self.position_post_semantic_id,
+        ] {
+            if identity == [0; 32] {
+                return Err(Error::InvalidReplayExtension);
+            }
+        }
+        if self.position_pre_semantic_id == self.position_post_semantic_id {
+            return Err(Error::InvalidReplayExtension);
+        }
+        let mut output = [0_u8; STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1];
+        let mut cursor = 0_usize;
+        put(&mut output, &mut cursor, &[self.action.tag()])?;
+        put(&mut output, &mut cursor, &self.sequence.to_le_bytes())?;
+        for identity in [
+            self.transition_id,
+            self.position_account,
+            self.position_pre_semantic_id,
+            self.position_post_semantic_id,
+        ] {
+            put(&mut output, &mut cursor, &identity)?;
+        }
+        if cursor != output.len() {
+            return Err(Error::InvalidLength);
+        }
+        Ok(output)
+    }
+}
+
+/// Exact terminal delta for the sole Structured Position/Replay pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredClaimTerminalReplayDeltaV1 {
+    /// Exactly [`StructuredClaimActionV1::RetireDescriptor`].
+    pub action: StructuredClaimActionV1,
+    /// Live Replay ordinal consumed while sealing the terminal envelope.
+    pub sequence: u64,
+    /// Receipt for the complete authenticated retirement prestate.
+    pub transition_id: [u8; 32],
+    /// Exact Structured Position V3 account.
+    pub position_account: [u8; 32],
+    /// Live Position semantic identity before requesting close.
+    pub position_pre_semantic_id: [u8; 32],
+    /// Empty close-requested Position semantic identity consumed by retirement.
+    pub position_terminal_semantic_id: [u8; 32],
+}
+
+impl StructuredClaimTerminalReplayDeltaV1 {
+    /// Encode the exact terminal digest body; adapters hash `domain || body`.
+    pub fn encode(&self) -> Result<[u8; STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1]> {
+        if self.action != StructuredClaimActionV1::RetireDescriptor
+            || self.sequence == u64::MAX
+        {
+            return Err(Error::InvalidReplayExtension);
+        }
+        for identity in [
+            self.transition_id,
+            self.position_account,
+            self.position_pre_semantic_id,
+            self.position_terminal_semantic_id,
+        ] {
+            if identity == [0; 32] {
+                return Err(Error::InvalidReplayExtension);
+            }
+        }
+        if self.position_pre_semantic_id == self.position_terminal_semantic_id {
+            return Err(Error::InvalidReplayExtension);
+        }
+        let mut output = [0_u8; STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1];
+        let mut cursor = 0_usize;
+        put(&mut output, &mut cursor, &[self.action.tag()])?;
+        put(&mut output, &mut cursor, &self.sequence.to_le_bytes())?;
+        for identity in [
+            self.transition_id,
+            self.position_account,
+            self.position_pre_semantic_id,
+            self.position_terminal_semantic_id,
+        ] {
+            put(&mut output, &mut cursor, &identity)?;
+        }
+        if cursor != output.len() {
+            return Err(Error::InvalidLength);
+        }
+        Ok(output)
+    }
+}
+
+const fn is_pair_action(action: u8) -> bool {
+    action == StructuredClaimActionV1::WrapCanonical.tag()
+        || action == StructuredClaimActionV1::UnwrapCanonical.tag()
+        || action == StructuredClaimActionV1::WrapFull.tag()
+        || action == StructuredClaimActionV1::UnwrapFull.tag()
+        || action == StructuredClaimActionV1::RedeemTerminal.tag()
+}
+
+const fn is_live_replay_action(action: u8) -> bool {
+    is_pair_action(action) || action == StructuredClaimActionV1::CompactDonation.tag()
 }
 
 fn read_key(input: &[u8], cursor: &mut usize) -> Result<[u8; 32]> {
@@ -374,5 +573,95 @@ mod tests {
             .unwrap();
         assert_eq!(advanced.current_position_semantic_id, [7; 32]);
         assert_eq!(advanced.last_action, 2);
+    }
+
+    #[test]
+    fn live_and_terminal_replay_actions_are_disjoint_and_terminal_is_absorbing() {
+        let founding =
+            StructuredClaimReplayExtensionV1::founding([1; 32], [2; 32], [3; 32], [4; 32])
+                .unwrap();
+        for action in [
+            StructuredClaimActionV1::WrapFull,
+            StructuredClaimActionV1::UnwrapFull,
+            StructuredClaimActionV1::CompactDonation,
+            StructuredClaimActionV1::RedeemTerminal,
+        ] {
+            assert!(founding
+                .advanced(StructuredClaimReplayTransitionV1 {
+                    descriptor_account: [1; 32],
+                    wrapper_product_id: [2; 32],
+                    vault_authority: [3; 32],
+                    action,
+                    transition_id: [5; 32],
+                    delta_id: [6; 32],
+                    position_pre_semantic_id: [4; 32],
+                    position_post_semantic_id: [7; 32],
+                })
+                .is_ok());
+        }
+        assert!(founding
+            .advanced(StructuredClaimReplayTransitionV1 {
+                descriptor_account: [1; 32],
+                wrapper_product_id: [2; 32],
+                vault_authority: [3; 32],
+                action: StructuredClaimActionV1::RetireDescriptor,
+                transition_id: [5; 32],
+                delta_id: [6; 32],
+                position_pre_semantic_id: [4; 32],
+                position_post_semantic_id: [7; 32],
+            })
+            .is_err());
+        let terminal = founding
+            .terminalized(StructuredClaimReplayTransitionV1 {
+                descriptor_account: [1; 32],
+                wrapper_product_id: [2; 32],
+                vault_authority: [3; 32],
+                action: StructuredClaimActionV1::RetireDescriptor,
+                transition_id: [8; 32],
+                delta_id: [9; 32],
+                position_pre_semantic_id: [4; 32],
+                position_post_semantic_id: [10; 32],
+            })
+            .unwrap();
+        assert_eq!(terminal.state, StructuredClaimReplayExtensionStateV1::Terminal);
+        assert!(terminal
+            .terminalized(StructuredClaimReplayTransitionV1 {
+                descriptor_account: [1; 32],
+                wrapper_product_id: [2; 32],
+                vault_authority: [3; 32],
+                action: StructuredClaimActionV1::RetireDescriptor,
+                transition_id: [11; 32],
+                delta_id: [12; 32],
+                position_pre_semantic_id: [10; 32],
+                position_post_semantic_id: [13; 32],
+            })
+            .is_err());
+        assert!(terminal
+            .advanced(StructuredClaimReplayTransitionV1 {
+                descriptor_account: [1; 32],
+                wrapper_product_id: [2; 32],
+                vault_authority: [3; 32],
+                action: StructuredClaimActionV1::WrapFull,
+                transition_id: [11; 32],
+                delta_id: [12; 32],
+                position_pre_semantic_id: [10; 32],
+                position_post_semantic_id: [13; 32],
+            })
+            .is_err());
+        let delta = StructuredClaimVaultReplayDeltaV1 {
+            action: StructuredClaimActionV1::CompactDonation,
+            sequence: 9,
+            transition_id: [8; 32],
+            position_account: [9; 32],
+            position_pre_semantic_id: [10; 32],
+            position_post_semantic_id: [11; 32],
+        };
+        assert_eq!(delta.encode().unwrap().len(), STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1);
+        assert!(StructuredClaimVaultReplayDeltaV1 {
+            action: StructuredClaimActionV1::WrapFull,
+            ..delta
+        }
+        .encode()
+        .is_err());
     }
 }

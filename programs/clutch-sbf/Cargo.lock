@@ -241,6 +241,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-retirement-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-collateral-adapter-v2",
+ "clutch-general-v2-contract",
+ "clutch-retirement",
+ "clutch-solana-layout",
+ "clutch-solana-reference",
+]
+
+[[package]]
 name = "clutch-sbf"
 version = "0.1.0"
 dependencies = [
@@ -268,6 +279,8 @@ dependencies = [
  "clutch-source-plane-v3",
  "clutch-source-plane-v3-adapter",
  "clutch-source-plane-v3-runtime",
+ "clutch-structured-claim",
+ "clutch-structured-claim-adapter",
  "solana-account-info",
  "solana-clock",
  "solana-cpi",
@@ -352,6 +365,41 @@ name = "clutch-source-profile-v1"
 version = "0.1.0"
 dependencies = [
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-structured-claim"
+version = "0.1.0"
+dependencies = [
+ "clutch-kernel",
+]
+
+[[package]]
+name = "clutch-structured-claim-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-collateral-adapter-v2",
+ "clutch-general-v2-contract",
+ "clutch-kernel",
+ "clutch-owner-settlement",
+ "clutch-product-series",
+ "clutch-retirement",
+ "clutch-retirement-adapter",
+ "clutch-solana-layout",
+ "clutch-solana-reference",
+ "clutch-structured-claim",
+ "clutch-structured-claim-runtime-contract",
+ "sha2 0.10.9",
+ "solana-pubkey",
+ "solana-sha256-hasher",
+]
+
+[[package]]
+name = "clutch-structured-claim-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+ "clutch-structured-claim",
 ]
 
 [[package]]

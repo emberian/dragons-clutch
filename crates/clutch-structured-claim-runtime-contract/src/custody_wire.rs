@@ -56,7 +56,10 @@ impl PositionAssetTransferAuthorityKindV1 {
 
     /// Return the exact one-byte wire value.
     pub const fn to_byte(self) -> u8 {
-        self as u8
+        match self {
+            Self::OwnerSigner => 0,
+            Self::StructuredCustody => 1,
+        }
     }
 }
 

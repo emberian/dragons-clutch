@@ -279,8 +279,10 @@ pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 /// StructuredClaim immutable descriptor envelope discriminator.
 pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
-/// StructuredClaim immutable descriptor envelope version.
-pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn StructuredClaim descriptor version with one ambiguous authority bump.
+pub const HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1: u8 = 1;
+/// Sole future StructuredClaim descriptor version with distinct authority bumps.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 2;
 /// General V2 final settlement-pot account discriminator.
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
 /// General V2 final settlement-pot account version.
@@ -467,6 +469,12 @@ pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION: u8 = 1;
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent Market interval-history bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
+/// Series-link-scoped mutable Structured descriptor-family root.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb7;
+/// First Structured root account version.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact Structured root account width.
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 656;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
@@ -609,6 +617,8 @@ const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 const _: () = assert!(PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
+const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_TAG == 0xb7);
+const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES == 656);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1294,10 +1304,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+            version: HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-structured-claim-descriptor-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
             version: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "structured-claim-descriptor-v1-account",
+        name: "structured-claim-descriptor-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1712,6 +1731,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-series-market-link-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+            version: STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "structured-market-root-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3142,10 +3170,6 @@ mod tests {
                 GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
             ),
             (
-                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
-                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
-            ),
-            (
                 GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
                 GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
             ),
@@ -3159,6 +3183,30 @@ mod tests {
                 Some(AllocationStatus::ReservedDisabled)
             );
         }
+        let historical_descriptor = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+                HISTORICAL_STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION_V1,
+            )
+        });
+        assert_eq!(
+            historical_descriptor.map(|entry| entry.status),
+            Some(AllocationStatus::Withdrawn)
+        );
+        let live_descriptor = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            live_descriptor.map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled)
+        );
     }
 
     #[test]
