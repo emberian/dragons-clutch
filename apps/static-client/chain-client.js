@@ -23,6 +23,15 @@
     Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "8", name: "dealer-retire-active-facility-credit" }),
     Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "9", name: "dealer-retire-unused-future-credit" })
   ]);
+  const dealerRole = (role, signer, writable) => Object.freeze({ role, signer, writable });
+  const DEALER_COMMON_ROLES = Object.freeze([
+    dealerRole("actor", true, true), dealerRole("policy", false, false), dealerRole("state-v3", false, true), dealerRole("facility-position-v3", false, true), dealerRole("facility-replay-v3", false, true), dealerRole("funded-dependencies-v2", false, false),
+    dealerRole("dealer-liveness-schedule-v1", false, false), dealerRole("liveness-policy", false, false), dealerRole("liveness-source", false, false), dealerRole("liveness-candidate", false, false), dealerRole("liveness-clearing", false, false), dealerRole("liveness-settlement", false, false), dealerRole("liveness-resolution", false, false), dealerRole("liveness-retirement", false, true), dealerRole("liveness-recovery", false, false), dealerRole("liveness-receipt", false, true),
+    dealerRole("liveness-payer", false, true), dealerRole("position-rent-payer", false, true), dealerRole("replay-rent-payer", false, true), dealerRole("obligation-rent-payer", false, true), dealerRole("neutral-lamport-sink", false, true), dealerRole("clock-sysvar", false, false), dealerRole("rent-sysvar", false, false), dealerRole("system-program", false, false), dealerRole("dealer-series-obligation-v2", false, true), dealerRole("product-market-root-v2", false, false), dealerRole("series-registry-v3", false, false),
+    dealerRole("current-program", false, false), dealerRole("current-programdata", false, false), dealerRole("registry-release-v2", false, false), dealerRole("capability-profile-v4", false, false), dealerRole("series-market-link-v2", false, true), dealerRole("compiler-bundle-v6", false, false), dealerRole("attachment-v5", false, false), dealerRole("realm", false, false), dealerRole("collateral-profile-v2", false, false), dealerRole("collateral-policy-v2", false, false), dealerRole("collateral-token-program", false, false), dealerRole("collateral-token-programdata", false, false), dealerRole("market-binding-v2", false, false), dealerRole("market-runtime-v3", false, false), dealerRole("market-instance-v2", false, false), dealerRole("hoard-v2", false, false)
+  ]);
+  const DEALER_ACTIVE_TAIL = Object.freeze([dealerRole("claim-ledger-v3", false, true), dealerRole("resolution-v5", false, false), dealerRole("fractional-policy-v3", false, false), dealerRole("fractional-ledger-v1", false, true), dealerRole("facility-credit-v2", false, true)]);
+  const DEALER_UNUSED_TAIL = Object.freeze([dealerRole("claim-ledger-v3", false, false), dealerRole("dealer-future-credit-funding-v1", false, true)]);
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -869,6 +878,45 @@
       if (row.verdict !== "unavailable" || row.transactionDraft !== null || !Array.isArray(row.signerRequirements) || row.signerRequirements.length !== 0 || typeof row.freshnessDisposition !== "string") throw new Error("unavailable Dealer payload variant carries executable-looking material.");
       return Object.freeze({ coordinate, payloadVariant, accountRoles, callable: false, projectedCallable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: null, transactionDraft: null, signerRequirements: Object.freeze([]), freshnessDisposition: null });
     }
+    const expectedRoles = [...DEALER_COMMON_ROLES, ...(payloadVariant.payloadDiscriminator === "8" ? DEALER_ACTIVE_TAIL : DEALER_UNUSED_TAIL)];
+    if (accountRoles.length !== expectedRoles.length || accountRoles.some((role, roleIndex) => role.role !== expectedRoles[roleIndex].role || role.signer !== expectedRoles[roleIndex].signer || role.writable !== expectedRoles[roleIndex].writable || role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable Dealer payload variant differs from its exact 48/45-role target contract.");
+    requirePlain(row.observationSet, `actions[${index}].observationSet`);
+    if (row.observationSet.schema !== "dragons-clutch/operator/dealer-terminal-observation-set/v1" || !Array.isArray(row.observationSet.accounts) || row.observationSet.accounts.length !== expectedRoles.length) throw new Error("Dealer payload variant lacks its exact finalized observation set.");
+    const observationSet = Object.freeze({
+      schema: row.observationSet.schema,
+      payloadDiscriminator: positiveDecimal(row.observationSet.payloadDiscriminator, `actions[${index}].observationSet.payloadDiscriminator`, 255n).toString(),
+      authorityStateSha256: hash32(row.observationSet.authorityStateSha256, `actions[${index}].observationSet.authorityStateSha256`),
+      chainStateSha256: hash32(row.observationSet.chainStateSha256, `actions[${index}].observationSet.chainStateSha256`),
+      collateralCatalogReceiptId: hash32(row.observationSet.collateralCatalogReceiptId, `actions[${index}].observationSet.collateralCatalogReceiptId`),
+      lookupTableStateSha256: hash32(row.observationSet.lookupTableStateSha256, `actions[${index}].observationSet.lookupTableStateSha256`),
+      accounts: Object.freeze(row.observationSet.accounts.map((observation, observationIndex) => {
+        requirePlain(observation, `actions[${index}].observationSet.accounts[${observationIndex}]`);
+        if (decimal(observation.index, `actions[${index}].observationSet.accounts[${observationIndex}].index`).toString() !== String(observationIndex)) throw new Error("Dealer observations are not in exact semantic-role order.");
+        const value = {
+          index: String(observationIndex),
+          address: nonzeroAddress(observation.address, `actions[${index}].observationSet.accounts[${observationIndex}].address`),
+          observedSlot: positiveDecimal(observation.observedSlot, `actions[${index}].observationSet.accounts[${observationIndex}].observedSlot`).toString(),
+          disposition: observation.disposition
+        };
+        if (value.address !== accountRoles[observationIndex].address) throw new Error("Dealer observation identity differs from its exact semantic role.");
+        const mustBeAbsent = observationIndex === 15;
+        if (mustBeAbsent) {
+          if (observation.disposition !== "finalized-absent" || observation.owner !== null || observation.lamports !== null || observation.executable !== null || observation.rentEpoch !== null || observation.dataSha256 !== null || observation.releaseKey !== null) throw new Error("Dealer liveness receipt creation target is not one finalized exact absence.");
+          return Object.freeze({ ...value, owner: null, lamports: null, executable: null, rentEpoch: null, dataSha256: null, releaseKey: null });
+        }
+        if (observation.disposition !== "finalized-present") throw new Error("Dealer required role is not one finalized present account observation.");
+        return Object.freeze({
+          ...value,
+          owner: nonzeroAddress(observation.owner, `actions[${index}].observationSet.accounts[${observationIndex}].owner`),
+          lamports: decimal(observation.lamports, `actions[${index}].observationSet.accounts[${observationIndex}].lamports`).toString(),
+          executable: bool(observation.executable, `actions[${index}].observationSet.accounts[${observationIndex}].executable`),
+          rentEpoch: decimal(observation.rentEpoch, `actions[${index}].observationSet.accounts[${observationIndex}].rentEpoch`).toString(),
+          dataSha256: hash32(observation.dataSha256, `actions[${index}].observationSet.accounts[${observationIndex}].dataSha256`),
+          releaseKey: text(observation.releaseKey, `actions[${index}].observationSet.accounts[${observationIndex}].releaseKey`, 320)
+        });
+      }))
+    });
+    if (observationSet.payloadDiscriminator !== payloadVariant.payloadDiscriminator) throw new Error("Dealer observation set differs from its exact target discriminator.");
     requirePlain(row.transactionDraft, `actions[${index}].transactionDraft`);
     const draft = row.transactionDraft;
     if (row.verdict !== "callable-unsigned-draft"
@@ -876,38 +924,63 @@
         || draft.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3"
         || hash32(draft.releaseManifestSha256, "Dealer draft release manifest") !== configuration.release.releaseManifestSha256
         || hash32(draft.capabilityProfileId, "Dealer draft capability profile") !== configuration.release.capabilityProfileId
-        || (draft.messageVersion !== "legacy" && draft.messageVersion !== "v0")
-        || draft.recentBlockhashPresent !== false
+        || text(draft.executionReleaseKey, "Dealer draft execution release key", 320) !== configuration.release.releaseKey
+        || text(draft.driverReleaseKey, "Dealer draft driver release key", 320) !== configuration.release.releaseKey
+        || draft.messageVersion !== "v0"
+        || draft.recentBlockhash !== null
+        || draft.hasRecentBlockhash !== false
         || draft.signed !== false
-        || draft.submitted !== false) throw new Error("callable Dealer payload variant violates its unsigned release boundary.");
+        || draft.submitted !== false
+        || draft.reloadAuthoritativeAccounts !== true) throw new Error("callable Dealer payload variant violates its unsigned release boundary.");
+    const driverAccount = nonzeroAddress(draft.driverAccount, "Dealer draft driver account");
+    const driverAccountSlot = decimal(draft.driverAccountSlot, "Dealer draft driver account slot").toString();
+    if (driverAccount !== observationSet.accounts[2].address || driverAccountSlot !== observationSet.accounts[2].observedSlot) throw new Error("Dealer draft driver differs from the exact state-v3 observation.");
     const transactionHex = text(draft.serializedTransactionHex, "Dealer serialized transaction", 2464);
-    if (!HEX_BYTES.test(transactionHex)) throw new Error("Dealer serialized transaction is not bounded canonical hexadecimal bytes.");
-    if (accountRoles.length === 0 || accountRoles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable Dealer payload variant has unresolved account-role identity.");
+    if (!HEX_BYTES.test(transactionHex) || decimal(draft.serializedBytes, "Dealer serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("Dealer serialized transaction is not bounded canonical hexadecimal bytes.");
+    if (!Array.isArray(draft.addressLookupTables) || draft.addressLookupTables.length !== 1) throw new Error("Dealer target-8/9 material does not use exactly one authenticated lookup table.");
+    const lookup = draft.addressLookupTables[0];
+    requirePlain(lookup, "Dealer draft lookup table");
+    const writableAddresses = decimal(lookup.writableAddresses, "Dealer draft lookup writable addresses", 256n);
+    const readonlyAddresses = decimal(lookup.readonlyAddresses, "Dealer draft lookup readonly addresses", 256n);
+    if (writableAddresses + readonlyAddresses === 0n || writableAddresses + readonlyAddresses > 256n) throw new Error("Dealer lookup table has an invalid exact address count.");
+    const addressLookupTables = Object.freeze([Object.freeze({ account: nonzeroAddress(lookup.account, "Dealer draft lookup account"), observedSlot: positiveDecimal(lookup.observedSlot, "Dealer draft lookup observed slot").toString(), stateSha256: hash32(lookup.stateSha256, "Dealer draft lookup state"), writableAddresses: writableAddresses.toString(), readonlyAddresses: readonlyAddresses.toString() })]);
+    if (addressLookupTables[0].stateSha256 !== observationSet.lookupTableStateSha256 || hash32(draft.authorityStateSha256, "Dealer draft authority state") !== observationSet.authorityStateSha256) throw new Error("Dealer observation set is not bound to the draft authority and lookup-table state.");
+    if (!Array.isArray(draft.actions) || draft.actions.length !== 1 || draft.actions[0] !== payloadVariant.name || !Array.isArray(draft.flows) || draft.flows.length !== 1 || draft.flows[0] !== "dealer-facility-terminal" || !Array.isArray(draft.semanticOwners) || draft.semanticOwners.length !== 1 || !Array.isArray(draft.registryBindings) || draft.registryBindings.length !== 1 || !Array.isArray(draft.runtimeAdmissions) || draft.runtimeAdmissions.length !== 1 || draft.runtimeAdmissions[0] !== "payload-variant-release-bound-enabled" || !Array.isArray(draft.exactEquations) || draft.exactEquations.length === 0) throw new Error("Dealer draft is not one exact payload-variant terminal action.");
+    const owner = draft.semanticOwners[0];
+    requirePlain(owner, "Dealer draft semantic owner");
+    if (owner.package !== "clutch-dealer-runtime-contract" || owner.schema !== "dragons-clutch/dealer-terminal-retire/action25/targets8-9/v1" || hash32(owner.releaseSha256, "Dealer semantic owner release") !== configuration.release.elfSha256) throw new Error("Dealer draft semantic owner differs from the checked target-8/9 owner.");
+    const binding = draft.registryBindings[0];
+    requirePlain(binding, "Dealer draft registry binding");
+    if (positiveDecimal(binding.familyTag, "Dealer binding family tag", 255n).toString() !== "76" || positiveDecimal(binding.familyVersion, "Dealer binding family version", 255n).toString() !== "1" || positiveDecimal(binding.localAction, "Dealer binding local action", 255n).toString() !== "25" || binding.allocationStatus !== "frozen" || decimal(binding.centralAction, "Dealer binding central action", 255n).toString() !== "25") throw new Error("Dealer draft promotes or changes its exact allocated coordinate.");
+    draft.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `Dealer exactEquations[${equationIndex}]`); requirePlain(equation.unit, `Dealer exactEquations[${equationIndex}].unit`); text(equation.name, `Dealer exactEquations[${equationIndex}].name`, 200); if (decimal(equation.left, "Dealer exact equation left") !== decimal(equation.right, "Dealer exact equation right")) throw new Error("Dealer exact-integer equation is unbalanced."); });
     if (!Array.isArray(row.signerRequirements) || row.signerRequirements.length > 64) throw new Error("Dealer signer projection exceeds the browser bound.");
     const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
       requirePlain(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
-      if (requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("Dealer signer projection implies signature or key access.");
-      return Object.freeze({ address: nonzeroAddress(requirement.address, `actions[${index}].signerRequirements[${signerIndex}].address`), signaturePresent: false, keyAccess: false });
+      if (!Array.isArray(requirement.semanticRoles) || requirement.semanticRoles.length === 0 || requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("Dealer signer projection implies signature or key access.");
+      return Object.freeze({ address: nonzeroAddress(requirement.address, `actions[${index}].signerRequirements[${signerIndex}].address`), semanticRoles: Object.freeze(requirement.semanticRoles.map((role, roleIndex) => text(role, `actions[${index}].signerRequirements[${signerIndex}].semanticRoles[${roleIndex}]`, 64))), signaturePresent: false, keyAccess: false });
     }));
     if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("Dealer signer projection repeats an identity.");
-    requirePlain(row.freshness, `actions[${index}].freshness`);
-    const observedSlot = positiveDecimal(row.freshness.observedSlot, `actions[${index}].freshness.observedSlot`);
-    const validBeforeSlot = positiveDecimal(row.freshness.validBeforeSlot, `actions[${index}].freshness.validBeforeSlot`);
-    const maximumValiditySlots = positiveDecimal(row.freshness.maximumValiditySlots, `actions[${index}].freshness.maximumValiditySlots`);
-    if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || row.freshness.recentBlockhash !== "absent-by-contract") throw new Error("Dealer payload-variant freshness boundary is invalid.");
+    const feePayer = nonzeroAddress(draft.feePayer, "Dealer draft fee payer");
+    const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
+    if (feePayer !== accountRoles[0].address || signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && requirement.address !== feePayer) || !signerRequirements.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer"))) throw new Error("Dealer signer requirements differ from the exact actor/payer roles.");
+    requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
+    const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
+    const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
+    const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
+    if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || addressLookupTables.some((table) => BigInt(table.observedSlot) > observedSlot) || observationSet.accounts.some((observation) => BigInt(observation.observedSlot) > observedSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("Dealer payload-variant freshness boundary is invalid.");
     return Object.freeze({
       coordinate,
       payloadVariant,
       accountRoles,
-      callable: false,
+      observationSet,
+      callable: true,
       projectedCallable: true,
-      verdict: "browser-transport-contract-unavailable",
-      reason: "The payload-scoped Dealer coordinate and unsigned boundary are release-authenticated, but the current browser does not yet accept its transaction as an inspectable exact account tuple.",
+      verdict: row.verdict,
+      reason: text(row.reason, `actions[${index}].reason`, 512),
       stateSelection: null,
-      transactionDraft: null,
+      transactionDraft: Object.freeze({ ...draft, draftId: hash32(draft.draftId, "Dealer draft ID"), authorityStateSha256: hash32(draft.authorityStateSha256, "Dealer draft authority state"), driverAccount, driverAccountSlot, feePayer, addressLookupTables, serializedTransactionHex: transactionHex }),
       signerRequirements,
-      freshnessDisposition: null,
-      projectedDraft: Object.freeze({ draftId: hash32(draft.draftId, "Dealer draft ID"), driverAccount: nonzeroAddress(draft.driverAccount, "Dealer draft driver account"), driverAccountSlot: decimal(draft.driverAccountSlot, "Dealer draft driver account slot").toString(), authorityStateSha256: hash32(draft.authorityStateSha256, "Dealer draft authority state"), feePayer: nonzeroAddress(draft.feePayer, "Dealer draft fee payer"), messageVersion: draft.messageVersion, serializedBytes: String(transactionHex.length / 2), observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString() })
+      freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() })
     });
   };
 
@@ -1083,7 +1156,7 @@
     return "other";
   };
 
-  const actionInspectionDisposition = (action, accountByAddress, tipSlot, requestedCommitment) => {
+  const actionInspectionDisposition = (action, accountByAddress, tipSlot, requestedCommitment, maximumSlotLag) => {
     if (requestedCommitment !== "finalized") {
       return Object.freeze({
         eligible: false,
@@ -1103,6 +1176,16 @@
         staleAccounts: "0",
         validBeforeSlot: action.projectedDraft ? action.projectedDraft.validBeforeSlot : null
       });
+    }
+    if (action.payloadVariant) {
+      const stale = action.observationSet.accounts.filter((observation) => tipSlot >= BigInt(observation.observedSlot) && tipSlot - BigInt(observation.observedSlot) > maximumSlotLag);
+      if (stale.length !== 0) {
+        return Object.freeze({ eligible: false, kind: "stale-finalized-dealer-tuple", reason: `${stale.length} exact Dealer role observation(s) exceed the explicit maximum slot lag.`, observedAccounts: String(action.observationSet.accounts.length), staleAccounts: String(stale.length), validBeforeSlot: action.freshnessDisposition.validBeforeSlot });
+      }
+      if (tipSlot >= BigInt(action.freshnessDisposition.validBeforeSlot)) {
+        return Object.freeze({ eligible: false, kind: "dealer-draft-freshness-expired", reason: `The projected tip ${tipSlot} has reached the Dealer draft's exclusive valid-before slot ${action.freshnessDisposition.validBeforeSlot}.`, observedAccounts: String(action.observationSet.accounts.length), staleAccounts: "0", validBeforeSlot: action.freshnessDisposition.validBeforeSlot });
+      }
+      return Object.freeze({ eligible: true, kind: "finalized-exact-dealer-variant-inspectable", reason: `Exact target-${action.payloadVariant.payloadDiscriminator} release admission, ${action.observationSet.accounts.length}-role finalized observation set, v0 lookup table, signer roles, and unsigned material agree for inspection.`, observedAccounts: String(action.observationSet.accounts.length), staleAccounts: "0", validBeforeSlot: action.freshnessDisposition.validBeforeSlot });
     }
     const selection = action.stateSelection;
     const namedAddresses = [selection.account, ...selection.dependencies];
@@ -1186,7 +1269,7 @@
     const accountByAddress = new Map(annotated.map((accountValue) => [accountValue.address, accountValue]));
     const inspectedActions = Object.freeze(actionCapabilities.actions.map((action) => Object.freeze({
       ...action,
-      inspection: actionInspectionDisposition(action, accountByAddress, tipSlot, configuration.commitment)
+      inspection: actionInspectionDisposition(action, accountByAddress, tipSlot, configuration.commitment, maximumLag)
     })));
     const inspectedActionCapabilities = Object.freeze({ ...actionCapabilities, actions: inspectedActions });
     const familySet = new Set(releases.selected.families);
@@ -1194,7 +1277,7 @@
       surface: "successor-action",
       family: action.coordinate.family,
       label: `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`,
-      indexedByRelease: action.stateSelection !== null,
+      indexedByRelease: action.stateSelection !== null || Boolean(action.observationSet),
       allocationStatus: action.inspection.eligible ? "inspectable" : "refused",
       enabled: action.inspection.eligible,
       reason: action.inspection.reason
