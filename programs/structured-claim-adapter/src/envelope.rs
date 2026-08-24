@@ -96,8 +96,8 @@ pub fn decode_instruction_v1(input: &[u8]) -> Result<StructuredClaimPayloadV1> {
 
 /// Apply the current ELF's runtime capability gate.
 ///
-/// Only the exact three-byte extension header is inspected. With the current
-/// Disabled actions always refuse before payload or account data is read.
+/// Only the exact three-byte extension header is inspected. Disabled actions
+/// always refuse before payload or account data is read.
 pub fn admit_runtime_envelope_v1(input: &[u8]) -> Result<StructuredClaimEnvelopeV1<'_>> {
     let envelope = StructuredClaimEnvelopeV1::decode_header(input)?;
     let bit = 1_u16
