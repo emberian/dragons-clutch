@@ -198,7 +198,8 @@ pub struct IndexedProgramRelease {
     /// Only centrally registered coordinates present in the checked manifest.
     /// A decoded family without a coordinate remains non-actionable.
     pub enabled_intents: Vec<CanonicalIntentCoordinate>,
-    /// Checked payload-scoped capabilities whose coarse tuple stays disabled.
+    /// Reserved payload-scoped capabilities. This remains empty until a
+    /// checked Product RootV3 outer owns the complete atomic transaction.
     pub enabled_intent_variants: Vec<CanonicalIntentVariantV1>,
     pub families: Vec<CanonicalFamily>,
 }
@@ -261,6 +262,7 @@ impl IndexedProgramRelease {
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
             || self.source_commit.bytes().all(|byte| byte == b'0')
             || self.families.is_empty()
+            || !self.enabled_intent_variants.is_empty()
         {
             return Err(RpcIndexError::InvalidRelease);
         }
@@ -280,15 +282,6 @@ impl IndexedProgramRelease {
                 return Err(RpcIndexError::InvalidRelease);
             }
             previous_intent = Some(*intent);
-        }
-        let mut previous_variant = None;
-        for variant in &self.enabled_intent_variants {
-            if previous_variant.is_some_and(|value| value >= *variant)
-                || self.enabled_intents.binary_search(&variant.coordinate()).is_ok()
-            {
-                return Err(RpcIndexError::InvalidRelease);
-            }
-            previous_variant = Some(*variant);
         }
         Ok(())
     }
@@ -1385,22 +1378,22 @@ mod tests {
     }
 
     #[test]
-    fn dealer_retire_variants_are_payload_scoped_and_canonical() {
+    fn standalone_dealer_retire_variants_are_withdrawn() {
         let mut value = release();
         value.families = vec![CanonicalFamily::Dealer];
         value.enabled_intent_variants = vec![
             CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit,
             CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit,
         ];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+        value.enabled_intent_variants.clear();
         assert!(value.validate().is_ok());
-
         value.enabled_intents = vec![
             CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit.coordinate(),
         ];
-        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
-
-        value.enabled_intents.clear();
-        value.enabled_intent_variants.swap(0, 1);
+        value.enabled_intent_variants = vec![
+            CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit,
+        ];
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 
