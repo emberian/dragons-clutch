@@ -24,16 +24,12 @@ use Product's current family authority. First admission prepares the RootV3
 Structured-family successor, admits Wrapper against the already-created
 descriptor/mint, initializes and hostile-reopens the final Structured root,
 admits Structured against that root, and commits RootV3 last. Each Product
-mutation consumes a distinct move-only physical postwrite; no withdrawn V2
-writer is a current fallback.
+mutation consumes a distinct move-only physical postwrite.
 
 The full-vector and terminal frames use 32 and 33 accounts. Each
 places the Realm-selected collateral ProgramData immediately after its token
 program; the base authenticates the exact current ELF/slot release and commits
 that private value-route receipt into every transition receipt before mutation.
-The withdrawn action-2/4 current codecs have been deleted. The wrapper rejects
-those reserved registry tags as unknown before payload or account decoding.
-
 The wrapper and base import one exact source/account contract from the adapter:
 action 1 uses 38 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
 33, and action 8 uses 34. That contract's implemented-source mask is distinct

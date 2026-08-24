@@ -3792,15 +3792,6 @@ mod tests {
         ] {
             assert!(production.contains(required));
         }
-        for withdrawn in [
-            "SeriesMarketLinkAccountV2",
-            "series_market_link_authentication_id_v2(",
-            "SeriesRegistryAccountV3",
-            "CompiledProductSeriesBundleV6",
-            "SeriesAttachmentPlanV5",
-        ] {
-            assert!(!production.contains(withdrawn));
-        }
     }
 
     #[test]

@@ -86,7 +86,8 @@ The principal current sources are:
 - [`PRODUCT_COMPILER_AND_SERIES_V1.md`](../design/PRODUCT_COMPILER_AND_SERIES_V1.md);
 - [`PRICE_MEASURE_WITNESS_V2.md`](../design/PRICE_MEASURE_WITNESS_V2.md);
 - [`research/score-v2`](../../research/score-v2/README.md);
-- [`research/structured-claim-wrapper`](../../research/structured-claim-wrapper/README.md);
+- [`crates/clutch-structured-claim`](../../crates/clutch-structured-claim/README.md);
+- [`crates/clutch-structured-claim-runtime-contract`](../../crates/clutch-structured-claim-runtime-contract/README.md);
 - [`research/liquidity-policy-model`](../../research/liquidity-policy-model/README.md);
 - the current commit history through the capability-profile and product-model
   wave beginning at `6586507` and ending, when inspected, at `f2cb7e4`.

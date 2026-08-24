@@ -32,8 +32,8 @@ supply, Market phase, and payouts remain base-program facts.
 
 ## Runtime activation
 
-The central allocation ledger reserves eight `75/v1` coordinates. The current
-runtime contract recognizes only six actions:
+The central registry and current runtime contract recognize exactly six
+`75/v1` actions:
 
 1. create descriptor;
 3. full-vector wrap;
@@ -42,15 +42,10 @@ runtime contract recognizes only six actions:
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
 
-Tags 2 and 4 have no current action or payload variant. They are rejected as
-unknown immediately after the three-byte family header; the registry reservation
-is not a compatibility decoder or an execution path.
-
 The adapter default remains fail-closed. The explicit
 `profile-successor-chain-attached-dev` wrapper feature admits exactly actions
 1, 3, 5, 6, 7, and 8 (`0x01ea`). The central program independently selects
-the identically named unified profile and admits the same six tuples. Actions
-2 and 4 refuse before payload or account loading on both sides.
+the identically named unified profile and admits the same six tuples.
 
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
 both wrapper and base: founding uses 38 accounts, full-vector wrap/unwind use
@@ -67,7 +62,6 @@ non-Copy Structured+Wrapper receipt inside the base invocation and immediately
 consumes it into the exact Product RootV3/LinkV3 pair.
 Their exact token effects are permanent-mint initialization, mint, burn,
 optional Hoard-surplus disposition, burn, and mint-authority revocation. The
-withdrawn canonical actions 2 and 4 have no current execution contract. The
 exact table is content-addressed by
 `STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1`; current wrapper/base/Token-2022
 release authentication consumes the single aggregate release contract.
@@ -129,19 +123,11 @@ layouts and metas for `InitializeMint2`, `MintToChecked`, `BurnChecked`, and
 
 ## Current successor ownership
 
-The deleted canonical action-2/4 route previously manufactured a Structured
-authority transcript for General V2 action 35. That parallel transfer planner,
-its public preparation/reconstruction receipts, its 30-account wrapper
-executor, and its duplicate General payload/CPI codec have been physically
-removed. Family-envelope parsing rejects the former action-2/4 tags as unknown;
-current Replay V3 construction, encoding, and hostile decode likewise have no
-variant for either action.
-
 Current actions project exact hostile-decoded Position V3 and purpose-Replay
 V3 successors directly from the same Hoard V2, ClaimLedger V3, descriptor,
 mint, holder, Product, collateral, and release observations used by their
-private base compositions. No caller-shaped Market ledger, generic action-35
-capability, or second transfer DTO can authorize those writes.
+private base compositions. No caller-shaped Market ledger or second transfer
+DTO can authorize those writes.
 
 ## Exact route staging
 

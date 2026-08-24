@@ -367,8 +367,7 @@ const fn retirement_role(index: usize) -> Option<CurrentStructuredAccountRoleV1>
     })
 }
 
-/// Complete implemented current action set. Withdrawn canonical actions 2 and
-/// 4 intentionally have no current account contract and cannot be admitted.
+/// Complete implemented current action set.
 pub const CURRENT_STRUCTURED_ACTION_CONTRACTS_V1: [CurrentStructuredActionContractV1; 6] = [
     CurrentStructuredActionContractV1 {
         action: StructuredClaimActionV1::CreateDescriptor,
@@ -436,7 +435,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[test]
-    fn implemented_contracts_are_exact_and_withdrawn_routes_have_none() {
+    fn implemented_contracts_are_exact() {
         let mut observed_mask = 0_u16;
         for contract in CURRENT_STRUCTURED_ACTION_CONTRACTS_V1 {
             observed_mask |= 1_u16 << contract.action.tag();
@@ -452,16 +451,6 @@ mod tests {
             ),
             STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1,
         );
-        for withdrawn_tag in [2_u8, 4_u8] {
-            assert_eq!(
-                StructuredClaimActionV1::from_tag(withdrawn_tag),
-                Err(crate::runtime_contract::Error::UnknownAction),
-            );
-            assert_eq!(
-                IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 & (1_u16 << withdrawn_tag),
-                0,
-            );
-        }
     }
 
     #[test]

@@ -26,11 +26,8 @@ pub const STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES: usize = 656;
 /// Stable root-binding identity domain.
 pub const STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/market-root-binding/v1\0";
-/// Exact wrapper/base/Token-2022 deployment-owner release domain.
-pub const STRUCTURED_OWNER_RELEASE_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-claim/owner-release/v1\0";
-/// Current release-set identity domain. Unlike V1, this commits the three
-/// content-addressed, locus-aware loader release artifacts.
+/// Current release-set identity domain committing the three content-addressed,
+/// locus-aware loader release artifacts.
 pub const STRUCTURED_OWNER_RELEASE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/structured-claim/owner-release/v2\0";
 /// Exact stable root-binding preimage width.
@@ -47,35 +44,6 @@ pub const STRUCTURED_MARKET_TERMINAL_DOMAIN_V1: &[u8] =
 /// Exact terminal-root preimage width after excluding its recursive receipt.
 pub const STRUCTURED_MARKET_TERMINAL_PREIMAGE_BYTES_V1: usize =
     STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES - 32;
-
-/// Derive the sole deployment-owner release identity shared by both SBF
-/// adapters. This commits the exact wrapper, base, and Token-2022 loader
-/// deployments without placing Solana account parsing in the pure contract.
-pub fn structured_owner_release_id_v1<H: WrapperRecipeHashV1>(
-    binding: DeploymentBinding,
-    hasher: &H,
-) -> Result<ContentId> {
-    binding.validate().map_err(|_| Error::InvalidIdentity)?;
-    let wrapper_slot = binding.wrapper_deployment_slot.to_le_bytes();
-    let base_slot = binding.base_deployment_slot.to_le_bytes();
-    let token_slot = binding.token_2022_deployment_slot.to_le_bytes();
-    let id = ContentId::from_bytes(hasher.hashv(&[
-        STRUCTURED_OWNER_RELEASE_DOMAIN_V1,
-        &binding.wrapper_program,
-        &binding.wrapper_program_data,
-        &wrapper_slot,
-        &binding.base_program,
-        &binding.base_program_data,
-        &base_slot,
-        &binding.token_2022_program,
-        &binding.token_2022_program_data,
-        &token_slot,
-    ]));
-    if id.is_zero() {
-        return Err(Error::InvalidIdentity);
-    }
-    Ok(id)
-}
 
 /// Derive the current runtime-owner identity from three independently
 /// authenticated loader releases plus the exact deployment addresses/slots

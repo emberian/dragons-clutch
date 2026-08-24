@@ -2801,12 +2801,8 @@ impl GeneralV2Action {
 pub enum StructuredClaimAction {
     /// Create one immutable structured-claim descriptor.
     CreateDescriptor = 1,
-    /// Wrap one canonical complete-set lot.
-    WrapCanonical = 2,
     /// Wrap one explicit full-vector lot.
     WrapFull = 3,
-    /// Unwrap one canonical complete-set lot.
-    UnwrapCanonical = 4,
     /// Unwrap one explicit full-vector lot.
     UnwrapFull = 5,
     /// Compact separately observed donation residue.
@@ -2818,18 +2814,14 @@ pub enum StructuredClaimAction {
 }
 
 impl StructuredClaimAction {
-    /// First allocated StructuredClaim local action tag.
-    pub const FIRST_TAG: u8 = 1;
-    /// Last allocated StructuredClaim local action tag.
-    pub const LAST_TAG: u8 = 8;
+    /// Exact allocated StructuredClaim local action tags.
+    pub const TAGS: [u8; 6] = [1, 3, 5, 6, 7, 8];
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
         match self {
             Self::CreateDescriptor => 1,
-            Self::WrapCanonical => 2,
             Self::WrapFull => 3,
-            Self::UnwrapCanonical => 4,
             Self::UnwrapFull => 5,
             Self::CompactDonation => 6,
             Self::RedeemTerminal => 7,
@@ -2841,9 +2833,7 @@ impl StructuredClaimAction {
     pub const fn from_tag(tag: u8) -> Option<Self> {
         match tag {
             1 => Some(Self::CreateDescriptor),
-            2 => Some(Self::WrapCanonical),
             3 => Some(Self::WrapFull),
-            4 => Some(Self::UnwrapCanonical),
             5 => Some(Self::UnwrapFull),
             6 => Some(Self::CompactDonation),
             7 => Some(Self::RedeemTerminal),
@@ -4135,8 +4125,7 @@ mod tests {
             let structured = decode_extension_action(75, 1, local_action);
             assert_eq!(
                 structured.is_ok(),
-                (StructuredClaimAction::FIRST_TAG..=StructuredClaimAction::LAST_TAG)
-                    .contains(&local_action),
+                StructuredClaimAction::from_tag(local_action).is_some(),
                 "structured-claim action {local_action}"
             );
             let recovery = decode_extension_action(78, 1, local_action);

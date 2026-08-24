@@ -34,14 +34,13 @@ pub use descriptor::{
     HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1, HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1,
 };
 pub use market_root::{
-    structured_descriptor_admission_receipt_v1, structured_owner_release_id_v1,
-    structured_owner_release_id_v2,
+    structured_descriptor_admission_receipt_v1, structured_owner_release_id_v2,
     StructuredMarketRootBindingV1, StructuredMarketRootV1, StructuredProductLineageV1,
     STRUCTURED_DESCRIPTOR_ADMISSION_DOMAIN_V1, STRUCTURED_DESCRIPTOR_TERMINAL_DOMAIN_V1,
     STRUCTURED_MARKET_TERMINAL_DOMAIN_V1, STRUCTURED_MARKET_TERMINAL_PREIMAGE_BYTES_V1,
     STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES, STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
     STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION, STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1,
-    STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1, STRUCTURED_OWNER_RELEASE_DOMAIN_V1,
+    STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1,
 };
 pub use market_projection::{
     project_structured_market_v1, StructuredMarketProjectionStateV1,
@@ -135,8 +134,6 @@ pub enum Error {
     UnknownAction,
     /// A construction target has hostile data, owner, executable, or address state.
     InvalidAccount,
-    /// A required base retirement/custody capability is unavailable or mismatched.
-    AuthorityUnavailable,
     /// A purpose-owned Replay V3 extension or exact transition join is invalid.
     InvalidReplayExtension,
 }

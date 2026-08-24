@@ -23,9 +23,6 @@ use crate::runtime_contract::{
 };
 use crate::{is_zero, BoundDescriptorV1, Error, Key, Result};
 
-/// Exact receipt domain for one current full-width Structured transition.
-pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-claim/current-transition/v1\0";
 /// Successor transition receipt domain that additionally commits the exact
 /// collateral ProgramData/ELF value-route receipt.
 pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2: &[u8] =
@@ -83,7 +80,7 @@ pub struct CurrentStructuredVaultAccountsV1 {
     pub mint: Key,
 }
 
-/// Exact current liability owners consumed by every non-canonical route.
+/// Exact current liability owners consumed by every quantity or compaction route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CurrentStructuredLiabilitiesV1 {
     /// Canonical Hoard V2 prestate.

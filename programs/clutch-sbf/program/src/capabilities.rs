@@ -531,9 +531,10 @@ mod tests {
                         == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION
-                        && (clutch_solana_layout::registry::StructuredClaimAction::FIRST_TAG
-                            ..=clutch_solana_layout::registry::StructuredClaimAction::LAST_TAG)
-                            .contains(&local_action);
+                        && clutch_solana_layout::registry::StructuredClaimAction::from_tag(
+                            local_action,
+                        )
+                        .is_some();
                     let recovery = family_tag
                         == clutch_solana_layout::registry::RECOVERY_FAMILY_TAG
                         && family_version

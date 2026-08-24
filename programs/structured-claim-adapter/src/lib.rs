@@ -55,12 +55,11 @@ pub use current_lifecycle::{
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
     CURRENT_STRUCTURED_COMPACTION_DISPOSITION_DOMAIN_V1,
-    CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
-    CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2,
+    CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2,
 };
 pub use envelope::{
     admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
-    ENABLED_STRUCTURED_CLAIM_ACTION_MASK, RESERVED_STRUCTURED_CLAIM_ACTION_MASK,
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
 };
 #[cfg(target_os = "solana")]
 pub use identity::SolanaPdaVerifierV1;
@@ -164,8 +163,6 @@ pub enum Error {
     BaseClosureMismatch,
     /// The Token-2022 parser boundary refused the mint or holder account.
     Token2022Boundary,
-    /// A base-program construction or retirement capability is absent or mismatched.
-    BaseCapabilityUnavailable,
     /// Exact shortfall, state, or transition arithmetic failed.
     Arithmetic,
     /// An executed CPI receipt differs from the completely staged operation.

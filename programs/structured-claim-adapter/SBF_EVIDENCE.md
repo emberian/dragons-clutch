@@ -13,11 +13,10 @@ new evidence must bind all of the following to one exact source digest and
 linked ELF identity:
 
 - `clutch-structured-claim-runtime-contract` and this adapter revision;
-- the implemented current `75/v1` actions 1/3/5/6/7/8 and explicit refusal of
-  the withdrawn action-2/4 execution routes;
+- the implemented current `75/v1` actions 1/3/5/6/7/8;
 - descriptor account coordinate `0x88/2` and Structured root `0xb7/1`;
 - the exact capability profile and central collision ledger;
-- the exact shared 34/32/32/32/33/31 wrapper/base account contracts and the
+- the exact shared 38/32/32/32/33/34 wrapper/base account contracts and the
   checked wrapper/base/Token-2022 release-manifest identities;
 - the concrete hostile Token-2022 parser and emitted instruction bytes;
 - maximum adapter and dependency frame sizes plus requested heap;
