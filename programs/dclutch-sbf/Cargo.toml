@@ -14,7 +14,7 @@ default = []
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
-non-production-real-pyth-lab = []
+non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }

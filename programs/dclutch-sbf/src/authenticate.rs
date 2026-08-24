@@ -1,68 +1,50 @@
-//! Exact account-frame and immutable-fact authentication.
+//! Exact account-frame, replay, funding, and provider authentication.
 
 use dclutch_pyth_contract::{
-    funding::ResolutionFundV1,
-    instruction::{
-        ResolveCategoricalFailureV1, ResolveCategoricalInstructionV1, ResolveCategoricalPythV1,
-    },
+    funding::{BalanceClassification, ResolutionFundV1},
     market::MarketStateV1,
 };
 use dclutch_pyth_svm::{
-    PostUpdateParamsView, ProgramDataV3View, ProgramV3View, ReceiverConfigV2View,
+    PostUpdateParamsView, ProgramDataV3View, ProgramV3View, PythReleaseV1, ReceiverConfigV2View,
 };
 use solana_program::{
-    account_info::AccountInfo, clock::Clock, hash::hash, program_error::ProgramError,
-    pubkey::Pubkey, rent::Rent, sysvar::Sysvar,
+    account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
+    sysvar::Sysvar,
 };
 
 use crate::AdapterError;
 
 const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
 const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
+const RECEIVER_CONFIG_SEED: &[u8] = b"config";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
 const UPGRADEABLE_LOADER: Pubkey = Pubkey::new_from_array([
     2, 168, 246, 145, 78, 136, 161, 176, 226, 16, 21, 62, 247, 99, 174, 43, 0, 194, 185, 61, 22,
     193, 36, 210, 192, 83, 122, 16, 4, 128, 0, 0,
 ]);
-const SYSTEM_PROGRAM: Pubkey = Pubkey::new_from_array([0; 32]);
 
-/// Dispatch the two fixed account frames after the instruction wire decodes.
-pub(crate) fn dispatch(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    instruction: ResolveCategoricalInstructionV1<'_>,
-) -> Result<(), ProgramError> {
-    match instruction {
-        ResolveCategoricalInstructionV1::Pyth(instruction) => {
-            let frame = PriceFrame::parse(accounts)?;
-            authenticate_price(program_id, frame, instruction)
-        }
-        ResolveCategoricalInstructionV1::Failure(instruction) => {
-            let frame = FailureFrame::parse(accounts)?;
-            authenticate_failure(program_id, frame, instruction)
-        }
-    }
-}
+/// Canonical System Program address.
+pub(crate) const SYSTEM_PROGRAM: Pubkey = Pubkey::new_from_array([0; 32]);
 
 /// Exact 13-role price-resolution account frame.
-struct PriceFrame<'a, 'info> {
-    resolver: &'a AccountInfo<'info>,
-    update: &'a AccountInfo<'info>,
-    market: &'a AccountInfo<'info>,
-    fund: &'a AccountInfo<'info>,
-    sponsor: &'a AccountInfo<'info>,
-    receiver: &'a AccountInfo<'info>,
-    receiver_programdata: &'a AccountInfo<'info>,
-    config: &'a AccountInfo<'info>,
-    encoded_vaa: &'a AccountInfo<'info>,
-    router: &'a AccountInfo<'info>,
-    router_programdata: &'a AccountInfo<'info>,
-    treasury: &'a AccountInfo<'info>,
-    system: &'a AccountInfo<'info>,
+pub(crate) struct PriceFrame<'a, 'info> {
+    pub(crate) resolver: &'a AccountInfo<'info>,
+    pub(crate) update: &'a AccountInfo<'info>,
+    pub(crate) market: &'a AccountInfo<'info>,
+    pub(crate) fund: &'a AccountInfo<'info>,
+    pub(crate) sponsor: &'a AccountInfo<'info>,
+    pub(crate) receiver: &'a AccountInfo<'info>,
+    pub(crate) receiver_programdata: &'a AccountInfo<'info>,
+    pub(crate) config: &'a AccountInfo<'info>,
+    pub(crate) encoded_vaa: &'a AccountInfo<'info>,
+    pub(crate) router: &'a AccountInfo<'info>,
+    pub(crate) router_programdata: &'a AccountInfo<'info>,
+    pub(crate) treasury: &'a AccountInfo<'info>,
+    pub(crate) system: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> PriceFrame<'a, 'info> {
-    fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+    pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
         if accounts.len() != 13 {
             return Err(AdapterError::AccountFrameLength.into());
         }
@@ -91,7 +73,7 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
         expect(self.market, false, true, false)?;
         expect(self.fund, false, true, false)?;
         // The immutable sponsor-refund destination never grants authority.
-        // A duplicate key or transaction fee-payer role can union a signer bit.
+        // A duplicate fee-payer role can legitimately union a signer bit.
         expect_writable_executable(self.sponsor, true, false)?;
         expect(self.receiver, false, false, true)?;
         expect(self.receiver_programdata, false, false, false)?;
@@ -100,20 +82,35 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
         expect(self.router, false, false, true)?;
         expect(self.router_programdata, false, false, false)?;
         expect(self.treasury, false, true, false)?;
-        expect(self.system, false, false, true)
+        expect(self.system, false, false, true)?;
+
+        // The two payout roles may alias each other. They may not alias the
+        // Fund, persistent Market, or mutable provider accounts.
+        if self.fund.key == self.resolver.key
+            || self.fund.key == self.sponsor.key
+            || self.resolver.key == self.update.key
+            || self.resolver.key == self.treasury.key
+            || self.update.key == self.treasury.key
+            || self.sponsor.key == self.update.key
+            || self.sponsor.key == self.market.key
+            || self.sponsor.key == self.treasury.key
+        {
+            return Err(AdapterError::AccountIdentity.into());
+        }
+        Ok(())
     }
 }
 
 /// Exact four-role permissionless failure-resolution account frame.
-struct FailureFrame<'a, 'info> {
-    bounty_recipient: &'a AccountInfo<'info>,
-    market: &'a AccountInfo<'info>,
-    fund: &'a AccountInfo<'info>,
-    sponsor: &'a AccountInfo<'info>,
+pub(crate) struct FailureFrame<'a, 'info> {
+    pub(crate) bounty_recipient: &'a AccountInfo<'info>,
+    pub(crate) market: &'a AccountInfo<'info>,
+    pub(crate) fund: &'a AccountInfo<'info>,
+    pub(crate) sponsor: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> FailureFrame<'a, 'info> {
-    fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+    pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
         if accounts.len() != 4 {
             return Err(AdapterError::AccountFrameLength.into());
         }
@@ -127,72 +124,43 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
         expect(frame.market, false, true, false)?;
         expect(frame.fund, false, true, false)?;
         expect_writable_executable(frame.sponsor, true, false)?;
+        // Only the two payout roles may alias; neither may alias owned state.
+        if frame.fund.key == frame.bounty_recipient.key
+            || frame.fund.key == frame.sponsor.key
+            || frame.market.key == frame.bounty_recipient.key
+            || frame.market.key == frame.sponsor.key
+        {
+            return Err(AdapterError::AccountIdentity.into());
+        }
         Ok(frame)
     }
 }
 
-fn authenticate_price(
-    program_id: &Pubkey,
-    frame: PriceFrame<'_, '_>,
-    instruction: ResolveCategoricalPythV1<'_>,
-) -> Result<(), ProgramError> {
-    if frame.resolver.owner != &SYSTEM_PROGRAM || !frame.resolver.data_is_empty() {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    if frame.system.key != &SYSTEM_PROGRAM {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    let market = authenticate_market(
-        program_id,
-        frame.market,
-        instruction.generation(),
-        instruction.child_count(),
-    )?;
-    let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
-    let release = selected_release(market.release_id, clock.unix_timestamp)?;
-    let funding = authenticate_fund(
-        program_id,
-        frame.fund,
-        frame.market,
-        frame.sponsor,
-        instruction.generation(),
-    )?;
-    authenticate_provider(frame, release, instruction.body(), funding)
-}
-
-fn authenticate_failure(
-    program_id: &Pubkey,
-    frame: FailureFrame<'_, '_>,
-    instruction: ResolveCategoricalFailureV1,
-) -> Result<(), ProgramError> {
-    authenticate_market(
-        program_id,
-        frame.market,
-        instruction.generation(),
-        instruction.child_count(),
-    )?;
-    let _ = authenticate_fund(
-        program_id,
-        frame.fund,
-        frame.market,
-        frame.sponsor,
-        instruction.generation(),
-    )?;
-    Ok(())
-}
-
+/// Authenticated immutable Market facts needed outside generic outcome dispatch.
 #[derive(Clone, Copy)]
-struct MarketFacts {
-    release_id: [u8; 32],
+pub(crate) struct MarketFacts {
+    pub(crate) release_id: [u8; 32],
+    pub(crate) provider_feed_id: [u8; 32],
+    pub(crate) outcome_count: u8,
 }
 
+/// Authenticated immutable Fund and exact live-balance classification.
 #[derive(Clone, Copy)]
-struct FundFacts {
-    fund: ResolutionFundV1,
-    classification: dclutch_pyth_contract::funding::BalanceClassification,
+pub(crate) struct FundFacts {
+    pub(crate) fund: ResolutionFundV1,
+    pub(crate) classification: BalanceClassification,
+    pub(crate) required_rent: u64,
 }
 
-fn authenticate_market(
+/// Exact receiver fee and temporary-account rent expected from `post_update`.
+#[derive(Clone, Copy)]
+pub(crate) struct ProviderFacts {
+    pub(crate) update_rent: u64,
+    pub(crate) fee: u64,
+}
+
+#[inline(never)]
+pub(crate) fn authenticate_market(
     program_id: &Pubkey,
     market: &AccountInfo<'_>,
     generation: u64,
@@ -225,6 +193,7 @@ fn authenticate_market(
     }
 }
 
+#[inline(never)]
 fn market_facts<const N: usize>(
     program_id: &Pubkey,
     market_key: &Pubkey,
@@ -254,19 +223,31 @@ fn market_facts<const N: usize>(
     if market_key != &expected_market {
         return Err(AdapterError::AccountIdentity.into());
     }
+
+    // Refuse an unretirable child count before paying the provider.
+    let mut next_root = root;
+    next_root
+        .transition_phase(generation, dclutch_core_contract::Phase::Resolved)
+        .map_err(|_| AdapterError::ReplayMismatch)?;
+    next_root
+        .retire_child(generation, child_count)
+        .map_err(|_| AdapterError::ReplayMismatch)?;
+
     Ok(MarketFacts {
         release_id: *market.policy().release_id(),
+        provider_feed_id: *market.feed_profile().provider_feed_id(),
+        outcome_count: u8::try_from(N).map_err(|_| AdapterError::AccountData)?,
     })
 }
 
-fn authenticate_fund(
+pub(crate) fn authenticate_fund(
     program_id: &Pubkey,
     fund_account: &AccountInfo<'_>,
     market: &AccountInfo<'_>,
     sponsor: &AccountInfo<'_>,
     generation: u64,
 ) -> Result<FundFacts, ProgramError> {
-    if fund_account.owner != program_id {
+    if fund_account.owner != program_id || fund_account.key == sponsor.key {
         return Err(AdapterError::AccountIdentity.into());
     }
     let (expected, _) = Pubkey::find_program_address(&[FUND_SEED, market.key.as_ref()], program_id);
@@ -291,24 +272,30 @@ fn authenticate_fund(
     Ok(FundFacts {
         fund,
         classification,
+        required_rent,
     })
 }
 
-fn authenticate_provider(
-    frame: PriceFrame<'_, '_>,
-    release: dclutch_pyth_svm::PythReleaseV1,
+#[inline(never)]
+pub(crate) fn authenticate_provider(
+    frame: &PriceFrame<'_, '_>,
+    release: PythReleaseV1,
     body: &[u8],
     funding: FundFacts,
-) -> Result<(), ProgramError> {
+) -> Result<ProviderFacts, ProgramError> {
+    let receiver = Pubkey::new_from_array(release.receiver_program());
+    let router = Pubkey::new_from_array(release.router_program());
+    let (canonical_config, _) = Pubkey::find_program_address(&[RECEIVER_CONFIG_SEED], &receiver);
     if frame.update.owner != &SYSTEM_PROGRAM
         || !frame.update.data_is_empty()
         || frame.update.lamports() != 0
-        || frame.config.owner != &Pubkey::new_from_array(release.receiver_program())
-        || frame.encoded_vaa.owner != &Pubkey::new_from_array(release.router_program())
-        || frame.receiver.key.to_bytes() != release.receiver_program()
+        || release.receiver_config() != canonical_config.to_bytes()
+        || frame.config.owner != &receiver
+        || frame.encoded_vaa.owner != &router
+        || frame.receiver.key != &receiver
         || frame.receiver_programdata.key.to_bytes() != release.receiver_programdata()
-        || frame.config.key.to_bytes() != release.receiver_config()
-        || frame.router.key.to_bytes() != release.router_program()
+        || frame.config.key != &canonical_config
+        || frame.router.key != &router
         || frame.router_programdata.key.to_bytes() != release.router_programdata()
     {
         return Err(AdapterError::ProviderAuthentication.into());
@@ -345,7 +332,6 @@ fn authenticate_provider(
     }
     let params = PostUpdateParamsView::parse(body).map_err(|_| AdapterError::AccountData)?;
     let treasury_id = [params.treasury_id()];
-    let receiver = Pubkey::new_from_array(release.receiver_program());
     let (expected_treasury, _) =
         Pubkey::find_program_address(&[RECEIVER_TREASURY_SEED, &treasury_id], &receiver);
     if frame.treasury.key != &expected_treasury {
@@ -355,15 +341,23 @@ fn authenticate_provider(
         return Err(AdapterError::FundUnderfunded.into());
     }
     let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
-    let required_resolver_lamports = rent
-        .minimum_balance(dclutch_pyth_svm::FULL_PRICE_UPDATE_V2_LEN)
+    let update_rent = rent.minimum_balance(dclutch_pyth_svm::FULL_PRICE_UPDATE_V2_LEN);
+    let required_resolver_lamports = update_rent
         .checked_add(config.fee())
-        .ok_or(AdapterError::FundUnderfunded)?;
+        .ok_or(AdapterError::Arithmetic)?;
+    if frame.resolver.owner != &SYSTEM_PROGRAM
+        || !frame.resolver.data_is_empty()
+        || frame.system.key != &SYSTEM_PROGRAM
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
     if frame.resolver.lamports() < required_resolver_lamports {
         return Err(AdapterError::FundUnderfunded.into());
     }
-    let _ = funding.classification;
-    Ok(())
+    Ok(ProviderFacts {
+        update_rent,
+        fee: config.fee(),
+    })
 }
 
 fn authenticate_loader_link(
@@ -395,10 +389,10 @@ fn authenticate_loader_link(
     Ok(())
 }
 
-fn selected_release(
+pub(crate) fn selected_release(
     release_id: [u8; 32],
     clock_time: i64,
-) -> Result<dclutch_pyth_svm::PythReleaseV1, ProgramError> {
+) -> Result<PythReleaseV1, ProgramError> {
     for release in &dclutch_pyth_svm::PRODUCTION_RELEASES {
         if hash(&release.to_bytes()).to_bytes() == release_id
             && clock_time >= release.activation_time()
@@ -433,15 +427,10 @@ fn expect(
     writable: bool,
     executable: bool,
 ) -> Result<(), ProgramError> {
-    expect_signer(account, signer)?;
-    expect_writable_executable(account, writable, executable)
-}
-
-fn expect_signer(account: &AccountInfo<'_>, signer: bool) -> Result<(), ProgramError> {
     if account.is_signer != signer {
         return Err(AdapterError::AccountPrivilege.into());
     }
-    Ok(())
+    expect_writable_executable(account, writable, executable)
 }
 
 fn expect_writable_executable(
@@ -528,11 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn price_frame_allows_signing_or_aliased_sponsor_but_refuses_extras() {
-        let mut signing_sponsor = price_accounts();
-        signing_sponsor[4] = test_account(true, true, false);
-        assert!(PriceFrame::parse(&signing_sponsor).is_ok());
-
+    fn price_frame_allows_resolver_sponsor_alias_and_refuses_extras() {
         let mut aliased_sponsor = price_accounts();
         aliased_sponsor[4] = aliased_sponsor[0].clone();
         assert!(PriceFrame::parse(&aliased_sponsor).is_ok());
@@ -546,8 +531,28 @@ mod tests {
     }
 
     #[test]
-    fn failure_frame_is_permissionless_about_bounty_and_sponsor_signers() {
+    fn price_and_failure_frames_refuse_a_self_refunding_fund() {
+        let mut price = price_accounts();
+        price[4] = price[3].clone();
+        assert_eq!(
+            PriceFrame::parse(&price).err(),
+            Some(AdapterError::AccountIdentity.into())
+        );
+
+        let mut failure = failure_accounts(false, false);
+        failure[0] = failure[2].clone();
+        assert_eq!(
+            FailureFrame::parse(&failure).err(),
+            Some(AdapterError::AccountIdentity.into())
+        );
+    }
+
+    #[test]
+    fn failure_frame_is_permissionless_and_allows_destination_alias() {
         assert!(FailureFrame::parse(&failure_accounts(false, false)).is_ok());
         assert!(FailureFrame::parse(&failure_accounts(true, true)).is_ok());
+        let mut aliased = failure_accounts(false, false);
+        aliased[3] = aliased[0].clone();
+        assert!(FailureFrame::parse(&aliased).is_ok());
     }
 }

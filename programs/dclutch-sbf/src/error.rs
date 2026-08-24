@@ -1,4 +1,4 @@
-//! Stable program-local refusals for the SBF authentication boundary.
+//! Stable program-local refusals for the SBF resolution adapter.
 
 use solana_program::program_error::ProgramError;
 
@@ -27,8 +27,22 @@ pub enum AdapterError {
     ReleaseUnavailable = 8,
     /// A release-bound provider account or ABI fact did not authenticate.
     ProviderAuthentication = 9,
-    /// The request is authenticated but state mutation is not implemented yet.
-    MutationNotImplemented = 10,
+    /// The authenticated observation did not satisfy the immutable kernel policy.
+    KernelResolution = 10,
+    /// The canonical Market/root/ledger/receipt transition refused.
+    MarketTransition = 11,
+    /// The receiver `post_update` CPI refused.
+    ProviderPostCpi = 12,
+    /// Receiver state or exact lamport deltas after `post_update` were wrong.
+    ProviderPostcondition = 13,
+    /// The receiver `reclaim_rent` CPI refused.
+    ProviderReclaimCpi = 14,
+    /// The temporary update was not closed and refunded exactly.
+    ProviderReclaimPostcondition = 15,
+    /// Checked adapter arithmetic left the exact `u64` or allocation domain.
+    Arithmetic = 16,
+    /// The Fund could not be distributed and closed canonically.
+    FundClose = 17,
 }
 
 impl From<AdapterError> for ProgramError {

@@ -1,35 +1,17 @@
-//! Feature-gated synthetic-local release facts.
-//!
-//! The values come only from `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md` and
-//! its named fixture provenance. This module is unavailable without the
-//! explicit `non-production-real-pyth-lab` feature and never extends the empty
-//! production catalog.
+//! Feature-gated checks around the one shared synthetic-local release row.
 
-use dclutch_pyth_svm::{
-    PythReleaseV1, PythReleaseV1Input, SyntheticLocalReleaseV1, SyntheticLocalReleaseV1Input,
-};
+use dclutch_pyth_svm::{PythReleaseV1, SYNTHETIC_LOCAL_LABEL_V1, synthetic_local_release_v1};
 use solana_program::{hash::hashv, program_error::ProgramError, pubkey::Pubkey};
 
 use crate::AdapterError;
 
-const LOCAL_LABEL: [u8; 32] = [
-    0x40, 0x81, 0xd5, 0x5d, 0x40, 0x31, 0x31, 0x3f, 0xcf, 0x4b, 0x7c, 0x41, 0x31, 0x3d, 0x54, 0x7a,
-    0x94, 0x41, 0xc8, 0xf9, 0xc0, 0x48, 0x74, 0x1a, 0x7a, 0x95, 0x1b, 0x3e, 0x03, 0x5e, 0x22, 0xd9,
-];
 const ADAPTER_ID: [u8; 32] = [
     0x3f, 0xdf, 0xc9, 0x45, 0x89, 0xc6, 0x9b, 0x13, 0x38, 0x64, 0x46, 0x83, 0x20, 0x97, 0x6f, 0x8e,
     0x79, 0x0e, 0x7f, 0xe0, 0xf1, 0x45, 0x89, 0x7b, 0x6e, 0xab, 0xc2, 0x2b, 0xd7, 0xc8, 0x71, 0x1b,
 ];
-const RECEIVER_PROGRAM: [u8; 32] = [
-    12, 183, 250, 122, 93, 166, 40, 251, 172, 169, 154, 234, 153, 247, 191, 59, 220, 54, 137, 104,
-    96, 42, 191, 65, 77, 78, 139, 165, 103, 187, 176, 191,
-];
-const RECEIVER_CONFIG: [u8; 32] = [
-    238, 89, 90, 195, 222, 6, 29, 79, 129, 224, 111, 41, 182, 154, 130, 148, 218, 115, 206, 1, 195,
-    236, 196, 54, 206, 145, 180, 165, 98, 100, 91, 13,
-];
 
-/// Return the sole non-production local release selected by this feature.
+/// Return the sole non-production release after independently checking the
+/// adapter-domain identity and receiver Config PDA used by the SBF boundary.
 pub(crate) fn release() -> Result<PythReleaseV1, ProgramError> {
     let expected_label = hashv(&[
         b"dclutch/synthetic-local-release/v1",
@@ -47,71 +29,22 @@ pub(crate) fn release() -> Result<PythReleaseV1, ProgramError> {
         b"inline-terminal-receipt",
     ])
     .to_bytes();
-    if expected_label != LOCAL_LABEL || expected_adapter != ADAPTER_ID {
+    if expected_label != SYNTHETIC_LOCAL_LABEL_V1 || expected_adapter != ADAPTER_ID {
         return Err(AdapterError::ProviderAuthentication.into());
     }
-    let receiver = Pubkey::new_from_array(RECEIVER_PROGRAM);
+
+    let local = synthetic_local_release_v1()
+        .map_err(|_| ProgramError::from(AdapterError::ProviderAuthentication))?;
+    let release = *local.release();
+    if release.adapter_id() != ADAPTER_ID {
+        return Err(AdapterError::ProviderAuthentication.into());
+    }
+    let receiver = Pubkey::new_from_array(release.receiver_program());
     let (expected_config, _) = Pubkey::find_program_address(&[b"config"], &receiver);
-    if expected_config.to_bytes() != RECEIVER_CONFIG {
+    if expected_config.to_bytes() != release.receiver_config() {
         return Err(AdapterError::ProviderAuthentication.into());
     }
-    let local = SyntheticLocalReleaseV1::new(SyntheticLocalReleaseV1Input {
-        local_label: LOCAL_LABEL,
-        release: PythReleaseV1Input {
-            cluster_id: LOCAL_LABEL,
-            receiver_program: RECEIVER_PROGRAM,
-            receiver_programdata: [
-                36, 193, 217, 188, 83, 14, 128, 168, 96, 32, 44, 16, 172, 175, 215, 77, 119, 182,
-                74, 169, 54, 67, 73, 241, 216, 23, 185, 252, 58, 36, 131, 42,
-            ],
-            receiver_config: RECEIVER_CONFIG,
-            router_program: [
-                241, 11, 10, 220, 120, 104, 244, 85, 102, 87, 169, 5, 247, 20, 69, 206, 236, 66, 7,
-                172, 119, 215, 197, 194, 183, 98, 223, 19, 148, 102, 75, 135,
-            ],
-            router_programdata: [
-                129, 50, 201, 239, 143, 229, 66, 230, 102, 107, 79, 207, 240, 58, 197, 139, 124,
-                134, 144, 55, 34, 39, 166, 84, 85, 21, 198, 154, 109, 140, 219, 31,
-            ],
-            config_digest: [
-                0x05, 0x03, 0x8c, 0xf7, 0x07, 0xaf, 0xce, 0xac, 0x3d, 0xf1, 0xaa, 0xe7, 0x35, 0xb0,
-                0x96, 0x34, 0x4a, 0xd6, 0x39, 0x50, 0x6b, 0x00, 0xf1, 0xdb, 0x0a, 0xc1, 0xc0, 0x84,
-                0xd6, 0xb6, 0x45, 0xaa,
-            ],
-            receiver_abi_id: [
-                0xc5, 0x07, 0x95, 0x58, 0x64, 0xfc, 0x34, 0xdb, 0xd5, 0xfe, 0x87, 0xb4, 0xaa, 0x9f,
-                0xba, 0x3a, 0x1e, 0xd2, 0x26, 0x90, 0x36, 0x3e, 0xc4, 0x90, 0x44, 0x9e, 0x86, 0x60,
-                0xe7, 0x3a, 0xf6, 0x4,
-            ],
-            router_abi_id: [
-                0xf9, 0x06, 0x1f, 0x03, 0xa8, 0x1b, 0x89, 0xdb, 0x29, 0xf4, 0x60, 0x36, 0x77, 0xe3,
-                0xb3, 0xd8, 0x9b, 0x3b, 0xbf, 0x08, 0xd6, 0x78, 0x27, 0xb2, 0x83, 0x2f, 0x18, 0xa4,
-                0xe2, 0xb6, 0x1a, 0xcb,
-            ],
-            price_update_codec_id: [
-                0x12, 0xd0, 0xce, 0x8b, 0xc3, 0x90, 0x7a, 0xe2, 0x94, 0x90, 0x43, 0x39, 0x7e, 0xaf,
-                0x3d, 0x5b, 0xd2, 0x5d, 0xee, 0xd9, 0x84, 0x50, 0xc6, 0x96, 0x9d, 0x95, 0x7b, 0xe4,
-                0x02, 0xc8, 0x07, 0xae,
-            ],
-            adapter_id: ADAPTER_ID,
-            receiver_deployment_slot: 460_336_311,
-            router_deployment_slot: 460_336_290,
-            guardian_set_count: 19,
-            required_guardian_count: 10,
-            upstream_commit: [
-                0xf5, 0x0a, 0x3f, 0xaf, 0x9f, 0xc5, 0xa2, 0x23, 0xa2, 0x28, 0x89, 0x7, 0x99, 0xb2,
-                0xf7, 0x78, 0x90, 0x0f, 0x18, 0x6b,
-            ],
-            sdk_crate_digest: [
-                0x24, 0x5b, 0x1b, 0x03, 0xdd, 0x21, 0x77, 0x40, 0x20, 0x18, 0xb6, 0x07, 0x2f, 0xcb,
-                0xb7, 0xbe, 0xa5, 0xb3, 0xd2, 0x80, 0x42, 0x7b, 0x19, 0x54, 0x79, 0x6b, 0xf1, 0xdc,
-                0x18, 0x9b, 0xe4, 0x8b,
-            ],
-            activation_time: 0,
-        },
-    })
-    .map_err(|_| AdapterError::ProviderAuthentication)?;
-    Ok(*local.release())
+    Ok(release)
 }
 
 #[cfg(test)]
@@ -119,12 +52,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_domain_identities_are_recomputed() {
+    fn shared_manifest_is_rechecked_at_the_adapter_boundary() {
         let value = release().expect("pinned fixture release");
-        assert_eq!(value.cluster_id(), LOCAL_LABEL);
+        assert_eq!(value.cluster_id(), SYNTHETIC_LOCAL_LABEL_V1);
         assert_eq!(value.adapter_id(), ADAPTER_ID);
         assert_eq!(value.guardian_set_count(), 19);
         assert_eq!(value.required_guardian_count(), 10);
-        assert_eq!(value.receiver_config(), RECEIVER_CONFIG);
     }
 }
