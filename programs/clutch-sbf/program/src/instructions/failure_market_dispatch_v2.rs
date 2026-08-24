@@ -42,8 +42,14 @@ pub enum FailureMarketAccountRoleV2 {
     MarketGenesisArtifact,
     AttachmentPlanArtifact,
     MarketInstanceArtifact,
-    SourceReleaseArtifact,
-    SourceSpecArtifact,
+    SourceRelease,
+    SourceAdapterProgram,
+    SourceAdapterProgramData,
+    SourceParserProgram,
+    SourceParserProgramData,
+    SourceParserConfig,
+    SourceSpec,
+    SourceWorkSchedule,
     SourceOccurrence,
     SourceWindowArtifact,
     SourceStatisticKeyArtifact,
@@ -126,8 +132,14 @@ pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] =
     meta(Role::MarketGenesisArtifact, false, false, false),
     meta(Role::AttachmentPlanArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
-    meta(Role::SourceReleaseArtifact, false, false, false),
-    meta(Role::SourceSpecArtifact, false, false, false),
+    meta(Role::SourceRelease, false, false, false),
+    meta(Role::SourceAdapterProgram, false, false, true),
+    meta(Role::SourceAdapterProgramData, false, false, false),
+    meta(Role::SourceParserProgram, false, false, true),
+    meta(Role::SourceParserProgramData, false, false, false),
+    meta(Role::SourceParserConfig, false, false, false),
+    meta(Role::SourceSpec, false, false, false),
+    meta(Role::SourceWorkSchedule, false, false, false),
     meta(Role::SourceOccurrence, false, false, false),
     meta(Role::SourceWindowArtifact, false, false, false),
     meta(Role::SourceStatisticKeyArtifact, false, false, false),
@@ -154,8 +166,14 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::RegistryReleaseArtifact, false, false, false),
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
-    meta(Role::SourceReleaseArtifact, false, false, false),
-    meta(Role::SourceSpecArtifact, false, false, false),
+    meta(Role::SourceRelease, false, false, false),
+    meta(Role::SourceAdapterProgram, false, false, true),
+    meta(Role::SourceAdapterProgramData, false, false, false),
+    meta(Role::SourceParserProgram, false, false, true),
+    meta(Role::SourceParserProgramData, false, false, false),
+    meta(Role::SourceParserConfig, false, false, false),
+    meta(Role::SourceSpec, false, false, false),
+    meta(Role::SourceWorkSchedule, false, false, false),
     meta(Role::SourceOccurrence, false, false, false),
     meta(Role::SourceWindowArtifact, false, false, false),
     meta(Role::SourceStatisticKeyArtifact, false, false, false),
@@ -188,15 +206,21 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
-    meta(Role::SourceReleaseArtifact, false, false, false),
-    meta(Role::SourceSpecArtifact, false, false, false),
+    meta(Role::SourceRelease, false, false, false),
+    meta(Role::SourceAdapterProgram, false, false, true),
+    meta(Role::SourceAdapterProgramData, false, false, false),
+    meta(Role::SourceParserProgram, false, false, true),
+    meta(Role::SourceParserProgramData, false, false, false),
+    meta(Role::SourceParserConfig, false, false, false),
+    meta(Role::SourceSpec, false, false, false),
+    meta(Role::SourceWorkSchedule, false, false, false),
     meta(Role::SourceOccurrence, false, false, false),
     meta(Role::SourceWindowArtifact, false, false, false),
     meta(Role::SourceStatisticKeyArtifact, false, false, false),
     meta(Role::SourceSummaryArtifact, false, false, false),
     meta(Role::SourceWindowSeal, false, false, false),
-    meta(Role::SourceStatisticResult, false, false, false),
-    meta(Role::SourceResultLineage, false, false, false),
+    meta(Role::SourceStatisticResult, true, false, false),
+    meta(Role::SourceResultLineage, true, false, false),
     meta(Role::SourceHandoffReceipt, false, false, false),
     meta(Role::SourceWorkReceipt, false, false, false),
     meta(Role::Realm, false, false, false),
@@ -212,7 +236,7 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::SourceTerminalReceipt, true, false, false),
     meta(Role::SourceLivenessPolicy, false, false, false),
     meta(Role::SourceLivenessCompartment, true, false, false),
-    meta(Role::SourcePayerRefund, true, false, false),
+    meta(Role::SourcePayerRefund, true, true, false),
     meta(Role::SourceNeutralSink, true, false, false),
     meta(Role::SourceAccountPayer, true, true, false),
     meta(Role::FailureLivenessPolicy, false, false, false),
@@ -545,6 +569,47 @@ mod adversarial_contract_tests {
                 .iter()
                 .any(|meta| meta.role == role));
         }
+    }
+
+    #[test]
+    fn source_resolution_contract_matches_the_registered_route_and_close_roles() {
+        let route = [
+            Role::SourceRelease,
+            Role::SourceAdapterProgram,
+            Role::SourceAdapterProgramData,
+            Role::SourceParserProgram,
+            Role::SourceParserProgramData,
+            Role::SourceParserConfig,
+            Role::SourceSpec,
+            Role::SourceWorkSchedule,
+        ];
+        let source_release = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .position(|meta| meta.role == Role::SourceRelease)
+            .expect("registered Source release");
+        let mut index = 0usize;
+        while index < route.len() {
+            assert_eq!(
+                RESOLVE_FAILURE_MARKET_SESSION_METAS_V2[source_release + index].role,
+                route[index],
+            );
+            index += 1;
+        }
+        let result = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::SourceStatisticResult)
+            .expect("StatisticResult close target");
+        let lineage = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::SourceResultLineage)
+            .expect("mutable result lineage");
+        let refund = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::SourcePayerRefund)
+            .expect("Source result principal refund");
+        assert!(result.writable && !result.signer);
+        assert!(lineage.writable && !lineage.signer);
+        assert!(refund.writable && refund.signer);
     }
 
     #[test]

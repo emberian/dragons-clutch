@@ -26,6 +26,10 @@ use crate::instructions::failure_market_runtime::{
     authenticate_failure_market_runtime_root_v1, write_failure_market_runtime_terminal_plan_v2,
     AuthenticatedFailureMarketRuntimeRootV1,
 };
+use crate::instructions::product_market::{
+    record_failure_shared_core_terminal_v1, AuthenticatedFailureSharedCoreTerminalOwnerV1,
+    AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
+};
 use clutch_failure_policy_runtime::market_interval_history_v2::{
     plan_seal_failure_market_interval_history_v2, AuthenticatedFailureMarketIntervalFamilySealV2,
     FailureMarketIntervalFamilySealFactsV2, FailureMarketIntervalFamilySealReceiptV2,
@@ -41,7 +45,10 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketFamilyTerminalDispositionV2, FailureMarketFamilyTerminalFactsV2,
     FailureMarketFamilyTerminalReceiptV2,
 };
-use clutch_product_series::ContentId;
+use clutch_product_series::{
+    ContentId, MarketLifecycleRootV1, MarketSharedCoreTerminalProjectionV1, MarketSharedCoreV1,
+};
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -279,6 +286,166 @@ impl AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
     pub(crate) const fn interval(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
         self.interval
     }
+
+    fn derived_owner_release_id(&self) -> ContentId {
+        let policy = self.admission.state().binding().facts();
+        ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                FAMILY_TERMINAL_OWNER_RELEASE_DOMAIN_V2,
+                &policy.market_instance_id.bytes(),
+                &policy.generation.to_le_bytes(),
+                &self.admission.account().to_bytes(),
+                &self.family_terminal.facts().admission_state_id.bytes(),
+                &self
+                    .family_terminal
+                    .facts()
+                    .failure_policy_binding_id
+                    .bytes(),
+                &self.runtime.account().to_bytes(),
+                &self.runtime.state_commitment().bytes(),
+                &self.replay.account().to_bytes(),
+                &self.replay.state_id().bytes(),
+                &self.replay.authentication_id().bytes(),
+                &self.replay_terminal.id().bytes(),
+                &self.interval.history_account().to_bytes(),
+                &self.interval.history_state_id().bytes(),
+                &self.interval.history_authentication_id().bytes(),
+                &self.interval.history().history_root().bytes(),
+                &self.family_seal.id().bytes(),
+                &self.family_terminal.id().bytes(),
+            ])
+            .to_bytes(),
+        )
+    }
+
+    fn derived_postwrite_id(&self) -> ContentId {
+        ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                FAMILY_TERMINAL_POSTWRITE_DOMAIN_V2,
+                &self.owner_release_id.bytes(),
+                &self.aggregate.id().bytes(),
+                &self.replay_terminal.id().bytes(),
+                &self.family_terminal.id().bytes(),
+                &self.family_seal.id().bytes(),
+                &self.replay.authentication_id().bytes(),
+                &self.runtime.state_commitment().bytes(),
+                &self.interval.history_authentication_id().bytes(),
+            ])
+            .to_bytes(),
+        )
+    }
+}
+
+impl AuthenticatedFailureSharedCoreTerminalOwnerV1
+    for AuthenticatedFailureMarketFamilyTerminalPostwriteV2
+{
+    fn postwrite_id(&self) -> ContentId {
+        self.id
+    }
+
+    fn market_instance_id(&self) -> clutch_product_series::MarketInstanceV2Id {
+        self.family_terminal.facts().market_instance_id
+    }
+
+    fn generation(&self) -> u64 {
+        self.family_terminal.facts().generation
+    }
+
+    fn owner_account_id(&self) -> ContentId {
+        ContentId::from_bytes(self.replay.account().to_bytes())
+    }
+
+    fn owner_release_id(&self) -> ContentId {
+        self.owner_release_id
+    }
+
+    fn family_terminal_receipt_id(&self) -> ContentId {
+        ContentId::from_bytes(self.family_terminal.id().bytes())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_failure_shared_core_terminal_owner_v1(
+        &self,
+        root_account: Pubkey,
+        root_binding_id: ContentId,
+        root_semantic_before_id: ContentId,
+        root_data_before_id: ContentId,
+        root_authentication_before_id: ContentId,
+        projection: MarketSharedCoreTerminalProjectionV1,
+    ) -> Outcome<()> {
+        let admission = self.admission.state();
+        let policy = admission.binding().facts();
+        let aggregate = self.aggregate.facts();
+        let replay = self.replay.replay();
+        let replay_terminal = self.replay_terminal.facts();
+        let terminal = self.family_terminal.facts();
+        let history = self.interval.history();
+        let seal = self.family_seal.facts();
+        let admission_state_id = admission
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            root_account != Pubkey::default()
+                && root_account != self.admission.account()
+                && root_account != self.runtime.account()
+                && root_account != self.replay.account()
+                && root_account != self.interval.cell_account()
+                && root_account != self.interval.history_account()
+                && !root_binding_id.is_zero()
+                && !root_semantic_before_id.is_zero()
+                && !root_data_before_id.is_zero()
+                && !root_authentication_before_id.is_zero()
+                && projection.market_binding_id() == root_binding_id
+                && projection.market_instance_id() == policy.market_instance_id
+                && projection.generation() == policy.generation
+                && projection.owner() == MarketSharedCoreV1::Failure
+                && projection.owner_account_id()
+                    == ContentId::from_bytes(self.replay.account().to_bytes())
+                && projection.owner_release_id() == self.owner_release_id
+                && projection.owner_terminal_receipt_id()
+                    == ContentId::from_bytes(self.family_terminal.id().bytes())
+                && projection.root_transition_sequence() != 0
+                && terminal.disposition == FailureMarketFamilyTerminalDispositionV2::Resolved
+                && terminal.market_instance_id == policy.market_instance_id
+                && terminal.generation == policy.generation
+                && terminal.admission_state_id == admission_state_id
+                && terminal.failure_policy_binding_id == admission.binding().id()
+                && terminal.family_aggregate_receipt_id == self.aggregate.id()
+                && terminal.failure_replay_account_id.bytes()
+                    == self.replay.account().to_bytes()
+                && terminal.failure_replay_terminal_receipt_id == self.replay_terminal.id()
+                && aggregate.market_instance_id == policy.market_instance_id
+                && aggregate.generation == policy.generation
+                && aggregate.admission_state_id == admission_state_id
+                && aggregate.failure_policy_binding_id == admission.binding().id()
+                && aggregate.runtime_root_account_id.bytes()
+                    == self.runtime.account().to_bytes()
+                && aggregate.interval_work_account_id.bytes()
+                    == self.interval.cell_account().to_bytes()
+                && aggregate.interval_history_account_id.bytes()
+                    == self.interval.history_account().to_bytes()
+                && replay.phase()
+                    == clutch_failure_policy_runtime::market_replay_v2::FailureMarketReplayPhaseV2::Terminal
+                && replay.family_aggregate_receipt_id() == self.aggregate.id()
+                && replay_terminal.replay_after == self.replay.state_id()
+                && replay_terminal.family_aggregate_receipt_id == self.aggregate.id()
+                && self.runtime.state().phase()
+                    == clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimePhaseV1::FamilyTerminal
+                && self.runtime.state().family_terminal_receipt_id().bytes()
+                    == self.family_terminal.id().bytes()
+                && self.interval.cell().phase()
+                    == clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellPhaseV2::Idle
+                && history.family_terminal_receipt_id() == self.family_terminal.id()
+                && terminal.interval_history_state_id == seal.history_before
+                && terminal.interval_history_root == seal.history_root
+                && terminal.completed_session_count == seal.completed_session_count
+                && seal.family_terminal_receipt_id == self.family_terminal.id()
+                && self.family_seal.history_after() == self.interval.history_state_id()
+                && self.owner_release_id == self.derived_owner_release_id()
+                && self.id == self.derived_postwrite_id(),
+            ClutchError::MismatchedState,
+        )
+    }
 }
 
 /// Produce one durable Failure terminal chain without a caller terminal DTO.
@@ -479,56 +646,9 @@ pub(crate) fn terminalize_failure_market_family_v2<'a>(
             && interval_after.cell_state_id() == live_interval.cell_state_id(),
         ClutchError::MismatchedState,
     )?;
-    let owner_release_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAMILY_TERMINAL_OWNER_RELEASE_DOMAIN_V2,
-            &policy.market_instance_id.bytes(),
-            &policy.generation.to_le_bytes(),
-            &live_admission.account().to_bytes(),
-            &expected_aggregate.admission_state_id.bytes(),
-            &expected_aggregate.failure_policy_binding_id.bytes(),
-            &runtime_after.account().to_bytes(),
-            &runtime_after.state_commitment().bytes(),
-            &replay_after.account().to_bytes(),
-            &replay_after.state_id().bytes(),
-            &replay_after.authentication_id().bytes(),
-            &replay_terminal.id().bytes(),
-            &interval_after.history_account().to_bytes(),
-            &interval_after.history_state_id().bytes(),
-            &interval_after.history_authentication_id().bytes(),
-            &interval_after.history().history_root().bytes(),
-            &family_seal.id().bytes(),
-            &family_terminal.id().bytes(),
-        ])
-        .to_bytes(),
-    );
-    let owner_account_id = ContentId::from_bytes(replay_after.account().to_bytes());
-    let owner_terminal_receipt_id = ContentId::from_bytes(family_terminal.id().bytes());
-    require(
-        !owner_release_id.is_zero()
-            && owner_release_id != owner_account_id
-            && owner_release_id != owner_terminal_receipt_id
-            && owner_account_id != owner_terminal_receipt_id,
-        ClutchError::MismatchedState,
-    )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAMILY_TERMINAL_POSTWRITE_DOMAIN_V2,
-            &owner_release_id.bytes(),
-            &aggregate.id().bytes(),
-            &replay_terminal.id().bytes(),
-            &family_terminal.id().bytes(),
-            &family_seal.id().bytes(),
-            &replay_after.authentication_id().bytes(),
-            &runtime_after.state_commitment().bytes(),
-            &interval_after.history_authentication_id().bytes(),
-        ])
-        .to_bytes(),
-    );
-    require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
-        id,
-        owner_release_id,
+    let mut postwrite = AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
+        id: ContentId::ZERO,
+        owner_release_id: ContentId::ZERO,
         admission: live_admission,
         aggregate,
         replay_terminal,
@@ -537,7 +657,84 @@ pub(crate) fn terminalize_failure_market_family_v2<'a>(
         replay: replay_after,
         runtime: runtime_after,
         interval: interval_after,
-    })
+    };
+    postwrite.owner_release_id = postwrite.derived_owner_release_id();
+    postwrite.id = postwrite.derived_postwrite_id();
+    let owner_account_id = postwrite.owner_account_id();
+    let owner_terminal_receipt_id = ContentId::from_bytes(postwrite.family_terminal.id().bytes());
+    require(
+        !postwrite.owner_release_id.is_zero()
+            && postwrite.owner_release_id != owner_account_id
+            && postwrite.owner_release_id != owner_terminal_receipt_id
+            && owner_account_id != owner_terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    require(!postwrite.id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(postwrite)
+}
+
+/// Seal the complete Failure owner and immediately consume it into Product.
+///
+/// The Product root must already be a live writable `Retiring` root. Failure
+/// writes happen first and Product's stale-reopening latch happens last; any
+/// refusal rolls the complete replay/runtime/history/root batch back.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn terminalize_failure_market_family_for_product_v2<'next>(
+    program_id: &Pubkey,
+    market_root_account: &AccountInfo<'_>,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    market_root_before: AuthenticatedMarketLifecycleRootV1<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
+    replay_before: AuthenticatedFailureMarketReplayV2,
+    market_root_successor_output: &mut MarketLifecycleRootV1,
+    market_root_rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<(
+    AuthenticatedFailureMarketFamilyTerminalPostwriteV2,
+    AuthenticatedMarketLifecycleRootV1<'next>,
+    AuthenticatedFailureSharedCoreTerminalPostwriteV1,
+)> {
+    require_distinct(&[
+        market_root_account.clone(),
+        admission_root_account.clone(),
+        runtime_root_account.clone(),
+        interval_cell_account.clone(),
+        interval_history_account.clone(),
+        replay_account.clone(),
+    ])?;
+    let family = terminalize_failure_market_family_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        recovery_close,
+        replay_before,
+    )?;
+    let (market_root_after, product_terminal) = record_failure_shared_core_terminal_v1(
+        program_id,
+        market_root_account,
+        market_root_before,
+        &family,
+        market_root_successor_output,
+        market_root_rebound_output,
+    )?;
+    require(
+        product_terminal.failure_postwrite_id() == family.id()
+            && product_terminal.projection().owner() == MarketSharedCoreV1::Failure
+            && product_terminal.projection().owner_account_id() == family.owner_account_id()
+            && product_terminal.projection().owner_release_id() == family.owner_release_id()
+            && product_terminal.projection().owner_terminal_receipt_id()
+                == ContentId::from_bytes(family.family_terminal().id().bytes()),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((family, market_root_after, product_terminal))
 }
 
 #[cfg(test)]
@@ -626,32 +823,78 @@ mod adversarial_family_terminal_tests {
     fn owner_release_commits_the_complete_terminal_owner_tuple() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
         let release = source
-            .split("let owner_release_id =")
+            .split("fn derived_owner_release_id")
             .nth(1)
-            .and_then(|value| value.split("let owner_account_id").next())
+            .and_then(|value| value.split("fn derived_postwrite_id").next())
             .expect("owner release derivation");
         for committed in [
             "policy.market_instance_id",
             "policy.generation",
-            "live_admission.account()",
-            "expected_aggregate.admission_state_id",
-            "expected_aggregate.failure_policy_binding_id",
-            "runtime_after.account()",
-            "runtime_after.state_commitment()",
-            "replay_after.account()",
-            "replay_after.state_id()",
-            "replay_after.authentication_id()",
-            "replay_terminal.id()",
-            "interval_after.history_account()",
-            "interval_after.history_state_id()",
-            "interval_after.history_authentication_id()",
-            "interval_after.history().history_root()",
-            "family_seal.id()",
-            "family_terminal.id()",
+            "self.admission.account()",
+            "self.family_terminal.facts().admission_state_id",
+            ".failure_policy_binding_id",
+            "self.runtime.account()",
+            "self.runtime.state_commitment()",
+            "self.replay.account()",
+            "self.replay.state_id()",
+            "self.replay.authentication_id()",
+            "self.replay_terminal.id()",
+            "self.interval.history_account()",
+            "self.interval.history_state_id()",
+            "self.interval.history_authentication_id()",
+            "self.interval.history().history_root()",
+            "self.family_seal.id()",
+            "self.family_terminal.id()",
         ] {
             assert!(release.contains(committed), "missing owner fact {committed}");
         }
         assert!(!release.contains("FailureReplayV1"));
         assert!(!release.contains("ExternalV2"));
+    }
+
+    #[test]
+    fn product_latch_reauthenticates_full_terminal_tuple() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let auth = source
+            .split("fn authenticate_failure_shared_core_terminal_owner_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Produce one durable Failure terminal").next())
+            .expect("Product terminal authority");
+        for predicate in [
+            "projection.market_binding_id() == root_binding_id",
+            "projection.owner() == MarketSharedCoreV1::Failure",
+            "projection.owner_account_id()",
+            "projection.owner_release_id() == self.owner_release_id",
+            "projection.owner_terminal_receipt_id()",
+            "terminal.admission_state_id == admission_state_id",
+            "aggregate.runtime_root_account_id.bytes()",
+            "replay.phase()",
+            "replay_terminal.replay_after == self.replay.state_id()",
+            "self.runtime.state().phase()",
+            "self.interval.cell().phase()",
+            "history.family_terminal_receipt_id()",
+            "self.owner_release_id == self.derived_owner_release_id()",
+            "self.id == self.derived_postwrite_id()",
+        ] {
+            assert!(auth.contains(predicate), "missing Product guard {predicate}");
+        }
+    }
+
+    #[test]
+    fn product_latch_is_the_last_atomic_terminal_write() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let outer = source
+            .split("pub(crate) fn terminalize_failure_market_family_for_product_v2")
+            .nth(1)
+            .and_then(|value| value.split("#[cfg(test)]").next())
+            .expect("Product terminal outer");
+        let failure = outer
+            .find("terminalize_failure_market_family_v2")
+            .expect("Failure family write");
+        let product = outer
+            .find("record_failure_shared_core_terminal_v1")
+            .expect("Product latch");
+        assert!(failure < product);
+        assert!(!outer.contains("write_market_lifecycle_root_v1"));
     }
 }
