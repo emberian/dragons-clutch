@@ -45,7 +45,7 @@ use clutch_dealer_runtime_contract::{
     DealerClaimWorkV1, DealerExitTicketV1, DealerLivenessCompartmentV1,
     DealerLivenessScheduleV1, DealerTerminalAllocationV1,
     DealerTerminalRoundingPolicyV1, DEALER_PAGE_BITMAP_BYTES_V1,
-    DealerPhaseV2, DealerQueueExitLivenessV1,
+    DealerPhaseV2, DealerQueueExitLivenessV1, DealerTerminalStateReceiptV2,
     DealerPositionMarketJoinV2, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerSeriesObligationBindingV1, DealerSeriesObligationKeyV1,
@@ -259,6 +259,8 @@ const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
 const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
+const DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/dealer-series-terminal-prewrite/v2\0";
 const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-product-resolution-authentication/v2\0";
 const DEALER_FUTURE_CREDIT_POSTWRITE_DOMAIN_V1: &[u8] =
@@ -362,6 +364,64 @@ struct AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1 {
     neutral_sink: Id,
 }
 
+/// Dealer's non-detachable input to Product's sole current LinkV2 terminal writer.
+///
+/// This retains the exact hostile-authenticated live Product receipt, current
+/// StateV3/Replay/Position cut, and live `0xaf/v2`. Product must consume this
+/// value before Dealer can persist the terminal `0xaf` successor or release
+/// any value-bearing child.
+pub(crate) struct AuthenticatedDealerSeriesTerminalPrewriteV2 {
+    authentication_id: ContentId,
+    live_product: AuthenticatedLiveSeriesDealerObligationV2,
+    obligation_account: Pubkey,
+    obligation_presemantic_id: ContentId,
+    state_account: Pubkey,
+    state_presemantic_id: ContentId,
+    terminal_state_receipt: DealerTerminalStateReceiptV2,
+    terminal_state_receipt_id: ContentId,
+    replay_presemantic_id: ContentId,
+    replay_pre_ordinal: u64,
+    owner_terminal_receipt_id: ContentId,
+    expected_link_transition_sequence: u64,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+}
+
+impl AuthenticatedDealerSeriesTerminalPrewriteV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.authentication_id }
+    pub(crate) const fn live_product(&self) -> &AuthenticatedLiveSeriesDealerObligationV2 {
+        &self.live_product
+    }
+    pub(crate) const fn dealer_obligation_account(&self) -> Pubkey {
+        self.obligation_account
+    }
+    pub(crate) const fn dealer_obligation_presemantic_id(&self) -> ContentId {
+        self.obligation_presemantic_id
+    }
+    pub(crate) const fn dealer_state_account(&self) -> Pubkey { self.state_account }
+    pub(crate) const fn dealer_state_presemantic_id(&self) -> ContentId {
+        self.state_presemantic_id
+    }
+    pub(crate) const fn terminal_state_receipt(&self) -> DealerTerminalStateReceiptV2 {
+        self.terminal_state_receipt
+    }
+    pub(crate) const fn terminal_state_receipt_id(&self) -> ContentId {
+        self.terminal_state_receipt_id
+    }
+    pub(crate) const fn replay_presemantic_id(&self) -> ContentId {
+        self.replay_presemantic_id
+    }
+    pub(crate) const fn replay_pre_ordinal(&self) -> u64 { self.replay_pre_ordinal }
+    pub(crate) const fn owner_terminal_receipt_id(&self) -> ContentId {
+        self.owner_terminal_receipt_id
+    }
+    pub(crate) const fn expected_link_transition_sequence(&self) -> u64 {
+        self.expected_link_transition_sequence
+    }
+    pub(crate) const fn rent_refund_owner(&self) -> Pubkey { self.rent_refund_owner }
+    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
+}
+
 /// Non-detachable physical receipt proving the unused `0xbc/v1` owner was
 /// deleted only after the exact current Product obligation reached Terminal.
 /// It retains the pure terminal plan plus every observed lamport poststate.
@@ -393,6 +453,7 @@ struct AuthenticatedExistingDealerSeriesAdmissionV1 {
 struct AuthenticatedExistingDealerSeriesAdmissionV2 {
     state: DealerStateV3,
     obligation: DealerSeriesObligationBindingV2,
+    product: AuthenticatedLiveSeriesDealerObligationV2,
 }
 
 impl AuthenticatedSeriesDealerAdmissionOwnerV1
@@ -886,6 +947,160 @@ fn authenticate_existing_dealer_series_admission_v2(
     Ok(AuthenticatedExistingDealerSeriesAdmissionV2 {
         state,
         obligation,
+        product,
+    })
+}
+
+/// Freeze Dealer's exact current terminal cut for Product's sole LinkV2 writer.
+///
+/// No Product bytes are mutated here. The returned non-Copy value is useful
+/// only to the Product-owned writer that will hostile-reopen the same RootV2,
+/// LinkV2, RegistryCapabilityV4, BundleV6, and AttachmentV5 immediately before
+/// changing Dealer's obligation status from Live to Terminal.
+#[inline(never)]
+fn authenticate_dealer_series_terminal_prewrite_v2(
+    program_id: &Pubkey,
+    existing: AuthenticatedExistingDealerSeriesAdmissionV2,
+    state_account: &AccountInfo<'_>,
+    obligation_account: &AccountInfo<'_>,
+    replay: &DealerFacilityReplayV1,
+    terminal_state_receipt: DealerTerminalStateReceiptV2,
+) -> Outcome<AuthenticatedDealerSeriesTerminalPrewriteV2> {
+    let state = existing.state;
+    let obligation = existing.obligation;
+    let product = existing.product;
+    state.validate().map_err(dealer_fault)?;
+    obligation.validate().map_err(dealer_fault)?;
+    replay.validate().map_err(dealer_fault)?;
+    terminal_state_receipt.validate().map_err(dealer_fault)?;
+
+    let state_presemantic_id = state.state_id().map_err(dealer_fault)?;
+    let state_base_presemantic_id = state.base.state_content_id().map_err(dealer_fault)?;
+    let obligation_presemantic_id = obligation.binding_id().map_err(dealer_fault)?;
+    let replay_presemantic_id = replay.replay_id().map_err(dealer_fault)?;
+    let terminal_state_receipt_id = terminal_state_receipt
+        .receipt_id()
+        .map_err(dealer_fault)?;
+    let expected_link_transition_sequence = product
+        .link_transition_sequence()
+        .checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    let owner_terminal_receipt_id = obligation
+        .terminal_owner_receipt_id(
+            terminal_state_receipt_id,
+            Id::from_bytes(product.link_semantic_id().bytes()),
+            expected_link_transition_sequence,
+        )
+        .map_err(dealer_fault)?;
+    let rent_floor = obligation
+        .rent
+        .refundable_principal
+        .checked_add(obligation.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+
+    require(
+        product.id() != ContentId::ZERO
+            && product.root_authentication_id() != ContentId::ZERO
+            && product.link_authentication_id() != ContentId::ZERO
+            && product.registry_capability_id() != ContentId::ZERO
+            && state_account.owner == program_id
+            && state_account.is_writable
+            && !state_account.is_signer
+            && !state_account.executable
+            && state_account.data_len() == DEALER_STATE_V3_ACCOUNT_BYTES
+            && id(state_account.key) == terminal_state_receipt.dealer_state_account_id
+            && id(state_account.key) == obligation.key.dealer_state_account_id
+            && obligation_account.owner == program_id
+            && obligation_account.is_writable
+            && !obligation_account.is_signer
+            && !obligation_account.executable
+            && obligation_account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2
+            && id(obligation_account.key) == obligation.key.binding_account_id
+            && obligation_account.lamports() >= rent_floor
+            && state.base.phase == DealerPhaseV2::Retiring
+            && state.series_obligation_children == 1
+            && state.series_obligation_binding_account_id == obligation.key.binding_account_id
+            && state.series_obligation_binding_id == obligation_presemantic_id
+            && obligation.phase == DealerSeriesObligationPhaseV1::Live
+            && obligation.admission_projection_id
+                == Id::from_bytes(product.dealer_admission_receipt_id().bytes())
+            && obligation.key.product_market_root_account_id == id(&product.root_account())
+            && obligation.key.product_market_binding_id
+                == Id::from_bytes(product.root_binding_id().bytes())
+            && obligation.key.series_market_link_account_id == id(&product.link_account())
+            && obligation.key.series_plan_v5_id.bytes() == product.series_plan_id().bytes()
+            && obligation.key.series_ordinal == product.ordinal()
+            && obligation.key.market_instance_v2_id.bytes()
+                == product.market_instance_id().bytes()
+            && obligation.key.product_generation == product.generation()
+            && obligation.key.compiler_bundle_v6_id.bytes()
+                == product.compiler_bundle_id().bytes()
+            && obligation.key.attachment_plan_v5_id.bytes()
+                == product.attachment_plan_id().bytes()
+            && obligation.key.policy_id.bytes()
+                == product.liquidity_facility_plan_id().bytes()
+            && obligation.rent.payer.bytes() == product.rent_refund_owner().bytes()
+            && obligation.rent.neutral_sink.bytes()
+                == product.neutral_lamport_sink().bytes()
+            && terminal_state_receipt.policy_id == state.base.policy_id
+            && terminal_state_receipt.facility_id == state.base.facility_id
+            && terminal_state_receipt.facility_position_binding_id
+                == state.base.facility_position_binding_id
+            && terminal_state_receipt.terminal_state_content_id == state_base_presemantic_id
+            && terminal_state_receipt.terminal_position_semantic_id
+                == state.base.facility_position_id
+            && terminal_state_receipt.replay_account_id == state.base.facility_replay_account_id
+            && terminal_state_receipt.terminal_generation == state.base.generation
+            && terminal_state_receipt.terminal_child_sequence == state.base.child_sequence
+            && replay.replay_account_id() == state.base.facility_replay_account_id
+            && replay.position_generation() == state.base.generation
+            && replay.lifecycle() == clutch_retirement::ReplayV3Lifecycle::Live
+            && replay.next_transition_ordinal() != 0
+            && expected_link_transition_sequence > obligation.admission_link_transition_sequence,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+
+    let authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2,
+            program_id.as_ref(),
+            &product.id().bytes(),
+            &product.root_authentication_id().bytes(),
+            &product.link_authentication_id().bytes(),
+            &product.link_semantic_id().bytes(),
+            &product.link_transition_sequence().to_le_bytes(),
+            state_account.key.as_ref(),
+            &state_presemantic_id.bytes(),
+            obligation_account.key.as_ref(),
+            &obligation_presemantic_id.bytes(),
+            &terminal_state_receipt_id.bytes(),
+            &replay_presemantic_id.bytes(),
+            &replay.next_transition_ordinal().to_le_bytes(),
+            &owner_terminal_receipt_id.bytes(),
+            &expected_link_transition_sequence.to_le_bytes(),
+            &obligation.rent.refundable_principal.to_le_bytes(),
+            &obligation.rent.donation_floor.to_le_bytes(),
+            &obligation.rent.payer.bytes(),
+            &obligation.rent.neutral_sink.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(authentication_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
+    Ok(AuthenticatedDealerSeriesTerminalPrewriteV2 {
+        authentication_id,
+        live_product: product,
+        obligation_account: *obligation_account.key,
+        obligation_presemantic_id: ContentId::from_bytes(obligation_presemantic_id.bytes()),
+        state_account: *state_account.key,
+        state_presemantic_id: ContentId::from_bytes(state_presemantic_id.bytes()),
+        terminal_state_receipt,
+        terminal_state_receipt_id: ContentId::from_bytes(terminal_state_receipt_id.bytes()),
+        replay_presemantic_id: ContentId::from_bytes(replay_presemantic_id.bytes()),
+        replay_pre_ordinal: replay.next_transition_ordinal(),
+        owner_terminal_receipt_id: ContentId::from_bytes(owner_terminal_receipt_id.bytes()),
+        expected_link_transition_sequence,
+        rent_refund_owner: Pubkey::new_from_array(obligation.rent.payer.bytes()),
+        neutral_lamport_sink: Pubkey::new_from_array(obligation.rent.neutral_sink.bytes()),
     })
 }
 
@@ -11150,6 +11365,36 @@ mod current_terminal_cut_adversarial_tests {
             .and_then(|value| value.split(");").next())
             .expect("Dealer implementation mask");
         assert!(!dispatcher.contains("DealerFacilityAction::Retire"));
+    }
+
+    #[test]
+    fn product_terminal_prewrite_binds_the_exact_live_dealer_cut() {
+        let source = include_str!("dealer_facility.rs");
+        let prewrite = source
+            .split("fn authenticate_dealer_series_terminal_prewrite_v2")
+            .nth(1)
+            .and_then(|value| value.split("fn authenticate_dealer_collateral_value_v2").next())
+            .expect("current Dealer terminal prewrite");
+        for guard in [
+            "product.root_authentication_id()",
+            "product.link_authentication_id()",
+            "product.registry_capability_id()",
+            "state.state_id()",
+            "obligation.binding_id()",
+            "replay.replay_id()",
+            "terminal_state_receipt.receipt_id()",
+            "terminal_owner_receipt_id",
+            "product.link_transition_sequence()",
+            "obligation.admission_projection_id",
+            "product.dealer_admission_receipt_id()",
+            "obligation.key.compiler_bundle_v6_id",
+            "obligation.key.attachment_plan_v5_id",
+            "obligation.rent.refundable_principal",
+            "obligation.rent.donation_floor",
+            "DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2",
+        ] {
+            assert!(prewrite.contains(guard), "missing terminal prewrite guard {guard}");
+        }
     }
 }
 
