@@ -37,6 +37,8 @@ use solana_sdk_ids::system_program;
 
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived unsigned Series and Dealer workflows.
+pub mod verticals;
 
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
