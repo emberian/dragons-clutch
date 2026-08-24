@@ -1,7 +1,8 @@
 # Structured-claim SBF successor adapter
 
-Status: **implemented disabled source seam; not routed, built, measured,
-deployed, or validated** (2026-08-23).
+Status: **current action owners are staged behind exact zero capability masks;
+neither the wrapper nor the base program admits a Structured action, and no
+artifact has been built, measured, deployed, or validated** (2026-08-24).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the only
 owner of structured-claim descriptor bytes, family-local payload codecs, and
@@ -16,15 +17,17 @@ inputs now authenticate the canonical 480-byte Position V3, the shared
 purpose-owned Replay V3 envelope, and the exact `GEN1` or `SCV1` extension
 before projecting the runtime contract's small economic view.
 
-The canonical persisted descriptor is exactly 384 bytes at account coordinate
-`0x88/1`. It contains deployment identity, MarketInstanceV2/NativeClaimBasis
-identity, primitive
-native-Egg coefficients, lifecycle, and PDA bumps. Actual wrapper supply is
-always the extension-free Token-2022 mint. Backing is always the dedicated
-base Position. Hoard, native supply, Market phase, and payouts remain base
-program facts.
+Historical descriptor v1 is exactly 384 bytes at `0x88/1` and remains
+decode-only. The sole future descriptor v2 is exactly 449 bytes at `0x88/2`.
+It additionally binds the exact Series-scoped Structured root and authenticated
+wrapper recipe, while retaining distinct descriptor/mint/mint-authority/vault
+bumps. The mutable `0xb7/1` root owns Product lineage, descriptor counts,
+ordered admission/terminal transcripts, refundable rent principal, and
+donation residue. Actual wrapper supply is always the extension-free
+Token-2022 mint; backing is always the dedicated base Position. Hoard, native
+supply, Market phase, and payouts remain base-program facts.
 
-## Runtime activation is empty
+## Runtime activation
 
 The structured family is `75/v1`, with eight runtime-contract actions:
 
@@ -37,18 +40,21 @@ The structured family is `75/v1`, with eight runtime-contract actions:
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
 
-`ENABLED_STRUCTURED_CLAIM_ACTION_MASK` is zero. Runtime admission reads only
-the three-byte family/version/action header and refuses every allocated action
-before payload or account data is read. The pure planners are implementation
-contracts, not an execution capability.
+The adapter default remains fail-closed. The historical name
+`live-current-wrapper` currently stages the current wrapper code but its action
+mask is exactly zero, as is the base program's Structured mask. All eight
+actions therefore refuse at capability admission before account loading. A
+future checked release must rotate the profile/release identity and admit only
+the actions whose complete base/wrapper compositions and evidence have landed.
 
 Activation must be atomic with all of the following:
 
-- central capability activation for the already allocated eight family-local
-  actions and descriptor account `0x88/1`;
+- central capability activation for only the implemented family-local actions,
+  descriptor account `0x88/2`, and root account `0xb7/1`;
 - an exact capability-profile tuple and new profile/release identity;
 - main-dispatcher routing to this crate;
-- a live base handler for the concrete Position V3 action-35 CPI below;
+- promotion of the laboratory-only base Position V3 action-35 handler into a
+  checked release identity;
 - the supplied parser plans wired into the pinned Token-2022 byte parser;
 - linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
   SVM, and local-validator evidence; and
@@ -77,8 +83,8 @@ The adapter owns only facts that cannot live in the pure runtime contract:
   nonaliasing;
 - hostile decoding of the current Realm/Profile/policy, MarketBinding/runtime,
   MarketInstance, Hoard V2, ClaimLedger V3, Position V3, and purpose-owned
-  Replay accounts on canonical custody routes (the still-disabled full-vector
-  and terminal planners retain their explicitly named legacy closure blocker);
+  Replay accounts on canonical and full-vector custody routes, with current
+  Hoard V2 and ClaimLedger V3 successors for the full-vector routes;
 - projection through a named base-PDA verifier;
 - projection through a named pinned Token-2022 parser; and
 - exact ordered outer CPI/write plans plus receipt reconciliation.
@@ -181,7 +187,7 @@ plan itself rather than an adapter copy of its post-state.
 
 | action | ordered outer operations |
 | --- | --- |
-| create | descriptor System allocation; mint System allocation; InitializeMint; base empty-vault creation; descriptor write |
+| create | descriptor System allocation; mint System allocation; InitializeMint; descriptor write; base Product admission + Structured root admission + empty-vault creation |
 | canonical wrap | base atomic Position transfer; MintToChecked |
 | full wrap | base atomic full-vector custody + complete-set compression; MintToChecked |
 | canonical unwind | BurnChecked; base atomic Position return |
@@ -204,22 +210,28 @@ rent shortfall plan. Existing lamports stay locked in the permanent descriptor
 and mint identities and never become a refund, fee, bounty, reserve, treasury,
 or caller claim.
 
-The closable base Position/Replay pair is separate. A base-owned creation
-capability must bind creator-funded shortfalls, hostile/benevolent prefunds, a
-beneficiary-free neutral sink, and one `rent_transition_id`. Its later close
-capability must return only the creator-funded component to that creator and
-send all prefunding to the neutral sink. The wrapper cannot mint either
-capability from caller-authored fields.
+The closable base Position/Replay pair and `0xb7/1` root are separate. The base
+charges the Product-authenticated rent owner each complete current-bank
+principal atop hostile prefunding, persists that principal separately from the
+donation floor/residue, and freezes Product's neutral lamport sink. Later close
+work may return only the persisted principal to its owner and must route every
+donation to the sink. The wrapper cannot mint this authority from caller fields.
 
 ## Remaining external dependencies
 
 The adapter implementation is intentionally honest about work owned elsewhere:
 
-- the base program does not yet route the authenticated Position V3 action-35
-  handler, empty-vault creation, atomic full-vector wrap/unwind,
-  beneficiary-free compaction, exact terminal redemption, and close receipt
-  interfaces staged here;
-- the main dispatcher has no structured-claim account loader or route arm; and
+- every Structured tuple and the separate wrapper action mask remain disabled;
+  the current compiled frames are create 33, base canonical 26 / wrapper
+  canonical 29, full-vector 31, and terminal redemption 32 accounts;
+- Product supplies the current RegistryV2-to-BundleV5/ReleaseV2/ProfileV4/
+  AttachmentV4 and frame-bounded Series-link authority this lane consumes.
+  The base uses Product's private authenticated wrapper
+  authorization and first-admission mutation rather than a caller DTO;
+  withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
+  creation;
+- compaction, Product terminal promotion, and root/Position close remain
+  incomplete; exact terminal redemption is compiled but not admitted; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
 
