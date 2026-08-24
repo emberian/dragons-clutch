@@ -1,5 +1,5 @@
 //! Private binding from one completed Source failure terminal to Product's
-//! exact current LinkV2 release postwrite.
+//! exact current LinkV3 release postwrite.
 //!
 //! Source terminal execution necessarily precedes Failure archival and the
 //! Product link release, so this is a post-release bridge rather than a
@@ -17,7 +17,7 @@ use crate::instructions::source_failure_terminal_v1::{
 };
 use crate::source_plane_v3::{derive_runtime_pda, runtime_key};
 use crate::source_plane_v3_actions::write_exact_account_data;
-use clutch_product_series::SeriesMarketLinkV2Id;
+use clutch_product_series::SeriesMarketLinkV3Id;
 use clutch_source_plane_v3::{ContentId, FixedCodec};
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use clutch_source_plane_v3_runtime::{
@@ -41,7 +41,7 @@ fn source_id(value: clutch_product_series::ContentId) -> ContentId {
     ContentId::from_bytes(value.bytes())
 }
 
-/// Exact Source terminal and Product LinkV2 release facts offered to Failure's
+/// Exact Source terminal and Product LinkV3 release facts offered to Failure's
 /// non-public archive authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceFailureProductReleaseFactsV1 {
@@ -56,8 +56,8 @@ pub(crate) struct SourceFailureProductReleaseFactsV1 {
     pub(crate) product_link_account: Pubkey,
     pub(crate) product_link_authentication_before: ContentId,
     pub(crate) product_link_authentication_after: ContentId,
-    pub(crate) product_link_semantic_before: SeriesMarketLinkV2Id,
-    pub(crate) product_link_semantic_after: SeriesMarketLinkV2Id,
+    pub(crate) product_link_semantic_before: SeriesMarketLinkV3Id,
+    pub(crate) product_link_semantic_after: SeriesMarketLinkV3Id,
     pub(crate) product_transition_sequence_before: u64,
     pub(crate) product_transition_sequence_after: u64,
     pub(crate) product_session_transcript_before: ContentId,
@@ -113,7 +113,7 @@ pub(crate) trait AuthenticatedSourceFailureProductReleaseAuthorityV1 {
 }
 
 /// Private postwrite proving one exact Source terminal reached the matching
-/// current Product LinkV2 release disposition.
+/// current Product LinkV3 release disposition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceFailureProductReleaseV1 {
     id: ContentId,
@@ -232,7 +232,7 @@ pub(crate) fn bind_source_failure_product_release_v1<
 }
 
 /// Hostile, durable per-occurrence proof that the exact failed Source
-/// terminal reached the matching current Product LinkV2 release. This value
+/// terminal reached the matching current Product LinkV3 release. This value
 /// is deliberately non-Copy so later retirement consumes one authenticated
 /// projection rather than reconstructing the transaction-local bridge.
 #[derive(Debug, Eq, PartialEq)]
