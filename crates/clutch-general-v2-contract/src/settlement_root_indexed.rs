@@ -8,10 +8,8 @@
 //! coordinate and canonical in-place Root PDA are reserved, but every runtime
 //! capability remains disabled until the complete SBF transition family lands.
 
-use clutch_owner_settlement::SettlementCashPotV1;
-
 use crate::{
-    prepare_activate_merge_cash_pot_v1, CodecError, DeletableRentOwnerV1, Id32, Reader,
+    CodecError, DeletableRentOwnerV1, Id32, Reader,
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootSeedTupleV1,
     SettlementRootTerminalProjectionV1, SettlementRootV1AccountV1, Sha256BackendV1, Writer,
     SETTLEMENT_ROOT_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_TAG,
@@ -594,7 +592,7 @@ impl ExactIndexChildCountsV1 {
 /// an arbitrary caller-authored Root poststate. Index-child identities and
 /// counts remain immutable across all variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum IndexedSettlementBaseTransitionV1 {
+enum IndexedSettlementBaseTransitionV1 {
     /// Admit the unique exact Dealer child.
     AdmitDealerChild,
     /// Retire the unique exact Dealer child.
@@ -646,47 +644,6 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
     plane_id: Id32,
     locator_data_id: Id32,
     adjacency_data_id: Id32,
-}
-
-/// Atomic indexed-root plus merge cash-pot activation plan.
-///
-/// This preserves the base contract's only lawful action-37 transition: the
-/// indexed-root postwrite cannot be obtained without the canonical cash-pot
-/// body, exact rent owner, account identity, and bump in the same typed plan.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IndexedActivateMergeCashPotPlanV1 {
-    root: IndexedSettlementRootV1AccountV1,
-    cash_pot_account: Id32,
-    cash_pot: SettlementCashPotV1,
-    rent: DeletableRentOwnerV1,
-    stored_bump: u8,
-}
-
-impl IndexedActivateMergeCashPotPlanV1 {
-    /// Indexed root successor latching the singleton cash pot live.
-    pub const fn root(&self) -> &IndexedSettlementRootV1AccountV1 {
-        &self.root
-    }
-
-    /// Exact canonical cash-pot PDA created atomically.
-    pub const fn cash_pot_account(&self) -> Id32 {
-        self.cash_pot_account
-    }
-
-    /// Canonical opening merge cash-pot body.
-    pub const fn cash_pot(&self) -> SettlementCashPotV1 {
-        self.cash_pot
-    }
-
-    /// Exact cash-pot rent/refund/donation owner.
-    pub const fn rent(&self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-
-    /// Stored canonical cash-pot PDA bump.
-    pub const fn stored_bump(&self) -> u8 {
-        self.stored_bump
-    }
 }
 
 impl IndexedSettlementRootTerminalProjectionV1 {
@@ -938,7 +895,7 @@ impl IndexedSettlementRootV1AccountV1 {
 
     /// Apply only an existing checked Root V1 transition while retaining exact
     /// immutable index identity and count ownership.
-    pub fn apply_base_transition(
+    fn apply_base_transition(
         &self,
         transition: IndexedSettlementBaseTransitionV1,
     ) -> Result<Self, CodecError> {
@@ -982,27 +939,60 @@ impl IndexedSettlementRootV1AccountV1 {
         Ok(value)
     }
 
-    /// Prepare the sole atomic merge cash-pot activation for the indexed root.
-    pub fn prepare_activate_merge_cash_pot(
+    /// Count the unique exact Dealer child admitted by its authenticated action.
+    pub fn admit_dealer_child(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::AdmitDealerChild)
+    }
+
+    /// Count the unique exact Dealer child retired by its authenticated action.
+    pub fn retire_dealer_child(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireDealerChild)
+    }
+
+    /// Count one authenticated materialization and its exact new endpoints.
+    pub fn admit_materialization(
         &self,
-    ) -> Result<IndexedActivateMergeCashPotPlanV1, CodecError> {
-        self.validate()?;
-        if self.state != ExactIndexChildrenStateV1::Live {
-            return Err(CodecError::InvalidState);
-        }
-        let base = prepare_activate_merge_cash_pot_v1(&self.base)?;
-        let root = Self {
-            base: *base.root(),
-            ..*self
-        };
-        root.validate()?;
-        Ok(IndexedActivateMergeCashPotPlanV1 {
-            root,
-            cash_pot_account: base.cash_pot_account(),
-            cash_pot: base.cash_pot(),
-            rent: base.rent(),
-            stored_bump: base.stored_bump(),
+        owner_rows_created: u8,
+        filled_reservations_admitted: u8,
+        merge_receipt: bool,
+    ) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::AdmitMaterialization {
+            owner_rows_created,
+            filled_reservations_admitted,
+            merge_receipt,
         })
+    }
+
+    /// Count one authenticated zero-fill Reservation release.
+    pub fn release_unfilled_reservation(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::ReleaseUnfilledReservation)
+    }
+
+    /// Count one authenticated owner finalization and its exact fee-child bit.
+    pub fn complete_owner_finalization(
+        &self,
+        fee_receipt_created: bool,
+    ) -> Result<Self, CodecError> {
+        self.apply_base_transition(
+            IndexedSettlementBaseTransitionV1::CompleteOwnerFinalization {
+                fee_receipt_created,
+            },
+        )
+    }
+
+    /// Count one authenticated merge-payment latch completion.
+    pub fn complete_merge_payment(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::CompleteMergePayment)
+    }
+
+    /// Count the complete authenticated receipt archive set for one portfolio pair.
+    pub fn retire_portfolio_pair_archives(
+        &self,
+        receipt_count: u8,
+    ) -> Result<Self, CodecError> {
+        self.apply_base_transition(
+            IndexedSettlementBaseTransitionV1::RetirePortfolioPairArchives { receipt_count },
+        )
     }
 
     /// Atomically count both live siblings retired immediately before Feed retirement.
@@ -1555,6 +1545,30 @@ mod tests {
             wrong_preparation.authenticate_source(&base_after, &Sha2Backend),
             Err(CodecError::MismatchedBinding),
         ));
+    }
+
+    #[test]
+    fn named_indexed_transitions_preserve_exact_children_and_match_base_successors() {
+        let indexed = live_indexed_root();
+        let expected_first = indexed
+            .base()
+            .admit_materialization_delta(2, 2, false)
+            .unwrap();
+        let first = indexed.admit_materialization(2, 2, false).unwrap();
+        assert_eq!(first.base(), &expected_first);
+        assert_eq!(first.locator_account(), indexed.locator_account());
+        assert_eq!(first.adjacency_account(), indexed.adjacency_account());
+        assert_eq!(first.plane_id(), indexed.plane_id());
+        assert_eq!(first.index_counts(), indexed.index_counts());
+        assert_eq!(first.index_state(), ExactIndexChildrenStateV1::Live);
+
+        let expected_second = expected_first
+            .admit_materialization_delta(0, 0, false)
+            .unwrap();
+        let second = first.admit_materialization(0, 0, false).unwrap();
+        assert_eq!(second.base(), &expected_second);
+        assert_eq!(second.index_counts(), indexed.index_counts());
+        assert_eq!(second.index_state(), ExactIndexChildrenStateV1::Live);
     }
 
     #[test]
