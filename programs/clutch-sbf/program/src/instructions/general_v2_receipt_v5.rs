@@ -253,7 +253,7 @@ fn authenticate_general_receipt_v5_inner(
 /// root, Feed, candidate, price, or page facts and performs no mutation.
 pub fn authenticate_general_receipt_v5_root_traversal(
     program_id: &Pubkey,
-    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
     receipt_account_info: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedGeneralReceiptV5> {
     require_program_state(
@@ -280,6 +280,12 @@ pub fn authenticate_general_receipt_v5_root_traversal(
         &receipt_data,
     )?;
     let semantic = receipt.semantic();
+    let bound_slice = traversal
+        .settlement_slice(semantic.slice_index)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bound_price = traversal
+        .outcome_price(semantic.outcome)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let receipt_pda = seeds::general_v2_receipt_v5_pda(
         program_id,
         &root.epoch().bytes(),
@@ -311,9 +317,9 @@ pub fn authenticate_general_receipt_v5_root_traversal(
             && semantic.market.0 == root.market().bytes()
             && semantic.candidate.0 == root.settlement_candidate_id().bytes()
             && semantic.slice_index < counts.admitted_receipts
-            && traversal.settlement_slice(semantic.slice_index).is_some()
+            && bound_slice.outcome() == semantic.outcome
             && semantic.outcome < feed.outcome_count
-            && traversal.outcome_price(semantic.outcome) == Some(semantic.price),
+            && bound_price == semantic.price,
         ClutchError::MismatchedState,
     )?;
     Ok(AuthenticatedGeneralReceiptV5 {
