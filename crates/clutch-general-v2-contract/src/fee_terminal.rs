@@ -8,7 +8,10 @@
 //! must commit every returned write and close in one instruction.
 
 use clutch_fee_runtime_contract::projection::AuthenticatedSelectedOwnerFeeV2;
-use clutch_fee_runtime_contract::selected::{OwnerFeeCarryV1, SelectedCompositeFeeAccess};
+use clutch_fee_runtime_contract::retirement::FeePositionCreditTransitionV1;
+use clutch_fee_runtime_contract::selected::{
+    OwnerFeeCarryV1, SelectedCompositeFeeAccess, SelectedCompositeFeeV1,
+};
 use clutch_fee_runtime_contract::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, GeneralFeeTerminalProjectionV1,
     OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1, OwnerFeeRentDispositionV2,
@@ -38,6 +41,9 @@ pub const OWNER_FEE_RENT_DATA_ID_DOMAIN_V2: &[u8] =
 /// Canonical data-ID domain for the exact cash-pot semantic poststate body.
 pub const SETTLEMENT_CASH_POT_POSTSTATE_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/settlement-cash-pot-poststate/v1\0";
+/// Canonical identity for one action-50 fee Position credit.
+pub const FEE_POSITION_CREDIT_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-fee-position-credit/v1\0";
 
 fn live(value: Id32) -> Result<(), CodecError> {
     if value.is_zero() {
@@ -81,6 +87,130 @@ pub fn settlement_cash_pot_poststate_data_id_v1<B: Sha256BackendV1>(
 ) -> Result<Id32, CodecError> {
     let body = pot.encode_body().map_err(|_| CodecError::InvalidState)?;
     Id32::new(backend.sha256(&[SETTLEMENT_CASH_POT_POSTSTATE_DATA_ID_DOMAIN_V1, &body]))
+}
+
+/// Exact atomic Position/Replay/cash-pot successor for one fee recipient.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeePositionCreditPlanV1 {
+    position: clutch_owner_settlement::PositionSettlementPoststateV3,
+    replay: Option<GeneralReplayTransitionPlanV1>,
+    cash_pot: SettlementCashPotV1,
+    semantic: FeePositionCreditTransitionV1,
+}
+
+impl FeePositionCreditPlanV1 {
+    pub const fn position(&self) -> clutch_owner_settlement::PositionSettlementPoststateV3 {
+        self.position
+    }
+    pub const fn replay(&self) -> Option<GeneralReplayTransitionPlanV1> { self.replay }
+    pub const fn cash_pot(&self) -> SettlementCashPotV1 { self.cash_pot }
+    pub const fn semantic(&self) -> FeePositionCreditTransitionV1 { self.semantic }
+}
+
+/// Re-derive one exact fee credit from authenticated semantic owners. A zero
+/// allocation advances only the fee cursor; it cannot fabricate a Position or
+/// Replay transition.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_fee_position_credit_v1<B>(
+    fee_record: Id32,
+    recipient_allocation_data_id: Id32,
+    settlement_cash_pot_account: Id32,
+    recipient_kind: u8,
+    recipient_ordinal: u8,
+    credited_atoms: u64,
+    position_replay: GeneralPositionReplayPrestateV1,
+    cash_pot_before: SettlementCashPotV1,
+    backend: &B,
+) -> Result<FeePositionCreditPlanV1, CodecError>
+where
+    B: Sha256BackendV1 + PositionV3Sha256Backend + ReplayV3HashBackend,
+{
+    distinct(&[
+        fee_record,
+        recipient_allocation_data_id,
+        settlement_cash_pot_account,
+        Id32::from_bytes(position_replay.position().account),
+        position_replay.replay_account(),
+    ])?;
+    if recipient_kind != 1 && recipient_kind != 2 {
+        return Err(CodecError::InvalidState);
+    }
+    let expectation = cash_pot_before.expectation;
+    if expectation.fee_record != fee_record.bytes()
+        || cash_pot_before.state == 0
+        || cash_pot_before.finalized_owner_count != expectation.owner_count
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let position_before = position_replay.position();
+    let position_after = position_before
+        .credit_free_cash_poststate(credited_atoms)
+        .map_err(|_| CodecError::ArithmeticOverflow)?;
+    let cash_pot_after = cash_pot_before
+        .distribute_collected_fee(credited_atoms)
+        .map_err(|_| CodecError::InvalidState)?;
+    let pot_prestate = settlement_cash_pot_poststate_data_id_v1(cash_pot_before, backend)?;
+    let pot_poststate = settlement_cash_pot_poststate_data_id_v1(cash_pot_after, backend)?;
+    let position_poststate = Id32::new(
+        position_after
+            .semantic
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let transition_id = Id32::new(backend.sha256(&[
+        FEE_POSITION_CREDIT_TRANSITION_DOMAIN_V1,
+        &fee_record.bytes(),
+        &recipient_allocation_data_id.bytes(),
+        &[recipient_kind, recipient_ordinal],
+        &position_before.account,
+        &position_before.semantic_id,
+        &position_poststate.bytes(),
+        &settlement_cash_pot_account.bytes(),
+        &pot_prestate.bytes(),
+        &pot_poststate.bytes(),
+        &credited_atoms.to_le_bytes(),
+    ]))?;
+    let replay = if credited_atoms == 0 {
+        None
+    } else {
+        Some(crate::project_general_replay_transition_v1(
+            position_replay,
+            position_after,
+            GeneralReplayTransitionKindV1::DistributeTradingFee,
+            transition_id,
+            recipient_allocation_data_id,
+            backend,
+        )?)
+    };
+    let (replay_prestate, replay_poststate) = match replay {
+        Some(value) => (
+            value.replay_prestate_semantic_id(),
+            value.replay_poststate_semantic_id(),
+        ),
+        None => (
+            position_replay.replay_semantic_id(),
+            position_replay.replay_semantic_id(),
+        ),
+    };
+    let semantic = FeePositionCreditTransitionV1 {
+        position_account: clutch_fee_runtime_contract::Id(position_before.account),
+        replay_account: clutch_fee_runtime_contract::Id(position_replay.replay_account().bytes()),
+        position_prestate: clutch_fee_runtime_contract::Id(position_before.semantic_id),
+        position_poststate: clutch_fee_runtime_contract::Id(position_poststate.bytes()),
+        replay_prestate: clutch_fee_runtime_contract::Id(replay_prestate.bytes()),
+        replay_poststate: clutch_fee_runtime_contract::Id(replay_poststate.bytes()),
+        cash_pot_account: clutch_fee_runtime_contract::Id(settlement_cash_pot_account.bytes()),
+        cash_pot_prestate: clutch_fee_runtime_contract::Id(pot_prestate.bytes()),
+        cash_pot_poststate: clutch_fee_runtime_contract::Id(pot_poststate.bytes()),
+        credited_atoms,
+    };
+    Ok(FeePositionCreditPlanV1 {
+        position: position_after,
+        replay,
+        cash_pot: cash_pot_after,
+        semantic,
+    })
 }
 
 /// Recompute the canonical rent-transition data ID without accepting a digest

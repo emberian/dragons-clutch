@@ -942,7 +942,7 @@ pub const FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
 /// Durable candidate-wide fee-terminal version.
 pub const FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION: u8 = 3;
 /// Exact rent-owned streaming accumulator width.
-pub const FEE_RETIREMENT_ACCOUNT_BYTES_V1: usize = 596;
+pub const FEE_RETIREMENT_ACCOUNT_BYTES_V1: usize = 708;
 /// Exact rent-owned closure-manifest width.
 pub const FEE_RETIREMENT_ACCOUNT_BYTES_V2: usize = 580;
 /// Exact rent-owned terminal-receipt width.

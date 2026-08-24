@@ -53,6 +53,7 @@ const PORTFOLIO_PAIR_BUYER_ROLE: u8 = 10;
 const PORTFOLIO_PAIR_SELLER_ROLE: u8 = 11;
 const PORTFOLIO_ARCHIVE_BUYER_ROLE: u8 = 12;
 const PORTFOLIO_ARCHIVE_SELLER_ROLE: u8 = 13;
+const FEE_DISTRIBUTION_RECIPIENT_ROLE: u8 = 14;
 const DEALER_BUYER_ROLE: u8 = 12;
 const DEALER_SELLER_ROLE: u8 = 13;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
@@ -79,6 +80,8 @@ pub enum GeneralReplayTransitionKindV1 {
     AccountReceiptEnd,
     /// Action 38 owner cash realization.
     FinalizeOwnerSettlement,
+    /// Action 50 exact maker or treasury trading-fee Position credit.
+    DistributeTradingFee,
     /// Action 26 buyer Position endpoint.
     DirectBuyer,
     /// Action 26 seller Position endpoint.
@@ -198,6 +201,12 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 38,
                 OWNER_CASH_ROLE,
+            ),
+            Self::DistributeTradingFee => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                50,
+                FEE_DISTRIBUTION_RECIPIENT_ROLE,
             ),
             Self::DirectBuyer => (
                 SETTLEMENT_FAMILY,
@@ -438,6 +447,12 @@ impl GeneralReplayTransitionKindV1 {
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 38, OWNER_CASH_ROLE) => {
                 Ok(Self::FinalizeOwnerSettlement)
             }
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                50,
+                FEE_DISTRIBUTION_RECIPIENT_ROLE,
+            ) => Ok(Self::DistributeTradingFee),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 26, DIRECT_BUYER_ROLE) => {
                 Ok(Self::DirectBuyer)
             }
@@ -1335,6 +1350,7 @@ where
             | GeneralReplayTransitionKindV1::Materialize
             | GeneralReplayTransitionKindV1::Dematerialize
             | GeneralReplayTransitionKindV1::DirectBuyer
+            | GeneralReplayTransitionKindV1::DistributeTradingFee
             | GeneralReplayTransitionKindV1::PortfolioPairBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
@@ -1466,6 +1482,41 @@ mod tests {
         );
         assert_eq!(
             GeneralReplayExtensionV1::decode(&advanced_extension(40, OWNER_CASH_ROLE)),
+            Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn action50_fee_distribution_tuple_is_exact_and_role_disjoint() {
+        let value = GeneralReplayExtensionV1::decode(&advanced_extension(
+            50,
+            FEE_DISTRIBUTION_RECIPIENT_ROLE,
+        ))
+        .unwrap();
+        assert_eq!(
+            value.last_kind(),
+            Some(GeneralReplayTransitionKindV1::DistributeTradingFee)
+        );
+        assert_eq!(value.last_kind().unwrap().action(), 50);
+        assert_eq!(
+            value.last_kind().unwrap().role(),
+            FEE_DISTRIBUTION_RECIPIENT_ROLE
+        );
+        for wrong_role in [
+            OWNER_ACCOUNTING_ROLE,
+            OWNER_CASH_ROLE,
+            PORTFOLIO_ARCHIVE_SELLER_ROLE,
+        ] {
+            assert_eq!(
+                GeneralReplayExtensionV1::decode(&advanced_extension(50, wrong_role)),
+                Err(CodecError::InvalidState)
+            );
+        }
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(
+                38,
+                FEE_DISTRIBUTION_RECIPIENT_ROLE,
+            )),
             Err(CodecError::InvalidState)
         );
     }
