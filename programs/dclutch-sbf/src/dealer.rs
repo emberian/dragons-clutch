@@ -190,20 +190,12 @@ fn process<const N: usize>(
         DealerInstructionV1::CreateLpPosition(request) => {
             create_lp_position::<N>(program_id, accounts, request)
         }
-        DealerInstructionV1::AddLiquidity(request) => change_liquidity::<N, _>(
-            program_id,
-            accounts,
-            request.lp_id(),
-            request.request(),
-            true,
-        ),
-        DealerInstructionV1::RemoveLiquidity(request) => change_liquidity::<N, _>(
-            program_id,
-            accounts,
-            request.lp_id(),
-            request.request(),
-            false,
-        ),
+        DealerInstructionV1::AddLiquidity(request) => {
+            change_liquidity::<N, _>(program_id, accounts, request.request(), true)
+        }
+        DealerInstructionV1::RemoveLiquidity(request) => {
+            change_liquidity::<N, _>(program_id, accounts, request.request(), false)
+        }
         DealerInstructionV1::Trade(request) => trade::<N>(program_id, accounts, request),
         DealerInstructionV1::ResetLadder {
             expected_pool_sequence,
@@ -1059,7 +1051,6 @@ fn create_lp_position<const N: usize>(
 fn change_liquidity<const N: usize, R>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    lp_id: [u8; 32],
     request: R,
     is_add: bool,
 ) -> Result<(), ProgramError>
@@ -1094,13 +1085,10 @@ where
         action,
     )?;
     let realm = authenticate_realm(program_id, realm_account, mint, token_program, facts.market)?;
-    let mut lp = authenticate_lp(
+    let mut lp = authenticate_existing_lp(
         program_id,
         lp_account,
-        market_account,
         pool_account,
-        facts.config_id,
-        lp_id,
         actor.key,
         facts.market.root().identity().generation(),
     )?;
@@ -1548,13 +1536,10 @@ fn close_lp_position<const N: usize>(
         config_staging,
         DealerActionV1::CloseLpPosition,
     )?;
-    let mut lp = authenticate_lp(
+    let mut lp = authenticate_existing_lp(
         program_id,
         lp_account,
-        market,
         pool,
-        facts.config_id,
-        request.lp_id(),
         owner.key,
         facts.market.root().identity().generation(),
     )?;
@@ -2058,31 +2043,25 @@ fn authenticate_destination_vault(
         .map_err(|_| AdapterError::PositionAuthentication.into())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn authenticate_lp(
+fn authenticate_existing_lp(
     program_id: &Pubkey,
     lp_account: &AccountInfo<'_>,
-    market: &AccountInfo<'_>,
     pool: &AccountInfo<'_>,
-    config_id: ContentId,
-    lp_id: [u8; 32],
     owner: &Pubkey,
     generation: u64,
 ) -> Result<LpPosition, ProgramError> {
     if lp_account.owner != program_id {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let seeds = LpPositionPdaSeedsV1::new(market.key.to_bytes(), generation, config_id, lp_id)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
-    let (expected, _) = find_pda(program_id, &seeds.seed_components());
     let data = lp_account
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let position = LpPosition::decode(&data).map_err(|_| AdapterError::PositionAuthentication)?;
-    if lp_account.key != &expected
-        || position.parent().address() != pool.key.to_bytes()
+    if position.parent().address() != pool.key.to_bytes()
         || position.parent().market_generation() != generation
         || position.owner() != owner.to_bytes()
+        || position.rent_credit().beneficiary() != owner.to_bytes()
+        || lp_account.lamports() < position.rent_credit().funded_rent_principal()
         || position
             .to_bytes()
             .map_err(|_| AdapterError::PositionAuthentication)?
@@ -2859,6 +2838,20 @@ mod tests {
         bytes
     }
 
+    fn lp_bytes(pool: Pubkey, owner: Pubkey, generation: u64, rent: u64) -> Vec<u8> {
+        let mut bytes = vec![0; dclutch_dealer_contract::LP_POSITION_BYTES];
+        bytes[..8].copy_from_slice(b"DCLTLPV1");
+        bytes[8..10].copy_from_slice(&1u16.to_le_bytes());
+        bytes[16..48].copy_from_slice(pool.as_ref());
+        bytes[48..56].copy_from_slice(&generation.to_le_bytes());
+        bytes[56..88].copy_from_slice(owner.as_ref());
+        bytes[88..120].copy_from_slice(owner.as_ref());
+        bytes[120..128].copy_from_slice(&rent.to_le_bytes());
+        bytes[136..144].copy_from_slice(&1u64.to_le_bytes());
+        bytes[144] = 1;
+        bytes
+    }
+
     fn config_index(action: DealerActionV1) -> usize {
         match action {
             DealerActionV1::ActivatePool => 8,
@@ -2905,6 +2898,86 @@ mod tests {
             assert!(select_route(&header(tag)).is_err());
         }
         assert!(select_route(&[0; ACTION_OFFSET]).is_err());
+    }
+
+    #[test]
+    fn existing_lp_identity_is_its_authenticated_account_key_not_an_unstored_seed() {
+        let program_id = Pubkey::new_unique();
+        let pool_key = Pubkey::new_unique();
+        let owner_key = Pubkey::new_unique();
+        let arbitrary_created_key = Pubkey::new_unique();
+        let bytes = lp_bytes(pool_key, owner_key, 9, 400);
+        let lp = test_account(
+            arbitrary_created_key,
+            false,
+            true,
+            400,
+            bytes.clone(),
+            program_id,
+            false,
+        );
+        assert!(
+            authenticate_existing_lp(
+                &program_id,
+                &lp,
+                &test_account(pool_key, false, true, 1, vec![], program_id, false,),
+                &owner_key,
+                9
+            )
+            .is_ok()
+        );
+        let pool = test_account(pool_key, false, true, 1, vec![], program_id, false);
+        assert!(
+            authenticate_existing_lp(&program_id, &lp, &pool, &Pubkey::new_unique(), 9).is_err()
+        );
+        assert!(authenticate_existing_lp(&program_id, &lp, &pool, &owner_key, 10).is_err());
+        let wrong_pool = test_account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            1,
+            vec![],
+            program_id,
+            false,
+        );
+        assert!(authenticate_existing_lp(&program_id, &lp, &wrong_pool, &owner_key, 9).is_err());
+
+        let wrong_program = test_account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            400,
+            bytes.clone(),
+            Pubkey::new_unique(),
+            false,
+        );
+        assert!(
+            authenticate_existing_lp(&program_id, &wrong_program, &pool, &owner_key, 9).is_err()
+        );
+
+        let mut wrong_rent_beneficiary = lp_bytes(pool_key, owner_key, 9, 400);
+        wrong_rent_beneficiary[88..120].copy_from_slice(Pubkey::new_unique().as_ref());
+        let wrong_rent = test_account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            400,
+            wrong_rent_beneficiary,
+            program_id,
+            false,
+        );
+        assert!(authenticate_existing_lp(&program_id, &wrong_rent, &pool, &owner_key, 9).is_err());
+
+        let underfunded = test_account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            399,
+            bytes,
+            program_id,
+            false,
+        );
+        assert!(authenticate_existing_lp(&program_id, &underfunded, &pool, &owner_key, 9).is_err());
     }
 
     #[test]

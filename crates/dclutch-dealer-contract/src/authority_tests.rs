@@ -71,14 +71,19 @@ fn config<const N: usize, const B: usize>() -> LiquidityConfigV1<N, B> {
 #[test]
 fn instruction_round_trips_and_refuses_hostile_envelopes() {
     let limits = crate::LiquidityAmounts::new(1_000, 50, [700, 800]).expect("limits");
-    let add = DealerInstructionV1::AddLiquidity(
-        AddLiquidityV1::new(4, 8, 12, [44; 32], limits).expect("add"),
-    );
+    let add =
+        DealerInstructionV1::AddLiquidity(AddLiquidityV1::new(4, 8, 12, limits).expect("add"));
     let mut bytes = vec![0u8; add.encoded_len().expect("width")];
     add.encode_into(&mut bytes).expect("encode");
     assert_eq!(DealerInstructionV1::<2>::decode(&bytes), Ok(add));
-    assert_eq!(bytes.len(), 104);
-    assert_eq!(instruction_len::<16>(DealerActionV1::AddLiquidity), Ok(216));
+    assert_eq!(bytes.len(), 72);
+    assert_eq!(instruction_len::<16>(DealerActionV1::AddLiquidity), Ok(184));
+    let mut obsolete_seeded = bytes.clone();
+    obsolete_seeded.resize(104, 0);
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&obsolete_seeded),
+        Err(InstructionError::InvalidLength)
+    );
 
     let mut trailing = bytes.clone();
     trailing.push(0);
@@ -113,7 +118,7 @@ fn instruction_round_trips_and_refuses_hostile_envelopes() {
     );
 
     let remove = DealerInstructionV1::RemoveLiquidity(
-        RemoveLiquidityV1::new(5, 9, 3, [44; 32], limits).expect("remove"),
+        RemoveLiquidityV1::new(5, 9, 3, limits).expect("remove"),
     );
     let values = [
         DealerInstructionV1::ActivatePool(
@@ -126,9 +131,7 @@ fn instruction_round_trips_and_refuses_hostile_envelopes() {
         DealerInstructionV1::ResetLadder {
             expected_pool_sequence: 11,
         },
-        DealerInstructionV1::CloseLpPosition(
-            CloseLpPositionV1::new(12, 3, [44; 32]).expect("close"),
-        ),
+        DealerInstructionV1::CloseLpPosition(CloseLpPositionV1::new(12, 3).expect("close")),
         DealerInstructionV1::RetirePool {
             expected_pool_sequence: 13,
             expected_market_child_count: 1,
@@ -139,6 +142,10 @@ fn instruction_round_trips_and_refuses_hostile_envelopes() {
         value.encode_into(&mut exact).expect("action encode");
         assert_eq!(DealerInstructionV1::<2>::decode(&exact), Ok(value));
     }
+    assert_eq!(
+        instruction_len::<16>(DealerActionV1::CloseLpPosition),
+        Ok(32)
+    );
 }
 
 fn frame<const N: usize>(action: DealerActionV1) -> Vec<DealerAccountMetaV1> {
@@ -281,10 +288,10 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
     let retire_accounts =
         dealer_account_count::<16>(DealerActionV1::RetirePool).expect("Retire account count");
     let activate_bytes = legacy_single_instruction_bytes(activate_accounts, 80, true);
-    let add_bytes = legacy_single_instruction_bytes(add_accounts, 216, true);
+    let add_bytes = legacy_single_instruction_bytes(add_accounts, 184, true);
     let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
     assert_eq!(activate_bytes, 1_009);
-    assert_eq!(add_bytes, 816);
+    assert_eq!(add_bytes, 784);
     assert_eq!(retire_bytes, 729);
     assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(add_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);

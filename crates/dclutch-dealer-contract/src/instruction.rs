@@ -27,7 +27,7 @@ pub const TRADE_BYTES: usize = 56;
 /// Exact slot-gated reset wire width.
 pub const RESET_LADDER_BYTES: usize = 24;
 /// Exact LP-position close wire width.
-pub const CLOSE_LP_POSITION_BYTES: usize = 64;
+pub const CLOSE_LP_POSITION_BYTES: usize = 32;
 /// Exact Pool retirement wire width.
 pub const RETIRE_POOL_BYTES: usize = 32;
 
@@ -49,10 +49,9 @@ const POSITION_LP_ID_OFFSET: usize = 24;
 const CHANGE_POOL_SEQUENCE_OFFSET: usize = 16;
 const CHANGE_POSITION_SEQUENCE_OFFSET: usize = 24;
 const CHANGE_SHARES_OFFSET: usize = 32;
-const CHANGE_LP_ID_OFFSET: usize = 40;
-const CHANGE_PRINCIPAL_LIMIT_OFFSET: usize = 72;
-const CHANGE_FEE_LIMIT_OFFSET: usize = 80;
-const CHANGE_CLAIMS_LIMIT_OFFSET: usize = 88;
+const CHANGE_PRINCIPAL_LIMIT_OFFSET: usize = 40;
+const CHANGE_FEE_LIMIT_OFFSET: usize = 48;
+const CHANGE_CLAIMS_LIMIT_OFFSET: usize = 56;
 
 const TRADE_RESET_OFFSET: usize = 16;
 const TRADE_SEQUENCE_OFFSET: usize = 24;
@@ -67,7 +66,6 @@ const RESET_SEQUENCE_OFFSET: usize = 16;
 
 const CLOSE_POOL_SEQUENCE_OFFSET: usize = 16;
 const CLOSE_POSITION_SEQUENCE_OFFSET: usize = 24;
-const CLOSE_LP_ID_OFFSET: usize = 32;
 
 const RETIRE_POOL_SEQUENCE_OFFSET: usize = 16;
 const RETIRE_CHILD_COUNT_OFFSET: usize = 24;
@@ -216,25 +214,21 @@ impl CreateLpPositionV1 {
     }
 }
 
-/// Add-liquidity request plus compact LP derivation identity.
+/// Add-liquidity request for the LP account named by the physical frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AddLiquidityV1<const N: usize> {
-    lp_id: [u8; 32],
     request: AddLiquidityRequest<N>,
 }
 
 impl<const N: usize> AddLiquidityV1<N> {
-    /// Construct from replay, share, compact identity, and maximum-deposit facts.
+    /// Construct from replay, share, and maximum-deposit facts.
     pub fn new(
         expected_pool_sequence: u64,
         expected_position_sequence: u64,
         shares_to_mint: u64,
-        lp_id: [u8; 32],
         maximum_deposit: LiquidityAmounts<N>,
     ) -> Result<Self> {
-        require_id(lp_id)?;
         Ok(Self {
-            lp_id,
             request: AddLiquidityRequest::new(
                 expected_pool_sequence,
                 expected_position_sequence,
@@ -244,35 +238,27 @@ impl<const N: usize> AddLiquidityV1<N> {
             .map_err(InstructionError::Dealer)?,
         })
     }
-    /// Return compact LP-position derivation identity.
-    pub const fn lp_id(self) -> [u8; 32] {
-        self.lp_id
-    }
     /// Return the bounded kernel request.
     pub const fn request(self) -> AddLiquidityRequest<N> {
         self.request
     }
 }
 
-/// Remove-liquidity request plus compact LP derivation identity.
+/// Remove-liquidity request for the LP account named by the physical frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoveLiquidityV1<const N: usize> {
-    lp_id: [u8; 32],
     request: RemoveLiquidityRequest<N>,
 }
 
 impl<const N: usize> RemoveLiquidityV1<N> {
-    /// Construct from replay, share, compact identity, and minimum-withdrawal facts.
+    /// Construct from replay, share, and minimum-withdrawal facts.
     pub fn new(
         expected_pool_sequence: u64,
         expected_position_sequence: u64,
         shares_to_burn: u64,
-        lp_id: [u8; 32],
         minimum_withdrawal: LiquidityAmounts<N>,
     ) -> Result<Self> {
-        require_id(lp_id)?;
         Ok(Self {
-            lp_id,
             request: RemoveLiquidityRequest::new(
                 expected_pool_sequence,
                 expected_position_sequence,
@@ -282,36 +268,25 @@ impl<const N: usize> RemoveLiquidityV1<N> {
             .map_err(InstructionError::Dealer)?,
         })
     }
-    /// Return compact LP-position derivation identity.
-    pub const fn lp_id(self) -> [u8; 32] {
-        self.lp_id
-    }
     /// Return the bounded kernel request.
     pub const fn request(self) -> RemoveLiquidityRequest<N> {
         self.request
     }
 }
 
-/// Empty-position closure replay and compact identity facts.
+/// Empty-position closure replay facts for the LP account named by the frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CloseLpPositionV1 {
     expected_pool_sequence: u64,
     expected_position_sequence: u64,
-    lp_id: [u8; 32],
 }
 
 impl CloseLpPositionV1 {
     /// Construct a canonical empty-position closure request.
-    pub fn new(
-        expected_pool_sequence: u64,
-        expected_position_sequence: u64,
-        lp_id: [u8; 32],
-    ) -> Result<Self> {
-        require_id(lp_id)?;
+    pub fn new(expected_pool_sequence: u64, expected_position_sequence: u64) -> Result<Self> {
         Ok(Self {
             expected_pool_sequence,
             expected_position_sequence,
-            lp_id,
         })
     }
     /// Return Pool replay guard.
@@ -321,10 +296,6 @@ impl CloseLpPositionV1 {
     /// Return position-local replay guard.
     pub const fn expected_position_sequence(self) -> u64 {
         self.expected_position_sequence
-    }
-    /// Return compact LP-position derivation identity.
-    pub const fn lp_id(self) -> [u8; 32] {
-        self.lp_id
     }
 }
 
@@ -380,14 +351,12 @@ impl<const N: usize> DealerInstructionV1<N> {
                 read_u64(bytes, CHANGE_POOL_SEQUENCE_OFFSET)?,
                 read_u64(bytes, CHANGE_POSITION_SEQUENCE_OFFSET)?,
                 read_u64(bytes, CHANGE_SHARES_OFFSET)?,
-                read_array(bytes, CHANGE_LP_ID_OFFSET)?,
                 read_liquidity(bytes)?,
             )?)),
             DealerActionV1::RemoveLiquidity => Ok(Self::RemoveLiquidity(RemoveLiquidityV1::new(
                 read_u64(bytes, CHANGE_POOL_SEQUENCE_OFFSET)?,
                 read_u64(bytes, CHANGE_POSITION_SEQUENCE_OFFSET)?,
                 read_u64(bytes, CHANGE_SHARES_OFFSET)?,
-                read_array(bytes, CHANGE_LP_ID_OFFSET)?,
                 read_liquidity(bytes)?,
             )?)),
             DealerActionV1::Trade => {
@@ -419,7 +388,6 @@ impl<const N: usize> DealerInstructionV1<N> {
             DealerActionV1::CloseLpPosition => Ok(Self::CloseLpPosition(CloseLpPositionV1::new(
                 read_u64(bytes, CLOSE_POOL_SEQUENCE_OFFSET)?,
                 read_u64(bytes, CLOSE_POSITION_SEQUENCE_OFFSET)?,
-                read_array(bytes, CLOSE_LP_ID_OFFSET)?,
             )?)),
             DealerActionV1::RetirePool => Ok(Self::RetirePool {
                 expected_pool_sequence: read_u64(bytes, RETIRE_POOL_SEQUENCE_OFFSET)?,
@@ -480,10 +448,10 @@ impl<const N: usize> DealerInstructionV1<N> {
                 put(out, POSITION_LP_ID_OFFSET, &value.lp_id)?;
             }
             Self::AddLiquidity(value) => {
-                write_change(out, value.lp_id, value.request)?;
+                write_change(out, value.request)?;
             }
             Self::RemoveLiquidity(value) => {
-                write_remove(out, value.lp_id, value.request)?;
+                write_remove(out, value.request)?;
             }
             Self::Trade(value) => {
                 put_u64(out, TRADE_RESET_OFFSET, value.reset_number())?;
@@ -513,7 +481,6 @@ impl<const N: usize> DealerInstructionV1<N> {
                     CLOSE_POSITION_SEQUENCE_OFFSET,
                     value.expected_position_sequence,
                 )?;
-                put(out, CLOSE_LP_ID_OFFSET, &value.lp_id)?;
             }
             Self::RetirePool {
                 expected_pool_sequence,
@@ -585,24 +552,16 @@ fn read_liquidity<const N: usize>(bytes: &[u8]) -> Result<LiquidityAmounts<N>> {
     .map_err(InstructionError::Dealer)
 }
 
-fn write_change<const N: usize>(
-    out: &mut [u8],
-    lp_id: [u8; 32],
-    request: AddLiquidityRequest<N>,
-) -> Result<()> {
+fn write_change<const N: usize>(out: &mut [u8], request: AddLiquidityRequest<N>) -> Result<()> {
     // This module owns the wire and therefore projects through a lossless
     // round-trip helper rather than exposing caller-authored balance facts.
     let probe = change_fields_from_add(request);
-    write_change_fields(out, lp_id, probe)
+    write_change_fields(out, probe)
 }
 
-fn write_remove<const N: usize>(
-    out: &mut [u8],
-    lp_id: [u8; 32],
-    request: RemoveLiquidityRequest<N>,
-) -> Result<()> {
+fn write_remove<const N: usize>(out: &mut [u8], request: RemoveLiquidityRequest<N>) -> Result<()> {
     let probe = change_fields_from_remove(request);
-    write_change_fields(out, lp_id, probe)
+    write_change_fields(out, probe)
 }
 
 #[derive(Clone, Copy)]
@@ -636,11 +595,7 @@ fn change_fields_from_remove<const N: usize>(
     }
 }
 
-fn write_change_fields<const N: usize>(
-    out: &mut [u8],
-    lp_id: [u8; 32],
-    fields: ChangeFields<N>,
-) -> Result<()> {
+fn write_change_fields<const N: usize>(out: &mut [u8], fields: ChangeFields<N>) -> Result<()> {
     put_u64(out, CHANGE_POOL_SEQUENCE_OFFSET, fields.pool_sequence)?;
     put_u64(
         out,
@@ -648,7 +603,6 @@ fn write_change_fields<const N: usize>(
         fields.position_sequence,
     )?;
     put_u64(out, CHANGE_SHARES_OFFSET, fields.shares)?;
-    put(out, CHANGE_LP_ID_OFFSET, &lp_id)?;
     put_u64(
         out,
         CHANGE_PRINCIPAL_LIMIT_OFFSET,

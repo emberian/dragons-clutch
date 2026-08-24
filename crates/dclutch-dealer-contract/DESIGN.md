@@ -97,6 +97,14 @@ Config = ["dclutch-raw-record-v1", config_schema_release_id, config_id]
 LP     = ["dclutch/dealer-lp/v1",     Market key, generation_le, config_id, lp_id]
 ```
 
+The LP derivation preimage exists only while Activate/Open or Create LP position
+creates a vacant account. After creation, that program-owned account's address
+is the position identity. Add, Remove, and Close name it only in the physical
+account frame; their wires do not repeat an `lp_id` that the 152-byte position
+does not persist. Each existing-position route authenticates the exact canonical
+LP bytes, parent Pool address and Market generation, owner signer, rent
+beneficiary/principal, and the already-authenticated Pool's Market/config join.
+
 FundingState deliberately does not get a Dealer derivation. Activation uses the
 capability crate's shared funding-state, authority, and Vault derivations after
 the adapter authenticates the exact manifest content hash. The config uses the
@@ -334,18 +342,18 @@ Instruction and exact-frame widths are:
 | --- | ---: | ---: | ---: |
 | Activate/Open | 80 | 24 | 24 |
 | Create LP position | 56 | 10 | 10 |
-| Add liquidity | `88 + 8N` | 14 | 14 |
-| Remove liquidity | `88 + 8N` | 14 | 14 |
+| Add liquidity | `56 + 8N` | 14 | 14 |
+| Remove liquidity | `56 + 8N` | 14 | 14 |
 | Trade | 56 | 13 | 13 |
 | Timed reset | 24 | 4 | 4 |
-| Close LP position | 64 | 8 | 8 |
+| Close LP position | 32 | 8 | 8 |
 | Retire Pool | 32 | 16 | 16 |
 
 These counts exclude the executing Dealer program ID from the instruction's
 account-index vector. All remain below the pinned 128 account-lock ceiling. A
 one-signature, one-instruction legacy message under the canonical short-vector
-serialization model is 1,009 bytes for N=16 Activate, 816 bytes for N=16
-Add/Remove (including their 216-byte limit wires), and 729 bytes for Retire with
+serialization model is 1,009 bytes for N=16 Activate, 784 bytes for N=16
+Add/Remove (including their 184-byte limit wires), and 729 bytes for Retire with
 a separate fee payer. They fit the 1,232-byte packet individually without a
 lookup table. Multi-instruction composition may still require v0/LUT transport.
 Actual transaction compilation, LUT contents, compute, CPI depth, and rollback
@@ -361,8 +369,9 @@ top-level routing and adversarial runtime execution must still establish it as
 callable:
 
 1. authenticate the Market root/capability manifest, apply the exact Dealer and
-   shared FundingState seed preimages, and derive/authenticate Pool, config,
-   LP-position, custody, and permanent RentCredit addresses;
+   shared FundingState seed preimages, derive vacant LP positions during
+   creation, and authenticate existing LP-position, Pool, config, custody, and
+   permanent RentCredit addresses;
 2. hash/authenticate the exact config content record, pass its content ID to
    `decode`, and select exact `N`/`B` only from the native `ClaimBasis` and
    authenticated config;
