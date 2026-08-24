@@ -15,8 +15,8 @@ use clutch_general_v2_contract::{
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_product_series::{
-    ContentId, MarketInstancePreimageV2, MarketLifecyclePhaseV3, SeriesMarketLinkPhaseV3,
-    SeriesFundingPhaseV5, SeriesPlanV5Id,
+    ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2, MarketLifecyclePhaseV3,
+    SeriesMarketLinkPhaseV3, SeriesFundingPhaseV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
@@ -99,7 +99,10 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     runtime_account: Pubkey,
     runtime: MarketRuntimeV3AccountV1,
     runtime_data_id: ContentId,
+    market_instance_account: Pubkey,
     market_instance: MarketInstancePreimageV2,
+    market_genesis_account: Pubkey,
+    market_genesis: MarketGenesisProfileV2,
     product_root_account: Pubkey,
     product_root_binding_id: ContentId,
     product_root_data_id: ContentId,
@@ -126,6 +129,7 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     compiler_bundle_account: Pubkey,
     compiler_bundle_id: ContentId,
     collateral_profile_id: ContentId,
+    realm_account: Pubkey,
     revenue: AuthenticatedRevenuePolicyRecordV2,
     treasury: RevenueMarketTreasuryDerivationV1,
 }
@@ -140,6 +144,15 @@ impl AuthenticatedGeneralMarketCurrentV5 {
     pub(crate) const fn runtime_data_id(&self) -> ContentId { self.runtime_data_id }
     pub(crate) const fn market_instance(&self) -> &MarketInstancePreimageV2 {
         &self.market_instance
+    }
+    pub(crate) const fn market_instance_account(&self) -> Pubkey {
+        self.market_instance_account
+    }
+    pub(crate) const fn market_genesis(&self) -> &MarketGenesisProfileV2 {
+        &self.market_genesis
+    }
+    pub(crate) const fn market_genesis_account(&self) -> Pubkey {
+        self.market_genesis_account
     }
     pub(crate) const fn product_root_account(&self) -> Pubkey { self.product_root_account }
     pub(crate) const fn product_root_binding_id(&self) -> ContentId {
@@ -201,6 +214,7 @@ impl AuthenticatedGeneralMarketCurrentV5 {
     pub(crate) const fn collateral_profile_id(&self) -> ContentId {
         self.collateral_profile_id
     }
+    pub(crate) const fn realm_account(&self) -> Pubkey { self.realm_account }
     pub(crate) const fn revenue(&self) -> AuthenticatedRevenuePolicyRecordV2 { self.revenue }
     pub(crate) const fn treasury(&self) -> RevenueMarketTreasuryDerivationV1 { self.treasury }
 }
@@ -770,7 +784,10 @@ fn authenticate_general_market_current_v5_with_product_access(
         runtime_account: *frame.market_runtime.key,
         runtime,
         runtime_data_id,
+        market_instance_account: *frame.market_instance.key,
         market_instance,
+        market_genesis_account: *frame.artifacts[6].key,
+        market_genesis: *artifacts.genesis(),
         product_root_account: *frame.product_root.key,
         product_root_binding_id: root_binding_id,
         product_root_data_id: root_data_id,
@@ -797,6 +814,7 @@ fn authenticate_general_market_current_v5_with_product_access(
         compiler_bundle_account,
         compiler_bundle_id: bundle_id,
         collateral_profile_id: registry_collateral.profile_id,
+        realm_account: *frame.realm.key,
         revenue,
         treasury,
     })

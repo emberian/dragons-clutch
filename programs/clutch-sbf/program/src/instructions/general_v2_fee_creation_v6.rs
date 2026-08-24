@@ -7,8 +7,7 @@
 //! materialized on an SBF frame.
 
 use clutch_batch_policy_identity::revenue_policy_v2::{
-    encode_revenue_policy_v2, MakerWeightAuthorityV2, RevenuePolicyV2,
-    REVENUE_POLICY_V2_BYTES,
+    MakerWeightAuthorityV2, RevenuePolicyV2,
 };
 use clutch_batch_policy_identity::{batch_policy_digest, decode_batch_policy, Identity32V1,
     BATCH_POLICY_BYTES};
@@ -46,8 +45,7 @@ use solana_pubkey::Pubkey;
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::revenue_policy_v2::{
-    accept_treasury_service_transition_v1, authenticate_revenue_policy_record_v2,
-    authenticate_treasury_service_ledger_v1, derive_revenue_market_treasury_v1,
+    accept_treasury_service_transition_v1, authenticate_treasury_service_ledger_v1,
     prepare_treasury_service_admission_v1, AuthenticatedRevenuePolicyRecordV2,
     AuthenticatedTreasuryServiceAdmissionV1, PreparedTreasuryServiceTransitionV1,
     RevenueMarketTreasuryDerivationV1,
@@ -55,6 +53,7 @@ use crate::instructions::revenue_policy_v2::{
 use crate::seeds;
 
 use super::general_v2_settlement_traversal_v5::AuthenticatedSettlementTraversalV5;
+use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeSha256;
@@ -243,48 +242,30 @@ fn authenticate_batch_policy_v6(
 }
 
 fn authenticate_revenue_authority_v6(
-    program_id: &Pubkey,
-    traversal: &AuthenticatedSettlementTraversalV5<'_>,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     frame: CandidateFeeAuthorityFrameV6<'_, '_>,
-    revenue_policy: RevenuePolicyV2,
 ) -> Outcome<(AuthenticatedRevenuePolicyRecordV2, RevenueMarketTreasuryDerivationV1)> {
-    let mut policy_bytes = [0u8; REVENUE_POLICY_V2_BYTES];
-    encode_revenue_policy_v2(&revenue_policy, &mut policy_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let authority = authenticate_revenue_policy_record_v2(
-        program_id,
-        frame.realm,
-        frame.revenue_policy_record,
-        &policy_bytes,
-    )?;
-    let market = traversal.market();
-    let current = market.authority();
-    let base = market.base().base();
+    let authority = current.revenue();
+    let derivation = current.treasury();
+    let persisted = current.binding().authority();
     require(
-        current.revenue_policy_record_account().bytes()
+        frame.realm.key == &current.realm_account()
+            && frame.revenue_policy_record.key == &authority.record_account()
+            && persisted.revenue_policy_record_account().bytes()
                 == authority.record_account().to_bytes()
-            && current.revenue_policy_record_v2_id().bytes()
+            && persisted.revenue_policy_record_v2_id().bytes()
                 == authority.record_semantic_id().bytes()
-            && current.revenue_policy_v2_digest().bytes()
+            && persisted.revenue_policy_v2_digest().bytes()
                 == authority.policy_digest().bytes()
-            && current.treasury_owner().bytes() == authority.treasury_owner().bytes()
-            && current.treasury_position_derivation_policy_v2_id().bytes()
+            && persisted.treasury_owner().bytes() == authority.treasury_owner().bytes()
+            && persisted.treasury_position_derivation_policy_v2_id().bytes()
                 == authority.treasury_position_derivation_policy_id().bytes()
-            && current.treasury_service_ledger_account().bytes()
-                == frame.treasury_service_ledger.key.to_bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    let derivation = derive_revenue_market_treasury_v1(
-        program_id,
-        authority,
-        Hash32::from_bytes(base.market_instance_v2_id.bytes()),
-        Pubkey::new_from_array(base.market.bytes()),
-    )?;
-    require(
-        derivation.treasury_position_account().to_bytes()
-                == current.treasury_position_account().bytes()
+            && persisted.treasury_service_ledger_account().bytes()
+                == frame.treasury_service_ledger.key.to_bytes()
+            && derivation.treasury_position_account().to_bytes()
+                == persisted.treasury_position_account().bytes()
             && derivation.treasury_service_ledger_account().to_bytes()
-                == current.treasury_service_ledger_account().bytes(),
+                == persisted.treasury_service_ledger_account().bytes(),
         ClutchError::MismatchedState,
     )?;
     Ok((authority, derivation))
@@ -415,6 +396,7 @@ fn allocate_cached_hamilton_v6(
 pub(crate) fn prepare_candidate_fee_creation_v6(
     program_id: &Pubkey,
     traversal: &AuthenticatedSettlementTraversalV5<'_>,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     frame: CandidateFeeAuthorityFrameV6<'_, '_>,
     revenue_policy: RevenuePolicyV2,
     epoch_account: Id32,
@@ -430,12 +412,12 @@ pub(crate) fn prepare_candidate_fee_creation_v6(
         epoch_account,
         market.base().batch_policy_id(),
     )?;
-    let (revenue_authority, treasury_derivation) = authenticate_revenue_authority_v6(
-        program_id,
-        traversal,
-        frame,
-        revenue_policy,
+    require(
+        current.binding().base() == market && current.revenue().policy() == revenue_policy,
+        ClutchError::MismatchedState,
     )?;
+    let (revenue_authority, treasury_derivation) =
+        authenticate_revenue_authority_v6(current, frame)?;
     let selected = map_fee(SelectedCompositeFeeV2::select(
         FeeId(selected_fee_record.bytes()),
         FeeId(traversal.projection().realm().bytes()),
