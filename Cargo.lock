@@ -11,5 +11,9 @@ name = "dclutch-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-pyth-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"

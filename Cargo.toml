@@ -3,6 +3,7 @@ members = [
     "crates/dclutch-core-contract",
     "crates/dclutch-kernel",
     "crates/dclutch-pyth-svm",
+    "crates/dclutch-pyth-contract",
 ]
 resolver = "2"
 
