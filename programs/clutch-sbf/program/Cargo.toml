@@ -62,14 +62,17 @@ non-production-failure-recovery-lab = [
 profile-full = [
     "dep:clutch-general-v2-runtime",
     "clutch-general-v2-runtime/layout-profile-full",
+    "clutch-retirement-adapter/profile-full",
     "clutch-solana-layout/profile-full",
     "clutch-solana-reference/profile-full",
 ]
 profile-direct-v3-source-v2-point = [
+    "clutch-retirement-adapter/profile-direct-v3-source-v2-point",
     "clutch-solana-layout/profile-direct-v3-source-v2-point",
     "clutch-solana-reference/profile-direct-v3-source-v2-point",
 ]
 profile-general-source-v2-point = [
+    "clutch-retirement-adapter/profile-general-source-v2-point",
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
@@ -138,6 +141,7 @@ clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contrac
 clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
 clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
 clutch-retirement = { path = "../../../crates/clutch-retirement" }
+clutch-retirement-adapter = { path = "../../../crates/clutch-retirement-adapter", default-features = false }
 clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
 clutch-product-series = { path = "../../../crates/clutch-product-series" }
 clutch-pyth-parser-v1 = { path = "../../../crates/clutch-pyth-parser-v1" }

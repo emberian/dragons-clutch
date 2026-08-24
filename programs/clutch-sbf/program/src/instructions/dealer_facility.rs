@@ -122,8 +122,15 @@ use clutch_retirement::{
     project_dealer_position_v3, project_general_position_v3, AdapterPositionMarketBindingV3,
     AdapterPositionPurposeBindingV3, DeletableRentOwnerV1 as ReplayRentOwnerV1, Identity32V1,
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionV3Fields,
-    PositionV3Sha256Backend, RentSplitV2, POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES,
-    ReplayV3Envelope,
+    PositionTombstoneV3, PositionV3Sha256Backend, RentSplitV2,
+    POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES, ReplayV3Envelope,
+};
+use clutch_retirement_adapter::{
+    authenticate_and_prepare_position_replay_close_v4,
+    authenticate_position_v3_exact, authenticate_purpose_replay_v3_exact, AccountAccessV2,
+    AccountViewV2 as RetirementAccountViewV2, CanonicalPdaV1,
+    PositionReplayCloseRuntimeRequestV4, PositionV3RetirementRealmV1,
+    PreparedPositionReplayCloseV3, RetirementRecipientViewV1,
 };
 use clutch_fractional_redemption_runtime::{
     bind_dealer_facility_vector_prestate_v1, CreditCreationV1,
@@ -261,6 +268,8 @@ const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
 const DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-series-terminal-prewrite/v2\0";
+const DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/dealer-position-replay-close-postwrite/v3\0";
 const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-product-resolution-authentication/v2\0";
 const DEALER_FUTURE_CREDIT_POSTWRITE_DOMAIN_V1: &[u8] =
@@ -387,11 +396,21 @@ pub(crate) struct AuthenticatedDealerSeriesTerminalPrewriteV2 {
     neutral_lamport_sink: Pubkey,
 }
 
+/// Exact prospective PositionV3 tombstone and Replay deletion retained until
+/// the same outer has accepted Product's LinkV2 terminal postwrite.
+#[derive(Clone, Copy)]
+struct PreparedDealerPositionReplayCloseV3 {
+    plan: PreparedPositionReplayCloseV3,
+    terminal_replay: DealerFacilityReplayV1,
+    close_receipt_id: ContentId,
+}
+
+impl PreparedDealerPositionReplayCloseV3 {
+    const fn close_receipt_id(self) -> ContentId { self.close_receipt_id }
+}
+
 impl AuthenticatedDealerSeriesTerminalPrewriteV2 {
     pub(crate) const fn id(&self) -> ContentId { self.authentication_id }
-    pub(crate) const fn live_product(&self) -> &AuthenticatedLiveSeriesDealerObligationV2 {
-        &self.live_product
-    }
     pub(crate) const fn dealer_obligation_account(&self) -> Pubkey {
         self.obligation_account
     }
@@ -4024,6 +4043,311 @@ fn credit_exact_dealer_terminal_lamports(
         observed += 1;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_dealer_position_replay_close_v3(
+    program_id: &Pubkey,
+    bound: clutch_collateral_adapter_v2::BoundCollateralProfileV2,
+    outcome_count: u8,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    terminal_position: DealerPositionObservationV3,
+    terminal_replay: DealerFacilityReplayV1,
+    replay_pre_ordinal: u64,
+    position_refund_owner: &AccountInfo<'_>,
+    replay_refund_owner: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<PreparedDealerPositionReplayCloseV3> {
+    let position = terminal_position.projection.position();
+    let runtime_program = retirement_id(id(program_id))?;
+    let neutral_sink_id = retirement_id(id(neutral_sink.key))?;
+    let expected_terminal_ordinal = replay_pre_ordinal
+        .checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        position_account.owner == program_id
+            && replay_account.owner == program_id
+            && position_account.is_writable
+            && replay_account.is_writable
+            && !position_account.is_signer
+            && !replay_account.is_signer
+            && !position_account.executable
+            && !replay_account.executable
+            && position_account.data_len() == POSITION_V3_BYTES
+            && replay_account.data_len()
+                == clutch_dealer_runtime_contract::DEALER_FACILITY_REPLAY_BYTES_V1
+            && terminal_position.account_id == id(position_account.key)
+            && terminal_position.semantic_id
+                == Id::from_bytes(
+                    position
+                        .semantic_id(&RuntimeSha256)
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                        .bytes(),
+                )
+            && position.lifecycle() == PositionLifecycleV3::CloseRequested
+            && position.cash_atoms() == 0
+            && position.reserved_cash_atoms() == 0
+            && position.native_eggs() == [0; clutch_retirement::MAX_OUTCOMES]
+            && position.outstanding_reservations() == 0
+            && terminal_replay.lifecycle() == clutch_retirement::ReplayV3Lifecycle::Terminal
+            && terminal_replay.position_generation() == position.generation()
+            && terminal_replay.replay_account_id() == id(replay_account.key)
+            && terminal_replay.facility_position_account_id() == id(position_account.key)
+            && terminal_replay.facility_position_binding_id()
+                == Id::from_bytes(position.purpose_binding_id().bytes())
+            && terminal_replay.next_transition_ordinal() == expected_terminal_ordinal
+            && position.rent().payer.bytes() == position_refund_owner.key.to_bytes()
+            && terminal_replay.rent().payer().bytes()
+                == replay_refund_owner.key.to_bytes()
+            && neutral_sink.key != position_account.key
+            && neutral_sink.key != replay_account.key
+            && neutral_sink.key != position_refund_owner.key
+            && neutral_sink.key != replay_refund_owner.key,
+        ClutchError::MismatchedState,
+    )?;
+    for recipient in [position_refund_owner, replay_refund_owner, neutral_sink] {
+        require(
+            recipient.owner == &SYSTEM_PROGRAM_ID
+                && recipient.is_writable
+                && !recipient.executable
+                && recipient.data_is_empty(),
+            ClutchError::MismatchedState,
+        )?;
+    }
+
+    let position_pda = seeds::position_v3_pda(
+        program_id,
+        &position.market_instance_id().bytes(),
+        &position.owner().bytes(),
+        position.purpose(),
+        &position.purpose_binding_id().bytes(),
+    );
+    let replay_pda = seeds::purpose_replay_v3_pda(
+        program_id,
+        &position_account.key.to_bytes(),
+        position.purpose(),
+        &position.purpose_binding_id().bytes(),
+    );
+    expect_pda(position_account.key, position_pda, Some(position.stored_bump()))?;
+    expect_pda(
+        replay_account.key,
+        replay_pda,
+        Some(terminal_replay.pda_seeds().stored_bump()),
+    )?;
+
+    let expected_position = position
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_data = position_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(position_data.as_ref() == &expected_position[..], ClutchError::MismatchedState)?;
+    let position_authenticated = authenticate_position_v3_exact(
+        RetirementAccountViewV2 {
+            address: retirement_id(id(position_account.key))?,
+            owner: runtime_program,
+            data: &position_data,
+            is_writable: true,
+            is_executable: false,
+        },
+        runtime_program,
+        CanonicalPdaV1::after_derivation(retirement_id(id(&position_pda.0))?, position_pda.1),
+        AccountAccessV2::Writable,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let mut terminal_replay_bytes =
+        [0u8; clutch_dealer_runtime_contract::DEALER_FACILITY_REPLAY_BYTES_V1];
+    terminal_replay
+        .encode_into(&mut terminal_replay_bytes)
+        .map_err(dealer_fault)?;
+    let replay_authenticated = authenticate_purpose_replay_v3_exact(
+        RetirementAccountViewV2 {
+            address: retirement_id(id(replay_account.key))?,
+            owner: runtime_program,
+            data: &terminal_replay_bytes,
+            is_writable: true,
+            is_executable: false,
+        },
+        runtime_program,
+        CanonicalPdaV1::after_derivation(retirement_id(id(&replay_pda.0))?, replay_pda.1),
+        AccountAccessV2::Writable,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let realm = PositionV3RetirementRealmV1::after_immutable_realm_authentication(
+        bound,
+        outcome_count,
+        neutral_sink_id,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let position_payer = retirement_id(id(position_refund_owner.key))?;
+    let replay_payer = retirement_id(id(replay_refund_owner.key))?;
+    let mut recipients = [None; clutch_retirement::MAX_RETIREMENT_RECIPIENTS];
+    recipients[0] = Some(RetirementRecipientViewV1 {
+        address: position_payer,
+        lamports: position_refund_owner.lamports(),
+        is_writable: true,
+        is_executable: false,
+    });
+    let sink_index = if replay_payer == position_payer {
+        1usize
+    } else {
+        recipients[1] = Some(RetirementRecipientViewV1 {
+            address: replay_payer,
+            lamports: replay_refund_owner.lamports(),
+            is_writable: true,
+            is_executable: false,
+        });
+        2usize
+    };
+    recipients[sink_index] = Some(RetirementRecipientViewV1 {
+        address: neutral_sink_id,
+        lamports: neutral_sink.lamports(),
+        is_writable: true,
+        is_executable: false,
+    });
+    let plan = authenticate_and_prepare_position_replay_close_v4(
+        PositionReplayCloseRuntimeRequestV4 {
+            position: position_authenticated,
+            replay: replay_authenticated,
+            realm,
+            signed_sequence: expected_terminal_ordinal,
+            position_lamports: position_account.lamports(),
+            replay_lamports: replay_account.lamports(),
+            recipients,
+        },
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_credit = plan
+        .recipient_credits()
+        .get(position_payer)
+        .ok_or(ClutchError::MismatchedState)?;
+    let replay_credit = plan
+        .recipient_credits()
+        .get(replay_payer)
+        .ok_or(ClutchError::MismatchedState)?;
+    let neutral_credit = plan
+        .recipient_credits()
+        .get(neutral_sink_id)
+        .ok_or(ClutchError::MismatchedState)?;
+    let close_receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3,
+            program_id.as_ref(),
+            position_account.key.as_ref(),
+            replay_account.key.as_ref(),
+            &terminal_position.semantic_id.bytes(),
+            &plan.replay_terminal_semantic_id().bytes(),
+            &replay_pre_ordinal.to_le_bytes(),
+            &expected_terminal_ordinal.to_le_bytes(),
+            position_refund_owner.key.as_ref(),
+            replay_refund_owner.key.as_ref(),
+            neutral_sink.key.as_ref(),
+            &position_credit.credit_lamports.to_le_bytes(),
+            &replay_credit.credit_lamports.to_le_bytes(),
+            &neutral_credit.credit_lamports.to_le_bytes(),
+            &plan.position_lamports_after().to_le_bytes(),
+            &plan.replay_lamports_after().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(close_receipt_id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    drop(position_data);
+    Ok(PreparedDealerPositionReplayCloseV3 {
+        plan,
+        terminal_replay,
+        close_receipt_id,
+    })
+}
+
+fn apply_dealer_position_replay_close_v3(
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    position_refund_owner: &AccountInfo<'_>,
+    replay_refund_owner: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+    prepared: PreparedDealerPositionReplayCloseV3,
+) -> Outcome<ContentId> {
+    let position_payer = retirement_id(id(position_refund_owner.key))?;
+    let replay_payer = retirement_id(id(replay_refund_owner.key))?;
+    let neutral_sink_id = retirement_id(id(neutral_sink.key))?;
+    let credits = prepared.plan.recipient_credits();
+    for (recipient, account) in [
+        (position_payer, position_refund_owner),
+        (replay_payer, replay_refund_owner),
+        (neutral_sink_id, neutral_sink),
+    ] {
+        let credit = credits
+            .get(recipient)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            account.lamports().checked_add(credit.credit_lamports)
+                == Some(credit.balance_after),
+            ClutchError::MismatchedState,
+        )?;
+    }
+
+    let tombstone = prepared.plan.position_tombstone_bytes();
+    **position_account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? =
+        prepared.plan.position_lamports_after();
+    position_account
+        .resize(POSITION_TOMBSTONE_V3_BYTES)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    position_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&tombstone);
+    release_dealer_account(replay_account)?;
+    for (recipient, account) in [
+        (position_payer, position_refund_owner),
+        (replay_payer, replay_refund_owner),
+        (neutral_sink_id, neutral_sink),
+    ] {
+        let credit = credits
+            .get(recipient)
+            .ok_or(ClutchError::MismatchedState)?;
+        **account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? =
+            credit.balance_after;
+    }
+
+    let observed_tombstone = PositionTombstoneV3::decode(
+        &position_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        observed_tombstone
+            == PositionTombstoneV3::decode(&tombstone)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && position_account.data_len() == POSITION_TOMBSTONE_V3_BYTES
+            && position_account.lamports() == prepared.plan.position_lamports_after()
+            && replay_account.owner == &SYSTEM_PROGRAM_ID
+            && replay_account.data_is_empty()
+            && replay_account.lamports() == prepared.plan.replay_lamports_after(),
+        ClutchError::MismatchedState,
+    )?;
+    for (recipient, account) in [
+        (position_payer, position_refund_owner),
+        (replay_payer, replay_refund_owner),
+        (neutral_sink_id, neutral_sink),
+    ] {
+        require(
+            credits
+                .get(recipient)
+                .map(|credit| credit.balance_after)
+                == Some(account.lamports()),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    Ok(prepared.close_receipt_id())
 }
 
 fn apply_epoch_close(
@@ -11394,6 +11718,48 @@ mod current_terminal_cut_adversarial_tests {
             "DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2",
         ] {
             assert!(prewrite.contains(guard), "missing terminal prewrite guard {guard}");
+        }
+    }
+
+    #[test]
+    fn position_replay_close_uses_the_realm_bound_adapter_and_hostile_postcheck() {
+        let source = include_str!("dealer_facility.rs");
+        let prepare = source
+            .split("fn prepare_dealer_position_replay_close_v3")
+            .nth(1)
+            .and_then(|value| value.split("fn apply_dealer_position_replay_close_v3").next())
+            .expect("Dealer Position/Replay close preflight");
+        for guard in [
+            "replay_pre_ordinal.checked_add(1)",
+            "terminal_replay.next_transition_ordinal() == expected_terminal_ordinal",
+            "authenticate_position_v3_exact",
+            "authenticate_purpose_replay_v3_exact",
+            "PositionV3RetirementRealmV1::after_immutable_realm_authentication",
+            "authenticate_and_prepare_position_replay_close_v4",
+            "position_refund_owner.key.to_bytes()",
+            "replay_refund_owner.key.to_bytes()",
+            "neutral_sink.key",
+            "DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3",
+        ] {
+            assert!(prepare.contains(guard), "missing close preflight guard {guard}");
+        }
+        assert!(prepare.contains("if replay_payer == position_payer"));
+
+        let apply = source
+            .split("fn apply_dealer_position_replay_close_v3")
+            .nth(1)
+            .and_then(|value| value.split("fn apply_epoch_close").next())
+            .expect("Dealer Position/Replay close postwrite");
+        for guard in [
+            "position_tombstone_bytes",
+            "POSITION_TOMBSTONE_V3_BYTES",
+            "release_dealer_account(replay_account)",
+            "PositionTombstoneV3::decode",
+            "replay_account.owner == &SYSTEM_PROGRAM_ID",
+            "replay_account.data_is_empty()",
+            "credit.balance_after",
+        ] {
+            assert!(apply.contains(guard), "missing close postwrite guard {guard}");
         }
     }
 }
