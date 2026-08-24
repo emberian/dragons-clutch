@@ -1,7 +1,9 @@
 # Compact exact settlement index plane V1
 
-Status: source implementation in progress, structurally disabled, and absent
-from every deployable capability profile.
+Status: current successor source implementation. The local creation, bounded
+read, ordered retirement, Feed close, Epoch decrement, and root-refund adapters
+are complete; central admission is composed only with the complete successor
+development profile.
 
 ## Purpose and semantic ownership
 
@@ -25,9 +27,10 @@ Action 39 authenticates the complete hostile OrderPage V5 set, the sealed
 CandidateFeed V2 body, the owner-blind order stream, and the immutable
 Market/Realm/collateral/Genesis joins once. Its private borrow-bound authority
 retains the exact Feed and page accounts and exposes only bounded reads joined
-to a compact projection. The SBF composer passes only that private authority
-to the pure trait-based constructor, whose separate noncopyable rent authority
-gates persistent indexed-root creation. No payload supplies a locator row,
+to a compact projection. The pure constructor accepts a bounded-read traversal
+trait; the only persistent SBF caller passes the private borrow-bound authority,
+and a separate noncopyable rent authority gates indexed-root creation. No
+payload supplies a locator row,
 directory, slice reference, count, digest, or candidate identity.
 
 Construction writes directly into caller-owned account buffers. For every
@@ -57,9 +60,12 @@ preparation, joins one borrowed source Root, and mints a noncopyable authority
 consumed by the builder. The builder borrows its construction input, streams
 the 1,228-byte indexed root directly into caller-owned account memory, and
 hashes that encoded buffer without constructing an indexed-root value or a
-second base scratch array. The disabled action-39 composer preauthenticates the
+second base scratch array. The action-39 composer preauthenticates the
 single payer's aggregate principal for the root, both compact children, and
-the direction-dependent cash pots before any CPI. Compiled end-to-end frame
+the direction-dependent cash pots together with every current fee global before
+any CPI. It also hostile-rereads the physical batch policy, immutable
+RevenuePolicyRecord V2 and exact RevenuePolicy V2 body, and advances the
+Market-scoped treasury-service ledger in the same rollback domain. Compiled end-to-end frame
 measurement is still required before promotion: source account widths are not
 frame measurements.
 
@@ -100,7 +106,10 @@ split/merge. Static clients and index bytes remain untrusted projections.
 Each child persists its payer, the full rent-exempt principal paid without a
 prefund discount, and the observed hostile-prefund donation floor. Atomic close
 returns only that principal to its payer and routes every remaining lamport to
-the root-bound MarketBinding neutral sink.
+the root-bound MarketBinding neutral sink. If payer, sink, and permissionless
+Feed keeper destinations coincide, the adapter prechecks and coalesces all
+credits exactly once; destination aliasing cannot strand principal or overwrite
+another credit.
 
 The compact adjacency depends on the retained Feed, so terminal order is
 strict:
@@ -133,14 +142,18 @@ compact child principals in the same rollback domain. The pure contract also
 defines exact in-place-upgrade rent equations, but no generic caller-shaped SBF
 upgrade writer is exposed.
 
-## Reserved coordinates and refusal
+## Current coordinates and admission
 
 The indexed root is reserved at `0xa9/2`, the locator at `0xb5/1`, and the
 adjacency at `0xb6/1`. The child PDA seed domains are unique, one-per-root, and
 at most Solana's 32-byte seed limit.
 
-`EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. No deployable capability
-profile admits action 39 through this implementation. Promotion additionally
-requires action-specific migration of every root reader/writer, the SBF
-Feed-retirement and Epoch-counted root-close adapters, compiled frame/CU
-measurement, and an independent review of the complete capability unit.
+General actions 39 and 45 through 47 own creation and the exact-index terminal
+chain. Actions 48 through 50 discharge the remaining owner/fee graph; action 51
+then moves the counted base root into `Retiring` before action 45. Every
+current root reader/writer accepts `0xa9/2`, and settlement actions authenticate
+MarketBinding V4 only. Central capability/profile admission remains one
+all-or-nothing integration decision with the Product founder, current Revenue
+authority, fee terminal, and the rest of the successor chain. Compiled SBF
+frame/CU measurement remains required evidence and is not inferred from account
+widths or source inspection.
