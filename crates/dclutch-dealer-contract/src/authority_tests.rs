@@ -14,9 +14,10 @@ use crate::{
     frame::{
         ConfigPdaSeedsV1, DEALER_CONFIG_PDA_DOMAIN_V1, DEALER_LP_PDA_DOMAIN_V1,
         DEALER_POOL_PDA_DOMAIN_V1, DEALER_RENT_SYSVAR_ID, DEALER_SYSTEM_PROGRAM_ID,
-        DealerAccountMetaV1, DealerAccountRoleV1, DealerFrameV1, FrameError, LpPositionPdaSeedsV1,
-        PoolPdaSeedsV1, dealer_account_count, dealer_account_privileges, dealer_account_role,
-        validate_market_phase,
+        DealerAccountMetaV1, DealerAccountRoleV1, DealerCollateralCompartmentV1,
+        DealerCollateralVaultPdaSeedsV1, DealerFrameV1, FrameError, LpPositionPdaSeedsV1,
+        PoolPdaSeedsV1, PoolPositionPdaSeedsV1, dealer_account_count, dealer_account_privileges,
+        dealer_account_role, validate_market_phase,
     },
     instruction::{
         ActivatePoolV1, AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1,
@@ -181,15 +182,15 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::ActivatePool),
-        Ok(37)
+        Ok(23)
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::AddLiquidity),
-        Ok(28)
+        Ok(13)
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::RetirePool),
-        Ok(29)
+        Ok(15)
     );
 
     let mut hostile = frame::<2>(DealerActionV1::Trade);
@@ -281,11 +282,11 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
     let activate_bytes = legacy_single_instruction_bytes(activate_accounts, 80, true);
     let add_bytes = legacy_single_instruction_bytes(add_accounts, 216, true);
     let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
-    assert_eq!(activate_bytes, 1_438);
-    assert_eq!(add_bytes, 1_278);
-    assert_eq!(retire_bytes, 1_158);
-    assert!(activate_bytes > crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
-    assert!(add_bytes > crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
+    assert_eq!(activate_bytes, 976);
+    assert_eq!(add_bytes, 783);
+    assert_eq!(retire_bytes, 696);
+    assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
+    assert!(add_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(retire_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(activate_accounts < crate::frame::SOLANA_ACCOUNT_LOCK_LIMIT_V1);
 }
@@ -295,6 +296,18 @@ fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
     let pool = PoolPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7)).expect("pool seeds");
     let config = ConfigPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7)).expect("config seeds");
     let lp = LpPositionPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7), [44; 32]).expect("LP seeds");
+    let pool_position =
+        PoolPositionPdaSeedsV1::new(MARKET_ADDRESS, POOL_ADDRESS).expect("Pool Position seeds");
+    let principal = DealerCollateralVaultPdaSeedsV1::new(
+        POOL_ADDRESS,
+        DealerCollateralCompartmentV1::Principal,
+    )
+    .expect("principal Vault seeds");
+    let fees = DealerCollateralVaultPdaSeedsV1::new(
+        POOL_ADDRESS,
+        DealerCollateralCompartmentV1::RealizedFees,
+    )
+    .expect("fee Vault seeds");
     assert_eq!(pool.seed_components()[0], DEALER_POOL_PDA_DOMAIN_V1);
     assert_eq!(config.seed_components()[0], DEALER_CONFIG_PDA_DOMAIN_V1);
     assert_eq!(lp.seed_components()[0], DEALER_LP_PDA_DOMAIN_V1);
@@ -302,6 +315,12 @@ fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
     assert_eq!(pool.seed_components()[2], 9u64.to_le_bytes().as_slice());
     assert_eq!(pool.seed_components()[3], id(7).as_bytes());
     assert_ne!(pool.seed_components()[0], config.seed_components()[0]);
+    assert_eq!(
+        pool_position.seed_components()[0],
+        dclutch_realm_contract::POSITION_PDA_DOMAIN
+    );
+    assert_eq!(pool_position.seed_components()[2], POOL_ADDRESS.as_slice());
+    assert_ne!(principal.seed_components(), fees.seed_components());
     assert_ne!(
         lp.seed_components(),
         LpPositionPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7), [45; 32])
@@ -354,7 +373,8 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         LP_ADDRESS,
         OWNER,
         rent(100),
-        rent(200),
+        rent(100),
+        RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
         request,
         50,
     )
@@ -366,6 +386,10 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
     assert_eq!(plan.pool().liquidity().claim_reserves(), [1_000; 2]);
     assert_eq!(plan.capability_funding_seeds().config_id(), [7; 32]);
     assert_eq!(plan.lp_seeds().lp_id(), [44; 32]);
+    assert_eq!(
+        plan.pool_position_seeds().seed_components()[2],
+        POOL_ADDRESS.as_slice()
+    );
 
     assert_eq!(
         activate_pool(
@@ -380,7 +404,8 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             LP_ADDRESS,
             [94; 32],
             rent(100),
-            rent(200),
+            rent(100),
+            RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
             request,
             50,
         ),

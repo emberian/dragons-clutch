@@ -15,7 +15,9 @@ use dclutch_core_contract::{MarketRoot, Phase};
 use crate::{
     Error as DealerError, LiquidityAmounts, LiquidityAttachment, LiquidityChangeReceipt,
     LiquidityConfigV1, LpPosition, PoolRetirementReceipt, PoolState, RentCreditTerms,
-    frame::{ConfigPdaSeedsV1, FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1},
+    frame::{
+        ConfigPdaSeedsV1, FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1,
+    },
     instruction::ActivatePoolV1,
 };
 
@@ -26,7 +28,7 @@ pub enum ActivationError {
     InvalidMarketPhase,
     /// Market/config/release/beneficiary authority did not join exactly.
     AuthorityMismatch,
-    /// Activation rent quote did not equal the two new accounts' funded rent.
+    /// Activation rent quote did not equal all new accounts' funded rent.
     RentFundingMismatch,
     /// Checked physical funding arithmetic overflowed or underflowed.
     FundingArithmetic,
@@ -79,6 +81,7 @@ pub struct ActivatePoolPlanV1<const N: usize, const B: usize> {
     pool_seeds: PoolPdaSeedsV1,
     config_seeds: ConfigPdaSeedsV1,
     lp_seeds: LpPositionPdaSeedsV1,
+    pool_position_seeds: PoolPositionPdaSeedsV1,
 }
 
 impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
@@ -122,6 +125,10 @@ impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
     pub const fn lp_seeds(self) -> LpPositionPdaSeedsV1 {
         self.lp_seeds
     }
+    /// Return shared native Position PDA seeds for Pool-owned claim inventory.
+    pub const fn pool_position_seeds(self) -> PoolPositionPdaSeedsV1 {
+        self.pool_position_seeds
+    }
 }
 
 /// Successful quiescent Pool/config retirement joined to Market child replay.
@@ -153,7 +160,8 @@ impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
 /// holding, and `authenticated_now_slot` is read from the adapter's trusted
 /// Clock syscall/sysvar access; neither is instruction data. `pool_rent` and
 /// `initial_position_rent` are constructed from observed Rent minima and the
-/// immutable config RentCredit beneficiary.
+/// immutable config RentCredit beneficiary. `pool_position_rent` is the Rent
+/// minimum of the shared native Position owned by the Pool PDA.
 #[allow(clippy::too_many_arguments)]
 pub fn activate_pool<const N: usize, const B: usize>(
     market: MarketRoot,
@@ -168,6 +176,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
     initial_owner: [u8; 32],
     pool_rent: RentCreditTerms,
     initial_position_rent: RentCreditTerms,
+    pool_position_rent: RentCreditTerms,
     request: ActivatePoolV1,
     authenticated_now_slot: u64,
 ) -> Result<ActivatePoolPlanV1<N, B>> {
@@ -224,6 +233,8 @@ pub fn activate_pool<const N: usize, const B: usize>(
         request.initial_lp_id(),
     )
     .map_err(ActivationError::Frame)?;
+    let pool_position_seeds = PoolPositionPdaSeedsV1::new(market_address, pool_address)
+        .map_err(ActivationError::Frame)?;
 
     let mut next_funding = funding;
     let activation = next_funding
@@ -234,9 +245,13 @@ pub fn activate_pool<const N: usize, const B: usize>(
             authenticated_now_slot,
         )
         .map_err(ActivationError::Capability)?;
+    if pool_position_rent.beneficiary() != pool_address {
+        return Err(ActivationError::AuthorityMismatch);
+    }
     let expected_rent = pool_rent
         .funded_rent_principal()
         .checked_add(initial_position_rent.funded_rent_principal())
+        .and_then(|value| value.checked_add(pool_position_rent.funded_rent_principal()))
         .ok_or(ActivationError::FundingArithmetic)?;
     if activation.rent_principal() != expected_rent {
         return Err(ActivationError::RentFundingMismatch);
@@ -315,6 +330,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
         pool_seeds,
         config_seeds,
         lp_seeds,
+        pool_position_seeds,
     })
 }
 

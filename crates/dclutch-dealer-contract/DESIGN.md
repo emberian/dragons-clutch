@@ -70,9 +70,10 @@ and service capitalization are the entire then-present Liquidity and Service
 compartments released by `FundingStateV1`; neither amount can be supplied in the
 instruction. The initial complete-set claim quantity and share quantity are
 wire quantities, but the adapter must prove the Position owns and atomically
-transfers every native claim. Pool/LP funded rent is obtained from authenticated
-Rent observations, and their checked sum must equal the activation rent debit.
-The returned plan must be applied atomically or discarded.
+transfers every native claim. Pool, LP, and Pool-owned native Position funded
+rent is obtained from authenticated Rent observations, and their checked sum
+must equal the activation rent debit. The returned plan must be applied
+atomically or discarded.
 
 Retirement similarly joins the quiescent Pool transition to the Market's exact
 direct-child decrement. `ExecutionReceipt`, liquidity-change, reset, position,
@@ -102,6 +103,19 @@ on creation and (b) multiple semantic rent destinations that resolve to the same
 permanent RentCredit. Pool/config/LP/custody/Position aliases always refuse.
 Reset has exactly Market, Pool, and config accounts: Clock is trusted adapter
 input and is never an instruction meta or caller field.
+
+Native claims are not tokens and Dealer does not create one token Vault per
+claim. All categorized Pool claim inventory lives physically in one canonical
+`PositionV1<N>` owned by the Pool PDA, using the Realm contract's shared exact
+`["dclutch/position/v1", Market, Pool]` derivation. LP/trader Position and Pool
+Position are separate exact roles and may never alias. Dealer's `claim_reserves`
+are the categorized LP ledger mirrored by that Position; the adapter requires
+exact equality before and after every transition. Three Realm-collateral token
+Vaults are instead derived under
+`["dclutch/dealer-vault/v1", Pool, compartment_tag]` for principal, realized
+fees, and service funding. Their physical separation enforces the kernel's
+compartment ontology. The Pool Position's eventual close lamports go only to
+the permanent RentCredit derived for the Pool authority.
 
 The Pool has four disjoint value compartments:
 
@@ -303,28 +317,25 @@ Instruction and exact-frame widths are:
 
 | Action | Wire bytes | N=2 accounts | N=16 accounts |
 | --- | ---: | ---: | ---: |
-| Activate/Open | 80 | 23 | 37 |
+| Activate/Open | 80 | 23 | 23 |
 | Create LP position | 56 | 9 | 9 |
-| Add liquidity | `88 + 8N` | 14 | 28 |
-| Remove liquidity | `88 + 8N` | 14 | 28 |
+| Add liquidity | `88 + 8N` | 13 | 13 |
+| Remove liquidity | `88 + 8N` | 13 | 13 |
 | Trade | 56 | 12 | 12 |
 | Timed reset | 24 | 3 | 3 |
 | Close LP position | 64 | 7 | 7 |
-| Retire Pool/config | 32 | 15 | 29 |
+| Retire Pool/config | 32 | 15 | 15 |
 
 These counts exclude the executing Dealer program ID from the instruction's
-account-index vector. All remain below the pinned 128 account-lock ceiling. The
-N=16 Activate frame is the packet-risk maximum at 37 accounts; a one-signature,
-one-instruction legacy message with 37 static frame keys, the program key, and
-the 80-byte wire is 1,438 bytes under the canonical short-vector serialization
-model, so it cannot fit the 1,232-byte packet. N=16 Add/Remove is 1,278 bytes and
-also cannot fit without address lookup. The same exact model places N=16 Retire
-at 1,158 bytes even with a separate fee payer, but leaves little composition
-headroom. A v0 transaction with an authenticated lookup table is therefore a
-release requirement for N=16 Activate/Add/Remove and strongly preferred for
-Retire. Actual transaction compilation, LUT contents, compute, CPI depth, and
-rollback remain SBF/local-validator measurements; these byte calculations are
-not throughput claims.
+account-index vector. All remain below the pinned 128 account-lock ceiling. A
+one-signature, one-instruction legacy message under the canonical short-vector
+serialization model is 976 bytes for N=16 Activate, 783 bytes for N=16
+Add/Remove (including their 216-byte limit wires), and 696 bytes for Retire with
+a separate fee payer. They fit the 1,232-byte packet individually without a
+lookup table. Multi-instruction composition may still require v0/LUT transport.
+Actual transaction compilation, LUT contents, compute, CPI depth, and rollback
+remain SBF/local-validator measurements; these byte calculations are not
+throughput claims.
 
 ## Required SBF and operator seams
 

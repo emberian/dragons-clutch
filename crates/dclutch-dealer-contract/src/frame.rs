@@ -6,6 +6,7 @@
 //! module refuses reordered, over-privileged, aliased, or extra accounts.
 
 use dclutch_core_contract::{ContentId, Phase};
+use dclutch_realm_contract::POSITION_PDA_DOMAIN;
 
 use crate::{MAX_NATIVE_CLAIMS, MIN_NATIVE_CLAIMS, instruction::DealerActionV1};
 
@@ -17,6 +18,8 @@ pub const DEALER_POOL_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-pool/v1";
 pub const DEALER_CONFIG_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-config/v1";
 /// Canonical LP-position PDA domain.
 pub const DEALER_LP_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-lp/v1";
+/// Canonical segregated collateral-vault PDA domain.
+pub const DEALER_COLLATERAL_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-vault/v1";
 /// Canonical System Program key.
 pub const DEALER_SYSTEM_PROGRAM_ID: [u8; DEALER_PUBKEY_BYTES] = [0; DEALER_PUBKEY_BYTES];
 /// Canonical Rent sysvar key.
@@ -93,8 +96,10 @@ pub enum DealerAccountRoleV1 {
     Pool,
     /// Mutable or vacant compact LP position.
     LpPosition,
-    /// Native Market Position supplying or receiving claims.
-    Position,
+    /// LP/trader native Market Position supplying or receiving claims.
+    ParticipantPosition,
+    /// Pool-owned native Market Position holding all categorized claim inventory.
+    PoolPosition,
     /// Owner-bound collateral token account.
     CollateralVault,
     /// Pool principal-collateral custody.
@@ -103,8 +108,6 @@ pub enum DealerAccountRoleV1 {
     PoolFeeVault,
     /// Pool segregated service-funding custody.
     PoolServiceVault,
-    /// Pool custody for one native claim; repeated in canonical claim order.
-    PoolClaimVault,
     /// Immutable service-refund collateral destination.
     ServiceRefundVault,
     /// Permanent RentCredit receiving all Pool close lamports.
@@ -113,6 +116,8 @@ pub enum DealerAccountRoleV1 {
     ConfigRentCredit,
     /// Permanent RentCredit receiving all LP-position close lamports.
     LpRentCredit,
+    /// Permanent RentCredit of the Pool authority receiving Pool Position rent.
+    PoolPositionRentCredit,
     /// Realm collateral mint.
     CollateralMint,
     /// Realm-selected executable token program.
@@ -188,25 +193,15 @@ impl<'a, const N: usize> DealerFrameV1<'a, N> {
 pub fn dealer_account_count<const N: usize>(action: DealerActionV1) -> Result<usize> {
     validate_profile::<N>()?;
     let base: usize = match action {
-        DealerActionV1::ActivatePool => 21,
+        DealerActionV1::ActivatePool => 23,
         DealerActionV1::CreateLpPosition => 9,
-        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => 12,
+        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => 13,
         DealerActionV1::Trade => 12,
         DealerActionV1::ResetLadder => 3,
         DealerActionV1::CloseLpPosition => 7,
-        DealerActionV1::RetirePool => 13,
+        DealerActionV1::RetirePool => 15,
     };
-    if matches!(
-        action,
-        DealerActionV1::ActivatePool
-            | DealerActionV1::AddLiquidity
-            | DealerActionV1::RemoveLiquidity
-            | DealerActionV1::RetirePool
-    ) {
-        base.checked_add(N).ok_or(FrameError::ArithmeticOverflow)
-    } else {
-        Ok(base)
-    }
+    Ok(base)
 }
 
 /// Return the exact semantic role for an action/index.
@@ -218,7 +213,7 @@ pub fn dealer_account_role<const N: usize>(
         return Err(FrameError::InvalidAccountFrame);
     }
     match action {
-        DealerActionV1::ActivatePool => role_repeating(
+        DealerActionV1::ActivatePool => role_at(
             index,
             &[
                 DealerAccountRoleV1::Activator,
@@ -230,15 +225,13 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::LiquidityConfig,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LpPosition,
-                DealerAccountRoleV1::Position,
+                DealerAccountRoleV1::ParticipantPosition,
+                DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::CollateralVault,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
                 DealerAccountRoleV1::PoolServiceVault,
-            ],
-            N,
-            DealerAccountRoleV1::PoolClaimVault,
-            &[
+                DealerAccountRoleV1::PoolPositionRentCredit,
                 DealerAccountRoleV1::PoolRentCredit,
                 DealerAccountRoleV1::ConfigRentCredit,
                 DealerAccountRoleV1::LpRentCredit,
@@ -262,7 +255,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::RentSysvar,
             ],
         ),
-        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => role_repeating(
+        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => role_at(
             index,
             &[
                 DealerAccountRoleV1::LpOwner,
@@ -271,14 +264,11 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
                 DealerAccountRoleV1::LpPosition,
-                DealerAccountRoleV1::Position,
+                DealerAccountRoleV1::ParticipantPosition,
+                DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::CollateralVault,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
-            ],
-            N,
-            DealerAccountRoleV1::PoolClaimVault,
-            &[
                 DealerAccountRoleV1::CollateralMint,
                 DealerAccountRoleV1::TokenProgram,
             ],
@@ -291,11 +281,11 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
-                DealerAccountRoleV1::Position,
+                DealerAccountRoleV1::ParticipantPosition,
+                DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::CollateralVault,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
-                DealerAccountRoleV1::PoolClaimVault,
                 DealerAccountRoleV1::CollateralMint,
                 DealerAccountRoleV1::TokenProgram,
             ],
@@ -320,21 +310,19 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::SystemProgram,
             ],
         ),
-        DealerActionV1::RetirePool => role_repeating(
+        DealerActionV1::RetirePool => role_at(
             index,
             &[
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Realm,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
                 DealerAccountRoleV1::PoolServiceVault,
-            ],
-            N,
-            DealerAccountRoleV1::PoolClaimVault,
-            &[
                 DealerAccountRoleV1::ServiceRefundVault,
+                DealerAccountRoleV1::PoolPositionRentCredit,
                 DealerAccountRoleV1::PoolRentCredit,
                 DealerAccountRoleV1::ConfigRentCredit,
                 DealerAccountRoleV1::CollateralMint,
@@ -468,6 +456,93 @@ impl LpPositionPdaSeedsV1 {
     }
 }
 
+/// Shared native Position PDA seed projection for Pool-owned claim inventory.
+///
+/// This deliberately reuses the Realm contract's canonical Position domain and
+/// its exact `[domain, Market, owner]` tuple, with the authenticated Pool PDA as
+/// owner. Dealer does not invent a parallel native-claim custody address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PoolPositionPdaSeedsV1 {
+    market: [u8; 32],
+    pool: [u8; 32],
+}
+
+impl PoolPositionPdaSeedsV1 {
+    /// Construct from authenticated Market and Pool keys.
+    pub fn new(market: [u8; 32], pool: [u8; 32]) -> Result<Self> {
+        require_nonzero(market)?;
+        require_nonzero(pool)?;
+        if market == pool {
+            return Err(FrameError::UnsafeAlias);
+        }
+        Ok(Self { market, pool })
+    }
+
+    /// Return the Realm-owned exact Position seed tuple.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            POSITION_PDA_DOMAIN,
+            self.market.as_slice(),
+            self.pool.as_slice(),
+        ]
+    }
+
+    /// Return authenticated Pool authority used as Position owner.
+    pub const fn pool(self) -> [u8; 32] {
+        self.pool
+    }
+}
+
+/// One physically segregated Pool collateral compartment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum DealerCollateralCompartmentV1 {
+    /// LP-owned principal collateral.
+    Principal = 0,
+    /// LP-owned realized trader-paid fees.
+    RealizedFees = 1,
+    /// Non-LP prepaid service funding.
+    Service = 2,
+}
+
+impl DealerCollateralCompartmentV1 {
+    const fn tag(self) -> [u8; 1] {
+        [self as u8]
+    }
+}
+
+/// Exact PDA seed projection for one segregated collateral token Vault.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerCollateralVaultPdaSeedsV1 {
+    pool: [u8; 32],
+    compartment_tag: [u8; 1],
+}
+
+impl DealerCollateralVaultPdaSeedsV1 {
+    /// Construct from authenticated Pool and one disjoint compartment tag.
+    pub fn new(pool: [u8; 32], compartment: DealerCollateralCompartmentV1) -> Result<Self> {
+        require_nonzero(pool)?;
+        Ok(Self {
+            pool,
+            compartment_tag: compartment.tag(),
+        })
+    }
+
+    /// Return ordered domain-separated seed components.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            DEALER_COLLATERAL_VAULT_PDA_DOMAIN_V1,
+            self.pool.as_slice(),
+            self.compartment_tag.as_slice(),
+        ]
+    }
+
+    /// Return exact persisted-free compartment tag.
+    pub const fn compartment_tag(self) -> u8 {
+        u8::from_le_bytes(self.compartment_tag)
+    }
+}
+
 fn validate_meta(
     action: DealerActionV1,
     role: DealerAccountRoleV1,
@@ -518,12 +593,12 @@ pub const fn dealer_account_privileges(
         | DealerAccountRoleV1::FundingState
         | DealerAccountRoleV1::Pool
         | DealerAccountRoleV1::LpPosition
-        | DealerAccountRoleV1::Position
+        | DealerAccountRoleV1::ParticipantPosition
+        | DealerAccountRoleV1::PoolPosition
         | DealerAccountRoleV1::CollateralVault
         | DealerAccountRoleV1::PoolPrincipalVault
         | DealerAccountRoleV1::PoolFeeVault
         | DealerAccountRoleV1::PoolServiceVault
-        | DealerAccountRoleV1::PoolClaimVault
         | DealerAccountRoleV1::ServiceRefundVault => true,
         DealerAccountRoleV1::Market => {
             matches!(
@@ -537,6 +612,9 @@ pub const fn dealer_account_privileges(
         }
         DealerAccountRoleV1::LpRentCredit => {
             matches!(action, DealerActionV1::CloseLpPosition)
+        }
+        DealerAccountRoleV1::PoolPositionRentCredit => {
+            matches!(action, DealerActionV1::RetirePool)
         }
         DealerAccountRoleV1::LpOwner => matches!(
             action,
@@ -602,26 +680,6 @@ fn role_at(index: usize, roles: &[DealerAccountRoleV1]) -> Result<DealerAccountR
         .get(index)
         .copied()
         .ok_or(FrameError::InvalidAccountFrame)
-}
-
-fn role_repeating(
-    index: usize,
-    prefix: &[DealerAccountRoleV1],
-    repeated: usize,
-    repeated_role: DealerAccountRoleV1,
-    suffix: &[DealerAccountRoleV1],
-) -> Result<DealerAccountRoleV1> {
-    if index < prefix.len() {
-        return role_at(index, prefix);
-    }
-    let repeated_end = prefix
-        .len()
-        .checked_add(repeated)
-        .ok_or(FrameError::ArithmeticOverflow)?;
-    if index < repeated_end {
-        return Ok(repeated_role);
-    }
-    role_at(index - repeated_end, suffix)
 }
 
 fn validate_profile<const N: usize>() -> Result<()> {
