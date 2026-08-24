@@ -1481,6 +1481,10 @@ pub(crate) struct AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
     neutral_sink: Pubkey,
     refunded_principal_lamports: u64,
     neutralized_donation_lamports: u64,
+    rent_refund_balance_before_lamports: u64,
+    rent_refund_balance_after_lamports: u64,
+    neutral_sink_balance_before_lamports: u64,
+    neutral_sink_balance_after_lamports: u64,
 }
 
 /// Complete Failure-derived tuple the Product RootV3 retirement writer must
@@ -1506,6 +1510,10 @@ pub(crate) struct FailureMarketPhysicalTerminalConsumerFactsV3 {
     pub neutral_sink: Pubkey,
     pub refunded_principal_lamports: u64,
     pub neutralized_donation_lamports: u64,
+    pub rent_refund_balance_before_lamports: u64,
+    pub rent_refund_balance_after_lamports: u64,
+    pub neutral_sink_balance_before_lamports: u64,
+    pub neutral_sink_balance_after_lamports: u64,
 }
 
 impl<'root> AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
@@ -1557,6 +1565,18 @@ impl<'root> AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
     pub(crate) const fn neutralized_donation_lamports(&self) -> u64 {
         self.neutralized_donation_lamports
     }
+    pub(crate) const fn rent_refund_balance_before_lamports(&self) -> u64 {
+        self.rent_refund_balance_before_lamports
+    }
+    pub(crate) const fn rent_refund_balance_after_lamports(&self) -> u64 {
+        self.rent_refund_balance_after_lamports
+    }
+    pub(crate) const fn neutral_sink_balance_before_lamports(&self) -> u64 {
+        self.neutral_sink_balance_before_lamports
+    }
+    pub(crate) const fn neutral_sink_balance_after_lamports(&self) -> u64 {
+        self.neutral_sink_balance_after_lamports
+    }
 
     pub(crate) const fn consumer_facts(&self) -> FailureMarketPhysicalTerminalConsumerFactsV3 {
         FailureMarketPhysicalTerminalConsumerFactsV3 {
@@ -1579,6 +1599,10 @@ impl<'root> AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
             neutral_sink: self.neutral_sink,
             refunded_principal_lamports: self.refunded_principal_lamports,
             neutralized_donation_lamports: self.neutralized_donation_lamports,
+            rent_refund_balance_before_lamports: self.rent_refund_balance_before_lamports,
+            rent_refund_balance_after_lamports: self.rent_refund_balance_after_lamports,
+            neutral_sink_balance_before_lamports: self.neutral_sink_balance_before_lamports,
+            neutral_sink_balance_after_lamports: self.neutral_sink_balance_after_lamports,
         }
     }
 
@@ -1787,12 +1811,12 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
             == Some(deleted_balance),
         ClutchError::MismatchedState,
     )?;
-    let refund_after = rent_refund_owner
-        .lamports()
+    let rent_refund_balance_before_lamports = rent_refund_owner.lamports();
+    let neutral_sink_balance_before_lamports = neutral_sink.lamports();
+    let rent_refund_balance_after_lamports = rent_refund_balance_before_lamports
         .checked_add(refunded_principal_lamports)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
-    let sink_after = neutral_sink
-        .lamports()
+    let neutral_sink_balance_after_lamports = neutral_sink_balance_before_lamports
         .checked_add(neutralized_donation_lamports)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
 
@@ -1819,8 +1843,8 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
         **history_lamports = 0;
         **runtime_lamports = 0;
         **admission_lamports = 0;
-        **refund_lamports = refund_after;
-        **sink_lamports = sink_after;
+        **refund_lamports = rent_refund_balance_after_lamports;
+        **sink_lamports = neutral_sink_balance_after_lamports;
     }
     interval_cell_account
         .resize(0)
@@ -1838,6 +1862,23 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
         .resize(0)
         .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
     admission_root_account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        interval_cell_account.lamports() == 0
+            && interval_cell_account.data_is_empty()
+            && interval_cell_account.owner == &SYSTEM_PROGRAM_ID
+            && interval_history_account.lamports() == 0
+            && interval_history_account.data_is_empty()
+            && interval_history_account.owner == &SYSTEM_PROGRAM_ID
+            && runtime_root_account.lamports() == 0
+            && runtime_root_account.data_is_empty()
+            && runtime_root_account.owner == &SYSTEM_PROGRAM_ID
+            && admission_root_account.lamports() == 0
+            && admission_root_account.data_is_empty()
+            && admission_root_account.owner == &SYSTEM_PROGRAM_ID
+            && rent_refund_owner.lamports() == rent_refund_balance_after_lamports
+            && neutral_sink.lamports() == neutral_sink_balance_after_lamports,
+        ClutchError::MismatchedState,
+    )?;
 
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -1859,6 +1900,10 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
             neutral_sink.key.as_ref(),
             &refunded_principal_lamports.to_le_bytes(),
             &neutralized_donation_lamports.to_le_bytes(),
+            &rent_refund_balance_before_lamports.to_le_bytes(),
+            &rent_refund_balance_after_lamports.to_le_bytes(),
+            &neutral_sink_balance_before_lamports.to_le_bytes(),
+            &neutral_sink_balance_after_lamports.to_le_bytes(),
         ])
         .to_bytes(),
     );
@@ -1886,6 +1931,10 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
         neutral_sink: *neutral_sink.key,
         refunded_principal_lamports,
         neutralized_donation_lamports,
+        rent_refund_balance_before_lamports,
+        rent_refund_balance_after_lamports,
+        neutral_sink_balance_before_lamports,
+        neutral_sink_balance_after_lamports,
     })
 }
 
@@ -2826,6 +2875,12 @@ mod adversarial_family_terminal_tests {
             "runtime_donation >= runtime_funding.donation_floor_lamports",
             "Some(deleted_balance)",
             "require_failure_close_destination",
+            "interval_cell_account.owner == &SYSTEM_PROGRAM_ID",
+            "interval_history_account.owner == &SYSTEM_PROGRAM_ID",
+            "runtime_root_account.owner == &SYSTEM_PROGRAM_ID",
+            "admission_root_account.owner == &SYSTEM_PROGRAM_ID",
+            "rent_refund_owner.lamports() == rent_refund_balance_after_lamports",
+            "neutral_sink.lamports() == neutral_sink_balance_after_lamports",
         ] {
             assert!(close.contains(guard), "missing physical-close guard {guard}");
         }
@@ -2886,6 +2941,10 @@ mod adversarial_family_terminal_tests {
             "replay_account.key.as_ref()",
             "rent_refund_owner.key.as_ref()",
             "neutral_sink.key.as_ref()",
+            "&rent_refund_balance_before_lamports.to_le_bytes()",
+            "&rent_refund_balance_after_lamports.to_le_bytes()",
+            "&neutral_sink_balance_before_lamports.to_le_bytes()",
+            "&neutral_sink_balance_after_lamports.to_le_bytes()",
         ] {
             assert!(close.contains(committed), "missing physical terminal commitment {committed}");
         }
