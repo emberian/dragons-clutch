@@ -145,7 +145,10 @@ pub(crate) mod general_v2_fee_terminal_pair_v1;
 /// pair and its same-instruction Product RootV3 shared-core latch.
 pub(crate) mod general_treasury_position_terminal_v5;
 /// Sole current General action-50 fee-retirement composer.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub(crate) mod general_v2_fee_retirement_v2;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -182,18 +185,30 @@ pub mod general_v2_settlement_root;
 ))]
 pub mod general_v2_settlement_producer_v5;
 /// Ordered indexed-root terminal lifecycle.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_exact_index_retirement_v1;
 /// Typed counted settlement-child retirement and phase gate.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_settlement_retirement_v1;
 /// Nonempty V5 Epoch freeze successor.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_freeze_v5;
 /// Complete coefficient-portfolio settlement and archive retirement.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_portfolio_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_portfolio_retirement_v5;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
