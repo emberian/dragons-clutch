@@ -2110,6 +2110,13 @@ fn coordinate_description(
         let Some(action) = DirectMarketAction::from_tag(coordinate.local_action) else {
             return ("direct", "unknown-direct-action", None);
         };
+        if action == DirectMarketAction::InitializeMarket {
+            return (
+                "direct",
+                "initialize-direct-market-current-v3",
+                Some("current-v1"),
+            );
+        }
         if action == DirectMarketAction::FinalizeSelection {
             return (
                 "direct",
