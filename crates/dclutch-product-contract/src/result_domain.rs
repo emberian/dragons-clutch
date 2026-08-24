@@ -25,6 +25,11 @@ pub const FINITE_RESULT_DOMAIN_BYTES: usize = 352;
 pub const FINITE_RESULT_DOMAIN_MAGIC: [u8; 8] = *b"DCLTRDV1";
 /// Implemented result-domain schema version.
 pub const FINITE_RESULT_DOMAIN_SCHEMA_VERSION: u16 = 1;
+/// Canonical content-identity byte domain for a finite result-domain preimage.
+///
+/// Hash derivation is an adapter concern; this Product-owned value names the
+/// semantic namespace that adapters must supply when identifying this record.
+pub const FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1: &[u8] = b"dclutch.result-domain.v1";
 /// Closed semantic release for identity-ordered regions plus final failure.
 pub const FINITE_RESULT_DOMAIN_RELEASE_PREIMAGE_V1: &[u8] =
     b"dclutch/product-finite-result-domain-release/v1";

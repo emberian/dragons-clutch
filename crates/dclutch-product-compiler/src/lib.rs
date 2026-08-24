@@ -24,7 +24,7 @@ use dclutch_product_contract::product::{
     InstanceV1, InstanceV1Input, OccurrenceV1, OccurrenceV1Input, TermsV1, TermsV1Input,
 };
 use dclutch_product_contract::result_domain::{
-    FINITE_RESULT_DOMAIN_BYTES, FiniteResultDomainV1,
+    FINITE_RESULT_DOMAIN_BYTES, FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1,
 };
 use dclutch_product_contract::{ContentId, Error as ContractError};
 use sha2::{Digest, Sha256};
@@ -312,7 +312,7 @@ pub fn compile<const N: usize>(
         derived.partition.cuts(),
     )?;
     let result_domain_bytes = result_domain.to_bytes();
-    let result_domain_id = content_id(b"dclutch.result-domain.v1", &result_domain_bytes)?;
+    let result_domain_id = content_id(FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &result_domain_bytes)?;
     let partition_evidence_id = content_id(
         b"dclutch.result-domain-evidence.v1",
         &result_domain_bytes,
@@ -446,7 +446,10 @@ pub fn recheck<const N: usize>(
     if result_domain != output.result_domain || result_domain != expected_result_domain {
         return Err(CompileError::CertificateMismatch);
     }
-    let result_domain_id = content_id(b"dclutch.result-domain.v1", &output.result_domain_bytes)?;
+    let result_domain_id = content_id(
+        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+        &output.result_domain_bytes,
+    )?;
     let partition_evidence_id = content_id(
         b"dclutch.result-domain-evidence.v1",
         &output.result_domain_bytes,
@@ -1198,5 +1201,44 @@ mod tests {
             recheck(&request, &compiled),
             Err(CompileError::CertificateMismatch)
         );
+    }
+
+    #[test]
+    fn result_domain_identity_uses_product_namespace_and_exact_bytes() {
+        assert_eq!(
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            b"dclutch.result-domain.v1"
+        );
+        let request = request::<3>(ProductShape::BinaryThreshold {
+            threshold: 60,
+            payout: ExactAmount {
+                numerator: 1,
+                denominator: 1,
+            },
+            failure_payout: ExactAmount::ZERO,
+        });
+        let compiled = compile(&request).expect("compiled");
+        let expected_id = content_id(
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            &compiled.result_domain_bytes,
+        )
+        .expect("result-domain identity");
+        assert_eq!(compiled.certificate.result_domain_id, expected_id);
+        assert_eq!(compiled.terms.artifact_id(), expected_id);
+        assert_eq!(compiled.instance.result_domain_id(), expected_id);
+
+        let substitute = FiniteResultDomainV1::new(
+            request.context.coordinate_domain_id,
+            request.context.result_unit_id,
+            request.domain.denominator,
+            &[61],
+        )
+        .expect("same-width substitute");
+        let substitute_id = content_id(
+            FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+            &substitute.to_bytes(),
+        )
+        .expect("substitute identity");
+        assert_ne!(substitute_id, expected_id);
     }
 }
