@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Disabled counted SettlementRoot successor for the exact index plane.
+//! Counted SettlementRoot successor for the exact index plane.
 //!
 //! The live Root V1 cannot count the locator and adjacency accounts. This
 //! breaking wrapper retains the exact Root V1 body and makes those two accounts
-//! explicit expected/admitted/live/retired children. Its central account
-//! coordinate and canonical in-place Root PDA are reserved, but every runtime
-//! capability remains disabled until the complete SBF transition family lands.
+//! explicit expected/admitted/live/retired children at the canonical in-place
+//! Root PDA.
 
 use crate::{
     CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, GeneralEpochPhaseV1,

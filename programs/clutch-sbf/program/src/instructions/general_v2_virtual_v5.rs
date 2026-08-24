@@ -1,4 +1,4 @@
-//! Staged General V2 actions 36/37 virtual complete-set consumption.
+//! General V2 actions 36/37 virtual complete-set consumption.
 //!
 //! Both routes authenticate the counted root through the exhaustive retained
 //! Feed/Page traversal, then compose the existing pure virtual inventory and
@@ -574,7 +574,7 @@ fn liability_successors(
     Ok(LiabilitySuccessorsV5 { hoard, claim_ledger: claim })
 }
 
-/// Decode and execute one staged action 36 or 37 request.
+/// Decode and execute one action 36 or 37 request.
 pub fn process<'info>(
     program_id: &Pubkey,
     accounts: &'info [AccountInfo<'info>],

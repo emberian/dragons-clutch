@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Compact, capability-disabled exact indexes for General V2 settlement.
+//! Compact exact indexes for General V2 settlement.
 //!
 //! CandidateFeed remains the sole persisted owner of slice leg, counterparty,
 //! outcome, quantity, and route facts. The adjacency child stores only a
@@ -40,7 +40,6 @@ use crate::{
 
 pub const EXACT_INDEX_PLANE_VERSION_V1: u8 = 1;
 pub const EXACT_INDEX_PLANE_STATE_SEALED_V1: u8 = 1;
-pub const EXACT_INDEX_PLANE_LIVE_ENABLED_V1: bool = false;
 pub const FROZEN_ORDER_LOCATOR_MAGIC_V1: [u8; 8] = [
     GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG,
     GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION,
