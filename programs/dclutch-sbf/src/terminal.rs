@@ -12,7 +12,9 @@ use dclutch_collateral_contract::{
 use dclutch_core_contract::MarketRoot;
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_rent_contract::{CreditBalancePlanV1, RefundAuthority, RentCreditV1};
-use dclutch_terminal_contract::{TERMINAL_CATEGORICAL_MARKET_BYTES, TerminalCategoricalMarketV1};
+use dclutch_terminal_contract::{
+    TERMINAL_CATEGORICAL_MARKET_BYTES, TerminalCategoricalMarketV1, decode_terminal_outcome_count,
+};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
     sysvar::SysvarSerialize,
@@ -294,6 +296,13 @@ fn plan_from_active_bytes(
 ) -> Result<TerminalProjectionPlan, ProgramError> {
     if market_owner != program_id {
         return Err(AdapterError::AccountIdentity.into());
+    }
+    // The binary active and terminal layouts are both 312 bytes.  Do not let
+    // their equal widths turn an already-reclaimed account into an idempotent
+    // second compaction: a complete canonical terminal envelope is a replay,
+    // never an active Market input.
+    if decode_terminal_outcome_count(active_bytes).is_ok() {
+        return Err(AdapterError::ReplayMismatch.into());
     }
     let outcome_count =
         decode_market_outcome_count(active_bytes).map_err(|_| AdapterError::AccountData)?;
@@ -762,6 +771,68 @@ mod tests {
         );
         assert_eq!(market.lamports(), market_before);
         assert_eq!(overflow.lamports(), u64::MAX);
+    }
+
+    #[test]
+    fn canonical_compact_binary_market_refuses_replay_before_any_mutation() {
+        let program_id = Pubkey::new_from_array([16; 32]);
+        let rent = Rent::default();
+        let active = active_bytes::<2>();
+        let active_minimum = rent.minimum_balance(active.len());
+        let projection = plan_from_active_bytes(
+            &program_id,
+            &expected_key(&program_id),
+            &program_id,
+            active_minimum,
+            &active,
+            &rent,
+        )
+        .expect("active Market compacts once");
+        assert_eq!(
+            TerminalCategoricalMarketV1::<2>::decode(&projection.terminal_bytes),
+            Ok(TerminalCategoricalMarketV1::<2>::from_reclaimed_active(
+                &CategoricalMarketV1::<2>::decode(&active).expect("active Market")
+            )
+            .expect("terminal projection"))
+        );
+
+        let market = test_account(
+            expected_key(&program_id),
+            false,
+            true,
+            projection.market_lamports_after_credit,
+            projection.terminal_bytes.to_vec(),
+            program_id,
+            false,
+        );
+        let (credit, _) =
+            rent_credit_account(&program_id, [6; 32], true, projection.rent_credit_lamports);
+        let rent_sysvar = rent_account(&rent);
+        let market_before = market.lamports();
+        let market_data_before = market.try_borrow_data().expect("terminal bytes").to_vec();
+        let credit_before = credit.lamports();
+        let credit_data_before = credit.try_borrow_data().expect("credit bytes").to_vec();
+
+        assert_eq!(
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &credit,
+                &rent_sysvar,
+                GENERATION,
+            ),
+            Err(AdapterError::ReplayMismatch.into())
+        );
+        assert_eq!(market.lamports(), market_before);
+        assert_eq!(
+            market.try_borrow_data().expect("terminal bytes").as_ref(),
+            market_data_before.as_slice()
+        );
+        assert_eq!(credit.lamports(), credit_before);
+        assert_eq!(
+            credit.try_borrow_data().expect("credit bytes").as_ref(),
+            credit_data_before.as_slice()
+        );
     }
 
     #[test]
