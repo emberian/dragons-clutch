@@ -39,6 +39,7 @@ use crate::{Error, FailurePolicyBindingId, Result};
 const RUNTIME_ADMISSION_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-admission/v1";
 const RUNTIME_COMMITMENT_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-commitment/v1";
 const SESSION_BEGIN_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-begin/v1";
+const SESSION_BEGIN_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-session-begin/v2";
 const SESSION_ADVANCE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-advance/v1";
 const SESSION_RESOLVE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-resolve/v1";
 const SESSION_CLOSE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-close/v1";
@@ -409,6 +410,50 @@ pub struct FailureMarketSessionBeginFactsV1 {
     pub begin_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
 }
 
+/// Exact current LinkV2 begin authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionBeginFactsV2 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Exact active unpinned Product LinkV2 prestate.
+    pub series_link_before: SeriesMarketLinkV2Id,
+    /// Deterministic Product LinkV2 post-pin state.
+    pub series_link_after: SeriesMarketLinkV2Id,
+    /// Exact Product physical pin postwrite identity.
+    pub product_pin_receipt_id: ProductContentId,
+    /// Prior durable closed-session transcript, or zero for the first session.
+    pub previous_session_history: FailureMarketIntervalHistoryRootV2,
+    /// Prior interval terminal receipt, or zero for the first session.
+    pub previous_interval_terminal_receipt_id: ProductContentId,
+    /// Exact authenticated reusable `0xab/v2` cell.
+    pub interval_work_account: FailureMarketAccountIdV1,
+    /// Exact authenticated append-only `0xac/v2` history.
+    pub interval_history_account: FailureMarketAccountIdV1,
+    /// Complete authenticated history prestate.
+    pub interval_history_state_id: FailureMarketIntervalHistoryStateIdV2,
+    /// Exact number of already folded sessions.
+    pub completed_session_count: u64,
+    /// Noncircular Product/Failure preauthorization passed to the link pin.
+    pub begin_preauthorization_id: ProductContentId,
+    /// Exact Product post-pin transcript retained by the cell and runtime.
+    pub session_binding_id: ProductContentId,
+    /// Complete subordinate descriptor.
+    pub session: FailureMarketSessionDescriptorV1,
+    /// Unique current shared-runtime begin transition receipt.
+    pub begin_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// Default-refusing owner of one exact current LinkV2 Begin.
+pub trait AuthenticatedFailureMarketSessionBeginV2 {
+    /// Authenticate the complete Product pin/session/runtime tuple.
+    fn authenticate_failure_market_session_begin_v2(
+        &self,
+        _expected: FailureMarketSessionBeginFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
 /// Expected exact bounded session-state advance authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureMarketSessionAdvanceFactsV1 {
@@ -763,6 +808,17 @@ impl FailureMarketRuntimeV1 {
         Ok(())
     }
 
+    /// Commit one stale-checked current LinkV2 Begin transition.
+    pub fn commit_begin_plan_v2(&mut self, plan: FailureMarketSessionBeginPlanV2) -> Result<()> {
+        self.validate()?;
+        if *self != plan.before {
+            return Err(Error::StalePlan);
+        }
+        plan.after.validate()?;
+        *self = plan.after;
+        Ok(())
+    }
+
     /// Encode every semantic and reserved byte canonically.
     pub fn encode_into(self, output: &mut [u8; FAILURE_MARKET_RUNTIME_BYTES_V1]) -> Result<()> {
         self.validate()?;
@@ -1039,6 +1095,27 @@ pub struct FailureMarketSessionTransitionPlanV1 {
     series_link_before: SeriesMarketLinkV1,
     series_link_after: SeriesMarketLinkV1,
     receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// One stale-checked current LinkV2 Begin transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionBeginPlanV2 {
+    before: FailureMarketRuntimeV1,
+    after: FailureMarketRuntimeV1,
+    series_link_before: SeriesMarketLinkV2,
+    series_link_after: SeriesMarketLinkV2,
+    receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+impl FailureMarketSessionBeginPlanV2 {
+    /// Resulting complete shared runtime.
+    pub const fn resulting_runtime(self) -> FailureMarketRuntimeV1 { self.after }
+    /// Exact unpinned current Product link.
+    pub const fn series_link_before(self) -> SeriesMarketLinkV2 { self.series_link_before }
+    /// Exact deterministic current Product post-pin link.
+    pub const fn series_link_after(self) -> SeriesMarketLinkV2 { self.series_link_after }
+    /// Unique transition receipt.
+    pub const fn receipt_id(self) -> FailureMarketSessionTransitionReceiptIdV1 { self.receipt_id }
 }
 
 impl FailureMarketSessionTransitionPlanV1 {
@@ -1766,6 +1843,130 @@ pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session.session_state_commitment;
     after.validate_against_admission(admission)?;
     Ok(FailureMarketSessionTransitionPlanV1 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link_after_value,
+        receipt_id: begin_receipt_id,
+    })
+}
+
+/// Plan one current subordinate Series/Source session pin against LinkV2.
+///
+/// Product's physical pin receipt is an explicit input and is committed beside
+/// the deterministic LinkV2 successor. This prevents a semantic-only pin from
+/// being replayed across a different account postwrite.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_begin_failure_market_session_v2<
+    A: AuthenticatedFailureMarketSessionBeginV2 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV2,
+    begin_preauthorization_id: ProductContentId,
+    product_pin_receipt_id: ProductContentId,
+    session: FailureMarketSessionDescriptorV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    interval_history: FailureMarketIntervalHistoryV2,
+) -> Result<FailureMarketSessionBeginPlanV2> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::Ready
+        && runtime.phase != FailureMarketRuntimePhaseV1::IntervalArchived
+    {
+        return Err(Error::WrongPhase);
+    }
+    require_live(begin_preauthorization_id.bytes())?;
+    require_live(product_pin_receipt_id.bytes())?;
+    if begin_preauthorization_id == product_pin_receipt_id {
+        return Err(Error::BindingMismatch);
+    }
+    validate_session_descriptor_v2(
+        runtime,
+        admission,
+        series_link,
+        session,
+        interval_funding,
+        interval_history,
+    )?;
+    let series_link_before = series_link.semantic_id()?;
+    let runtime_before = runtime.commitment()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let previous_session_history = runtime.session_history_commitment();
+    let previous_interval_terminal_receipt_id = runtime.interval_terminal_receipt_id();
+    if runtime.phase == FailureMarketRuntimePhaseV1::Ready {
+        if previous_session_history.bytes() != [0; 32]
+            || !previous_interval_terminal_receipt_id.is_zero()
+        {
+            return Err(Error::WrongPhase);
+        }
+    } else if previous_session_history.bytes() == [0; 32]
+        || previous_interval_terminal_receipt_id.is_zero()
+    {
+        return Err(Error::WrongPhase);
+    }
+    let series_link_after_value = series_link.pin_failure_session(begin_preauthorization_id)?;
+    let series_link_after = series_link_after_value.semantic_id()?;
+    let session_binding_id = series_link_after_value.failure_session_transcript_id();
+    require_live(session_binding_id.bytes())?;
+    if session_binding_id == begin_preauthorization_id
+        || session_binding_id == product_pin_receipt_id
+        || session_binding_id == session.session_state_commitment
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_BEGIN_DOMAIN_V2);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_before.bytes());
+    hasher.update(series_link_after.bytes());
+    hasher.update(product_pin_receipt_id.bytes());
+    hasher.update(previous_session_history.bytes());
+    hasher.update(previous_interval_terminal_receipt_id.bytes());
+    hasher.update(begin_preauthorization_id.bytes());
+    hasher.update(session_binding_id.bytes());
+    hasher.update(interval_funding.id().bytes());
+    hasher.update(interval_history.id()?.bytes());
+    hasher.update(interval_history.completed_session_count().to_le_bytes());
+    hasher.update(interval_funding.facts().work_account.bytes());
+    hasher.update(interval_funding.facts().history_account.bytes());
+    hash_session_descriptor(&mut hasher, session);
+    let begin_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
+    require_live(begin_receipt_id.bytes())?;
+    let facts = FailureMarketSessionBeginFactsV2 {
+        runtime_before,
+        series_link_before,
+        series_link_after,
+        product_pin_receipt_id,
+        previous_session_history,
+        previous_interval_terminal_receipt_id,
+        interval_work_account: interval_funding.facts().work_account,
+        interval_history_account: interval_funding.facts().history_account,
+        interval_history_state_id: interval_history.id()?,
+        completed_session_count: runtime.completed_session_count,
+        begin_preauthorization_id,
+        session_binding_id,
+        session,
+        begin_receipt_id,
+    };
+    authority.authenticate_failure_market_session_begin_v2(facts)?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::IntervalActive;
+    after.transition_sequence = next_sequence;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = session_binding_id;
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+        ProductContentId::from_bytes(series_link_after.bytes());
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session.session_state_commitment;
+    after.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[ACTIVE_INTERVAL_FUNDING_RECEIPT_INDEX_V1] =
+        ProductContentId::from_bytes(interval_funding.id().bytes());
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionBeginPlanV2 {
         before: runtime,
         after,
         series_link_before: series_link,
@@ -3291,5 +3492,24 @@ mod tests {
         assert!(!current.contains("reward_lamports"));
         assert!(!current.contains("close_success"));
         assert!(!current.contains("Product work"));
+    }
+
+    #[test]
+    fn current_begin_binds_link_v2_and_physical_product_pin() {
+        assert_ne!(SESSION_BEGIN_DOMAIN_V1, SESSION_BEGIN_DOMAIN_V2);
+        let source = include_str!("market_runtime_v1.rs");
+        let current = source
+            .split("pub fn plan_begin_failure_market_session_v2")
+            .nth(1)
+            .expect("current begin")
+            .split("/// Plan one bounded subordinate session/liveness advance.")
+            .next()
+            .expect("bounded current begin");
+        assert!(current.contains("series_link: SeriesMarketLinkV2"));
+        assert!(current.contains("product_pin_receipt_id"));
+        assert!(current.contains("validate_session_descriptor_v2"));
+        assert!(current.contains("series_link.pin_failure_session(begin_preauthorization_id)?"));
+        assert!(current.contains("hasher.update(series_link_after.bytes())"));
+        assert!(current.contains("authority.authenticate_failure_market_session_begin_v2(facts)?"));
     }
 }

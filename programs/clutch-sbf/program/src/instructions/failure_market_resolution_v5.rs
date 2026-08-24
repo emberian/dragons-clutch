@@ -49,7 +49,7 @@ use crate::instructions::product_market::{
     AuthenticatedWritableFailureResolutionLinkV1,
     AuthenticatedWritableFailureSessionReleaseLinkV2,
 };
-use crate::instructions::product_series::AuthenticatedSourceResolutionInputV3;
+use crate::instructions::product_source_current::AuthenticatedSourceResolutionInputV4;
 use crate::instructions::source_terminal_resolution_v5::{
     close_successful_source_statistic_result_v1, compose_source_resolution_terminal_v1,
     AuthenticatedSourceResolutionStatisticResultCloseV1,
@@ -614,7 +614,7 @@ impl AuthenticatedSourceResolutionV5TerminalV1 for AuthenticatedFailureMarketRes
     fn authenticate_source_resolution_v5_terminal_v1(
         &self,
         route: AuthenticatedSourceRouteV1,
-        source: AuthenticatedSourceResolutionInputV3,
+        source: AuthenticatedSourceResolutionInputV4,
         failure: FailureMarketIntervalCellResolutionReceiptV2,
         lineage: AuthenticatedReopenLineageV1,
     ) -> Outcome<AuthenticatedSourceResolutionTerminalPolicyV1> {
@@ -1266,7 +1266,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
     source_route: AuthenticatedSourceRouteV1,
     source_schedule: SourceWorkScheduleBindingV1,
     source_success: SuccessfulEvaluationHandoffV1,
-    source_input: AuthenticatedSourceResolutionInputV3,
+    source_input: AuthenticatedSourceResolutionInputV4,
     source_lineage: AuthenticatedReopenLineageV1,
     context: QuantizedIntervalConsensusContextV1<'_>,
     root_decode_before: &'root mut MarketLifecycleRootAccountV1,

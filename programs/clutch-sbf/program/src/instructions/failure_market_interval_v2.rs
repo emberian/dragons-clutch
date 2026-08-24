@@ -2080,7 +2080,7 @@ pub(crate) fn write_failure_market_interval_begin_plan_v2<
         projected.funding,
         projected.quote,
         true,
-        false,
+        history_account.is_writable,
     )?;
     require(rebound == projected, ClutchError::MismatchedState)?;
     Ok(rebound)
@@ -2205,7 +2205,7 @@ fn write_failure_market_interval_cell_plan_inner_v2(
         authenticated.history_data_id,
         authenticated.history_observed_lamports,
         FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
-        false,
+        history_account.is_writable,
     )?;
     let mut next = authenticated.cell;
     next.commit_plan(plan)

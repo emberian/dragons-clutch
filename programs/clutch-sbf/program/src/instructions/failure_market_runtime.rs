@@ -25,7 +25,7 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketSourceFailureTransitionPlanV3,
     FailureMarketSourceFailureTransitionReceiptIdV3,
     FailureMarketRuntimeStateCommitmentV1, FailureMarketRuntimeTerminalPlanV2,
-    FailureMarketRuntimeV1, FailureMarketSessionTransitionPlanV1,
+    FailureMarketRuntimeV1, FailureMarketSessionBeginPlanV2, FailureMarketSessionTransitionPlanV1,
     FailureMarketSessionTransitionReceiptIdV1, FAILURE_MARKET_RUNTIME_BYTES_V1,
 };
 use clutch_product_series::ContentId as ProductContentId;
@@ -41,6 +41,8 @@ use solana_pubkey::Pubkey;
 const _: () = assert!(FAILURE_MARKET_RUNTIME_BODY_BYTES_V1 == FAILURE_MARKET_RUNTIME_BYTES_V1);
 const FAILURE_MARKET_RUNTIME_SESSION_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/failure-market-runtime-session-postwrite/v1\0";
+const FAILURE_MARKET_RUNTIME_BEGIN_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/failure-market-runtime-begin-postwrite/v2\0";
 const FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-runtime-source-failure-postwrite/v2\0";
 const FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V3: &[u8] =
@@ -603,6 +605,105 @@ pub(crate) fn write_failure_market_runtime_session_plan_v1<
     let id = ProductContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             FAILURE_MARKET_RUNTIME_SESSION_POSTWRITE_DOMAIN_V1,
+            runtime_root.key.as_ref(),
+            &runtime_before.bytes(),
+            &runtime_after.bytes(),
+            &facts.transition_receipt_id.bytes(),
+            &balance_before.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ProductContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedFailureMarketRuntimeSessionPostwriteV1 {
+        id,
+        root: reopened,
+        transition_receipt_id: facts.transition_receipt_id,
+        runtime_before,
+    })
+}
+
+/// Persist one exact current LinkV2 Begin transcript after the cell and Product
+/// pin postwrites. A refusal here rolls those earlier same-instruction writes
+/// back; no generic runtime mutation is exposed.
+pub(crate) fn write_failure_market_runtime_begin_plan_v2<
+    A: AuthenticatedFailureMarketRuntimeSessionWriteV1 + ?Sized,
+>(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root: &AccountInfo<'_>,
+    admission_root: AuthenticatedFailureMarketRootV2,
+    authenticated: AuthenticatedFailureMarketRuntimeRootV1,
+    plan: FailureMarketSessionBeginPlanV2,
+    authority: &A,
+) -> Outcome<AuthenticatedFailureMarketRuntimeSessionPostwriteV1> {
+    require(
+        authenticated.account == *runtime_root.key && runtime_root.is_writable,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(live == authenticated, ClutchError::MismatchedState)?;
+    let runtime_before = live.state_commitment;
+    let resulting = plan.resulting_runtime();
+    let runtime_after = resulting
+        .commitment()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before,
+        runtime_after,
+        transition_receipt_id: plan.receipt_id(),
+    };
+    authority
+        .authenticate_failure_market_runtime_session_write_v1(facts)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut after = live.state;
+    after
+        .commit_begin_plan_v2(plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(after == resulting, ClutchError::MismatchedState)?;
+    let balance_before = runtime_root.lamports();
+    let mut runtime_body = [0; FAILURE_MARKET_RUNTIME_BYTES_V1];
+    after
+        .encode_into(&mut runtime_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRuntimeRootAccountV1 {
+        bump: live.bump,
+        runtime_body,
+    };
+    {
+        let mut data = runtime_root
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let output: &mut [u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1] = data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        record
+            .encode_into(output)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    }
+    require(runtime_root.lamports() == balance_before, ClutchError::MismatchedState)?;
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(
+        reopened.state == after
+            && reopened.state_commitment == runtime_after
+            && reopened.state_commitment != runtime_before,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_MARKET_RUNTIME_BEGIN_POSTWRITE_DOMAIN_V2,
             runtime_root.key.as_ref(),
             &runtime_before.bytes(),
             &runtime_after.bytes(),

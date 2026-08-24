@@ -12,8 +12,9 @@ use crate::capabilities;
 use crate::error::ClutchError;
 use crate::instructions::failure_market_actions_v2::{
     process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
-    process_begin_failure_market_session_v2, process_resolve_failure_market_session_v2,
+    process_resolve_failure_market_session_v2,
 };
+use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
@@ -132,14 +133,17 @@ const fn meta(
 
 use FailureMarketAccountRoleV2 as Role;
 
-/// Begin reopens the current Product/Source graph and pins exactly one link.
+/// Action 10 reopens the current Product/Source graph and consumes exactly one
+/// persisted successful, absent, or refused Source handoff. The writable
+/// Result/lineage/history privileges are the exhaustive three-branch union;
+/// no branch may inherit a caller-selected disposition.
 pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] = &[
     meta(Role::MarketLifecycleRoot, false, false, false),
     meta(Role::SeriesMarketLink, true, false, false),
     meta(Role::FailureAdmissionRoot, false, false, false),
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
-    meta(Role::FailureIntervalHistory, false, false, false),
+    meta(Role::FailureIntervalHistory, true, false, false),
     meta(Role::SeriesRegistry, false, false, false),
     meta(Role::RegistryProgram, false, false, true),
     meta(Role::RegistryProgramData, false, false, false),
@@ -168,11 +172,19 @@ pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] =
     meta(Role::SourceStatisticKeyArtifact, false, false, false),
     meta(Role::SourceSummaryArtifact, false, false, false),
     meta(Role::SourceWindowSeal, false, false, false),
-    meta(Role::SourceStatisticResult, false, false, false),
-    meta(Role::SourceResultLineage, false, false, false),
+    meta(Role::SourceStatisticResult, true, false, false),
+    meta(Role::SourceResultLineage, true, false, false),
     meta(Role::SourceHandoffReceipt, false, false, false),
     meta(Role::SourceWorkReceipt, false, false, false),
     meta(Role::FailureLivenessPolicy, false, false, false),
+    meta(Role::SourceTerminalPolicy, true, false, false),
+    meta(Role::SourceTerminalReceipt, true, false, false),
+    meta(Role::SourceLivenessPolicy, false, false, false),
+    meta(Role::SourceLivenessCompartment, true, false, false),
+    meta(Role::SourceFundingCustody, true, false, false),
+    meta(Role::SourceNeutralSink, true, false, false),
+    meta(Role::SystemProgram, false, false, true),
+    meta(Role::RentSysvar, false, false, false),
 ];
 
 /// Paid advance mutates only the reusable cell, shared runtime, and Recovery.
@@ -656,6 +668,29 @@ mod adversarial_contract_tests {
         assert!(process.contains("RecoveryAction::CloseIntervalConsensusWork =>"));
         assert!(process.contains("process_archive_failure_market_session_v2"));
         assert!(!process.contains("failure_recovery::"));
+    }
+
+    #[test]
+    fn action10_contract_is_the_exact_three_branch_writable_union() {
+        let contract = BEGIN_FAILURE_MARKET_SESSION_METAS_V2;
+        for role in [
+            Role::FailureIntervalHistory,
+            Role::SourceStatisticResult,
+            Role::SourceResultLineage,
+            Role::SourceTerminalPolicy,
+            Role::SourceTerminalReceipt,
+            Role::SourceLivenessCompartment,
+            Role::SourceFundingCustody,
+            Role::SourceNeutralSink,
+        ] {
+            let meta = contract.iter().find(|meta| meta.role == role).expect("role");
+            assert!(meta.writable);
+            assert!(!meta.signer);
+        }
+        assert!(contract.iter().any(|meta| meta.role == Role::SystemProgram
+            && meta.executable && !meta.writable && !meta.signer));
+        assert!(contract.iter().any(|meta| meta.role == Role::RentSysvar
+            && !meta.executable && !meta.writable && !meta.signer));
     }
 
     #[test]
