@@ -22,6 +22,9 @@ use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::failure_action11_material::{
     FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
 };
+use crate::failure_action12_material::{
+    FAILURE_ACTION12_ROLE_LABELS_V1, FAILURE_ACTION12_ROLE_WRITABLE_V1,
+};
 use crate::failure_action13_material::{
     FAILURE_ACTION13_ROLE_LABELS_V1, FAILURE_ACTION13_ROLE_WRITABLE_V1,
 };
@@ -271,6 +274,7 @@ fn merge_chain_material_cursors(
                         RecoveryAction::from_tag(coordinate.local_action),
                         Some(
                             RecoveryAction::AdvanceIntervalConsensus
+                                | RecoveryAction::ResolveIntervalConsensus
                                 | RecoveryAction::CloseIntervalConsensusWork
                         )
                     )
@@ -1798,6 +1802,25 @@ fn action_verdict_json(
             .collect::<Vec<_>>()
     } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
+        && coordinate.local_action == RecoveryAction::ResolveIntervalConsensus.tag()
+    {
+        FAILURE_ACTION12_ROLE_LABELS_V1
+            .iter()
+            .zip(FAILURE_ACTION12_ROLE_WRITABLE_V1)
+            .enumerate()
+            .map(|(index, (role, writable))| {
+                json!({
+                    "index": index.to_string(),
+                    "role": role,
+                    "writable": writable,
+                    "signer": false,
+                    "address": null,
+                    "identityDisposition": "unresolved-until-semantic-owner-construction"
+                })
+            })
+            .collect::<Vec<_>>()
+    } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
         && coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag()
     {
         FAILURE_ACTION13_ROLE_LABELS_V1
@@ -2269,6 +2292,11 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
             RECOVERY_FAMILY_VERSION,
             RecoveryAction::AdvanceIntervalConsensus.tag(),
         ),
+        "resolve-failure-interval-consensus" => (
+            RECOVERY_FAMILY_TAG,
+            RECOVERY_FAMILY_VERSION,
+            RecoveryAction::ResolveIntervalConsensus.tag(),
+        ),
         "close-failure-interval-consensus-work" => (
             RECOVERY_FAMILY_TAG,
             RECOVERY_FAMILY_VERSION,
@@ -2469,6 +2497,13 @@ fn coordinate_description(
                 Some("clutch-failure-policy-runtime/current-action11-chain-state-v1"),
             );
         }
+        if coordinate.local_action == RecoveryAction::ResolveIntervalConsensus.tag() {
+            return (
+                "recovery",
+                "resolve-failure-interval-consensus",
+                Some("clutch-failure-policy-runtime/current-action12-physical-resolution-v1"),
+            );
+        }
         if coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag() {
             return (
                 "recovery",
@@ -2530,6 +2565,7 @@ const fn allocation_status_name(
 
 fn integer_unit_json(unit: IntegerUnit) -> Value {
     match unit {
+        IntegerUnit::Count => json!({"kind": "count"}),
         IntegerUnit::Lamports => json!({"kind": "lamports"}),
         IntegerUnit::CollateralAtoms { mint } => {
             json!({"kind": "collateral-atoms", "mint": mint.to_string()})
