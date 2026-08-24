@@ -576,6 +576,12 @@ pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
 #[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2")]
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 =
     PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
+/// Product-owned Direct global-liveness manifest and allocation lifecycle discriminator.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG: u8 = 0xba;
+/// First Product Direct global-liveness account version.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Product Direct global-liveness account width.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES: usize = 1_024;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -589,6 +595,8 @@ const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb8);
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG == 0xba);
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES == 1_024);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
@@ -1861,6 +1869,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-series-lifecycle-replay-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+            version: PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-direct-global-liveness-v1-account",
     },
 ];
 
