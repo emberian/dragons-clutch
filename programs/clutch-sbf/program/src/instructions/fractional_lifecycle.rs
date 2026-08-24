@@ -39,10 +39,12 @@ use super::fractional_redemption::{
     authenticate_fractional_family_admission_postwrite_v1,
     authenticate_fractional_family_terminal_postwrite_v1,
     authenticate_fractional_runtime_release_v1,
-    consume_fractional_family_admission_postwrite_v2,
     consume_fractional_family_terminal_postwrite_v2,
     execute_fractional_family_physical_terminal_v2,
     prepare_fractional_family_physical_terminal_v2,
+};
+use super::fractional_product_consumer::{
+    commit_fractional_admission_v3, prepare_fractional_admission_v3,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -53,6 +55,9 @@ use super::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
     AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
 };
+use super::product_market_family_capability_current::
+    authenticate_current_market_family_capability_policy_v1;
+use super::product_market_replay_current::authenticate_market_lifecycle_replay_v2;
 use super::product_series_current::{
     authenticate_registry_capability_v5, authenticate_series_registry_account_v4,
 };
@@ -65,6 +70,10 @@ const CLAIM_LEDGER: usize = 4;
 const RESOLUTION: usize = 10;
 const POLICY: usize = 11;
 const LEDGER: usize = 12;
+const PRODUCT_REPLAY: usize = 13;
+/// Role 14 carries the hostile current family-policy artifact. The graph's
+/// slot-14 Hoard token account is a canonical PDA derived below.
+const FAMILY_POLICY_ARTIFACT: usize = 14;
 const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4;
 const MAX_FRACTIONAL_LIFECYCLE_ACCOUNTS: usize =
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + MARKET_FOUNDATION_MAX_OUTCOMES_V4 + 17;
@@ -241,14 +250,25 @@ fn build_graph(
     generation: u64,
     outcome_count: u8,
     revenue_binding: &MarketBindingV4,
+    family_policy_in_role_14: bool,
 ) -> Outcome<MarketFoundationAccountGraphV4> {
     let outcomes = usize::from(outcome_count);
     let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
     let mut core = 0usize;
-    while core < MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
+    while core < FAMILY_POLICY_ARTIFACT {
         account_ids[core] = ContentId::from_bytes(accounts[core].key.to_bytes());
         core += 1;
     }
+    let hoard_slot = MarketFoundationSlotV4::HoardCollateralVault
+        .index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    account_ids[hoard_slot] = if family_policy_in_role_14 {
+        ContentId::from_bytes(
+            seeds::hoard_token_v2_pda(program_id, &market.bytes()).0.to_bytes(),
+        )
+    } else {
+        ContentId::from_bytes(accounts[hoard_slot].key.to_bytes())
+    };
     let mut outcome = 0usize;
     while outcome < outcomes {
         account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcome] =
@@ -529,12 +549,25 @@ pub(super) fn process_initialize(
         binding.generation,
         outcome_count,
         &liabilities.market_binding,
+        true,
     )?;
     require(
         graph.id(&schedule)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
             == binding.foundation_account_graph_id,
         ClutchError::MismatchedState,
+    )?;
+    let replay = authenticate_market_lifecycle_replay_v2(
+        program_id,
+        &accounts[PRODUCT_REPLAY],
+        binding.market_instance_id,
+        false,
+    )?;
+    let family_policy = authenticate_current_market_family_capability_policy_v1(
+        program_id,
+        &root,
+        &replay,
+        &accounts[FAMILY_POLICY_ARTIFACT],
     )?;
     let policy_funding = authenticate_fractional_foundation_preallocation_v4(
         &root,
@@ -667,6 +700,22 @@ pub(super) fn process_initialize(
         ledger_rent,
     )
     .map_err(map_fractional)?;
+    let mut product_successor = Box::new(MarketLifecycleRootV3::decode_buffer());
+    let (product_admission_plan, fractional_admission_prewrite) =
+        prepare_fractional_admission_v3(
+            program_id,
+            &root,
+            &replay,
+            &family_policy,
+            &link,
+            &schedule,
+            &graph,
+            &runtime_release,
+            &resolution,
+            ContentId::from_bytes(liabilities.claim_ledger.native_claim_basis_id.bytes()),
+            &plan,
+            &mut product_successor,
+        )?;
 
     let policy_bump_seed = [policy_bump];
     let market_seed = binding.market_instance_id.bytes();
@@ -724,15 +773,13 @@ pub(super) fn process_initialize(
         &accounts[CLAIM_LEDGER],
     )?;
     let mut product_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let mut product_successor = Box::new(MarketLifecycleRootV3::decode_buffer());
     let mut product_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let accepted = consume_fractional_family_admission_postwrite_v2(
+    let (_, accepted) = commit_fractional_admission_v3(
         program_id,
         &accounts[ROOT],
+        product_admission_plan,
+        fractional_admission_prewrite,
         postwrite,
-        &link,
-        &schedule,
-        &graph,
         &mut product_before,
         &mut product_successor,
         &mut product_after,
@@ -807,6 +854,7 @@ pub(super) fn process_close_empty_ledger(
         binding.generation,
         outcome_count,
         &liabilities.market_binding,
+        false,
     )?;
     require(
         graph.id(&schedule)
@@ -979,11 +1027,42 @@ mod adversarial_tests {
     #[test]
     fn omitted_graph_roles_are_derived_from_current_authorities() {
         let source = include_str!("fractional_lifecycle.rs");
+        assert!(source.contains("seeds::hoard_token_v2_pda("));
         assert!(source.contains("seeds::outcome_custody_v1_pda("));
         assert!(source.contains("revenue.treasury_position_account()"));
         assert!(source.contains("seeds::purpose_replay_v3_pda("));
         assert!(source.contains("revenue.treasury_service_ledger_account()"));
         assert!(!source.contains("outcomes.checked_mul(2)"));
+    }
+
+    #[test]
+    fn action_one_prepares_product_before_physical_writes_and_commits_root_last() {
+        let source = include_str!("fractional_lifecycle.rs");
+        let start = source
+            .find("pub(super) fn process_initialize")
+            .expect("action-1 handler");
+        let end = source[start..]
+            .find("pub(super) fn process_close_empty_ledger")
+            .map(|offset| start + offset)
+            .expect("action-1 handler end");
+        let body = &source[start..end];
+        let prepare = body
+            .find("prepare_fractional_admission_v3(")
+            .expect("generic Product family preauthorization");
+        let first_physical_write = body
+            .find("allocate_prefunded_pda(")
+            .expect("first physical Fractional write");
+        let physical_postwrite = body
+            .find("authenticate_fractional_family_admission_postwrite_v1(")
+            .expect("hostile Fractional postwrite");
+        let product_commit = body
+            .find("commit_fractional_admission_v3(")
+            .expect("RootV3 commit");
+        assert!(prepare < first_physical_write);
+        assert!(first_physical_write < physical_postwrite);
+        assert!(physical_postwrite < product_commit);
+        assert!(body.contains("authenticate_current_market_family_capability_policy_v1("));
+        assert!(body.contains("authenticate_market_lifecycle_replay_v2("));
     }
 
     #[test]
