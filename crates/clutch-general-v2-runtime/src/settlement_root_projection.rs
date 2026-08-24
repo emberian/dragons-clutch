@@ -7,8 +7,9 @@
 //! not authenticate Solana account ownership, PDA absence, or rent funding.
 
 use clutch_fee_runtime_contract::{
+    codec::CertifiedRecipientAllocationSummaryV3,
     projection::{CertifiedRecipientAllocationV2, SelectedOwnerFeeBookV1},
-    selected::SelectedCompositeFeeV1,
+    selected::{SelectedCompositeFeeV1, SelectedCompositeFeeV2},
 };
 use clutch_owner_settlement::{
     owner_credit_atoms, owner_debit_atoms, owner_rounding_residue_price_units,
@@ -17,10 +18,8 @@ use clutch_owner_settlement::{
 
 use crate::{SettlementAdapterErrorV1, SettlementTraversalProjectionV5};
 
-/// Candidate-wide fee facts accepted by the root expectation join.
-///
-/// `NoFeeRecord` is structural only. The live SBF adapter must authenticate
-/// the canonical fee-record PDA as absent before selecting that branch.
+/// Historical candidate-wide fee facts retained until all live callsites move
+/// atomically to the V3 certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CandidateFeeAggregateProjectionV1<'a> {
     /// Canonical selected fee record is absent and the aggregate fee is zero.
@@ -29,8 +28,7 @@ pub enum CandidateFeeAggregateProjectionV1<'a> {
     CandidateFee {
         /// Immutable selected composite-fee semantics.
         selected: &'a SelectedCompositeFeeV1,
-        /// Exhaustive owner-sorted terminal projection whose total is derived
-        /// from every authenticated owner fee row.
+        /// Exhaustive owner-sorted terminal projection.
         book: &'a SelectedOwnerFeeBookV1,
     },
 }
@@ -66,7 +64,8 @@ impl SettlementRootExpectationProjectionV1 {
     }
 }
 
-/// Derive action-39 expectations solely from checked traversal and fee owners.
+/// Historical root join retained for source-compatible decode-only consumers.
+/// New writers must use the V3 summary join below.
 pub fn derive_settlement_root_expectation_v1(
     traversal: &SettlementTraversalProjectionV5,
     fee: CandidateFeeAggregateProjectionV1<'_>,
@@ -79,10 +78,9 @@ pub fn derive_settlement_root_expectation_v1(
                 .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
             if book.fee_record() != selected.fee_record()
                 || book.settlement_candidate() != selected.selected_candidate()
-                || book.owner_count() != u8::try_from(
-                    traversal.expected_owner_count(),
-                )
-                    .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?
+                || book.owner_count()
+                    != u8::try_from(traversal.expected_owner_count())
+                        .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?
                 || selected_fee_atoms == 0
                 || selected.market().0 != feed.market.bytes()
                 || selected.epoch().0 != feed.epoch.bytes()
@@ -102,15 +100,8 @@ pub fn derive_settlement_root_expectation_v1(
     )
 }
 
-/// Derive action-39 expectations from the immutable complete-book fee
-/// certificate authenticated by the SBF adapter.
-///
-/// This is the O(1) persistence successor to
-/// [`CandidateFeeAggregateProjectionV1::CandidateFee`]. The certificate's
-/// creation remains the only path that consumes the complete canonical owner
-/// fee book. This join neither reconstructs that book nor accepts a caller
-/// total: it reads the conserved collected total from the certified allocation
-/// and equality-binds its owner digest/count to the exhaustive traversal.
+/// Historical O(1) V2 certificate join retained until the live SBF callsite
+/// cutover. No current writer may create V2 bytes.
 pub fn derive_settlement_root_expectation_from_certified_fee_v2(
     traversal: &SettlementTraversalProjectionV5,
     selected: &SelectedCompositeFeeV1,
@@ -124,6 +115,49 @@ pub fn derive_settlement_root_expectation_from_certified_fee_v2(
         || certified.owner_order_set_digest().0
             != traversal.owner_order_set_digest().bytes()
         || certified.owner_count() != traversal.expected_owner_count()
+        || selected.market().0 != feed.market.bytes()
+        || selected.epoch().0 != feed.epoch.bytes()
+        || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()
+        || selected.price_scale() != feed.price_scale
+        || selected.outcome_count() != feed.outcome_count
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    derive_settlement_root_expectation_from_fee_total_v1(
+        traversal,
+        selected.fee_record().0,
+        selected_fee_atoms,
+    )
+}
+
+/// Derive the canonical absent-selected-fee action-39 expectation.
+///
+/// The live adapter must authenticate the selected-fee PDA as a zero-data
+/// System account before entering this branch.
+pub fn derive_zero_fee_settlement_root_expectation_v1(
+    traversal: &SettlementTraversalProjectionV5,
+) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
+    derive_settlement_root_expectation_from_fee_total_v1(traversal, [0; 32], 0)
+}
+
+/// Derive action-39 expectations from the current V2 weight-stream-certified
+/// recipient allocation.
+///
+/// The persisted allocation owns the exact collected fee total. The V3
+/// certificate equality-binds its traversal digest/count and omits the
+/// historical selected-owner fee-book content ID entirely.
+pub fn derive_settlement_root_expectation_from_certified_fee_v3(
+    traversal: &SettlementTraversalProjectionV5,
+    selected: &SelectedCompositeFeeV2,
+    certified: CertifiedRecipientAllocationSummaryV3,
+) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
+    let feed = traversal.feed();
+    let selected_fee_atoms = certified.collected_fee_atoms();
+    if certified.fee_record() != selected.fee_record()
+        || certified.owner_order_set_digest().0
+            != traversal.owner_order_set_digest().bytes()
+        || certified.traversed_owner_count() != traversal.expected_owner_count()
+        || certified.nonzero_weight_row_count() != certified.row_count()
         || selected.market().0 != feed.market.bytes()
         || selected.epoch().0 != feed.epoch.bytes()
         || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()

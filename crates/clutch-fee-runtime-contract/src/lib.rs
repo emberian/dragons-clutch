@@ -16,9 +16,11 @@ pub mod codec;
 pub mod integration;
 pub mod intent;
 pub mod projection;
+pub mod retirement;
 pub mod selected;
 pub mod terminal;
 pub mod treasury;
+pub mod weight_v2;
 
 pub use clutch_batch_policy_identity::Identity32V1 as Id;
 

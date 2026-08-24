@@ -215,7 +215,9 @@ pub fn prepare_direct_foundation_into_v3<
         &binding.product.product_family_admission_receipt_id,
         &binding.product.family_admission_sequence.to_le_bytes(),
         &binding.product.product_direct_global_liveness_binding_id,
-        &binding.product.product_direct_global_liveness_activation_id,
+        &binding
+            .product
+            .product_direct_global_liveness_allocation_authentication_id,
         &binding.product.activated_product_market_binding_id,
         &binding.product.direct_work_quote_id,
         &binding.candidate_liveness.allocation_receipt_id,

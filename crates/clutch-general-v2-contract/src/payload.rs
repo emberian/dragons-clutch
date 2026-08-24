@@ -2,6 +2,10 @@
 
 //! Strict, allocation-free payload decoders for the non-production General V2 lab.
 
+use clutch_batch_policy_identity::revenue_policy_v2::{
+    decode_revenue_policy_v2, RevenuePolicyV2, REVENUE_POLICY_V2_BYTES,
+};
+
 use crate::{
     CodecError, Id32, Reader, SettlementCandidateKindV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8,
     MAX_QUANTIZED_ATOMS_U8, MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
@@ -41,6 +45,9 @@ pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 /// Exact action-39 counted-root initialization selector bytes.
 pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
+/// Exact current action-39 selector plus untrusted RevenuePolicyV2 preimage.
+pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2: usize =
+    INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES + REVENUE_POLICY_V2_BYTES;
 /// Exact action-40 merge-payment selector bytes.
 pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-41 zero-fill Reservation-release selector bytes.
@@ -49,6 +56,15 @@ pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 /// Exact action-44 portfolio archive-retirement selector width.
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
+/// Exact counted-root lifecycle selector width.
+pub const COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES: usize = 64;
+/// Exact action-27/28/30/48/49 child-retirement selector width.
+pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
+/// Exact action-50 maker-distribution selector width.
+pub const FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1: usize = 200;
+/// Exact action-50 final treasury/global retirement selector width.
+pub const FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1: usize = 296 + REVENUE_POLICY_V2_BYTES;
+const _: () = assert!(FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1 <= MAX_GENERAL_V2_ACTION_PAYLOAD_BYTES);
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -748,6 +764,38 @@ impl InitializeSettlementRootPayloadV1 {
     }
 }
 
+/// Current action-39 selector with the exact immutable RevenuePolicyV2
+/// preimage carried in instruction data rather than consuming an AccountInfo.
+/// The preimage is untrusted until action39 joins its digest and copied fields
+/// to the physical RecordV2 and retained MarketBindingV4 authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializeSettlementRootPayloadV2 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Winning cost-certificate-bearing AdmissionNode V4 PDA.
+    pub selected_node: Id32,
+    /// Strictly decoded current revenue policy preimage.
+    pub revenue_policy: RevenuePolicyV2,
+}
+
+impl InitializeSettlementRootPayloadV2 {
+    /// Decode exactly 144 hostile bytes. The historical 64-byte V1 body is
+    /// intentionally not accepted by the current action39 dispatcher.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2)?;
+        let epoch = live_id(&mut reader)?;
+        let selected_node = live_id(&mut reader)?;
+        let policy_bytes: [u8; REVENUE_POLICY_V2_BYTES] = reader.array()?;
+        reader.finish()?;
+        if epoch == selected_node {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let revenue_policy = decode_revenue_policy_v2(&policy_bytes)
+            .map_err(|_| CodecError::MismatchedBinding)?;
+        Ok(Self { epoch, selected_node, revenue_policy })
+    }
+}
+
 /// Action-40 `FinalizeMergeReceiptPayment` immutable selector.
 ///
 /// The payment transition identity is derived from the authenticated Receipt
@@ -918,6 +966,221 @@ impl RetirePortfolioPairArchivesPayloadV1 {
         Ok(value)
     }
 }
+
+/// Immutable selector shared by the three ordered exact-index retirement
+/// actions. Every child, Feed, rent, MarketBinding, Window, and Epoch fact is
+/// rederived from authenticated accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedSettlementRootSelectorV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped indexed SettlementRoot PDA.
+    pub settlement_root: Id32,
+}
+
+impl CountedSettlementRootSelectorV1 {
+    /// Decode exactly two distinct live identities.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.settlement_root {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+/// Immutable selector for one candidate-scoped child retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementChildRetirementPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
+    /// Exact child account consumed by this action.
+    pub child: Id32,
+}
+
+impl SettlementChildRetirementPayloadV1 {
+    /// Decode exactly three pairwise-distinct live identities.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            child: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.settlement_root
+            || value.epoch == value.child
+            || value.settlement_root == value.child
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+const FEE_RETIREMENT_PAYLOAD_VERSION_V1: u8 = 1;
+const FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1: u8 = 1;
+const FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1: u8 = 2;
+
+/// Immutable selector for one ordered maker credit under action 50.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeMakerDistributionPayloadV1 {
+    pub epoch: Id32,
+    pub settlement_root: Id32,
+    pub fee_record: Id32,
+    pub accumulator: Id32,
+    pub recipient_allocation: Id32,
+    pub maker_position: Id32,
+    pub maker_ordinal: u8,
+}
+
+impl FeeMakerDistributionPayloadV1 {
+    fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1)?;
+        if reader.u8()? != FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1
+            || reader.u8()? != FEE_RETIREMENT_PAYLOAD_VERSION_V1
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            fee_record: live_id(&mut reader)?,
+            accumulator: live_id(&mut reader)?,
+            recipient_allocation: live_id(&mut reader)?,
+            maker_position: live_id(&mut reader)?,
+            maker_ordinal: reader.u8()?,
+        };
+        let reserved: [u8; 5] = reader.array()?;
+        reader.finish()?;
+        require_distinct_ids(&[
+            value.epoch,
+            value.settlement_root,
+            value.fee_record,
+            value.accumulator,
+            value.recipient_allocation,
+            value.maker_position,
+        ])?;
+        if reserved != [0; 5] {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
+
+/// Immutable selector for the final treasury credit, durable receipts, and
+/// closure of all temporary global fee accounts under action 50.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeFinalizeGlobalsPayloadV1 {
+    pub epoch: Id32,
+    pub settlement_root: Id32,
+    pub fee_record: Id32,
+    pub accumulator: Id32,
+    pub recipient_allocation: Id32,
+    pub treasury_ledger: Id32,
+    pub settlement_cash_pot: Id32,
+    pub terminal_receipt: Id32,
+    pub closure_manifest: Id32,
+    /// Exact untrusted RevenuePolicyV2 preimage reauthenticated against the
+    /// immutable Realm record and MarketBindingV4 before 0xbb settlement.
+    pub revenue_policy: RevenuePolicyV2,
+}
+
+impl FeeFinalizeGlobalsPayloadV1 {
+    fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1)?;
+        if reader.u8()? != FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1
+            || reader.u8()? != FEE_RETIREMENT_PAYLOAD_VERSION_V1
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            fee_record: live_id(&mut reader)?,
+            accumulator: live_id(&mut reader)?,
+            recipient_allocation: live_id(&mut reader)?,
+            treasury_ledger: live_id(&mut reader)?,
+            settlement_cash_pot: live_id(&mut reader)?,
+            terminal_receipt: live_id(&mut reader)?,
+            closure_manifest: live_id(&mut reader)?,
+            revenue_policy: {
+                let policy_bytes: [u8; REVENUE_POLICY_V2_BYTES] = reader.array()?;
+                decode_revenue_policy_v2(&policy_bytes)
+                    .map_err(|_| CodecError::MismatchedBinding)?
+            },
+        };
+        let reserved: [u8; 6] = reader.array()?;
+        reader.finish()?;
+        require_distinct_ids(&[
+            value.epoch,
+            value.settlement_root,
+            value.fee_record,
+            value.accumulator,
+            value.recipient_allocation,
+            value.treasury_ledger,
+            value.settlement_cash_pot,
+            value.terminal_receipt,
+            value.closure_manifest,
+        ])?;
+        if reserved != [0; 6] {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
+
+/// Strict fresh action-50 payload partition; its widths and discriminants are
+/// disjoint from every legacy child-retirement selector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeeRetirementPayloadV1 {
+    MakerDistribution(FeeMakerDistributionPayloadV1),
+    FinalizeTreasuryAndGlobals(FeeFinalizeGlobalsPayloadV1),
+}
+
+pub fn decode_fee_retirement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<FeeRetirementPayloadV1, CodecError> {
+    if local_action != 50 {
+        return Err(CodecError::InvalidState);
+    }
+    match payload.len() {
+        FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1 => Ok(
+            FeeRetirementPayloadV1::MakerDistribution(
+                FeeMakerDistributionPayloadV1::decode(payload)?,
+            ),
+        ),
+        FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1 => Ok(
+            FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(
+                FeeFinalizeGlobalsPayloadV1::decode(payload)?,
+            ),
+        ),
+        _ => Err(CodecError::WrongLength),
+    }
+}
+
+fn require_distinct_ids(values: &[Id32]) -> Result<(), CodecError> {
+    let mut left = 0usize;
+    while left < values.len() {
+        let mut right = left + 1;
+        while right < values.len() {
+            if values[left] == values[right] {
+                return Err(CodecError::MismatchedBinding);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -960,8 +1223,8 @@ pub enum VirtualSettlementPayloadV1 {
 /// Strict payload facts for the counted settlement-root lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettlementRootPayloadV1 {
-    /// Action 39 selector only; all account creation remains disabled.
-    InitializeSettlementRoot(InitializeSettlementRootPayloadV1),
+    /// Current action39 selector plus strict RevenuePolicyV2 preimage.
+    InitializeSettlementRoot(InitializeSettlementRootPayloadV2),
     /// Action 40 selector only; all merge-payment mutation remains disabled.
     FinalizeMergeReceiptPayment(FinalizeMergeReceiptPaymentPayloadV1),
     /// Action 41 selector only; all zero-fill release mutation remains disabled.
@@ -975,6 +1238,34 @@ pub enum PortfolioSettlementPayloadV1 {
     ConsumePortfolioPairEggs(ConsumePortfolioPairEggsPayloadV1),
     /// Action 44 selector; all archive and refund facts are adapter-derived.
     RetirePortfolioPairArchives(RetirePortfolioPairArchivesPayloadV1),
+}
+
+/// Ordered exact-index terminal lifecycle selectors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExactIndexLifecyclePayloadKindV1 {
+    /// Close both compact index children and mark their root compartment retired.
+    RetireIndexChildren(CountedSettlementRootSelectorV1),
+    /// Close the retained Feed and make the base root Terminal.
+    RetireRetainedFeed(CountedSettlementRootSelectorV1),
+    /// Close the terminal indexed root and decrement the parent Epoch count.
+    CloseIndexedRoot(CountedSettlementRootSelectorV1),
+}
+
+/// Exact settlement-child and phase-gate retirement payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettlementRetirementPayloadKindV1 {
+    /// Close one fully terminal Receipt V5.
+    CloseReceipt(SettlementChildRetirementPayloadV1),
+    /// Close one consumed Reservation V9.
+    CloseReservation(SettlementChildRetirementPayloadV1),
+    /// Close the candidate cash pot or optional FinalPot.
+    ClosePot(SettlementChildRetirementPayloadV1),
+    /// Close one finalized OwnerSettlement V5 row.
+    CloseOwnerRow(SettlementChildRetirementPayloadV1),
+    /// Close one rent-owned owner fee-finalization account.
+    CloseFeeFinalization(SettlementChildRetirementPayloadV1),
+    /// Advance the fully discharged base root from Settling to Retiring.
+    BeginRetiring(CountedSettlementRootSelectorV1),
 }
 
 /// Decode action 26 without adding it to the live-lab union.
@@ -1013,7 +1304,7 @@ pub fn decode_settlement_root_payload_v1(
 ) -> Result<SettlementRootPayloadV1, CodecError> {
     match local_action {
         39 => Ok(SettlementRootPayloadV1::InitializeSettlementRoot(
-            InitializeSettlementRootPayloadV1::decode(payload)?,
+            InitializeSettlementRootPayloadV2::decode(payload)?,
         )),
         40 => Ok(SettlementRootPayloadV1::FinalizeMergeReceiptPayment(
             FinalizeMergeReceiptPaymentPayloadV1::decode(payload)?,
@@ -1039,6 +1330,49 @@ pub fn decode_portfolio_settlement_payload_v1(
         )),
         44 => Ok(PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(
             RetirePortfolioPairArchivesPayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode only the ordered indexed-root terminal lifecycle.
+pub fn decode_exact_index_lifecycle_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<ExactIndexLifecyclePayloadKindV1, CodecError> {
+    let selector = CountedSettlementRootSelectorV1::decode(payload)?;
+    match local_action {
+        45 => Ok(ExactIndexLifecyclePayloadKindV1::RetireIndexChildren(selector)),
+        46 => Ok(ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(selector)),
+        47 => Ok(ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(selector)),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode only named settlement retirement actions. Child-close actions use
+/// the 96-byte selector; the phase gate uses the 64-byte root selector.
+pub fn decode_settlement_retirement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<SettlementRetirementPayloadKindV1, CodecError> {
+    match local_action {
+        27 => Ok(SettlementRetirementPayloadKindV1::CloseReceipt(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        28 => Ok(SettlementRetirementPayloadKindV1::CloseReservation(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        30 => Ok(SettlementRetirementPayloadKindV1::ClosePot(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        48 => Ok(SettlementRetirementPayloadKindV1::CloseOwnerRow(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        49 => Ok(SettlementRetirementPayloadKindV1::CloseFeeFinalization(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        51 => Ok(SettlementRetirementPayloadKindV1::BeginRetiring(
+            CountedSettlementRootSelectorV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
@@ -1165,6 +1499,37 @@ mod tests {
 
     fn live(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    #[test]
+    fn current_action39_requires_strict_revenue_v2_preimage() {
+        let policy = RevenuePolicyV2::successor_development([3; 32]);
+        let mut payload = [0u8; INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2];
+        payload[..ID_BYTES].copy_from_slice(&live(1));
+        payload[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        clutch_batch_policy_identity::revenue_policy_v2::encode_revenue_policy_v2(
+            &policy,
+            &mut payload[2 * ID_BYTES..],
+        )
+        .unwrap();
+        let decoded = decode_settlement_root_payload_v1(39, &payload).unwrap();
+        assert!(matches!(
+            decoded,
+            SettlementRootPayloadV1::InitializeSettlementRoot(value)
+                if value.revenue_policy == policy
+        ));
+        assert_eq!(
+            decode_settlement_root_payload_v1(
+                39,
+                &payload[..INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES]
+            ),
+            Err(CodecError::WrongLength)
+        );
+        payload[INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2 - 1] = 1;
+        assert_eq!(
+            decode_settlement_root_payload_v1(39, &payload),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
@@ -1341,6 +1706,155 @@ mod tests {
         selector[3 * ID_BYTES + 1] = 19;
         assert_eq!(
             decode_portfolio_settlement_payload_v1(44, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn actions45_through_47_share_one_strict_disjoint_selector() {
+        let mut selector = [0u8; COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES];
+        selector[..ID_BYTES].copy_from_slice(&live(1));
+        selector[ID_BYTES..].copy_from_slice(&live(2));
+
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::RetireIndexChildren(_))
+        ));
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(46, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(_))
+        ));
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(47, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(_))
+        ));
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(44, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector[..63]),
+            Err(CodecError::WrongLength)
+        );
+        selector[ID_BYTES..].copy_from_slice(&live(1));
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[ID_BYTES..].fill(0);
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(46, &selector),
+            Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn settlement_retirement_payloads_are_width_and_action_disjoint() {
+        let mut child = [0u8; SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES];
+        child[..ID_BYTES].copy_from_slice(&live(1));
+        child[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        child[2 * ID_BYTES..].copy_from_slice(&live(3));
+        for action in [27, 28, 30, 48, 49] {
+            assert!(decode_settlement_retirement_payload_v1(action, &child).is_ok());
+        }
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(50, &child),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(51, &child),
+            Err(CodecError::WrongLength)
+        );
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(45, &child),
+            Err(CodecError::InvalidState)
+        );
+        child[2 * ID_BYTES..].copy_from_slice(&live(2));
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(27, &child),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut root = [0u8; COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES];
+        root[..ID_BYTES].copy_from_slice(&live(1));
+        root[ID_BYTES..].copy_from_slice(&live(2));
+        assert!(matches!(
+            decode_settlement_retirement_payload_v1(51, &root),
+            Ok(SettlementRetirementPayloadKindV1::BeginRetiring(_))
+        ));
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(48, &root),
+            Err(CodecError::WrongLength)
+        );
+    }
+
+    #[test]
+    fn fee_retirement_payload_arms_are_width_discriminant_and_padding_disjoint() {
+        let mut maker = [0u8; FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1];
+        maker[0] = FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1;
+        maker[1] = FEE_RETIREMENT_PAYLOAD_VERSION_V1;
+        for index in 0..6 {
+            let start = 2 + index * ID_BYTES;
+            maker[start..start + ID_BYTES].copy_from_slice(&live((index + 1) as u8));
+        }
+        maker[2 + 6 * ID_BYTES] = 3;
+        assert!(matches!(
+            decode_fee_retirement_payload_v1(50, &maker),
+            Ok(FeeRetirementPayloadV1::MakerDistribution(value)) if value.maker_ordinal == 3
+        ));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(49, &maker),
+            Err(CodecError::InvalidState)
+        );
+        let mut wrong_kind = maker;
+        wrong_kind[0] = FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &wrong_kind),
+            Err(CodecError::InvalidState)
+        );
+        let mut bad_padding = maker;
+        bad_padding[FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1 - 1] = 1;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &bad_padding),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        let mut terminal = [0u8; FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1];
+        terminal[0] = FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1;
+        terminal[1] = FEE_RETIREMENT_PAYLOAD_VERSION_V1;
+        for index in 0..9 {
+            let start = 2 + index * ID_BYTES;
+            terminal[start..start + ID_BYTES]
+                .copy_from_slice(&live((index + 1) as u8));
+        }
+        let policy = RevenuePolicyV2::successor_development(live(20));
+        let mut policy_bytes = [0u8; REVENUE_POLICY_V2_BYTES];
+        clutch_batch_policy_identity::revenue_policy_v2::encode_revenue_policy_v2(
+            &policy,
+            &mut policy_bytes,
+        )
+        .unwrap();
+        terminal[2 + 9 * ID_BYTES..2 + 9 * ID_BYTES + REVENUE_POLICY_V2_BYTES]
+            .copy_from_slice(&policy_bytes);
+        assert!(matches!(
+            decode_fee_retirement_payload_v1(50, &terminal),
+            Ok(FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(value))
+                if value.revenue_policy == policy
+        ));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &terminal[..terminal.len() - 1]),
+            Err(CodecError::WrongLength)
+        );
+        let mut corrupt_policy = terminal;
+        corrupt_policy[2 + 9 * ID_BYTES] ^= 0xff;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &corrupt_policy),
+            Err(CodecError::MismatchedBinding)
+        );
+        terminal[2 + 8 * ID_BYTES..2 + 9 * ID_BYTES]
+            .copy_from_slice(&live(1));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &terminal),
             Err(CodecError::MismatchedBinding)
         );
     }

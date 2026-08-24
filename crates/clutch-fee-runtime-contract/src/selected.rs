@@ -47,6 +47,16 @@ pub enum AssessmentBoundaryV1 {
     TerminalCeil,
 }
 
+impl AssessmentBoundaryV1 {
+    /// Canonical fixed-layout discriminant.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::FragmentFloor => 0,
+            Self::TerminalCeil => 1,
+        }
+    }
+}
+
 /// Runtime-sized result of an exact `u128` composite quote.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerFeeAssessmentV1 {
@@ -188,7 +198,10 @@ impl SelectedCompositeFeeV1 {
         ] {
             live(identity)?;
         }
-        if !(2..=MAX_OUTCOMES as u8).contains(&outcome_count) || price_scale == 0 {
+        if outcome_count < 2
+            || usize::from(outcome_count) > MAX_OUTCOMES
+            || price_scale == 0
+        {
             return Err(Error::InvalidWidth);
         }
         batch.validate().map_err(|_| Error::InvalidPolicy)?;
@@ -381,6 +394,82 @@ impl SelectedCompositeFeeV2 {
     pub const fn dispersion_bps(&self) -> u32 { self.dispersion_bps }
     pub const fn floor_range_bps(&self) -> u32 { self.floor_range_bps }
     pub const fn carry_denominator(&self) -> u128 { self.carry_denominator }
+
+    /// Restore a persisted current transcript before its independent batch,
+    /// RevenuePolicyV2, and MarketBinding authorities are joined by the
+    /// adapter. This owns only the selected body's intrinsic invariants; it
+    /// cannot certify any copied policy identity by itself.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_persisted(
+        fee_record: Id,
+        realm: Id,
+        market: Id,
+        epoch: Id,
+        settlement_candidate: Id,
+        batch_policy: Id,
+        revenue_policy: Id,
+        treasury_owner: Id,
+        treasury_position: Id,
+        price_scale: u64,
+        outcome_count: u8,
+        dispersion_bps: u32,
+        floor_range_bps: u32,
+        carry_denominator: u128,
+    ) -> Result<Self> {
+        let identities = [
+            fee_record,
+            realm,
+            market,
+            epoch,
+            settlement_candidate,
+            batch_policy,
+            revenue_policy,
+            treasury_owner,
+            treasury_position,
+        ];
+        independent(&identities)?;
+        if !(2..=MAX_OUTCOMES as u8).contains(&outcome_count)
+            || price_scale == 0
+            || dispersion_bps > 10_000
+            || floor_range_bps > 10_000
+            || (dispersion_bps == 0 && floor_range_bps == 0)
+        {
+            return Err(Error::InvalidPolicy);
+        }
+        let payoffs = [0u64; MAX_OUTCOMES];
+        let mut prices = [0u64; MAX_OUTCOMES];
+        prices[0] = price_scale;
+        let expected_denominator = composite_fee_quote(
+            &payoffs,
+            &prices,
+            usize::from(outcome_count),
+            price_scale,
+            dispersion_bps,
+            floor_range_bps,
+            0,
+        )
+        .map_err(|_| Error::InvalidPolicy)?
+        .base_denominator;
+        if carry_denominator != expected_denominator {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(Self {
+            fee_record,
+            realm,
+            market,
+            epoch,
+            settlement_candidate,
+            batch_policy,
+            revenue_policy,
+            treasury_owner,
+            treasury_position,
+            price_scale,
+            outcome_count,
+            dispersion_bps,
+            floor_range_bps,
+            carry_denominator,
+        })
+    }
 
     /// Bind the exact rated batch policy to the independently Realm-founded
     /// RevenuePolicyV2 and its immutable treasury Position.
@@ -794,6 +883,23 @@ mod tests {
                 &RevenuePolicyV2::successor_development([9; 32]),
             ),
             Err(Error::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn persisted_v2_decoder_preserves_intrinsic_denominator_refusal() {
+        let selected = selected_v2();
+        let bytes = crate::codec::encode_fee_record_v2(&selected).unwrap();
+        assert_eq!(
+            crate::codec::decode_persisted_fee_record_v2(&bytes).unwrap(),
+            selected
+        );
+        let mut forged_denominator = bytes;
+        let last = forged_denominator.len() - 1;
+        forged_denominator[last] ^= 1;
+        assert_eq!(
+            crate::codec::decode_persisted_fee_record_v2(&forged_denominator),
+            Err(Error::MismatchedBinding)
         );
     }
 }

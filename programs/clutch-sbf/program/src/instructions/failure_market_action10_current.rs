@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sole current Recovery78/action10 Product/Source/Failure owner.
 //!
-//! This handler starts from RootV2/LinkV2, RegistryV3/ProfileV4, BundleV6,
-//! QuoteV5 and AttachmentV5. It reconstructs the persisted Source handoff from
+//! This handler starts from RootV3/LinkV3, RegistryV4/ProfileV4, BundleV7,
+//! QuoteV6 and AttachmentV6. It reconstructs the persisted Source handoff from
 //! accounts and requires the three success/absence/refusal predicates to be
 //! disjoint. Absence and refusal are consumed through the non-detachable
 //! Product pin -> Source terminal -> Failure archive -> Product release outer.
@@ -16,30 +16,41 @@ use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
 use crate::instructions::failure_market_interval_v2::{
-    authenticate_failure_market_recovery_quote_v2, reopen_failure_market_interval_accounts_v2,
+    authenticate_failure_market_recovery_quote_v3, reopen_failure_market_interval_accounts_v2,
     write_failure_market_interval_begin_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketIntervalBeginV2, FailureMarketIntervalFundingPreimageV2,
 };
 use crate::instructions::failure_market_runtime::{
-    authenticate_failure_market_runtime_root_v1, write_failure_market_runtime_begin_plan_v2,
+    authenticate_failure_market_runtime_root_v1, write_failure_market_runtime_begin_plan_v3,
     AuthenticatedFailureMarketRuntimeRootV1,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
-    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
+    AuthenticatedFailureMarketRuntimeSessionWriteV3, FailureMarketRuntimeSessionWriteFactsV3,
 };
 use crate::instructions::failure_market_source_failure_current::compose_failure_market_source_failure_attempt_v3;
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
-use crate::instructions::product_failure_begin_current::authenticate_product_failure_begin_schedule_v2;
+use crate::instructions::product_failure_begin_v3_current::{
+    authenticate_product_failure_begin_schedule_v3, AuthenticatedProductFailureScheduleV3,
+};
+use crate::instructions::product_failure_link_v3_current::{
+    pin_series_market_link_failure_v3, AuthenticatedSeriesFailureSessionBeginV4,
+    AuthenticatedSeriesFailureSessionPinV3,
+};
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
+};
 use crate::instructions::product_series_current::{
-    authenticate_market_lifecycle_root_v2, authenticate_registry_capability_v4,
-    authenticate_series_market_link_v2, authenticate_series_registry_account_v3,
-    pin_series_market_link_failure_v2, AuthenticatedMarketLifecycleRootV2,
-    AuthenticatedRegistryCapabilityV4, AuthenticatedSeriesFailureSessionBeginV3,
-    AuthenticatedSeriesFailureSessionPinV2, AuthenticatedSeriesMarketLinkV2,
+    authenticate_registry_capability_v5, authenticate_series_funding_account_v5,
+    authenticate_series_registry_account_v4, AuthenticatedRegistryCapabilityV5,
+};
+use crate::instructions::product_source_current::{
+    authenticate_compiled_product_series_bundle_v7, authenticate_series_source_artifacts_v6,
 };
 use crate::source_plane_v3::{
     authenticate_failure_absence_source_handoff_for_terminal_v1,
     authenticate_failure_result_source_handoff_for_terminal_v1,
-    authenticate_route, authenticate_successful_source_handoff_for_resolution_v1,
+    authenticate_release, authenticate_route,
+    authenticate_successful_source_handoff_for_resolution_v1,
 };
 use crate::source_plane_v3_actions::authenticate_source_work_schedule_artifact;
 use crate::instructions::source_failure_terminal_v1::AuthenticatedSourceFailureHandoffV1;
@@ -49,18 +60,18 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellActivationReceiptV2,
 };
 use clutch_failure_policy_runtime::market_runtime_v1::{
-    plan_begin_failure_market_session_v2, AuthenticatedFailureMarketSessionBeginV2,
-    FailureMarketSessionBeginFactsV2, FailureMarketSessionDescriptorV1,
+    plan_begin_failure_market_session_v3, AuthenticatedFailureMarketSessionBeginV3,
+    FailureMarketSessionBeginFactsV3, FailureMarketSessionDescriptorV1,
     FailureMarketSessionScheduleIdV1,
 };
 use clutch_product_series::{
     begin_quantized_interval_consensus_v1, ContentId, MarketGenesisProfileV2,
-    MarketInstancePreimageV2, MarketLifecyclePhaseV2, NativeClaimBasisV1,
+    MarketInstancePreimageV2, MarketLifecyclePhaseV3, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedIntervalConsensusContextV1,
     QuantizedIntervalConsensusProfileV1,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use clutch_solana_layout::registry::RecoveryAction;
 use clutch_source_plane_v3_runtime::{AuthenticatedSourceRouteV1, SourceWorkScheduleBindingV1};
@@ -81,8 +92,12 @@ struct CurrentSuccessBeginPreauthorizationV2 {
     id: ContentId,
     root_account: Pubkey,
     root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    root_binding_id: ContentId,
     link_account: Pubkey,
     link_authentication_id: ContentId,
+    link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+    link_binding_id: ContentId,
     series_plan_id: clutch_product_series::SeriesPlanV5Id,
     ordinal: u32,
     market_instance_id: clutch_product_series::MarketInstanceV2Id,
@@ -92,13 +107,17 @@ struct CurrentSuccessBeginPreauthorizationV2 {
     activation_facts: FailureMarketIntervalCellActivationFactsV2,
 }
 
-impl AuthenticatedSeriesFailureSessionBeginV3 for CurrentSuccessBeginPreauthorizationV2 {
-    fn authenticate_series_failure_session_begin_v3(
+impl AuthenticatedSeriesFailureSessionBeginV4 for CurrentSuccessBeginPreauthorizationV2 {
+    fn authenticate_series_failure_session_begin_v4(
         &self,
         root_account: Pubkey,
         root_authentication_id: ContentId,
+        root_semantic_id: ContentId,
+        root_binding_id: ContentId,
         link_account: Pubkey,
         link_authentication_id: ContentId,
+        link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+        link_binding_id: ContentId,
         series_plan_id: clutch_product_series::SeriesPlanV5Id,
         ordinal: u32,
         market_instance_id: clutch_product_series::MarketInstanceV2Id,
@@ -110,8 +129,12 @@ impl AuthenticatedSeriesFailureSessionBeginV3 for CurrentSuccessBeginPreauthoriz
             begin_admission_receipt_id == self.id
                 && root_account == self.root_account
                 && root_authentication_id == self.root_authentication_id
+                && root_semantic_id == self.root_semantic_id
+                && root_binding_id == self.root_binding_id
                 && link_account == self.link_account
                 && link_authentication_id == self.link_authentication_id
+                && link_semantic_id == self.link_semantic_id
+                && link_binding_id == self.link_binding_id
                 && series_plan_id == self.series_plan_id
                 && ordinal == self.ordinal
                 && market_instance_id == self.market_instance_id
@@ -161,17 +184,17 @@ impl AuthenticatedFailureMarketIntervalBeginV2 for CurrentSuccessBeginCellWriteV
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CurrentSuccessRuntimeBeginAuthorityV2 {
-    expected: FailureMarketSessionBeginFactsV2,
+    expected: FailureMarketSessionBeginFactsV3,
 }
 
-impl AuthenticatedFailureMarketSessionBeginV2 for CurrentSuccessRuntimeBeginAuthorityV2 {
-    fn authenticate_failure_market_session_begin_v2(
+impl AuthenticatedFailureMarketSessionBeginV3 for CurrentSuccessRuntimeBeginAuthorityV2 {
+    fn authenticate_failure_market_session_begin_v3(
         &self,
-        mut expected: FailureMarketSessionBeginFactsV2,
+        mut expected: FailureMarketSessionBeginFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         let receipt = expected.begin_receipt_id;
         expected.begin_receipt_id =
-            clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]);
+            clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV3::from_bytes([0; 32]);
         if receipt.bytes() != [0; 32] && expected == self.expected {
             Ok(())
         } else {
@@ -182,13 +205,13 @@ impl AuthenticatedFailureMarketSessionBeginV2 for CurrentSuccessRuntimeBeginAuth
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CurrentSuccessRuntimeWriteV2 {
-    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    expected: FailureMarketRuntimeSessionWriteFactsV3,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for CurrentSuccessRuntimeWriteV2 {
-    fn authenticate_failure_market_runtime_session_write_v1(
+impl AuthenticatedFailureMarketRuntimeSessionWriteV3 for CurrentSuccessRuntimeWriteV2 {
+    fn authenticate_failure_market_runtime_session_write_v3(
         &self,
-        expected: FailureMarketRuntimeSessionWriteFactsV1,
+        expected: FailureMarketRuntimeSessionWriteFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected == self.expected {
             Ok(())
@@ -219,6 +242,7 @@ pub(crate) fn process_begin_failure_market_session_v2(
     require_distinct(accounts)?;
     let root_account = account_for_role_v2(action, accounts, Role::MarketLifecycleRoot)?;
     let link_account = account_for_role_v2(action, accounts, Role::SeriesMarketLink)?;
+    let funding_account = account_for_role_v2(action, accounts, Role::SeriesFunding)?;
     let admission_account = account_for_role_v2(action, accounts, Role::FailureAdmissionRoot)?;
     let runtime_account = account_for_role_v2(action, accounts, Role::FailureRuntimeRoot)?;
     let cell_account = account_for_role_v2(action, accounts, Role::FailureIntervalCell)?;
@@ -232,6 +256,7 @@ pub(crate) fn process_begin_failure_market_session_v2(
     let compiler_bundle = account_for_role_v2(action, accounts, Role::CompilerBundleArtifact)?;
     let funding_quote = account_for_role_v2(action, accounts, Role::FundingQuoteArtifact)?;
     let series_plan = account_for_role_v2(action, accounts, Role::SeriesPlanArtifact)?;
+    let funding_terms = account_for_role_v2(action, accounts, Role::SeriesFundingTermsArtifact)?;
     let template = account_for_role_v2(action, accounts, Role::ProductTemplateArtifact)?;
     let basis = account_for_role_v2(action, accounts, Role::NativeClaimBasisArtifact)?;
     let recovery = account_for_role_v2(action, accounts, Role::RecoveryPolicyArtifact)?;
@@ -276,8 +301,8 @@ pub(crate) fn process_begin_failure_market_session_v2(
 
     let admission = authenticate_failure_market_root_v2(program_id, admission_account, false)?;
     let policy = admission.state().binding().facts();
-    let mut root_decode = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         policy.market_instance_id,
@@ -285,12 +310,10 @@ pub(crate) fn process_begin_failure_market_session_v2(
         false,
         &mut root_decode,
     )?;
-    let root_binding = root.state().binding();
-    let root_binding_id = root_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_binding = root.binding();
+    let root_binding_id = root.binding_id();
     require(
-        root.state().phase() == MarketLifecyclePhaseV2::Active
+        root.state().phase() == MarketLifecyclePhaseV3::Active
             && root_binding.market_failure_policy_binding_id.bytes()
                 == admission.state().binding().id().bytes()
             && root_binding.market_instance_id == policy.market_instance_id
@@ -298,14 +321,14 @@ pub(crate) fn process_begin_failure_market_session_v2(
         ClutchError::MismatchedState,
     )?;
 
-    let mut link_decode = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let mut link_decode = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
     let link_data = link_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_decode)?;
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link_decode)?;
     drop(link_data);
-    let decoded_link_binding = link_decode.state.binding();
-    let link = authenticate_series_market_link_v2(
+    let decoded_link_binding = link_decode.state.binding_ref();
+    let link = authenticate_series_market_link_v3(
         program_id,
         link_account,
         decoded_link_binding.series_plan_id,
@@ -316,20 +339,20 @@ pub(crate) fn process_begin_failure_market_session_v2(
         true,
         &mut link_decode,
     )?;
-    let link_binding = link.state().binding();
+    let link_binding = link.binding();
     require(
         link_binding.market_binding_id == root_binding_id
             && link_binding.market_instance_id == root_binding.market_instance_id
             && link_binding.generation == root_binding.generation,
         ClutchError::MismatchedState,
     )?;
-    let registry_account = authenticate_series_registry_account_v3(
+    let registry_account = authenticate_series_registry_account_v4(
         program_id,
         registry_account,
         link_binding.series_plan_id,
         false,
     )?;
-    let registry = authenticate_registry_capability_v4(
+    let registry = authenticate_registry_capability_v5(
         program_id,
         registry_account,
         registry_program,
@@ -337,10 +360,16 @@ pub(crate) fn process_begin_failure_market_session_v2(
         registry_release,
         capability_profile,
     )?;
-    let quote = authenticate_failure_market_recovery_quote_v2(
+    let series_funding = authenticate_series_funding_account_v5(
+        program_id,
+        funding_account,
+        link_binding.series_plan_id,
+        false,
+    )?;
+    let quote = authenticate_failure_market_recovery_quote_v3(
         program_id,
         admission,
-        root,
+        &root,
         &registry,
         failure_liveness_policy,
         recovery_quote_schedule,
@@ -371,24 +400,44 @@ pub(crate) fn process_begin_failure_market_session_v2(
     require(sequence == expected_sequence, ClutchError::Replay)?;
     let attempt_index = u8::try_from(runtime.state().completed_session_count())
         .map_err(|_| ClutchError::Arithmetic)?;
-    let mut schedule_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut schedule_link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let product_schedule = authenticate_product_failure_begin_schedule_v2(
+    let release = authenticate_release(program_id, source_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let artifact_accounts = [
+        series_plan.clone(),
+        funding_terms.clone(),
+        template.clone(),
+        basis.clone(),
+        recovery.clone(),
+        price.clone(),
+        genesis.clone(),
+        funding_quote.clone(),
+        attachment.clone(),
+    ];
+    let artifacts = authenticate_series_source_artifacts_v6(
+        program_id,
+        &artifact_accounts,
+        link_binding.series_plan_id,
+        link_binding.funding_terms_id,
+    )?;
+    let bundle = authenticate_compiled_product_series_bundle_v7(
+        program_id,
+        compiler_bundle,
+        &registry,
+        release,
+        &artifacts,
+    )?;
+    let mut schedule_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut schedule_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let product_schedule = authenticate_product_failure_begin_schedule_v3(
         program_id,
         root_account,
         link_account,
-        root,
-        link,
+        &root,
+        &link,
         &registry,
-        compiler_bundle,
-        funding_quote,
-        series_plan,
-        template,
-        basis,
-        recovery,
-        price,
-        genesis,
-        attachment,
+        &series_funding,
+        &artifacts,
+        &bundle,
         market,
         &quote,
         attempt_index,
@@ -436,11 +485,12 @@ pub(crate) fn process_begin_failure_market_session_v2(
     )?;
     match source {
         ReconstructedAction10SourceV1::Failure(source) => {
-            let mut pin_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-            let mut pinned_link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-            let mut release_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-            let mut release_link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-            let mut released_link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+            let mut pin_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+            let mut pinned_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+            let mut pre_release_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+            let mut release_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+            let mut release_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+            let mut released_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
             let _ = compose_failure_market_source_failure_attempt_v3(
                 program_id,
                 root_account,
@@ -471,6 +521,7 @@ pub(crate) fn process_begin_failure_market_session_v2(
                 rent_sysvar,
                 &mut pin_root,
                 &mut pinned_link,
+                &mut pre_release_root,
                 &mut release_root,
                 &mut release_link,
                 &mut released_link,
@@ -478,8 +529,8 @@ pub(crate) fn process_begin_failure_market_session_v2(
             Ok(())
         }
         ReconstructedAction10SourceV1::Successful(source) => {
-            let mut pin_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-            let mut pinned_link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+            let mut pin_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+            let mut pinned_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
             let _ = compose_current_successful_failure_begin_v2(
                 program_id,
                 root_account,
@@ -509,7 +560,7 @@ pub(crate) fn process_begin_failure_market_session_v2(
     }
 }
 
-/// Atomically write one successful Idle-to-Active cell, pin LinkV2, and write
+/// Atomically write one successful Idle-to-Active cell, pin LinkV3, and write
 /// the shared runtime transcript. History is writable only because action10's
 /// absence/refusal branches append it; this success branch reauthenticates it
 /// byte-for-byte and never mutates it.
@@ -522,28 +573,28 @@ fn compose_current_successful_failure_begin_v2<'next>(
     runtime_account: &AccountInfo<'_>,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
-    root: AuthenticatedMarketLifecycleRootV2<'_>,
-    link: AuthenticatedSeriesMarketLinkV2<'_>,
+    root: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: AuthenticatedSeriesMarketLinkV3<'_>,
     admission: crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    schedule: &crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    schedule: &AuthenticatedProductFailureScheduleV3,
     source: crate::source_plane_v3::AuthenticatedSuccessfulSourceHandoffV1,
     template_account: &AccountInfo<'_>,
     basis_account: &AccountInfo<'_>,
     price_account: &AccountInfo<'_>,
     genesis_account: &AccountInfo<'_>,
     market_account: &AccountInfo<'_>,
-    root_rebound: &mut MarketLifecycleRootAccountV2,
-    link_rebound: &'next mut SeriesMarketLinkAccountV2,
+    root_rebound: &mut MarketLifecycleRootAccountV3,
+    link_rebound: &'next mut SeriesMarketLinkAccountV3,
 ) -> Outcome<(
-    AuthenticatedSeriesMarketLinkV2<'next>,
-    AuthenticatedSeriesFailureSessionPinV2,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedSeriesMarketLinkV3<'next>,
+    AuthenticatedSeriesFailureSessionPinV3,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
 )> {
-    let root_binding = root.state().binding();
-    let link_binding = link.state().binding();
+    let root_binding = *root.binding();
+    let link_binding = *link.binding();
     let policy = admission.state().binding().facts();
     let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
         program_id,
@@ -592,11 +643,11 @@ fn compose_current_successful_failure_begin_v2<'next>(
             && work_profile_id.bytes() == policy.interval_consensus_profile_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_exact_successful_source_join_current_v2(
+    require_exact_successful_source_join_current_v3(
         source.join(),
         source.handoff(),
-        link_binding,
-        root_binding,
+        &link_binding,
+        &root_binding,
         policy,
     )?;
     let source_interval = source.interval();
@@ -669,6 +720,8 @@ fn compose_current_successful_failure_begin_v2<'next>(
         .state()
         .pin_failure_session(preauthorization_id)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_before_state = *link.state();
+    let link_before_semantic = link.semantic_id();
     let predicted_session_transcript_id = predicted_link.failure_session_transcript_id();
     let activation_facts = FailureMarketIntervalCellActivationFactsV2 {
         cell_before: interval.cell_state_id(),
@@ -689,8 +742,12 @@ fn compose_current_successful_failure_begin_v2<'next>(
         id: preauthorization_id,
         root_account: root.account(),
         root_authentication_id: root.authentication_id(),
+        root_semantic_id: root.semantic_id(),
+        root_binding_id: root.binding_id(),
         link_account: link.account(),
         link_authentication_id: link.authentication_id(),
+        link_semantic_id: link.semantic_id(),
+        link_binding_id: link.binding_id(),
         series_plan_id: link_binding.series_plan_id,
         ordinal: link_binding.ordinal,
         market_instance_id: link_binding.market_instance_id,
@@ -726,7 +783,7 @@ fn compose_current_successful_failure_begin_v2<'next>(
             activation,
         },
     )?;
-    let (link_after, pin) = pin_series_market_link_failure_v2(
+    let (link_after, pin) = pin_series_market_link_failure_v3(
         program_id,
         root_account,
         root,
@@ -758,12 +815,9 @@ fn compose_current_successful_failure_begin_v2<'next>(
         interval_funding_receipt_id: interval.funding().id(),
         session_state_commitment: ContentId::from_bytes(cell_state_after.bytes()),
     };
-    let expected_runtime_facts = FailureMarketSessionBeginFactsV2 {
+    let expected_runtime_facts = FailureMarketSessionBeginFactsV3 {
         runtime_before: runtime.state_commitment(),
-        series_link_before: link
-            .state()
-            .semantic_id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_link_before: link_before_semantic,
         series_link_after: predicted_link
             .semantic_id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
@@ -778,15 +832,15 @@ fn compose_current_successful_failure_begin_v2<'next>(
         session_binding_id: predicted_session_transcript_id,
         session,
         begin_receipt_id:
-            clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]),
+            clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV3::from_bytes([0; 32]),
     };
-    let runtime_plan = plan_begin_failure_market_session_v2(
+    let runtime_plan = plan_begin_failure_market_session_v3(
         &CurrentSuccessRuntimeBeginAuthorityV2 {
             expected: expected_runtime_facts,
         },
         runtime.state(),
         admission.state(),
-        *link.state(),
+        link_before_state,
         preauthorization_id,
         pin.id(),
         session,
@@ -795,7 +849,7 @@ fn compose_current_successful_failure_begin_v2<'next>(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        runtime_plan.series_link_before() == *link.state()
+        runtime_plan.series_link_before() == link_before_state
             && runtime_plan.series_link_after() == *link_after.state()
             && runtime_plan.resulting_runtime().active_session_pin_id()
                 == predicted_session_transcript_id
@@ -807,12 +861,12 @@ fn compose_current_successful_failure_begin_v2<'next>(
         .resulting_runtime()
         .commitment()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV3 {
         runtime_before: runtime.state_commitment(),
         runtime_after,
         transition_receipt_id: runtime_plan.receipt_id(),
     };
-    let runtime_postwrite = write_failure_market_runtime_begin_plan_v2(
+    let runtime_postwrite = write_failure_market_runtime_begin_plan_v3(
         program_id,
         admission_account,
         runtime_account,
@@ -868,11 +922,11 @@ fn reconstruct_exact_action10_source(
     }
 }
 
-pub(crate) fn require_exact_successful_source_join_current_v2(
+pub(crate) fn require_exact_successful_source_join_current_v3(
     source_join: clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1,
     source_success: clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1,
-    link: clutch_product_series::SeriesMarketLinkBindingV2,
-    root: clutch_product_series::MarketLifecycleBindingV2,
+    link: &clutch_product_series::SeriesMarketLinkBindingV3,
+    root: &clutch_product_series::MarketLifecycleBindingV3,
     policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
 ) -> Outcome<()> {
     let occurrence = source_success.occurrence();
@@ -930,11 +984,11 @@ pub(crate) fn require_exact_successful_source_join_current_v2(
 fn require_current_source_authority(
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
-    root: clutch_product_series::MarketLifecycleBindingV2,
-    link: clutch_product_series::SeriesMarketLinkBindingV2,
+    root: &clutch_product_series::MarketLifecycleBindingV3,
+    link: &clutch_product_series::SeriesMarketLinkBindingV3,
     policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
-    registry: &crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4,
-    product_schedule: &crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2,
+    registry: &crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5,
+    product_schedule: &AuthenticatedProductFailureScheduleV3,
 ) -> Outcome<()> {
     require(
         route.release_manifest_id().bytes() == root.source_release_id.bytes()
@@ -976,7 +1030,7 @@ mod adversarial_source_contract_tests {
     fn action10_dispatch_reaches_the_current_atomic_failure_composer() {
         let source = include_str!("failure_market_action10_current.rs");
         assert!(source.contains("compose_failure_market_source_failure_attempt_v3("));
-        assert!(source.contains("authenticate_product_failure_begin_schedule_v2("));
+        assert!(source.contains("authenticate_product_failure_begin_schedule_v3("));
         assert!(source.contains("authenticate_failure_absence_source_handoff_for_terminal_v1("));
         assert!(source.contains("authenticate_failure_result_source_handoff_for_terminal_v1("));
         assert!(!source.contains("AuthenticatedSourceResolutionInputV3"));
@@ -1001,7 +1055,7 @@ mod adversarial_source_contract_tests {
     fn successful_join_keeps_occurrence_identity_separate_from_pre_root_receipt() {
         let source = include_str!("failure_market_action10_current.rs");
         let join = source
-            .split("fn require_exact_successful_source_join_current_v2")
+            .split("fn require_exact_successful_source_join_current_v3")
             .nth(1)
             .and_then(|value| value.split("fn require_current_source_authority").next())
             .expect("current successful Source join");
@@ -1027,10 +1081,10 @@ mod adversarial_source_contract_tests {
             .find("write_failure_market_interval_begin_plan_v2(")
             .expect("cell write");
         let pin = outer
-            .find("pin_series_market_link_failure_v2(")
+            .find("pin_series_market_link_failure_v3(")
             .expect("Product pin");
         let runtime = outer
-            .find("write_failure_market_runtime_begin_plan_v2(")
+            .find("write_failure_market_runtime_begin_plan_v3(")
             .expect("runtime write");
         assert!(cell < pin && pin < runtime);
         assert!(outer.contains("predicted_session_transcript_id"));

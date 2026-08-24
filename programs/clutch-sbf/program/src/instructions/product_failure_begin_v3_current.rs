@@ -122,6 +122,34 @@ impl AuthenticatedProductFailureScheduleV3 {
     }
 }
 
+/// Authenticate and compile the exact current schedule before a LinkV3 pin.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_product_failure_begin_schedule_v3<'root, 'link, Q>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: &AuthenticatedSeriesMarketLinkV3<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    funding: &AuthenticatedSeriesFundingAccountV5,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    market_account: &AccountInfo<'_>,
+    failure_quote: &Q,
+    attempt_index: u8,
+    root_decode: &'root mut MarketLifecycleRootAccountV3,
+    link_decode: &'link mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedProductFailureScheduleV3>
+where
+    Q: AuthenticatedProductFailureBeginQuoteV3 + ?Sized,
+{
+    authenticate_product_failure_schedule_v3(
+        program_id, root_account, link_account, root_before, link_before, registry, funding,
+        artifacts, bundle, market_account, failure_quote, attempt_index, true, 0,
+        root_decode, link_decode,
+    )
+}
+
 /// Reauthenticate and deterministically compile one already-pinned current session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_product_failure_active_schedule_v3<'root, 'link, Q>(
@@ -143,6 +171,35 @@ pub(crate) fn authenticate_product_failure_active_schedule_v3<'root, 'link, Q>(
 where
     Q: AuthenticatedProductFailureBeginQuoteV3 + ?Sized,
 {
+    authenticate_product_failure_schedule_v3(
+        program_id, root_account, link_account, root_before, link_before, registry, funding,
+        artifacts, bundle, market_account, failure_quote, attempt_index, false, 1,
+        root_decode, link_decode,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_product_failure_schedule_v3<'root, 'link, Q>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: &AuthenticatedSeriesMarketLinkV3<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    funding: &AuthenticatedSeriesFundingAccountV5,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    market_account: &AccountInfo<'_>,
+    failure_quote: &Q,
+    attempt_index: u8,
+    expected_link_writable: bool,
+    expected_active_failure_sessions: u32,
+    root_decode: &'root mut MarketLifecycleRootAccountV3,
+    link_decode: &'link mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedProductFailureScheduleV3>
+where
+    Q: AuthenticatedProductFailureBeginQuoteV3 + ?Sized,
+{
     let root_binding = root_before.binding();
     let link_binding = link_before.binding();
     let root = authenticate_market_lifecycle_root_v3(
@@ -150,7 +207,7 @@ where
         root_account,
         root_binding.market_instance_id,
         root_binding.generation,
-        false,
+        expected_link_writable,
         root_decode,
     )?;
     let link = authenticate_series_market_link_v3(
@@ -178,7 +235,7 @@ where
             && root_state.resolution_data_id() == ContentId::ZERO
             && root_state.resolution_activation_receipt_id() == ContentId::ZERO
             && link_state.phase() == SeriesMarketLinkPhaseV3::Active
-            && link_state.active_failure_sessions() == 1
+            && link_state.active_failure_sessions() == expected_active_failure_sessions
             && link_binding.market_root_account_id.bytes() == root.account().to_bytes()
             && link_binding.market_binding_id == root_binding_id
             && link_binding.market_instance_id == root_binding.market_instance_id

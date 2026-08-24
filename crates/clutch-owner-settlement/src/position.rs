@@ -101,6 +101,21 @@ impl AuthenticatedPositionV3 {
         })
     }
 
+    /// Credit ordinary free cash while preserving every identity, lifecycle,
+    /// reservation, inventory, generation, controller, and rent fact.
+    pub fn credit_free_cash_poststate(
+        self,
+        credited_atoms: u64,
+    ) -> Result<PositionSettlementPoststateV3> {
+        self.validate_writable()?;
+        let old = self.semantic.fields();
+        let cash_atoms = old
+            .cash_atoms
+            .checked_add(credited_atoms)
+            .ok_or(Error::ArithmeticOverflow)?;
+        self.settlement_poststate(cash_atoms, old.reserved_cash_atoms, old.native_eggs)
+    }
+
     /// Return the exact Position successor for one atomically closed active
     /// Reservation. Total cash stays in Position while the released amount
     /// leaves `reserved_cash`; remaining Eggs return to `native_eggs`; and the

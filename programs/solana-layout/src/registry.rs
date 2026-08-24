@@ -310,6 +310,14 @@ pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 /// General V2 temporary candidate-wide recipient-allocation version.
 pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// Historical rent-owned complete-book-certified recipient version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Current rent-owned exact portfolio-weight recipient version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact historical V2 recipient outer width.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_764;
+/// Exact current V3 recipient outer width.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3: usize = 2_796;
 /// General V2 selected-record treasury-ledger envelope discriminator.
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// General V2 selected-record treasury-ledger envelope version.
@@ -614,6 +622,16 @@ pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG: u8 = 0xb6;
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION: u8 = 1;
 /// Largest exact active selected-candidate adjacency account body.
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES: usize = 2_448;
+/// Compact General fee-retirement and durable-terminal family.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 708;
+/// Exact rent-owned durable closure-manifest bytes.
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 580;
+/// Exact rent-owned durable fee-terminal bytes.
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_BYTES: usize = 596;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
@@ -677,6 +695,12 @@ const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES == 1_192);
 const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG == 0xbc);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 0xb9);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 185);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2 == 2);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3 == 3);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 == 2_764);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 == 2_796);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1003,6 +1027,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-candidate-adjacency-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-retirement-accumulator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-closure-manifest-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-terminal-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1529,6 +1580,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "historical-general-v2-recipient-allocation-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "current-general-v2-recipient-allocation-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
             version: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
         },
@@ -1952,6 +2021,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-retirement-accumulator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-closure-manifest-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-terminal-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
             version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1,
         },
@@ -2330,6 +2426,24 @@ pub enum GeneralV2Action {
     ReleaseUnfilledReservation = 41,
     /// Atomically consume one exact full coefficient-portfolio pair.
     ConsumePortfolioPairEggs = 42,
+    /// Freeze one nonempty V5 order book under the successor chain.
+    FreezeEpochV5 = 43,
+    /// Retire one complete coefficient-portfolio archive set.
+    RetirePortfolioPairArchives = 44,
+    /// Retire both compact exact-index children atomically.
+    RetireExactIndexChildren = 45,
+    /// Retire the retained Feed after every child liability is discharged.
+    RetireRetainedFeed = 46,
+    /// Close one terminal indexed SettlementRoot and decrement its Epoch.
+    CloseIndexedSettlementRoot = 47,
+    /// Close one finalized OwnerSettlement V5 row.
+    CloseOwnerSettlementRow = 48,
+    /// Close one rent-owned owner fee-finalization account.
+    CloseOwnerFeeFinalization = 49,
+    /// Consume one authenticated candidate-wide fee terminal receipt.
+    AdvanceFeeRetirement = 50,
+    /// Advance one fully discharged counted root from Settling to Retiring.
+    BeginSettlementRetirement = 51,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -2534,7 +2648,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 42;
+    pub const LAST_TAG: u8 = 51;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -2581,6 +2695,15 @@ impl GeneralV2Action {
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
             Self::ConsumePortfolioPairEggs => 42,
+            Self::FreezeEpochV5 => 43,
+            Self::RetirePortfolioPairArchives => 44,
+            Self::RetireExactIndexChildren => 45,
+            Self::RetireRetainedFeed => 46,
+            Self::CloseIndexedSettlementRoot => 47,
+            Self::CloseOwnerSettlementRow => 48,
+            Self::CloseOwnerFeeFinalization => 49,
+            Self::AdvanceFeeRetirement => 50,
+            Self::BeginSettlementRetirement => 51,
         }
     }
 
@@ -2629,6 +2752,15 @@ impl GeneralV2Action {
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
             42 => Some(Self::ConsumePortfolioPairEggs),
+            43 => Some(Self::FreezeEpochV5),
+            44 => Some(Self::RetirePortfolioPairArchives),
+            45 => Some(Self::RetireExactIndexChildren),
+            46 => Some(Self::RetireRetainedFeed),
+            47 => Some(Self::CloseIndexedSettlementRoot),
+            48 => Some(Self::CloseOwnerSettlementRow),
+            49 => Some(Self::CloseOwnerFeeFinalization),
+            50 => Some(Self::AdvanceFeeRetirement),
+            51 => Some(Self::BeginSettlementRetirement),
             _ => None,
         }
     }
@@ -3451,6 +3583,14 @@ mod tests {
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
+            ),
+            (
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
             ),
@@ -3477,6 +3617,18 @@ mod tests {
             (
                 GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
                 GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+                GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+                GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+                GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
@@ -3623,6 +3775,14 @@ mod tests {
             (
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,

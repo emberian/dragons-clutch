@@ -11,11 +11,13 @@
 use clutch_fee_runtime_contract::terminal::OwnerFeeRentDispositionV2;
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::codec::{
-    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES, FEE_RECORD_MAGIC_V1,
-    OWNER_FEE_CARRY_ACCOUNT_V1_BYTES, OWNER_FEE_CARRY_MAGIC_V1,
+    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES,
+    FEE_RECORD_ACCOUNT_V1_BYTES, FEE_RECORD_MAGIC_V1, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
+    OWNER_FEE_CARRY_MAGIC_V1,
     PAYER_ALLOCATION_ACCOUNT_V1_BYTES, PAYER_ALLOCATION_MAGIC_V1,
     RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_MAGIC_V1,
 };
+use clutch_fee_runtime_contract::weight_v2::COMPOSITE_FEE_WEIGHT_POLICY_V2;
 use clutch_fee_runtime_contract::projection::{
     SELECTED_OWNER_FEE_BOOK_MAGIC_V1, SELECTED_OWNER_FEE_BOOK_V1_BYTES,
 };
@@ -26,7 +28,9 @@ use clutch_fee_runtime_contract::terminal::{
 
 use crate::{
     CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1,
+    FEE_RETIREMENT_ACCOUNT_BYTES_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3,
 };
 
 /// Data-ID domain for the rent-owned fee-account transition.
@@ -35,12 +39,30 @@ pub const OWNER_FEE_RENT_TRANSITION_DATA_ID_DOMAIN_V3: &[u8] =
 /// Content domain for the exact reviewed fee semantic schema bundle.
 pub const FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fee-runtime-semantic-release/v1\0";
+/// Current exact semantic bundle using streamed V2 recipient weighting.
+pub const FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fee-runtime-semantic-release/v2\0";
 /// Full-outer data-ID domain for the exact rent-owned terminal carry account.
 pub const OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4: &[u8] =
     b"dragons-clutch/owner-fee-finalization-account-data/v4\0";
 /// Full-outer data-ID domain for the certified recipient-allocation account.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
     b"dragons-clutch/certified-recipient-allocation-account-data/v2\0";
+/// Full-outer data-ID domain for the durable closure manifest.
+pub const FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fee-closure-manifest-account-data/v2\0";
+/// Full-outer data-ID domain for the durable terminal receipt.
+pub const FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/fee-terminal-account-data/v3\0";
+/// Full-outer data-ID domain for current V2-stream recipient allocation.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/certified-recipient-allocation-account-data/v3\0";
+/// Full-outer data-ID domain for the durable `0xb9/v2` closure manifest.
+pub const FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fee-closure-manifest-account-data/v2\0";
+/// Full-outer data-ID domain for the durable `0xb9/v3` terminal receipt.
+pub const FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/fee-terminal-account-data/v3\0";
 
 /// Hash the exact hostile-byte-authenticated 548-byte 0x83/v4 outer account.
 pub fn owner_fee_finalization_account_data_id_v4<B: Sha256BackendV1>(
@@ -66,6 +88,68 @@ pub fn recipient_allocation_account_data_id_v2<B: Sha256BackendV1>(
     }
     Id32::new(backend.sha256(&[
         RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2,
+        bytes,
+    ]))
+}
+
+pub fn fee_closure_manifest_account_data_id_v2<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2, bytes]))
+}
+
+pub fn fee_terminal_account_data_id_v3<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3, bytes]))
+}
+
+/// Hash the exact hostile-byte-authenticated 2,796-byte 0x85/v3 outer account.
+pub fn recipient_allocation_account_data_id_v3<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V3,
+        bytes,
+    ]))
+}
+
+/// Hash the exact hostile-byte-authenticated 580-byte `0xb9/v2` outer.
+pub fn fee_closure_manifest_account_data_id_v2<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2,
+        bytes,
+    ]))
+}
+
+/// Hash the exact hostile-byte-authenticated 596-byte `0xb9/v3` outer.
+pub fn fee_terminal_account_data_id_v3<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3,
         bytes,
     ]))
 }
@@ -119,6 +203,56 @@ pub fn fee_runtime_semantic_release_id_v1<B: Sha256BackendV1>(
         b"terminal-owner-ceil/canonical-owner-rows/exact-u128-carry",
     ]))
 }
+
+/// Derive the current fee semantic bundle with V2 weight-stream provenance.
+///
+/// This successor intentionally omits the historical selected-owner fee-book
+/// body. The allocation's fee record and the V2 transcript jointly commit the
+/// policy, denominator, and exact canonical rows.
+pub fn fee_runtime_semantic_release_id_v2<B: Sha256BackendV1>(
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    let fee_record_bytes = u64::try_from(FEE_RECORD_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let carry_bytes = u64::try_from(OWNER_FEE_CARRY_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let payer_bytes = u64::try_from(PAYER_ALLOCATION_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let recipient_bytes = u64::try_from(RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let certified_recipient_bytes = u64::try_from(CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let weight_policy = COMPOSITE_FEE_WEIGHT_POLICY_V2.encode();
+    let terminal_version = OWNER_FEE_FINALIZATION_VERSION_V2.to_le_bytes();
+    let terminal_bytes = u64::try_from(OWNER_FEE_FINALIZATION_BODY_V2_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    Id32::new(backend.sha256(&[
+        FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V2,
+        &FEE_RECORD_MAGIC_V1,
+        &fee_record_bytes,
+        &OWNER_FEE_CARRY_MAGIC_V1,
+        &carry_bytes,
+        &PAYER_ALLOCATION_MAGIC_V1,
+        &payer_bytes,
+        &RECIPIENT_ALLOCATION_MAGIC_V1,
+        &recipient_bytes,
+        &certified_recipient_bytes,
+        &weight_policy,
+        &OWNER_FEE_FINALIZATION_MAGIC_V2,
+        &terminal_version,
+        &terminal_bytes,
+        b"terminal-owner-ceil/v2-stream-provenance/exact-u128-weight/hamilton-final-atom",
+    ]))
+}
+
+const _: () = assert!(CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES == 2_744);
+const _: () = assert!(RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 == 2_796);
 
 /// Exact named identities for one carry realloc and payer close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -430,6 +564,48 @@ mod tests {
                 &EchoHash,
             ),
             Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn durable_fee_pair_data_ids_refuse_every_nearby_width() {
+        for width in [
+            FEE_RETIREMENT_ACCOUNT_BYTES_V2 - 1,
+            FEE_RETIREMENT_ACCOUNT_BYTES_V2 + 1,
+        ] {
+            assert_eq!(
+                fee_closure_manifest_account_data_id_v2(&vec![0; width], &EchoHash),
+                Err(CodecError::WrongLength)
+            );
+        }
+        for width in [
+            FEE_RETIREMENT_ACCOUNT_BYTES_V3 - 1,
+            FEE_RETIREMENT_ACCOUNT_BYTES_V3 + 1,
+        ] {
+            assert_eq!(
+                fee_terminal_account_data_id_v3(&vec![0; width], &EchoHash),
+                Err(CodecError::WrongLength)
+            );
+        }
+    }
+
+    #[test]
+    fn durable_fee_pair_data_ids_have_distinct_outer_domains() {
+        let manifest = fee_closure_manifest_account_data_id_v2(
+            &[0; FEE_RETIREMENT_ACCOUNT_BYTES_V2],
+            &EchoHash,
+        )
+        .unwrap();
+        let terminal = fee_terminal_account_data_id_v3(
+            &[0; FEE_RETIREMENT_ACCOUNT_BYTES_V3],
+            &EchoHash,
+        )
+        .unwrap();
+        assert_eq!(manifest, id(99));
+        assert_eq!(terminal, id(99));
+        assert_ne!(
+            FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2,
+            FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3
         );
     }
 }
