@@ -235,6 +235,9 @@ const _: () = assert!(SEED_SOURCE_ARCHIVE.len() == 17);
 /// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
 /// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
 pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
+/// Canonical immutable full RevenuePolicyV2 preimage owned by one Realm.
+/// The address is derived from the Realm, never guessed from a digest.
+pub const SEED_REVENUE_POLICY_PREIMAGE_V2: &[u8] = b"dc:revenue-preimage:v2";
 /// One deterministic active ResolutionWork lock per Market.
 pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
 /// Program-owned prepaid Reserve bound to one deterministic Work PDA.
@@ -1772,6 +1775,14 @@ pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8)
     find(program_id, &[SEED_REVENUE_POLICY, realm])
 }
 
+/// Canonical program-owned full RevenuePolicyV2 preimage for one Realm.
+pub fn revenue_policy_preimage_v2_pda(
+    program_id: &Pubkey,
+    realm: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_REVENUE_POLICY_PREIMAGE_V2, realm])
+}
+
 /// Treasury-service-ledger seed domain.  Its account tag `0xbb` occupies the
 /// account namespace; this seed has no relationship to intent family `81`.
 pub const SEED_TREASURY_SERVICE_LEDGER_V1: &[u8] = b"treasury-service-v1";
@@ -1922,8 +1933,9 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 48] = [
+        const PREFIXES: [&[u8]; 49] = [
             SEED_REVENUE_POLICY,
+            SEED_REVENUE_POLICY_PREIMAGE_V2,
             SEED_EPOCH_WINDOW,
             SEED_REALM,
             SEED_PROFILE,
@@ -2003,6 +2015,7 @@ mod tests {
         assert_eq!(SEED_EPOCH_WINDOW.len(), 30);
         // The design-named revenue-policy prefix sits exactly at the cap.
         assert_eq!(SEED_REVENUE_POLICY.len(), 32);
+        assert_eq!(SEED_REVENUE_POLICY_PREIMAGE_V2.len(), 22);
         // The plan's own proposal, kept here as the falsifier: it does not fit.
         assert_eq!(b"dragons-clutch:hoard-authority:v1".len(), 33);
     }
@@ -2014,7 +2027,8 @@ mod tests {
     /// two addresses.
     #[test]
     fn the_revenue_policy_prefix_collides_with_nothing() {
-        const REGISTRY: [&[u8]; 46] = [
+        const REGISTRY: [&[u8]; 47] = [
+            SEED_REVENUE_POLICY_PREIMAGE_V2,
             SEED_REALM,
             SEED_PROFILE,
             SEED_MARKET,

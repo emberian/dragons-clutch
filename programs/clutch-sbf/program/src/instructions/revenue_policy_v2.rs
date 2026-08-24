@@ -18,7 +18,8 @@ use crate::accounts::{
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, instructions::genesis};
 use clutch_batch_policy_identity::revenue_policy_v2::{
-    decode_revenue_policy_v2, revenue_policy_record_v2_id, revenue_policy_v2_digest,
+    canonical_revenue_policy_v2_bytes, decode_revenue_policy_v2,
+    revenue_policy_record_v2_id, revenue_policy_v2_digest,
     treasury_position_derivation_policy_v2_id, RevenuePolicyV2,
 };
 use clutch_general_v2_contract::GENERAL_POSITION_FOUNDING_GENERATION_V1;
@@ -26,8 +27,8 @@ use clutch_retirement::PositionPurposeV3;
 use clutch_solana_layout::registry::RealmRevenueV2Action;
 use clutch_solana_layout::revenue::{
     CloseRevenuePolicyRecordV2Payload, InitializeFeeBearingRealmV2Payload,
-    RevenuePolicyRecordV2, TreasuryServiceLedgerV1, REVENUE_POLICY_RECORD_BYTES_V2,
-    TREASURY_SERVICE_LEDGER_V1_BYTES,
+    RevenuePolicyRecordV2, TreasuryServiceLedgerV1, REVENUE_POLICY_PREIMAGE_BYTES_V2,
+    REVENUE_POLICY_RECORD_BYTES_V2, TREASURY_SERVICE_LEDGER_V1_BYTES,
 };
 use clutch_solana_layout::{
     account_len, canonical_realm_id, Hash32, RealmAccount,
@@ -46,7 +47,7 @@ const TREASURY_SERVICE_SETTLEMENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/treasury-service/settle/v1\0";
 
 /// Exact accounts for action 1.
-pub const INITIALIZE_FEE_BEARING_REALM_V2_ACCOUNT_COUNT: usize = 6;
+pub const INITIALIZE_FEE_BEARING_REALM_V2_ACCOUNT_COUNT: usize = 7;
 /// Founding payer: signer and writable.
 pub const IX_REVENUE_V2_PAYER: usize = 0;
 /// Absent canonical Realm PDA: writable.
@@ -55,22 +56,27 @@ pub const IX_REVENUE_V2_REALM: usize = 1;
 pub const IX_REVENUE_V2_COLLATERAL_POLICY: usize = 2;
 /// Absent canonical RevenuePolicyRecordV2 PDA: writable.
 pub const IX_REVENUE_V2_RECORD: usize = 3;
+/// Absent canonical immutable RevenuePolicyV2 preimage PDA: writable.
+pub const IX_REVENUE_V2_PREIMAGE: usize = 4;
 /// System program.
-pub const IX_REVENUE_V2_SYSTEM: usize = 4;
+pub const IX_REVENUE_V2_SYSTEM: usize = 5;
 /// Rent sysvar.
-pub const IX_REVENUE_V2_RENT: usize = 5;
+pub const IX_REVENUE_V2_RENT: usize = 6;
 
-/// Exact accounts for action 2: absent Realm, record, refund owner, neutral
-/// sink.  No signer is needed because destinations are immutable record facts.
-pub const CLOSE_REVENUE_POLICY_RECORD_V2_ACCOUNT_COUNT: usize = 4;
+/// Exact accounts for action 2: absent Realm, record, immutable preimage,
+/// refund owner, neutral sink. No signer is needed because destinations and
+/// both rent splits are immutable record facts.
+pub const CLOSE_REVENUE_POLICY_RECORD_V2_ACCOUNT_COUNT: usize = 5;
 /// Provably absent canonical Realm PDA.
 pub const IX_CLOSE_REVENUE_V2_REALM: usize = 0;
 /// Live V2 record, writable.
 pub const IX_CLOSE_REVENUE_V2_RECORD: usize = 1;
+/// Live canonical policy preimage, writable and retired with its record.
+pub const IX_CLOSE_REVENUE_V2_PREIMAGE: usize = 2;
 /// Exact recorded payer, writable.
-pub const IX_CLOSE_REVENUE_V2_PAYER: usize = 2;
+pub const IX_CLOSE_REVENUE_V2_PAYER: usize = 3;
 /// Canonical neutral sink, writable.
-pub const IX_CLOSE_REVENUE_V2_SINK: usize = 3;
+pub const IX_CLOSE_REVENUE_V2_SINK: usize = 4;
 
 /// Private, non-caller-constructible authentication of one live V2 record and
 /// its exact policy preimage.
@@ -78,6 +84,7 @@ pub const IX_CLOSE_REVENUE_V2_SINK: usize = 3;
 pub(crate) struct AuthenticatedRevenuePolicyRecordV2 {
     realm: Hash32,
     record_account: Pubkey,
+    policy_preimage_account: Pubkey,
     record_semantic_id: Hash32,
     policy_digest: Hash32,
     policy: RevenuePolicyV2,
@@ -93,6 +100,11 @@ impl AuthenticatedRevenuePolicyRecordV2 {
     /// Physical immutable record account.
     pub(crate) const fn record_account(self) -> Pubkey {
         self.record_account
+    }
+
+    /// Canonical program-owned account carrying the full policy preimage.
+    pub(crate) const fn policy_preimage_account(self) -> Pubkey {
+        self.policy_preimage_account
     }
 
     /// Rent-independent semantic record identity.
@@ -193,7 +205,7 @@ pub(crate) fn authenticate_revenue_policy_record_v2(
     program_id: &Pubkey,
     realm_account: &AccountInfo,
     record_account: &AccountInfo,
-    policy_preimage: &[u8],
+    policy_preimage_account: &AccountInfo,
 ) -> Outcome<AuthenticatedRevenuePolicyRecordV2> {
     accounts::validate_state_role_lengths(
         program_id,
@@ -222,8 +234,35 @@ pub(crate) fn authenticate_revenue_policy_record_v2(
         Some(record.stored_bump),
     )?;
 
-    let policy = decode_revenue_policy_v2(policy_preimage)
+    accounts::validate_state_role_lengths(
+        program_id,
+        policy_preimage_account,
+        false,
+        &[REVENUE_POLICY_PREIMAGE_BYTES_V2],
+    )?;
+    expect_pda(
+        policy_preimage_account.key,
+        seeds::revenue_policy_preimage_v2_pda(program_id, &realm.realm.bytes()),
+        Some(record.policy_preimage_stored_bump),
+    )?;
+    let policy_data = policy_preimage_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy = decode_revenue_policy_v2(&policy_data)
         .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+    let record_floor = record
+        .terminal_payer_principal
+        .checked_add(record.terminal_donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let preimage_floor = record
+        .policy_preimage_payer_principal
+        .checked_add(record.policy_preimage_donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        record_account.lamports() >= record_floor
+            && policy_preimage_account.lamports() >= preimage_floor,
+        ClutchError::AggregateClosureMismatch,
+    )?;
     record.binds_policy(&policy)?;
     let digest = revenue_policy_v2_digest(&policy)
         .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
@@ -234,6 +273,7 @@ pub(crate) fn authenticate_revenue_policy_record_v2(
     Ok(AuthenticatedRevenuePolicyRecordV2 {
         realm: realm.realm,
         record_account: *record_account.key,
+        policy_preimage_account: *policy_preimage_account.key,
         record_semantic_id: Hash32::from_bytes(semantic_id.0),
         policy_digest: Hash32::from_bytes(digest.0),
         policy,
@@ -609,8 +649,16 @@ fn initialize_fee_bearing_realm_v2(
         (record_address, record_bump),
         None,
     )?;
+    let (preimage_address, preimage_bump) =
+        seeds::revenue_policy_preimage_v2_pda(program_id, &realm_bytes);
+    expect_pda(
+        accounts[IX_REVENUE_V2_PREIMAGE].key,
+        (preimage_address, preimage_bump),
+        None,
+    )?;
     genesis::require_creatable(&accounts[IX_REVENUE_V2_REALM])?;
     genesis::require_creatable(&accounts[IX_REVENUE_V2_RECORD])?;
+    genesis::require_creatable(&accounts[IX_REVENUE_V2_PREIMAGE])?;
 
     let record_funding = direct_creation_funding(
         &accounts[IX_REVENUE_V2_PAYER],
@@ -619,8 +667,19 @@ fn initialize_fee_bearing_realm_v2(
         REVENUE_POLICY_RECORD_BYTES_V2,
         DIRECT_NEUTRAL_SINK_V3,
     )?;
+    let preimage_funding = direct_creation_funding(
+        &accounts[IX_REVENUE_V2_PAYER],
+        &accounts[IX_REVENUE_V2_PREIMAGE],
+        &rent,
+        REVENUE_POLICY_PREIMAGE_BYTES_V2,
+        DIRECT_NEUTRAL_SINK_V3,
+    )?;
     let policy_digest = revenue_policy_v2_digest(&request.policy)
         .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+    require(
+        preimage_funding.payer == record_funding.payer,
+        ClutchError::MismatchedState,
+    )?;
     let record = RevenuePolicyRecordV2 {
         realm,
         policy_digest: Hash32::from_bytes(policy_digest.0),
@@ -630,6 +689,9 @@ fn initialize_fee_bearing_realm_v2(
         terminal_payer_principal: record_funding.payer_principal_lamports,
         terminal_donation_floor: record_funding.prior_donation_lamports,
         terminal_generation: 1,
+        policy_preimage_payer_principal: preimage_funding.payer_principal_lamports,
+        policy_preimage_donation_floor: preimage_funding.prior_donation_lamports,
+        policy_preimage_stored_bump: preimage_bump,
         stored_bump: record_bump,
         flags: 0,
     };
@@ -683,6 +745,45 @@ fn initialize_fee_bearing_realm_v2(
         written.binds_policy(&request.policy)?;
         require(written == record, ClutchError::MismatchedState)?;
     }
+    create_pda_account_full_principal(
+        program_id,
+        &accounts[IX_REVENUE_V2_PAYER],
+        &accounts[IX_REVENUE_V2_PREIMAGE],
+        &accounts[IX_REVENUE_V2_SYSTEM],
+        &rent,
+        REVENUE_POLICY_PREIMAGE_BYTES_V2,
+        preimage_funding,
+        0,
+        &[
+            seeds::SEED_REVENUE_POLICY_PREIMAGE_V2,
+            &realm_bytes,
+            &[preimage_bump],
+        ],
+    )?;
+    {
+        let canonical = canonical_revenue_policy_v2_bytes(&request.policy)
+            .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+        let mut data = accounts[IX_REVENUE_V2_PREIMAGE]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        data.copy_from_slice(&canonical);
+        require(
+            decode_revenue_policy_v2(&data)
+                .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?
+                == request.policy,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let authenticated = authenticate_revenue_policy_record_v2(
+        program_id,
+        &accounts[IX_REVENUE_V2_REALM],
+        &accounts[IX_REVENUE_V2_RECORD],
+        &accounts[IX_REVENUE_V2_PREIMAGE],
+    )?;
+    require(
+        authenticated.policy_preimage_account() == preimage_address,
+        ClutchError::MismatchedState,
+    )?;
     Ok(())
 }
 
@@ -724,6 +825,20 @@ fn close_revenue_policy_record_v2(
         seeds::revenue_policy_pda(program_id, &realm_bytes),
         Some(record.stored_bump),
     )?;
+    accounts::validate_state_role_lengths(
+        program_id,
+        &accounts[IX_CLOSE_REVENUE_V2_PREIMAGE],
+        true,
+        &[REVENUE_POLICY_PREIMAGE_BYTES_V2],
+    )?;
+    expect_pda(
+        accounts[IX_CLOSE_REVENUE_V2_PREIMAGE].key,
+        seeds::revenue_policy_preimage_v2_pda(program_id, &realm_bytes),
+        Some(record.policy_preimage_stored_bump),
+    )?;
+    let policy = decode_revenue_policy_v2(&accounts[IX_CLOSE_REVENUE_V2_PREIMAGE].data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+    record.binds_policy(&policy)?;
     require(
         Hash32::from_bytes(accounts[IX_CLOSE_REVENUE_V2_PAYER].key.to_bytes())
             == record.terminal_payer,
@@ -742,12 +857,17 @@ fn close_revenue_policy_record_v2(
         ClutchError::NotWritable,
     )?;
 
-    let observed = accounts[IX_CLOSE_REVENUE_V2_RECORD].lamports();
-    let neutral = observed
+    let record_neutral = accounts[IX_CLOSE_REVENUE_V2_RECORD]
+        .lamports()
         .checked_sub(record.terminal_payer_principal)
         .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
+    let preimage_neutral = accounts[IX_CLOSE_REVENUE_V2_PREIMAGE]
+        .lamports()
+        .checked_sub(record.policy_preimage_payer_principal)
+        .ok_or(Refusal::Adapter(ClutchError::AggregateClosureMismatch))?;
     require(
-        neutral >= record.terminal_donation_floor,
+        record_neutral >= record.terminal_donation_floor
+            && preimage_neutral >= record.policy_preimage_donation_floor,
         ClutchError::AggregateClosureMismatch,
     )?;
     {
@@ -760,9 +880,26 @@ fn close_revenue_policy_record_v2(
         .resize(0)
         .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
     accounts[IX_CLOSE_REVENUE_V2_RECORD].assign(&genesis::SYSTEM_PROGRAM_ID);
+    {
+        let mut lamports = accounts[IX_CLOSE_REVENUE_V2_PREIMAGE]
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **lamports = 0;
+    }
+    accounts[IX_CLOSE_REVENUE_V2_PREIMAGE]
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    accounts[IX_CLOSE_REVENUE_V2_PREIMAGE].assign(&genesis::SYSTEM_PROGRAM_ID);
+    let refundable_principal = record
+        .terminal_payer_principal
+        .checked_add(record.policy_preimage_payer_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let neutral = record_neutral
+        .checked_add(preimage_neutral)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     credit_lamports(
         &accounts[IX_CLOSE_REVENUE_V2_PAYER],
-        record.terminal_payer_principal,
+        refundable_principal,
     )?;
     credit_lamports(&accounts[IX_CLOSE_REVENUE_V2_SINK], neutral)
 }
@@ -793,8 +930,8 @@ mod tests {
     fn payload_and_account_contracts_are_exact() {
         assert_eq!(INITIALIZE_FEE_BEARING_REALM_V2_PAYLOAD_BYTES, 122);
         assert_eq!(CLOSE_REVENUE_POLICY_RECORD_V2_PAYLOAD_BYTES, 32);
-        assert_eq!(INITIALIZE_FEE_BEARING_REALM_V2_ACCOUNT_COUNT, 6);
-        assert_eq!(CLOSE_REVENUE_POLICY_RECORD_V2_ACCOUNT_COUNT, 4);
+        assert_eq!(INITIALIZE_FEE_BEARING_REALM_V2_ACCOUNT_COUNT, 7);
+        assert_eq!(CLOSE_REVENUE_POLICY_RECORD_V2_ACCOUNT_COUNT, 5);
         let policy = RevenuePolicyV2::successor_development([7; 32]);
         assert_eq!(policy.dispersion_bps, SUCCESSOR_DEV_DISPERSION_BPS);
         assert_eq!(policy.floor_range_bps, SUCCESSOR_DEV_FLOOR_RANGE_BPS);

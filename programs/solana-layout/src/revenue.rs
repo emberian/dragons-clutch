@@ -6,7 +6,7 @@
 //! | account | tag | bytes | what it holds |
 //! | --- | ---: | ---: | --- |
 //! | [`RevenuePolicyRecordV1`] | 27/v1 | 156 | historical deferred-treasury pin; decode-only for successor admission |
-//! | [`RevenuePolicyRecordV2`] | 27/v2 | 160 | one successor Realm's immutable fee rates, beneficiary, Market-scoped Position lifecycle, and exact deletable-rent owner |
+//! | [`RevenuePolicyRecordV2`] | 27/v2 | 177 | one successor Realm's immutable fee rates, beneficiary, Market-scoped Position lifecycle, and exact record/preimage rent ownership |
 //!
 //! **The record's absence IS the zero-take state (D4).**  Existing Realms are
 //! zero-take forever by construction: no retrofit instruction exists, because
@@ -53,10 +53,16 @@ pub const REVENUE_POLICY_RECORD_BYTES: usize = 2 + 32 + 32 + 32 + 56 + 1 + 1;
 /// interpreted through this version.
 pub const REVENUE_POLICY_RECORD_VERSION_V2: u8 = 2;
 /// Exact V2 record length: header 2, three identities 96, lifecycle selector
-/// plus reserved bytes 4, payer/principal/donation/generation 56, bump 1,
-/// flags 1.
-pub const REVENUE_POLICY_RECORD_BYTES_V2: usize = 2 + 32 + 32 + 32 + 4 + 56 + 1 + 1;
-const _: () = assert!(REVENUE_POLICY_RECORD_BYTES_V2 == 160);
+/// plus reserved bytes 4, the record rent owner 56, the canonical immutable
+/// preimage account's principal/donation/bump 17, record bump 1, and flags 1.
+///
+/// The full 80-byte policy lives in the separately addressed Realm-owned
+/// preimage PDA.  Its rent facts live here so the record lifecycle owner can
+/// retire both accounts atomically without a parallel authority.
+pub const REVENUE_POLICY_RECORD_BYTES_V2: usize = 2 + 32 + 32 + 32 + 4 + 56 + 17 + 1 + 1;
+const _: () = assert!(REVENUE_POLICY_RECORD_BYTES_V2 == 177);
+/// Exact bytes of the canonical immutable RevenuePolicyV2 preimage PDA.
+pub const REVENUE_POLICY_PREIMAGE_BYTES_V2: usize = REVENUE_POLICY_V2_BYTES;
 const _: () = assert!(
     REVENUE_POLICY_RECORD_TAG
         == crate::registry::REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG
@@ -250,6 +256,12 @@ pub struct RevenuePolicyRecordV2 {
     /// Close/reopen generation.  Immutable Realm founding admits exactly 1;
     /// no reopen route exists.
     pub terminal_generation: u64,
+    /// Refundable principal paid for the canonical policy-preimage PDA.
+    pub policy_preimage_payer_principal: u64,
+    /// Hostile prefund observed on the canonical policy-preimage PDA.
+    pub policy_preimage_donation_floor: u64,
+    /// Stored bump of the canonical policy-preimage PDA.
+    pub policy_preimage_stored_bump: u8,
     /// Stored record PDA bump.
     pub stored_bump: u8,
     /// Reserved flags; zero in V2.
@@ -535,9 +547,17 @@ impl RevenuePolicyRecordV2 {
         check_hash(self.policy_digest)?;
         check_hash(self.treasury_owner)?;
         check_hash(self.terminal_payer)?;
-        if self.terminal_payer_principal == 0 || self.terminal_generation != 1 {
+        if self.terminal_payer_principal == 0
+            || self.policy_preimage_payer_principal == 0
+            || self.terminal_generation != 1
+        {
             return Err(CodecError::InvalidCount);
         }
+        self.terminal_payer_principal
+            .checked_add(self.policy_preimage_payer_principal)
+            .and_then(|principal| principal.checked_add(self.terminal_donation_floor))
+            .and_then(|subtotal| subtotal.checked_add(self.policy_preimage_donation_floor))
+            .ok_or(CodecError::ArithmeticOverflow)?;
         if self.flags != 0 {
             return Err(CodecError::InvalidEnum);
         }
@@ -591,6 +611,9 @@ impl RevenuePolicyRecordV2 {
         w.u64(self.terminal_payer_principal)?;
         w.u64(self.terminal_donation_floor)?;
         w.u64(self.terminal_generation)?;
+        w.u64(self.policy_preimage_payer_principal)?;
+        w.u64(self.policy_preimage_donation_floor)?;
+        w.u8(self.policy_preimage_stored_bump)?;
         w.u8(self.stored_bump)?;
         w.u8(self.flags)?;
         if w.at != REVENUE_POLICY_RECORD_BYTES_V2 {
@@ -628,6 +651,9 @@ impl RevenuePolicyRecordV2 {
             terminal_payer_principal: r.u64()?,
             terminal_donation_floor: r.u64()?,
             terminal_generation: r.u64()?,
+            policy_preimage_payer_principal: r.u64()?,
+            policy_preimage_donation_floor: r.u64()?,
+            policy_preimage_stored_bump: r.u8()?,
             stored_bump: r.u8()?,
             flags: r.u8()?,
         };
@@ -675,6 +701,9 @@ mod tests {
                 terminal_payer_principal: 2_000_000,
                 terminal_donation_floor: 17,
                 terminal_generation: 1,
+                policy_preimage_payer_principal: 1_500_000,
+                policy_preimage_donation_floor: 11,
+                policy_preimage_stored_bump: 252,
                 stored_bump: 253,
                 flags: 0,
             },
@@ -722,7 +751,10 @@ mod tests {
         let mut bytes = [0u8; REVENUE_POLICY_RECORD_BYTES_V2];
         record.encode(&mut bytes).unwrap();
         assert!(RevenuePolicyRecordV1::decode(&bytes).is_err());
-        assert!(RevenuePolicyRecordV2::decode(&bytes[..159]).is_err());
+        assert!(RevenuePolicyRecordV2::decode(
+            &bytes[..REVENUE_POLICY_RECORD_BYTES_V2 - 1]
+        )
+        .is_err());
         let mut long = [0u8; REVENUE_POLICY_RECORD_BYTES_V2 + 1];
         long[..REVENUE_POLICY_RECORD_BYTES_V2].copy_from_slice(&bytes);
         assert!(RevenuePolicyRecordV2::decode(&long).is_err());
@@ -735,6 +767,7 @@ mod tests {
             RevenuePolicyRecordV2 { treasury_owner: Hash32::ZERO, ..record },
             RevenuePolicyRecordV2 { terminal_payer: Hash32::ZERO, ..record },
             RevenuePolicyRecordV2 { terminal_payer_principal: 0, ..record },
+            RevenuePolicyRecordV2 { policy_preimage_payer_principal: 0, ..record },
             RevenuePolicyRecordV2 { terminal_generation: 2, ..record },
             RevenuePolicyRecordV2 { flags: 1, ..record },
         ] {

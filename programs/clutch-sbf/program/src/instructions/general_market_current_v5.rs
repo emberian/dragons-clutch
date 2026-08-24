@@ -9,7 +9,6 @@
 
 use std::boxed::Box;
 
-use clutch_batch_policy_identity::revenue_policy_v2::REVENUE_POLICY_V2_BYTES;
 use clutch_general_v2_contract::{
     MarketBindingV5, MarketRuntimeV3AccountV1, MARKET_BINDING_ACCOUNT_BYTES_V5,
     MARKET_RUNTIME_ACCOUNT_BYTES,
@@ -577,24 +576,12 @@ fn authenticate_general_market_current_v5_with_product_access(
         .validate_against(artifacts.series(), artifacts.quote(), artifacts.attachment())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
-    require(
-        !frame.revenue_policy_preimage.is_signer
-            && !frame.revenue_policy_preimage.is_writable
-            && !frame.revenue_policy_preimage.executable
-            && frame.revenue_policy_preimage.data_len() == REVENUE_POLICY_V2_BYTES,
-        ClutchError::MismatchedState,
-    )?;
-    let policy_data = frame
-        .revenue_policy_preimage
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let revenue = authenticate_revenue_policy_record_v2(
         program_id,
         frame.realm,
         frame.revenue_record,
-        &policy_data,
+        frame.revenue_policy_preimage,
     )?;
-    drop(policy_data);
     let treasury = derive_revenue_market_treasury_v1(
         program_id,
         revenue,
