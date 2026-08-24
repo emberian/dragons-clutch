@@ -9568,7 +9568,9 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
     fn canonical_retirement_consumes_one_live_physical_link_before_counting() {
         let series_source = include_str!("product_series.rs");
         let series_production = series_source
-            .split("#[cfg(test)]")
+            .split(
+                "#[cfg(test)]\nmod series_lifecycle_terminal_postwrite_v1_adversarial_tests",
+            )
             .next()
             .expect("production Product/Series owner");
         assert_eq!(
@@ -9607,7 +9609,13 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
     #[test]
     fn terminal_receipt_follows_all_hostile_reauth_and_the_terminal_write() {
         let source = include_str!("product_series.rs");
-        let outer = source
+        let production = source
+            .split(
+                "#[cfg(test)]\nmod series_lifecycle_terminal_postwrite_v1_adversarial_tests",
+            )
+            .next()
+            .expect("production before terminal source cases");
+        let outer = production
             .split("pub(crate) fn terminalize_series_lifecycle_replay_v1")
             .nth(1)
             .expect("single terminal outer");
