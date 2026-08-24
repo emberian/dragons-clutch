@@ -64,6 +64,8 @@ pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
 pub(crate) mod failure_market_interval_v2;
+/// Sole current Product/Source/Failure zero-payout attempt composer.
+pub(crate) mod failure_market_source_failure_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
 pub(crate) mod failure_market_actions_v2;
 /// Capability-disabled atomic paid Failure interval advance.
@@ -80,6 +82,8 @@ pub(crate) mod failure_market_family_terminal_v2;
 pub(crate) mod failure_market_replay_v2;
 /// Capability-disabled atomic shared-Market Recovery close.
 pub(crate) mod failure_market_recovery_terminal_v2;
+/// Reverse-order physical retirement of terminal Market Failure dependents.
+pub(crate) mod failure_market_retirement_v2;
 pub mod failure_market_admission;
 pub mod failure_market_runtime;
 /// Withdrawn occurrence-scoped Recovery78/v1 adapter; no current route imports it.

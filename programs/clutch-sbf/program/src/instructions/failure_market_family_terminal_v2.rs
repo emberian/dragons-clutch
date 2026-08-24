@@ -32,9 +32,10 @@ use crate::instructions::product_market::{
     AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
-    plan_seal_failure_market_interval_history_v2, AuthenticatedFailureMarketIntervalFamilySealV2,
-    FailureMarketIntervalFamilySealFactsV2, FailureMarketIntervalFamilySealReceiptV2,
-    FailureMarketIntervalFundingReceiptV2,
+    plan_seal_failure_market_interval_history_v2,
+    reconstruct_failure_market_interval_family_seal_v2,
+    AuthenticatedFailureMarketIntervalFamilySealV2, FailureMarketIntervalFamilySealFactsV2,
+    FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingReceiptV2,
 };
 use clutch_failure_policy_runtime::market_replay_v2::{
     plan_terminalize_failure_market_replay_v2, AuthenticatedFailureMarketReplayTerminalV2,
@@ -365,6 +366,18 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
         self.interval
     }
 
+    /// Reconstruct the unique private seal receipt from the durable terminal
+    /// owner. No earlier transaction-local seal token is required.
+    pub(crate) fn family_seal(self) -> Outcome<FailureMarketIntervalFamilySealReceiptV2> {
+        reconstruct_failure_market_interval_family_seal_v2(
+            &self,
+            self.interval.history(),
+            self.admission.state(),
+            self.interval.quote(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
     fn derived_owner_release_id(&self) -> Outcome<ContentId> {
         derive_terminal_owner_release_id_v2(
             self.admission,
@@ -395,6 +408,30 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
             ])
             .to_bytes(),
         )
+    }
+}
+
+impl AuthenticatedFailureMarketIntervalFamilySealV2
+    for AuthenticatedFailureMarketFamilyTerminalOwnerV2
+{
+    fn authenticate_failure_market_interval_family_seal(
+        &self,
+        expected: FailureMarketIntervalFamilySealFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        let history = self.interval.history();
+        if expected.history_before.bytes() == [0; 32]
+            || expected.history_before == self.interval.history_state_id()
+            || expected.history_root != history.history_root()
+            || expected.completed_session_count != history.completed_session_count()
+            || expected.completed_work_calls != history.completed_work_calls()
+            || expected.exact_reward_lamports != history.exact_reward_lamports()
+            || expected.family_terminal_receipt_id.bytes()
+                != self.family_terminal_receipt_id.bytes()
+            || expected.family_terminal_receipt_id != history.family_terminal_receipt_id()
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -460,6 +497,10 @@ fn authenticate_failure_market_family_terminal_owner_v2(
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
+    runtime_writable: bool,
+    interval_cell_writable: bool,
+    interval_history_writable: bool,
+    replay_writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketFamilyTerminalOwnerV2> {
     require_distinct(&[
         admission_root_account.clone(),
@@ -476,7 +517,7 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         admission_root_account,
         runtime_root_account,
         live_admission,
-        false,
+        runtime_writable,
     )?;
     let interval = authenticate_failure_market_interval_accounts_v2(
         program_id,
@@ -485,15 +526,15 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         live_admission,
         interval_funding,
         quote,
-        false,
-        false,
+        interval_cell_writable,
+        interval_history_writable,
     )?;
     let replay = authenticate_failure_market_replay_v2(
         program_id,
         replay_account,
         live_admission,
         replay_funding,
-        false,
+        replay_writable,
     )?;
     let policy = live_admission.state().binding().facts();
     let runtime_state = runtime.state();
@@ -547,6 +588,41 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         ClutchError::MismatchedState,
     )?;
     Ok(authenticated)
+}
+
+/// Reopen the exact durable Failure terminal with only the deletable accounts
+/// writable. The admission root and permanent replay remain read-only. A
+/// Product whole-Market terminal composer consumes this narrow authority
+/// before reverse-order rent closure; no generic writer is exposed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    replay_funding: FailureMarketReplayFundingReceiptV2,
+) -> Outcome<AuthenticatedFailureMarketFamilyTerminalOwnerV2> {
+    authenticate_failure_market_family_terminal_owner_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        interval_funding,
+        quote,
+        replay_funding,
+        true,
+        true,
+        true,
+        false,
+    )
 }
 
 impl AuthenticatedFailureSharedCoreTerminalOwnerV1
@@ -950,6 +1026,10 @@ pub(crate) fn record_persisted_failure_market_family_terminal_v2<'next>(
         interval_funding,
         quote,
         replay_funding,
+        false,
+        false,
+        false,
+        false,
     )?;
     let (market_root_after, product_terminal) = record_failure_shared_core_terminal_v1(
         program_id,
@@ -1126,6 +1206,46 @@ mod adversarial_family_terminal_tests {
         ] {
             assert!(auth.contains(predicate), "missing durable guard {predicate}");
         }
+    }
+
+    #[test]
+    fn durable_terminal_owner_reconstructs_the_only_interval_seal() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let owner = source
+            .split("impl AuthenticatedFailureMarketFamilyTerminalOwnerV2")
+            .nth(1)
+            .and_then(|value| {
+                value.split("fn derive_terminal_owner_release_id_v2")
+                    .next()
+            })
+            .expect("durable owner");
+        for predicate in [
+            "reconstruct_failure_market_interval_family_seal_v2",
+            "self.interval.history()",
+            "self.admission.state()",
+            "self.interval.quote()",
+            "expected.history_root != history.history_root()",
+            "expected.family_terminal_receipt_id.bytes()",
+            "history.family_terminal_receipt_id()",
+        ] {
+            assert!(owner.contains(predicate));
+        }
+        assert!(!owner.contains("FailureMarketIntervalFamilySealReceiptV2 {"));
+    }
+
+    #[test]
+    fn close_reopen_widens_only_deletable_failure_accounts() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let close = source
+            .split("pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2")
+            .nth(1)
+            .and_then(|value| {
+                value.split("impl AuthenticatedFailureSharedCoreTerminalOwnerV1")
+                    .next()
+            })
+            .expect("close-scoped durable owner");
+        assert!(close.contains("true,\n        true,\n        true,\n        false,"));
+        assert!(!close.contains("admission_root_account.is_writable"));
     }
 
     #[test]

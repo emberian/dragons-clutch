@@ -157,7 +157,9 @@ impl AuthenticatedSourceFailureHandoffV1 {
         }
     }
 
-    fn facts(
+    /// Project the one canonical noncircular authority tuple consumed by the
+    /// post-Product-pin Failure owner and by this terminal composer.
+    pub(crate) fn authority_facts(
         self,
         route: AuthenticatedSourceRouteV1,
         schedule: SourceWorkScheduleBindingV1,
@@ -482,7 +484,7 @@ pub(crate) fn compose_source_failure_terminal_v1<
             && all_distinct(&account_keys),
         ClutchError::MismatchedState,
     )?;
-    let facts = source.facts(
+    let facts = source.authority_facts(
         route,
         schedule,
         runtime_key(terminal_policy_account.key),
@@ -796,5 +798,6 @@ mod adversarial_tests {
         let c = RuntimeKey::from_bytes([3; 32]);
         assert!(all_distinct(&[a, b, c]));
         assert!(!all_distinct(&[a, b, a]));
+        assert!(!all_distinct(&[a, b, b]));
     }
 }
