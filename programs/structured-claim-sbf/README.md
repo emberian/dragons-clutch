@@ -22,8 +22,8 @@ The full-vector and terminal frames use 32 and 33 accounts. Each
 places the Realm-selected collateral ProgramData immediately after its token
 program; the base authenticates the exact current ELF/slot release and commits
 that private value-route receipt into every transition receipt before mutation.
-The withdrawn canonical action 2/4 execution route is not dispatched, and the
-wrapper explicitly refuses those historical wire variants.
+The withdrawn action-2/4 current codecs have been deleted. The wrapper rejects
+those reserved registry tags as unknown before payload or account decoding.
 
 The wrapper and base import one exact source/account contract from the adapter:
 action 1 uses 34 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses

@@ -578,36 +578,11 @@ mod tests {
         let founding =
             StructuredClaimReplayExtensionV1::founding([1; 32], [2; 32], [3; 32], [4; 32])
                 .unwrap();
-        for action in [
-            StructuredClaimActionV1::WrapCanonical,
-            StructuredClaimActionV1::UnwrapCanonical,
-        ] {
-            assert!(founding
-                .advanced(StructuredClaimReplayTransitionV1 {
-                    descriptor_account: [1; 32],
-                    wrapper_product_id: [2; 32],
-                    vault_authority: [3; 32],
-                    action,
-                    transition_id: [5; 32],
-                    delta_id: [6; 32],
-                    position_pre_semantic_id: [4; 32],
-                    position_post_semantic_id: [7; 32],
-                })
-                .is_err());
-            assert!(StructuredClaimReplayDeltaV1 {
-                action,
-                source_sequence: 0,
-                destination_sequence: 0,
-                transition_id: [5; 32],
-                source_position_account: [6; 32],
-                source_position_pre_semantic_id: [7; 32],
-                source_position_post_semantic_id: [8; 32],
-                destination_position_account: [9; 32],
-                destination_position_pre_semantic_id: [10; 32],
-                destination_position_post_semantic_id: [11; 32],
-            }
-            .encode()
-            .is_err());
+        for withdrawn_tag in [2_u8, 4_u8] {
+            assert_eq!(
+                StructuredClaimActionV1::from_tag(withdrawn_tag),
+                Err(Error::UnknownAction),
+            );
         }
 
         let advanced = founding
@@ -623,12 +598,12 @@ mod tests {
             })
             .unwrap();
         let mut hostile = advanced.encode().unwrap();
-        hostile[11] = StructuredClaimActionV1::WrapCanonical.tag();
+        hostile[11] = 2;
         assert_eq!(
             StructuredClaimReplayExtensionV1::decode(&hostile),
             Err(Error::InvalidReplayExtension),
         );
-        hostile[11] = StructuredClaimActionV1::UnwrapCanonical.tag();
+        hostile[11] = 4;
         assert_eq!(
             StructuredClaimReplayExtensionV1::decode(&hostile),
             Err(Error::InvalidReplayExtension),

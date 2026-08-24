@@ -117,8 +117,6 @@ pub const fn current_structured_action_contract_v1(
         StructuredClaimActionV1::RetireDescriptor => {
             Some(CURRENT_STRUCTURED_ACTION_CONTRACTS_V1[5])
         }
-        StructuredClaimActionV1::WrapCanonical
-        | StructuredClaimActionV1::UnwrapCanonical => None,
     }
 }
 
@@ -150,15 +148,14 @@ mod tests {
             ),
             STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1,
         );
-        for action in [
-            StructuredClaimActionV1::WrapCanonical,
-            StructuredClaimActionV1::UnwrapCanonical,
-        ] {
-            assert_eq!(current_structured_action_contract_v1(action), None);
+        for withdrawn_tag in [2_u8, 4_u8] {
             assert_eq!(
-                IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
-                    & (1_u16 << action.tag()),
-                0
+                StructuredClaimActionV1::from_tag(withdrawn_tag),
+                Err(crate::runtime_contract::Error::UnknownAction),
+            );
+            assert_eq!(
+                IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 & (1_u16 << withdrawn_tag),
+                0,
             );
         }
     }

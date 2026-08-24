@@ -228,8 +228,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
         StructuredClaimPayloadV1::CreateDescriptor(value) => {
             create(program_id, accounts, value)
         }
-        StructuredClaimPayloadV1::WrapCanonical(_)
-        | StructuredClaimPayloadV1::UnwrapCanonical(_) => Err(WrapperError::Instruction),
         StructuredClaimPayloadV1::WrapFull(value) => {
             full_vector(program_id, accounts, StructuredClaimActionV1::WrapFull, value)
         }
@@ -251,7 +249,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
         StructuredClaimPayloadV1::RetireDescriptor(value) => {
             retire_descriptor(program_id, accounts, value)
         }
-        _ => Err(WrapperError::Instruction),
     }
 }
 
