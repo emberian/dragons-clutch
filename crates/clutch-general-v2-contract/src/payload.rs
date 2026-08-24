@@ -51,6 +51,8 @@ pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
 /// Exact action-45 through action-47 indexed lifecycle selector width.
 pub const EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES: usize = 64;
+/// Exact action-27/28/30/48/49/50 child-retirement selector width.
+pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -925,14 +927,14 @@ impl RetirePortfolioPairArchivesPayloadV1 {
 /// actions. Every child, Feed, rent, MarketBinding, Window, and Epoch fact is
 /// rederived from authenticated accounts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExactIndexLifecyclePayloadV1 {
+pub struct CountedSettlementRootSelectorV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
     /// Candidate-scoped indexed SettlementRoot PDA.
     pub settlement_root: Id32,
 }
 
-impl ExactIndexLifecyclePayloadV1 {
+impl CountedSettlementRootSelectorV1 {
     /// Decode exactly two distinct live identities.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES)?;
@@ -942,6 +944,37 @@ impl ExactIndexLifecyclePayloadV1 {
         };
         reader.finish()?;
         if value.epoch == value.settlement_root {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+/// Immutable selector for one candidate-scoped child retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementChildRetirementPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
+    /// Exact child account consumed by this action.
+    pub child: Id32,
+}
+
+impl SettlementChildRetirementPayloadV1 {
+    /// Decode exactly three pairwise-distinct live identities.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            child: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.settlement_root
+            || value.epoch == value.child
+            || value.settlement_root == value.child
+        {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -1010,11 +1043,30 @@ pub enum PortfolioSettlementPayloadV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExactIndexLifecyclePayloadKindV1 {
     /// Close both compact index children and mark their root compartment retired.
-    RetireIndexChildren(ExactIndexLifecyclePayloadV1),
+    RetireIndexChildren(CountedSettlementRootSelectorV1),
     /// Close the retained Feed and make the base root Terminal.
-    RetireRetainedFeed(ExactIndexLifecyclePayloadV1),
+    RetireRetainedFeed(CountedSettlementRootSelectorV1),
     /// Close the terminal indexed root and decrement the parent Epoch count.
-    CloseIndexedRoot(ExactIndexLifecyclePayloadV1),
+    CloseIndexedRoot(CountedSettlementRootSelectorV1),
+}
+
+/// Exact settlement-child and phase-gate retirement payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettlementRetirementPayloadKindV1 {
+    /// Close one fully terminal Receipt V5.
+    CloseReceipt(SettlementChildRetirementPayloadV1),
+    /// Close one consumed Reservation V9.
+    CloseReservation(SettlementChildRetirementPayloadV1),
+    /// Close the candidate cash pot or optional FinalPot.
+    ClosePot(SettlementChildRetirementPayloadV1),
+    /// Close one finalized OwnerSettlement V5 row.
+    CloseOwnerRow(SettlementChildRetirementPayloadV1),
+    /// Close one rent-owned owner fee-finalization account.
+    CloseFeeFinalization(SettlementChildRetirementPayloadV1),
+    /// Consume the candidate-wide selected-fee terminal receipt.
+    RetireFeeRecord(SettlementChildRetirementPayloadV1),
+    /// Advance the fully discharged base root from Settling to Retiring.
+    BeginRetiring(CountedSettlementRootSelectorV1),
 }
 
 /// Decode action 26 without adding it to the live-lab union.
@@ -1089,11 +1141,43 @@ pub fn decode_exact_index_lifecycle_payload_v1(
     local_action: u8,
     payload: &[u8],
 ) -> Result<ExactIndexLifecyclePayloadKindV1, CodecError> {
-    let selector = ExactIndexLifecyclePayloadV1::decode(payload)?;
+    let selector = CountedSettlementRootSelectorV1::decode(payload)?;
     match local_action {
         45 => Ok(ExactIndexLifecyclePayloadKindV1::RetireIndexChildren(selector)),
         46 => Ok(ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(selector)),
         47 => Ok(ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(selector)),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode only named settlement retirement actions. Child-close actions use
+/// the 96-byte selector; the phase gate uses the 64-byte root selector.
+pub fn decode_settlement_retirement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<SettlementRetirementPayloadKindV1, CodecError> {
+    match local_action {
+        27 => Ok(SettlementRetirementPayloadKindV1::CloseReceipt(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        28 => Ok(SettlementRetirementPayloadKindV1::CloseReservation(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        30 => Ok(SettlementRetirementPayloadKindV1::ClosePot(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        48 => Ok(SettlementRetirementPayloadKindV1::CloseOwnerRow(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        49 => Ok(SettlementRetirementPayloadKindV1::CloseFeeFinalization(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        50 => Ok(SettlementRetirementPayloadKindV1::RetireFeeRecord(
+            SettlementChildRetirementPayloadV1::decode(payload)?,
+        )),
+        51 => Ok(SettlementRetirementPayloadKindV1::BeginRetiring(
+            CountedSettlementRootSelectorV1::decode(payload)?,
+        )),
         _ => Err(CodecError::InvalidState),
     }
 }
@@ -1434,6 +1518,42 @@ mod tests {
         assert_eq!(
             decode_exact_index_lifecycle_payload_v1(46, &selector),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn settlement_retirement_payloads_are_width_and_action_disjoint() {
+        let mut child = [0u8; SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES];
+        child[..ID_BYTES].copy_from_slice(&live(1));
+        child[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        child[2 * ID_BYTES..].copy_from_slice(&live(3));
+        for action in [27, 28, 30, 48, 49, 50] {
+            assert!(decode_settlement_retirement_payload_v1(action, &child).is_ok());
+        }
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(51, &child),
+            Err(CodecError::WrongLength)
+        );
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(45, &child),
+            Err(CodecError::InvalidState)
+        );
+        child[2 * ID_BYTES..].copy_from_slice(&live(2));
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(27, &child),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut root = [0u8; EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES];
+        root[..ID_BYTES].copy_from_slice(&live(1));
+        root[ID_BYTES..].copy_from_slice(&live(2));
+        assert!(matches!(
+            decode_settlement_retirement_payload_v1(51, &root),
+            Ok(SettlementRetirementPayloadKindV1::BeginRetiring(_))
+        ));
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(48, &root),
+            Err(CodecError::WrongLength)
         );
     }
 

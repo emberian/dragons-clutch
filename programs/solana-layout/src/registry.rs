@@ -1963,6 +1963,14 @@ pub enum GeneralV2Action {
     RetireRetainedFeed = 46,
     /// Close one terminal indexed SettlementRoot and decrement its Epoch.
     CloseIndexedSettlementRoot = 47,
+    /// Close one finalized OwnerSettlement V5 row.
+    CloseOwnerSettlementRow = 48,
+    /// Close one rent-owned owner fee-finalization account.
+    CloseOwnerFeeFinalization = 49,
+    /// Consume one authenticated candidate-wide fee terminal receipt.
+    RetireSelectedFeeRecord = 50,
+    /// Advance one fully discharged counted root from Settling to Retiring.
+    BeginSettlementRetirement = 51,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -2145,7 +2153,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 47;
+    pub const LAST_TAG: u8 = 51;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -2197,6 +2205,10 @@ impl GeneralV2Action {
             Self::RetireExactIndexChildren => 45,
             Self::RetireRetainedFeed => 46,
             Self::CloseIndexedSettlementRoot => 47,
+            Self::CloseOwnerSettlementRow => 48,
+            Self::CloseOwnerFeeFinalization => 49,
+            Self::RetireSelectedFeeRecord => 50,
+            Self::BeginSettlementRetirement => 51,
         }
     }
 
@@ -2250,6 +2262,10 @@ impl GeneralV2Action {
             45 => Some(Self::RetireExactIndexChildren),
             46 => Some(Self::RetireRetainedFeed),
             47 => Some(Self::CloseIndexedSettlementRoot),
+            48 => Some(Self::CloseOwnerSettlementRow),
+            49 => Some(Self::CloseOwnerFeeFinalization),
+            50 => Some(Self::RetireSelectedFeeRecord),
+            51 => Some(Self::BeginSettlementRetirement),
             _ => None,
         }
     }

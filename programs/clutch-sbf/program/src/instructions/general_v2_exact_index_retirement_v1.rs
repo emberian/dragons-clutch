@@ -189,7 +189,7 @@ fn preflight_writes(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
 fn retire_index_children(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    selector: contract::ExactIndexLifecyclePayloadV1,
+    selector: contract::CountedSettlementRootSelectorV1,
 ) -> Outcome<()> {
     require_count(accounts, RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1)?;
     require_program_account(
@@ -380,7 +380,7 @@ fn apply_coalesced_credits(
 fn retire_retained_feed(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    selector: contract::ExactIndexLifecyclePayloadV1,
+    selector: contract::CountedSettlementRootSelectorV1,
 ) -> Outcome<()> {
     require_count(accounts, RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1)?;
     require_program_account(
@@ -480,7 +480,7 @@ fn retire_retained_feed(
 fn close_indexed_root(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    selector: contract::ExactIndexLifecyclePayloadV1,
+    selector: contract::CountedSettlementRootSelectorV1,
 ) -> Outcome<()> {
     require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
     require_program_account(

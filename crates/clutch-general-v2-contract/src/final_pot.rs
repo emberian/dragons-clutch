@@ -90,6 +90,71 @@ pub struct FinalPotV1AccountV1 {
 }
 
 impl FinalPotV1AccountV1 {
+    /// Decode and project a terminal FinalPot against the counted root that
+    /// created it. This is the successor retirement authority; it never falls
+    /// back to the withdrawn SelectedCandidate account family.
+    pub fn decode_counted_root_retirement(
+        input: &[u8],
+        final_pot: Id32,
+        derived_bump: u8,
+        root: &crate::SettlementRootV1AccountV1,
+    ) -> Result<(Self, FinalPotRetirementProjectionV1), CodecError> {
+        root.validate()?;
+        if root.phase() != crate::SettlementRootPhaseV1::Retiring
+            || root.final_pot_state() != crate::SettlementRootChildStateV1::Live
+            || root.final_pot() != final_pot
+            || root.final_pot_rent()?.is_none()
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut reader = Reader::exact(input, FINAL_POT_ACCOUNT_BYTES)?;
+        if reader.u8()? != FINAL_POT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if reader.u8()? != FINAL_POT_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        let body: [u8; FINAL_POT_BODY_V1_BYTES] = reader.array()?;
+        let semantic = AuthenticatedFinalPotV1::decode_body(
+            &body,
+            final_pot.bytes(),
+            true,
+            true,
+        )
+        .map_err(|_| CodecError::InvalidState)?;
+        let value = Self {
+            semantic,
+            stored_bump: reader.u8()?,
+            flags: reader.u8()?,
+        };
+        reader.finish()?;
+        let expected_kind = match root.virtual_cash_direction() {
+            crate::VirtualCashDirectionV1::None => return Err(CodecError::InvalidState),
+            crate::VirtualCashDirectionV1::Split => VirtualReceiptKindV1::Split,
+            crate::VirtualCashDirectionV1::Merge => VirtualReceiptKindV1::Merge,
+        };
+        if value.flags != 0
+            || value.stored_bump != derived_bump
+            || value.semantic.account != final_pot.bytes()
+            || value.semantic.market != root.market().bytes()
+            || value.semantic.epoch != root.epoch().bytes()
+            || value.semantic.candidate != root.settlement_candidate_id().bytes()
+            || value.semantic.owner_order_set_digest != root.owner_order_set_digest().bytes()
+            || value.semantic.relation_witness_digest
+                != root.settlement_witness_digest().bytes()
+            || value.semantic.inventory_kind != expected_kind
+            || value.semantic.authorized_complete_set_atoms != root.virtual_cash_atoms()
+            || value.semantic.outcome_count != root.outcome_count()
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let terminal = value
+            .semantic
+            .retirement_projection()
+            .map_err(|_| CodecError::InvalidState)?;
+        Ok((value, terminal))
+    }
+
     /// Validate exact SelectedCandidate, PDA, owner, bump, and body joins.
     pub fn validate_against_selected(
         self,
