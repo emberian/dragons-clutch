@@ -12,7 +12,12 @@ signed maker, and affected `PositionV1` owner to agree. It binds Market identity
 and generation, maker, nonce, inclusive slot interval, side, outcome, capacity,
 and limit price. `IntentStateV1` binds the locator `(market, generation, maker,
 nonce)`, tracks exact partial fill, and has a terminal maker-authorized cancel.
-A matcher selects only compatible fills and prices.
+A matcher selects only compatible fills and prices. Each signed intent also
+binds the exact fee-config/release identity and fee rate. The adapter creates
+`MarketVenueAuthorization` only after authenticating that the immutable Market
+selected that config/release; the kernel requires that attestation, the policy,
+and every signed intent to agree on Market, generation, config, and rate.
+Therefore a caller or matcher cannot invent a fee policy.
 
 ## Settlement
 
@@ -25,8 +30,11 @@ Each has a distinct owner/Position, shares one fill, and uses prices summing
 exactly to `PRICE_SCALE`. The checker credits each indexed outcome and requires
 gross buyer debits to equal the fill; the adapter must atomically put that exact
 amount in the Market collateral vault. Fees are separate buyer debits and
-transfers. There is no Hoard, reserve, future-fee funding, candidate account, or
-General-style workflow.
+transfers. Complementary sells have exactly N Sell intents in the same
+canonical order from one owner and atomically debit that owner's complete set;
+the Market vault debits exactly `fill`, seller receives `fill - fee`, and the
+venue receives the fee. There is no Hoard, reserve, future-fee funding,
+candidate account, or General-style workflow.
 
 ## Arithmetic and bounds
 
