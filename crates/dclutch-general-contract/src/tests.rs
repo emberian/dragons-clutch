@@ -2184,11 +2184,11 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::CancelOrder, 0).len(),
-        13
+        16
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::CloseOrder, 0).len(),
-        11
+        14
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::VerifyCandidatePage, 4).len(),

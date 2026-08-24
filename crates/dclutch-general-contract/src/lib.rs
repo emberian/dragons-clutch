@@ -1149,8 +1149,8 @@ fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Resul
         GeneralInstructionTagV1::OpenBatch => 10,
         GeneralInstructionTagV1::LockBatch => 4,
         GeneralInstructionTagV1::AdmitOrder => 18,
-        GeneralInstructionTagV1::CancelOrder => 13,
-        GeneralInstructionTagV1::CloseOrder => 11,
+        GeneralInstructionTagV1::CancelOrder => 16,
+        GeneralInstructionTagV1::CloseOrder => 14,
         GeneralInstructionTagV1::SubmitCandidate => 9,
         GeneralInstructionTagV1::FinishCandidate => 2,
         GeneralInstructionTagV1::ConsiderCandidate => 4,
@@ -1257,6 +1257,8 @@ fn general_frame_role(
         GeneralInstructionTagV1::CancelOrder => *[
             Role::OrderOwner,
             Role::ReadonlyMarket,
+            Role::Realm,
+            Role::StagingCursorVacancy,
             Role::ReadonlyConfig,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
@@ -1267,12 +1269,15 @@ fn general_frame_role(
             Role::Mint,
             Role::TokenProgram,
             Role::WritableRentCredit,
+            Role::RentSysvar,
             Role::ClockSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::CloseOrder => *[
             Role::ReadonlyMarket,
+            Role::Realm,
+            Role::StagingCursorVacancy,
             Role::ReadonlyConfig,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
@@ -1283,6 +1288,7 @@ fn general_frame_role(
             Role::Mint,
             Role::TokenProgram,
             Role::WritableRentCredit,
+            Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,

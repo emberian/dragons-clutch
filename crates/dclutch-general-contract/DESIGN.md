@@ -78,6 +78,10 @@ derived identity. Verification frames contain exactly `4 + M` accounts and
 settlement frames exactly `8 + 5M` accounts for the instruction's leading
 execution count `M = 1..4`, so unused execution accounts are not padded into a
 transaction. The maximum V1 settlement frame is therefore 28 accounts.
+The finalized-content-sensitive fixed frames are activation 18, admission 18,
+cancellation 16, and post-batch order close 14 accounts; cancellation and close
+both reauthenticate the raw Realm with its vacancy and their shared Rent sysvar
+before moving or closing Realm-mint quote custody.
 
 ## Canonical mutable-state records
 
