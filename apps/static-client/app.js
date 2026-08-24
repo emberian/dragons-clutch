@@ -87,7 +87,8 @@
     $("copy-snapshot").disabled = true;
     const keeper = $("keeper-action");
     reset(keeper);
-    const option = create("option", null, "Manual explicit construction (no keeper cursor)");
+    reset($("action-verdicts"));
+    const option = create("option", null, "No chain-derived action verdict acquired");
     option.value = "";
     keeper.append(option);
     keeper.disabled = true;
@@ -207,21 +208,43 @@
     const select = $("keeper-action");
     reset(select);
     const actions = snapshot.actionCapabilities.actions;
-    const callable = actions.filter((action) => action.callable);
-    const empty = create("option", null, callable.length === 0
-      ? `${actions.length} release-authenticated verdict(s); no canonical draft is callable`
+    const inspectable = actions.filter((action) => action.inspection.eligible);
+    const empty = create("option", null, inspectable.length === 0
+      ? `${actions.length} release-authenticated verdict(s); every exact tuple is refused`
       : "Select one server-constructed canonical transaction draft");
     empty.value = "";
     select.append(empty);
     actions.forEach((action, index) => {
-      const option = create("option", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}${action.callable ? "" : ` — unavailable: ${action.reason}`}`);
+      const option = create("option", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}${action.inspection.eligible ? "" : ` — refused (${action.inspection.kind}): ${action.inspection.reason}`}`);
       option.value = String(index);
-      option.disabled = !action.callable;
+      option.disabled = !action.inspection.eligible;
       select.append(option);
     });
-    select.disabled = snapshot.finality.requestedCommitment === "processed" || callable.length === 0;
+    select.disabled = snapshot.finality.requestedCommitment === "processed" || inspectable.length === 0;
     $("build-workflow").disabled = true;
-    $("workflow-status").textContent = callable.length === 0 ? "no callable canonical draft" : "select a canonical draft";
+    $("workflow-status").textContent = inspectable.length === 0 ? "all exact action tuples refused" : "select a finalized exact tuple";
+
+    const verdicts = $("action-verdicts");
+    reset(verdicts);
+    for (const action of actions) {
+      const card = create("article", `action-verdict ${action.inspection.eligible ? "eligible" : "refused"}`);
+      const heading = create("div", "card-heading");
+      heading.append(
+        create("h3", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}`),
+        create("span", `chip ${action.inspection.eligible ? "" : "disabled-chip"}`.trim(), action.inspection.eligible ? "inspectable" : "refused")
+      );
+      const facts = create("dl", "compact-facts");
+      facts.append(
+        definition("Disposition", action.inspection.kind),
+        definition("Finalized driver", action.stateSelection ? `${action.stateSelection.account} @ ${action.stateSelection.accountSlot}` : "missing"),
+        definition("Observed tuple accounts", action.inspection.observedAccounts),
+        definition("Stale tuple accounts", action.inspection.staleAccounts),
+        definition("Canonical unsigned material", action.transactionDraft ? `${action.transactionDraft.flows[0]} · ${action.transactionDraft.messageVersion} · ${action.transactionDraft.serializedBytes} bytes` : "unavailable"),
+        definition("Exclusive valid-before slot", action.inspection.validBeforeSlot)
+      );
+      card.append(heading, create("p", null, action.inspection.reason), facts);
+      verdicts.append(card);
+    }
   };
 
   const renderSnapshot = async (snapshot) => {
@@ -353,7 +376,7 @@
     if (state.snapshot.sourceConfiguration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
     const action = actionForSelection();
-    if (!action || !action.callable || !action.transactionDraft) throw new Error("No release-authenticated, state-callable server transaction draft is selected. Browser-authored protocol material is forbidden.");
+    if (!action || !action.callable || !action.transactionDraft || !action.inspection.eligible) throw new Error("No release-authenticated draft with an exact fresh finalized account tuple is selected. Browser-authored protocol material is forbidden.");
     const output = action.transactionDraft;
     state.construction = output;
     $("workflow-output").textContent = JSON.stringify(output, null, 2);
@@ -416,11 +439,11 @@
     });
     $("keeper-action").addEventListener("change", () => {
       const action = actionForSelection();
-      const callable = Boolean(action && action.callable && action.transactionDraft);
-      $("build-workflow").disabled = !callable;
-      $("workflow-status").textContent = callable
-        ? "canonical unsigned draft available for inspection"
-        : "no callable canonical draft selected";
+      const inspectable = Boolean(action && action.callable && action.transactionDraft && action.inspection.eligible);
+      $("build-workflow").disabled = !inspectable;
+      $("workflow-status").textContent = inspectable
+        ? "canonical unsigned draft joined to a fresh finalized exact tuple"
+        : "no fresh finalized exact tuple selected";
     });
     $("copy-workflow").addEventListener("click", () => { if (state.construction) copy($("workflow-output").textContent, $("copy-workflow")); });
   };

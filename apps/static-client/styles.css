@@ -128,6 +128,12 @@ dd { margin: 0; color: var(--ink); font-size: .67rem; overflow-wrap: anywhere; }
 
 .compiler-layout, .constructor-layout { display: grid; grid-template-columns: minmax(18rem, .78fr) minmax(0, 1.22fr); gap: 1px; border: 1px solid var(--line); background: var(--line); }
 .compiler-form, .workflow-form { min-width: 0; display: grid; align-content: start; gap: .9rem; padding: 1rem; background: var(--surface); }
+.action-verdicts { display: grid; gap: .65rem; }
+.action-verdict { min-width: 0; padding: .8rem; border: 1px solid var(--line); background: #0e1310; box-shadow: inset 2px 0 var(--acid); }
+.action-verdict.refused { box-shadow: inset 2px 0 var(--clay); }
+.action-verdict h3 { overflow-wrap: anywhere; }
+.action-verdict > p { margin: .6rem 0 0; color: var(--muted); font-size: .69rem; }
+.action-verdict .compact-facts > div { grid-template-columns: minmax(8rem, .8fr) minmax(0, 1.2fr); }
 .compiler-output, .workflow-output { min-width: 0; background: #090c0b; }
 .compiler-facts { padding: .8rem; }
 .compiler-facts > div { grid-template-columns: minmax(9rem, .65fr) minmax(0, 1.35fr); }
