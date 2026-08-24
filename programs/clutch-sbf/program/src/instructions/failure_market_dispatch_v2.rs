@@ -15,25 +15,22 @@ use crate::instructions::failure_market_action10_current::process_begin_failure_
 use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
 use crate::instructions::failure_market_action13_current::process_archive_failure_market_session_v3;
-use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 /// Exact padded operation prefix for the paid-advance coordinate request.
 pub const FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2: usize = 8;
-/// Canonical Product Foundation GraphV3 preimage width (47 exact slots).
-pub const FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3: usize = 1_576;
 /// Begin/archive need no caller payload: RootV3 retains both immutable
 /// preimages required to reopen the interval pair.
 pub const FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2: usize = 0;
 /// Paid advance additionally carries one padded coordinate request.
 pub const FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2: usize =
     FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2 + FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2;
-/// Resolve also reopens permanent replay and Product slot-10 graph authority.
-pub const FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2: usize = FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2
-    + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2
-    + FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3;
+/// Resolve derives every authority from persisted accounts and therefore has
+/// no caller payload.
+pub const FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2: usize =
+    FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2;
 
 /// Semantic account roles for the complete current action family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,7 +149,6 @@ pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] =
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
     meta(Role::SeriesPlanArtifact, false, false, false),
-    meta(Role::SeriesFundingTermsArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
     meta(Role::RecoveryPolicyArtifact, false, false, false),
@@ -329,15 +325,12 @@ pub const ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
 
 /// Current caller-neutral payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailureMarketActionPayloadV2<'a> {
+pub enum FailureMarketActionPayloadV2 {
     Begin,
     Advance {
         requested_coordinates: u16,
     },
-    Resolve {
-        replay_funding_preimage: &'a [u8],
-        foundation_account_graph: &'a [u8],
-    },
+    Resolve,
     Archive,
 }
 
@@ -368,7 +361,7 @@ pub const fn account_metas_v2(
 pub fn decode_payload_v2(
     action: RecoveryAction,
     payload: &[u8],
-) -> Outcome<FailureMarketActionPayloadV2<'_>> {
+) -> Outcome<FailureMarketActionPayloadV2> {
     match action {
         RecoveryAction::BeginIntervalConsensus => {
             require(
@@ -399,11 +392,7 @@ pub fn decode_payload_v2(
                 payload.len() == FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2,
                 ClutchError::NonCanonical,
             )?;
-            let replay_end = FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
-            Ok(FailureMarketActionPayloadV2::Resolve {
-                replay_funding_preimage: &payload[..replay_end],
-                foundation_account_graph: &payload[replay_end..],
-            })
+            Ok(FailureMarketActionPayloadV2::Resolve)
         }
         RecoveryAction::CloseIntervalConsensusWork => {
             require(
@@ -799,14 +788,8 @@ mod adversarial_contract_tests {
     }
 
     #[test]
-    fn resolve_payload_is_exact_current_graph_v3_not_historical_graph_v2() {
-        assert_eq!(FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3, 1_576);
-        assert_eq!(
-            FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2,
-            FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2
-                + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2
-                + 1_576,
-        );
+    fn resolve_payload_accepts_no_caller_authority_preimages() {
+        assert_eq!(FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2, 0);
     }
 
     #[test]

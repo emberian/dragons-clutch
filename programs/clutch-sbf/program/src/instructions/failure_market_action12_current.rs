@@ -84,7 +84,7 @@ pub(crate) fn process_resolve_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Resolve {
         replay_funding_preimage,

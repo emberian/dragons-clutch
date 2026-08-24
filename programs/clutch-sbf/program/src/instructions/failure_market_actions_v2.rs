@@ -99,7 +99,7 @@ fn withdrawn_root_v1_begin_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Begin {
         recovery_quote_schedule,
@@ -288,7 +288,7 @@ fn withdrawn_root_v1_advance_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Advance {
         requested_coordinates,
@@ -470,7 +470,7 @@ fn withdrawn_root_v1_resolve_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Resolve {
         recovery_quote_schedule,
@@ -751,7 +751,7 @@ pub(crate) fn process_archive_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Archive {
         recovery_quote_schedule,
