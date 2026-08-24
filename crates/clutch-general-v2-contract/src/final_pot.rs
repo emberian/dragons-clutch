@@ -9,7 +9,8 @@
 
 use crate::{
     AuthenticatedSelectedCandidateV1, CodecError, Id32, Reader, Writer, FINAL_POT_ACCOUNT_BYTES,
-    FINAL_POT_ACCOUNT_TAG, FINAL_POT_ACCOUNT_VERSION,
+    FINAL_POT_ACCOUNT_TAG, FINAL_POT_ACCOUNT_VERSION, SettlementRootChildStateV1,
+    SettlementRootPhaseV1, SettlementRootV1AccountV1,
 };
 
 pub use clutch_owner_settlement::{
@@ -89,7 +90,122 @@ pub struct FinalPotV1AccountV1 {
     pub flags: u8,
 }
 
+/// Exact counted-root authority for an existing FinalPot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalPotSettlementRootBindingV1<'a> {
+    /// Canonical counted SettlementRoot.
+    pub root: &'a SettlementRootV1AccountV1,
+    /// Supplied FinalPot PDA.
+    pub final_pot: Id32,
+    /// Bump rederived from the root's immutable seed tuple.
+    pub derived_bump: u8,
+    /// Program-owner authentication performed by the adapter.
+    pub program_owner_authenticated: bool,
+    /// Exact effective writable bit.
+    pub writable: bool,
+}
+
+impl FinalPotSettlementRootBindingV1<'_> {
+    fn validate(self) -> Result<(), CodecError> {
+        self.root.validate()?;
+        if self.final_pot.is_zero()
+            || self.root.phase() != SettlementRootPhaseV1::Settling
+            || self.root.final_pot_state() != SettlementRootChildStateV1::Live
+            || self.root.final_pot() != self.final_pot
+            || self.root.final_pot_bump() != self.derived_bump
+            || !self.program_owner_authenticated
+            || !self.writable
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+}
+
 impl FinalPotV1AccountV1 {
+    /// Validate a live FinalPot directly against its counted SettlementRoot.
+    pub fn validate_against_settlement_root(
+        self,
+        binding: FinalPotSettlementRootBindingV1<'_>,
+    ) -> Result<(), CodecError> {
+        binding.validate()?;
+        let root = binding.root;
+        let expected_kind = match root.virtual_cash_direction() {
+            clutch_owner_settlement::VirtualCashDirectionV1::Split => VirtualReceiptKindV1::Split,
+            clutch_owner_settlement::VirtualCashDirectionV1::Merge => VirtualReceiptKindV1::Merge,
+            clutch_owner_settlement::VirtualCashDirectionV1::None => {
+                return Err(CodecError::MismatchedBinding)
+            }
+        };
+        if self.flags != 0
+            || self.stored_bump != binding.derived_bump
+            || self.semantic.account != binding.final_pot.bytes()
+            || !self.semantic.writable
+            || !self.semantic.selected_budget_authenticated
+            || self.semantic.market != root.market().bytes()
+            || self.semantic.epoch != root.epoch().bytes()
+            || self.semantic.candidate != root.settlement_candidate_id().bytes()
+            || self.semantic.owner_order_set_digest != root.owner_order_set_digest().bytes()
+            || self.semantic.relation_witness_digest != root.settlement_witness_digest().bytes()
+            || self.semantic.inventory_kind != expected_kind
+            || self.semantic.authorized_complete_set_atoms != root.virtual_cash_atoms()
+            || self.semantic.outcome_count != root.outcome_count()
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        self.semantic
+            .encode_body()
+            .map_err(|_| CodecError::InvalidState)?;
+        Ok(())
+    }
+
+    /// Encode a successor while preserving the same counted-root authority.
+    pub fn encode_against_settlement_root(
+        self,
+        binding: FinalPotSettlementRootBindingV1<'_>,
+        output: &mut [u8],
+    ) -> Result<(), CodecError> {
+        self.validate_against_settlement_root(binding)?;
+        let body = self.semantic.encode_body().map_err(|_| CodecError::InvalidState)?;
+        let mut writer = Writer::exact(output, FINAL_POT_ACCOUNT_BYTES)?;
+        writer.u8(FINAL_POT_ACCOUNT_TAG)?;
+        writer.u8(FINAL_POT_ACCOUNT_VERSION)?;
+        writer.bytes(&body)?;
+        writer.u8(self.stored_bump)?;
+        writer.u8(self.flags)?;
+        writer.finish()
+    }
+
+    /// Decode hostile FinalPot bytes through the counted root that created it.
+    pub fn decode_against_settlement_root(
+        input: &[u8],
+        binding: FinalPotSettlementRootBindingV1<'_>,
+    ) -> Result<Self, CodecError> {
+        binding.validate()?;
+        let mut reader = Reader::exact(input, FINAL_POT_ACCOUNT_BYTES)?;
+        if reader.u8()? != FINAL_POT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if reader.u8()? != FINAL_POT_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        let body: [u8; FINAL_POT_BODY_V1_BYTES] = reader.array()?;
+        let value = Self {
+            semantic: AuthenticatedFinalPotV1::decode_body(
+                &body,
+                binding.final_pot.bytes(),
+                true,
+                binding.writable,
+            )
+            .map_err(|_| CodecError::InvalidState)?,
+            stored_bump: reader.u8()?,
+            flags: reader.u8()?,
+        };
+        reader.finish()?;
+        value.validate_against_settlement_root(binding)?;
+        Ok(value)
+    }
+
     /// Decode and project a terminal FinalPot against the counted root that
     /// created it. This is the successor retirement authority; it never falls
     /// back to the withdrawn SelectedCandidate account family.

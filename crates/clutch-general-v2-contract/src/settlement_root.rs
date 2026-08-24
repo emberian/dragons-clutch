@@ -534,6 +534,11 @@ impl SettlementRootV1AccountV1 {
         self.final_pot_state
     }
 
+    /// Canonical FinalPot PDA bump, zero only when no FinalPot exists.
+    pub const fn final_pot_bump(&self) -> u8 {
+        self.final_pot_bump
+    }
+
     /// Selected composite-fee record, zero only for the zero-fee route.
     pub const fn fee_record(&self) -> Id32 {
         self.fee_record
