@@ -904,7 +904,6 @@ fn require_exact_successful_source_join_current_v2(
             && source_join.window_id() == occurrence.window_id()
             && source_join.statistic_key_id() == occurrence.statistic_key_id()
             && occurrence.occurrence_record_id().bytes() == link.source_occurrence_id.bytes()
-            && occurrence.id().bytes() == link.source_occurrence_receipt_id.bytes()
             && occurrence.occurrence_account_authentication_id().bytes()
                 == link.source_occurrence_account_authentication_id.bytes()
             && occurrence.series_plan_id().bytes() == link.series_plan_id.bytes()
@@ -996,6 +995,25 @@ mod adversarial_source_contract_tests {
         assert!(reconstruction.contains("(None, Some(value), None)"));
         assert!(reconstruction.contains("(None, None, Some(value))"));
         assert!(reconstruction.contains("ClutchError::MismatchedState"));
+    }
+
+    #[test]
+    fn successful_join_keeps_occurrence_identity_separate_from_pre_root_receipt() {
+        let source = include_str!("failure_market_action10_current.rs");
+        let join = source
+            .split("fn require_exact_successful_source_join_current_v2")
+            .nth(1)
+            .and_then(|value| value.split("fn require_current_source_authority").next())
+            .expect("current successful Source join");
+        assert!(join.contains(
+            "occurrence.occurrence_record_id().bytes() == link.source_occurrence_id.bytes()"
+        ));
+        assert!(join.contains(
+            "occurrence.occurrence_account_authentication_id().bytes()"
+        ));
+        assert!(!join.contains(
+            "occurrence.id().bytes() == link.source_occurrence_receipt_id.bytes()"
+        ));
     }
 
     #[test]

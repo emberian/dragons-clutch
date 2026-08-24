@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Atomic Failure-family aggregate, permanent replay, and history seal.
 //!
-//! Recovery close alone is not Product authority. This disabled composer joins
+//! Recovery close alone is not Product authority. This private composer joins
 //! the hostile-reopened `RecoveryClosed` runtime and canonical Idle interval
 //! pair, mints the exact pre-replay aggregate, writes fresh permanent
 //! `0xa3/v2`, advances `0xa0/v3` to `FamilyTerminal`, and only then seals the
@@ -31,6 +31,14 @@ use crate::instructions::product_market::{
     AuthenticatedFailureSharedCoreTerminalOwnerV1,
     AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
 };
+use crate::instructions::product_series_current::{
+    authenticate_market_lifecycle_root_v2, AuthenticatedMarketLifecycleRootV2,
+};
+use crate::instructions::source_funding_custody_retirement_v1::{
+    AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1,
+    SourceFundingCustodyLifecycleTerminalFactsV1, SourceFundingCustodyLiveFounderFactsV1,
+    SourceFundingCustodyTerminalDispositionV1,
+};
 use clutch_failure_policy_runtime::market_interval_history_v2::{
     plan_seal_failure_market_interval_history_v2,
     reconstruct_failure_market_interval_family_seal_v2,
@@ -51,10 +59,12 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketFamilyTerminalReceiptV2,
 };
 use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV1, MarketLifecycleRootV1,
+    ContentId, MarketLifecyclePhaseV1, MarketLifecyclePhaseV2, MarketLifecycleRootV1,
     MarketSharedCoreTerminalProjectionV1, MarketSharedCoreV1,
 };
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV1, MarketLifecycleRootAccountV2,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -275,6 +285,29 @@ impl AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
         self.family_terminal
     }
 
+    /// Durable Source-to-current-Product release binding folded before
+    /// Recovery close and repeated in the terminal receipt.
+    pub(crate) const fn source_product_release_binding_id(self) -> ContentId {
+        self.family_terminal.facts().source_product_release_binding_id
+    }
+
+    /// Exact current Product LinkV2 account whose resolved release was folded.
+    pub(crate) const fn source_product_link_account_id(self) -> ContentId {
+        self.family_terminal.facts().source_product_link_account_id
+    }
+
+    /// Exact successful Source terminal folded through Recovery and replay.
+    pub(crate) const fn source_resolution_terminal_postwrite_id(self) -> ContentId {
+        self.family_terminal
+            .facts()
+            .source_resolution_terminal_receipt_id
+    }
+
+    /// Exact successful StatisticResult/lineage physical-close postwrite.
+    pub(crate) const fn source_result_close_receipt_id(self) -> ContentId {
+        self.family_terminal.facts().source_result_close_receipt_id
+    }
+
     /// Exact append-only history seal.
     pub(crate) const fn family_seal(self) -> FailureMarketIntervalFamilySealReceiptV2 {
         self.family_seal
@@ -322,6 +355,27 @@ impl AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
     }
 }
 
+impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
+    for AuthenticatedFailureMarketFamilyTerminalPostwriteV2
+{
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
+        &self,
+        founder: SourceFundingCustodyLiveFounderFactsV1,
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+        successful_source_custody_terminal_facts_v1(
+            self.admission.state().binding().facts(),
+            self.family_terminal
+                .facts()
+                .source_resolution_terminal_receipt_id,
+            self.family_terminal.facts().source_result_close_receipt_id,
+            self.family_terminal.facts().source_product_release_binding_id,
+            self.family_terminal.facts().source_product_link_account_id,
+            ContentId::from_bytes(self.family_terminal.id().bytes()),
+            founder,
+        )
+    }
+}
+
 /// Hostile-reopened durable terminal owner used after Product enters
 /// `Retiring`. The resolution instruction cannot carry its private postwrite
 /// across transactions, so the later Product latch authenticates the unique
@@ -348,6 +402,29 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
 
     pub(crate) const fn family_terminal_receipt_id(self) -> ContentId {
         self.family_terminal_receipt_id
+    }
+
+    /// Durable Source-to-current-Product release binding recovered from the
+    /// hostile-decoded terminal runtime, never from a caller projection.
+    pub(crate) const fn source_product_release_binding_id(self) -> ContentId {
+        self.runtime.state().source_product_release_binding_id()
+    }
+
+    /// Exact current Product LinkV2 account recovered from terminal runtime.
+    pub(crate) const fn source_product_link_account_id(self) -> ContentId {
+        self.runtime.state().source_product_link_account_id()
+    }
+
+    /// Exact successful Source terminal recovered from the terminal runtime.
+    pub(crate) const fn source_resolution_terminal_postwrite_id(self) -> ContentId {
+        self.runtime
+            .state()
+            .source_resolution_terminal_postwrite_id()
+    }
+
+    /// Exact successful StatisticResult/lineage close recovered from runtime.
+    pub(crate) const fn source_result_close_receipt_id(self) -> ContentId {
+        self.runtime.state().source_result_close_receipt_id()
     }
 
     pub(crate) const fn admission(self) -> AuthenticatedFailureMarketRootV2 {
@@ -411,6 +488,88 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
     }
 }
 
+impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
+    for AuthenticatedFailureMarketFamilyTerminalOwnerV2
+{
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
+        &self,
+        founder: SourceFundingCustodyLiveFounderFactsV1,
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+        successful_source_custody_terminal_facts_v1(
+            self.admission.state().binding().facts(),
+            self.runtime.state().source_resolution_terminal_postwrite_id(),
+            self.runtime.state().source_result_close_receipt_id(),
+            self.runtime.state().source_product_release_binding_id(),
+            self.runtime.state().source_product_link_account_id(),
+            self.family_terminal_receipt_id,
+            founder,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn successful_source_custody_terminal_facts_v1(
+    policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
+    source_terminal: ContentId,
+    source_result_close: ContentId,
+    source_product_release: ContentId,
+    source_product_link_account: ContentId,
+    family_terminal_receipt_id: ContentId,
+    founder: SourceFundingCustodyLiveFounderFactsV1,
+) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+    require(
+        founder.market_instance_id.bytes() == policy.market_instance_id.bytes()
+            && founder.source_release_manifest_id.bytes()
+                == policy.source_release_manifest_id.bytes()
+            && founder.source_release_authentication_id.bytes()
+                == policy.source_release_authentication_id.bytes()
+            && founder.source_generation == policy.generation
+            && founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()
+            && !source_terminal.is_zero()
+            && !source_result_close.is_zero()
+            && !source_product_release.is_zero()
+            && !source_product_link_account.is_zero()
+            && !family_terminal_receipt_id.is_zero()
+            && source_terminal != source_result_close
+            && source_terminal != source_product_release
+            && source_terminal != family_terminal_receipt_id
+            && source_result_close != source_product_release
+            && source_result_close != family_terminal_receipt_id
+            && source_product_release != family_terminal_receipt_id
+            && source_product_link_account != source_terminal
+            && source_product_link_account != source_result_close
+            && source_product_link_account != source_product_release
+            && source_product_link_account != family_terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(SourceFundingCustodyLifecycleTerminalFactsV1 {
+        disposition: SourceFundingCustodyTerminalDispositionV1::Successful,
+        capitalization_authority_id: founder.capitalization_authority_id,
+        capitalization_receipt_id: founder.capitalization_receipt_id,
+        pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id,
+        source_terminal_postwrite_id: source_terminal,
+        source_result_or_absence_close_receipt_id: source_result_close,
+        source_product_release_binding_id: source_product_release,
+        failure_family_terminal_receipt_id: family_terminal_receipt_id,
+        market_instance_id: founder.market_instance_id,
+        series_plan_id: founder.series_plan_id,
+        ordinal: founder.ordinal,
+        source_generation: founder.source_generation,
+        source_release_manifest_id: founder.source_release_manifest_id,
+        source_release_authentication_id: founder.source_release_authentication_id,
+        source_route_id: founder.source_route_id,
+        source_work_schedule_id: founder.source_work_schedule_id,
+        source_lifecycle_id: founder.source_lifecycle_id,
+        source_occurrence_id: founder.source_occurrence_id,
+        source_occurrence_account: founder.source_occurrence_account,
+        source_occurrence_authentication_id: founder.source_occurrence_authentication_id,
+        source_repair_generation: founder.source_repair_generation,
+        source_funding_custody: founder.source_funding_custody,
+        lamport_principal_refund: founder.lamport_principal_refund,
+        neutral_lamport_sink: founder.neutral_lamport_sink,
+    })
+}
+
 impl AuthenticatedFailureMarketIntervalFamilySealV2
     for AuthenticatedFailureMarketFamilyTerminalOwnerV2
 {
@@ -458,6 +617,13 @@ fn derive_terminal_owner_release_id_v2(
             &runtime.state_commitment().bytes(),
             &runtime.state().recovery_terminal_receipt_id().bytes(),
             &runtime.state().family_terminal_receipt_id().bytes(),
+            &runtime.state().source_product_release_binding_id().bytes(),
+            &runtime.state().source_product_link_account_id().bytes(),
+            &runtime
+                .state()
+                .source_resolution_terminal_postwrite_id()
+                .bytes(),
+            &runtime.state().source_result_close_receipt_id().bytes(),
             &replay.account().to_bytes(),
             &replay.state_id().bytes(),
             &replay.authentication_id().bytes(),
@@ -625,6 +791,40 @@ pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2(
     )
 }
 
+/// Reopen the durable terminal tuple read-only for Source custody retirement.
+/// Source independently hostile-authenticates the exact Retiring LinkV2,
+/// route, schedule, and live custody before invoking this authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_family_terminal_for_source_retirement_v2(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    replay_funding: FailureMarketReplayFundingReceiptV2,
+) -> Outcome<AuthenticatedFailureMarketFamilyTerminalOwnerV2> {
+    authenticate_failure_market_family_terminal_owner_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        interval_funding,
+        quote,
+        replay_funding,
+        false,
+        false,
+        false,
+        false,
+    )
+}
+
 impl AuthenticatedFailureSharedCoreTerminalOwnerV1
     for AuthenticatedFailureMarketFamilyTerminalOwnerV2
 {
@@ -779,6 +979,11 @@ fn write_failure_market_family_terminal_v2<'a>(
         exact_reward_lamports: history.exact_reward_lamports(),
         recovery_close_receipt_id: recovery_close.close().id(),
         resolution_activation_receipt_id: recovery_facts.resolution_activation_receipt_id,
+        source_resolution_terminal_receipt_id:
+            recovery_facts.source_resolution_terminal_receipt_id,
+        source_result_close_receipt_id: recovery_facts.source_result_close_receipt_id,
+        source_product_release_binding_id: recovery_facts.source_product_release_binding_id,
+        source_product_link_account_id: recovery_facts.source_product_link_account_id,
     };
     let aggregate = admit_failure_market_family_aggregate_v2(
         &FailureMarketFamilyAggregateAuthorityV2 {
@@ -821,6 +1026,11 @@ fn write_failure_market_family_terminal_v2<'a>(
         interval_history_state_id: live_interval.history_state_id(),
         interval_history_root: history.history_root(),
         completed_session_count: history.completed_session_count(),
+        source_resolution_terminal_receipt_id:
+            expected_aggregate.source_resolution_terminal_receipt_id,
+        source_result_close_receipt_id: expected_aggregate.source_result_close_receipt_id,
+        source_product_release_binding_id: expected_aggregate.source_product_release_binding_id,
+        source_product_link_account_id: expected_aggregate.source_product_link_account_id,
     };
     let (runtime_plan, family_terminal) = plan_finalize_failure_market_family_v2(
         &FailureMarketFamilyTerminalAuthorityV2 {
@@ -933,11 +1143,11 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
     interval_cell_account: &AccountInfo<'_>,
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-    resolved_market_root: AuthenticatedMarketLifecycleRootV1<'_>,
+    resolved_market_root: AuthenticatedMarketLifecycleRootV2<'_>,
     admission: AuthenticatedFailureMarketRootV2,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
-    resolved_root_decode: &mut MarketLifecycleRootAccountV1,
+    resolved_root_decode: &mut MarketLifecycleRootAccountV2,
 ) -> Outcome<AuthenticatedFailureMarketFamilyTerminalPostwriteV2> {
     require_distinct(&[
         market_root_account.clone(),
@@ -948,7 +1158,7 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
         replay_account.clone(),
     ])?;
     let policy = admission.state().binding().facts();
-    let live_root = authenticate_market_lifecycle_root_v1(
+    let live_root = authenticate_market_lifecycle_root_v2(
         program_id,
         market_root_account,
         policy.market_instance_id,
@@ -962,7 +1172,7 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
     require(
         live_root.account() == *market_root_account.key
             && live_root.owner_program() == *program_id
-            && root.phase() == MarketLifecyclePhaseV1::Active
+            && root.phase() == MarketLifecyclePhaseV2::Active
             && root.binding().market_instance_id
                 == admission.state().binding().facts().market_instance_id
             && root.binding().generation == admission.state().binding().facts().generation
@@ -1158,6 +1368,8 @@ mod adversarial_family_terminal_tests {
             "runtime.state_commitment()",
             "runtime.state().recovery_terminal_receipt_id()",
             "runtime.state().family_terminal_receipt_id()",
+            "runtime.state().source_resolution_terminal_postwrite_id()",
+            "runtime.state().source_result_close_receipt_id()",
             "replay.account()",
             "replay.state_id()",
             "replay.authentication_id()",
@@ -1234,6 +1446,46 @@ mod adversarial_family_terminal_tests {
     }
 
     #[test]
+    fn source_custody_terminal_is_derived_from_live_founder_and_durable_runtime() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let owner = source
+            .split("fn successful_source_custody_terminal_facts_v1")
+            .nth(1)
+            .and_then(|value| value.split("fn derive_terminal_owner_release_id_v2").next())
+            .expect("successful Source custody terminal owner");
+        for predicate in [
+            "founder.market_instance_id.bytes() == policy.market_instance_id.bytes()",
+            "founder.source_release_manifest_id.bytes()",
+            "founder.source_release_authentication_id.bytes()",
+            "founder.source_generation == policy.generation",
+            "founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()",
+            "source_terminal_postwrite_id: source_terminal",
+            "source_result_or_absence_close_receipt_id: source_result_close",
+            "source_product_release_binding_id: source_product_release",
+            "!source_product_link_account.is_zero()",
+            "source_product_link_account != source_product_release",
+            "failure_family_terminal_receipt_id: family_terminal_receipt_id",
+            "pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id",
+            "source_occurrence_authentication_id: founder.source_occurrence_authentication_id",
+        ] {
+            assert!(owner.contains(predicate), "missing Source terminal fact {predicate}");
+        }
+        assert!(!owner.contains("SourceFundingCustodyLifecycleTerminalFactsV1::decode"));
+    }
+
+    #[test]
+    fn terminal_owner_release_commits_the_exact_resolved_product_link_account() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let derivation = source
+            .split("fn derive_terminal_owner_release_id_v2")
+            .nth(1)
+            .expect("owner release derivation");
+        assert!(derivation.contains("runtime.state().source_product_link_account_id().bytes()"));
+        assert!(source.contains("source_product_link_account_id: recovery_facts.source_product_link_account_id"));
+        assert!(source.contains("source_product_link_account_id: expected_aggregate.source_product_link_account_id"));
+    }
+
+    #[test]
     fn close_reopen_widens_only_deletable_failure_accounts() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
         let close = source
@@ -1258,17 +1510,18 @@ mod adversarial_family_terminal_tests {
                 value.split("/// After all Series links retire").next()
             })
             .expect("Active-root persistence outer");
-        assert!(persist.contains("MarketLifecyclePhaseV1::Active"));
-        assert!(persist.contains("authenticate_market_lifecycle_root_v1"));
+        assert!(persist.contains("MarketLifecyclePhaseV2::Active"));
+        assert!(persist.contains("authenticate_market_lifecycle_root_v2"));
         assert!(persist.contains("live_root == resolved_market_root"));
         assert!(persist.contains("root.resolution_activation_receipt_id()"));
         assert!(persist.contains("close.resolution_activation_receipt_id"));
         assert!(persist.contains("write_failure_market_family_terminal_v2"));
         assert!(!persist.contains("record_failure_shared_core_terminal_v1"));
         assert!(
-            persist.find("authenticate_market_lifecycle_root_v1")
+            persist.find("authenticate_market_lifecycle_root_v2")
                 < persist.find("write_failure_market_family_terminal_v2")
         );
+        assert!(!persist.contains("AuthenticatedMarketLifecycleRootV1"));
 
         let latch = source
             .split("pub(crate) fn record_persisted_failure_market_family_terminal_v2")

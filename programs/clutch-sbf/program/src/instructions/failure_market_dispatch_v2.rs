@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Checked, capability-disabled wire contract for current Market Failure.
+//! Checked wire contract for current Market Failure.
 //!
 //! Recovery78/v1 actions 10 through 13 retain their allocated coordinates,
 //! but they no longer inherit the withdrawn caller-ID payloads or occurrence-
 //! scoped `ExternalV2` account contract. This always-compiled module owns the
-//! exact current ordered roles and the only hostile payload decoder. While the
-//! central capability is false, [`process`] refuses before inspecting either.
+//! exact current ordered roles and the only hostile payload decoder. Central
+//! profile admission remains the sole gate and is checked before payload or
+//! account inspection.
 
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
 use crate::instructions::failure_market_actions_v2::{
     process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
-    process_resolve_failure_market_session_v2,
 };
 use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
+use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
@@ -24,8 +25,8 @@ use solana_pubkey::Pubkey;
 
 /// Exact padded operation prefix for the paid-advance coordinate request.
 pub const FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2: usize = 8;
-/// Canonical Product foundation account-graph preimage width.
-pub const FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2: usize = 1_544;
+/// Canonical Product Foundation GraphV3 preimage width (47 exact slots).
+pub const FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3: usize = 1_576;
 /// Begin/archive carry only the two immutable Failure content preimages.
 pub const FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2: usize =
     FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
@@ -36,7 +37,7 @@ pub const FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2: usize =
 /// Resolve also reopens permanent replay and Product slot-10 graph authority.
 pub const FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2: usize = FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2
     + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2
-    + FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2;
+    + FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3;
 
 /// Semantic account roles for the complete current action family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +57,7 @@ pub enum FailureMarketAccountRoleV2 {
     CompilerBundleArtifact,
     FundingQuoteArtifact,
     SeriesPlanArtifact,
+    SeriesFundingTermsArtifact,
     ProductTemplateArtifact,
     NativeClaimBasisArtifact,
     RecoveryPolicyArtifact,
@@ -247,10 +249,14 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::SeriesPlanArtifact, false, false, false),
+    meta(Role::SeriesFundingTermsArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
+    meta(Role::RecoveryPolicyArtifact, false, false, false),
     meta(Role::PriceMeasurePolicyArtifact, false, false, false),
     meta(Role::MarketGenesisArtifact, false, false, false),
+    meta(Role::AttachmentPlanArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
     meta(Role::SourceRelease, false, false, false),
     meta(Role::SourceAdapterProgram, false, false, true),
@@ -756,6 +762,10 @@ mod adversarial_contract_tests {
             Role::FailureIntervalCell,
             Role::FailureIntervalHistory,
             Role::FailureMarketReplay,
+            Role::SeriesPlanArtifact,
+            Role::SeriesFundingTermsArtifact,
+            Role::RecoveryPolicyArtifact,
+            Role::AttachmentPlanArtifact,
             Role::ResolutionV5,
             Role::HoardV2,
             Role::ClaimLedgerV3,
@@ -770,6 +780,17 @@ mod adversarial_contract_tests {
                 .iter()
                 .any(|meta| meta.role == role));
         }
+    }
+
+    #[test]
+    fn resolve_payload_is_exact_current_graph_v3_not_historical_graph_v2() {
+        assert_eq!(FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3, 1_576);
+        assert_eq!(
+            FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2,
+            FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2
+                + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2
+                + 1_576,
+        );
     }
 
     #[test]

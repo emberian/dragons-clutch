@@ -15,7 +15,7 @@ use crate::instructions::failure_market_admission::{
 };
 use crate::instructions::failure_market_interval_v2::{
     authenticate_failure_market_interval_accounts_v2, AuthenticatedFailureMarketIntervalAccountsV2,
-    FailureMarketIntervalArchivePostwriteV2,
+    FailureMarketIntervalArchivePostwriteV3,
 };
 use crate::instructions::failure_market_resolution_v5::AuthenticatedFailureMarketResolutionPostwriteV5;
 use crate::instructions::failure_market_runtime::{
@@ -27,6 +27,7 @@ use crate::instructions::source_terminal_resolution_v5::{
     AuthenticatedSourceResolutionStatisticResultCloseV1, AuthenticatedSourceResolutionTerminalV1,
     PersistedSourceResolutionTerminalPolicyV1,
 };
+use crate::instructions::source_resolution_product_release_v1::AuthenticatedSourceResolutionProductReleaseV1;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_recovery_terminal_v2::{
     admit_failure_market_recovery_terminal_v2,
@@ -161,10 +162,11 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
     recovery_refund_owner: &AccountInfo<'a>,
     neutral_sink: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
-    archive: FailureMarketIntervalArchivePostwriteV2,
+    archive: FailureMarketIntervalArchivePostwriteV3,
     archive_runtime: AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
     source_terminal: AuthenticatedSourceResolutionTerminalV1,
+    source_product_release: AuthenticatedSourceResolutionProductReleaseV1,
     source_result_close: AuthenticatedSourceResolutionStatisticResultCloseV1,
 ) -> Outcome<AuthenticatedFailureMarketRecoveryClosePostwriteV2> {
     require_distinct(&[
@@ -230,6 +232,11 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
                 .bytes()
                 == resolution.failure_resolution().id().bytes()
             && source_result_close.source_terminal_id() == source_terminal.id()
+            && source_product_release.facts().source_terminal_id == source_terminal.id()
+            && source_product_release.facts().failure_resolution_postwrite_id
+                == resolution.id()
+            && source_product_release.facts().product_archive_postwrite_id.bytes()
+                == archive.id().bytes()
             && source_terminal_policy.resolution_v5_terminal_postwrite_id()
                 == resolution.id()
             && source_result_close.source_resolution_input_id()
@@ -275,6 +282,10 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         resolution_activation_receipt_id: resolution.product_activation().id(),
         source_resolution_terminal_receipt_id: ContentId::from_bytes(source_terminal.id().bytes()),
         source_result_close_receipt_id: ContentId::from_bytes(source_result_close.id().bytes()),
+        source_product_release_binding_id: ContentId::from_bytes(source_product_release.id().bytes()),
+        source_product_link_account_id: ContentId::from_bytes(
+            source_product_release.facts().product_link_account.to_bytes(),
+        ),
         liveness_policy_id: policy.liveness_policy_id,
         liveness_lifecycle_id: policy.liveness_lifecycle_id,
         recovery_compartment_account_id: policy.recovery_compartment_account_id,
@@ -294,6 +305,8 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         resolution.product_activation().id(),
         ContentId::from_bytes(source_terminal.id().bytes()),
         ContentId::from_bytes(source_result_close.id().bytes()),
+        ContentId::from_bytes(source_product_release.id().bytes()),
+        ContentId::from_bytes(source_product_release.facts().product_link_account.to_bytes()),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
@@ -331,7 +344,11 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         exact_reward_lamports: expected_terminal.exact_reward_lamports,
         latest_interval_terminal_receipt_id: expected_terminal.latest_interval_terminal_receipt_id,
         resolution_activation_receipt_id: expected_terminal.resolution_activation_receipt_id,
+        source_resolution_terminal_receipt_id:
+            expected_terminal.source_resolution_terminal_receipt_id,
         source_result_close_receipt_id: expected_terminal.source_result_close_receipt_id,
+        source_product_release_binding_id: expected_terminal.source_product_release_binding_id,
+        source_product_link_account_id: expected_terminal.source_product_link_account_id,
         recovery_terminal_receipt_id: terminal.id(),
         closed_recovery_join_id: closed_join,
     };
@@ -380,6 +397,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
             &terminal.id().bytes(),
             &close.id().bytes(),
             &source_result_close.id().bytes(),
+            &source_product_release.id().bytes(),
             &live_runtime.state_commitment().bytes(),
             &runtime_after.state_commitment().bytes(),
             &closed_join.bytes(),

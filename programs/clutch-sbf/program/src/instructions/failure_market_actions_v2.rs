@@ -461,10 +461,11 @@ pub(crate) fn process_advance_failure_market_session_v2(
     Ok(())
 }
 
-/// Resolve one interval and atomically finish its Source, Recovery, replay,
-/// history, and durable Failure-family poststates.
+/// Historical RootV1 resolution source retained only for archaeology. Current
+/// dispatch is owned exclusively by `failure_market_action12_current`.
+#[cfg(any())]
 #[allow(clippy::too_many_lines)]
-pub(crate) fn process_resolve_failure_market_session_v2(
+fn withdrawn_root_v1_resolve_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -901,29 +902,32 @@ mod adversarial_action_tests {
 
     #[test]
     fn resolve_has_one_full_source_product_failure_terminal_outer() {
-        let source = include_str!("failure_market_actions_v2.rs");
+        let source = include_str!("failure_market_action12_current.rs");
         let handler = source
             .split("fn process_resolve_failure_market_session_v2")
             .nth(1)
-            .and_then(|value| value.split("fn process_archive_failure_market_session_v2").next())
+            .and_then(|value| value.split("#[cfg(test)]").next())
             .expect("action12 handler");
         for owner in [
-            "require_protocol_distinct_with_external_aliases",
-            "authenticate_failure_market_execution_v2",
-            "execution.require_next_sequence(sequence)",
+            "require_current_resolution_aliases",
+            "authenticate_market_lifecycle_root_v2",
+            "authenticate_series_market_link_v2",
+            "authenticate_registry_capability_v4",
             "authenticate_successful_source_handoff_for_resolution_v1",
-            "authenticate_failure_market_source_product_route_v3",
-            "authenticate_source_resolution_input_v3",
-            "authenticate_failure_market_resolution_foundation_v2",
+            "authenticate_source_product_route_v4",
+            "authenticate_source_resolution_input_v4",
+            "authenticate_market_foundation_preallocation_from_bytes_v3",
             "authenticate_general_market_liabilities_v2",
             "resolve_failure_market_interval_and_source_v5",
         ] {
             assert!(handler.contains(owner));
         }
         require_every_contract_role_is_consumed(handler, RESOLVE_FAILURE_MARKET_SESSION_METAS_V2);
-        assert!(handler.matches("source_custody,").count() >= 2);
+        assert!(handler.matches("source_custody,").count() >= 3);
         assert!(!handler.contains("Role::NeutralSink"));
         assert!(!handler.contains("ExternalRecoveryStateV1"));
+        assert!(!handler.contains(concat!("authenticate_source_resolution_input_", "v3")));
+        assert!(!handler.contains(concat!("MarketLifecycleRootAccount", "V1")));
     }
 
     #[test]

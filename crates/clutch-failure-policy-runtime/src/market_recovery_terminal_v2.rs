@@ -105,6 +105,10 @@ pub struct FailureMarketRecoveryTerminalFactsV2 {
     pub source_resolution_terminal_receipt_id: ProductContentId,
     /// Source's exact physical StatisticResult/lineage close postwrite.
     pub source_result_close_receipt_id: ProductContentId,
+    /// Source's exact terminal-to-current-Product LinkV2 release binding.
+    pub source_product_release_binding_id: ProductContentId,
+    /// Exact Product LinkV2 account consumed by that release.
+    pub source_product_link_account_id: ProductContentId,
     /// Immutable liveness policy.
     pub liveness_policy_id: LivenessId,
     /// Market-scoped liveness lifecycle.
@@ -199,6 +203,8 @@ pub fn admit_failure_market_recovery_terminal_v2<
     resolution_activation_receipt_id: ProductContentId,
     source_resolution_terminal_receipt_id: ProductContentId,
     source_result_close_receipt_id: ProductContentId,
+    source_product_release_binding_id: ProductContentId,
+    source_product_link_account_id: ProductContentId,
 ) -> Result<FailureMarketRecoveryTerminalReceiptV2> {
     runtime.validate_against_admission(admission)?;
     if runtime.phase() != FailureMarketRuntimePhaseV1::IntervalArchived {
@@ -215,13 +221,36 @@ pub fn admit_failure_market_recovery_terminal_v2<
     require_live(resolution_activation_receipt_id.bytes())?;
     require_live(source_resolution_terminal_receipt_id.bytes())?;
     require_live(source_result_close_receipt_id.bytes())?;
+    require_live(source_product_release_binding_id.bytes())?;
+    require_live(source_product_link_account_id.bytes())?;
+    let policy = admission.binding().facts();
     if resolution_activation_receipt_id == source_resolution_terminal_receipt_id
         || resolution_activation_receipt_id == source_result_close_receipt_id
+        || resolution_activation_receipt_id == history.latest_terminal_receipt_id()
         || source_resolution_terminal_receipt_id == source_result_close_receipt_id
+        || source_resolution_terminal_receipt_id == history.latest_terminal_receipt_id()
+        || source_result_close_receipt_id == history.latest_terminal_receipt_id()
+        || source_product_release_binding_id == resolution_activation_receipt_id
+        || source_product_release_binding_id == source_resolution_terminal_receipt_id
+        || source_product_release_binding_id == source_result_close_receipt_id
+        || source_product_release_binding_id == history.latest_terminal_receipt_id()
+        || source_product_link_account_id == resolution_activation_receipt_id
+        || source_product_link_account_id == source_resolution_terminal_receipt_id
+        || source_product_link_account_id == source_result_close_receipt_id
+        || source_product_link_account_id == source_product_release_binding_id
+        || source_product_link_account_id == history.latest_terminal_receipt_id()
+        || source_product_link_account_id.bytes() == runtime.runtime_account_id().bytes()
+        || source_product_link_account_id.bytes()
+            == admission.root_funding().facts().root_account_id.bytes()
+        || source_product_link_account_id.bytes() == history.work_account().bytes()
+        || source_product_link_account_id.bytes() == history.history_account().bytes()
+        || source_product_link_account_id.bytes()
+            == policy.recovery_compartment_account_id.bytes()
+        || source_product_link_account_id.bytes() == policy.recovery_refund_owner.bytes()
+        || source_product_link_account_id.bytes() == policy.neutral_sink.bytes()
     {
         return Err(Error::BindingMismatch);
     }
-    let policy = admission.binding().facts();
     let facts = FailureMarketRecoveryTerminalFactsV2 {
         runtime_before: runtime.commitment()?,
         admission_state_id: admission.id()?,
@@ -239,6 +268,8 @@ pub fn admit_failure_market_recovery_terminal_v2<
         resolution_activation_receipt_id,
         source_resolution_terminal_receipt_id,
         source_result_close_receipt_id,
+        source_product_release_binding_id,
+        source_product_link_account_id,
         liveness_policy_id: policy.liveness_policy_id,
         liveness_lifecycle_id: policy.liveness_lifecycle_id,
         recovery_compartment_account_id: policy.recovery_compartment_account_id,
@@ -353,6 +384,8 @@ fn hash_terminal_facts(hasher: &mut Sha256, facts: FailureMarketRecoveryTerminal
     hasher.update(facts.resolution_activation_receipt_id.bytes());
     hasher.update(facts.source_resolution_terminal_receipt_id.bytes());
     hasher.update(facts.source_result_close_receipt_id.bytes());
+    hasher.update(facts.source_product_release_binding_id.bytes());
+    hasher.update(facts.source_product_link_account_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
@@ -431,6 +464,8 @@ mod adversarial_terminal_tests {
             resolution_activation_receipt_id: ProductContentId::from_bytes([14; 32]),
             source_resolution_terminal_receipt_id: ProductContentId::from_bytes([15; 32]),
             source_result_close_receipt_id: ProductContentId::from_bytes([16; 32]),
+            source_product_release_binding_id: ProductContentId::from_bytes([24; 32]),
+            source_product_link_account_id: ProductContentId::from_bytes([25; 32]),
             liveness_policy_id: LivenessId::from_bytes([17; 32]),
             liveness_lifecycle_id: LivenessId::from_bytes([18; 32]),
             recovery_compartment_account_id: LivenessId::from_bytes([19; 32]),
@@ -459,5 +494,13 @@ mod adversarial_terminal_tests {
         let mut unspliced = Sha256::new();
         hash_terminal_facts(&mut unspliced, facts);
         assert_ne!(unspliced.finalize(), physical.finalize());
+
+        let mut link_splice = facts;
+        link_splice.source_product_link_account_id = ProductContentId::from_bytes([26; 32]);
+        let mut substituted_link = Sha256::new();
+        hash_terminal_facts(&mut substituted_link, link_splice);
+        let mut unspliced = Sha256::new();
+        hash_terminal_facts(&mut unspliced, facts);
+        assert_ne!(unspliced.finalize(), substituted_link.finalize());
     }
 }

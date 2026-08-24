@@ -739,8 +739,51 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v2(
     liveness_policy_account: &AccountInfo<'_>,
     body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
+    authenticate_failure_market_recovery_quote_with_root_access_v2(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        false,
+    )
+}
+
+/// Resolution-only quote authentication against the exact writable unresolved
+/// RootV2 that the same instruction will activate. This narrow entrypoint does
+/// not relax ordinary Begin/Advance authority to accept unexpected writability.
+pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v2(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
+    authenticate_failure_market_recovery_quote_with_root_access_v2(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_failure_market_recovery_quote_with_root_access_v2(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+    expected_root_writable: bool,
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
     require(
-        !root.is_writable()
+        root.is_writable() == expected_root_writable
             && liveness_policy_account.owner == program_id
             && !liveness_policy_account.is_writable
             && !liveness_policy_account.is_signer
@@ -2614,6 +2657,77 @@ const fn failure_release_disposition_byte_v2(
     }
 }
 
+/// Persist a resolved current interval append/reset and release its exact
+/// Product LinkV2 pin, without yet advancing the shared Failure runtime.
+///
+/// The successful Source-to-Product release bridge can exist only after this
+/// release. The Resolution outer must mint that bridge next and then persist
+/// the runtime transcript with the bridge identity; no crate-visible caller
+/// may detach this narrow intermediate from that sole outer.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn archive_resolved_failure_market_interval_link_v3<'a, 'link, 'next>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    release_link: &AuthenticatedWritableFailureSessionReleaseLinkV3,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    link_rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV3,
+    AuthenticatedSeriesMarketLinkV2<'next>,
+    AuthenticatedSeriesFailureSessionReleaseV3,
+)> {
+    require_distinct(&[
+        cell_account.clone(),
+        history_account.clone(),
+        series_link_account.clone(),
+    ])?;
+    require(
+        release_link.disposition() == FailureSessionReleaseDispositionV3::Resolved,
+        ClutchError::MismatchedState,
+    )?;
+    let archive = write_failure_market_interval_archive_v3(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+        link_before.state().binding().source_occurrence_id,
+        None,
+        None,
+        release_link.id(),
+        FailureSessionReleaseDispositionV3::Resolved,
+    )?;
+    let (released, release) = release_series_market_link_failure_v3(
+        program_id,
+        series_link_account,
+        link_before,
+        release_link,
+        &archive,
+        link_rebound_output,
+    )?;
+    require(
+        release.disposition() == FailureSessionReleaseDispositionV3::Resolved
+            && release.archive_postwrite_id() == archive.id()
+            && release.append_receipt_id().bytes() == archive.append().id().bytes()
+            && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
+            && release.release_link_preauthorization_id() == release_link.id()
+            && release.session_terminal_receipt_id()
+                == archive.append().session_terminal_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((archive, released, release))
+}
+
 /// Atomically archive one exact terminal Failure session and release its
 /// initiating Product link pin.
 ///
@@ -2766,6 +2880,162 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
                 .root()
                 .state()
                 .session_history_commitment()
+                == archive.append().resulting_root(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((archive, release, runtime_postwrite))
+}
+
+/// Atomically archive one current LinkV2 exhausted session, release
+/// its exact Product pin, and persist the shared runtime transcript last.
+///
+/// Resolved and Source failure sessions use stronger Source terminal/release
+/// compositors; this owner accepts only deterministic exhaustion and never
+/// lowers its current LinkV2 pre/poststates into the historical contract.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root_account: &AccountInfo<'a>,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    release_link: &AuthenticatedWritableFailureSessionReleaseLinkV3,
+    admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    disposition: FailureSessionReleaseDispositionV3,
+    link_rebound_output: &mut SeriesMarketLinkAccountV2,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV3,
+    AuthenticatedSeriesFailureSessionReleaseV3,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+)> {
+    require_distinct(&[
+        admission_root_account.clone(),
+        runtime_root_account.clone(),
+        cell_account.clone(),
+        history_account.clone(),
+        series_link_account.clone(),
+    ])?;
+    require(
+        disposition == FailureSessionReleaseDispositionV3::Exhausted
+            && disposition == release_link.disposition(),
+        ClutchError::MismatchedState,
+    )?;
+    let link_after = link_before
+        .state()
+        .release_failure_session(append.session_terminal_receipt_id())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_close = FailureMarketSessionCloseFactsV2 {
+        runtime_before: runtime_before.state_commitment(),
+        series_link_before: link_before
+            .state()
+            .semantic_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_link_after: link_after
+            .semantic_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        session_before: ProductContentId::from_bytes(append.terminal_state_commitment().bytes()),
+        session_after: ProductContentId::from_bytes(append.idle_state_commitment().bytes()),
+        interval_terminal_receipt_id: append.session_terminal_receipt_id(),
+        previous_session_history: append.previous_root(),
+        resulting_session_history: append.resulting_root(),
+        history_append_receipt_id: append.id(),
+        history_before: append.history_before(),
+        history_after: append.history_after(),
+        completed_session_count: append.completed_session_count(),
+        source_product_release_binding_id: ProductContentId::ZERO,
+        transition_receipt_id:
+            clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]),
+    };
+    let runtime_authority = FailureMarketRuntimeArchiveAuthorityV2 {
+        expected: expected_close,
+    };
+    let runtime_plan = plan_close_failure_market_session_v2(
+        &runtime_authority,
+        runtime_before.state(),
+        admission.state(),
+        *link_before.state(),
+        append,
+        ProductContentId::ZERO,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let archive = write_failure_market_interval_archive_v3(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+        link_before.state().binding().source_occurrence_id,
+        None,
+        None,
+        release_link.id(),
+        disposition,
+    )?;
+    let (released_link, release) = release_series_market_link_failure_v3(
+        program_id,
+        series_link_account,
+        link_before,
+        release_link,
+        &archive,
+        link_rebound_output,
+    )?;
+    let runtime_link_after = runtime_plan
+        .series_link_after()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        *released_link.state() == runtime_plan.series_link_after()
+            && release.link_semantic_before() == runtime_plan.series_link_before().semantic_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && release.link_semantic_after() == runtime_link_after
+            && release.archive_postwrite_id() == archive.id()
+            && release.release_link_preauthorization_id() == release_link.id()
+            && release.release_disposition() == disposition,
+        ClutchError::MismatchedState,
+    )?;
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before: runtime_before.state_commitment(),
+        runtime_after: runtime_plan
+            .resulting_runtime()
+            .commitment()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        transition_receipt_id: runtime_plan.receipt_id(),
+    };
+    let runtime_write_authority = FailureMarketRuntimeArchiveWriteV1 {
+        expected: runtime_write_facts,
+        archive_idle_state: ProductContentId::from_bytes(archive.accounts().cell_state_id().bytes()),
+        runtime_idle_state: runtime_plan.resulting_runtime().session_state_commitment(),
+        release_link_after: release.link_semantic_after().content_id(),
+        runtime_link_after: runtime_link_after.content_id(),
+        release_terminal_receipt_id: release.session_terminal_receipt_id(),
+        runtime_terminal_receipt_id: runtime_plan
+            .resulting_runtime()
+            .interval_terminal_receipt_id(),
+    };
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        admission,
+        runtime_before,
+        runtime_plan,
+        &runtime_write_authority,
+    )?;
+    require(
+        runtime_postwrite.transition_receipt_id() == runtime_write_facts.transition_receipt_id
+            && runtime_postwrite.root().state().completed_session_count()
+                == archive.append().completed_session_count()
+            && runtime_postwrite.root().state().session_history_commitment()
                 == archive.append().resulting_root(),
         ClutchError::MismatchedState,
     )?;
