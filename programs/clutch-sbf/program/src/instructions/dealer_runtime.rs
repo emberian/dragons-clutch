@@ -616,6 +616,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::BindEpoch
             | DealerFacilityAction::LapseEpoch
             | DealerFacilityAction::SelectLeaseAndBegin
+            | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 24,
             DealerFacilityAction::FinalizeSettlement
@@ -677,6 +678,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::RefundCancelledSponsor
             | DealerFacilityAction::BindEpoch
             | DealerFacilityAction::LapseEpoch
+            | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
@@ -1214,6 +1216,29 @@ const TIMED_CLOSE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
+];
+
+const ENTER_UNWIND: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1775,6 +1800,7 @@ pub fn meta_contract_v1(
         DealerFacilityAction::FinalizeSettlement => Some(FINALIZE_SETTLEMENT),
         DealerFacilityAction::AbortBeforeCollection => Some(ABORT_BEFORE_COLLECTION),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
+        DealerFacilityAction::EnterUnwind => Some(ENTER_UNWIND),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit
             if !payload.external_liveness && !payload.existing_ticket =>

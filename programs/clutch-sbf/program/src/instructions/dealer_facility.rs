@@ -26,6 +26,7 @@ use clutch_dealer_runtime_contract::{
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     prepare_refund_cancelled_sponsor_v3, prepare_sponsor_halt_dealer_v3,
+    prepare_enter_unwind_by_queue_v3,
     prepare_increase_exit_ticket_v1, prepare_new_exit_ticket_v1,
     prepare_timed_close_dealer_v3,
     CoveredDealerSelectionContextV1,
@@ -194,6 +195,7 @@ const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize =
     21 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
+const ENTER_UNWIND_ACCOUNT_COUNT: usize = 20;
 const TIMED_CLOSE_ACCOUNT_COUNT: usize = 21;
 const QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT: usize = 10;
 const QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT: usize = 8;
@@ -3807,11 +3809,24 @@ fn sponsor_halt(
     )
 }
 
-/// Permissionlessly enter UnwindOnly after the immutable close slot while
-/// preserving Product's facility-lifetime obligation. Retirement work and
-/// keeper payment come only from the Retirement compartment; the caller funds
-/// receipt rent. The facility Position and Realm Hoard remain byte-for-byte
-/// balance-neutral.
+/// Permissionlessly enter UnwindOnly after the exact queued-share quorum.
+#[inline(never)]
+fn enter_unwind(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    funded_unwind(
+        program_id,
+        accounts,
+        sequence,
+        DealerFacilityAction::EnterUnwind,
+        payload_bytes,
+    )
+}
+
+/// Permissionlessly enter UnwindOnly after the immutable close slot.
 #[inline(never)]
 fn timed_close(
     program_id: &Pubkey,
@@ -3819,9 +3834,33 @@ fn timed_close(
     sequence: u64,
     payload_bytes: &[u8],
 ) -> Outcome<()> {
-    require_count(accounts, TIMED_CLOSE_ACCOUNT_COUNT)?;
-    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::TimedClose, payload_bytes)
-        .map_err(dealer_fault)?;
+    funded_unwind(
+        program_id,
+        accounts,
+        sequence,
+        DealerFacilityAction::TimedClose,
+        payload_bytes,
+    )
+}
+
+/// Shared exact Retirement-funded transition for the two permissionless
+/// Trading→UnwindOnly causes. The facility Position and Realm Hoard remain
+/// byte-for-byte balance-neutral and Product's `0xaf` survives unchanged.
+#[inline(never)]
+fn funded_unwind(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DealerFacilityAction,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    let expected_count = match action {
+        DealerFacilityAction::EnterUnwind => ENTER_UNWIND_ACCOUNT_COUNT,
+        DealerFacilityAction::TimedClose => TIMED_CLOSE_ACCOUNT_COUNT,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    require_count(accounts, expected_count)?;
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
     require(
         sequence == payload.expected_replay_ordinal,
         ClutchError::Replay,
@@ -3838,9 +3877,14 @@ fn timed_close(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
     )?;
+    let (clock_index, rent_index, system_index, obligation_index) = match action {
+        DealerFacilityAction::EnterUnwind => (None, 17usize, 18usize, 19usize),
+        DealerFacilityAction::TimedClose => (Some(17usize), 18usize, 19usize, 20usize),
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
     let obligation = authenticate_live_series_obligation_for_state_v3(
         program_id,
-        &accounts[20],
+        &accounts[obligation_index],
         &accounts[2],
         &state_v3,
     )?;
@@ -3883,9 +3927,12 @@ fn timed_close(
         retirement.identity.payer.bytes() == accounts[16].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let current_slot = read_clock_slot(&accounts[17])?;
-    let rent = read_rent(&accounts[18])?;
-    require_system_program(&accounts[19])?;
+    let current_slot = match clock_index {
+        Some(index) => Some(read_clock_slot(&accounts[index])?),
+        None => None,
+    };
+    let rent = read_rent(&accounts[rent_index])?;
+    require_system_program(&accounts[system_index])?;
     require(
         accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
         ClutchError::DealerPolicyRentMismatch,
@@ -3893,7 +3940,12 @@ fn timed_close(
     require_creatable(&accounts[15])?;
 
     let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
-    let action_index = DealerLivenessScheduleV1::action_index(DealerRuntimeActionV1::TimedClose);
+    let runtime_action = match action {
+        DealerFacilityAction::EnterUnwind => DealerRuntimeActionV1::EnterUnwind,
+        DealerFacilityAction::TimedClose => DealerRuntimeActionV1::TimedClose,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let action_index = DealerLivenessScheduleV1::action_index(runtime_action);
     let receipt = DealerActionReceiptV1 {
         policy_id: state.policy_id,
         facility_id: state.facility_id,
@@ -3908,7 +3960,7 @@ fn timed_close(
         receipt_program_id: id(program_id),
         keeper: id(accounts[0].key),
         replay_account_id: id(accounts[4].key),
-        action: DealerRuntimeActionV1::TimedClose,
+        action: runtime_action,
         compartment: DealerLivenessCompartmentV1::Retirement,
         runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Retirement),
         facility_generation: state.generation,
@@ -3943,20 +3995,36 @@ fn timed_close(
             .runtime_receipt_observation()
             .map_err(dealer_fault)?,
     )?;
-    let prepared = prepare_timed_close_dealer_v3(
-        &policy,
-        &position_binding,
-        &state,
-        id(accounts[2].key),
-        &dependency,
-        &schedule,
-        &runtime_binding,
-        &authorization,
-        current_slot,
-        &position,
-        &replay,
-        replay_binding,
-    )
+    let prepared = match (runtime_action, current_slot) {
+        (DealerRuntimeActionV1::EnterUnwind, None) => prepare_enter_unwind_by_queue_v3(
+            &policy,
+            &position_binding,
+            &state,
+            id(accounts[2].key),
+            &dependency,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &position,
+            &replay,
+            replay_binding,
+        ),
+        (DealerRuntimeActionV1::TimedClose, Some(current_slot)) => prepare_timed_close_dealer_v3(
+            &policy,
+            &position_binding,
+            &state,
+            id(accounts[2].key),
+            &dependency,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            current_slot,
+            &position,
+            &replay,
+            replay_binding,
+        ),
+        _ => return Err(ClutchError::MismatchedState.into()),
+    }
     .map_err(dealer_fault)?;
     let state_after = state_v3
         .with_base(prepared.state_after)
@@ -3966,7 +4034,7 @@ fn timed_close(
         program_id,
         &accounts[0],
         &accounts[15],
-        &accounts[19],
+        &accounts[system_index],
         &rent,
         DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
         &[
@@ -4003,7 +4071,11 @@ fn timed_close(
 
     let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
     let observed_obligation =
-        authenticate_dealer_series_obligation_v1(program_id, &accounts[20], false)?;
+        authenticate_dealer_series_obligation_v1(
+            program_id,
+            &accounts[obligation_index],
+            false,
+        )?;
     let (_, observed_receipt) = authenticate_action_receipt(program_id, &accounts[15])?;
     let (_, observed_position, observed_replay, _) = authenticate_position_and_replay(
         program_id,
@@ -8010,6 +8082,7 @@ pub fn process(
             | DealerFacilityAction::AbortBeforeCollection
             | DealerFacilityAction::QueueExit
             | DealerFacilityAction::SponsorHalt
+            | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose
     );
     if !implemented {
@@ -8059,6 +8132,9 @@ pub fn process(
         }
         DealerFacilityAction::SponsorHalt => {
             sponsor_halt(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::EnterUnwind => {
+            enter_unwind(program_id, accounts, sequence, payload)
         }
         DealerFacilityAction::TimedClose => {
             timed_close(program_id, accounts, sequence, payload)
@@ -8344,7 +8420,9 @@ mod sponsor_halt_adversarial_tests {
 
 #[cfg(test)]
 mod timed_close_adversarial_tests {
-    use super::{DealerRuntimePayloadV1, TIMED_CLOSE_ACCOUNT_COUNT};
+    use super::{
+        DealerRuntimePayloadV1, ENTER_UNWIND_ACCOUNT_COUNT, TIMED_CLOSE_ACCOUNT_COUNT,
+    };
     use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaRoleV1};
     use clutch_solana_layout::registry::{
         DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
@@ -8376,6 +8454,24 @@ mod timed_close_adversarial_tests {
         assert!(metas[15].writable);
         assert_eq!(metas[20].role, DealerMetaRoleV1::SeriesObligation);
         assert!(!metas[20].writable);
+    }
+
+    #[test]
+    fn queued_unwind_uses_the_same_retirement_plane_without_a_clock() {
+        let decoded = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::EnterUnwind,
+            &payload(),
+        )
+        .unwrap();
+        let metas = meta_contract_v1(DealerFacilityAction::EnterUnwind, decoded).unwrap();
+        assert_eq!(metas.len(), ENTER_UNWIND_ACCOUNT_COUNT);
+        assert_eq!(metas[13].role, DealerMetaRoleV1::LivenessRetirement);
+        assert!(metas[13].writable);
+        assert_eq!(metas[15].role, DealerMetaRoleV1::LivenessReceipt);
+        assert_eq!(metas[17].role, DealerMetaRoleV1::Rent);
+        assert_eq!(metas[18].role, DealerMetaRoleV1::SystemProgram);
+        assert_eq!(metas[19].role, DealerMetaRoleV1::SeriesObligation);
+        assert!(!metas.iter().any(|meta| meta.role == DealerMetaRoleV1::Clock));
     }
 
     #[test]
@@ -8421,6 +8517,31 @@ mod timed_close_adversarial_tests {
             "liveness_transition.post_account_data",
         ] {
             assert!(handler.contains(guard), "missing TimedClose guard {guard}");
+        }
+    }
+
+    #[test]
+    fn queued_unwind_cannot_bypass_the_state_owned_share_threshold() {
+        let contract = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../crates/clutch-dealer-runtime-contract/src/transitions_v3.rs"
+        ));
+        let transition = contract
+            .split("pub fn prepare_enter_unwind_by_queue_v3")
+            .nth(1)
+            .and_then(|value| value.split("pub fn prepare_timed_close_dealer_v3").next())
+            .expect("queued unwind successor");
+        for guard in [
+            "validate_v3_plane",
+            "authorization.validate_against",
+            "DealerRuntimeActionV1::EnterUnwind",
+            "authorization.owner != state_account_id",
+            "authorization.lifecycle_id != state.facility_id",
+            "authorization.facility_generation != state.generation",
+            "policy.shutdown_queue_threshold_met(state.queued_shares, state.total_shares)",
+            "DealerTransitionLivenessModeV1::ExternalReceipt",
+        ] {
+            assert!(transition.contains(guard), "missing queue-unwind guard {guard}");
         }
     }
 

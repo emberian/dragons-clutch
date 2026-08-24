@@ -205,6 +205,55 @@ pub fn prepare_sponsor_halt_dealer_v3(
     )
 }
 
+/// Enter UnwindOnly permissionlessly after the canonical queued-share quorum.
+/// Queue ownership is already committed by the State/ExitTicket transitions;
+/// this action consumes only the exact State aggregate and funded Retirement
+/// receipt, never a caller-supplied LP summary.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_enter_unwind_by_queue_v3(
+    policy: &DealerPolicyV1,
+    binding: &FacilityPositionBindingV2,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    position: &DealerPositionObservationV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerUnwindV3> {
+    validate_v3_plane(
+        policy,
+        binding,
+        state,
+        state_account_id,
+        dependency,
+        schedule,
+        runtime,
+        position,
+        replay,
+    )?;
+    authorization.validate_against(schedule, runtime)?;
+    if authorization.action != DealerRuntimeActionV1::EnterUnwind
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || !policy.shutdown_queue_threshold_met(state.queued_shares, state.total_shares)?
+    {
+        return Err(Error::InvalidPhase);
+    }
+    prepare_unwind(
+        policy,
+        state,
+        replay,
+        replay_binding,
+        DealerRuntimeActionV1::EnterUnwind,
+        authorization.receipt_semantic_id,
+        DealerTransitionLivenessModeV1::ExternalReceipt,
+    )
+}
+
 /// Enter UnwindOnly at or after the immutable trading close slot.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_timed_close_dealer_v3(
