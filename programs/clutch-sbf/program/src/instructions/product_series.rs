@@ -69,7 +69,8 @@ use clutch_product_series::{
     SeriesLifecycleAdmissionProjectionV1, SeriesLifecycleLapseProjectionV1,
     SeriesLifecycleLinkRetirementProjectionV1,
     SeriesLifecycleReplayBindingV1, SeriesLifecycleReplayBindingV1Id,
-    SeriesLifecycleReplayV1, MarketLifecycleRootV1, SeriesMarketLinkV1,
+    SeriesLifecycleReplayV1, SeriesLifecycleTerminalEvidenceV1,
+    SeriesLifecycleTerminalProjectionV1, MarketLifecycleRootV1, SeriesMarketLinkV1,
     SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
     SourceOccurrenceV1Id, SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
@@ -113,6 +114,14 @@ const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v1\0";
 const SERIES_LIFECYCLE_REPLAY_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-postwrite/v1\0";
+const SERIES_REGISTRY_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-registry-terminal-authentication/v2\0";
+const SERIES_FUNDING_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-funding-terminal-authentication/v2\0";
+const SERIES_LIFECYCLE_TERMINAL_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-lifecycle-terminal-preauthorization/v1\0";
+const SERIES_LIFECYCLE_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-lifecycle-terminal-postwrite/v1\0";
 
 /// Exact read-only Product/Series artifact count used by registration and
 /// every later transition that reconstructs the immutable join.
@@ -1279,6 +1288,130 @@ impl AuthenticatedSeriesLifecycleReplayPostwriteV1 {
 
     pub(crate) const fn ordinal(self) -> u32 {
         self.ordinal
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesTerminalAccountAuthenticationV1 {
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+/// Private one-use authority produced from simultaneous hostile authentication
+/// of the permanent RegistryV2, Closed FundingV2, and Open lifecycle replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesLifecycleTerminalPreauthorizationV1 {
+    id: ContentId,
+    binding_id: SeriesLifecycleReplayBindingV1Id,
+    registry_account: Pubkey,
+    registry_data_id: ContentId,
+    registry_authentication_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_id: ContentId,
+    funding_data_id: ContentId,
+    funding_authentication_id: ContentId,
+    replay_account: Pubkey,
+    replay_state_id: ContentId,
+    replay_data_id: ContentId,
+    replay_authentication_id: ContentId,
+}
+
+/// Non-detachable physical Series terminal receipt. Funding value disposition
+/// may consume this only after the exact `0xb8/v1` Terminal postimage has been
+/// written and hostile-reopened in the same atomic instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
+    id: ContentId,
+    replay_account: Pubkey,
+    binding_id: SeriesLifecycleReplayBindingV1Id,
+    projection: SeriesLifecycleTerminalProjectionV1,
+    replay_state_before_id: ContentId,
+    replay_state_after_id: ContentId,
+    replay_data_before_id: ContentId,
+    replay_data_after_id: ContentId,
+    replay_authentication_before_id: ContentId,
+    replay_authentication_after_id: ContentId,
+    registry_account: Pubkey,
+    registry_data_id: ContentId,
+    registry_authentication_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_id: ContentId,
+    funding_data_id: ContentId,
+    funding_authentication_id: ContentId,
+    funding_terminal_projection: SeriesFundingTerminalProjectionV2,
+}
+
+impl AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn replay_account(self) -> Pubkey {
+        self.replay_account
+    }
+
+    pub(crate) const fn binding_id(self) -> SeriesLifecycleReplayBindingV1Id {
+        self.binding_id
+    }
+
+    pub(crate) const fn projection(self) -> SeriesLifecycleTerminalProjectionV1 {
+        self.projection
+    }
+
+    pub(crate) const fn replay_state_before_id(self) -> ContentId {
+        self.replay_state_before_id
+    }
+
+    pub(crate) const fn replay_state_after_id(self) -> ContentId {
+        self.replay_state_after_id
+    }
+
+    pub(crate) const fn replay_data_before_id(self) -> ContentId {
+        self.replay_data_before_id
+    }
+
+    pub(crate) const fn replay_data_after_id(self) -> ContentId {
+        self.replay_data_after_id
+    }
+
+    pub(crate) const fn replay_authentication_before_id(self) -> ContentId {
+        self.replay_authentication_before_id
+    }
+
+    pub(crate) const fn replay_authentication_after_id(self) -> ContentId {
+        self.replay_authentication_after_id
+    }
+
+    pub(crate) const fn registry_account(self) -> Pubkey {
+        self.registry_account
+    }
+
+    pub(crate) const fn registry_data_id(self) -> ContentId {
+        self.registry_data_id
+    }
+
+    pub(crate) const fn registry_authentication_id(self) -> ContentId {
+        self.registry_authentication_id
+    }
+
+    pub(crate) const fn funding_account(self) -> Pubkey {
+        self.funding_account
+    }
+
+    pub(crate) const fn funding_state_id(self) -> ContentId {
+        self.funding_state_id
+    }
+
+    pub(crate) const fn funding_data_id(self) -> ContentId {
+        self.funding_data_id
+    }
+
+    pub(crate) const fn funding_authentication_id(self) -> ContentId {
+        self.funding_authentication_id
+    }
+
+    pub(crate) const fn funding_terminal_projection(self) -> SeriesFundingTerminalProjectionV2 {
+        self.funding_terminal_projection
     }
 }
 
@@ -6807,6 +6940,422 @@ pub(crate) fn retire_series_market_link_with_lifecycle_replay_v1<'a>(
     Ok((retirement, postwrite))
 }
 
+fn authenticate_series_terminal_account_bytes_v1(
+    domain: &[u8],
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    stored_rent_principal_lamports: u64,
+) -> Outcome<SeriesTerminalAccountAuthenticationV1> {
+    require(
+        !account.is_signer && stored_rent_principal_lamports != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[&data[..]]).to_bytes());
+    drop(data);
+    let observed_lamports = account.lamports();
+    require(
+        observed_lamports >= stored_rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            domain,
+            program_id.as_ref(),
+            account.key.as_ref(),
+            &data_id.bytes(),
+            &stored_rent_principal_lamports.to_le_bytes(),
+            &observed_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(data_id)?;
+    require_live_content_id(authentication_id)?;
+    Ok(SeriesTerminalAccountAuthenticationV1 {
+        data_id,
+        authentication_id,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_series_lifecycle_terminal_preauthorization_v1(
+    binding_id: SeriesLifecycleReplayBindingV1Id,
+    registry_account: Pubkey,
+    registry_data_id: ContentId,
+    registry_authentication_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_id: ContentId,
+    funding_data_id: ContentId,
+    funding_authentication_id: ContentId,
+    replay_account: Pubkey,
+    replay_state_id: ContentId,
+    replay_data_id: ContentId,
+    replay_authentication_id: ContentId,
+    compiler_bundle_artifact_account: Pubkey,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+) -> Outcome<SeriesLifecycleTerminalPreauthorizationV1> {
+    require(
+        registry_account != Pubkey::default()
+            && funding_account != Pubkey::default()
+            && replay_account != Pubkey::default()
+            && compiler_bundle_artifact_account != Pubkey::default()
+            && registry_account != funding_account
+            && registry_account != replay_account
+            && funding_account != replay_account,
+        ClutchError::AccountAlias,
+    )?;
+    for id in [
+        binding_id.content_id(),
+        registry_data_id,
+        registry_authentication_id,
+        funding_state_id,
+        funding_data_id,
+        funding_authentication_id,
+        replay_state_id,
+        replay_data_id,
+        replay_authentication_id,
+        compiler_bundle_id.content_id(),
+    ] {
+        require_live_content_id(id)?;
+    }
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_LIFECYCLE_TERMINAL_PREAUTHORIZATION_DOMAIN_V1,
+            &binding_id.bytes(),
+            registry_account.as_ref(),
+            &registry_data_id.bytes(),
+            &registry_authentication_id.bytes(),
+            funding_account.as_ref(),
+            &funding_state_id.bytes(),
+            &funding_data_id.bytes(),
+            &funding_authentication_id.bytes(),
+            replay_account.as_ref(),
+            &replay_state_id.bytes(),
+            &replay_data_id.bytes(),
+            &replay_authentication_id.bytes(),
+            compiler_bundle_artifact_account.as_ref(),
+            &compiler_bundle_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(SeriesLifecycleTerminalPreauthorizationV1 {
+        id,
+        binding_id,
+        registry_account,
+        registry_data_id,
+        registry_authentication_id,
+        funding_account,
+        funding_state_id,
+        funding_data_id,
+        funding_authentication_id,
+        replay_account,
+        replay_state_id,
+        replay_data_id,
+        replay_authentication_id,
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SeriesLifecycleTerminalFundingAuthorityV1 {
+    preauthorization: SeriesLifecycleTerminalPreauthorizationV1,
+    expected_state: SeriesFundingStateV2,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV2 for SeriesLifecycleTerminalFundingAuthorityV1 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+        _quote: &SeriesFundingQuoteV4,
+        _attachment: &SeriesAttachmentPlanV4,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _source_occurrence_id: SourceOccurrenceV1Id,
+        _series_market_link_id: ContentId,
+        _disposition: clutch_product_series::SeriesMarketDispositionV1,
+        _debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        state: &SeriesFundingStateV2,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if *state != self.expected_state
+            || terminal_receipt_id != self.preauthorization.id
+            || self.preauthorization.funding_state_id != state.id()?.content_id()
+            || self.preauthorization.funding_account == Pubkey::default()
+            || self.preauthorization.replay_account == Pubkey::default()
+            || self.preauthorization.registry_account == Pubkey::default()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Hostile-seal the permanent Series replay after the exact live RegistryV2
+/// and Closed FundingV2 have been reauthenticated. The returned private value
+/// is the only authority the physical collateral/Funding close may consume.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn terminalize_series_lifecycle_replay_v1(
+    program_id: &Pubkey,
+    registry_account: &AccountInfo<'_>,
+    registry: AuthenticatedSeriesRegistryAccountV2,
+    funding_account: &AccountInfo<'_>,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    replay_account: &AccountInfo<'_>,
+    replay: AuthenticatedSeriesLifecycleReplayV1,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedSeriesLifecycleTerminalPostwriteV1> {
+    require(
+        registry_account.key != funding_account.key
+            && registry_account.key != replay_account.key
+            && funding_account.key != replay_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    let binding = replay.state().binding();
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let series_plan_id = binding.series_plan_id;
+    let live_registry = read_series_registry_account_v2_with_role(
+        program_id,
+        registry_account,
+        series_plan_id,
+        rent,
+        false,
+    )?;
+    require(
+        live_registry == registry
+            && live_registry.activation_consumed()
+            && binding.registry_account_id.bytes() == registry_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let live_funding = authenticate_live_series_funding_value_v2(
+        program_id,
+        funding_account,
+        funding.value(),
+        artifacts,
+        rent,
+    )?;
+    require(
+        live_funding == funding
+            && live_funding.value().state.phase
+                == clutch_product_series::SeriesFundingPhaseV2::Closed
+            && binding.funding_account_id.bytes() == funding_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let live_replay = authenticate_series_lifecycle_replay_v1(
+        program_id,
+        replay_account,
+        series_plan_id,
+        true,
+        rent,
+    )?;
+    require(
+        live_replay == replay
+            && live_replay.state().binding() == binding
+            && live_replay.state().phase()
+                == clutch_product_series::SeriesLifecycleReplayPhaseV1::Open,
+        ClutchError::MismatchedState,
+    )?;
+    let expected_binding = derive_series_lifecycle_replay_binding_v1(
+        live_registry,
+        live_funding,
+        artifacts,
+        compiler_bundle,
+        *replay_account.key,
+        Pubkey::new_from_array(binding.permanent_rent_funder.bytes()),
+        Pubkey::new_from_array(binding.neutral_lamport_sink.bytes()),
+    )?;
+    require(expected_binding == binding, ClutchError::MismatchedState)?;
+
+    let registry_account_auth = authenticate_series_terminal_account_bytes_v1(
+        SERIES_REGISTRY_TERMINAL_AUTHENTICATION_DOMAIN_V2,
+        program_id,
+        registry_account,
+        live_registry.value().rent_principal_lamports,
+    )?;
+    let funding_account_auth = authenticate_series_terminal_account_bytes_v1(
+        SERIES_FUNDING_TERMINAL_AUTHENTICATION_DOMAIN_V2,
+        program_id,
+        funding_account,
+        live_funding.value().rent_principal_lamports,
+    )?;
+    let funding_state_id = live_funding
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let replay_state_before_id = live_replay
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let preauthorization = derive_series_lifecycle_terminal_preauthorization_v1(
+        binding_id,
+        live_registry.account(),
+        registry_account_auth.data_id,
+        registry_account_auth.authentication_id,
+        live_funding.account(),
+        funding_state_id,
+        funding_account_auth.data_id,
+        funding_account_auth.authentication_id,
+        live_replay.account(),
+        replay_state_before_id,
+        live_replay.data_id(),
+        live_replay.authentication_id(),
+        compiler_bundle.artifact_account(),
+        compiler_bundle.bundle_id(),
+    )?;
+    let authority = SeriesLifecycleTerminalFundingAuthorityV1 {
+        preauthorization,
+        expected_state: live_funding.value().state,
+    };
+    let funding_projection = close_series_funding_v2(
+        program_id,
+        funding_account,
+        live_funding,
+        artifacts,
+        &authority,
+        preauthorization.id,
+        rent,
+    )?;
+    let funding_terminal_projection_id = funding_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let evidence = SeriesLifecycleTerminalEvidenceV1 {
+        binding_id,
+        funding_account_id: ContentId::from_bytes(funding_account.key.to_bytes()),
+        funding_state_id,
+        funding_terminal_projection_id,
+        registry_account_id: ContentId::from_bytes(registry_account.key.to_bytes()),
+        registry_authentication_id: registry_account_auth.authentication_id,
+        terminal_authority_receipt_id: preauthorization.id,
+    };
+    let (successor, projection) = live_replay
+        .state()
+        .terminalize(evidence)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_series_lifecycle_replay_v1(
+        program_id,
+        replay_account,
+        live_replay,
+        successor,
+        rent,
+    )?;
+    let replay_state_after_id = rebound
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        rebound.state().phase()
+            == clutch_product_series::SeriesLifecycleReplayPhaseV1::Terminal
+            && rebound.state().transition_sequence() == projection.terminal_transition_sequence()
+            && rebound.state().transition_transcript_id() == projection.terminal_transcript_id()
+            && projection.funding_terminal_projection_id() == funding_terminal_projection_id
+            && projection.registry_authentication_id()
+                == registry_account_auth.authentication_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_LIFECYCLE_TERMINAL_POSTWRITE_DOMAIN_V1,
+            &preauthorization.id.bytes(),
+            replay_account.key.as_ref(),
+            &binding_id.bytes(),
+            &projection.id().bytes(),
+            &replay_state_before_id.bytes(),
+            &replay_state_after_id.bytes(),
+            &live_replay.data_id().bytes(),
+            &rebound.data_id().bytes(),
+            &live_replay.authentication_id().bytes(),
+            &rebound.authentication_id().bytes(),
+            registry_account.key.as_ref(),
+            &registry_account_auth.data_id.bytes(),
+            &registry_account_auth.authentication_id.bytes(),
+            funding_account.key.as_ref(),
+            &funding_state_id.bytes(),
+            &funding_account_auth.data_id.bytes(),
+            &funding_account_auth.authentication_id.bytes(),
+            &funding_terminal_projection_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    let terminal = AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
+        id,
+        replay_account: *replay_account.key,
+        binding_id,
+        projection,
+        replay_state_before_id,
+        replay_state_after_id,
+        replay_data_before_id: live_replay.data_id(),
+        replay_data_after_id: rebound.data_id(),
+        replay_authentication_before_id: live_replay.authentication_id(),
+        replay_authentication_after_id: rebound.authentication_id(),
+        registry_account: *registry_account.key,
+        registry_data_id: registry_account_auth.data_id,
+        registry_authentication_id: registry_account_auth.authentication_id,
+        funding_account: *funding_account.key,
+        funding_state_id,
+        funding_data_id: funding_account_auth.data_id,
+        funding_authentication_id: funding_account_auth.authentication_id,
+        funding_terminal_projection: funding_projection,
+    };
+    Ok(terminal)
+}
+
 /// Reserve the next current ordinal without advancing its cursor.
 #[allow(clippy::too_many_arguments)]
 fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
@@ -8916,5 +9465,102 @@ mod series_lapse_postwrite_v2_adversarial_tests {
         assert!(receipt_id(binding, 6, id(8), id(8), id(10)).is_err());
         assert!(receipt_id(binding, 6, ContentId::ZERO, id(9), id(10)).is_err());
         assert!(receipt_id(binding, 6, id(8), id(9), ContentId::ZERO).is_err());
+    }
+}
+
+#[cfg(test)]
+mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn preauthorization(
+        registry_account: Pubkey,
+        funding_account: Pubkey,
+        replay_account: Pubkey,
+        funding_state_id: ContentId,
+        replay_authentication_id: ContentId,
+        bundle_id: CompiledProductSeriesBundleV5Id,
+    ) -> Outcome<SeriesLifecycleTerminalPreauthorizationV1> {
+        derive_series_lifecycle_terminal_preauthorization_v1(
+            SeriesLifecycleReplayBindingV1Id::from_bytes([1; 32]),
+            registry_account,
+            id(2),
+            id(3),
+            funding_account,
+            funding_state_id,
+            id(5),
+            id(6),
+            replay_account,
+            id(7),
+            id(8),
+            replay_authentication_id,
+            Pubkey::new_from_array([13; 32]),
+            bundle_id,
+        )
+    }
+
+    #[test]
+    fn terminal_preauthorization_refuses_aliases_and_binds_stale_substitutions() {
+        let registry = Pubkey::new_from_array([10; 32]);
+        let funding = Pubkey::new_from_array([11; 32]);
+        let replay = Pubkey::new_from_array([12; 32]);
+        let bundle = CompiledProductSeriesBundleV5Id::from_bytes([14; 32]);
+        let expected = preauthorization(registry, funding, replay, id(4), id(9), bundle)
+            .unwrap()
+            .id;
+        assert_ne!(
+            expected,
+            preauthorization(
+                registry,
+                funding,
+                replay,
+                id(15),
+                id(9),
+                bundle,
+            )
+            .unwrap()
+            .id,
+        );
+        assert_ne!(
+            expected,
+            preauthorization(
+                registry,
+                funding,
+                replay,
+                id(4),
+                id(16),
+                bundle,
+            )
+            .unwrap()
+            .id,
+        );
+        assert_ne!(
+            expected,
+            preauthorization(
+                registry,
+                funding,
+                replay,
+                id(4),
+                id(9),
+                CompiledProductSeriesBundleV5Id::from_bytes([17; 32]),
+            )
+            .unwrap()
+            .id,
+        );
+        assert!(preauthorization(registry, registry, replay, id(4), id(9), bundle).is_err());
+        assert!(preauthorization(registry, funding, funding, id(4), id(9), bundle).is_err());
+        assert!(preauthorization(
+            registry,
+            funding,
+            replay,
+            ContentId::ZERO,
+            id(9),
+            bundle,
+        )
+        .is_err());
     }
 }
