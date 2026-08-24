@@ -3,6 +3,17 @@
 //! The production catalog deliberately starts empty. No address, digest, or
 //! release claim is inferred from this source file.
 
+/// Canonical magic for a serialized [`PythReleaseV1`] preimage.
+pub const PYTH_RELEASE_V1_MAGIC: [u8; 8] = *b"DCLTPR01";
+
+/// Canonical schema version for a serialized [`PythReleaseV1`] preimage.
+pub const PYTH_RELEASE_V1_SCHEMA_VERSION: u16 = 1;
+
+/// Exact length of the canonical [`PythReleaseV1`] preimage.
+///
+/// The encoding has no Rust-layout padding and no variable-width fields.
+pub const PYTH_RELEASE_V1_ENCODED_LEN: usize = 440;
+
 /// A named nonzero field in a Pyth release contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReleaseField {
@@ -34,9 +45,21 @@ pub enum ReleaseField {
     SdkCrateDigest,
 }
 
-/// Error returned while validating a production Pyth release contract.
+/// Error returned while validating or decoding a production Pyth release contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PythReleaseV1Error {
+    /// A canonical preimage or output slice did not have the exact V1 length.
+    InvalidEncodedLength {
+        /// Observed number of bytes.
+        actual: usize,
+    },
+    /// The canonical preimage did not start with [`PYTH_RELEASE_V1_MAGIC`].
+    InvalidMagic,
+    /// The canonical preimage named an unsupported schema version.
+    UnsupportedSchemaVersion {
+        /// Observed little-endian schema version.
+        actual: u16,
+    },
     /// A required opaque key, digest, ABI, codec, adapter, or commit was zero.
     ZeroField {
         /// The rejected zero-valued field.
@@ -175,6 +198,86 @@ impl PythReleaseV1 {
             sdk_crate_digest: input.sdk_crate_digest,
             activation_time: input.activation_time,
         })
+    }
+
+    /// Decode and semantically validate one exact canonical V1 preimage.
+    ///
+    /// This decoder never depends on `repr(C)`, native alignment, or a
+    /// framework serializer. Integers are explicitly little-endian.
+    pub fn decode(bytes: &[u8]) -> PythReleaseV1Result<Self> {
+        if bytes.len() != PYTH_RELEASE_V1_ENCODED_LEN {
+            return Err(PythReleaseV1Error::InvalidEncodedLength {
+                actual: bytes.len(),
+            });
+        }
+        if bytes.get(0..8) != Some(&PYTH_RELEASE_V1_MAGIC) {
+            return Err(PythReleaseV1Error::InvalidMagic);
+        }
+        let schema_version = u16_at(bytes, 8)?;
+        if schema_version != PYTH_RELEASE_V1_SCHEMA_VERSION {
+            return Err(PythReleaseV1Error::UnsupportedSchemaVersion {
+                actual: schema_version,
+            });
+        }
+        Self::new(PythReleaseV1Input {
+            cluster_id: array_at(bytes, 10)?,
+            receiver_program: array_at(bytes, 42)?,
+            receiver_programdata: array_at(bytes, 74)?,
+            receiver_config: array_at(bytes, 106)?,
+            router_program: array_at(bytes, 138)?,
+            router_programdata: array_at(bytes, 170)?,
+            config_digest: array_at(bytes, 202)?,
+            receiver_abi_id: array_at(bytes, 234)?,
+            router_abi_id: array_at(bytes, 266)?,
+            price_update_codec_id: array_at(bytes, 298)?,
+            adapter_id: array_at(bytes, 330)?,
+            receiver_deployment_slot: u64_at(bytes, 362)?,
+            router_deployment_slot: u64_at(bytes, 370)?,
+            guardian_set_count: byte_at(bytes, 378)?,
+            required_guardian_count: byte_at(bytes, 379)?,
+            upstream_commit: array_at(bytes, 380)?,
+            sdk_crate_digest: array_at(bytes, 400)?,
+            activation_time: i64_at(bytes, 432)?,
+        })
+    }
+
+    /// Return the exact canonical V1 preimage for hashing or persistence.
+    pub fn to_bytes(&self) -> [u8; PYTH_RELEASE_V1_ENCODED_LEN] {
+        let mut bytes = [0_u8; PYTH_RELEASE_V1_ENCODED_LEN];
+        bytes[0..8].copy_from_slice(&PYTH_RELEASE_V1_MAGIC);
+        bytes[8..10].copy_from_slice(&PYTH_RELEASE_V1_SCHEMA_VERSION.to_le_bytes());
+        bytes[10..42].copy_from_slice(&self.cluster_id);
+        bytes[42..74].copy_from_slice(&self.receiver_program);
+        bytes[74..106].copy_from_slice(&self.receiver_programdata);
+        bytes[106..138].copy_from_slice(&self.receiver_config);
+        bytes[138..170].copy_from_slice(&self.router_program);
+        bytes[170..202].copy_from_slice(&self.router_programdata);
+        bytes[202..234].copy_from_slice(&self.config_digest);
+        bytes[234..266].copy_from_slice(&self.receiver_abi_id);
+        bytes[266..298].copy_from_slice(&self.router_abi_id);
+        bytes[298..330].copy_from_slice(&self.price_update_codec_id);
+        bytes[330..362].copy_from_slice(&self.adapter_id);
+        bytes[362..370].copy_from_slice(&self.receiver_deployment_slot.to_le_bytes());
+        bytes[370..378].copy_from_slice(&self.router_deployment_slot.to_le_bytes());
+        bytes[378] = self.guardian_set_count;
+        bytes[379] = self.required_guardian_count;
+        bytes[380..400].copy_from_slice(&self.upstream_commit);
+        bytes[400..432].copy_from_slice(&self.sdk_crate_digest);
+        bytes[432..440].copy_from_slice(&self.activation_time.to_le_bytes());
+        bytes
+    }
+
+    /// Encode into an exact-width output slice.
+    ///
+    /// An output-length refusal leaves `output` unchanged.
+    pub fn encode(&self, output: &mut [u8]) -> PythReleaseV1Result<()> {
+        if output.len() != PYTH_RELEASE_V1_ENCODED_LEN {
+            return Err(PythReleaseV1Error::InvalidEncodedLength {
+                actual: output.len(),
+            });
+        }
+        output.copy_from_slice(&self.to_bytes());
+        Ok(())
     }
 
     /// Return the opaque Solana cluster identifier.
@@ -328,6 +431,44 @@ fn is_zero<const N: usize>(value: &[u8; N]) -> bool {
     value.iter().all(|byte| *byte == 0)
 }
 
+fn byte_at(bytes: &[u8], offset: usize) -> PythReleaseV1Result<u8> {
+    bytes
+        .get(offset)
+        .copied()
+        .ok_or(PythReleaseV1Error::InvalidEncodedLength {
+            actual: bytes.len(),
+        })
+}
+
+fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> PythReleaseV1Result<[u8; N]> {
+    let end = offset
+        .checked_add(N)
+        .ok_or(PythReleaseV1Error::InvalidEncodedLength {
+            actual: bytes.len(),
+        })?;
+    bytes
+        .get(offset..end)
+        .ok_or(PythReleaseV1Error::InvalidEncodedLength {
+            actual: bytes.len(),
+        })?
+        .try_into()
+        .map_err(|_| PythReleaseV1Error::InvalidEncodedLength {
+            actual: bytes.len(),
+        })
+}
+
+fn u16_at(bytes: &[u8], offset: usize) -> PythReleaseV1Result<u16> {
+    Ok(u16::from_le_bytes(array_at(bytes, offset)?))
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> PythReleaseV1Result<u64> {
+    Ok(u64::from_le_bytes(array_at(bytes, offset)?))
+}
+
+fn i64_at(bytes: &[u8], offset: usize) -> PythReleaseV1Result<i64> {
+    Ok(i64::from_le_bytes(array_at(bytes, offset)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +518,89 @@ mod tests {
         assert_eq!(release.sdk_crate_digest(), [14; 32]);
         assert_eq!(release.activation_time(), -15);
         assert_eq!(PRODUCTION_RELEASES.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_preimage_is_exact_and_round_trips_every_field() -> PythReleaseV1Result<()> {
+        let release = PythReleaseV1::new(input())?;
+        let bytes = release.to_bytes();
+        assert_eq!(bytes.len(), PYTH_RELEASE_V1_ENCODED_LEN);
+        assert_eq!(bytes.get(0..8), Some(PYTH_RELEASE_V1_MAGIC.as_slice()));
+        assert_eq!(bytes.get(8..10), Some([1_u8, 0].as_slice()));
+        assert_eq!(bytes.get(10..42), Some([1_u8; 32].as_slice()));
+        assert_eq!(bytes.get(330..362), Some([11_u8; 32].as_slice()));
+        assert_eq!(bytes.get(362..370), Some(11_u64.to_le_bytes().as_slice()));
+        assert_eq!(bytes.get(370..378), Some(12_u64.to_le_bytes().as_slice()));
+        assert_eq!(bytes.get(378..380), Some([5_u8, 3].as_slice()));
+        assert_eq!(bytes.get(380..400), Some([13_u8; 20].as_slice()));
+        assert_eq!(bytes.get(400..432), Some([14_u8; 32].as_slice()));
+        assert_eq!(
+            bytes.get(432..440),
+            Some((-15_i64).to_le_bytes().as_slice())
+        );
+        assert_eq!(PythReleaseV1::decode(&bytes), Ok(release));
+
+        let mut output = [0xa5_u8; PYTH_RELEASE_V1_ENCODED_LEN];
+        release.encode(&mut output)?;
+        assert_eq!(output, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_preimage_refuses_hostile_envelopes_and_invalid_semantics()
+    -> PythReleaseV1Result<()> {
+        let release = PythReleaseV1::new(input())?;
+        let bytes = release.to_bytes();
+        for length in 0..PYTH_RELEASE_V1_ENCODED_LEN {
+            let truncated = bytes
+                .get(..length)
+                .ok_or(PythReleaseV1Error::InvalidEncodedLength { actual: length })?;
+            assert_eq!(
+                PythReleaseV1::decode(truncated),
+                Err(PythReleaseV1Error::InvalidEncodedLength { actual: length })
+            );
+        }
+        let mut long = [0_u8; PYTH_RELEASE_V1_ENCODED_LEN + 1];
+        long.get_mut(..PYTH_RELEASE_V1_ENCODED_LEN)
+            .ok_or(PythReleaseV1Error::InvalidEncodedLength { actual: 0 })?
+            .copy_from_slice(&bytes);
+        assert_eq!(
+            PythReleaseV1::decode(&long),
+            Err(PythReleaseV1Error::InvalidEncodedLength {
+                actual: PYTH_RELEASE_V1_ENCODED_LEN + 1
+            })
+        );
+
+        let mut wrong_magic = bytes;
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            PythReleaseV1::decode(&wrong_magic),
+            Err(PythReleaseV1Error::InvalidMagic)
+        );
+        let mut wrong_schema = bytes;
+        wrong_schema[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        assert_eq!(
+            PythReleaseV1::decode(&wrong_schema),
+            Err(PythReleaseV1Error::UnsupportedSchemaVersion { actual: 2 })
+        );
+        let mut zero_identifier = bytes;
+        zero_identifier[298..330].fill(0);
+        assert_eq!(
+            PythReleaseV1::decode(&zero_identifier),
+            Err(PythReleaseV1Error::ZeroField {
+                field: ReleaseField::PriceUpdateCodecId
+            })
+        );
+
+        let mut short_output = [0xa5_u8; PYTH_RELEASE_V1_ENCODED_LEN - 1];
+        assert_eq!(
+            release.encode(&mut short_output),
+            Err(PythReleaseV1Error::InvalidEncodedLength {
+                actual: PYTH_RELEASE_V1_ENCODED_LEN - 1
+            })
+        );
+        assert!(short_output.iter().all(|byte| *byte == 0xa5));
         Ok(())
     }
 
