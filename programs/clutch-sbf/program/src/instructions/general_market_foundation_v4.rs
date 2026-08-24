@@ -31,6 +31,7 @@ use super::revenue_policy_v2::{
     RevenueMarketTreasuryDerivationV1, RevenueMarketTreasuryFoundationV1,
 };
 use super::general_v2_settlement_producer_v5::{create_from_payer, rent_owner};
+use super::collateral_position_v3::authenticate_general_market_v4_with_data_ids;
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/general/current-founding-join/v4\0";
@@ -150,8 +151,10 @@ pub(crate) struct GeneralMarketFoundationAccountFrameV4<'a, 'info> {
 pub(crate) struct AuthenticatedGeneralMarketFoundingPostwriteV4 {
     binding_account: Pubkey,
     binding: MarketBindingV4,
+    binding_data_id: Id32,
     runtime_account: Pubkey,
     runtime: MarketRuntimeV3AccountV1,
+    runtime_data_id: Id32,
     treasury: RevenueMarketTreasuryFoundationV1,
     join_id: ContentId,
 }
@@ -159,8 +162,10 @@ pub(crate) struct AuthenticatedGeneralMarketFoundingPostwriteV4 {
 impl AuthenticatedGeneralMarketFoundingPostwriteV4 {
     pub(crate) const fn binding_account(self) -> Pubkey { self.binding_account }
     pub(crate) const fn binding(self) -> MarketBindingV4 { self.binding }
+    pub(crate) const fn binding_data_id(self) -> Id32 { self.binding_data_id }
     pub(crate) const fn runtime_account(self) -> Pubkey { self.runtime_account }
     pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 { self.runtime }
+    pub(crate) const fn runtime_data_id(self) -> Id32 { self.runtime_data_id }
     pub(crate) const fn treasury(self) -> RevenueMarketTreasuryFoundationV1 { self.treasury }
     pub(crate) const fn join_id(self) -> ContentId { self.join_id }
 }
@@ -445,11 +450,14 @@ where
         plan.treasury,
         product,
     )?;
-    let persisted_binding = MarketBindingV4::decode(&frame.market_binding.data.borrow())?;
-    let persisted_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data.borrow())?;
+    let persisted = authenticate_general_market_v4_with_data_ids(
+        program_id,
+        frame.market_binding,
+        frame.market_runtime,
+    )?;
     require(
-        persisted_binding == binding
-            && persisted_runtime == runtime
+        persisted.binding() == binding
+            && persisted.runtime() == runtime
             && treasury.revenue_policy_record_account()
                 == plan.revenue.record_account()
             && treasury.revenue_policy_record_v2_id().bytes()
@@ -471,8 +479,10 @@ where
     Ok(AuthenticatedGeneralMarketFoundingPostwriteV4 {
         binding_account: *frame.market_binding.key,
         binding,
+        binding_data_id: Id32::from_bytes(persisted.binding_data_id().bytes()),
         runtime_account: *frame.market_runtime.key,
         runtime,
+        runtime_data_id: Id32::from_bytes(persisted.runtime_data_id().bytes()),
         treasury,
         join_id: plan.join_id,
     })
