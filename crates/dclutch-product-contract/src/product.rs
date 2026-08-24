@@ -189,6 +189,16 @@ impl TermsV1 {
     pub const fn partition_evidence_id(self) -> ContentId {
         self.partition_evidence_id
     }
+
+    /// Return the exact partition artifact byte length.
+    pub const fn artifact_bytes(self) -> u32 {
+        self.artifact_bytes
+    }
+
+    /// Return the unique minimal partition artifact page count.
+    pub const fn page_count(self) -> u32 {
+        self.page_count
+    }
 }
 
 /// Inputs to one concrete occurrence under reusable Terms.
@@ -298,6 +308,21 @@ impl OccurrenceV1 {
     pub const fn capacity_profile_id(self) -> CapacityProfileId {
         self.capacity_profile_id
     }
+
+    /// Return the occurrence-specific semantic artifact identity.
+    pub const fn occurrence_artifact_id(self) -> ContentId {
+        self.occurrence_artifact_id
+    }
+
+    /// Return the exact occurrence artifact byte length.
+    pub const fn artifact_bytes(self) -> u32 {
+        self.artifact_bytes
+    }
+
+    /// Return the unique minimal occurrence artifact page count.
+    pub const fn page_count(self) -> u32 {
+        self.page_count
+    }
 }
 
 /// Inputs to one Product instance.
@@ -307,7 +332,7 @@ pub struct InstanceV1Input {
     pub terms_id: ContentId,
     /// Concrete Occurrence content identity.
     pub occurrence_id: ContentId,
-    /// Finite claim-basis content identity.
+    /// Elementary categorical claim-basis content identity.
     pub claim_basis_id: ContentId,
     /// Capacity-profile identity shared by all linked records.
     pub capacity_profile_id: CapacityProfileId,
@@ -421,9 +446,19 @@ impl InstanceV1 {
         self.occurrence_id
     }
 
+    /// Return the governing Terms identity.
+    pub const fn terms_id(self) -> ContentId {
+        self.terms_id
+    }
+
     /// Return the bound claim-basis identity.
     pub const fn claim_basis_id(self) -> ContentId {
         self.claim_basis_id
+    }
+
+    /// Return the shared capacity-profile identity.
+    pub const fn capacity_profile_id(self) -> CapacityProfileId {
+        self.capacity_profile_id
     }
 
     /// Return the exact finite partition width.

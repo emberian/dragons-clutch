@@ -478,9 +478,21 @@ pub fn recheck<const N: usize>(
     let partition_id = content_id(b"dclutch.partition.v1", &output.partition_bytes)?;
     let partition_evidence_id =
         content_id(b"dclutch.partition-evidence.v1", &output.partition_bytes)?;
+    let partition_size =
+        u32::try_from(output.partition_bytes.len()).map_err(|_| CompileError::CountOverflow)?;
+    let partition_pages = pages(
+        partition_size,
+        request.context.capacity_profile.page_payload_bytes(),
+    )?;
     let occurrence_artifact_id = content_id(
         b"dclutch.occurrence-artifact.v1",
         &request.context.occurrence_artifact,
+    )?;
+    let occurrence_size = u32::try_from(request.context.occurrence_artifact.len())
+        .map_err(|_| CompileError::CountOverflow)?;
+    let occurrence_pages = pages(
+        occurrence_size,
+        request.context.capacity_profile.page_payload_bytes(),
     )?;
     let terms = TermsV1::decode(&output.terms.to_bytes())?;
     let occurrence = OccurrenceV1::decode(&output.occurrence.to_bytes())?;
@@ -528,8 +540,20 @@ pub fn recheck<const N: usize>(
         || terms.artifact_id() != partition_id
         || terms.partition_evidence_id() != partition_evidence_id
         || terms.partition_cell_count() != cell_count
+        || terms.capacity_profile_id() != request.context.capacity_profile_id
+        || terms.semantic_release_id() != request.context.terms_semantic_release_id
+        || terms.artifact_bytes() != partition_size
+        || terms.page_count() != partition_pages
         || occurrence.terms_id() != terms_id
-        || occurrence.to_bytes().get(80..112) != Some(occurrence_artifact_id.as_bytes().as_slice())
+        || occurrence.capacity_profile_id() != request.context.capacity_profile_id
+        || occurrence.occurrence_artifact_id() != occurrence_artifact_id
+        || occurrence.artifact_bytes() != occurrence_size
+        || occurrence.page_count() != occurrence_pages
+        || claim_basis.capacity_profile_id() != request.context.capacity_profile_id
+        || instance.terms_id() != terms_id
+        || instance.occurrence_id() != occurrence_id
+        || instance.claim_basis_id() != claim_basis_id
+        || instance.capacity_profile_id() != request.context.capacity_profile_id
     {
         return Err(CompileError::CertificateMismatch);
     }
@@ -1080,6 +1104,57 @@ mod tests {
         assert_eq!(
             recheck(&request, &changed),
             Err(CompileError::Contract(ContractError::IdentityMismatch))
+        );
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        let foreign_terms = TermsV1::new(
+            TermsV1Input {
+                capacity_profile_id: request.context.capacity_profile_id,
+                semantic_release_id: id(77),
+                artifact_id: changed.terms.artifact_id(),
+                partition_evidence_id: changed.terms.partition_evidence_id(),
+                artifact_bytes: changed.terms.artifact_bytes(),
+                page_count: changed.terms.page_count(),
+                partition_cell_count: changed.terms.partition_cell_count(),
+            },
+            request.context.capacity_profile,
+        )
+        .expect("foreign terms");
+        let foreign_terms_id =
+            content_id(b"dclutch.terms.v1", &foreign_terms.to_bytes()).expect("terms id");
+        let foreign_occurrence = OccurrenceV1::new(
+            OccurrenceV1Input {
+                terms_id: foreign_terms_id,
+                capacity_profile_id: changed.occurrence.capacity_profile_id(),
+                occurrence_artifact_id: changed.occurrence.occurrence_artifact_id(),
+                artifact_bytes: changed.occurrence.artifact_bytes(),
+                page_count: changed.occurrence.page_count(),
+            },
+            request.context.capacity_profile,
+        )
+        .expect("foreign occurrence");
+        let foreign_occurrence_id =
+            content_id(b"dclutch.occurrence.v1", &foreign_occurrence.to_bytes())
+                .expect("occurrence id");
+        let foreign_instance = InstanceV1::new(InstanceV1Input {
+            terms_id: foreign_terms_id,
+            occurrence_id: foreign_occurrence_id,
+            claim_basis_id: changed.instance.claim_basis_id(),
+            capacity_profile_id: changed.instance.capacity_profile_id(),
+            partition_cell_count: changed.instance.partition_cell_count(),
+        })
+        .expect("foreign instance");
+        let foreign_instance_id =
+            content_id(b"dclutch.instance.v1", &foreign_instance.to_bytes()).expect("instance id");
+        changed.terms = foreign_terms;
+        changed.occurrence = foreign_occurrence;
+        changed.instance = foreign_instance;
+        changed.certificate.terms_id = foreign_terms_id;
+        changed.certificate.occurrence_id = foreign_occurrence_id;
+        changed.certificate.instance_id = foreign_instance_id;
+        assert_eq!(
+            recheck(&request, &changed),
+            Err(CompileError::CertificateMismatch)
         );
 
         let mut changed = compile::<2>(&request).expect("compile");
