@@ -6,14 +6,22 @@
 
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
+    MARKET_OPENING_READINESS_BYTES, MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1,
     RequiredFoundingEntryV1,
 };
 use dclutch_collateral_contract::{
+    COLLATERAL_CUSTODY_BYTES, COLLATERAL_CUSTODY_PDA_DOMAIN, COLLATERAL_VAULT_PDA_DOMAIN,
     CREATE_REALM_BYTES, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
-    frame::{AccountRole, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME, Role},
+    OPEN_COLLATERAL_VAULT_BYTES, OpenCollateralVaultV1,
+    frame::{
+        AccountRole, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME, OPEN_COLLATERAL_VAULT_FRAME,
+        Role,
+    },
 };
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot};
-use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
+use dclutch_market_contract::market::{
+    CategoricalMarketV1, CategoricalSettlementSummaryV1, decode_market_outcome_count,
+};
 use dclutch_product_contract::{
     ContentId as ProductContentId, capacity::CapacityProfileV1, claim::CategoricalUnitV1,
     product::InstanceV1,
@@ -28,7 +36,7 @@ use dclutch_realm_contract::{
 use dclutch_record_contract::{
     ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
 };
-use dclutch_token_svm::{CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
+use dclutch_token_svm::{ACCOUNT_BYTES, CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
 use solana_program::{
     account_info::AccountInfo,
     hash::hash,
@@ -49,6 +57,8 @@ pub const FOUNDATION_GENERATION: u64 = 0;
 pub const CREATE_REALM_ACCOUNT_COUNT: usize = CREATE_REALM_FRAME.len();
 /// Exact account count of [`build_found_market_and_fund_v1`].
 pub const FOUND_MARKET_ACCOUNT_COUNT: usize = FOUND_MARKET_AND_FUND_FRAME.len();
+/// Exact account count of [`build_open_collateral_vault_v1`].
+pub const OPEN_COLLATERAL_VAULT_ACCOUNT_COUNT: usize = OPEN_COLLATERAL_VAULT_FRAME.len();
 
 /// One finalized observation that a derived destination did not exist.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,6 +177,39 @@ pub struct FoundMarketState {
     pub rent_sysvar: ObservedAccount,
 }
 
+/// Same-observation records needed to create custody and open a founded Market.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenCollateralVaultState {
+    /// System-owned signer paying only the new custody and Vault rent.
+    pub sponsor: ObservedAccount,
+    /// Authenticated Founding Market.
+    pub market: ObservedAccount,
+    /// Ready direct Market child consumed and closed during Open.
+    pub readiness: ObservedAccount,
+    /// Pre-existing permanent credit bound to the immutable Market beneficiary.
+    pub rent_credit: ObservedAccount,
+    /// Finalized capability manifest raw record committed by the Market.
+    pub capability_manifest: ObservedAccount,
+    /// Raw-record and vacant-cursor proof for the manifest.
+    pub capability_manifest_finalization: FinalizedRecordProof,
+    /// Finalized Realm raw record committed by the Market.
+    pub realm: ObservedAccount,
+    /// Raw-record and vacant-cursor proof for the Realm.
+    pub realm_finalization: FinalizedRecordProof,
+    /// System-owned empty derived custody destination.
+    pub custody_destination: ObservedAccount,
+    /// System-owned empty derived token-Vault destination.
+    pub vault_destination: ObservedAccount,
+    /// Mint bound by the Realm.
+    pub collateral_mint: ObservedAccount,
+    /// Executable token program bound by the Realm.
+    pub token_program: ObservedAccount,
+    /// Canonical executable System Program.
+    pub system_program: ObservedAccount,
+    /// Canonical Rent sysvar.
+    pub rent_sysvar: ObservedAccount,
+}
+
 /// Exact signer, rent, prepayment, and total sponsor debit report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FoundationDebitReport {
@@ -226,6 +269,25 @@ pub struct FoundMarketReport {
     /// capacity, child schema/derivation, activation policy, and exact funding
     /// quote without creating a second operator-owned semantic representation.
     pub resolution_funding: RequiredFoundingEntryV1,
+    /// Exact signer and debit report.
+    pub debit: FoundationDebitReport,
+}
+
+/// Complete unsigned custody creation and Market-open result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenCollateralVaultReport {
+    /// Exact unsigned 14-account Open instruction.
+    pub instruction: Instruction,
+    /// One finalized observation shared by every state input.
+    pub observation: Observation,
+    /// Exact immutable Market generation.
+    pub generation: u64,
+    /// Required pre-open direct-child replay count.
+    pub child_count: u64,
+    /// Derived custody PDA to be created.
+    pub custody_address: Pubkey,
+    /// Derived token Vault PDA to be created.
+    pub vault_address: Pubkey,
     /// Exact signer and debit report.
     pub debit: FoundationDebitReport,
 }
@@ -611,6 +673,173 @@ pub fn build_found_market_and_fund_v1(
     })
 }
 
+/// Construct an unsigned Open14 instruction from finalized chain observations.
+pub fn build_open_collateral_vault_v1(
+    program_id: Pubkey,
+    state: &OpenCollateralVaultState,
+) -> Result<OpenCollateralVaultReport, FoundationError> {
+    let observation = require_observation(&[
+        state.sponsor.observation,
+        state.market.observation,
+        state.readiness.observation,
+        state.rent_credit.observation,
+        state.capability_manifest.observation,
+        state
+            .capability_manifest_finalization
+            .staging_cursor
+            .observation,
+        state.realm.observation,
+        state.realm_finalization.staging_cursor.observation,
+        state.custody_destination.observation,
+        state.vault_destination.observation,
+        state.collateral_mint.observation,
+        state.token_program.observation,
+        state.system_program.observation,
+        state.rent_sysvar.observation,
+    ])?;
+    authenticate_system_program(&state.system_program)?;
+    let rent = decode_rent(&state.rent_sysvar)?;
+    authenticate_sponsor(&state.sponsor)?;
+    authenticate_distinct(&[
+        state.sponsor.key,
+        state.market.key,
+        state.readiness.key,
+        state.rent_credit.key,
+        state.capability_manifest.key,
+        state.capability_manifest_finalization.staging_cursor.key,
+        state.realm.key,
+        state.realm_finalization.staging_cursor.key,
+        state.custody_destination.key,
+        state.vault_destination.key,
+        state.collateral_mint.key,
+        state.token_program.key,
+        state.system_program.key,
+        state.rent_sysvar.key,
+    ])?;
+    authenticate_finalized_record(
+        program_id,
+        &rent,
+        &state.capability_manifest,
+        &state.capability_manifest_finalization,
+    )?;
+    authenticate_finalized_record(program_id, &rent, &state.realm, &state.realm_finalization)?;
+    require_rent_exempt(&rent, &state.market)?;
+    let manifest = CapabilityManifestV1::decode(&state.capability_manifest.data)
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    require_canonical(&state.capability_manifest.data, manifest.as_bytes())?;
+    let manifest_id = CapabilityContentId::new(hash(manifest.as_bytes()).to_bytes())
+        .map_err(|_| FoundationError::ContentLinkMismatch)?;
+    let realm = RealmV1::decode(&state.realm.data).map_err(|_| FoundationError::InvalidRecord)?;
+    require_canonical(&state.realm.data, &realm.to_bytes())?;
+    authenticate_token_program(&state.token_program)?;
+    if realm.token_program() != &state.token_program.key.to_bytes()
+        || realm.collateral_mint() != state.collateral_mint.key.as_ref()
+        || state.collateral_mint.owner != state.token_program.key
+        || state.collateral_mint.executable
+    {
+        return Err(FoundationError::InvalidOwner);
+    }
+    require_rent_exempt(&rent, &state.collateral_mint)?;
+    let release = select_token_release(state.token_program.key)?;
+    let mint = release
+        .profile()
+        .check_mint(
+            state.token_program.key.to_bytes(),
+            &state.collateral_mint.data,
+        )
+        .map_err(|_| FoundationError::InvalidMint)?;
+    require_realm_authorities(
+        realm,
+        !mint.mint_authority.is_none(),
+        !mint.freeze_authority.is_none(),
+    )?;
+    let (generation, child_count, beneficiary) = open_market_facts(
+        program_id,
+        &state.market,
+        hash(&state.realm.data).to_bytes(),
+        manifest_id.to_bytes(),
+    )?;
+    let readiness = MarketOpeningReadinessV1::decode(&state.readiness.data)
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    if readiness.to_bytes().as_slice() != state.readiness.data.as_slice()
+        || readiness.sponsor_rent_refund() != state.sponsor.key.as_ref()
+    {
+        return Err(FoundationError::ContentLinkMismatch);
+    }
+    readiness
+        .require_ready_for_open(
+            state.market.key.to_bytes(),
+            generation,
+            manifest_id,
+            manifest,
+        )
+        .map_err(|_| FoundationError::InvalidFundingAuthority)?;
+    let generation_seed = generation.to_le_bytes();
+    let (expected_readiness, _) = Pubkey::find_program_address(
+        &[
+            MARKET_OPENING_READINESS_PDA_DOMAIN,
+            state.market.key.as_ref(),
+            generation_seed.as_slice(),
+        ],
+        &program_id,
+    );
+    if state.readiness.key != expected_readiness
+        || state.readiness.owner != program_id
+        || state.readiness.executable
+        || state.readiness.lamports != rent.minimum_balance(MARKET_OPENING_READINESS_BYTES)
+    {
+        return Err(FoundationError::AddressMismatch);
+    }
+    authenticate_rent_credit(
+        program_id,
+        &state.rent_credit,
+        Pubkey::new_from_array(beneficiary),
+    )
+    .map_err(|_| FoundationError::InvalidOwner)?;
+    let (custody_address, _) = Pubkey::find_program_address(
+        &[COLLATERAL_CUSTODY_PDA_DOMAIN, state.market.key.as_ref()],
+        &program_id,
+    );
+    let (vault_address, _) = Pubkey::find_program_address(
+        &[COLLATERAL_VAULT_PDA_DOMAIN, state.market.key.as_ref()],
+        &program_id,
+    );
+    authenticate_empty_system_destination(&state.custody_destination, custody_address)?;
+    authenticate_empty_system_destination(&state.vault_destination, vault_address)?;
+    let custody_rent = rent.minimum_balance(COLLATERAL_CUSTODY_BYTES);
+    let vault_rent = rent.minimum_balance(ACCOUNT_BYTES);
+    let total = custody_rent
+        .checked_add(vault_rent)
+        .ok_or(FoundationError::ArithmeticOverflow)?;
+    require_sponsor_balance(state.sponsor.lamports, total)?;
+    let mut data = vec![0; OPEN_COLLATERAL_VAULT_BYTES];
+    OpenCollateralVaultV1::new(generation, child_count)
+        .encode(&mut data)
+        .map_err(|_| FoundationError::InstructionEncoding)?;
+    let accounts = exact_open_collateral_vault_metas(state, custody_address, vault_address)?;
+    Ok(OpenCollateralVaultReport {
+        instruction: Instruction {
+            program_id,
+            accounts,
+            data,
+        },
+        observation,
+        generation,
+        child_count,
+        custody_address,
+        vault_address,
+        debit: FoundationDebitReport {
+            sponsor: state.sponsor.key,
+            realm_rent: 0,
+            market_rent: 0,
+            fund_rent: 0,
+            provider_fee_reimbursement: 0,
+            resolution_success_bounty: 0,
+            total_sponsor_debit: total,
+        },
+    })
+}
+
 fn exact_create_realm_metas(
     state: &CreateRealmState,
     realm_address: Pubkey,
@@ -674,6 +903,38 @@ fn exact_found_market_metas(
         .collect()
 }
 
+fn exact_open_collateral_vault_metas(
+    state: &OpenCollateralVaultState,
+    custody_address: Pubkey,
+    vault_address: Pubkey,
+) -> Result<Vec<AccountMeta>, FoundationError> {
+    OPEN_COLLATERAL_VAULT_FRAME
+        .iter()
+        .map(|role| {
+            let key = match role.role() {
+                Role::Sponsor => state.sponsor.key,
+                Role::Market => state.market.key,
+                Role::CapabilityReadiness => state.readiness.key,
+                Role::RentCredit => state.rent_credit.key,
+                Role::CapabilityManifest => state.capability_manifest.key,
+                Role::Realm => state.realm.key,
+                Role::CollateralCustody => custody_address,
+                Role::CollateralVault => vault_address,
+                Role::CollateralMint => state.collateral_mint.key,
+                Role::CapabilityManifestStagingCursor => {
+                    state.capability_manifest_finalization.staging_cursor.key
+                }
+                Role::RealmStagingCursor => state.realm_finalization.staging_cursor.key,
+                Role::TokenProgram => state.token_program.key,
+                Role::SystemProgram => system_program::ID,
+                Role::RentSysvar => sysvar::rent::ID,
+                _ => return Err(FoundationError::InstructionEncoding),
+            };
+            Ok(exact_meta(key, *role))
+        })
+        .collect()
+}
+
 fn exact_meta(key: Pubkey, role: AccountRole) -> AccountMeta {
     AccountMeta {
         pubkey: key,
@@ -702,6 +963,21 @@ fn require_observation(observations: &[Observation]) -> Result<Observation, Foun
 fn authenticate_sponsor(account: &ObservedAccount) -> Result<(), FoundationError> {
     if account.owner != system_program::ID || account.executable || !account.data.is_empty() {
         return Err(FoundationError::InvalidSponsor);
+    }
+    Ok(())
+}
+
+fn authenticate_empty_system_destination(
+    account: &ObservedAccount,
+    expected: Pubkey,
+) -> Result<(), FoundationError> {
+    if account.key != expected
+        || account.owner != system_program::ID
+        || account.executable
+        || account.lamports != 0
+        || !account.data.is_empty()
+    {
+        return Err(FoundationError::DestinationNotVacant);
     }
     Ok(())
 }
@@ -853,6 +1129,78 @@ fn product_id(bytes: [u8; 32]) -> Result<ProductContentId, FoundationError> {
 
 fn core_id(bytes: [u8; 32]) -> Result<CoreContentId, FoundationError> {
     CoreContentId::new(bytes).map_err(|_| FoundationError::ContentLinkMismatch)
+}
+
+fn require_realm_authorities(
+    realm: RealmV1,
+    mint_authority_present: bool,
+    freeze_authority_present: bool,
+) -> Result<(), FoundationError> {
+    if (realm.mint_authority_policy() == MintAuthorityPolicy::RequireAbsent
+        && mint_authority_present)
+        || (realm.freeze_authority_policy() == FreezeAuthorityPolicy::RequireAbsent
+            && freeze_authority_present)
+    {
+        return Err(FoundationError::IssuerAuthorityConsentRequired);
+    }
+    Ok(())
+}
+
+fn open_market_facts(
+    program_id: Pubkey,
+    market: &ObservedAccount,
+    realm_id: [u8; 32],
+    manifest_id: [u8; 32],
+) -> Result<(u64, u64, [u8; 32]), FoundationError> {
+    match decode_market_outcome_count(&market.data).map_err(|_| FoundationError::InvalidRecord)? {
+        2 => typed_open_market_facts::<2>(program_id, market, realm_id, manifest_id),
+        3 => typed_open_market_facts::<3>(program_id, market, realm_id, manifest_id),
+        4 => typed_open_market_facts::<4>(program_id, market, realm_id, manifest_id),
+        5 => typed_open_market_facts::<5>(program_id, market, realm_id, manifest_id),
+        6 => typed_open_market_facts::<6>(program_id, market, realm_id, manifest_id),
+        7 => typed_open_market_facts::<7>(program_id, market, realm_id, manifest_id),
+        8 => typed_open_market_facts::<8>(program_id, market, realm_id, manifest_id),
+        9 => typed_open_market_facts::<9>(program_id, market, realm_id, manifest_id),
+        10 => typed_open_market_facts::<10>(program_id, market, realm_id, manifest_id),
+        11 => typed_open_market_facts::<11>(program_id, market, realm_id, manifest_id),
+        12 => typed_open_market_facts::<12>(program_id, market, realm_id, manifest_id),
+        13 => typed_open_market_facts::<13>(program_id, market, realm_id, manifest_id),
+        14 => typed_open_market_facts::<14>(program_id, market, realm_id, manifest_id),
+        15 => typed_open_market_facts::<15>(program_id, market, realm_id, manifest_id),
+        16 => typed_open_market_facts::<16>(program_id, market, realm_id, manifest_id),
+        _ => Err(FoundationError::InvalidOutcomeCount),
+    }
+}
+
+fn typed_open_market_facts<const N: usize>(
+    program_id: Pubkey,
+    observed: &ObservedAccount,
+    realm_id: [u8; 32],
+    manifest_id: [u8; 32],
+) -> Result<(u64, u64, [u8; 32]), FoundationError> {
+    if observed.owner != program_id || observed.executable {
+        return Err(FoundationError::InvalidOwner);
+    }
+    let market = CategoricalMarketV1::<N>::decode(&observed.data)
+        .map_err(|_| FoundationError::InvalidRecord)?;
+    let root = market.root();
+    if root.phase() != dclutch_core_contract::Phase::Founding
+        || root.outstanding_children() != 2
+        || root.identity().realm_id().to_bytes() != realm_id
+        || root.identity().capability_manifest_id().to_bytes() != manifest_id
+    {
+        return Err(FoundationError::ContentLinkMismatch);
+    }
+    let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
+    let (expected, _) = Pubkey::find_program_address(&[MARKET_SEED, &identity_digest], &program_id);
+    if observed.key != expected {
+        return Err(FoundationError::AddressMismatch);
+    }
+    Ok((
+        root.identity().generation(),
+        root.outstanding_children(),
+        root.rent_refund(),
+    ))
 }
 
 fn validate_market_space(outcome_count: u8, root: MarketRoot) -> Result<usize, FoundationError> {

@@ -799,3 +799,159 @@ fn create_realm_refuses_wrong_destination_owner_mint_rent_and_balance() {
         Err(FoundationError::SponsorUnderfunded)
     );
 }
+
+fn open_state() -> (Pubkey, OpenCollateralVaultState) {
+    let fixture = FoundFixture::new(2, 16);
+    let sponsor = fixture.state.sponsor.key;
+    let mut root = MarketRoot::founding(fixture.identity, sponsor.to_bytes()).expect("root");
+    root.register_child(FOUNDATION_GENERATION, 0)
+        .expect("fund child");
+    root.register_child(FOUNDATION_GENERATION, 1)
+        .expect("readiness child");
+    let market =
+        CategoricalMarketV1::<2>::new(root, 0, [0; 2], CategoricalSettlementSummaryV1::empty())
+            .expect("market");
+    let mut market_data = vec![0; CategoricalMarketV1::<2>::encoded_len().expect("market len")];
+    market.encode(&mut market_data).expect("market encode");
+    let market_key = Pubkey::find_program_address(
+        &[MARKET_SEED, &hash(&fixture.identity.to_bytes()).to_bytes()],
+        &fixture.program_id,
+    )
+    .0;
+    let manifest =
+        CapabilityManifestV1::decode(&fixture.state.capability_manifest.data).expect("manifest");
+    let manifest_id = CapabilityContentId::new(hash(manifest.as_bytes()).to_bytes()).expect("ID");
+    let mut readiness = MarketOpeningReadinessV1::begin(
+        market_key.to_bytes(),
+        FOUNDATION_GENERATION,
+        manifest_id,
+        manifest,
+        sponsor.to_bytes(),
+    )
+    .expect("readiness");
+    let selected = manifest
+        .required_founding_entry_for_config(fixture.identity.resolution_policy_id())
+        .expect("entry");
+    let funding = construct_required_resolution_funding(
+        manifest_id,
+        manifest,
+        selected,
+        Rent::default().minimum_balance(dclutch_pyth_contract::funding::FUNDING_BYTES),
+        observation().slot,
+    )
+    .expect("funding");
+    readiness
+        .advance(
+            market_key.to_bytes(),
+            FOUNDATION_GENERATION,
+            manifest_id,
+            manifest,
+            0,
+            funding,
+            funding.remaining().total_principal(),
+            observation().slot,
+        )
+        .expect("ready");
+    let readiness_key = Pubkey::find_program_address(
+        &[
+            MARKET_OPENING_READINESS_PDA_DOMAIN,
+            market_key.as_ref(),
+            &FOUNDATION_GENERATION.to_le_bytes(),
+        ],
+        &fixture.program_id,
+    )
+    .0;
+    let rent = Rent::default();
+    let custody = Pubkey::find_program_address(
+        &[COLLATERAL_CUSTODY_PDA_DOMAIN, market_key.as_ref()],
+        &fixture.program_id,
+    )
+    .0;
+    let vault = Pubkey::find_program_address(
+        &[COLLATERAL_VAULT_PDA_DOMAIN, market_key.as_ref()],
+        &fixture.program_id,
+    )
+    .0;
+    (
+        fixture.program_id,
+        OpenCollateralVaultState {
+            sponsor: observed(sponsor, system_program::ID, u64::MAX, Vec::new(), false),
+            market: observed(
+                market_key,
+                fixture.program_id,
+                rent.minimum_balance(market_data.len()),
+                market_data,
+                false,
+            ),
+            readiness: observed(
+                readiness_key,
+                fixture.program_id,
+                rent.minimum_balance(MARKET_OPENING_READINESS_BYTES),
+                readiness.to_bytes().to_vec(),
+                false,
+            ),
+            rent_credit: fixture.state.rent_credit.clone(),
+            capability_manifest: fixture.state.capability_manifest.clone(),
+            capability_manifest_finalization: fixture
+                .state
+                .capability_manifest_finalization
+                .clone(),
+            realm: fixture.state.realm.clone(),
+            realm_finalization: fixture.state.realm_finalization.clone(),
+            custody_destination: observed(custody, system_program::ID, 0, Vec::new(), false),
+            vault_destination: observed(vault, system_program::ID, 0, Vec::new(), false),
+            collateral_mint: observed(
+                Pubkey::new_from_array([92; 32]),
+                Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID),
+                u64::MAX,
+                mint_data(false),
+                false,
+            ),
+            token_program: observed(
+                Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID),
+                bpf_loader_upgradeable::ID,
+                1,
+                Vec::new(),
+                true,
+            ),
+            system_program: system_program_account(),
+            rent_sysvar: rent_account(),
+        },
+    )
+}
+
+#[test]
+fn open_vault_derives_open14_and_refuses_hostile_destinations() {
+    let (program, state) = open_state();
+    let report = build_open_collateral_vault_v1(program, &state).expect("Open14");
+    assert_eq!(
+        report.instruction.accounts.len(),
+        OPEN_COLLATERAL_VAULT_ACCOUNT_COUNT
+    );
+    assert_eq!(report.generation, FOUNDATION_GENERATION);
+    assert_eq!(report.child_count, 2);
+    assert_eq!(
+        report.instruction.accounts.get(9).map(|meta| meta.pubkey),
+        Some(state.capability_manifest_finalization.staging_cursor.key)
+    );
+    assert_eq!(
+        report.instruction.accounts.get(10).map(|meta| meta.pubkey),
+        Some(state.realm_finalization.staging_cursor.key)
+    );
+    let mut occupied = state.clone();
+    occupied.custody_destination.lamports = 1;
+    assert_eq!(
+        build_open_collateral_vault_v1(program, &occupied),
+        Err(FoundationError::DestinationNotVacant)
+    );
+    let mut incomplete = state;
+    *incomplete
+        .readiness
+        .data
+        .get_mut(0)
+        .expect("canonical readiness has a header") ^= 1;
+    assert_eq!(
+        build_open_collateral_vault_v1(program, &incomplete),
+        Err(FoundationError::InvalidRecord)
+    );
+}
