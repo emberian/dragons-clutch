@@ -2951,7 +2951,7 @@ pub(crate) fn consume_source_market_shared_core_v5(
         program_id,
         funding_account,
         series_plan_id,
-        false,
+        true,
     )?;
     require(
         root.state().phase() == MarketLifecyclePhaseV3::Retiring
