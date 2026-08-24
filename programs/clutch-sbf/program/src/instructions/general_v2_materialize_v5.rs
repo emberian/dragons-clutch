@@ -48,6 +48,7 @@ use super::general_v2_fee_v5::{
     PreparedOwnerFeeAction24V5,
 };
 use super::general_v2_settlement_producer_v5::{create_from_payer, encode_account, rent_owner};
+use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 use super::general_v2_settlement_traversal_v5::{
     authenticate_portfolio_materialization_sibling_set_v5, authenticate_settlement_traversal_v5,
     authenticate_writable_root_settlement_traversal_v5, AuthenticatedSettlementTraversalV5,
@@ -412,7 +413,7 @@ fn prepare_owner_fee_evidence(
     require(
         !revenue_preimage.is_writable
             && !revenue_preimage.is_signer
-            && revenue_preimage.executable
+            && !revenue_preimage.executable
             && revenue_preimage.data_len() == REVENUE_POLICY_BYTES,
         ClutchError::MismatchedState,
     )?;
@@ -983,6 +984,7 @@ fn apply_plan<'a>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'a>],
     rent: &RentParameters,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     plan: &MaterializeEntitlementSlicePlanV5,
 ) -> Outcome<()> {
     let payer = &accounts[IX_RENT_PAYER];
@@ -1060,7 +1062,10 @@ fn apply_plan<'a>(
         ordinal += 1;
     }
     encode_account(&accounts[IX_ROOT], |out| {
-        plan.settlement_root_poststate().encode(out)
+        authenticated_root.encode_materialization_successor(
+            plan.settlement_root_poststate(),
+            out,
+        )
     })
 }
 
@@ -1069,6 +1074,7 @@ fn apply_portfolio_plan<'a>(
     accounts: &[AccountInfo<'a>],
     rent: &RentParameters,
     fee_end: usize,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     plan: &MaterializePortfolioPairPlanV5,
 ) -> Outcome<()> {
     let payer = &accounts[IX_RENT_PAYER];
@@ -1158,7 +1164,10 @@ fn apply_portfolio_plan<'a>(
         ordinal += 1;
     }
     encode_account(&accounts[IX_ROOT], |out| {
-        plan.settlement_root_poststate().encode(out)
+        authenticated_root.encode_materialization_successor(
+            plan.settlement_root_poststate(),
+            out,
+        )
     })
 }
 
@@ -1234,10 +1243,17 @@ pub fn process(
             sibling_set,
         )?;
         authenticate_portfolio_plan_accounts(program_id, accounts, fee_end, &plan)?;
-        apply_portfolio_plan(program_id, accounts, &rent, fee_end, &plan)
+        apply_portfolio_plan(
+            program_id,
+            accounts,
+            &rent,
+            fee_end,
+            root_traversal.root(),
+            &plan,
+        )
     } else {
         let plan = prepare_generic_plan(program_id, accounts, &root_traversal, page_count, &rent)?;
         authenticate_plan_accounts(program_id, accounts, &plan)?;
-        apply_plan(program_id, accounts, &rent, &plan)
+        apply_plan(program_id, accounts, &rent, root_traversal.root(), &plan)
     }
 }

@@ -30,6 +30,7 @@ use clutch_solana_layout::order_page_v5::{
 };
 use clutch_solana_layout::projection::OwnerInterner;
 use clutch_solana_layout::{account_len, Hash32, PriceGridAccount};
+use clutch_solana_layout::registry::GeneralV2Action;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -93,6 +94,28 @@ impl Sha256BackendV1 for RuntimeSha256 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; contract::ID_BYTES] {
         solana_sha256_hasher::hashv(parts).to_bytes()
     }
+}
+
+/// Dispatch-compatible action-43 entrypoint.
+#[inline(never)]
+pub fn process(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    action: GeneralV2Action,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)?;
+    require(
+        capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    require(action == GeneralV2Action::FreezeEpochV5, ClutchError::UnsupportedInstruction)?;
+    freeze_epoch_v5(
+        program_id,
+        accounts,
+        contract::FreezeEpochPayloadV1::decode(payload)?,
+    )
 }
 
 /// Execute fresh General local action 43 over one exact nonempty V5 book.

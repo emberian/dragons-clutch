@@ -524,6 +524,16 @@ impl SelectedOwnerFeeBookV1 {
     pub const fn selected_fee_atoms(&self) -> u128 {
         self.selected_fee_atoms
     }
+
+    /// Canonical complete-book content identity under the supplied exact hash
+    /// backend. This keeps downstream streaming retirement bound to the same
+    /// semantic owner instead of reimplementing the transcript.
+    pub fn owner_fee_book_data_id<H: SelectedOwnerFeeBookHashV1>(
+        &self,
+        hash: &H,
+    ) -> Result<Id> {
+        selected_owner_fee_book_data_id_v1(self, hash)
+    }
 }
 
 /// Project one terminal owner carry into the owner-settlement builder's exact

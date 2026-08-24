@@ -3,11 +3,13 @@
 //! Action 39 authenticates the winning Window/AdmissionNode/retained-Feed
 //! chain, the complete canonical V5 page set, the immutable Market/Realm/
 //! collateral joins, and either the complete-book fee certificate or the
-//! canonical absent selected-fee PDA. It then creates the counted Settlement
-//! Root and its direction-dependent singleton children while atomically
-//! finalizing Epoch and Window. No child expectation is read from payload.
+//! canonical absent selected-fee PDA. It then creates the indexed counted
+//! Settlement Root, its compact exact-index pair, and any direction-dependent
+//! singleton pots while atomically finalizing Epoch and Window. No child
+//! expectation is read from payload.
 
 use core::cell::Ref;
+use std::boxed::Box;
 
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
@@ -17,11 +19,13 @@ use clutch_general_v2_contract::{
     decode_settlement_root_payload_v1, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, DeletableRentOwnerV1, GeneralEpochV6AccountV1, Id32,
     InitializeSettlementRootV1, OptionalSettlementRentV1, SettlementCashPotV1AccountV1,
-    SettlementRootPayloadV1,
+    SettlementRootPayloadV1, Sha256BackendV1,
 };
 use clutch_general_v2_runtime::{
-    derive_settlement_root_expectation_v1, CandidateFeeAggregateProjectionV1,
-    SettlementRootExpectationProjectionV1,
+    adjacency_data_len_v1, derive_settlement_root_expectation_v1, locator_data_len_v1,
+    stream_counted_exact_index_root_v1, CandidateFeeAggregateProjectionV1,
+    ConstructExactIndexStreamingInputV1, ExactIndexCreateAccountInputV1,
+    ExactIndexPlaneErrorV1, SettlementRootExpectationProjectionV1,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::MAX_ORDER_PAGES;
@@ -45,7 +49,8 @@ use super::general_v2_fee_v5::{
     CandidateFeeCollectionExpectationV5,
 };
 use super::general_v2_settlement_traversal_v5::{
-    authenticate_settlement_traversal_v5, SettlementTraversalAccountFrameV5,
+    authenticate_settlement_traversal_v5, AuthenticatedSettlementTraversalV5,
+    SettlementTraversalAccountFrameV5,
 };
 
 /// Fixed action-39 roles before the optional fee suffix.
@@ -53,7 +58,7 @@ pub const ACTION39_COMMON_PREFIX_ACCOUNTS: usize = 15;
 /// Four accounts present only for a nonzero selected fee record.
 pub const ACTION39_FEE_SUFFIX_ACCOUNTS: usize = 4;
 /// Fixed creation/sysvar roles after the optional fee suffix.
-pub const ACTION39_CREATION_SUFFIX_ACCOUNTS: usize = 7;
+pub const ACTION39_CREATION_SUFFIX_ACCOUNTS: usize = 9;
 
 const IX_EPOCH: usize = 0;
 const IX_WINDOW: usize = 1;
@@ -75,11 +80,71 @@ fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RuntimeSha256;
+
+impl Sha256BackendV1 for RuntimeSha256 {
+    fn sha256(&self, parts: &[&[u8]]) -> [u8; contract::ID_BYTES] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+fn exact_index_outcome<T>(value: Result<T, ExactIndexPlaneErrorV1>) -> Outcome<T> {
+    value.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+fn action39_total_principal(
+    indexed_root: u64,
+    locator: u64,
+    adjacency: u64,
+    cash_pot: Option<u64>,
+    final_pot: Option<u64>,
+) -> Option<u64> {
+    let mut total = indexed_root.checked_add(locator)?.checked_add(adjacency)?;
+    if let Some(principal) = cash_pot {
+        total = total.checked_add(principal)?;
+    }
+    if let Some(principal) = final_pot {
+        total = total.checked_add(principal)?;
+    }
+    Some(total)
+}
+
 fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     Ok(Ref::map(data, |bytes| &**bytes))
+}
+
+#[inline(never)]
+fn decode_epoch_boxed(account: &AccountInfo<'_>) -> Outcome<Box<GeneralEpochV6AccountV1>> {
+    Ok(Box::new(GeneralEpochV6AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn decode_window_boxed(account: &AccountInfo<'_>) -> Outcome<Box<CandidateWindowV5AccountV1>> {
+    Ok(Box::new(CandidateWindowV5AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn decode_node_boxed(account: &AccountInfo<'_>) -> Outcome<Box<AdmissionNodeV4AccountV1>> {
+    Ok(Box::new(AdmissionNodeV4AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn authenticate_traversal_boxed<'a, 'info>(
+    program_id: &Pubkey,
+    frame: SettlementTraversalAccountFrameV5<'a, 'info>,
+) -> Outcome<Box<AuthenticatedSettlementTraversalV5<'info>>> {
+    Ok(Box::new(authenticate_settlement_traversal_v5(program_id, frame)?))
+}
+
+#[inline(never)]
+fn prepare_root_plan_boxed<'a>(
+    request: InitializeSettlementRootV1<'a>,
+) -> Outcome<Box<contract::StreamingSettlementRootInitializationV1<'a>>> {
+    Ok(Box::new(contract::prepare_streaming_settlement_root_v1(request)?))
 }
 
 fn require_program_state(
@@ -277,9 +342,9 @@ fn initialize_settlement_root(
         Some(contract::ADMISSION_NODE_ACCOUNT_BYTES_V2),
     )?;
 
-    let epoch = GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[IX_EPOCH])?)?;
-    let window = CandidateWindowV5AccountV1::decode(&borrow_data(&accounts[IX_WINDOW])?)?;
-    let node = AdmissionNodeV4AccountV1::decode(&borrow_data(&accounts[IX_NODE])?)?;
+    let epoch = decode_epoch_boxed(&accounts[IX_EPOCH])?;
+    let window = decode_window_boxed(&accounts[IX_WINDOW])?;
+    let node = decode_node_boxed(&accounts[IX_NODE])?;
 
     let selected_fee_pda = seeds::general_v2_selected_fee_record_pda(
         program_id,
@@ -307,10 +372,12 @@ fn initialize_settlement_root(
     let ix_root = creation_at;
     let ix_cash_pot = creation_at + 1;
     let ix_final_pot = creation_at + 2;
-    let ix_payer = creation_at + 3;
-    let ix_system = creation_at + 4;
-    let ix_rent = creation_at + 5;
-    let ix_clock = creation_at + 6;
+    let ix_locator = creation_at + 3;
+    let ix_adjacency = creation_at + 4;
+    let ix_payer = creation_at + 5;
+    let ix_system = creation_at + 6;
+    let ix_rent = creation_at + 7;
+    let ix_clock = creation_at + 8;
     let first_page = creation_at + ACTION39_CREATION_SUFFIX_ACCOUNTS;
     require(
         accounts.len() > first_page && accounts.len() <= first_page + MAX_ORDER_PAGES,
@@ -318,10 +385,11 @@ fn initialize_settlement_root(
     )?;
     require_signer(&accounts[ix_payer])?;
     require(accounts[ix_payer].is_writable, ClutchError::NotWritable)?;
+    let payer_lamports_before = accounts[ix_payer].lamports();
     require_system_program(&accounts[ix_system])?;
     let rent = read_rent(&accounts[ix_rent])?;
     let current_slot = read_clock_slot(&accounts[ix_clock])?;
-    let authenticated = authenticate_settlement_traversal_v5(
+    let authenticated = authenticate_traversal_boxed(
         program_id,
         SettlementTraversalAccountFrameV5 {
             retained_feed: &accounts[IX_FEED],
@@ -419,6 +487,10 @@ fn initialize_settlement_root(
         &request.epoch.bytes(),
         &node.base().settlement_candidate_id.bytes(),
     );
+    let locator_pda =
+        seeds::general_v2_frozen_order_locator_pda(program_id, &root_pda.0.to_bytes());
+    let adjacency_pda =
+        seeds::general_v2_candidate_slice_index_pda(program_id, &root_pda.0.to_bytes());
     let cash_pda = seeds::general_v2_settlement_cash_pot_pda(
         program_id,
         &request.epoch.bytes(),
@@ -439,18 +511,44 @@ fn initialize_settlement_root(
     require(
         *accounts[ix_root].key == root_pda.0
             && *accounts[ix_cash_pot].key == cash_pda.0
-            && *accounts[ix_final_pot].key == final_pda.0,
+            && *accounts[ix_final_pot].key == final_pda.0
+            && *accounts[ix_locator].key == locator_pda.0
+            && *accounts[ix_adjacency].key == adjacency_pda.0,
         ClutchError::WrongPda,
     )?;
-    for target in [&accounts[ix_root], &accounts[ix_cash_pot], &accounts[ix_final_pot]] {
+    for target in [
+        &accounts[ix_root],
+        &accounts[ix_cash_pot],
+        &accounts[ix_final_pot],
+        &accounts[ix_locator],
+        &accounts[ix_adjacency],
+    ] {
         require_creatable(target)?;
         require(target.is_writable && !target.is_signer, ClutchError::NotWritable)?;
     }
+    let reference_count = traversal.projection().exact_slice_reference_count();
+    let locator_len = exact_index_outcome(locator_data_len_v1(feed.order_count))?;
+    let adjacency_len = exact_index_outcome(adjacency_data_len_v1(
+        feed.order_count,
+        reference_count,
+    ))?;
     let root_rent = rent_owner(
         &accounts[ix_payer],
         &accounts[ix_root],
         &rent,
-        contract::SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        contract::INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    )?;
+    let locator_rent = rent_owner(
+        &accounts[ix_payer],
+        &accounts[ix_locator],
+        &rent,
+        locator_len,
+    )?;
+    let adjacency_rent = rent_owner(
+        &accounts[ix_payer],
+        &accounts[ix_adjacency],
+        &rent,
+        adjacency_len,
     )?;
     let cash_rent = rent_owner(
         &accounts[ix_payer],
@@ -466,7 +564,7 @@ fn initialize_settlement_root(
         &rent,
         contract::FINAL_POT_ACCOUNT_BYTES,
     )?;
-    let plan = contract::initialize_settlement_root_v1(InitializeSettlementRootV1 {
+    let plan = prepare_root_plan_boxed(InitializeSettlementRootV1 {
         root_account: id(accounts[ix_root].key),
         root_bump: root_pda.1,
         epoch_account: request.epoch,
@@ -503,6 +601,56 @@ fn initialize_settlement_root(
         },
     })?;
 
+    let root_rent_preparation = contract::prepare_fresh_indexed_settlement_root_rent_v1(
+        plan.root(),
+        id(accounts[ix_root].key),
+        accounts[ix_root].lamports(),
+        root_rent.refundable_principal,
+        payer_lamports_before,
+        traversal.projection().neutral_sink(),
+        &RuntimeSha256,
+    )?;
+    let root_rent_authority =
+        root_rent_preparation.authenticate_source(plan.root(), &RuntimeSha256)?;
+    let locator_create = ExactIndexCreateAccountInputV1 {
+        account: id(accounts[ix_locator].key),
+        program_id: id(program_id),
+        payer: id(accounts[ix_payer].key),
+        payer_lamports: payer_lamports_before,
+        target_lamports: accounts[ix_locator].lamports(),
+        target_owner: Id32::ZERO,
+        target_data_len: accounts[ix_locator].data_len(),
+        target_writable: accounts[ix_locator].is_writable,
+        target_executable: accounts[ix_locator].executable,
+        rent_exempt_minimum: locator_rent.refundable_principal,
+        stored_bump: locator_pda.1,
+    };
+    let adjacency_create = ExactIndexCreateAccountInputV1 {
+        account: id(accounts[ix_adjacency].key),
+        program_id: id(program_id),
+        payer: id(accounts[ix_payer].key),
+        payer_lamports: payer_lamports_before,
+        target_lamports: accounts[ix_adjacency].lamports(),
+        target_owner: Id32::ZERO,
+        target_data_len: accounts[ix_adjacency].data_len(),
+        target_writable: accounts[ix_adjacency].is_writable,
+        target_executable: accounts[ix_adjacency].executable,
+        rent_exempt_minimum: adjacency_rent.refundable_principal,
+        stored_bump: adjacency_pda.1,
+    };
+    let total_principal = action39_total_principal(
+        root_rent.refundable_principal,
+        locator_rent.refundable_principal,
+        adjacency_rent.refundable_principal,
+        plan.creates_cash_pot().then_some(cash_rent.refundable_principal),
+        plan.creates_final_pot().then_some(final_rent.refundable_principal),
+    )
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        payer_lamports_before >= total_principal,
+        ClutchError::AccountCreationFailed,
+    )?;
+
     let root_epoch = request.epoch.bytes();
     let candidate = node.base().settlement_candidate_id.bytes();
     let root_bump = [root_pda.1];
@@ -518,11 +666,44 @@ fn initialize_settlement_root(
         &accounts[ix_root],
         &accounts[ix_system],
         &rent,
-        contract::SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        contract::INDEXED_SETTLEMENT_ROOT_BYTES_V1,
         root_rent,
         &root_seeds,
     )?;
-    if let Some(cash) = plan.cash_pot() {
+    let root_key = root_pda.0.to_bytes();
+    let locator_bump = [locator_pda.1];
+    let locator_seeds: [&[u8]; 3] = [
+        seeds::SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR,
+        &root_key,
+        &locator_bump,
+    ];
+    create_from_payer(
+        program_id,
+        &accounts[ix_payer],
+        &accounts[ix_locator],
+        &accounts[ix_system],
+        &rent,
+        locator_len,
+        locator_rent,
+        &locator_seeds,
+    )?;
+    let adjacency_bump = [adjacency_pda.1];
+    let adjacency_seeds: [&[u8]; 3] = [
+        seeds::SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX,
+        &root_key,
+        &adjacency_bump,
+    ];
+    create_from_payer(
+        program_id,
+        &accounts[ix_payer],
+        &accounts[ix_adjacency],
+        &accounts[ix_system],
+        &rent,
+        adjacency_len,
+        adjacency_rent,
+        &adjacency_seeds,
+    )?;
+    if let Some(cash) = plan.cash_pot()? {
         let cash_bump = [cash_pda.1];
         let cash_seeds: [&[u8]; 4] = [
             seeds::SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
@@ -549,7 +730,7 @@ fn initialize_settlement_root(
             .encode(out)
         })?;
     }
-    if let Some(final_pot) = plan.final_pot() {
+    if let Some(final_pot) = plan.final_pot()? {
         let final_bump = [final_pda.1];
         let final_seeds: [&[u8]; 4] = [
             final_seed.domain(),
@@ -569,7 +750,62 @@ fn initialize_settlement_root(
         )?;
         encode_account(&accounts[ix_final_pot], |out| final_pot.encode(out))?;
     }
-    encode_account(&accounts[ix_root], |out| plan.root().encode(out))?;
-    encode_account(&accounts[IX_EPOCH], |out| plan.epoch().encode(out))?;
-    encode_account(&accounts[IX_WINDOW], |out| plan.window().encode(out))
+    {
+        let mut root_output = accounts[ix_root]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut locator_output = accounts[ix_locator]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut adjacency_output = accounts[ix_adjacency]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        exact_index_outcome(stream_counted_exact_index_root_v1(
+            root_rent_authority,
+            &ConstructExactIndexStreamingInputV1 {
+                traversal,
+                settlement_root_account: id(accounts[ix_root].key),
+                settlement_root: plan.root(),
+                capability_profile_id: Id32::from_bytes(capabilities::PROFILE_ID),
+                locator_create,
+                adjacency_create,
+            },
+            &mut root_output,
+            &mut locator_output,
+            &mut adjacency_output,
+        ))?;
+    }
+    encode_account(&accounts[IX_EPOCH], |out| plan.encode_epoch_successor(out))?;
+    encode_account(&accounts[IX_WINDOW], |out| plan.encode_window_successor(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_index_roles_fit_action39_and_all_principals_are_aggregated() {
+        assert_eq!(ACTION39_CREATION_SUFFIX_ACCOUNTS, 9);
+        assert_eq!(
+            ACTION39_COMMON_PREFIX_ACCOUNTS
+                + ACTION39_FEE_SUFFIX_ACCOUNTS
+                + ACTION39_CREATION_SUFFIX_ACCOUNTS
+                + MAX_ORDER_PAGES,
+            32,
+        );
+        assert_eq!(action39_total_principal(11, 13, 17, None, None), Some(41));
+        assert_eq!(
+            action39_total_principal(11, 13, 17, Some(19), Some(23)),
+            Some(83),
+        );
+        assert_eq!(
+            action39_total_principal(u64::MAX, 1, 1, None, None),
+            None,
+        );
+        assert!(contract::INDEXED_SETTLEMENT_ROOT_BYTES_V1 <= MAX_PERMITTED_DATA_INCREASE);
+        assert!(clutch_general_v2_runtime::FROZEN_ORDER_LOCATOR_MAX_BYTES_V1
+            <= MAX_PERMITTED_DATA_INCREASE);
+        assert!(clutch_general_v2_runtime::CANDIDATE_ORDER_SLICE_INDEX_MAX_BYTES_V1
+            <= MAX_PERMITTED_DATA_INCREASE);
+    }
 }

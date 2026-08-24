@@ -11,6 +11,11 @@
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+use super::general_v2_settlement_root::{
+    authenticate_readonly_general_settlement_root_epoch_v1,
+    authenticate_writable_general_settlement_root_epoch_v1,
+    AuthenticatedGeneralSettlementRootV1,
+};
 use clutch_dealer_runtime_contract::{
     advance_collect_v2, advance_deliver_v2, prepare_covered_dealer_row_progress_v1,
     dealer_runtime_liveness_policy_id_v1,
@@ -41,7 +46,7 @@ use clutch_general_v2_contract::{
     SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1,
     ECONOMIC_DOMAIN_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
 };
 use clutch_batch::portfolio_book_v2::{
     authenticate_complete_portfolio_book_into_v2,
@@ -1069,13 +1074,14 @@ fn find_dealer_page_membership_v1(
 fn with_authenticated_complete_dealer_book_v2<R>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    root: &SettlementRootV1AccountV1,
+    root_authority: &AuthenticatedGeneralSettlementRootV1,
     feed_account: &AccountInfo<'_>,
     domain: &EconomicDomainV2AccountV1,
     page_accounts: &[AccountInfo<'_>],
     root_writable: bool,
     consume: impl FnOnce(&AuthenticatedCompletePortfolioBookRefV2<'_>, &[u8]) -> Outcome<R>,
 ) -> Outcome<R> {
+    let root = root_authority.root();
     require(root_account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(
         root_account.is_writable == root_writable,
@@ -1090,7 +1096,8 @@ fn with_authenticated_complete_dealer_book_v2<R>(
         ClutchError::MismatchedState,
     )?;
     require(
-        root_account.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        root_account.data_len() == root_authority.account_bytes()
+            && id(root_account.key) == root_authority.account(),
         ClutchError::WrongDataLength,
     )?;
     expect_pda(
@@ -1352,7 +1359,7 @@ struct AuthenticatedCoveredProductV1 {
 }
 
 struct AuthenticatedCoveredRootInputsV1 {
-    root: Box<SettlementRootV1AccountV1>,
+    root: AuthenticatedGeneralSettlementRootV1,
     domain: Box<EconomicDomainV2AccountV1>,
     binding: Box<MarketBindingV2>,
     grid: Box<PriceGridAccount>,
@@ -1368,8 +1375,20 @@ fn authenticate_covered_root_inputs_v1(
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
     root_writable: bool,
 ) -> Outcome<AuthenticatedCoveredRootInputsV1> {
+    require(root_account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(
+        root_account.is_writable == root_writable,
+        if root_writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        !root_account.is_signer && !root_account.executable,
+        ClutchError::MismatchedState,
+    )?;
     for (account, writable, length) in [
-        (root_account, root_writable, SETTLEMENT_ROOT_ACCOUNT_BYTES),
         (domain_account, false, ECONOMIC_DOMAIN_ACCOUNT_BYTES),
         (binding_account, false, MARKET_BINDING_ACCOUNT_BYTES_V2),
         (grid_account, false, account_len::PRICE_GRID),
@@ -1388,29 +1407,33 @@ fn authenticate_covered_root_inputs_v1(
             ClutchError::MismatchedState,
         )?;
     }
-    let root = Box::new(SettlementRootV1AccountV1::decode(&root_account.data.borrow())?);
     let domain = Box::new(EconomicDomainV2AccountV1::decode(&domain_account.data.borrow())?);
     let binding = Box::new(MarketBindingV2::decode(&binding_account.data.borrow())?);
     let grid = Box::new(PriceGridAccount::decode(&grid_account.data.borrow())?);
-    expect_pda(
-        root_account.key,
-        seeds::general_v2_settlement_root_pda(
+    let root = if root_writable {
+        authenticate_writable_general_settlement_root_epoch_v1(
             program_id,
-            &root.epoch().bytes(),
-            &root.settlement_candidate_id().bytes(),
-        ),
-        Some(root.stored_bump()),
-    )?;
+            core::slice::from_ref(root_account),
+            domain.epoch,
+        )?
+    } else {
+        authenticate_readonly_general_settlement_root_epoch_v1(
+            program_id,
+            core::slice::from_ref(root_account),
+            domain.epoch,
+        )?
+    };
+    let root_value = root.root();
     expect_pda(
         domain_account.key,
-        seeds::general_v2_economic_domain_pda(program_id, &root.epoch().bytes()),
+        seeds::general_v2_economic_domain_pda(program_id, &root_value.epoch().bytes()),
         Some(domain.stored_bump),
     )?;
     expect_pda(
         binding_account.key,
         seeds::general_v2_market_binding_pda(
             program_id,
-            &root.market_instance_v2_id().bytes(),
+            &root_value.market_instance_v2_id().bytes(),
         ),
         Some(binding.base().stored_bump),
     )?;
@@ -1419,10 +1442,10 @@ fn authenticate_covered_root_inputs_v1(
         seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
         Some(grid.stored_bump),
     )?;
-    let root_floor = root
+    let root_floor = root_value
         .root_rent()
         .refundable_principal
-        .checked_add(root.root_rent().donation_floor)
+        .checked_add(root_value.root_rent().donation_floor)
         .ok_or(ClutchError::Arithmetic)?;
     let domain_floor = domain
         .rent
@@ -1432,9 +1455,9 @@ fn authenticate_covered_root_inputs_v1(
     require(
         root_account.lamports() >= root_floor
             && domain_account.lamports() >= domain_floor
-            && root.market_binding().bytes() == binding_account.key.to_bytes()
-            && root.market().bytes() == binding.base().market.bytes()
-            && root.market_instance_v2_id().bytes() == policy.market_instance_v2_id.bytes()
+            && root_value.market_binding().bytes() == binding_account.key.to_bytes()
+            && root_value.market().bytes() == binding.base().market.bytes()
+            && root_value.market_instance_v2_id().bytes() == policy.market_instance_v2_id.bytes()
             && binding.base().market_instance_v2_id.bytes()
                 == policy.market_instance_v2_id.bytes()
             && binding.base().relation_policy_id.bytes() == policy.relation_v2_id.bytes()
@@ -1444,7 +1467,7 @@ fn authenticate_covered_root_inputs_v1(
             && binding.base().outcome_count == policy.outcome_count
             && binding.base().neutral_sink.bytes() == policy.neutral_sink.bytes()
             && binding.base().price_scale == grid.price_scale
-            && domain.epoch.bytes() == root.epoch().bytes()
+            && domain.epoch.bytes() == root_value.epoch().bytes()
             && domain.transcript.market_instance_v2_id.bytes()
                 == policy.market_instance_v2_id.bytes()
             && domain.transcript.relation_policy_id == binding.base().relation_policy_id
@@ -3634,7 +3657,7 @@ fn select_lease_and_begin(
         &policy,
         true,
     )?;
-    let root = root_inputs.root.as_ref();
+    let root = root_inputs.root.root();
     require(
         root.epoch().bytes() == epoch.epoch_account_id.bytes()
             && root.epoch_generation() == epoch.general_epoch_generation,
@@ -3698,7 +3721,7 @@ fn select_lease_and_begin(
     with_authenticated_complete_dealer_book_v2(
         program_id,
         &accounts[18],
-        root,
+        &root_inputs.root,
         &accounts[19],
         root_inputs.domain.as_ref(),
         &accounts[SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT..],
@@ -4027,9 +4050,10 @@ fn select_lease_and_begin(
                 .replay_post()
                 .encode_into(&mut accounts[4].data.borrow_mut())
                 .map_err(dealer_fault)?;
-            prepared
-                .settlement_root_after
-                .encode(&mut accounts[18].data.borrow_mut())?;
+            root_inputs.root.encode_dealer_admission_successor(
+                &prepared.settlement_root_after,
+                &mut accounts[18].data.borrow_mut(),
+            )?;
             Ok(())
         },
     )
@@ -5179,7 +5203,7 @@ fn collect_or_deliver_row(
         &policy,
         false,
     )?;
-    let root = root_inputs.root.as_ref();
+    let root = root_inputs.root.root();
     let domain = root_inputs.domain.as_ref();
     let binding = root_inputs.binding.as_ref();
     let grid = root_inputs.grid.as_ref();
@@ -5359,7 +5383,7 @@ fn collect_or_deliver_row(
     with_authenticated_complete_dealer_book_v2(
         program_id,
         &accounts[21],
-        &root,
+        &root_inputs.root,
         &accounts[22],
         domain,
         &accounts[COLLECT_DELIVER_FIXED_ACCOUNT_COUNT..],
@@ -5388,10 +5412,7 @@ fn collect_or_deliver_row(
             }
             let order_index = dense.ok_or(ClutchError::MismatchedState)?;
             let position_semantic_id = user_position.semantic_id;
-            let root_data_id = root.data_id(
-                &RuntimeSha256,
-                clutch_general_v2_contract::Id32::new(accounts[21].key.to_bytes())?,
-            )?;
+            let root_data_id = root_inputs.root.data_id(&RuntimeSha256)?;
             let feed_data_id = clutch_general_v2_contract::candidate_bundle_digest_v1(
                 &RuntimeSha256,
                 feed_data,

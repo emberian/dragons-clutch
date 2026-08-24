@@ -372,7 +372,7 @@ const _: () = assert!(NODE_RANK_LEN_OFFSET == 738);
 const _: () = assert!(ADMISSION_NODE_ACCOUNT_BYTES_V2 == ADMISSION_NODE_ACCOUNT_BYTES + 32);
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         DeletableRentOwnerV1, MarketBindingV1, SettlementCandidateKindV1,
@@ -437,7 +437,7 @@ mod tests {
         .unwrap()
     }
 
-    fn window() -> CandidateWindowV5AccountV1 {
+    pub(crate) fn window() -> CandidateWindowV5AccountV1 {
         CandidateWindowV5AccountV1::new(CandidateWindowV4AccountV1 {
             epoch: id(1),
             market: id(2),

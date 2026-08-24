@@ -49,6 +49,29 @@ pub const FRACTIONAL_REDEMPTION_FAMILY_VERSION: u8 = 1;
 pub const DIRECT_MARKET_FAMILY_TAG: u8 = 80;
 /// Current Direct-market successor intent-family version.
 pub const DIRECT_MARKET_FAMILY_VERSION: u8 = 1;
+/// Realm and immutable revenue-authority successor intent-family tag: decimal
+/// 81 (`0x51`).  Account tag `0xbb` is a disjoint namespace.
+pub const REALM_REVENUE_V2_FAMILY_TAG: u8 = 81;
+/// Realm/revenue successor intent-family version.
+pub const REALM_REVENUE_V2_FAMILY_VERSION: u8 = 1;
+
+/// Realm-owned immutable RevenuePolicyRecord V2 discriminator.  V1 at the
+/// same tag remains historical and is never reinterpreted.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG: u8 = 27;
+/// Realm-owned immutable RevenuePolicyRecord V2 version.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION: u8 = 2;
+/// Exact immutable RevenuePolicyRecord V2 width.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES: usize = 160;
+/// Per-Market counted treasury-service ledger account discriminator.
+pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG: u8 = 0xbb;
+/// Per-Market counted treasury-service ledger account version.
+pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_VERSION: u8 = 1;
+/// Exact treasury-service ledger account width.
+pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES: usize = 268;
+const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG == 0xbb);
+const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG != 0xba);
+const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG != 0xbc);
+const _: () = assert!(REALM_REVENUE_V2_FAMILY_TAG == 0x51);
 
 /// Existing Source Archive V2 **account** discriminator: hexadecimal `0x74`,
 /// decimal 116.
@@ -255,6 +278,8 @@ pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_BYTES_V5: usize = 340;
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
+/// Sole future rent-owned selected fee-record envelope version.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 owner fee-carry envelope discriminator.
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// General V2 owner fee-carry envelope version.
@@ -273,6 +298,8 @@ pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// General V2 selected-record treasury-ledger envelope version.
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// Sole future rent-owned treasury-ledger envelope version.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 buyer-first settlement cash-pot envelope discriminator.
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// General V2 buyer-first settlement cash-pot envelope version.
@@ -490,7 +517,7 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
 /// Counted exact-index General V2 settlement-root successor version.
 pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 /// Exact fixed width of the counted exact-index settlement-root successor.
-pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_196;
+pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_228;
 /// Product shared Market lifecycle root discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
 /// First Product shared Market lifecycle-root version.
@@ -529,6 +556,20 @@ pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG: u8 = 0xb6;
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION: u8 = 1;
 /// Largest exact active selected-candidate adjacency account body.
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES: usize = 2_448;
+/// Compact General fee-retirement and durable-terminal account family.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
+/// Streaming owner-finalization accumulator version.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
+/// Durable candidate-wide closure-manifest version.
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
+/// Durable candidate-wide fee-terminal version.
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
+/// Exact rent-owned streaming accumulator bytes.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 708;
+/// Exact rent-owned durable closure-manifest bytes.
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 276;
+/// Exact rent-owned durable fee-terminal bytes.
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_BYTES: usize = 596;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
@@ -552,6 +593,8 @@ const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 0xb9);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 185);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -612,7 +655,7 @@ const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
 const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION == 2);
-const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_196);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_228);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
@@ -705,6 +748,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainIntent,
+            tag: REALM_REVENUE_V2_FAMILY_TAG,
+            version: REALM_REVENUE_V2_FAMILY_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "realm-revenue-v2",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG,
+            version: REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "realm-revenue-policy-record-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG,
+            version: TREASURY_SERVICE_LEDGER_V1_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "market-treasury-service-ledger-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1249,6 +1319,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+            version: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "rent-owned-general-v2-selected-fee-record-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
         },
@@ -1290,6 +1369,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-treasury-ledger-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+            version: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "rent-owned-general-v2-treasury-ledger-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1672,6 +1760,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-retirement-accumulator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-closure-manifest-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-terminal-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
             version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
         },
@@ -1769,6 +1884,8 @@ pub enum ExtensionFamily {
     FractionalRedemption,
     /// Current Direct-market lifecycle and settlement services.
     DirectMarket,
+    /// Realm founding and immutable revenue authority.
+    RealmRevenueV2,
 }
 
 impl ExtensionFamily {
@@ -1782,6 +1899,7 @@ impl ExtensionFamily {
             Self::Recovery => RECOVERY_FAMILY_TAG,
             Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_TAG,
             Self::DirectMarket => DIRECT_MARKET_FAMILY_TAG,
+            Self::RealmRevenueV2 => REALM_REVENUE_V2_FAMILY_TAG,
         }
     }
 
@@ -1795,6 +1913,7 @@ impl ExtensionFamily {
             Self::Recovery => RECOVERY_FAMILY_VERSION,
             Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_VERSION,
             Self::DirectMarket => DIRECT_MARKET_FAMILY_VERSION,
+            Self::RealmRevenueV2 => REALM_REVENUE_V2_FAMILY_VERSION,
         }
     }
 
@@ -1812,6 +1931,9 @@ impl ExtensionFamily {
                 Some(Self::FractionalRedemption)
             }
             (DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION) => Some(Self::DirectMarket),
+            (REALM_REVENUE_V2_FAMILY_TAG, REALM_REVENUE_V2_FAMILY_VERSION) => {
+                Some(Self::RealmRevenueV2)
+            }
             _ => None,
         }
     }
@@ -1953,6 +2075,24 @@ pub enum GeneralV2Action {
     ReleaseUnfilledReservation = 41,
     /// Atomically consume one exact full coefficient-portfolio pair.
     ConsumePortfolioPairEggs = 42,
+    /// Freeze one nonempty V5 order book under the successor chain.
+    FreezeEpochV5 = 43,
+    /// Retire one complete coefficient-portfolio archive set.
+    RetirePortfolioPairArchives = 44,
+    /// Retire both compact exact-index children atomically.
+    RetireExactIndexChildren = 45,
+    /// Retire the retained Feed after every child liability is discharged.
+    RetireRetainedFeed = 46,
+    /// Close one terminal indexed SettlementRoot and decrement its Epoch.
+    CloseIndexedSettlementRoot = 47,
+    /// Close one finalized OwnerSettlement V5 row.
+    CloseOwnerSettlementRow = 48,
+    /// Close one rent-owned owner fee-finalization account.
+    CloseOwnerFeeFinalization = 49,
+    /// Consume one authenticated candidate-wide fee terminal receipt.
+    AdvanceFeeRetirement = 50,
+    /// Advance one fully discharged counted root from Settling to Retiring.
+    BeginSettlementRetirement = 51,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -2135,7 +2275,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 42;
+    pub const LAST_TAG: u8 = 51;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -2182,6 +2322,15 @@ impl GeneralV2Action {
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
             Self::ConsumePortfolioPairEggs => 42,
+            Self::FreezeEpochV5 => 43,
+            Self::RetirePortfolioPairArchives => 44,
+            Self::RetireExactIndexChildren => 45,
+            Self::RetireRetainedFeed => 46,
+            Self::CloseIndexedSettlementRoot => 47,
+            Self::CloseOwnerSettlementRow => 48,
+            Self::CloseOwnerFeeFinalization => 49,
+            Self::AdvanceFeeRetirement => 50,
+            Self::BeginSettlementRetirement => 51,
         }
     }
 
@@ -2230,6 +2379,15 @@ impl GeneralV2Action {
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
             42 => Some(Self::ConsumePortfolioPairEggs),
+            43 => Some(Self::FreezeEpochV5),
+            44 => Some(Self::RetirePortfolioPairArchives),
+            45 => Some(Self::RetireExactIndexChildren),
+            46 => Some(Self::RetireRetainedFeed),
+            47 => Some(Self::CloseIndexedSettlementRoot),
+            48 => Some(Self::CloseOwnerSettlementRow),
+            49 => Some(Self::CloseOwnerFeeFinalization),
+            50 => Some(Self::AdvanceFeeRetirement),
+            51 => Some(Self::BeginSettlementRetirement),
             _ => None,
         }
     }
@@ -2618,6 +2776,39 @@ impl DirectMarketAction {
     }
 }
 
+/// Realm/revenue V2 family-local actions inside decimal `81/v1`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RealmRevenueV2Action {
+    /// Atomically create one Realm and its immutable fee-bearing record.
+    InitializeFeeBearingRealmV2,
+    /// Permissionlessly close the record only after the Realm is absent.
+    CloseRevenuePolicyRecordV2,
+}
+
+impl RealmRevenueV2Action {
+    /// First allocated local tag.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last allocated local tag.
+    pub const LAST_TAG: u8 = 2;
+
+    /// Return the exact local action tag.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::InitializeFeeBearingRealmV2 => 1,
+            Self::CloseRevenuePolicyRecordV2 => 2,
+        }
+    }
+
+    /// Decode one exact local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::InitializeFeeBearingRealmV2),
+            2 => Some(Self::CloseRevenuePolicyRecordV2),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
@@ -2639,6 +2830,8 @@ pub enum ExtensionAction {
     FractionalRedemption(FractionalRedemptionAction),
     /// One current Direct-market action.
     DirectMarket(DirectMarketAction),
+    /// One Realm/revenue V2 action.
+    RealmRevenueV2(RealmRevenueV2Action),
 }
 
 impl ExtensionAction {
@@ -2652,6 +2845,7 @@ impl ExtensionAction {
             Self::Recovery(_) => ExtensionFamily::Recovery,
             Self::FractionalRedemption(_) => ExtensionFamily::FractionalRedemption,
             Self::DirectMarket(_) => ExtensionFamily::DirectMarket,
+            Self::RealmRevenueV2(_) => ExtensionFamily::RealmRevenueV2,
         }
     }
 
@@ -2667,6 +2861,7 @@ impl ExtensionAction {
             Self::Recovery(action) => action.tag(),
             Self::FractionalRedemption(action) => action.tag(),
             Self::DirectMarket(action) => action.tag(),
+            Self::RealmRevenueV2(action) => action.tag(),
         }
     }
 }
@@ -2731,6 +2926,12 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::DirectMarket(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
+        Some(ExtensionFamily::RealmRevenueV2) => {
+            match RealmRevenueV2Action::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::RealmRevenueV2(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            }
+        }
         None => Err(RegistryError::UnknownFamilyVersion),
     }
 }
@@ -3503,6 +3704,41 @@ mod tests {
                     .contains(&local_action),
                 "direct-market action {local_action}"
             );
+            let realm_revenue = decode_extension_action(81, 1, local_action);
+            assert_eq!(
+                realm_revenue.is_ok(),
+                (RealmRevenueV2Action::FIRST_TAG..=RealmRevenueV2Action::LAST_TAG)
+                    .contains(&local_action),
+                "realm-revenue action {local_action}"
+            );
+        }
+    }
+
+    #[test]
+    fn revenue_v2_namespaces_and_account_widths_are_exact() {
+        assert_eq!(REALM_REVENUE_V2_FAMILY_TAG, 81);
+        assert_eq!(REALM_REVENUE_V2_FAMILY_TAG, 0x51);
+        assert_eq!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG, 0xbb);
+        assert_ne!(REALM_REVENUE_V2_FAMILY_TAG, TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG);
+        assert_eq!(REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES, 160);
+        assert_eq!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES, 268);
+        for (tag, version) in [
+            (
+                REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG,
+                REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION,
+            ),
+            (
+                TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG,
+                TREASURY_SERVICE_LEDGER_V1_ACCOUNT_VERSION,
+            ),
+        ] {
+            let matching = CENTRAL_COLLISION_LEDGER
+                .iter()
+                .filter(|entry| {
+                    coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                })
+                .count();
+            assert_eq!(matching, 1, "account {tag}/{version}");
         }
     }
 

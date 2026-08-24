@@ -26,7 +26,6 @@ use clutch_general_v2_contract::{
     OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
     SettlementRootPayloadV1, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4,
     OWNER_SETTLEMENT_ACCOUNT_BYTES_V5, SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
-    SETTLEMENT_ROOT_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     prepare_finalize_merge_receipt_payment_v5, project_owner_settlement_account_v5_readonly,
@@ -56,6 +55,7 @@ use super::general_v2_receipt_v5::{
     authenticate_general_receipt_v5_writable_root, AuthenticatedGeneralReceiptV5,
     RECEIPT_V5_AUTH_ACCOUNT_COUNT,
 };
+use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 
 /// Exact zero-fee action-40 account count.
 pub const ZERO_FEE_ACCOUNT_COUNT: usize = 18;
@@ -360,6 +360,7 @@ fn prepare_plan_boxed(
 #[inline(never)]
 fn write_atomic_bundle(
     accounts: &[AccountInfo<'_>],
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     plan: &FinalizeMergeReceiptPaymentPlanV5,
 ) -> Outcome<()> {
     require(
@@ -374,10 +375,14 @@ fn write_atomic_bundle(
         ClutchError::MismatchedState,
     )?;
 
-    let mut root_body = std::vec![0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    plan.settlement_root_poststate().encode(&mut root_body)?;
+    let mut root_body = std::vec![0u8; authenticated_root.account_bytes()];
+    authenticated_root.encode_merge_payment_successor(
+        plan.settlement_root_poststate(),
+        &mut root_body,
+    )?;
     require(
-        accounts[IX_RECEIPT].data_len() == SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5
+        accounts[IX_ROOT].data_len() == authenticated_root.account_bytes()
+            && accounts[IX_RECEIPT].data_len() == SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5
             && accounts[IX_RESERVATION].data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && accounts[IX_REPLAY].data_len() == contract::GENERAL_REPLAY_ACCOUNT_V1_BYTES,
         ClutchError::WrongDataLength,
@@ -530,7 +535,7 @@ pub fn process(
     drop(feed_data);
     drop(fee_data);
     drop(seller_data);
-    write_atomic_bundle(accounts, &plan)
+    write_atomic_bundle(accounts, receipt.root_authority(), &plan)
 }
 
 #[cfg(test)]

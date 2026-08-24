@@ -100,6 +100,12 @@ pub mod general_v2_merge_payment_v5;
 pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
+/// Staged action-38 owner cash, Replay, root, and fee-terminal executor.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_finalize_owner_v5;
+/// Staged action-25 accounting over the exhaustive retained settlement traversal.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_account_receipt_v5;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_materialize_v5;
@@ -131,6 +137,20 @@ pub mod general_v2_settlement_root;
 /// action-24 materialization is reachable under the same profile.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_producer_v5;
+/// Ordered indexed-root terminal lifecycle.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_exact_index_retirement_v1;
+/// Typed counted settlement-child retirement and phase gate.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_retirement_v1;
+/// Nonempty V5 Epoch freeze successor.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_freeze_v5;
+/// Complete coefficient-portfolio settlement and archive retirement.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_v5;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_retirement_v5;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
@@ -155,6 +175,9 @@ pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod resolution_work;
+/// Realm-owned immutable fee-bearing RevenuePolicyV2 founding and private
+/// Product/General authentication receipt.
+pub mod revenue_policy_v2;
 pub mod series_failure_funding;
 pub mod source_ingest;
 pub mod source_ingest_v2;

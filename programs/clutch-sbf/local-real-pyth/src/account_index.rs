@@ -34,8 +34,9 @@ use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
     EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
-    OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
-    SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
+    IndexedSettlementRootV1AccountV1, OwnerSettlementV5AccountV1,
+    SettlementCashPotV1AccountV1, SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG,
+    ADMISSION_NODE_ACCOUNT_VERSION_V2,
     CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION, CANDIDATE_FEED_STAGE_ACCOUNT_TAG,
     CANDIDATE_FEED_STAGE_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_TAG, CLEAR_WORK_ACCOUNT_VERSION_V3,
     ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG,
@@ -51,7 +52,8 @@ use clutch_general_v2_contract::{
     RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     SETTLEMENT_CASH_POT_ACCOUNT_TAG, SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
-    SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION, TREASURY_LEDGER_ACCOUNT_BYTES,
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, SETTLEMENT_ROOT_ACCOUNT_TAG,
+    SETTLEMENT_ROOT_ACCOUNT_VERSION, TREASURY_LEDGER_ACCOUNT_BYTES,
     TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION, WINDOW_ACCOUNT_TAG,
     WINDOW_ACCOUNT_VERSION_V2,
 };
@@ -243,7 +245,7 @@ impl CanonicalAccountKind {
             Self::GeneralEpochBudget => "general-epoch-budget",
             Self::GeneralOwnerSettlement => "general-owner-settlement-v5",
             Self::GeneralSettlementReceipt => "general-settlement-receipt-v5",
-            Self::GeneralSettlementRoot => "general-settlement-root-v1",
+            Self::GeneralSettlementRoot => "general-settlement-root",
             Self::GeneralSettlementCashPot => "general-settlement-cash-pot",
             Self::GeneralFinalPot => "general-final-pot",
             Self::SeriesRegistry => "series-registry",
@@ -731,6 +733,22 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         );
         projection.primary_binding = Some(semantic.epoch.bytes());
         projection.secondary_binding = Some(semantic.candidate.bytes());
+        projection
+    } else if tag_version(
+        data,
+        SETTLEMENT_ROOT_ACCOUNT_TAG,
+        INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+    ) {
+        let value = IndexedSettlementRootV1AccountV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let base = value.base();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::General,
+            CanonicalAccountKind::GeneralSettlementRoot,
+        );
+        projection.generation = Some(base.epoch_generation());
+        projection.primary_binding = Some(base.epoch().bytes());
+        projection.secondary_binding = Some(base.settlement_candidate_id().bytes());
         projection
     } else if tag_version(
         data,
@@ -2383,6 +2401,14 @@ mod current_decoder_tests {
         assert_eq!(
             decode_general(&[SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION]),
             Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+        assert_eq!(
+            decode_general(&[
+                SETTLEMENT_ROOT_ACCOUNT_TAG,
+                INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "the live indexed root coordinate must not be downgraded to unknown",
         );
         assert_eq!(
             decode_general(&[

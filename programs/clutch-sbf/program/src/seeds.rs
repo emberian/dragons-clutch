@@ -279,6 +279,19 @@ pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
 /// Counted candidate-scoped General V2 SettlementRoot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
+/// Disabled one-per-Root compact frozen-order locator prefix.
+pub const SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR: &[u8] =
+    clutch_general_v2_contract::FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1;
+/// Disabled one-per-Root compact candidate slice-index prefix.
+pub const SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX: &[u8] =
+    clutch_general_v2_contract::CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1;
+
+const _: () = assert!(SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR.len() <= 32);
+const _: () = assert!(SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX.len() <= 32);
+const _: () = assert!(
+    SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR.len()
+        != SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX.len()
+);
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -971,6 +984,48 @@ pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]
     find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
 }
 
+/// Canonical streaming fee-retirement accumulator for one selected record.
+pub fn general_v2_fee_retirement_accumulator_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
+/// Canonical durable candidate-wide fee-closure manifest.
+pub fn general_v2_fee_closure_manifest_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
+/// Canonical durable candidate-wide fee terminal receipt.
+pub fn general_v2_fee_terminal_receipt_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
 /// Canonical disabled buyer-first cash-pot address for one final candidate.
 pub fn general_v2_settlement_cash_pot_pda(
     program_id: &Pubkey,
@@ -996,6 +1051,28 @@ pub fn general_v2_settlement_root_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
+    )
+}
+
+/// Canonical disabled compact locator PDA for one counted SettlementRoot.
+pub fn general_v2_frozen_order_locator_pda(
+    program_id: &Pubkey,
+    settlement_root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR, settlement_root],
+    )
+}
+
+/// Canonical disabled compact slice-index PDA for one counted SettlementRoot.
+pub fn general_v2_candidate_slice_index_pda(
+    program_id: &Pubkey,
+    settlement_root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX, settlement_root],
     )
 }
 
@@ -1489,6 +1566,27 @@ pub fn general_funding_pda(program_id: &Pubkey, target: &Pubkey) -> (Pubkey, u8)
 /// and its absence is the zero-take state.
 pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_REVENUE_POLICY, realm])
+}
+
+/// Treasury-service-ledger seed domain.  Its account tag `0xbb` occupies the
+/// account namespace; this seed has no relationship to intent family `81`.
+pub const SEED_TREASURY_SERVICE_LEDGER_V1: &[u8] = b"treasury-service-v1";
+
+/// Canonical counted service-ledger address for one Market-scoped ordinary
+/// treasury Position.
+pub fn treasury_service_ledger_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    treasury_position_account: &Pubkey,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_TREASURY_SERVICE_LEDGER_V1,
+            market_instance_v2_id,
+            &treasury_position_account.to_bytes(),
+        ],
+    )
 }
 
 /* ------------------------------------------------------------------------ */
