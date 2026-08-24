@@ -1659,6 +1659,10 @@ impl MarketLifecycleRootV3 {
     pub const fn retired_series_links(&self) -> u32 {
         self.retired_series_links
     }
+    /// Rolling transcript of every admitted and retired Series link.
+    pub const fn series_link_transcript_id(&self) -> ContentId {
+        self.series_link_transcript_id
+    }
     /// Embedded exhaustive product-family semantic owner.
     pub const fn product_families(&self) -> &MarketFamilyAggregatorV1 {
         &self.product_families

@@ -43,6 +43,7 @@ use crate::instructions::source_failure_product_release_v1::{
 use crate::instructions::source_funding_custody_retirement_v1::{
     authenticate_source_family_terminal_authority_v3,
     consume_source_family_terminal_into_product_v3, retire_source_funding_custody_v3,
+    AuthenticatedSourceMarketSharedCoreTerminalV3,
     AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1,
     SourceFundingCustodyLifecycleTerminalEvidenceV1,
     SourceFundingCustodyLifecycleTerminalFactsV1, SourceFundingCustodyLiveFounderFactsV1,
@@ -1253,7 +1254,8 @@ pub(crate) fn authenticate_failure_market_family_terminal_for_source_retirement_
 /// the move-only Failure receipt and physically closes custody before Product
 /// advances either writable lifecycle account. Any Product reauthentication or
 /// postwrite refusal rolls the preceding Source close back with the instruction.
-/// No detached Product receipt or caller terminal projection is returned.
+/// The returned move-only Source Market owner must be consumed by Product's
+/// later RootV3 shared-core transition.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retire_successful_failure_source_family_into_product_v3<
     'root,
@@ -1285,7 +1287,7 @@ pub(crate) fn retire_successful_failure_source_family_into_product_v3<
     link_successor: &mut SeriesMarketLinkAccountV3,
     root_reopen: &'post mut MarketLifecycleRootAccountV3,
     link_reopen: &'post mut SeriesMarketLinkAccountV3,
-) -> Outcome<()> {
+) -> Outcome<AuthenticatedSourceMarketSharedCoreTerminalV3> {
     require_distinct(&[
         admission_root_account.clone(),
         runtime_root_account.clone(),
@@ -1355,7 +1357,8 @@ pub(crate) fn retire_successful_failure_source_family_into_product_v3<
 ///
 /// The branch is recovered only from the one-way Source V3 terminal account;
 /// the payload cannot select a disposition or substitute either physical
-/// Source terminal identity.
+/// Source terminal identity. The returned move-only Source Market owner must
+/// be consumed by Product's later RootV3 shared-core transition.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retire_failed_failure_source_family_into_product_v3<'root, 'link, 'post>(
     program_id: &Pubkey,
@@ -1384,7 +1387,7 @@ pub(crate) fn retire_failed_failure_source_family_into_product_v3<'root, 'link, 
     link_successor: &mut SeriesMarketLinkAccountV3,
     root_reopen: &'post mut MarketLifecycleRootAccountV3,
     link_reopen: &'post mut SeriesMarketLinkAccountV3,
-) -> Outcome<()> {
+) -> Outcome<AuthenticatedSourceMarketSharedCoreTerminalV3> {
     require_distinct(&[
         admission_root_account.clone(),
         runtime_root_account.clone(),
