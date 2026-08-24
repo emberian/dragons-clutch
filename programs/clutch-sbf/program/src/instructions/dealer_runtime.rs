@@ -680,11 +680,20 @@ impl DealerRuntimePayloadV1 {
             }
             DealerFacilityAction::Activate
             | DealerFacilityAction::CancelFunding
-            | DealerFacilityAction::RefundCancelledSponsor
-            | DealerFacilityAction::BindEpoch
-            | DealerFacilityAction::LapseEpoch => {
+            | DealerFacilityAction::RefundCancelledSponsor => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::BindEpoch | DealerFacilityAction::LapseEpoch => {
+                value.liveness_call_ordinal = read_u32(input, 16);
+                value.existing_series_admission = decode_bool(input[20])?;
+                if input[21..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
                 }
                 value.keeper_payment_lamports = read_u64(input, 24);
@@ -1298,6 +1307,7 @@ const BIND_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
 const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
@@ -1326,6 +1336,7 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
 const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 58;
@@ -1847,8 +1858,10 @@ pub fn meta_contract_v1(
         DealerFacilityAction::Activate => Some(ACTIVATE),
         DealerFacilityAction::CancelFunding => Some(CANCEL_FUNDING),
         DealerFacilityAction::RefundCancelledSponsor => Some(REFUND_SPONSOR),
-        DealerFacilityAction::BindEpoch => Some(BIND_EPOCH),
-        DealerFacilityAction::LapseEpoch => Some(LAPSE_EPOCH),
+        DealerFacilityAction::BindEpoch if payload.existing_series_admission => Some(BIND_EPOCH),
+        DealerFacilityAction::BindEpoch => Some(&BIND_EPOCH[..BIND_EPOCH.len() - 1]),
+        DealerFacilityAction::LapseEpoch if payload.existing_series_admission => Some(LAPSE_EPOCH),
+        DealerFacilityAction::LapseEpoch => Some(&LAPSE_EPOCH[..LAPSE_EPOCH.len() - 1]),
         DealerFacilityAction::SelectLeaseAndBegin => {
             let contract = if payload.existing_series_admission {
                 &SELECT_LEASE_BEGIN_EXISTING
