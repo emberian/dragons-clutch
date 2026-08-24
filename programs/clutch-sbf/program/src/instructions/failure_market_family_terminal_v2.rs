@@ -553,6 +553,19 @@ impl AuthenticatedFailureMarketFamilyTerminalReceiptV3 {
         &self.owner
     }
 
+    /// Consume the one durable Failure terminal into Product's current V3
+    /// root facts and the unique Source-lifecycle owner.  Product must persist
+    /// the exact facts before it may move the owner into Source custody
+    /// retirement; neither half is constructible independently.
+    pub(crate) fn into_product_v3_parts(
+        self,
+    ) -> (
+        FailureMarketFamilyTerminalConsumerFactsV3,
+        AuthenticatedFailureMarketFamilyTerminalOwnerV2,
+    ) {
+        (self.facts, self.owner)
+    }
+
     fn from_owner(owner: AuthenticatedFailureMarketFamilyTerminalOwnerV2) -> Outcome<Self> {
         let policy = owner.admission().state().binding().facts();
         let admission_state_id = owner

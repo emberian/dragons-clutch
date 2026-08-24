@@ -762,6 +762,15 @@ pub(crate) struct AuthenticatedSourceFamilyTerminalV3 {
     lifecycle_terminal: AuthenticatedSourceFamilyTerminalAuthorityV3,
 }
 
+/// Facts-only projection left after Product has consumed Source's unique
+/// move-only physical terminal into the current RootV3/LinkV3 postwrite.
+/// This value cannot authorize another custody close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceFamilyTerminalProjectionV3 {
+    pub(crate) id: ContentId,
+    pub(crate) facts: SourceFamilyTerminalFactsV3,
+}
+
 impl AuthenticatedSourceFamilyTerminalV3 {
     pub(crate) const fn id(&self) -> ContentId {
         self.id
@@ -1165,12 +1174,16 @@ pub(crate) fn consume_source_family_terminal_into_product_v3<'root, 'link, 'post
     link_successor: &mut SeriesMarketLinkAccountV3,
     root_reopen: &'post mut MarketLifecycleRootAccountV3,
     link_reopen: &'post mut SeriesMarketLinkAccountV3,
-) -> Outcome<()> {
+) -> Outcome<SourceFamilyTerminalProjectionV3> {
     let root_state = root_before.state();
     let root_binding = root_before.binding();
     let link_state = link_before.state();
     let link_binding = link_before.binding();
-    let terminal = source_terminal.facts();
+    let terminal_projection = SourceFamilyTerminalProjectionV3 {
+        id: source_terminal.id(),
+        facts: source_terminal.facts(),
+    };
+    let terminal = terminal_projection.facts;
     let lifecycle = terminal.lifecycle_terminal;
     require(
         root_before.is_writable()
@@ -1273,7 +1286,8 @@ pub(crate) fn consume_source_family_terminal_into_product_v3<'root, 'link, 'post
                     .ok_or(ClutchError::Arithmetic)?
             && reopened_link.state().phase() == SeriesMarketLinkPhaseV3::Retired,
         ClutchError::MismatchedState,
-    )
+    )?;
+    Ok(terminal_projection)
 }
 
 fn all_distinct_ids(values: &[ContentId]) -> bool {
