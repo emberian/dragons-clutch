@@ -1410,6 +1410,140 @@ fn candidate_liveness_elides_only_unreachable_roles_and_binds_b3() {
 }
 
 #[test]
+fn family_terminal_seal_refuses_pre_liveness_or_substituted_replay() {
+    let mut terminal = state();
+    terminal.root.phase = DirectRootPhaseV1::Terminal;
+    terminal.root.terminal_reason = Some(DirectTerminalReasonV1::Settled);
+    terminal.root.selection_account = id(60);
+    terminal.replay.economic_terminal_receipt_id = id(61);
+    terminal.replay.candidate_liveness_completed_calls = 7;
+    terminal.replay.candidate_liveness_last_receipt_id = id(62);
+    terminal.replay.candidate_liveness_batch_receipt_id = id(63);
+    terminal.replay.validate_against(terminal.root).unwrap();
+
+    let retirement = build_direct_retirement_transfer_v1(
+        [
+            Some(DirectRetirementSourceV1 {
+                account: id(70),
+                rent: rent(71, 10, 2),
+                observed_lamports: 15,
+            }),
+            None,
+            None,
+            None,
+            None,
+        ],
+        id(72),
+    )
+    .unwrap();
+    let mut provisional = terminal.replay;
+    provisional.phase = DirectReplayPhaseV1::Terminal;
+    provisional.next_action_sequence += 1;
+    provisional.action_transcript_id = id(73);
+    provisional.family_terminal_receipt_id = id(74);
+    provisional.candidate_liveness_pending = true;
+    provisional.validate_against(terminal.root).unwrap();
+    let preparation = DirectFamilyTerminalPreparationV1 {
+        root_semantic_id: terminal.root.semantic_id(&Sha).unwrap(),
+        replay_pre_semantic_id: terminal.replay.semantic_id(terminal.root, &Sha).unwrap(),
+        retirement_transfer_id: retirement.semantic_id(&Sha).unwrap(),
+        final_resolution_account: id(75),
+        final_resolution_semantic_id: id(76),
+        final_resolution_data_id: id(77),
+        replay_post: provisional,
+        provisional_terminal_receipt_id: ContentId::from_bytes(id(74)),
+        aggregator_prestate_id: ContentId::from_bytes(id(78)),
+        family_root_id: ContentId::from_bytes(terminal.root.binding.direct_root_account),
+        family_terminal_sequence: 1,
+    };
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(77),
+            },
+            provisional,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+
+    let mut bound = provisional;
+    bound.candidate_liveness_completed_calls = 8;
+    bound.candidate_liveness_last_receipt_id = id(79);
+    bound.candidate_liveness_batch_receipt_id = id(80);
+    bound.candidate_liveness_pending = false;
+    bound.action_transcript_id = DirectHashBackendV1::sha256_parts(
+        &Sha,
+        &[
+            REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+            &provisional.market_instance_id,
+            &provisional.direct_root_account,
+            &provisional.action_transcript_id,
+            &8u32.to_le_bytes(),
+            &bound.candidate_liveness_last_receipt_id,
+            &bound.candidate_liveness_batch_receipt_id,
+        ],
+    );
+    let plan = seal_direct_family_terminal_liveness_v1(
+        preparation,
+        &terminal.root,
+        &retirement,
+        DirectFinalResolutionV1 {
+            account: id(75),
+            semantic_id: id(76),
+            data_id: id(77),
+        },
+        bound,
+        &Sha,
+    )
+    .unwrap();
+    assert_ne!(plan.terminal_receipt_id.bytes(), id(74));
+    assert_eq!(
+        plan.replay_post.family_terminal_receipt_id(),
+        plan.terminal_receipt_id.bytes(),
+    );
+
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(82),
+            },
+            bound,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+
+    let mut substituted = bound;
+    substituted.foundation_receipt_id = id(81);
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(77),
+            },
+            substituted,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+}
+
+#[test]
 fn unselected_lapse_refunds_complete_retained_bond_principal_once() {
     let (frozen, endpoints) = submission_open_pair_with_endpoints();
     let submitted = submit_direct_candidate_v1(

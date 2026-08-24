@@ -42,7 +42,8 @@ use clutch_direct_market_runtime::{
     build_direct_retirement_transfer_v1, direct_epoch_semantics_id_v1,
     direct_schedule_policy_id_v1,
     prepare_direct_family_terminal_v1,
-    prepare_direct_foundation_v1, AuthenticatedDirectFoundationV1,
+    prepare_direct_foundation_v1, seal_direct_family_terminal_liveness_v1,
+    AuthenticatedDirectFoundationV1,
     AuthenticatedDirectTerminalV1, DirectActionReplayV1, DirectHashBackendV1,
     DirectFinalResolutionV1, DirectMarketBindingV1, DirectMarketErrorV1, DirectMarketRootV1,
     DirectRentOwnerV1,
@@ -134,7 +135,7 @@ const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/price-authentication/v1\0";
 const DIRECT_MARKET_V1_MAX_ACCOUNTS: usize = 30;
 const DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES: usize = 80;
-const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 16;
+const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 20;
 const DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1: usize = 4;
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
@@ -154,6 +155,10 @@ const _: () = assert!(core::mem::size_of::<DirectSelectionFreezeAuthoritySbfV1<'
 const _: () = assert!(core::mem::size_of::<DirectEconomicTerminalAuthoritySbfV1<'static>>() <= 512);
 const _: () = assert!(core::mem::size_of::<DirectMissedFreezeTerminalAuthoritySbfV1<'static>>() <= 512);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalAuthoritySbfV1<'static>>() <= 512);
+const _: () = assert!(
+    core::mem::size_of::<clutch_direct_market_runtime::DirectFamilyTerminalPreparationV1>()
+        <= 768
+);
 
 /// Runtime SHA-256 implementation for all current Direct semantic identities.
 #[derive(Clone, Copy, Debug, Default)]
@@ -2736,8 +2741,10 @@ impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1<'_> {
 ///
 /// Fixed accounts 0..=8 are Product root, founder link, BundleV5, b1, b3,
 /// b2, ResolutionV5, Clock, and the Realm neutral sink. The exact b2-order
-/// live b4 prefix follows, then the sorted unique persisted payer accounts.
-/// Both suffix lengths are derived from authenticated state.
+/// live b4 prefix follows, then the sorted unique persisted payer accounts,
+/// immutable liveness policy, writable Candidate, writable keeper signer, and
+/// the Candidate's immutable writable payer. Every suffix length and work
+/// amount is derived from authenticated state.
 #[inline(never)]
 pub(crate) fn process_direct_retire_terminal_v1(
     program_id: &Pubkey,
@@ -2878,15 +2885,19 @@ pub(crate) fn process_direct_retire_terminal_v1(
         accounts[8].key.to_bytes(),
     )
     .map_err(map_direct_error_v1)?;
-    let expected_count = reservation_end
+    let refund_end = reservation_end
         .checked_add(usize::from(retirement.refund_count))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let expected_count = refund_end
+        .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require_count(accounts, expected_count)?;
     index = reservation_end;
-    while index < expected_count {
+    while index < refund_end {
         require(
             accounts[index].is_writable
-                && !accounts[index].is_signer
+                && (!accounts[index].is_signer
+                    || accounts[index].key == accounts[refund_end + 2].key)
                 && !accounts[index].executable,
             ClutchError::NotWritable,
         )?;
@@ -2912,6 +2923,11 @@ pub(crate) fn process_direct_retire_terminal_v1(
         )?;
         index += 1;
     }
+    require_direct_candidate_liveness_aliases_v1(
+        accounts,
+        refund_end,
+        reservation_end,
+    )?;
     let retirement_transfer_id = retirement
         .semantic_id(&DirectRuntimeSha256V1)
         .map_err(map_direct_error_v1)?;
@@ -2942,7 +2958,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
         slot: observed_slot,
         family_sequence,
     };
-    let plan = prepare_direct_family_terminal_v1(
+    let preparation = prepare_direct_family_terminal_v1(
         &authority,
         product_root.state(),
         founder_link.state(),
@@ -2955,6 +2971,24 @@ pub(crate) fn process_direct_retire_terminal_v1(
         sequence,
         observed_slot,
         family_sequence,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+    let prepared_state = preparation.prepared_state(root.value());
+    let bound_replay = apply_direct_candidate_work_v1(
+        program_id,
+        &accounts[refund_end..],
+        &accounts[4],
+        &prepared_state,
+        selection.value_ref(),
+        clutch_direct_market_runtime::DirectMarketActionV1::RetireTerminal,
+    )?;
+    let plan = seal_direct_family_terminal_liveness_v1(
+        preparation,
+        root.value_ref(),
+        &retirement,
+        final_resolution,
+        bound_replay,
         &DirectRuntimeSha256V1,
     )
     .map_err(map_direct_error_v1)?;
@@ -4327,7 +4361,10 @@ mod tests {
         );
         assert_eq!(18 + 3, 21);
         assert!(21 <= DIRECT_MARKET_V1_MAX_ACCOUNTS);
-        assert_eq!(9 + 2 + 5, DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS);
+        assert_eq!(
+            9 + 2 + 5 + DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1,
+            DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS,
+        );
         assert_eq!(
             clutch_solana_layout::direct_market_v1::DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1,
             DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES,
