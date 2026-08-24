@@ -11,6 +11,7 @@
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     DealerPhaseV2, DealerSeriesObligationBindingV1, DealerSeriesObligationBindingV2,
+    DealerSeriesObligationBindingV3,
     DealerSeriesObligationPhaseV1,
     DealerStateV2, DeletableRentOwnerV1, Error, FixedCodec, Id, Result, DEALER_STATE_BYTES_V2,
     DEALER_STATE_CONTENT_DOMAIN_V3, DELETABLE_RENT_OWNER_BYTES,
@@ -43,6 +44,37 @@ pub struct DealerStateV3 {
 }
 
 impl DealerStateV3 {
+    /// Promote the exact generic Product RootV3/LinkV3 admission post-state.
+    pub fn promote_product_v3(
+        base: DealerStateV2,
+        binding: &DealerSeriesObligationBindingV3,
+        product_upgrade_rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        base.validate()?;
+        binding.validate()?;
+        product_upgrade_rent.validate()?;
+        if binding.phase != DealerSeriesObligationPhaseV1::Live
+            || binding.key.policy_id != base.policy_id
+            || binding.key.facility_id != base.facility_id
+            || binding.key.facility_position_binding_id != base.facility_position_binding_id
+            || base.children.leases != 1
+            || base.children.settlement_pots != 1
+            || base.active_lease_id.is_zero()
+            || product_upgrade_rent.neutral_sink != base.rent.neutral_sink
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            base,
+            series_obligation_binding_id: binding.binding_id()?,
+            series_obligation_binding_account_id: binding.key.binding_account_id,
+            series_obligation_children: 1,
+            product_upgrade_rent,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Promote the exact current Product RootV2/LinkV2 admission post-state.
     pub fn promote_current(
         base: DealerStateV2,
