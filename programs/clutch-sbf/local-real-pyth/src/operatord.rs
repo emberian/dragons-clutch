@@ -9,6 +9,7 @@ use crate::account_index::{
     CanonicalAccountIndex, CanonicalAccountKind, DecodeState, IndexedAccountVersion, IndexedBranch,
 };
 use crate::rpc_index::RpcCommitment;
+use crate::rpc_index::public_rpc_endpoint_binding;
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -186,7 +187,7 @@ fn dependency_digest(
     dependencies: &[&IndexedAccountVersion],
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"dragons-clutch/operator-index-observation/v1");
+    hash.update(b"dragons-clutch/operator-index-observation/v3-semantic-finalized-state");
     hash.update([match commitment {
         RpcCommitment::Processed => 1,
         RpcCommitment::Finalized => 2,
@@ -194,8 +195,13 @@ fn dependency_digest(
     for dependency in dependencies {
         hash.update(dependency.account.address.to_bytes());
         hash.update(dependency.account.owner.to_bytes());
-        hash.update(dependency.account.provenance.slot.to_le_bytes());
-        hash.update(dependency.account.provenance.receive_sequence.to_le_bytes());
+        hash.update(dependency.account.lamports.to_le_bytes());
+        hash.update(dependency.account.rent_epoch.to_le_bytes());
+        hash.update(
+            u64::try_from(dependency.account.data.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
         hash.update(dependency.data_sha256);
         let release = dependency.account.provenance.release_key.as_bytes();
         hash.update(
@@ -204,17 +210,21 @@ fn dependency_digest(
                 .to_le_bytes(),
         );
         hash.update(release);
-        match &dependency.branch {
-            IndexedBranch::FinalizedScan => hash.update([0]),
-            IndexedBranch::Processed { blockhash } => {
-                hash.update([1]);
-                let blockhash = blockhash.as_bytes();
-                hash.update(
-                    u64::try_from(blockhash.len())
-                        .unwrap_or(u64::MAX)
-                        .to_le_bytes(),
-                );
-                hash.update(blockhash);
+        if commitment == RpcCommitment::Processed {
+            hash.update(dependency.account.provenance.slot.to_le_bytes());
+            hash.update(dependency.account.provenance.receive_sequence.to_le_bytes());
+            match &dependency.branch {
+                IndexedBranch::FinalizedScan => hash.update([0]),
+                IndexedBranch::Processed { blockhash } => {
+                    hash.update([1]);
+                    let blockhash = blockhash.as_bytes();
+                    hash.update(
+                        u64::try_from(blockhash.len())
+                            .unwrap_or(u64::MAX)
+                            .to_le_bytes(),
+                    );
+                    hash.update(blockhash);
+                }
             }
         }
     }
@@ -334,6 +344,7 @@ impl<'index> OperatorJsonApi<'index> {
                 }),
             ),
             "/v1/releases" => self.releases(),
+            "/v1/session" if query.is_empty() => self.session(),
             "/v1/accounts" => match commitment_query(query) {
                 Ok(commitment) => self.accounts(commitment),
                 Err(error) => response(400, json!({"error": error})),
@@ -382,6 +393,95 @@ impl<'index> OperatorJsonApi<'index> {
         response(
             200,
             json!({"cluster": self.index.cluster_key(), "authorityEligible": false, "releases": releases}),
+        )
+    }
+
+    /// Project one restart-safe read-only session identity from canonical,
+    /// finalized account decodes. The caller supplies no account roles or
+    /// cursors: every persisted identity below is owned by an onchain account
+    /// codec or by the immutable checked release/transport binding.
+    fn session(&self) -> OperatorJsonResponse {
+        let plan = self.index.acquisition_plan();
+        let [release] = plan.releases.as_slice() else {
+            return response(
+                409,
+                json!({
+                    "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
+                    "status": "unavailable",
+                    "reason": "a canonical browser session requires exactly one checked release"
+                }),
+            );
+        };
+        let accounts = self.index.current_accounts(RpcCommitment::Finalized);
+        let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
+            Ok(cursors) => cursors,
+            Err(error) => {
+                return response(
+                    409,
+                    json!({
+                        "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
+                        "status": "unavailable",
+                        "reason": error.to_string()
+                    }),
+                );
+            }
+        };
+        let http = public_rpc_endpoint_binding(&plan.cluster.rpc_http_url);
+        let websocket = public_rpc_endpoint_binding(&plan.cluster.rpc_websocket_url);
+        let session_id = read_only_session_id(
+            &plan.cluster.cluster_name,
+            &plan.cluster.genesis_hash,
+            self.selector.workflow_id,
+            http.binding_sha256,
+            websocket.binding_sha256,
+            release,
+            &accounts,
+            &cursors,
+        );
+        response(
+            200,
+            json!({
+                "schema": "dragons-clutch/operator-read-only-session-manifest/v1",
+                "status": "ready",
+                "sessionId": hex32(session_id),
+                "projectionAuthority": "untrusted-canonical-codec-projection",
+                "authorityEligible": false,
+                "signing": false,
+                "submission": false,
+                "commitment": "finalized",
+                "transport": {
+                    "clusterName": plan.cluster.cluster_name,
+                    "genesisHash": plan.cluster.genesis_hash,
+                    "clusterKey": plan.cluster.key(),
+                    "rpcHttpEndpoint": {
+                        "redacted": http.redacted,
+                        "bindingSha256": hex32(http.binding_sha256)
+                    },
+                    "rpcWebsocketEndpoint": {
+                        "redacted": websocket.redacted,
+                        "bindingSha256": hex32(websocket.binding_sha256)
+                    }
+                },
+                "release": {
+                    "releaseKey": release.key(),
+                    "programId": release.program_id.to_string(),
+                    "programData": release.program_data.to_string(),
+                    "deploymentSlot": release.deployment_slot.to_string(),
+                    "elfSha256": hex32(release.elf_sha256),
+                    "releaseManifestSha256": hex32(release.release_manifest_sha256),
+                    "capabilityProfileId": hex32(release.capability_profile_id),
+                    "sourceCommit": release.source_commit,
+                    "decoderSet": crate::account_index::CANONICAL_ACCOUNT_DECODER_SET
+                },
+                "canonicalAccounts": accounts.iter().map(|version| session_account_json(version)).collect::<Vec<_>>(),
+                "restart": {
+                    "semantics": "reload every named account through its canonical codec and reauthenticate all joins before using a cursor",
+                    "identitySource": "finalized onchain account bodies plus immutable checked release and RPC bindings",
+                    "accountCount": accounts.len().to_string(),
+                    "cursorCount": cursors.len().to_string(),
+                    "cursors": cursors.iter().map(session_selection_json).collect::<Vec<_>>()
+                }
+            }),
         )
     }
 
@@ -474,6 +574,140 @@ impl<'index> OperatorJsonApi<'index> {
     }
 }
 
+fn read_only_session_id(
+    cluster_name: &str,
+    genesis_hash: &str,
+    workflow_id: [u8; 32],
+    rpc_http_binding: [u8; 32],
+    rpc_websocket_binding: [u8; 32],
+    release: &crate::rpc_index::IndexedProgramRelease,
+    accounts: &[&IndexedAccountVersion],
+    cursors: &[KeeperActionSelection],
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator-read-only-session-manifest/v1");
+    hash_text(&mut hash, cluster_name);
+    hash_text(&mut hash, genesis_hash);
+    hash_text(
+        &mut hash,
+        crate::account_index::CANONICAL_ACCOUNT_DECODER_SET,
+    );
+    hash_text(&mut hash, &release.key());
+    hash.update(rpc_http_binding);
+    hash.update(rpc_websocket_binding);
+    hash.update(release.program_id.to_bytes());
+    hash.update(release.program_data.to_bytes());
+    hash.update(release.deployment_slot.to_le_bytes());
+    hash.update(release.elf_sha256);
+    hash.update(release.release_manifest_sha256);
+    hash.update(release.capability_profile_id);
+    hash_text(&mut hash, &release.source_commit);
+    hash.update(workflow_id);
+    hash.update(u64::try_from(accounts.len()).unwrap_or(u64::MAX).to_le_bytes());
+    for version in accounts {
+        hash.update(version.account.address.to_bytes());
+        hash.update(version.account.owner.to_bytes());
+        hash_text(&mut hash, &version.account.provenance.release_key);
+        hash.update(version.account.lamports.to_le_bytes());
+        hash.update(version.account.rent_epoch.to_le_bytes());
+        hash.update(
+            u64::try_from(version.account.data.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hash.update(version.data_sha256);
+        hash_optional_u8(&mut hash, version.account.data.first().copied());
+        hash_optional_u8(&mut hash, version.account.data.get(1).copied());
+        hash_text(&mut hash, version.projection.family.name());
+        hash_text(&mut hash, version.projection.kind.name());
+        hash_optional_u64(&mut hash, version.projection.generation);
+        hash_optional_32(&mut hash, version.projection.primary_binding);
+        hash_optional_32(&mut hash, version.projection.secondary_binding);
+        match version.projection.decode_state {
+            DecodeState::Canonical => hash.update([0]),
+            DecodeState::RequiresContext(requirement) => {
+                hash.update([1]);
+                hash_text(&mut hash, requirement);
+            }
+        }
+    }
+    hash.update(u64::try_from(cursors.len()).unwrap_or(u64::MAX).to_le_bytes());
+    for selection in cursors {
+        hash.update(selection.account.to_bytes());
+        hash_text(&mut hash, &selection.release_key);
+        hash_text(&mut hash, selection.action);
+        hash.update(selection.cursor.workflow_id);
+        hash_text(&mut hash, lane_name(selection.cursor.lane));
+        hash.update(selection.cursor.generation.to_le_bytes());
+        hash.update(selection.cursor.position.phase.to_le_bytes());
+        hash.update(selection.cursor.position.item.to_le_bytes());
+        hash.update(selection.cursor.observed_state_sha256);
+        hash.update(u64::try_from(selection.dependencies.len()).unwrap_or(u64::MAX).to_le_bytes());
+        for dependency in &selection.dependencies {
+            hash.update(dependency.to_bytes());
+        }
+    }
+    hash.finalize().into()
+}
+
+fn hash_text(hash: &mut Sha256, value: &str) {
+    hash.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hash.update(value.as_bytes());
+}
+
+fn hash_optional_u64(hash: &mut Sha256, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hash.update([1]);
+            hash.update(value.to_le_bytes());
+        }
+        None => hash.update([0]),
+    }
+}
+
+fn hash_optional_u8(hash: &mut Sha256, value: Option<u8>) {
+    match value {
+        Some(value) => hash.update([1, value]),
+        None => hash.update([0]),
+    }
+}
+
+fn hash_optional_32(hash: &mut Sha256, value: Option<[u8; 32]>) {
+    match value {
+        Some(value) => {
+            hash.update([1]);
+            hash.update(value);
+        }
+        None => hash.update([0]),
+    }
+}
+
+fn session_account_json(version: &IndexedAccountVersion) -> Value {
+    let decode = match version.projection.decode_state {
+        DecodeState::Canonical => json!({"status": "canonical"}),
+        DecodeState::RequiresContext(requirement) => {
+            json!({"status": "requires-context", "requirement": requirement})
+        }
+    };
+    json!({
+        "address": version.account.address.to_string(),
+        "owner": version.account.owner.to_string(),
+        "releaseKey": version.account.provenance.release_key,
+        "lamports": version.account.lamports.to_string(),
+        "rentEpoch": version.account.rent_epoch.to_string(),
+        "dataBytes": version.account.data.len().to_string(),
+        "dataSha256": hex32(version.data_sha256),
+        "accountTag": version.account.data.first().copied().map(|value| value.to_string()),
+        "accountVersion": version.account.data.get(1).copied().map(|value| value.to_string()),
+        "family": version.projection.family.name(),
+        "kind": version.projection.kind.name(),
+        "decode": decode,
+        "generation": version.projection.generation.map(|value| value.to_string()),
+        "primaryBinding": version.projection.primary_binding.map(hex32),
+        "secondaryBinding": version.projection.secondary_binding.map(hex32)
+    })
+}
+
 fn commitment_query(query: &str) -> Result<RpcCommitment, &'static str> {
     if query.is_empty() || query == "commitment=finalized" {
         Ok(RpcCommitment::Finalized)
@@ -496,6 +730,7 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
         "owner": version.account.owner.to_string(),
         "releaseKey": version.account.provenance.release_key,
         "slot": version.account.provenance.slot.to_string(),
+        "receiveSequence": version.account.provenance.receive_sequence.to_string(),
         "observedCommitment": version.account.provenance.commitment.name(),
         "effectiveCommitment": effective.name(),
         "finalityDisposition": if effective == RpcCommitment::Processed { "nonfinal-rollbackable" } else { "finalized-projection" },
@@ -525,6 +760,23 @@ fn selection_json(selection: &KeeperActionSelection) -> Value {
         "observedCommitment": selection.observed_commitment.name(),
         "effectiveCommitment": selection.effective_commitment.name(),
         "branch": branch_json(&selection.branch),
+        "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "cursor": {
+            "workflowId": hex32(selection.cursor.workflow_id),
+            "lane": lane_name(selection.cursor.lane),
+            "generation": selection.cursor.generation.to_string(),
+            "phase": selection.cursor.position.phase.to_string(),
+            "item": selection.cursor.position.item.to_string(),
+            "observedStateSha256": hex32(selection.cursor.observed_state_sha256)
+        }
+    })
+}
+
+fn session_selection_json(selection: &KeeperActionSelection) -> Value {
+    json!({
+        "account": selection.account.to_string(),
+        "releaseKey": selection.release_key,
+        "action": selection.action,
         "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "cursor": {
             "workflowId": hex32(selection.cursor.workflow_id),
@@ -567,4 +819,33 @@ fn hex32(bytes: [u8; 32]) -> String {
 
 fn response(status: u16, body: Value) -> OperatorJsonResponse {
     OperatorJsonResponse { status, body }
+}
+
+#[cfg(test)]
+mod read_only_session_contract_tests {
+    use super::*;
+
+    fn optional_u8_digest(value: Option<u8>) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash_optional_u8(&mut hash, value);
+        hash.finalize().into()
+    }
+
+    #[test]
+    fn absent_codec_coordinate_cannot_alias_zero() {
+        assert_ne!(optional_u8_digest(None), optional_u8_digest(Some(0)));
+    }
+
+    #[test]
+    fn length_prefixed_session_text_has_unambiguous_field_boundaries() {
+        let digest = |values: &[&str]| {
+            let mut hash = Sha256::new();
+            for value in values {
+                hash_text(&mut hash, value);
+            }
+            let output: [u8; 32] = hash.finalize().into();
+            output
+        };
+        assert_ne!(digest(&["ab", "c"]), digest(&["a", "bc"]));
+    }
 }
