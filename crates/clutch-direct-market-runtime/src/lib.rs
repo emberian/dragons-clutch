@@ -441,8 +441,14 @@ pub struct DirectMarketBindingV1 {
     pub direct_schedule_policy_id: [u8; 32],
     /// Product MarketLifecycleRoot account.
     pub product_root_account: [u8; 32],
+    /// Exact immutable Product MarketLifecycle binding identity joined by the
+    /// current General V3 owner.
+    pub product_market_binding_id: [u8; 32],
     /// Exact Product family-aggregator prestate which admitted this occurrence.
     pub product_family_prestate_id: [u8; 32],
+    /// One-way Product preauthorization persisted by the current General V3
+    /// owner before General-family admission.
+    pub general_product_preauthorization_id: [u8; 32],
     /// Zero-based Product Direct-family admission coordinate for this occurrence.
     pub family_admission_sequence: u32,
     /// Exact founder SeriesMarketLink account.
@@ -494,7 +500,9 @@ impl DirectMarketBindingV1 {
             self.candidate_lifecycle_policy_id,
             self.candidate_liveness_policy_id,
             self.direct_schedule_policy_id,
+            self.product_market_binding_id,
             self.product_family_prestate_id,
+            self.general_product_preauthorization_id,
             self.founder_series_link_binding_id,
             self.compiler_bundle_v5_id,
             self.founder_series_plan_id,
@@ -557,6 +565,7 @@ fn validate_product_join_v1(
             != product
                 .id()
                 .map_err(|_| DirectMarketErrorV1::Product)?
+        || link.market_binding_id.bytes() != direct.product_market_binding_id
         || link.generation != direct.generation
         || link.capability_profile_id.bytes() != product.capability_profile_id.bytes()
         || link.neutral_lamport_sink.bytes() != direct.neutral_lamport_sink
@@ -710,7 +719,9 @@ pub fn direct_epoch_semantics_id_v1<B: DirectHashBackendV1>(
         &binding.generation.to_le_bytes(),
         &binding.direct_root_account,
         &binding.direct_schedule_policy_id,
+        &binding.product_market_binding_id,
         &binding.product_family_prestate_id,
+        &binding.general_product_preauthorization_id,
         &binding.family_admission_sequence.to_le_bytes(),
         &binding.general_market_binding,
         &binding.general_market_runtime,
@@ -997,7 +1008,9 @@ impl DirectMarketRootV1 {
             &self.binding.candidate_lifecycle_policy_id,
             &self.binding.candidate_liveness_policy_id,
             &self.binding.direct_schedule_policy_id,
-            &self.binding.product_root_account, &self.binding.product_family_prestate_id,
+            &self.binding.product_root_account, &self.binding.product_market_binding_id,
+            &self.binding.product_family_prestate_id,
+            &self.binding.general_product_preauthorization_id,
             &self.binding.family_admission_sequence.to_le_bytes(),
             &self.binding.founder_series_link_account,
             &self.binding.founder_series_link_binding_id, &self.binding.compiler_bundle_v5_id,
@@ -1648,6 +1661,11 @@ pub fn prepare_direct_foundation_v1<
         || product_binding.collateral_release_id.bytes() != binding.collateral_release_id
         || product_binding.resolution_account_id.bytes() != binding.resolution_account
         || product_binding.price_measure_policy_id.bytes() != binding.price_policy_id
+        || product_binding
+            .id()
+            .map_err(|_| DirectMarketErrorV1::Product)?
+            .bytes()
+            != binding.product_market_binding_id
         || families.binding().family_root_id(MarketFamilyV1::Direct).bytes()
             != binding.direct_root_account
         || binding.product_family_prestate_id != aggregator_prestate_id.bytes()
@@ -1687,7 +1705,9 @@ pub fn prepare_direct_foundation_v1<
         &binding.direct_fee_shape_id,
         &binding.candidate_lifecycle_policy_id, &binding.candidate_liveness_policy_id,
         &binding.direct_schedule_policy_id,
-        &binding.product_root_account, &binding.product_family_prestate_id,
+        &binding.product_root_account, &binding.product_market_binding_id,
+        &binding.product_family_prestate_id,
+        &binding.general_product_preauthorization_id,
         &binding.family_admission_sequence.to_le_bytes(),
         &binding.founder_series_link_account,
         &binding.founder_series_link_binding_id, &founder_link_semantic_id,

@@ -25,7 +25,7 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_078;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_142;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
 /// Exact semantic bytes inside the `0xb3/1` frame.
@@ -395,7 +395,9 @@ fn write_binding(
     writer.id(value.candidate_liveness_policy_id)?;
     writer.id(value.direct_schedule_policy_id)?;
     writer.id(value.product_root_account)?;
+    writer.id(value.product_market_binding_id)?;
     writer.id(value.product_family_prestate_id)?;
+    writer.id(value.general_product_preauthorization_id)?;
     writer.u32(value.family_admission_sequence)?;
     writer.id(value.founder_series_link_account)?;
     writer.id(value.founder_series_link_binding_id)?;
@@ -429,7 +431,9 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         candidate_liveness_policy_id: reader.id()?,
         direct_schedule_policy_id: reader.id()?,
         product_root_account: reader.id()?,
+        product_market_binding_id: reader.id()?,
         product_family_prestate_id: reader.id()?,
+        general_product_preauthorization_id: reader.id()?,
         family_admission_sequence: reader.u32()?,
         founder_series_link_account: reader.id()?,
         founder_series_link_binding_id: reader.id()?,
@@ -764,7 +768,7 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_078);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_142);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 453);

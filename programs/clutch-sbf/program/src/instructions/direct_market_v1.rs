@@ -98,7 +98,7 @@ use solana_pubkey::Pubkey;
 
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::artifact::read_clock_slot;
-use super::collateral_position_v3::authenticate_general_market_v2;
+use super::collateral_position_v3::authenticate_general_market_v3;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
 use super::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
@@ -838,7 +838,7 @@ impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1<'_> {
 ///
 /// The eighteen accounts are Product root, founder link, BundleV5, fresh b1,
 /// fresh b3, payer, Realm, Profile, collateral policy, token program, General
-/// MarketBindingV2, General runtime, MarketInstanceV2, GenesisV2, System,
+/// MarketBindingV3, General runtime, MarketInstanceV2, GenesisV2, System,
 /// Rent, Clock, and PriceGrid. Every immutable binding
 /// field is copied only from these authenticated semantic owners.
 pub(crate) fn process_direct_initialize_market_v1(
@@ -900,12 +900,12 @@ pub(crate) fn process_direct_initialize_market_v1(
         &accounts[8],
         &accounts[9],
     )?;
-    let (market_binding, market_runtime) = authenticate_general_market_v2(
+    let (market_binding, market_runtime) = authenticate_general_market_v3(
         program_id,
         &accounts[10],
         &accounts[11],
     )?;
-    let general_market = market_binding.base();
+    let general_market = market_binding.base().base();
     let market_instance = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         &accounts[12],
@@ -926,6 +926,13 @@ pub(crate) fn process_direct_initialize_market_v1(
         .release()
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let product_market_binding_id = product_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let general_family = product_root
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::General);
     require(
         product_binding.market_instance_id == general_market.market_instance_v2_id
             && product_binding.outcome_count == general_market.outcome_count
@@ -942,6 +949,37 @@ pub(crate) fn process_direct_initialize_market_v1(
             && general_market.price_scale == grid.price_scale
             && market_runtime.market_instance_v2_id == general_market.market_instance_v2_id
             && accounts[11].key.to_bytes() == general_market.market.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        market_binding.product_market_root_account().bytes() == accounts[0].key.to_bytes()
+            && market_binding.product_market_binding_id().bytes()
+                == product_market_binding_id.bytes()
+            && market_binding.product_generation() == product_binding.generation
+            && market_binding.series_market_link_account().bytes()
+                == accounts[1].key.to_bytes()
+            && market_binding.series_ordinal() == founder_link.state().binding().ordinal
+            && market_binding.compiler_bundle_v5_id().bytes() == bundle.semantic_id().bytes()
+            && market_binding.attachment_plan_v4_id().bytes()
+                == founder_link.state().binding().attachment_plan_id.bytes()
+            && market_binding.market_liability_founding_id().bytes()
+                == product_binding.market_liability_founding_id.bytes()
+            && market_binding.claim_mint_founding_plan_id().bytes()
+                == product_binding.claim_mint_founding_plan_id.bytes()
+            && market_binding.claim_issuance_binding_id().bytes()
+                == product_binding.claim_issuance_binding_id.bytes()
+            && market_binding.general_founding_capability_id().bytes()
+                == product_binding.general_founding_capability_id.bytes()
+            && general_market.series_plan_v5_id.bytes()
+                == founder_link.state().binding().series_plan_id.bytes()
+            && general_family.counts().live == 1
+            && product_root
+                .state()
+                .product_families()
+                .binding()
+                .family_root_id(MarketFamilyV1::General)
+                .bytes()
+                == accounts[10].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
 
@@ -1013,7 +1051,11 @@ pub(crate) fn process_direct_initialize_market_v1(
         candidate_liveness_policy_id: genesis.value().candidate_liveness_policy_id.bytes(),
         direct_schedule_policy_id: [0; 32],
         product_root_account: accounts[0].key.to_bytes(),
+        product_market_binding_id: product_market_binding_id.bytes(),
         product_family_prestate_id,
+        general_product_preauthorization_id: market_binding
+            .product_preauthorization_id()
+            .bytes(),
         family_admission_sequence: family_sequence,
         founder_series_link_account: accounts[1].key.to_bytes(),
         founder_series_link_binding_id: founder_link
@@ -1159,7 +1201,7 @@ impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAut
 ///
 /// The fixed nineteen-account prefix is root, Direct replay, fresh
 /// Reservation, owner/payer, Position, GEN1, Realm, Profile, collateral
-/// policy, token program, General MarketBindingV2, General runtime,
+/// policy, token program, General MarketBindingV3, General runtime,
 /// MarketInstanceV2 artifact, System, Rent, Clock, BundleV5, GenesisV2, and
 /// PriceGrid. When the root owns one live Reservation, its exact read-only b4
 /// peer is the sole suffix account; the root count, never payload data, fixes
@@ -1367,7 +1409,7 @@ impl AuthenticatedDirectReservationCancelV1 for DirectReservationCancelAuthority
 ///
 /// The sixteen accounts are root, Direct replay, Reservation, owner/payer,
 /// Position, GEN1, Realm, Profile, collateral policy, token program, General
-/// MarketBindingV2, General runtime, MarketInstanceV2, GenesisV2, neutral
+/// MarketBindingV3, General runtime, MarketInstanceV2, GenesisV2, neutral
 /// lamport sink, and Clock. Principal returns only to the persisted payer;
 /// every other lamport goes only to the root's Realm-authenticated sink.
 pub(crate) fn process_direct_cancel_order_v1(
@@ -1585,12 +1627,12 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthori
 ///
 /// Fixed accounts 0..=18 are b1, b3, fresh b2, payer, System, Rent, Clock,
 /// BundleV5, NativeClaimBasis, PriceMeasurePolicy, GenesisV2, PriceGrid,
-/// Realm, Profile, collateral policy, token program, General MarketBindingV2,
+/// Realm, Profile, collateral policy, token program, General MarketBindingV3,
 /// General runtime, and MarketInstanceV2. Exactly the root-owned
 /// live count of `(b4, PositionV3, GEN1)` triples follows in canonical order.
-/// The 128-byte action payload is the same exact Product-grid price vector
-/// used by action 4; it is required only because the absent b2 has no retained
-/// price owner yet.
+/// The payload is empty. The exact Product-grid price vector is derived from
+/// the authenticated canonical book and cannot be caller-selected or supplied
+/// later by selection.
 #[inline(never)]
 fn process_direct_missed_freeze_lapse_v1(
     program_id: &Pubkey,
@@ -2116,7 +2158,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
 /// complete b2-owned endpoint prefix.
 ///
 /// Fixed accounts 0..=12 are b1, b3, b2, Realm, Profile, collateral policy,
-/// token program, General MarketBindingV2, General runtime, MarketInstanceV2,
+/// token program, General MarketBindingV3, General runtime, MarketInstanceV2,
 /// GenesisV2, ResolutionV5, and Clock. Exactly `selection.reservation_count`
 /// triples follow in b2 order: b4, PositionV3, GEN1. No payload count or
 /// endpoint index is accepted. A repeated Position/GEN1 pair is admitted only
@@ -2402,12 +2444,12 @@ fn authenticate_direct_general_market_v1(
         policy_account,
         token_program,
     )?;
-    let (market_binding, market_runtime) = authenticate_general_market_v2(
+    let (market_binding, market_runtime) = authenticate_general_market_v3(
         program_id,
         market_binding_account,
         market_runtime_account,
     )?;
-    let market = market_binding.base();
+    let market = market_binding.base().base();
     let market_instance = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         market_instance_account,
@@ -2440,6 +2482,19 @@ fn authenticate_direct_general_market_v1(
             && release_id.bytes() == binding.collateral_release_id
             && market_runtime_account.key.to_bytes() == binding.general_market_runtime
             && market_runtime.market_instance_v2_id == market.market_instance_v2_id
+            && market_binding.product_market_root_account().bytes()
+                == binding.product_root_account
+            && market_binding.product_market_binding_id().bytes()
+                == binding.product_market_binding_id
+            && market_binding.product_preauthorization_id().bytes()
+                == binding.general_product_preauthorization_id
+            && market_binding.product_generation() == binding.generation
+            && market_binding.series_market_link_account().bytes()
+                == binding.founder_series_link_account
+            && market_binding.series_ordinal() == binding.founder_series_ordinal
+            && market_binding.compiler_bundle_v5_id().bytes()
+                == binding.compiler_bundle_v5_id
+            && market.series_plan_v5_id.bytes() == binding.founder_series_plan_id
             && market_instance.value().id()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                 .bytes() == binding.market_instance_id,
