@@ -98,19 +98,34 @@ pub mod general_v2_merge_payment_v5;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_unfilled_release_v1;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_fee_v5;
 /// Staged action-38 owner cash, Replay, root, and fee-terminal executor.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_finalize_owner_v5;
 /// Staged action-25 accounting over the exhaustive retained settlement traversal.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_account_receipt_v5;
 /// Staged actions 36/37 virtual complete-set conversion and real-end delivery.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_virtual_v5;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_materialize_v5;
 #[cfg(any(
     all(
@@ -138,21 +153,39 @@ pub mod general_v2_receipt_v5;
 pub mod general_v2_settlement_root;
 /// Staged action-39 producer; the route remains capability-disabled until
 /// action-24 materialization is reachable under the same profile.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_settlement_producer_v5;
 /// Ordered indexed-root terminal lifecycle.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_exact_index_retirement_v1;
 /// Typed counted settlement-child retirement and phase gate.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_settlement_retirement_v1;
 /// Nonempty V5 Epoch freeze successor.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_freeze_v5;
 /// Complete coefficient-portfolio settlement and archive retirement.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_portfolio_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_portfolio_retirement_v5;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
@@ -164,7 +197,10 @@ pub mod general_v2_portfolio_retirement_v5;
 ))]
 pub mod general_v2_settlement_traversal_v5;
 /// One exhaustive dispatcher seam for the current General settlement successor.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub(crate) mod general_v2_successor;
 pub mod genesis;
 #[cfg(test)]
