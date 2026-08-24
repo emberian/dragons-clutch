@@ -287,7 +287,6 @@ impl SelectedFeeRecordV2AccountV1 {
             stored_bump,
         })
     }
-
     pub fn data_id<B: Sha256BackendV1>(
         &self,
         backend: &B,
