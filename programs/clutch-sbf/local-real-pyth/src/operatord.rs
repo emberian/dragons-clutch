@@ -180,12 +180,17 @@ impl ResumableKeeperSelector {
 fn merge_chain_material_cursors(
     mut cursors: Vec<KeeperActionSelection>,
     index: &CanonicalAccountIndex,
+    action_materials: &[CanonicalActionMaterialV1],
     direct_batch: Option<&DirectAction8OperatorBatchV2>,
     dealer_batch: Option<&DealerTerminalOperatorBatchV1>,
     release: &IndexedProgramRelease,
     maximum_actions: usize,
 ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
-    if direct_batch.is_none() && dealer_batch.is_none() {
+    let fractional_materials = action_materials
+        .iter()
+        .filter(|material| material.cursor().lane == WorkflowLane::FractionalRedemption)
+        .collect::<Vec<_>>();
+    if direct_batch.is_none() && dealer_batch.is_none() && fractional_materials.is_empty() {
         return Ok(cursors);
     }
     let current_finalized_slot = index
@@ -194,6 +199,61 @@ fn merge_chain_material_cursors(
         .map(|(slot, _)| slot)
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
     let finalized = index.current_accounts(RpcCommitment::Finalized);
+    for material in fractional_materials {
+        let coordinate = material.coordinate();
+        let freshness = material.freshness();
+        if coordinate.family_tag != FRACTIONAL_REDEMPTION_FAMILY_TAG
+            || coordinate.family_version != FRACTIONAL_REDEMPTION_FAMILY_VERSION
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+            || material.variant().is_some()
+            || material.release_key() != release.key()
+            || material.driver_release_key() != release.key()
+            || material.release_manifest_sha256() != release.release_manifest_sha256
+            || material.capability_profile_id() != release.capability_profile_id
+            || material.driver_account() == Address::default()
+            || material.driver_account_slot() == 0
+            || current_finalized_slot < freshness.observed_slot
+            || current_finalized_slot >= freshness.valid_before_slot
+            || !material.reload_authoritative_accounts()
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let matching_driver = finalized
+            .iter()
+            .filter(|version| version.account.address == material.driver_account())
+            .collect::<Vec<_>>();
+        if !matches!(matching_driver.as_slice(), [driver]
+            if driver.account.owner == release.program_id
+                && driver.account.provenance.release_key == release.key()
+                && driver.account.provenance.commitment == RpcCommitment::Finalized
+                && driver.account.provenance.slot == material.driver_account_slot())
+            || material.account_roles().iter().any(|role| {
+                finalized.iter().any(|version| {
+                    version.account.address == role.address()
+                        && version.account.owner == release.program_id
+                        && version.account.provenance.slot > freshness.observed_slot
+                })
+            })
+            || cursors.iter().any(|cursor| cursor.cursor == material.cursor())
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let (_, action, _) = coordinate_description(coordinate);
+        cursors.push(KeeperActionSelection {
+            account: material.driver_account(),
+            release_key: material.driver_release_key().to_string(),
+            action,
+            cursor: material.cursor(),
+            account_slot: material.driver_account_slot(),
+            observed_commitment: RpcCommitment::Finalized,
+            effective_commitment: RpcCommitment::Finalized,
+            branch: IndexedBranch::FinalizedScan,
+            dependencies: selection_dependencies_without_driver(
+                material.account_roles(),
+                material.driver_account(),
+            ),
+        });
+    }
     if let Some(batch) = direct_batch {
         if batch.release_key() != release.key()
             || batch.snapshot_receipt_id() == [0; 32]
@@ -818,6 +878,7 @@ impl<'index> OperatorJsonApi<'index> {
             Ok(cursors) => match merge_chain_material_cursors(
                 cursors,
                 self.index,
+                self.action_materials,
                 self.direct_action8_batch,
                 self.dealer_terminal_batch,
                 release,
@@ -943,6 +1004,7 @@ impl<'index> OperatorJsonApi<'index> {
             Ok(cursors) => match merge_chain_material_cursors(
                 cursors,
                 self.index,
+                self.action_materials,
                 self.direct_action8_batch,
                 self.dealer_terminal_batch,
                 release,
@@ -1066,14 +1128,46 @@ impl<'index> OperatorJsonApi<'index> {
 
     fn keeper(&self, commitment: RpcCommitment) -> OperatorJsonResponse {
         match self.selector.select(self.index, commitment) {
-            Ok(selections) => response(
+            Ok(selections) => {
+                let selections = if commitment == RpcCommitment::Finalized {
+                    let plan = self.index.acquisition_plan();
+                    let release = match select_operator_release(
+                        &plan.releases,
+                        self.action_materials,
+                        self.direct_action8_batch,
+                        self.dealer_terminal_batch,
+                    ) {
+                        Ok(release) => release,
+                        Err(error) => {
+                            return response(409, json!({"error": error.to_string()}));
+                        }
+                    };
+                    match merge_chain_material_cursors(
+                        selections,
+                        self.index,
+                        self.action_materials,
+                        self.direct_action8_batch,
+                        self.dealer_terminal_batch,
+                        release,
+                        self.selector.maximum_actions,
+                    ) {
+                        Ok(selections) => selections,
+                        Err(error) => {
+                            return response(409, json!({"error": error.to_string()}));
+                        }
+                    }
+                } else {
+                    selections
+                };
+                response(
                 200,
                 json!({
                     "effectiveCommitment": commitment.name(),
                     "authorityEligible": false,
                     "actions": selections.iter().map(selection_json).collect::<Vec<_>>()
                 }),
-            ),
+                )
+            }
             Err(error) => response(409, json!({"error": error.to_string()})),
         }
     }
@@ -1619,7 +1713,10 @@ fn coordinate_description(
         let (action, builder) = match FractionalRedemptionActionV1::from_tag(
             coordinate.local_action,
         ) {
-            Some(FractionalRedemptionActionV1::Initialize) => ("initialize-fractional", None),
+            Some(FractionalRedemptionActionV1::Initialize) => (
+                "initialize-fractional",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/1/initialize"),
+            ),
             Some(FractionalRedemptionActionV1::RedeemInternalExact) => (
                 "redeem-fractional-internal-exact",
                 Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/2/redeem-internal-exact"),
@@ -1659,7 +1756,10 @@ fn coordinate_description(
                 Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/9/seal-claims-exhausted"),
             ),
             Some(FractionalRedemptionActionV1::CloseEmptyLedger) => {
-                ("close-empty-fractional-ledger", None)
+                (
+                    "close-empty-fractional-ledger",
+                    Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/10/close-empty-ledger"),
+                )
             }
             None => ("unknown-fractional-action", None),
         };

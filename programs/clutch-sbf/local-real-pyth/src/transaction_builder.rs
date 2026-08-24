@@ -921,6 +921,139 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble one permissionless Product-foundation Fractional lifecycle
+    /// transition.  The outcome width is derived from the exact account vector;
+    /// callers cannot weaken the dynamic core/outcome/aux geometry or its
+    /// privilege union.
+    pub(crate) fn enabled_fractional_lifecycle_v1(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        action: clutch_fractional_redemption_runtime::FractionalRedemptionActionV1,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_fractional_redemption_runtime::{
+            fractional_account_contract_v1, FractionalInitializeIntentV1,
+            FractionalRedemptionActionV1, FractionalTerminalIntentV1,
+        };
+
+        if !matches!(
+            action,
+            FractionalRedemptionActionV1::Initialize
+                | FractionalRedemptionActionV1::CloseEmptyLedger
+        ) {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let contract = fractional_account_contract_v1(action);
+        let fixed = usize::from(contract.foundation_core_accounts)
+            .checked_add(usize::from(contract.foundation_aux_accounts))
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+        let outcome_count = accounts
+            .len()
+            .checked_sub(fixed)
+            .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+        if !(1..=16).contains(&outcome_count)
+            || accounts.len() != fixed + 2 * outcome_count
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        match action {
+            FractionalRedemptionActionV1::Initialize => {
+                FractionalInitializeIntentV1::decode(payload)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if sequence != 0 {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+            }
+            FractionalRedemptionActionV1::CloseEmptyLedger => {
+                let intent = FractionalTerminalIntentV1::decode(payload)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if sequence == 0 || intent.expected_ledger_sequence != sequence {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+            }
+            _ => return Err(ConstructionError::InvalidAccountContract),
+        }
+        let aux = usize::from(contract.foundation_core_accounts) + 2 * outcome_count;
+        let mut identities = BTreeSet::new();
+        for (index, account) in accounts.iter().enumerate() {
+            let expected_writable = if index < usize::from(contract.foundation_core_accounts) {
+                contract.writable_mask & (1_u32 << index) != 0
+            } else if index < aux {
+                false
+            } else {
+                contract.foundation_aux_writable_mask & (1_u32 << (index - aux)) != 0
+            };
+            if account.is_signer || account.is_writable != expected_writable {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            // The frozen loader contract permits only the correlated
+            // collateral/claim Program and ProgramData aliases.
+            if !identities.insert(account.pubkey) {
+                let collateral_program = aux + 3;
+                let collateral_programdata = aux + 4;
+                let claim_program = aux + 5;
+                let claim_programdata = aux + 6;
+                let allowed = (index == claim_program
+                    && accounts[collateral_program].pubkey == account.pubkey)
+                    || (index == claim_programdata
+                        && accounts[collateral_programdata].pubkey == account.pubkey);
+                if !allowed {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+            }
+        }
+        if accounts[aux + 11].pubkey != program_id {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let central_action = ExtensionAction::FractionalRedemption(action);
+        let binding = registry_binding(
+            ExtensionFamily::FractionalRedemption,
+            action.tag(),
+            Some(central_action),
+        )?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::FractionalRedemption,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FractionalRedemption,
+            action_name: match action {
+                FractionalRedemptionActionV1::Initialize => "initialize-fractional",
+                FractionalRedemptionActionV1::CloseEmptyLedger => "close-empty-fractional-ledger",
+                _ => unreachable!(),
+            }
+            .into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: Vec::new(),
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::FractionalRedemptionRequestV1 {
+                binding,
+                action,
+                sequence,
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble a zero-credit close from the decoded live credit and its
     /// persisted rent owner. The only permitted alias is claimant == payer,
     /// matching the SBF privilege-union contract.
@@ -1791,7 +1924,8 @@ impl OwnedInstructionDraft {
                     .map_err(|_| ConstructionError::WrongWirePrefix)?;
                 if !matches!(
                     action,
-                    FractionalRedemptionActionV1::RedeemInternalExact
+                    FractionalRedemptionActionV1::Initialize
+                        | FractionalRedemptionActionV1::RedeemInternalExact
                         | FractionalRedemptionActionV1::RedeemBearerExact
                         | FractionalRedemptionActionV1::RedeemBearerCredit
                         | FractionalRedemptionActionV1::RedeemInternalCredit
@@ -1799,8 +1933,9 @@ impl OwnedInstructionDraft {
                         | FractionalRedemptionActionV1::MergeCredit
                         | FractionalRedemptionActionV1::CloseZeroCredit
                         | FractionalRedemptionActionV1::SealClaimsExhausted
+                        | FractionalRedemptionActionV1::CloseEmptyLedger
                 )
-                    || sequence == 0
+                    || (sequence == 0 && action != FractionalRedemptionActionV1::Initialize)
                     || request.sequence != sequence
                     || request.envelope.family != ExtensionFamily::FractionalRedemption
                     || request.envelope.action != ExtensionAction::FractionalRedemption(action)
@@ -1818,16 +1953,63 @@ impl OwnedInstructionDraft {
                 if !matches!(
                     action,
                     FractionalRedemptionActionV1::RedeemInternalCredit
+                        | FractionalRedemptionActionV1::Initialize
                         | FractionalRedemptionActionV1::RedeemBearerExact
                         | FractionalRedemptionActionV1::RedeemBearerCredit
                         | FractionalRedemptionActionV1::TransferCredit
                         | FractionalRedemptionActionV1::MergeCredit
+                        | FractionalRedemptionActionV1::CloseEmptyLedger
                 )
                     && self.accounts.len() != usize::from(contract.account_count)
                 {
                     return Err(ConstructionError::InvalidAccountContract);
                 }
                 match action {
+                    FractionalRedemptionActionV1::Initialize
+                    | FractionalRedemptionActionV1::CloseEmptyLedger => {
+                        let fixed = usize::from(contract.foundation_core_accounts)
+                            .checked_add(usize::from(contract.foundation_aux_accounts))
+                            .ok_or(ConstructionError::InvalidAccountContract)?;
+                        let outcomes = self.accounts.len().checked_sub(fixed)
+                            .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
+                            .ok_or(ConstructionError::InvalidAccountContract)?;
+                        if !(1..=16).contains(&outcomes) {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
+                        if action == FractionalRedemptionActionV1::Initialize {
+                            clutch_fractional_redemption_runtime::FractionalInitializeIntentV1::decode(
+                                request.envelope.payload,
+                            )
+                            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                            if sequence != 0 {
+                                return Err(ConstructionError::InvalidAccountContract);
+                            }
+                        } else {
+                            let intent = clutch_fractional_redemption_runtime::FractionalTerminalIntentV1::decode(
+                                request.envelope.payload,
+                            )
+                            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                            if intent.expected_ledger_sequence != sequence {
+                                return Err(ConstructionError::InvalidAccountContract);
+                            }
+                        }
+                        let aux = usize::from(contract.foundation_core_accounts) + 2 * outcomes;
+                        if self.accounts[aux + 11].pubkey != self.program_id {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
+                        for (index, account) in self.accounts.iter().enumerate() {
+                            let expected_writable = if index < usize::from(contract.foundation_core_accounts) {
+                                contract.writable_mask & (1_u32 << index) != 0
+                            } else if index < aux {
+                                false
+                            } else {
+                                contract.foundation_aux_writable_mask & (1_u32 << (index - aux)) != 0
+                            };
+                            if account.is_signer || account.is_writable != expected_writable {
+                                return Err(ConstructionError::InvalidAccountContract);
+                            }
+                        }
+                    }
                     FractionalRedemptionActionV1::RedeemInternalExact => {
                         let intent = FractionalRedeemIntentV1::decode(request.envelope.payload)
                             .map_err(|_| ConstructionError::WrongWirePrefix)?;
@@ -2049,11 +2231,13 @@ impl OwnedInstructionDraft {
                     if !matches!(
                         action,
                         FractionalRedemptionActionV1::CloseZeroCredit
+                            | FractionalRedemptionActionV1::Initialize
                             | FractionalRedemptionActionV1::RedeemInternalCredit
                             | FractionalRedemptionActionV1::RedeemBearerExact
                             | FractionalRedemptionActionV1::RedeemBearerCredit
                             | FractionalRedemptionActionV1::TransferCredit
                             | FractionalRedemptionActionV1::MergeCredit
+                            | FractionalRedemptionActionV1::CloseEmptyLedger
                     ) {
                         if account.is_signer != (contract.signer_mask & mask != 0)
                             || account.is_writable != (contract.writable_mask & mask != 0)
@@ -2102,12 +2286,25 @@ impl OwnedInstructionDraft {
                         } else {
                             false
                         };
+                        let allowed_lifecycle_loader_alias = if matches!(
+                            action,
+                            FractionalRedemptionActionV1::Initialize
+                                | FractionalRedemptionActionV1::CloseEmptyLedger
+                        ) {
+                            let outcomes = (self.accounts.len() - 32) / 2;
+                            let aux = 15 + 2 * outcomes;
+                            matches!((index, other), (i, j) if i == aux + 3 && j == aux + 5)
+                                || matches!((index, other), (i, j) if i == aux + 4 && j == aux + 6)
+                        } else {
+                            false
+                        };
                         if account.pubkey == self.accounts[other].pubkey
                             && !allowed_close_payer_alias
                             && !allowed_credit_payer_alias
                             && !allowed_bearer_loader_alias
                             && !allowed_bearer_credit_payer_alias
                             && !allowed_move_payer_alias
+                            && !allowed_lifecycle_loader_alias
                         {
                             return Err(ConstructionError::DuplicateAccount);
                         }
