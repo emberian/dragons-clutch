@@ -5,8 +5,8 @@
 
 //! Allocation-free runtime contracts for transferable structured claims.
 //!
-//! The economic machine lives in `clutch-structured-claim`. This crate owns
-//! the adapter-side facts that do not belong there: the exact persisted
+//! Product algebra lives in `clutch-structured-claim`. This crate owns
+//! current adapter-side facts: the exact persisted
 //! descriptor image, deployment/basis reconstruction, and an atomic transfer
 //! plan over two authenticated base Position projections. It deliberately has
 //! no Solana SDK, CPI, hashing implementation, PDA implementation, account
@@ -19,9 +19,9 @@ mod descriptor;
 mod market_root;
 mod market_projection;
 mod position_transfer;
+mod projection;
 mod recipe;
 mod replay_v3;
-mod runtime;
 mod terminal;
 mod wire;
 
@@ -82,14 +82,9 @@ pub use replay_v3::{
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1,
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
-pub use runtime::{
-    prepare_compact_donation_v1, prepare_redeem_terminal_v1, prepare_retire_descriptor_v1,
-    prepare_unwrap_canonical_v1, prepare_unwrap_full_v1, prepare_wrap_canonical_v1,
-    prepare_wrap_full_v1, AuthenticatedVaultRetirementV1, CanonicalUnwrapRequestV1,
-    CanonicalWrapRequestV1, DescriptorRetirementPlanV1, DonationCompactionPlanV1,
-    MarketChangingWrapperTransitionPlanV1, StructuredClaimRuntimeAddressesV1,
-    TerminalRedemptionPlanV1, VaultMutationRequestV1, WrapperMintProjectionV1,
-    WrapperTokenProjectionV1, WrapperTransitionPlanV1,
+pub use projection::{
+    AuthenticatedVaultRetirementV1, DescriptorRetirementPlanV1,
+    StructuredClaimRuntimeAddressesV1, WrapperMintProjectionV1, WrapperTokenProjectionV1,
 };
 pub use terminal::{
     prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
@@ -144,8 +139,8 @@ pub enum Error {
     ReplayExhausted,
     /// A prospective result violates exact conservation.
     InvariantViolation,
-    /// The authoritative structured-claim economic machine refused the route.
-    EconomicTransitionRefused,
+    /// Terminal payout arithmetic is not integral in collateral atoms.
+    InexactTerminalPayout,
     /// The family-local action is unallocated.
     UnknownAction,
     /// A construction target has hostile data, owner, executable, or address state.

@@ -2,9 +2,69 @@
 
 use crate::runtime_contract::{WrapperMintProjectionV1, WrapperTokenProjectionV1};
 use crate::{
-    is_zero, BoundDescriptorV1, CpiAccountMetaV1, Error, Key, Result, Token2022CpiV1,
-    Token2022DecoderV1,
+    is_zero, BoundDescriptorV1, CpiAccountMetaV1, Error, Key, Result, Token2022DecoderV1,
 };
+
+/// Exact Token-2022 CPI operation emitted by the current wrapper boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Token2022CpiV1 {
+    /// Initialize an extension-free zero-decimal mint.
+    InitializeMint {
+        /// Pinned Token-2022 executable.
+        token_program: Key,
+        /// Canonical wrapper mint.
+        mint: Key,
+        /// Canonical mint-authority PDA.
+        mint_authority: Key,
+    },
+    /// Mint the exact wrapper quantity after backing enters custody.
+    MintChecked {
+        /// Canonical wrapper mint.
+        mint: Key,
+        /// Holder token account.
+        token: Key,
+        /// Mint-authority PDA.
+        authority: Key,
+        /// Exact zero-decimal quantity.
+        quantity: u64,
+        /// Actual supply before CPI.
+        supply_before: u64,
+        /// Required supply after CPI.
+        supply_after: u64,
+        /// Actual holder balance before CPI.
+        holder_before: u64,
+        /// Required holder balance after CPI.
+        holder_after: u64,
+    },
+    /// Burn the exact wrapper quantity before backing leaves custody.
+    BurnChecked {
+        /// Canonical wrapper mint.
+        mint: Key,
+        /// Holder token account.
+        token: Key,
+        /// Signing token owner.
+        authority: Key,
+        /// Exact zero-decimal quantity.
+        quantity: u64,
+        /// Actual supply before CPI.
+        supply_before: u64,
+        /// Required supply after CPI.
+        supply_after: u64,
+        /// Actual holder balance before CPI.
+        holder_before: u64,
+        /// Required holder balance after CPI.
+        holder_after: u64,
+    },
+    /// Permanently revoke mint authority after the empty vault closes.
+    RevokeMintAuthority {
+        /// Canonical wrapper mint.
+        mint: Key,
+        /// Current mint-authority PDA.
+        authority_before: Key,
+        /// Absent authority, canonically zero.
+        authority_after: Key,
+    },
+}
 
 /// Base Token/Token-2022 account width.
 pub const TOKEN_2022_BASE_ACCOUNT_BYTES: u16 = 165;

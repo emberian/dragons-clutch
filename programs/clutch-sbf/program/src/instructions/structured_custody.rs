@@ -1494,8 +1494,8 @@ pub fn process_compact_donation(
 
 /// Retire one exact descriptor after the wrapper has atomically revoked its
 /// zero-supply mint authority and persisted the descriptor tombstone. This is
-/// the sole current action-8 base route: it never consults MarketLedger, and it
-/// consumes Product's private Wrapper terminal writer only for the final live
+/// the sole current action-8 base route: it consumes current owners plus
+/// Product's private Wrapper terminal writer only for the final live
 /// descriptor in the Structured root.
 pub fn process_retire_descriptor(
     program_id: &Pubkey,

@@ -2,9 +2,9 @@
 
 This crate is the production-bound semantic core for Dragon's Clutch
 transferable structured claims. It is safe Rust, `no_std`, allocation-free,
-float-free, and fixed-capacity. Its sole production dependency is the
-first-party `clutch-kernel`, which remains the one semantic owner of base total
-claim supply, Hoard collateral, payout-set semantics, and global solvency.
+float-free, and fixed-capacity. It owns product algebra only; authoritative
+Market supply, Hoard collateral, payout-set semantics, and global solvency
+remain in their current base-account owners.
 
 It owns:
 
@@ -13,21 +13,15 @@ It owns:
 - complete-set cash compression, `p = k·1 + r`;
 - byte-exact native-claim and deployment-bound wrapper-product preimages;
 - flat associative composition over one native basis;
-- supply-sensitive canonical/full wrap and unwind transitions;
-- post-resolution canonical unwind and exact aggregate redemption;
-- direct holder burns, beneficiary-free surplus donation, and retirement; and
-- transactional refusal: every failed state transition leaves every input
-  unchanged.
+- exact backing quantities consumed by the current account-owned lifecycle; and
+- transactional refusal for coefficient and composition operations.
 
 It does not own accounts, serialization, SHA-256, PDAs, Token-2022, CPI,
 deployment authentication, signer authority, replay, reservation state, oracle
-evidence, collateral-cap admission, or the live internal/external SupplyLedger
-closure. `MarketLedger` joins wrapper identity to a complete
-`clutch_kernel::MarketState`; full-vector wrapping/unwinding, donation, and
-aggregate redemption invoke base-owned transitions rather than writing a
-wrapper-local supply/Hoard projection. The adapter must still reconcile the
-kernel's total supply with authenticated internal and external live ledgers and
-apply collateral-cap checks. `MarketLedger` must never become persisted truth.
+evidence, collateral-cap admission, or the live internal/external ClaimLedger
+closure. The withdrawn `MarketLedger`/`StructuredClaimMachine` model has been
+deleted: no wrapper-local object can act as parallel Market, supply, Hoard, or
+resolution authority.
 
 ## Representation
 
@@ -65,27 +59,26 @@ every instruction:
 2. hash `NativeClaim::identity_preimage` and verify the live native claim id;
 3. authenticate every Program/ProgramData/slot in `DeploymentBinding`, hash its
    product preimage, and verify the descriptor/mint derivations;
-4. read actual extension-free Token-2022 mint supply into `WrapperState`;
+4. read actual extension-free Token-2022 mint supply into the current mint
+   observation;
 5. prove holder and vault Position assets are free and canonically padded;
-6. invoke one core transition on local copies;
+6. invoke the current HoardV2/ClaimLedgerV3/PositionV3 lifecycle contract;
 7. perform exact base/token operations and check every post-delta; and
 8. rely on transaction rollback if a CPI or postcondition fails.
 
-The wrapper vault must never place orders. Direct Token-2022 burns are allowed:
-they create locked surplus, not a fee or caller entitlement. `compact_donation`
-only models the economic result; promotion still requires live base donation
-instructions and bank tests.
+The wrapper vault must never place orders. Direct Token-2022 burns create
+locked surplus, not a fee or caller entitlement. Compaction is owned by the
+current base adapter's exact Hoard-to-neutral disposition, not this algebra
+crate.
 
 The full runtime/account plan remains in
 [`research/structured-claim-wrapper/ADAPTER_PLAN.md`](../../research/structured-claim-wrapper/ADAPTER_PLAN.md).
 
 ## Evidence and compatibility
 
-`tests/kernel.rs` freezes the live native-claim digest and wrapper-product
-digest, checks rational overflow/refusal, composition associativity, exhaustive
-small-simplex payoff preservation, Active/Resolved race behavior, direct-burn
-compaction, retirement, exact/inexact terminal lots, undercoverage, overflow,
-and no-mutation-on-error. [`SBF_STACK_EVIDENCE.md`](SBF_STACK_EVIDENCE.md)
+`tests/algebra.rs` freezes the native-claim identity join, checks rational
+overflow/refusal, composition associativity, deployment-locus binding, and
+no-mutation-on-error. [`SBF_STACK_EVIDENCE.md`](SBF_STACK_EVIDENCE.md)
 records isolated release-frame measurements and their deliberately narrow
 claim boundary.
 

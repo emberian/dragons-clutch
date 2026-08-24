@@ -5,12 +5,12 @@
 
 //! Disabled-by-default Solana trust-boundary adapter for structured claims.
 //!
-//! `clutch-structured-claim-runtime-contract` is the sole owner of the
-//! descriptor bytes, family-local payloads, and economic state transitions.
-//! This crate does not restate those DTOs. It owns only work that necessarily
-//! lives at the SBF boundary: family admission, deployment hashing, PDA
-//! authentication, hostile Solana account projection, exact CPI staging, and
-//! post-CPI reconciliation.
+//! `clutch-structured-claim-runtime-contract` is the sole owner of descriptor
+//! bytes, family-local payloads, roots, replay extensions, and terminal plans.
+//! This crate owns the current HoardV2/ClaimLedgerV3/PositionV3 lifecycle join
+//! plus work that necessarily lives at the SBF boundary: family admission,
+//! deployment hashing, PDA authentication, hostile account projection, exact
+//! CPI staging, and post-CPI reconciliation.
 //!
 //! Every adapter profile currently keeps every family-local action disabled.
 //! The `live-current-wrapper` feature compiles the current implementation seam
@@ -21,17 +21,12 @@ mod accounts;
 mod custody;
 mod current_lifecycle;
 mod envelope;
-mod handler;
 mod identity;
 mod token2022_wire;
 
 pub use accounts::{
-    authenticate_general_base_position_v3_v1, authenticate_structured_claim_base_position_v3_v1,
-    authenticate_token_2022_mint_v1, authenticate_token_2022_token_v1,
-    decode_owned_descriptor_v1, AccountAccessV1, AccountFrameV1, AccountProgramsV1,
-    AccountRoleV1, AuthenticatedBasePositionV3, AuthenticatedTokenMintV1,
-    AuthenticatedTokenV1, BasePositionPdaVerifierV1, RawAccountV1, Token2022DecoderV1,
-    MAX_ROUTE_ACCOUNTS,
+    decode_owned_descriptor_v1, AccountRoleV1, BasePositionPdaVerifierV1, RawAccountV1,
+    Token2022DecoderV1,
 };
 pub use custody::{
     authenticate_structured_custody_call_v1, prepare_structured_custody_call_v1, AdapterSha256V1,
@@ -61,13 +56,6 @@ pub use envelope::{
     admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
     ENABLED_STRUCTURED_CLAIM_ACTION_MASK, RESERVED_STRUCTURED_CLAIM_ACTION_MASK,
 };
-pub use handler::{
-    authenticate_base_vault_creation_v1, authenticate_base_vault_retirement_v1,
-    authenticate_structured_terminal_v1, BaseCapabilityVerifierV1,
-    BaseVaultCreationEvidenceV1, BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1,
-    BoundStructuredTerminalV1, StructuredTerminalEvidenceV1, StructuredTerminalVerifierV1,
-    Token2022CpiV1,
-};
 #[cfg(target_os = "solana")]
 pub use identity::SolanaPdaVerifierV1;
 pub use identity::{
@@ -80,7 +68,7 @@ pub use token2022_wire::{
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     decode_retired_canonical_wrapper_mint_v1, plan_token_2022_cpi_v1,
     wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1, CanonicalToken2022DecoderV1,
-    Token2022InstructionPlanV1, WrapperMintParserPlanV1, WrapperTokenParserPlanV1,
+    Token2022CpiV1, Token2022InstructionPlanV1, WrapperMintParserPlanV1, WrapperTokenParserPlanV1,
     TOKEN_2022_BASE_ACCOUNT_BYTES,
     TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES, TOKEN_2022_INSTRUCTION_DATA_CAPACITY,
 };

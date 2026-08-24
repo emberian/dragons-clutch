@@ -1,7 +1,7 @@
 # `clutch-structured-claim-runtime-contract`
 
-This crate is the allocation-free runtime contract between the pure
-`clutch-structured-claim` economics and the small SBF/Token-2022 adapters. It
+This crate is the allocation-free current lifecycle contract between the pure
+`clutch-structured-claim` product algebra and the small SBF/Token-2022 adapters. It
 keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
 future 449-byte descriptor v2, and owns the exact 656-byte Series-scoped
 Structured root plus fixed-depth wrapper-recipe membership. The descriptor
@@ -27,13 +27,12 @@ structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,
 transaction execution, post-delta checks, and rollback.
 
-The canonical and full-vector wrap/unwind planners join actual mint supply and
-holder balance to the pure economic machine, stage exact Market and
-Position/Replay poststates, and return the precise `MintToChecked` or
-`BurnChecked` quantity. Full routes include the authoritative base complete-set
-Merge/Split poststate rather than simulating it as a transfer. The runtime also
-stages beneficiary-free surplus compaction and exact resolved terminal-lot
-redemption. These routes never spend reserved Position cash.
+The superseded `MarketLedger` transition model has been physically removed.
+Current wrap/unwind, compaction, redemption, and retirement instead consume the
+exact HoardV2, ClaimLedgerV3, PositionV3, ReplayV3, ResolutionV5, Product, and
+collateral authorities owned by their respective contracts. Shared projections
+in this crate are hostile observations or terminal-close facts, never a second
+Market or supply owner.
 
 Retirement now requires zero actual mint supply, empty canonical backing, and
 an authenticated successor base-Position close receipt. The descriptor and
