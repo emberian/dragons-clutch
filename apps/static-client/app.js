@@ -87,7 +87,8 @@
     $("copy-snapshot").disabled = true;
     const keeper = $("keeper-action");
     reset(keeper);
-    const option = create("option", null, "Manual explicit construction (no keeper cursor)");
+    reset($("action-verdicts"));
+    const option = create("option", null, "No chain-derived action verdict acquired");
     option.value = "";
     keeper.append(option);
     keeper.disabled = true;
@@ -172,8 +173,9 @@
       definition("Data bytes", account.dataBytes),
       definition("Codec tag / version", `${account.accountTag} / ${account.accountVersion}`),
       definition("Generation", account.generation),
-      definition("Primary binding", account.primaryBinding),
-      definition("Secondary binding", account.secondaryBinding),
+      definition(account.bindingProjection.primary.label, account.bindingProjection.primary.value),
+      definition(account.bindingProjection.secondary.label, account.bindingProjection.secondary.value),
+      definition("Projection authority", account.bindingProjection.authority),
       definition("Body SHA-256", account.dataSha256),
       definition("Decode", account.decode.status === "requires-context" ? `requires context: ${account.decode.requirement}` : "canonical")
     );
@@ -207,21 +209,61 @@
     const select = $("keeper-action");
     reset(select);
     const actions = snapshot.actionCapabilities.actions;
-    const callable = actions.filter((action) => action.callable);
-    const empty = create("option", null, callable.length === 0
-      ? `${actions.length} release-authenticated verdict(s); no canonical draft is callable`
+    const inspectable = actions.filter((action) => action.inspection.eligible);
+    const empty = create("option", null, inspectable.length === 0
+      ? `${actions.length} release-authenticated verdict(s); every exact tuple is refused`
       : "Select one server-constructed canonical transaction draft");
     empty.value = "";
     select.append(empty);
     actions.forEach((action, index) => {
-      const option = create("option", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}${action.callable ? "" : ` — unavailable: ${action.reason}`}`);
+      const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
+      const option = create("option", null, `${label}${action.inspection.eligible ? "" : ` — refused (${action.inspection.kind}): ${action.inspection.reason}`}`);
       option.value = String(index);
-      option.disabled = !action.callable;
+      option.disabled = !action.inspection.eligible;
       select.append(option);
     });
-    select.disabled = snapshot.finality.requestedCommitment === "processed" || callable.length === 0;
+    select.disabled = snapshot.finality.requestedCommitment === "processed" || inspectable.length === 0;
     $("build-workflow").disabled = true;
-    $("workflow-status").textContent = callable.length === 0 ? "no callable canonical draft" : "select a canonical draft";
+    $("workflow-status").textContent = inspectable.length === 0 ? "all exact action tuples refused" : "select a finalized exact tuple";
+
+    const verdicts = $("action-verdicts");
+    reset(verdicts);
+    for (const action of actions) {
+      const fractionalHolderPending = action.coordinate.familyTag === "79" && action.coordinate.familyVersion === "1" && ["3", "4", "5", "6", "7"].includes(action.coordinate.localAction);
+      const holderChoice = action.fractionalContract ? action.fractionalContract.holderChoice : null;
+      const holderChoiceText = holderChoice === null ? null : holderChoice.kind === "redeem-bearer-exact" || holderChoice.kind === "redeem-bearer-credit"
+        ? `${holderChoice.kind}: outcome ${holderChoice.outcome}, quantity ${holderChoice.quantity}; claimant ${holderChoice.claimant}; bearer source ${holderChoice.bearerSource}; collateral destination ${holderChoice.collateralDestination}; funding payer ${holderChoice.fundingPayer || "none"}`
+        : holderChoice.kind === "redeem-internal-credit"
+          ? `${holderChoice.kind}: outcome ${holderChoice.outcome}, quantity ${holderChoice.quantity}; claimant ${holderChoice.claimant}; Position ${holderChoice.position}; funding payer ${holderChoice.fundingPayer || "none"}`
+        : `${holderChoice.kind}: source claimant ${holderChoice.sourceClaimant}; source credit ${holderChoice.sourceCredit}; destination claimant ${holderChoice.destinationClaimant}; numerator ${holderChoice.numerator || "entire chain-derived source balance"}; payout ${holderChoice.payout.kind} to ${holderChoice.payout.target}; funding payer ${holderChoice.fundingPayer || "none"}`;
+      const fractionalDerivedFacts = action.fractionalContract && action.fractionalContract.derivedFacts
+        ? action.fractionalContract.derivedFacts.kind === "fractional-lifecycle"
+          ? `${action.fractionalContract.derivedFacts.outcomeCount} chain-derived outcomes; ${action.fractionalContract.derivedFacts.driver} driver at sequence ${action.fractionalContract.derivedFacts.sequence}; ${action.fractionalContract.derivedFacts.authority}`
+          : `credit ${action.fractionalContract.derivedFacts.credit}; ${action.fractionalContract.derivedFacts.creditAdmission}; payout ${action.fractionalContract.derivedFacts.wholeCollateralPayout} collateral atoms; retained numerator ${action.fractionalContract.derivedFacts.retainedPayoutNumerator}`
+        : "contained in exact balanced equations";
+      const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
+      const card = create("article", `action-verdict ${action.inspection.eligible ? "eligible" : "refused"}`);
+      const heading = create("div", "card-heading");
+      heading.append(
+        create("h3", null, label),
+        create("span", `chip ${action.inspection.eligible ? "" : "disabled-chip"}`.trim(), action.inspection.eligible ? "inspectable" : "refused")
+      );
+      const facts = create("dl", "compact-facts");
+      facts.append(
+        definition("Disposition", action.inspection.kind),
+        definition("Finalized driver", action.stateSelection ? `${action.stateSelection.account} @ ${action.stateSelection.accountSlot}` : action.transactionDraft ? `${action.transactionDraft.driverAccount} @ ${action.transactionDraft.driverAccountSlot}` : "missing"),
+        definition("Observed tuple accounts", action.inspection.observedAccounts),
+        definition("Stale tuple accounts", action.inspection.staleAccounts),
+        definition("Current material contract", action.directContract ? `${action.directContract.schema} · ${action.directContract.branch}` : action.fractionalContract ? `${action.fractionalContract.schema} · ${action.fractionalContract.geometry}` : action.payloadVariant ? `exact Dealer target-${action.payloadVariant.payloadDiscriminator}` : "release-bound family contract"),
+        definition("Holder-authored choices", holderChoiceText || (action.fractionalContract ? "none — identities, metas, amounts, and payload are chain-derived" : fractionalHolderPending ? "unavailable until exact finalized constructor material exists; raw account IDs and metas are forbidden" : "none on this inspection surface")),
+        definition("Chain-derived credit/payout", fractionalDerivedFacts),
+        definition("Execution-Clock postcondition", action.directContract && action.directContract.symbolicPostcondition ? `${action.directContract.symbolicPostcondition.writableAccounts.length} exact writable accounts · ${action.directContract.symbolicPostcondition.contractId}` : "not required"),
+        definition("Canonical unsigned material", action.transactionDraft ? `${action.transactionDraft.flows[0]} · ${action.transactionDraft.messageVersion} · ${action.transactionDraft.serializedBytes} bytes` : "unavailable"),
+        definition("Exclusive valid-before slot", action.inspection.validBeforeSlot)
+      );
+      card.append(heading, create("p", null, action.inspection.reason), facts);
+      verdicts.append(card);
+    }
   };
 
   const renderSnapshot = async (snapshot) => {
@@ -291,7 +333,7 @@
       context.definitionValue,
       context.request
     );
-    const profileId = proposal.compiledProductSeriesBundleV6.identities.capabilityProfileId;
+    const profileId = proposal.compiledProductSeriesBundleV7.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
@@ -314,8 +356,8 @@
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
-      definition("BundleV6 ID / bytes", `${proposal.compiledProductSeriesBundleV6.id} / ${proposal.compiledProductSeriesBundleV6.byteLength}`),
-      definition("BundleV6 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV6.artifact.kind} / ${proposal.compiledProductSeriesBundleV6.artifact.pda}`),
+      definition("BundleV7 ID / bytes", `${proposal.compiledProductSeriesBundleV7.id} / ${proposal.compiledProductSeriesBundleV7.byteLength}`),
+      definition("BundleV7 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV7.artifact.kind} / ${proposal.compiledProductSeriesBundleV7.artifact.pda}`),
       definition("Exact market outcome / coverage", proposal.exactMarket ? `${proposal.exactMarket.outcome} / ${proposal.exactMarket.coverage}` : "not requested"),
       definition("Exact certificate / work manifest", proposal.exactMarket ? `${proposal.exactMarket.certificate ? proposal.exactMarket.certificate.outputId : "none"} / ${proposal.exactMarket.workManifest.id}` : "not requested"),
       definition("Capability profile join", profileId),
@@ -353,7 +395,7 @@
     if (state.snapshot.sourceConfiguration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
     const action = actionForSelection();
-    if (!action || !action.callable || !action.transactionDraft) throw new Error("No release-authenticated, state-callable server transaction draft is selected. Browser-authored protocol material is forbidden.");
+    if (!action || !action.callable || !action.transactionDraft || !action.inspection.eligible) throw new Error("No release-authenticated draft with an exact fresh finalized account tuple is selected. Browser-authored protocol material is forbidden.");
     const output = action.transactionDraft;
     state.construction = output;
     $("workflow-output").textContent = JSON.stringify(output, null, 2);
@@ -416,11 +458,11 @@
     });
     $("keeper-action").addEventListener("change", () => {
       const action = actionForSelection();
-      const callable = Boolean(action && action.callable && action.transactionDraft);
-      $("build-workflow").disabled = !callable;
-      $("workflow-status").textContent = callable
-        ? "canonical unsigned draft available for inspection"
-        : "no callable canonical draft selected";
+      const inspectable = Boolean(action && action.callable && action.transactionDraft && action.inspection.eligible);
+      $("build-workflow").disabled = !inspectable;
+      $("workflow-status").textContent = inspectable
+        ? "canonical unsigned draft joined to a fresh finalized exact tuple"
+        : "no fresh finalized exact tuple selected";
     });
     $("copy-workflow").addEventListener("click", () => { if (state.construction) copy($("workflow-output").textContent, $("copy-workflow")); });
   };

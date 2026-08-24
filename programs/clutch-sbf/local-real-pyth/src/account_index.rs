@@ -35,7 +35,7 @@ use clutch_fractional_redemption_runtime::{
 use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
-    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketBindingV3,
+    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV5,
     MarketRuntimeV3AccountV1,
     OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
     SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
@@ -44,8 +44,8 @@ use clutch_general_v2_contract::{
     ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG,
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
-    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2,
-    MARKET_BINDING_ACCOUNT_VERSION_V3, MARKET_RUNTIME_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_BYTES_V5, MARKET_BINDING_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_VERSION_V5, MARKET_RUNTIME_ACCOUNT_TAG,
     MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
     OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
     OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -89,8 +89,14 @@ use clutch_solana_layout::failure_recovery::{
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
-    SeriesFundingAccountV1, SeriesMarketLinkAccountV2, SeriesRegistryAccountV1,
-    SeriesRegistryAccountV3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
+    MarketLifecycleReplayAccountV2, MarketLifecycleRootAccountV3, SeriesFundingAccountV5,
+    SeriesMarketLinkAccountV3, SeriesRegistryAccountV4, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
+    MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
+};
+use clutch_product_series::{
+    CompiledProductSeriesBundleV7, FixedCodec as ProductFixedCodec, SeriesAttachmentPlanV6,
+    SeriesFundingQuoteV6, COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES,
+    SERIES_ATTACHMENT_PLAN_BYTES_V6, SERIES_FUNDING_QUOTE_BYTES_V6,
 };
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
@@ -121,7 +127,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v6-current-dealer-terminal-targets-8-9";
+    "dragons-clutch/canonical-account-decoders/v7-product-v5-authority";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -174,8 +180,7 @@ pub enum CanonicalAccountKind {
     GeneralMarketRuntime,
     GeneralEpoch,
     GeneralEconomicDomain,
-    GeneralMarketBinding,
-    GeneralMarketBindingV3Historical,
+    GeneralMarketBindingV5,
     GeneralOrderPage,
     GeneralReservation,
     GeneralCandidateWindow,
@@ -189,10 +194,14 @@ pub enum CanonicalAccountKind {
     GeneralSettlementRoot,
     GeneralSettlementCashPot,
     GeneralFinalPot,
-    SeriesRegistry,
-    SeriesRegistryV3,
-    SeriesFunding,
-    SeriesMarketLinkV2,
+    SeriesRegistryV4,
+    SeriesFundingV5,
+    ProductFundingQuoteV6,
+    ProductAttachmentV6,
+    CompiledProductSeriesBundleV7,
+    ProductMarketReplayV2,
+    ProductMarketRootV3,
+    SeriesMarketLinkV3,
     SourceRelease,
     SourceWorkSchedule,
     SourceHead,
@@ -259,8 +268,7 @@ impl CanonicalAccountKind {
             Self::GeneralMarketRuntime => "general-market-runtime",
             Self::GeneralEpoch => "general-epoch",
             Self::GeneralEconomicDomain => "general-economic-domain",
-            Self::GeneralMarketBinding => "general-market-binding",
-            Self::GeneralMarketBindingV3Historical => "general-market-binding-v3-historical",
+            Self::GeneralMarketBindingV5 => "general-current-market-authority-v5",
             Self::GeneralOrderPage => "general-order-page-v5",
             Self::GeneralReservation => "general-reservation-v9",
             Self::GeneralCandidateWindow => "general-candidate-window",
@@ -274,10 +282,14 @@ impl CanonicalAccountKind {
             Self::GeneralSettlementRoot => "general-settlement-root-v1",
             Self::GeneralSettlementCashPot => "general-settlement-cash-pot",
             Self::GeneralFinalPot => "general-final-pot",
-            Self::SeriesRegistry => "series-registry",
-            Self::SeriesRegistryV3 => "series-registry-v3",
-            Self::SeriesFunding => "series-funding",
-            Self::SeriesMarketLinkV2 => "series-market-link-v2",
+            Self::SeriesRegistryV4 => "series-registry-v4",
+            Self::SeriesFundingV5 => "series-funding-v5",
+            Self::ProductFundingQuoteV6 => "product-funding-quote-v6-schedule-v4",
+            Self::ProductAttachmentV6 => "product-attachment-v6",
+            Self::CompiledProductSeriesBundleV7 => "compiled-product-series-bundle-v7",
+            Self::ProductMarketReplayV2 => "product-market-replay-v2-graph-v4",
+            Self::ProductMarketRootV3 => "product-market-root-v3-graph-v4",
+            Self::SeriesMarketLinkV3 => "series-market-link-v3",
             Self::SourceRelease => "source-release",
             Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
@@ -730,32 +742,19 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else if tag_version(
         data,
         MARKET_BINDING_ACCOUNT_TAG,
-        MARKET_BINDING_ACCOUNT_VERSION_V2,
-    ) {
-        let value =
-            MarketBindingV2::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        MARKET_BINDING_ACCOUNT_VERSION_V5,
+    ) && data.len() == MARKET_BINDING_ACCOUNT_BYTES_V5
+    {
+        let value = MarketBindingV5::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let authority = value.authority();
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::General,
-            CanonicalAccountKind::GeneralMarketBinding,
+            CanonicalAccountKind::GeneralMarketBindingV5,
         );
-        projection.primary_binding = Some(value.base().market.bytes());
-        projection.secondary_binding = Some(value.base().market_instance_v2_id.bytes());
-        projection
-    } else if tag_version(
-        data,
-        MARKET_BINDING_ACCOUNT_TAG,
-        MARKET_BINDING_ACCOUNT_VERSION_V3,
-    ) {
-        let value =
-            MarketBindingV3::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let mut projection = CanonicalAccountProjection::contextual(
-            CanonicalFamily::General,
-            CanonicalAccountKind::GeneralMarketBindingV3Historical,
-            "historical Product/General binding; current Direct founding requires MarketBindingV4",
-        );
-        projection.generation = Some(value.product_generation());
+        projection.generation = Some(authority.product_generation());
         projection.primary_binding = Some(value.base().base().market_instance_v2_id.bytes());
-        projection.secondary_binding = Some(value.product_market_root_account().bytes());
+        projection.secondary_binding = Some(authority.product_market_root_account().bytes());
         projection
     } else if tag_version(
         data,
@@ -948,85 +947,120 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
 fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
         data,
-        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
-        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2,
-    ) && data.len() == SERIES_MARKET_LINK_ACCOUNT_BYTES_V2
+        registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+        registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
+    ) && data.len() == MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2
     {
-        let value = SeriesMarketLinkAccountV2::decode(data)
+        let value = MarketLifecycleReplayAccountV2::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let binding = value.state.binding();
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesMarketLinkV2,
+            CanonicalAccountKind::ProductMarketReplayV2,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.market_instance_id.bytes());
+        projection.secondary_binding = Some(binding.foundation_account_graph_id.bytes());
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+        registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V3,
+    ) && data.len() == MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3
+    {
+        let value = MarketLifecycleRootAccountV3::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding_ref();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductMarketRootV3,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.market_instance_id.bytes());
+        projection.secondary_binding = Some(binding.foundation_account_graph_id.bytes());
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V3,
+    ) && data.len() == SERIES_MARKET_LINK_ACCOUNT_BYTES_V3
+    {
+        let value = SeriesMarketLinkAccountV3::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding_ref();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::SeriesMarketLinkV3,
         );
         projection.generation = Some(binding.generation);
         projection.primary_binding = Some(binding.series_plan_id.bytes());
-        projection.secondary_binding = Some(binding.compiler_bundle_id.bytes());
-        // A Link body alone cannot select a recipe from the published set or
-        // prove the corresponding descriptor/mint/Position/Replay absences.
-        // Structured scheduling therefore lives only in the closed hostile-
-        // state constructor, never in this generic/browser-facing hint.
-        projection.keeper_hint = None;
+        projection.secondary_binding = Some(binding.market_instance_id.bytes());
         Ok(Some(projection))
     } else if tag_version(
         data,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4,
     ) {
-        let value = SeriesRegistryAccountV3::decode(data)
+        let value = SeriesRegistryAccountV4::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesRegistryV3,
+            CanonicalAccountKind::SeriesRegistryV4,
         );
-        projection.generation = Some(1);
         projection.primary_binding = Some(value.series_plan_id.bytes());
         projection.secondary_binding = Some(value.compiler_bundle_id.bytes());
         Ok(Some(projection))
     } else if tag_version(
         data,
-        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
-    ) {
-        let value = SeriesRegistryAccountV1::decode(data)
-            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let mut projection = CanonicalAccountProjection::canonical(
-            CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesRegistry,
-        );
-        projection.primary_binding = Some(value.series_plan_id.bytes());
-        projection.secondary_binding = Some(value.registry_release_id.bytes());
-        Ok(Some(projection))
-    } else if tag_version(
-        data,
         registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-        registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+        registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V5,
     ) {
-        let value = SeriesFundingAccountV1::decode(data)
+        let value = SeriesFundingAccountV5::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let terminal = value.state.next_ordinal == value.state.instance_count;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesFunding,
+            CanonicalAccountKind::SeriesFundingV5,
         );
-        projection.generation = Some(1);
         projection.primary_binding = Some(value.state.series_plan_id.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(if terminal {
-                WorkflowLane::RecoveryRetirement
-            } else {
-                WorkflowLane::Creation
-            }),
-            position: WorkflowPosition {
-                phase: if terminal { 8 } else { 6 },
-                item: u64::from(value.state.next_ordinal),
-            },
-            action: if terminal {
-                "close-series-funding"
-            } else {
-                "advance-series-occurrence"
-            },
-        });
+        projection.secondary_binding = Some(value.state.compiler_bundle_id.bytes());
+        Ok(Some(projection))
+    } else if data.starts_with(b"DCFQUOT6") && data.len() == SERIES_FUNDING_QUOTE_BYTES_V6 {
+        let value = SeriesFundingQuoteV6::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductFundingQuoteV6,
+        );
+        projection.primary_binding = Some(
+            value.id().map_err(|_| AccountIndexError::CanonicalDecodeRefused)?.bytes(),
+        );
+        projection.secondary_binding = Some(
+            value.foundation.id().map_err(|_| AccountIndexError::CanonicalDecodeRefused)?.bytes(),
+        );
+        Ok(Some(projection))
+    } else if data.starts_with(b"DCSATTV6") && data.len() == SERIES_ATTACHMENT_PLAN_BYTES_V6 {
+        let value = SeriesAttachmentPlanV6::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductAttachmentV6,
+        );
+        projection.primary_binding = Some(
+            value.id().map_err(|_| AccountIndexError::CanonicalDecodeRefused)?.bytes(),
+        );
+        projection.secondary_binding = Some(value.funding_quote_id.bytes());
+        Ok(Some(projection))
+    } else if data.starts_with(b"DCCBNDV7") && data.len() == COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES {
+        let value = CompiledProductSeriesBundleV7::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::CompiledProductSeriesBundleV7,
+        );
+        projection.primary_binding = Some(
+            value.id().map_err(|_| AccountIndexError::CanonicalDecodeRefused)?.bytes(),
+        );
+        projection.secondary_binding = Some(value.series_plan_id.bytes());
         Ok(Some(projection))
     } else if tag_version(
         data,
