@@ -17,8 +17,9 @@ use clutch_product_series::{
 use sha2::{Digest, Sha256};
 
 use crate::market_interval_cell_v2::{
-    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellSourceFailureReceiptV2,
-    FailureMarketIntervalCellStateIdV2, FailureMarketIntervalCellV2,
+    FailureMarketIntervalCellExhaustionReceiptV2, FailureMarketIntervalCellPhaseV2,
+    FailureMarketIntervalCellSourceFailureReceiptV2, FailureMarketIntervalCellStateIdV2,
+    FailureMarketIntervalCellV2,
 };
 use crate::market_interval_history_v2::{
     FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
@@ -51,6 +52,8 @@ const SESSION_RESOLVE_DOMAIN_V3: &[u8] = b"dragons-clutch/failure-market-session
 const SESSION_CLOSE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-close/v1";
 const SESSION_CLOSE_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-session-close/v2";
 const SESSION_CLOSE_DOMAIN_V3: &[u8] = b"dragons-clutch/failure-market-session-close/v3";
+const SESSION_EXHAUSTION_CLOSE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/failure-market-session-exhaustion-close/v3";
 const SESSION_SOURCE_FAILURE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-session-source-failure/v2";
 const SESSION_SOURCE_FAILURE_DOMAIN_V3: &[u8] =
@@ -798,6 +801,58 @@ pub struct FailureMarketSessionCloseFactsV3 {
     pub transition_receipt_id: FailureMarketSessionTransitionReceiptIdV3,
 }
 
+/// Exact one-transition current LinkV3 deterministic-exhaustion close.
+///
+/// Unlike [`FailureMarketSessionCloseFactsV3`], this boundary starts from an
+/// active incomplete interval. The exact exhaustion receipt supplies the
+/// terminal cell successor, so no synthetic Resolution transition or second
+/// runtime sequence increment is admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionExhaustionCloseFactsV3 {
+    /// Shared active runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Pinned current Product LinkV3 prestate.
+    pub series_link_before: SeriesMarketLinkV3Id,
+    /// Released current Product LinkV3 poststate.
+    pub series_link_after: SeriesMarketLinkV3Id,
+    /// Exact incomplete active cell committed by the runtime.
+    pub active_session_state_id: ProductContentId,
+    /// Exact deterministic terminal cell committed by the exhaustion receipt.
+    pub exhausted_session_state_id: FailureMarketIntervalCellStateIdV2,
+    /// Canonical Idle reusable-cell postimage after append/reset.
+    pub idle_session_state_id: ProductContentId,
+    /// Deterministic Failure exhaustion receipt; never a Resolution receipt.
+    pub exhaustion_receipt_id:
+        crate::market_interval_cell_v2::FailureMarketIntervalCellExhaustionReceiptIdV2,
+    /// Prior durable transcript.
+    pub previous_session_history: FailureMarketIntervalHistoryRootV2,
+    /// Resulting append-only transcript.
+    pub resulting_session_history: FailureMarketIntervalHistoryRootV2,
+    /// Exact private append receipt.
+    pub history_append_receipt_id:
+        crate::market_interval_history_v2::FailureMarketIntervalHistoryAppendReceiptIdV2,
+    /// Complete history prestate.
+    pub history_before: FailureMarketIntervalHistoryStateIdV2,
+    /// Complete history poststate.
+    pub history_after: FailureMarketIntervalHistoryStateIdV2,
+    /// Resulting one-based completed-session count.
+    pub completed_session_count: u64,
+    /// Unique domain-separated one-transition close receipt.
+    pub transition_receipt_id: FailureMarketSessionTransitionReceiptIdV3,
+}
+
+/// Default-refusing owner of the exact active-to-dormant exhaustion close.
+pub trait AuthenticatedFailureMarketSessionExhaustionCloseV3 {
+    /// Authenticate the exhaustion cell, history append, LinkV3 release, and
+    /// single runtime transition without admitting Product resolution facts.
+    fn authenticate_failure_market_session_exhaustion_close_v3(
+        &self,
+        _expected: FailureMarketSessionExhaustionCloseFactsV3,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
 /// Default-refusing owner of one exact current LinkV3 Begin.
 pub trait AuthenticatedFailureMarketSessionBeginV3 {
     /// Authenticate the complete Product pin/session/runtime tuple.
@@ -1361,8 +1416,9 @@ impl FailureMarketRuntimeV1 {
             FailureMarketRuntimePhaseV1::RecoveryDormant => {
                 if self.transition_sequence == 0
                     || active_pin
-                    || !(series_link && session_state && session_resolution && interval_terminal)
+                    || !(series_link && session_state && interval_terminal)
                     || !session_history
+                    || session_resolution != source_product_release
                     || interval_funding
                     || recovery_terminal
                     || family_terminal
@@ -3401,6 +3457,139 @@ pub fn plan_resolve_failure_market_session_v3<
     })
 }
 
+/// Close one exact current LinkV3 deterministic exhaustion in one transition.
+///
+/// The runtime remains `IntervalActive` until this plan consumes the exact
+/// terminal cell receipt and append/reset receipt together. It then releases
+/// the Product link and enters `RecoveryDormant` directly. No Resolution,
+/// Source-product release, Recovery close, or Product Market terminal fact is
+/// created or accepted at this boundary.
+pub fn plan_close_exhausted_failure_market_session_v3<
+    A: AuthenticatedFailureMarketSessionExhaustionCloseV3 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV3,
+    exhaustion: FailureMarketIntervalCellExhaustionReceiptV2,
+    history_append: FailureMarketIntervalHistoryAppendReceiptV2,
+) -> Result<FailureMarketSessionTransitionPlanV3> {
+    runtime.validate_against_admission(admission)?;
+    require_active_link_v3(runtime, admission, series_link)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::IntervalActive
+        || !runtime.session_resolution_receipt_id().is_zero()
+        || !runtime.source_product_release_binding_id().is_zero()
+        || history_append.disposition() != FailureMarketIntervalTerminalDispositionV2::Exhausted
+    {
+        return Err(Error::WrongPhase);
+    }
+    let exhaustion_facts = exhaustion.facts();
+    let active_session_state_id = runtime.session_state_commitment();
+    let exhausted_session_state_id = exhaustion_facts.cell_after;
+    let idle_session_state_id = history_append.idle_state_commitment();
+    let exhaustion_receipt_id = ProductContentId::from_bytes(exhaustion.id().bytes());
+    let expected_completed_session_count = runtime
+        .completed_session_count
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    if exhaustion.failure_policy_binding_id() != runtime.policy_binding_id
+        || exhaustion_facts.market_instance_id != admission.binding().facts().market_instance_id
+        || exhaustion_facts.generation != admission.binding().facts().generation
+        || exhaustion_facts.session_binding_id.bytes() != runtime.active_session_pin_id().bytes()
+        || exhaustion_facts.cell_before.bytes() != active_session_state_id.bytes()
+        || history_append.failure_policy_binding_id() != runtime.policy_binding_id
+        || history_append.market_instance_id() != admission.binding().facts().market_instance_id
+        || history_append.generation() != admission.binding().facts().generation
+        || history_append.funding_receipt_id().bytes()
+            != runtime.active_interval_funding_receipt_id().bytes()
+        || history_append.session_binding_id() != runtime.active_session_pin_id()
+        || history_append.session_terminal_receipt_id() != exhaustion_receipt_id
+        || history_append.terminal_state_commitment().bytes()
+            != exhausted_session_state_id.bytes()
+        || history_append.previous_root() != runtime.session_history_commitment()
+        || history_append.completed_session_count() != expected_completed_session_count
+        || idle_session_state_id == active_session_state_id
+        || idle_session_state_id.bytes() == exhausted_session_state_id.bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let series_link_before = series_link.semantic_id()?;
+    let series_link_after_value = series_link.release_failure_session(exhaustion_receipt_id)?;
+    let series_link_after = series_link_after_value.semantic_id()?;
+    let runtime_before = runtime.commitment()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_EXHAUSTION_CLOSE_DOMAIN_V3);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_before.bytes());
+    hasher.update(series_link_after.bytes());
+    hasher.update(active_session_state_id.bytes());
+    hasher.update(exhausted_session_state_id.bytes());
+    hasher.update(idle_session_state_id.bytes());
+    hasher.update(exhaustion.id().bytes());
+    hasher.update(exhaustion_facts.terminal_work_id.bytes());
+    hasher.update([match exhaustion_facts.reason {
+        crate::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::AttemptProgress => 1,
+        crate::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::MarketCalls => 2,
+        crate::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::MarketPrincipal => 3,
+    }]);
+    hasher.update(exhaustion_facts.accepted_progress_units.to_le_bytes());
+    hasher.update(exhaustion_facts.aggregate_work_calls.to_le_bytes());
+    hasher.update(exhaustion_facts.aggregate_reward_lamports.to_le_bytes());
+    hasher.update(history_append.id().bytes());
+    hasher.update(history_append.history_before().bytes());
+    hasher.update(history_append.history_after().bytes());
+    hasher.update(history_append.previous_root().bytes());
+    hasher.update(history_append.resulting_root().bytes());
+    hasher.update(expected_completed_session_count.to_le_bytes());
+    let transition_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV3::from_bytes(hasher.finalize().into());
+    require_live(transition_receipt_id.bytes())?;
+    authority.authenticate_failure_market_session_exhaustion_close_v3(
+        FailureMarketSessionExhaustionCloseFactsV3 {
+            runtime_before,
+            series_link_before,
+            series_link_after,
+            active_session_state_id,
+            exhausted_session_state_id,
+            idle_session_state_id,
+            exhaustion_receipt_id: exhaustion.id(),
+            previous_session_history: history_append.previous_root(),
+            resulting_session_history: history_append.resulting_root(),
+            history_append_receipt_id: history_append.id(),
+            history_before: history_append.history_before(),
+            history_after: history_append.history_after(),
+            completed_session_count: expected_completed_session_count,
+            transition_receipt_id,
+        },
+    )?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::RecoveryDormant;
+    after.transition_sequence = next_sequence;
+    after.completed_session_count = expected_completed_session_count;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+        ProductContentId::from_bytes(series_link_after.bytes());
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = idle_session_state_id;
+    after.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = exhaustion_receipt_id;
+    after.session_ids[ACTIVE_INTERVAL_FUNDING_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[INTERVAL_HISTORY_ROOT_INDEX_V1] =
+        ProductContentId::from_bytes(history_append.resulting_root().bytes());
+    after.session_ids[SOURCE_PRODUCT_RELEASE_BINDING_INDEX_V1] = ProductContentId::ZERO;
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionTransitionPlanV3 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link_after_value,
+        receipt_id: transition_receipt_id,
+    })
+}
+
 /// Plan one current LinkV3 history append, reusable-cell reset, and pin release.
 pub fn plan_close_failure_market_session_v3<
     A: AuthenticatedFailureMarketSessionV3 + ?Sized,
@@ -5125,5 +5314,41 @@ mod tests {
         ] {
             assert!(close.contains(committed), "missing close commitment {committed}");
         }
+    }
+
+    #[test]
+    fn link_v3_exhaustion_close_is_one_transition_without_resolution_laundering() {
+        assert_ne!(SESSION_EXHAUSTION_CLOSE_DOMAIN_V3, SESSION_CLOSE_DOMAIN_V3);
+        assert_ne!(SESSION_EXHAUSTION_CLOSE_DOMAIN_V3, SESSION_RESOLVE_DOMAIN_V3);
+        let source = include_str!("market_runtime_v1.rs");
+        let body = source
+            .split("pub fn plan_close_exhausted_failure_market_session_v3")
+            .nth(1)
+            .and_then(|value| {
+                value.split("/// Plan one current LinkV3 history append").next()
+            })
+            .expect("bounded exhaustion close");
+        for exact_guard in [
+            "runtime.phase != FailureMarketRuntimePhaseV1::IntervalActive",
+            "runtime.session_resolution_receipt_id().is_zero()",
+            "runtime.source_product_release_binding_id().is_zero()",
+            "FailureMarketIntervalTerminalDispositionV2::Exhausted",
+            "exhaustion_facts.cell_before.bytes() != active_session_state_id.bytes()",
+            "history_append.terminal_state_commitment().bytes()",
+            "history_append.session_terminal_receipt_id() != exhaustion_receipt_id",
+            "history_append.previous_root() != runtime.session_history_commitment()",
+            "series_link.release_failure_session(exhaustion_receipt_id)?",
+            "SESSION_EXHAUSTION_CLOSE_DOMAIN_V3",
+            "authenticate_failure_market_session_exhaustion_close_v3",
+            "after.phase = FailureMarketRuntimePhaseV1::RecoveryDormant",
+            "SESSION_RESOLUTION_RECEIPT_INDEX_V1] = ProductContentId::ZERO",
+            "SOURCE_PRODUCT_RELEASE_BINDING_INDEX_V1] = ProductContentId::ZERO",
+        ] {
+            assert!(body.contains(exact_guard), "missing exhaustion guard {exact_guard}");
+        }
+        assert_eq!(body.matches("checked_add(1)").count(), 2);
+        assert!(!body.contains("plan_resolve_failure_market_session_v3"));
+        assert!(!body.contains("IntervalResolved"));
+        assert!(!body.contains("source_product_release_binding_id:"));
     }
 }
