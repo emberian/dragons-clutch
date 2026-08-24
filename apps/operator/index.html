@@ -4,64 +4,60 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Operator Bench — Dragon's Clutch</title>
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+<title>Read-only operator attach — Dragon's Clutch</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<!-- The honesty strip is markup, not a component decision: it exists in the
-     document before any script runs, and nothing on this page removes it. -->
 <div id="honesty" class="honesty">
-  <span class="honesty-flag">NON-PRODUCTION</span>
-  <span>NO SESSION SELECTED</span>
+  <span class="honesty-flag">READ ONLY</span>
+  <span id="session-state">NO CANONICAL SESSION ATTACHED</span>
   <span class="honesty-sep">·</span>
-  <code class="digest">sha256 pending</code>
+  <code id="session-id" class="digest">session unavailable</code>
   <span class="honesty-sep">·</span>
-  <span>EXPLICIT NON-PRODUCTION IDENTITY REQUIRED</span>
-  <span class="honesty-sep">·</span>
-  <span>no value</span>
-  <span class="honesty-sep">·</span>
-  <span>evidence scope</span>
-  <span class="evidence-chip stop-chip">UNAVAILABLE</span>
-  <span class="honesty-note">unpromoted</span>
+  <span>NO WALLET · NO SIGNING · NO SUBMISSION</span>
 </div>
 
 <header class="topbar">
   <div class="brand">
-    <h1 class="brand-name">Operator Bench</h1>
-    <span class="brand-sub" id="brand-sub">no session selected</span>
+    <h1 class="brand-name">Operator Attach</h1>
+    <span class="brand-sub">canonical chain-derived restart view</span>
   </div>
-  <nav id="nav" class="nav"></nav>
-  <div id="status" class="status" aria-live="polite"></div>
+  <div id="status" class="status" aria-live="polite"><span class="dead">detached</span><span>unavailable</span></div>
 </header>
 
-<!-- An empty inline SVG, present only so the scripts can read the SVG
-     namespace off a real node (`namespaceURI`) instead of restating it as a
-     URL literal. Nothing under apps/operator/ names an off-machine address,
-     and the grep that gates that stays exact rather than carrying an
-     exception. -->
-<svg id="svg-namespace" width="0" height="0" aria-hidden="true" focusable="false"></svg>
-
-<main id="screen" class="screen">
+<main class="screen">
   <section class="card">
-    <h2>Attaching to the daemon</h2>
-    <p class="muted">
-      This page has no RPC client, no wallet, no transaction serializer, and no
-      key material. It reads one event stream from the local daemon and
-      renders it. Every transaction the bank sees was built by the
-      repository's own harness library.
-    </p>
+    <h2>Attach to an explicit operatord</h2>
+    <p class="muted">This page performs one bounded GET to <code>/v1/session</code>. It has no validator RPC client, fixture source, mock-mode selection, wallet, transaction builder, signer, or restart truth of its own. No fixture or default source is available.</p>
+    <form id="attach-form" class="attach-form">
+      <label for="operator-url">operatord base URL</label>
+      <input id="operator-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:PORT" required>
+      <button type="submit">Attach read-only</button>
+    </form>
+    <p id="attach-error" class="callout callout-warn" role="alert">Unavailable until an explicit URL returns a complete finalized canonical session manifest.</p>
+  </section>
+
+  <section id="identity-card" class="card" hidden>
+    <div class="card-heading"><h2>Checked transport and release identity</h2><span class="evidence-chip proposed-chip">untrusted projection</span></div>
+    <dl id="identity-fields" class="fields"></dl>
+  </section>
+
+  <section id="accounts-card" class="card" hidden>
+    <div class="card-heading"><h2>Canonical onchain restart identities</h2><span id="account-count" class="count"></span></div>
+    <p class="muted">Every row came from a finalized account body accepted by the release-selected canonical decoder. A restart must reload the body and reauthenticate every join.</p>
+    <div class="table-scroll"><table><thead><tr><th>Kind</th><th>Address</th><th>Lamports</th><th>Data bytes</th><th>Tag / version</th><th>Generation</th><th>Decode</th></tr></thead><tbody id="account-rows"></tbody></table></div>
+  </section>
+
+  <section id="cursors-card" class="card" hidden>
+    <div class="card-heading"><h2>Restart cursors</h2><span id="cursor-count" class="count"></span></div>
+    <p class="muted">These are onchain-derived scheduling hints, never execution authority. Every action is disabled in this frontend.</p>
+    <div id="cursor-rows"></div>
   </section>
 </main>
 
-<footer class="footer">
-  <p>
-    Non-production SBF execution on local test infrastructure. The active
-    screen supplies the exact source profile and evidence boundary. Not a
-    deployment, not devnet or mainnet evidence, not a wallet, and not an
-    operatorless venue.
-  </p>
-</footer>
-
+<footer class="footer"><p>Unavailable is an honest state. A missing or changing manifest never falls back to mock sources, embedded account IDs, retained transcripts, or browser persistence.</p></footer>
 <script type="module" src="app.js"></script>
 </body>
 </html>
