@@ -13,6 +13,13 @@ use crate::instructions::genesis::{
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
 };
+use crate::instructions::product_series::{
+    authenticate_series_artifact_accounts_v4, authenticate_series_lifecycle_replay_v1,
+    complete_and_record_series_lifecycle_admission_v1, read_series_funding_account_v2,
+    read_series_registry_account_v2, AuthenticatedSeriesFundingAccountV2,
+    AuthenticatedSeriesLifecycleReplayPostwriteV1, AuthenticatedSeriesLifecycleReplayV1,
+    AuthenticatedSeriesOccurrenceCompletionV2, SeriesLifecycleLinkRetirementAggregateAuthorityV1,
+};
 use crate::seeds;
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
@@ -25,7 +32,8 @@ use clutch_product_series::{
     MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketFoundationStepProjectionV2,
     MarketFoundingAbortProjectionV1, MarketInstanceTerminalProjectionV1, MarketInstanceV2Id,
     MarketLifecyclePhaseV1, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
-    MarketResolutionActivationV1, SeriesAttachmentPlanV4, SeriesFundingComponentV2,
+    MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1, MarketSharedCoreV1,
+    SeriesAttachmentPlanV4, SeriesFundingComponentV2,
     SeriesFundingQuoteV4,
     SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationDispositionV1,
     SeriesLinkObligationStatusV1, SeriesLinkObligationTerminalProjectionV1,
@@ -62,6 +70,8 @@ const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-terminal-authentication/v1";
 const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-failure-release-authentication/v1";
+const SERIES_FAILURE_RESOLUTION_LINK_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-failure-resolution-link-preauthorization/v1";
 const SERIES_MARKET_LINK_RETIREMENT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-retirement-authentication/v1";
 const SERIES_MARKET_LINK_CLOSE_AUTHENTICATION_DOMAIN_V1: &[u8] =
@@ -78,6 +88,10 @@ const MARKET_FOUNDATION_ACTIVATION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-foundation-activation-authentication/v2";
 const SERIES_MARKET_LINK_ACTIVATION_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-activation-authentication/v1";
+const PRODUCT_FOUNDATION_COMPLETION_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-foundation-completion-authentication/v1";
+const PRODUCT_FOUNDER_ACTIVATION_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-founder-activation-authentication/v1";
 const MARKET_FOUNDATION_PREALLOCATION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-foundation-preallocation-authentication/v2";
 const MARKET_FOUNDATION_VAULT_ABORT_DOMAIN_V1: &[u8] =
@@ -90,6 +104,8 @@ const MARKET_LIFECYCLE_ROOT_CLOSE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-lifecycle-root-close/v1";
 const MARKET_LIFECYCLE_ABORT_CLOSE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-lifecycle-abort-close/v1";
+const FAILURE_SHARED_CORE_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/market-failure-shared-core-terminal-postwrite/v1";
 
 /// Authenticate the fixed Product/General/Failure core of one immutable
 /// foundation account graph against the executing program's canonical PDAs.
@@ -99,7 +115,7 @@ const MARKET_LIFECYCLE_ABORT_CLOSE_DOMAIN_V1: &[u8] =
 /// include identities not repeated by the Product root. This helper must not
 /// guess those identities. It does make the common core non-caller-shaped,
 /// including the reusable V2 Failure interval cell and append-only history.
-fn require_canonical_market_foundation_core_v2(
+pub(crate) fn require_canonical_market_foundation_core_v2(
     program_id: &Pubkey,
     root_account: Pubkey,
     account_graph: &MarketFoundationAccountGraphV2,
@@ -690,17 +706,6 @@ impl SeriesMarketLinkRetirementPostwriteFactsV1 {
     }
     pub(crate) const fn sink_balance_after(self) -> u64 {
         self.sink_balance_after
-    }
-}
-
-/// Default-refusing authority supplied only by a durable counted per-Series
-/// aggregate postwrite. Funding `Closed` alone cannot implement this trait.
-pub(crate) trait AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 {
-    fn authenticate_series_link_retirement_aggregate_postwrite_v1(
-        &self,
-        _facts: SeriesMarketLinkRetirementPostwriteFactsV1,
-    ) -> Outcome<ContentId> {
-        Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
 }
 
@@ -1623,6 +1628,10 @@ pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
 
+    fn resolution_link_preauthorization_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn authenticate_series_failure_archive_postwrite_v2(
         &self,
@@ -1634,9 +1643,143 @@ pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
         _source_occurrence_id: SourceOccurrenceV1Id,
         _session_binding_id: ContentId,
         _session_terminal_receipt_id: ContentId,
+        _resolution_link_preauthorization_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
+}
+
+/// Scoped read projection for one physically writable Failure-session link.
+///
+/// The transaction must grant write privilege because the same atomic outer
+/// releases the pin after Resolution, Source terminalization, and interval
+/// archive. This value gives the Resolution writer only immutable facts from
+/// the hostile-authenticated prestate; it is not a globally relaxed link
+/// authenticator and cannot itself mutate `0xad`.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedWritableFailureResolutionLinkV1 {
+    id: ContentId,
+    link_account: Pubkey,
+    owner_program: Pubkey,
+    observed_lamports: u64,
+    data_id: ContentId,
+    authentication_id: ContentId,
+    semantic_id: SeriesMarketLinkV1Id,
+    state: SeriesMarketLinkV1,
+    market_root_account: Pubkey,
+    market_binding_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    transition_sequence: u64,
+    failure_sessions_started: u32,
+    failure_session_transcript_id: ContentId,
+}
+
+impl AuthenticatedWritableFailureResolutionLinkV1 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn link_account(&self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn owner_program(&self) -> Pubkey {
+        self.owner_program
+    }
+
+    pub(crate) const fn observed_lamports(&self) -> u64 {
+        self.observed_lamports
+    }
+
+    pub(crate) const fn data_id(&self) -> ContentId {
+        self.data_id
+    }
+
+    pub(crate) const fn authentication_id(&self) -> ContentId {
+        self.authentication_id
+    }
+
+    pub(crate) const fn semantic_id(&self) -> SeriesMarketLinkV1Id {
+        self.semantic_id
+    }
+
+    pub(crate) const fn state(&self) -> SeriesMarketLinkV1 {
+        self.state
+    }
+
+    pub(crate) const fn market_root_account(&self) -> Pubkey {
+        self.market_root_account
+    }
+
+    pub(crate) const fn market_binding_id(&self) -> ContentId {
+        self.market_binding_id
+    }
+
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    pub(crate) const fn ordinal(&self) -> u32 {
+        self.ordinal
+    }
+
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    pub(crate) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) const fn source_occurrence_id(&self) -> SourceOccurrenceV1Id {
+        self.source_occurrence_id
+    }
+
+    pub(crate) const fn transition_sequence(&self) -> u64 {
+        self.transition_sequence
+    }
+
+    pub(crate) const fn failure_sessions_started(&self) -> u32 {
+        self.failure_sessions_started
+    }
+
+    pub(crate) const fn failure_session_transcript_id(&self) -> ContentId {
+        self.failure_session_transcript_id
+    }
+}
+
+fn writable_failure_resolution_link_preauthorization_id_v1(
+    program_id: &Pubkey,
+    value: &AuthenticatedWritableFailureResolutionLinkV1,
+) -> ContentId {
+    ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_FAILURE_RESOLUTION_LINK_PREAUTHORIZATION_DOMAIN_V1,
+            program_id.as_ref(),
+            value.link_account.as_ref(),
+            &value.owner_program.to_bytes(),
+            &value.observed_lamports.to_le_bytes(),
+            &value.data_id.bytes(),
+            &value.authentication_id.bytes(),
+            &value.semantic_id.bytes(),
+            value.market_root_account.as_ref(),
+            &value.market_binding_id.bytes(),
+            &value.series_plan_id.bytes(),
+            &value.ordinal.to_le_bytes(),
+            &value.market_instance_id.bytes(),
+            &value.generation.to_le_bytes(),
+            &value.source_occurrence_id.bytes(),
+            &value.transition_sequence.to_le_bytes(),
+            &value.failure_sessions_started.to_le_bytes(),
+            &value.failure_session_transcript_id.bytes(),
+            &value.state.active_failure_sessions().to_le_bytes(),
+        ])
+        .to_bytes(),
+    )
 }
 
 /// Default-refusing Failure Begin owner for the sole exclusive link pin.
@@ -1676,6 +1819,7 @@ pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV1 {
     archive_postwrite_id: ContentId,
     append_receipt_id: ContentId,
     reset_receipt_id: ContentId,
+    resolution_link_preauthorization_id: ContentId,
 }
 
 impl AuthenticatedSeriesFailureSessionReleaseV1 {
@@ -1733,6 +1877,10 @@ impl AuthenticatedSeriesFailureSessionReleaseV1 {
 
     pub(crate) const fn reset_receipt_id(self) -> ContentId {
         self.reset_receipt_id
+    }
+
+    pub(crate) const fn resolution_link_preauthorization_id(self) -> ContentId {
+        self.resolution_link_preauthorization_id
     }
 }
 
@@ -2357,6 +2505,24 @@ pub(crate) fn authenticate_market_founder_foundation_v1(
     capability: AuthenticatedRegistryCapabilityV3,
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
 ) -> Outcome<AuthenticatedMarketFounderFoundationV1> {
+    authenticate_market_founder_foundation_with_link_privilege_v1(
+        program_id,
+        root,
+        founder_link,
+        capability,
+        compiler_bundle,
+        false,
+    )
+}
+
+fn authenticate_market_founder_foundation_with_link_privilege_v1(
+    program_id: &Pubkey,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    founder_link: AuthenticatedSeriesMarketLinkV1<'_>,
+    capability: AuthenticatedRegistryCapabilityV3,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    expected_link_writable: bool,
+) -> Outcome<AuthenticatedMarketFounderFoundationV1> {
     let binding = root.state().binding();
     let link_binding = founder_link.state().binding();
     let founder_link_id = founder_link
@@ -2372,7 +2538,7 @@ pub(crate) fn authenticate_market_founder_foundation_v1(
         root.is_writable()
             && root.state().phase() == MarketLifecyclePhaseV1::Founding
             && founder_link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
-            && !founder_link.is_writable()
+            && founder_link.is_writable() == expected_link_writable
             && founder_link_id == root.state().capital().founder_link_id
             && link_binding.disposition == SeriesMarketDispositionV1::Founder
             && link_binding.market_instance_id == binding.market_instance_id
@@ -2884,6 +3050,71 @@ pub(crate) trait AuthenticatedMarketFoundationActivationPostwriteV2 {
     }
 }
 
+/// Product-owned durable completion authority derived only from the exact
+/// hostile-reopened Founding root and its still-pending founder link.
+///
+/// Family owners have already committed their accepted postwrites into the
+/// root's foundation transcript and family aggregator. Reopening that complete
+/// root is the canonical durable join; no ephemeral family receipt or caller
+/// content ID is allowed to substitute for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedProductFoundationCompletionV1 {
+    id: ContentId,
+    founder_authorization_id: ContentId,
+    root_account: Pubkey,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    root_data_id: ContentId,
+    founder_link_account: Pubkey,
+    founder_link_semantic_id: SeriesMarketLinkV1Id,
+    founder_link_authentication_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    foundation_schedule_id: ContentId,
+    foundation_account_graph_id: ContentId,
+    foundation_transcript_id: ContentId,
+}
+
+impl AuthenticatedMarketFoundationActivationPostwriteV2
+    for AuthenticatedProductFoundationCompletionV1
+{
+    fn accepted_market_core_receipt_id(&self) -> Outcome<ContentId> {
+        require_live_content_id(self.id)?;
+        Ok(self.id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_market_foundation_activation_postwrite_v2(
+        &self,
+        founder_authorization_id: ContentId,
+        root_account: Pubkey,
+        root_authentication_id: ContentId,
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
+        founder_link_account: Pubkey,
+        founder_link_semantic_id: SeriesMarketLinkV1Id,
+        foundation_schedule_id: ContentId,
+        foundation_account_graph_id: ContentId,
+        foundation_transcript_id: ContentId,
+        accepted_market_core_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        require(
+            accepted_market_core_receipt_id == self.id
+                && founder_authorization_id == self.founder_authorization_id
+                && root_account == self.root_account
+                && root_authentication_id == self.root_authentication_id
+                && market_instance_id == self.market_instance_id
+                && generation == self.generation
+                && founder_link_account == self.founder_link_account
+                && founder_link_semantic_id == self.founder_link_semantic_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_account_graph_id == self.foundation_account_graph_id
+                && foundation_transcript_id == self.foundation_transcript_id,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
 /// Private Product receipt for the sole Founding-to-Active transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedMarketFoundationActivationV2 {
@@ -3214,25 +3445,110 @@ where
     ))
 }
 
+fn authenticate_product_foundation_completion_v1(
+    program_id: &Pubkey,
+    founder: AuthenticatedMarketFounderFoundationV1,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    founder_link: AuthenticatedSeriesMarketLinkV1<'_>,
+    schedule: &MarketFoundationScheduleV2,
+    account_graph: &MarketFoundationAccountGraphV2,
+) -> Outcome<AuthenticatedProductFoundationCompletionV1> {
+    let binding = root.state().binding();
+    let root_semantic_id = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_id = founder_link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = account_graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        root.is_writable()
+            && founder_link.is_writable()
+            && root.state().phase() == MarketLifecyclePhaseV1::Founding
+            && founder_link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
+            && founder.root_account() == root.account()
+            && founder.root_authentication_id() == root.authentication_id()
+            && founder.link_account() == founder_link.account()
+            && founder.link_authentication_id() == founder_link.authentication_id()
+            && founder.founder_link_id == link_semantic_id
+            && binding.foundation_schedule_id == schedule_id
+            && binding.foundation_account_graph_id == graph_id
+            && account_graph.market_instance_id == binding.market_instance_id
+            && account_graph.generation == binding.generation
+            && root.state().foundation().complete()
+            && root.state().capital().principal_remaining_lamports == 0
+            && root.state().product_families().activation_ready()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    let foundation_transcript_id = root.state().foundation().transcript_id;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_FOUNDATION_COMPLETION_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            root.account().as_ref(),
+            &root_semantic_id.bytes(),
+            &root.data_id().bytes(),
+            &root.authentication_id().bytes(),
+            founder_link.account().as_ref(),
+            &link_semantic_id.bytes(),
+            &founder_link.data_id().bytes(),
+            &founder_link.authentication_id().bytes(),
+            &founder.id().bytes(),
+            &binding.market_instance_id.bytes(),
+            &binding.generation.to_le_bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &root.state().foundation().sequence.to_le_bytes(),
+            &foundation_transcript_id.bytes(),
+            &root.state().transition_sequence().to_le_bytes(),
+            &root.state().product_families().transition_sequence().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedProductFoundationCompletionV1 {
+        id,
+        founder_authorization_id: founder.id(),
+        root_account: root.account(),
+        root_authentication_id: root.authentication_id(),
+        root_semantic_id,
+        root_data_id: root.data_id(),
+        founder_link_account: founder_link.account(),
+        founder_link_semantic_id: link_semantic_id,
+        founder_link_authentication_id: founder_link.authentication_id(),
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        foundation_schedule_id: schedule_id.content_id(),
+        foundation_account_graph_id: graph_id.content_id(),
+        foundation_transcript_id,
+    })
+}
+
 /// Activate one fully accepted founder Market while leaving its physical link
-/// pending until this exact root postwrite can be consumed.
+/// pending until this exact root postwrite can be consumed by the sole outer.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn activate_market_foundation_v2<'next, A>(
+fn activate_market_foundation_v2<'next>(
     program_id: &Pubkey,
     founder: AuthenticatedMarketFounderFoundationV1,
     root_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
     founder_link: AuthenticatedSeriesMarketLinkV1<'_>,
     schedule: &MarketFoundationScheduleV2,
-    postwrite: &A,
+    postwrite: &AuthenticatedProductFoundationCompletionV1,
     successor_output: &mut MarketLifecycleRootV1,
     rebound_output: &'next mut MarketLifecycleRootAccountV1,
 ) -> Outcome<(
     AuthenticatedMarketLifecycleRootV1<'next>,
     AuthenticatedMarketFoundationActivationV2,
 )>
-where
-    A: AuthenticatedMarketFoundationActivationPostwriteV2 + ?Sized,
 {
     let binding = root.state().binding();
     let link_semantic_id = founder_link
@@ -3267,7 +3583,7 @@ where
             && root.state().admitted_series_links() == 1
             && root.state().live_series_links() == 1
             && founder_link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
-            && !founder_link.is_writable()
+            && founder_link.is_writable()
             && admission_receipt_id != accepted_market_core_receipt_id,
         ClutchError::MismatchedState,
     )?;
@@ -3428,7 +3744,7 @@ fn mint_series_market_link_activation_v1(
 /// Activate the sole founder link only after the exact root activation
 /// postwrite is hostile-reopened as Active.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn activate_founder_series_market_link_v1<'next>(
+fn activate_founder_series_market_link_v1<'next>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
@@ -3447,7 +3763,7 @@ pub(crate) fn activate_founder_series_market_link_v1<'next>(
         root_account,
         root_binding.market_instance_id,
         root_binding.generation,
-        false,
+        true,
         root_rebound_output,
     )?;
     let link_before = *link.state();
@@ -3456,7 +3772,7 @@ pub(crate) fn activate_founder_series_market_link_v1<'next>(
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        !root.is_writable()
+        root.is_writable()
             && live_root.state() == root.state()
             && live_root.authentication_id() == root.authentication_id()
             && live_root.state().phase() == MarketLifecyclePhaseV1::Active
@@ -3508,6 +3824,321 @@ pub(crate) fn activate_founder_series_market_link_v1<'next>(
         activation.id,
     )?;
     Ok((rebound, receipt))
+}
+
+/// Non-detachable receipt for the sole founder activation chain.
+///
+/// Product mints this only after the complete Founding root becomes Active,
+/// the exact founder `0xad` becomes Active, FundingV2 consumes the pending
+/// ordinal, and permanent `0xb8` records that same admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductFounderActivationV1 {
+    id: ContentId,
+    foundation_completion_id: ContentId,
+    root_activation_id: ContentId,
+    link_activation_id: ContentId,
+    occurrence_completion_id: ContentId,
+    lifecycle_replay_postwrite_id: ContentId,
+    root_account: Pubkey,
+    root_authentication_after: ContentId,
+    link_account: Pubkey,
+    link_authentication_after: ContentId,
+    funding_account: Pubkey,
+    funding_state_after_id: ContentId,
+    lifecycle_replay_account: Pubkey,
+    lifecycle_replay_authentication_after: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    compiler_bundle_id: ContentId,
+}
+
+impl AuthenticatedProductFounderActivationV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn root_account(self) -> Pubkey {
+        self.root_account
+    }
+
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    pub(crate) const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    pub(crate) const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+}
+
+/// Atomically activate the complete Product founder root and link, consume the
+/// exact pending FundingV2 reservation, and record the same ordinal in the
+/// permanent counted Series replay.
+///
+/// All four mutable accounts are hostile-reopened at entry and after their
+/// respective writes. Raw root activation, link activation, Funding
+/// completion, and replay admission are private and cannot mint detachable
+/// authority. Any final refusal rolls every earlier write back with the SVM
+/// instruction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn activate_and_complete_product_market_founder_v1<'root, 'link>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    registry_account: &AccountInfo<'_>,
+    funding_account: &AccountInfo<'_>,
+    lifecycle_replay_account: &AccountInfo<'_>,
+    funding_quote_account: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    series_artifact_accounts: &[AccountInfo<'_>],
+    account_graph: &MarketFoundationAccountGraphV2,
+    capability: AuthenticatedRegistryCapabilityV3,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    root_before_output: &mut MarketLifecycleRootAccountV1,
+    link_before_output: &mut SeriesMarketLinkAccountV1,
+    root_successor_output: &mut MarketLifecycleRootV1,
+    root_after_output: &'root mut MarketLifecycleRootAccountV1,
+    root_verify_output: &mut MarketLifecycleRootAccountV1,
+    link_after_output: &'link mut SeriesMarketLinkAccountV1,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV1<'root>,
+    AuthenticatedSeriesMarketLinkV1<'link>,
+    AuthenticatedSeriesFundingAccountV2,
+    AuthenticatedSeriesLifecycleReplayV1,
+    AuthenticatedProductFounderActivationV1,
+)> {
+    require_distinct(&[
+        root_account.clone(),
+        link_account.clone(),
+        registry_account.clone(),
+        funding_account.clone(),
+        lifecycle_replay_account.clone(),
+        funding_quote_account.clone(),
+        rent_sysvar.clone(),
+    ])?;
+    let rent = read_rent(rent_sysvar)?;
+
+    let root_data = root_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV1::decode_into(&root_data, root_before_output)?;
+    let root_binding = root_before_output.state.binding();
+    drop(root_data);
+    let root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        root_account,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        true,
+        root_before_output,
+    )?;
+
+    let link_data = link_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&link_data, link_before_output)?;
+    let link_binding = link_before_output.state.binding();
+    drop(link_data);
+    let link = authenticate_series_market_link_v1(
+        program_id,
+        link_account,
+        link_binding.series_plan_id,
+        link_binding.ordinal,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        *root_account.key,
+        true,
+        link_before_output,
+    )?;
+
+    let bundle = compiler_bundle.bundle();
+    let compiler_bundle_id = compiler_bundle.bundle_id();
+    let artifacts = authenticate_series_artifact_accounts_v4(
+        program_id,
+        series_artifact_accounts,
+        capability.series_plan_id(),
+        capability.funding_terms_id(),
+    )?;
+    let registry = read_series_registry_account_v2(
+        program_id,
+        registry_account,
+        capability.series_plan_id(),
+        &rent,
+    )?;
+    let funding = read_series_funding_account_v2(
+        program_id,
+        funding_account,
+        registry,
+        &artifacts,
+        &rent,
+    )?;
+    let replay = authenticate_series_lifecycle_replay_v1(
+        program_id,
+        lifecycle_replay_account,
+        capability.series_plan_id(),
+        true,
+        &rent,
+    )?;
+    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV4>(
+        program_id,
+        funding_quote_account,
+        bundle.funding_quote_id.content_id(),
+    )?;
+    let registry_data = registry_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let registry_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&registry_data[..]]).to_bytes());
+    drop(registry_data);
+    require(
+        capability.program_account() == *program_id
+            && capability.series_registry_account() == *registry_account.key
+            && registry.activation_consumed()
+            && registry.value().compiler_bundle_id == compiler_bundle_id
+            && registry.value().funding_terms_id == bundle.funding_terms_id
+            && compiler_bundle_id.content_id() == link_binding.compiler_output_id
+            && bundle.series_plan_id == link_binding.series_plan_id
+            && bundle.funding_terms_id == link_binding.funding_terms_id
+            && bundle.funding_quote_id.content_id() == link_binding.funding_quote_id
+            && bundle.attachment_plan_id.content_id() == link_binding.attachment_plan_id
+            && quote.semantic_id() == bundle.funding_quote_id.content_id()
+            && root.state().phase() == MarketLifecyclePhaseV1::Founding
+            && link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
+            && funding.value().state.phase == clutch_product_series::SeriesFundingPhaseV2::Pending
+            && replay.state().binding().series_plan_id == link_binding.series_plan_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let founder = authenticate_market_founder_foundation_with_link_privilege_v1(
+        program_id,
+        root,
+        link,
+        capability,
+        compiler_bundle,
+        true,
+    )?;
+    let completion = authenticate_product_foundation_completion_v1(
+        program_id,
+        founder,
+        root,
+        link,
+        &quote.value().foundation,
+        account_graph,
+    )?;
+    let (root_after, root_activation) = activate_market_foundation_v2(
+        program_id,
+        founder,
+        root_account,
+        root,
+        link,
+        &quote.value().foundation,
+        &completion,
+        root_successor_output,
+        root_after_output,
+    )?;
+    let (link_after, link_activation) = activate_founder_series_market_link_v1(
+        program_id,
+        root_account,
+        root_after,
+        link_account,
+        link,
+        root_activation,
+        root_verify_output,
+        link_after_output,
+    )?;
+    let (funding_after, replay_after, occurrence, replay_postwrite) =
+        complete_and_record_series_lifecycle_admission_v1(
+            program_id,
+            funding_account,
+            funding,
+            lifecycle_replay_account,
+            replay,
+            link_account,
+            &artifacts,
+            link_activation,
+            &rent,
+        )?;
+    let funding_state_after_id = funding_after
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        root_after.state().phase() == MarketLifecyclePhaseV1::Active
+            && link_after.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && occurrence.link_activation_id() == link_activation.id()
+            && occurrence.market_admission_receipt_id()
+                == link_activation.market_admission_receipt_id()
+            && occurrence.funding_state_after_id() == funding_state_after_id
+            && replay_postwrite.event_id() == occurrence.id()
+            && replay_after.authentication_id()
+                == replay_postwrite.authentication_after_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_FOUNDER_ACTIVATION_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &completion.id.bytes(),
+            &root_activation.id().bytes(),
+            &link_activation.id().bytes(),
+            &occurrence.id().bytes(),
+            &replay_postwrite.id().bytes(),
+            root_account.key.as_ref(),
+            &root_after.authentication_id().bytes(),
+            link_account.key.as_ref(),
+            &link_after.authentication_id().bytes(),
+            funding_account.key.as_ref(),
+            &funding_state_after_id.bytes(),
+            lifecycle_replay_account.key.as_ref(),
+            &replay_after.authentication_id().bytes(),
+            registry_account.key.as_ref(),
+            &registry_data_id.bytes(),
+            &root_binding.market_instance_id.bytes(),
+            &root_binding.generation.to_le_bytes(),
+            &link_binding.series_plan_id.bytes(),
+            &link_binding.ordinal.to_le_bytes(),
+            &compiler_bundle_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    let receipt = AuthenticatedProductFounderActivationV1 {
+        id,
+        foundation_completion_id: completion.id,
+        root_activation_id: root_activation.id(),
+        link_activation_id: link_activation.id(),
+        occurrence_completion_id: occurrence.id(),
+        lifecycle_replay_postwrite_id: replay_postwrite.id(),
+        root_account: *root_account.key,
+        root_authentication_after: root_after.authentication_id(),
+        link_account: *link_account.key,
+        link_authentication_after: link_after.authentication_id(),
+        funding_account: *funding_account.key,
+        funding_state_after_id,
+        lifecycle_replay_account: *lifecycle_replay_account.key,
+        lifecycle_replay_authentication_after: replay_after.authentication_id(),
+        market_instance_id: root_binding.market_instance_id,
+        generation: root_binding.generation,
+        series_plan_id: link_binding.series_plan_id,
+        ordinal: link_binding.ordinal,
+        compiler_bundle_id: compiler_bundle_id.content_id(),
+    };
+    Ok((root_after, link_after, funding_after, replay_after, receipt))
 }
 
 /// Admit and activate one converger atomically against an already-Active root.
@@ -4740,6 +5371,235 @@ pub(crate) fn write_authenticated_fractional_family_terminal_root_v1<
     )
 }
 
+/// Default-refusing bridge from the complete Failure aggregate/replay/seal
+/// postwrite into the Product-owned mandatory shared-core latch.
+///
+/// Getter defaults are deliberately invalid. The concrete Failure owner must
+/// retain and authenticate its full a0/a3/ab/ac postwrite; Product accepts no
+/// caller projection or founding-time binding as terminal authority.
+pub(crate) trait AuthenticatedFailureSharedCoreTerminalOwnerV1 {
+    fn postwrite_id(&self) -> ContentId {
+        ContentId::ZERO
+    }
+
+    fn market_instance_id(&self) -> MarketInstanceV2Id {
+        MarketInstanceV2Id::from_bytes([0; 32])
+    }
+
+    fn generation(&self) -> u64 {
+        0
+    }
+
+    fn owner_account_id(&self) -> ContentId {
+        ContentId::ZERO
+    }
+
+    fn owner_release_id(&self) -> ContentId {
+        ContentId::ZERO
+    }
+
+    fn family_terminal_receipt_id(&self) -> ContentId {
+        ContentId::ZERO
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_failure_shared_core_terminal_owner_v1(
+        &self,
+        _root_account: Pubkey,
+        _root_binding_id: ContentId,
+        _root_semantic_before_id: ContentId,
+        _root_data_before_id: ContentId,
+        _root_authentication_before_id: ContentId,
+        _projection: MarketSharedCoreTerminalProjectionV1,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Exact Product root postwrite proving the mandatory Failure shared-core
+/// receipt was consumed once from the private Failure terminal owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureSharedCoreTerminalPostwriteV1 {
+    id: ContentId,
+    failure_postwrite_id: ContentId,
+    projection: MarketSharedCoreTerminalProjectionV1,
+    root_account: Pubkey,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+}
+
+impl AuthenticatedFailureSharedCoreTerminalPostwriteV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn failure_postwrite_id(self) -> ContentId {
+        self.failure_postwrite_id
+    }
+
+    pub(crate) const fn projection(self) -> MarketSharedCoreTerminalProjectionV1 {
+        self.projection
+    }
+
+    pub(crate) const fn root_account(self) -> Pubkey {
+        self.root_account
+    }
+
+    pub(crate) const fn root_semantic_before_id(self) -> ContentId {
+        self.root_semantic_before_id
+    }
+
+    pub(crate) const fn root_semantic_after_id(self) -> ContentId {
+        self.root_semantic_after_id
+    }
+
+    pub(crate) const fn root_data_before_id(self) -> ContentId {
+        self.root_data_before_id
+    }
+
+    pub(crate) const fn root_data_after_id(self) -> ContentId {
+        self.root_data_after_id
+    }
+
+    pub(crate) const fn root_authentication_before_id(self) -> ContentId {
+        self.root_authentication_before_id
+    }
+
+    pub(crate) const fn root_authentication_after_id(self) -> ContentId {
+        self.root_authentication_after_id
+    }
+}
+
+/// Consume the exact current Failure-family terminal postwrite into a live
+/// Retiring `0xaa`. The only accepted owner account is the permanent canonical
+/// a3/v2 replay for this Market/generation, and the raw root writer remains
+/// inaccessible outside this semantic-owner module.
+pub(crate) fn record_failure_shared_core_terminal_v1<'next, A>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    authority: &A,
+    successor_output: &mut MarketLifecycleRootV1,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV1<'next>,
+    AuthenticatedFailureSharedCoreTerminalPostwriteV1,
+)>
+where
+    A: AuthenticatedFailureSharedCoreTerminalOwnerV1 + ?Sized,
+{
+    let current = authenticated.state();
+    let binding = current.binding();
+    let root_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_semantic_before_id = current
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let postwrite_id = authority.postwrite_id();
+    let owner_account_id = authority.owner_account_id();
+    let owner_release_id = authority.owner_release_id();
+    let family_terminal_receipt_id = authority.family_terminal_receipt_id();
+    let (expected_owner_account, _) = seeds::failure_market_replay_v2_pda(
+        program_id,
+        &binding.market_instance_id.bytes(),
+        binding.generation,
+    );
+    require(
+        authenticated.is_writable()
+            && authenticated.account() == *account.key
+            && authenticated.owner_program() == *program_id
+            && current.phase() == MarketLifecyclePhaseV1::Retiring
+            && current.failure_terminal_receipt_id() == ContentId::ZERO
+            && authority.market_instance_id() == binding.market_instance_id
+            && authority.generation() == binding.generation
+            && owner_account_id.bytes() == expected_owner_account.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    for id in [
+        postwrite_id,
+        owner_account_id,
+        owner_release_id,
+        family_terminal_receipt_id,
+    ] {
+        require_live_content_id(id)?;
+    }
+    let root_transition_sequence = current
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let projection = MarketSharedCoreTerminalProjectionV1::new(
+        binding,
+        MarketSharedCoreV1::Failure,
+        owner_account_id,
+        owner_release_id,
+        family_terminal_receipt_id,
+        root_transition_sequence,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authority.authenticate_failure_shared_core_terminal_owner_v1(
+        authenticated.account(),
+        root_binding_id,
+        root_semantic_before_id,
+        authenticated.data_id(),
+        authenticated.authentication_id(),
+        projection,
+    )?;
+    *successor_output = (*current)
+        .consume_shared_core_terminal(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_market_lifecycle_root_v1(
+        program_id,
+        account,
+        authenticated,
+        successor_output,
+        rebound_output,
+    )?;
+    let root_semantic_after_id = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound.state().failure_terminal_receipt_id() == projection.id()
+            && rebound.state().transition_sequence() == root_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_SHARED_CORE_TERMINAL_POSTWRITE_DOMAIN_V1,
+            &postwrite_id.bytes(),
+            &projection.id().bytes(),
+            account.key.as_ref(),
+            &root_binding_id.bytes(),
+            &root_semantic_before_id.bytes(),
+            &root_semantic_after_id.bytes(),
+            &authenticated.data_id().bytes(),
+            &rebound.data_id().bytes(),
+            &authenticated.authentication_id().bytes(),
+            &rebound.authentication_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    let postwrite = AuthenticatedFailureSharedCoreTerminalPostwriteV1 {
+        id,
+        failure_postwrite_id: postwrite_id,
+        projection,
+        root_account: *account.key,
+        root_semantic_before_id,
+        root_semantic_after_id,
+        root_data_before_id: authenticated.data_id(),
+        root_data_after_id: rebound.data_id(),
+        root_authentication_before_id: authenticated.authentication_id(),
+        root_authentication_after_id: rebound.authentication_id(),
+    };
+    Ok((rebound, postwrite))
+}
+
 /// Default-refusing same-program authority for the sole Resolution V5 root write.
 ///
 /// The isolated Failure/Collateral composer implements this only for a private
@@ -4868,7 +5728,7 @@ fn write_series_market_link_v1<'next>(
 /// boundary prevents a FundingV2 `Closed` projection from standing in for the
 /// missing admitted/retired link partition.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn retire_and_close_series_market_link_v1<'a, A>(
+pub(crate) fn retire_and_close_series_market_link_v1<'a>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'a>,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
@@ -4876,17 +5736,14 @@ pub(crate) fn retire_and_close_series_market_link_v1<'a, A>(
     link: AuthenticatedSeriesMarketLinkV1<'_>,
     refund_owner: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
-    aggregate: &A,
+    aggregate: &SeriesLifecycleLinkRetirementAggregateAuthorityV1<'_, 'a>,
     root_successor_output: &mut MarketLifecycleRootV1,
     link_retiring_output: &mut SeriesMarketLinkV1,
     link_retired_output: &mut SeriesMarketLinkV1,
     root_rebound_output: &mut MarketLifecycleRootAccountV1,
     link_retiring_rebound_output: &mut SeriesMarketLinkAccountV1,
     link_retired_rebound_output: &mut SeriesMarketLinkAccountV1,
-) -> Outcome<AuthenticatedSeriesMarketLinkRetirementV1>
-where
-    A: AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 + ?Sized,
-{
+) -> Outcome<AuthenticatedSeriesMarketLinkRetirementV1> {
     require_distinct(&[
         root_account.clone(),
         link_account.clone(),
@@ -5085,8 +5942,7 @@ where
         ClutchError::MismatchedState,
     )?;
 
-    let aggregate_postwrite_id = aggregate
-        .authenticate_series_link_retirement_aggregate_postwrite_v1(facts)?;
+    let aggregate_postwrite_id = aggregate.accept_product_retirement(facts)?;
     require_live_content_id(aggregate_postwrite_id)?;
     require(
         aggregate_postwrite_id != facts_id
@@ -5388,6 +6244,96 @@ fn require_unresolved_market_resolution_v1(
     )
 }
 
+/// Hostile-authenticate the exact pinned `0xad` prestate for an atomic
+/// Resolution/archive/release outer which necessarily receives the account as
+/// writable. The returned value contains a copied pure read projection and no
+/// writer; only [`release_series_market_link_failure_v1`] may later consume it
+/// to prove that the same prestate was released.
+pub(crate) fn authenticate_writable_failure_resolution_link_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<AuthenticatedWritableFailureResolutionLinkV1> {
+    let root_state = root.state();
+    let root_binding = root_state.binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        root.is_writable()
+            && root_state.phase() == MarketLifecyclePhaseV1::Active
+            && root_state.resolution_semantic_id() == ContentId::ZERO
+            && root_state.resolution_data_id() == ContentId::ZERO
+            && root_state.resolution_activation_receipt_id() == ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+
+    // The Product-owned hostile codec may discover only the immutable Series
+    // coordinate from this exact body. Its Market/root half is independently
+    // constrained by the authenticated root below before the projection is
+    // minted.
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&data, output)?;
+    let decoded_binding = output.state.binding();
+    drop(data);
+    let live = authenticate_series_market_link_v1(
+        program_id,
+        account,
+        decoded_binding.series_plan_id,
+        decoded_binding.ordinal,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        root.account(),
+        true,
+        output,
+    )?;
+    let state = *live.state();
+    let binding = state.binding();
+    let semantic_id = state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_binding_id = binding.market_binding_id;
+    let failure_session_transcript_id = state.failure_session_transcript_id();
+    require(
+        state.phase() == SeriesMarketLinkPhaseV1::Active
+            && state.active_failure_sessions() == 1
+            && state.failure_sessions_started() != 0
+            && !failure_session_transcript_id.is_zero()
+            && binding.market_root_account_id.bytes() == root.account().to_bytes()
+            && market_binding_id == root_binding_id
+            && binding.market_instance_id == root_binding.market_instance_id
+            && binding.generation == root_binding.generation,
+        ClutchError::MismatchedState,
+    )?;
+    let mut authenticated = AuthenticatedWritableFailureResolutionLinkV1 {
+        id: ContentId::ZERO,
+        link_account: live.account(),
+        owner_program: live.owner_program(),
+        observed_lamports: live.observed_lamports(),
+        data_id: live.data_id(),
+        authentication_id: live.authentication_id(),
+        semantic_id,
+        state,
+        market_root_account: Pubkey::new_from_array(binding.market_root_account_id.bytes()),
+        market_binding_id,
+        series_plan_id: binding.series_plan_id,
+        ordinal: binding.ordinal,
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        source_occurrence_id: binding.source_occurrence_id,
+        transition_sequence: state.transition_sequence(),
+        failure_sessions_started: state.failure_sessions_started(),
+        failure_session_transcript_id,
+    };
+    authenticated.id =
+        writable_failure_resolution_link_preauthorization_id_v1(program_id, &authenticated);
+    require_live_content_id(authenticated.id)?;
+    Ok(authenticated)
+}
+
 /// Release one exact subordinate Failure session only after its terminal cell
 /// was appended to durable market history and reset to canonical Idle.
 pub(crate) fn release_series_market_link_failure_v1<
@@ -5396,6 +6342,7 @@ pub(crate) fn release_series_market_link_failure_v1<
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
+    resolution_link: AuthenticatedWritableFailureResolutionLinkV1,
     archive: &A,
     rebound_output: &mut SeriesMarketLinkAccountV1,
 ) -> Outcome<AuthenticatedSeriesFailureSessionReleaseV1> {
@@ -5418,12 +6365,15 @@ pub(crate) fn release_series_market_link_failure_v1<
     let source_occurrence_id = archive.source_occurrence_id()?;
     let session_binding_id = archive.session_binding_id()?;
     let session_terminal_receipt_id = archive.session_terminal_receipt_id()?;
+    let resolution_link_preauthorization_id =
+        archive.resolution_link_preauthorization_id()?;
     for receipt in [
         archive_postwrite_id,
         append_receipt_id,
         reset_receipt_id,
         session_binding_id,
         session_terminal_receipt_id,
+        resolution_link_preauthorization_id,
     ] {
         require_live_content_id(receipt)?;
     }
@@ -5431,6 +6381,26 @@ pub(crate) fn release_series_market_link_failure_v1<
         authenticated.is_writable()
             && authenticated.state().phase() == SeriesMarketLinkPhaseV1::Active
             && authenticated.state().active_failure_sessions() == 1
+            && resolution_link.id() == resolution_link_preauthorization_id
+            && resolution_link.link_account() == *account.key
+            && resolution_link.owner_program() == *program_id
+            && resolution_link.observed_lamports() == authenticated.observed_lamports()
+            && resolution_link.data_id() == authenticated.data_id()
+            && resolution_link.authentication_id() == authentication_before
+            && resolution_link.semantic_id().content_id() == semantic_before
+            && resolution_link.state() == *authenticated.state()
+            && resolution_link.market_root_account()
+                == Pubkey::new_from_array(binding.market_root_account_id.bytes())
+            && resolution_link.market_binding_id() == binding.market_binding_id
+            && resolution_link.series_plan_id() == binding.series_plan_id
+            && resolution_link.ordinal() == binding.ordinal
+            && resolution_link.market_instance_id() == binding.market_instance_id
+            && resolution_link.generation() == binding.generation
+            && resolution_link.source_occurrence_id() == binding.source_occurrence_id
+            && resolution_link.transition_sequence() == transition_sequence_before
+            && resolution_link.failure_sessions_started() == failure_sessions_started_before
+            && resolution_link.failure_session_transcript_id()
+                == failure_session_transcript_before
             && failure_session_transcript_before == session_binding_id
             && binding.market_instance_id == market_instance_id
             && binding.generation == generation
@@ -5450,6 +6420,7 @@ pub(crate) fn release_series_market_link_failure_v1<
         source_occurrence_id,
         session_binding_id,
         session_terminal_receipt_id,
+        resolution_link_preauthorization_id,
     )?;
     let successor = authenticated
         .state()
@@ -5496,6 +6467,7 @@ pub(crate) fn release_series_market_link_failure_v1<
             &archive_postwrite_id.bytes(),
             &append_receipt_id.bytes(),
             &reset_receipt_id.bytes(),
+            &resolution_link_preauthorization_id.bytes(),
             &binding.series_plan_id.bytes(),
             &binding.ordinal.to_le_bytes(),
             &binding.market_instance_id.bytes(),
@@ -5520,6 +6492,7 @@ pub(crate) fn release_series_market_link_failure_v1<
         archive_postwrite_id,
         append_receipt_id,
         reset_receipt_id,
+        resolution_link_preauthorization_id,
     })
 }
 
@@ -5546,6 +6519,29 @@ mod adversarial_resolution_repin_tests {
 
     fn id(byte: u8) -> ContentId {
         ContentId::from_bytes([byte; 32])
+    }
+
+    fn resolution_link_preauthorization() -> AuthenticatedWritableFailureResolutionLinkV1 {
+        AuthenticatedWritableFailureResolutionLinkV1 {
+            id: ContentId::ZERO,
+            link_account: Pubkey::new_from_array([40; 32]),
+            owner_program: Pubkey::new_from_array([41; 32]),
+            observed_lamports: 42,
+            data_id: id(43),
+            authentication_id: id(44),
+            semantic_id: SeriesMarketLinkV1Id::from_bytes([45; 32]),
+            state: SeriesMarketLinkV1::decode_buffer(),
+            market_root_account: Pubkey::new_from_array([46; 32]),
+            market_binding_id: id(47),
+            series_plan_id: SeriesPlanV5Id::from_bytes([48; 32]),
+            ordinal: 49,
+            market_instance_id: MarketInstanceV2Id::from_bytes([50; 32]),
+            generation: 51,
+            source_occurrence_id: SourceOccurrenceV1Id::from_bytes([52; 32]),
+            transition_sequence: 53,
+            failure_sessions_started: 54,
+            failure_session_transcript_id: id(55),
+        }
     }
 
     fn founder_authority() -> AuthenticatedMarketFounderFoundationV1 {
@@ -5713,6 +6709,149 @@ mod adversarial_resolution_repin_tests {
             assert!(require_unresolved_market_resolution_v1(fields.0, fields.1, fields.2).is_err());
         }
     }
+
+    #[test]
+    fn writable_resolution_link_identity_refuses_prestate_substitution() {
+        let program_id = Pubkey::new_from_array([56; 32]);
+        let exact = resolution_link_preauthorization();
+        let exact_id = writable_failure_resolution_link_preauthorization_id_v1(
+            &program_id,
+            &exact,
+        );
+        let mut changed = resolution_link_preauthorization();
+        changed.authentication_id = id(57);
+        assert_ne!(
+            writable_failure_resolution_link_preauthorization_id_v1(&program_id, &changed),
+            exact_id,
+        );
+        let mut changed = resolution_link_preauthorization();
+        changed.failure_session_transcript_id = id(58);
+        assert_ne!(
+            writable_failure_resolution_link_preauthorization_id_v1(&program_id, &changed),
+            exact_id,
+        );
+        let mut changed = resolution_link_preauthorization();
+        changed.ordinal = 59;
+        assert_ne!(
+            writable_failure_resolution_link_preauthorization_id_v1(&program_id, &changed),
+            exact_id,
+        );
+        let mut changed = resolution_link_preauthorization();
+        changed.market_root_account = Pubkey::new_from_array([60; 32]);
+        assert_ne!(
+            writable_failure_resolution_link_preauthorization_id_v1(&program_id, &changed),
+            exact_id,
+        );
+    }
+
+    #[test]
+    fn writable_resolution_link_is_scoped_and_release_consumes_the_same_id() {
+        let source = include_str!("product_market.rs");
+        let preauth = source
+            .split("pub(crate) fn authenticate_writable_failure_resolution_link_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Release one exact subordinate").next())
+            .expect("scoped writable preauthorization");
+        for guard in [
+            "root.is_writable()",
+            "root_state.resolution_semantic_id() == ContentId::ZERO",
+            "SeriesMarketLinkAccountV1::decode_into(&data, output)?",
+            "authenticate_series_market_link_v1",
+            "state.active_failure_sessions() == 1",
+            "state.failure_sessions_started() != 0",
+            "market_binding_id == root_binding_id",
+            "failure_session_transcript_id",
+        ] {
+            assert!(preauth.contains(guard), "missing preauth guard {guard}");
+        }
+        let release = source
+            .split("pub(crate) fn release_series_market_link_failure_v1")
+            .nth(1)
+            .and_then(|value| value.split("fn require_live_content_id").next())
+            .expect("sole Product release");
+        for guard in [
+            "archive.resolution_link_preauthorization_id()?",
+            "resolution_link.id() == resolution_link_preauthorization_id",
+            "resolution_link.authentication_id() == authentication_before",
+            "resolution_link.state() == *authenticated.state()",
+            "resolution_link.failure_session_transcript_id()",
+            "write_series_market_link_v1",
+        ] {
+            assert!(release.contains(guard), "missing release guard {guard}");
+        }
+    }
+
+    #[test]
+    fn founder_activation_has_one_non_detachable_current_outer() {
+        let source = include_str!("product_market.rs");
+        let outer = source
+            .split("pub(crate) fn activate_and_complete_product_market_founder_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Admit and activate one converger").next())
+            .expect("sole founder activation outer");
+        for guard in [
+            "authenticate_market_lifecycle_root_v1",
+            "authenticate_series_market_link_v1",
+            "read_series_registry_account_v2",
+            "read_series_funding_account_v2",
+            "authenticate_series_lifecycle_replay_v1",
+            "authenticate_product_foundation_completion_v1",
+            "activate_market_foundation_v2",
+            "activate_founder_series_market_link_v1",
+            "complete_and_record_series_lifecycle_admission_v1",
+            "replay_postwrite.event_id() == occurrence.id()",
+        ] {
+            assert!(outer.contains(guard), "missing atomic guard {guard}");
+        }
+        for private_raw in [
+            "\nfn activate_market_foundation_v2",
+            "\nfn activate_founder_series_market_link_v1",
+        ] {
+            assert!(source.contains(private_raw), "raw writer escaped: {private_raw}");
+        }
+        for escaped_raw in [
+            "pub(crate) fn activate_market_foundation_v2",
+            "pub(crate) fn activate_founder_series_market_link_v1",
+        ] {
+            assert!(!source.contains(escaped_raw), "detachable writer: {escaped_raw}");
+        }
+    }
+
+    #[test]
+    fn founder_activation_refuses_stale_or_spliced_authority_sourcewise() {
+        let source = include_str!("product_market.rs");
+        let outer = source
+            .split("pub(crate) fn activate_and_complete_product_market_founder_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Admit and activate one converger").next())
+            .expect("sole founder activation outer");
+        for refusal in [
+            "capability.series_registry_account() == *registry_account.key",
+            "registry.activation_consumed()",
+            "registry.value().compiler_bundle_id == compiler_bundle_id",
+            "bundle.funding_quote_id.content_id() == link_binding.funding_quote_id",
+            "root.state().phase() == MarketLifecyclePhaseV1::Founding",
+            "link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket",
+            "funding.value().state.phase == clutch_product_series::SeriesFundingPhaseV2::Pending",
+            "replay.state().binding().series_plan_id == link_binding.series_plan_id",
+        ] {
+            assert!(outer.contains(refusal), "missing splice refusal {refusal}");
+        }
+        let completion = source
+            .split("fn authenticate_product_foundation_completion_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Activate one fully accepted").next())
+            .expect("foundation completion authority");
+        for refusal in [
+            "root.state().foundation().complete()",
+            "root.state().capital().principal_remaining_lamports == 0",
+            "root.state().product_families().activation_ready()",
+            "binding.foundation_account_graph_id == graph_id",
+            "founder_link.authentication_id()",
+        ] {
+            assert!(completion.contains(refusal), "missing completion refusal {refusal}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5772,9 +6911,6 @@ mod adversarial_series_link_retirement_tests {
         }
     }
 
-    struct NoSeriesAggregate;
-    impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 for NoSeriesAggregate {}
-
     #[test]
     fn exact_retirement_facts_are_canonical_and_substitution_changes_identity() {
         let exact = facts();
@@ -5817,10 +6953,4 @@ mod adversarial_series_link_retirement_tests {
         assert!(aliased.validate().is_err());
     }
 
-    #[test]
-    fn default_series_aggregate_cannot_close_a_link() {
-        assert!(NoSeriesAggregate
-            .authenticate_series_link_retirement_aggregate_postwrite_v1(facts())
-            .is_err());
-    }
 }
