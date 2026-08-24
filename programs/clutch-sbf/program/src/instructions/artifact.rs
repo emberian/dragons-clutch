@@ -22,7 +22,8 @@ use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV6,
-    FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2,
+    FixedCodec as RegistryFixedCodec, MarketFamilyCapabilityPolicyV1,
+    RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryProgramReleaseV1,
     RegistryProgramReleaseV2, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
     SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesFundingQuoteV2,
@@ -30,6 +31,7 @@ use clutch_product_series::{
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
     COMPILED_PRODUCT_SERIES_BUNDLE_V4_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
     COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
+    MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1,
     REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
     REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
     REGISTRY_PROGRAM_RELEASE_V2_DOMAIN, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
@@ -468,7 +470,8 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
         | ArtifactKind::CompiledProductSeriesBundleV6
-        | ArtifactKind::WrapperRecipeSetV1) => {
+        | ArtifactKind::WrapperRecipeSetV1
+        | ArtifactKind::MarketFamilyCapabilityPolicyV1) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -537,6 +540,7 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
             | ArtifactKind::SeriesFundingQuoteV5
             | ArtifactKind::SeriesAttachmentPlanV5
             | ArtifactKind::CompiledProductSeriesBundleV6
+            | ArtifactKind::MarketFamilyCapabilityPolicyV1
     ) {
         binding.validate()?;
         require(
@@ -633,6 +637,11 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                 CompiledProductSeriesBundleV6::decode(body)
                     .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
                 COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN
+            }
+            ArtifactKind::MarketFamilyCapabilityPolicyV1 => {
+                MarketFamilyCapabilityPolicyV1::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1
             }
             _ => return Err(ClutchError::MismatchedState.into()),
         };
@@ -912,7 +921,8 @@ fn create_final<'a>(
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
         | ArtifactKind::CompiledProductSeriesBundleV6
-        | ArtifactKind::WrapperRecipeSetV1) => {
+        | ArtifactKind::WrapperRecipeSetV1
+        | ArtifactKind::MarketFamilyCapabilityPolicyV1) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,

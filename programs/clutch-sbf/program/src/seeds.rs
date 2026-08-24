@@ -331,6 +331,8 @@ pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
 /// Permanent compact Product Market-lifecycle replay anchor.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
+/// Non-persisted Market-family namespace anchor.
+pub const SEED_PRODUCT_MARKET_FAMILY_ROOT_V1: &[u8] = b"dc:product-family-root:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
 /// Permanent counted Product Series-lifecycle replay.
@@ -577,6 +579,28 @@ pub fn product_market_lifecycle_replay_pda(
             SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             market_instance_v2_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive one canonical non-persisted Product family namespace anchor.
+///
+/// The returned address is committed by the sole persisted family aggregator.
+/// It is never initialized as a second family-root account; physical family
+/// state must authenticate itself as a child of this exact address.
+pub fn product_market_family_root_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+    family: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_FAMILY_ROOT_V1,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+            &[family],
         ],
     )
 }

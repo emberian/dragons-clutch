@@ -68,6 +68,7 @@ pub(crate) mod failure_market_interval_v2;
 pub(crate) mod failure_market_source_failure_current;
 /// Sole current action-10 Product/Source/Failure branch owner.
 pub(crate) mod failure_market_action10_current;
+pub(crate) mod failure_market_action11_current;
 /// Sole current action-12 RootV2/Product/Source/Failure owner.
 pub(crate) mod failure_market_action12_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
@@ -187,6 +188,8 @@ pub(crate) mod product_failure_begin_current;
 pub mod product_market;
 /// Capability-disabled Product FoundationVault/Recovery/founder compositor.
 pub(crate) mod product_market_foundation_init;
+/// Immutable current five-family mask and namespace-anchor authority.
+pub(crate) mod product_market_family_capability_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain

@@ -18,6 +18,7 @@ use crate::instructions::product_market_foundation_current::{
     AuthenticatedProductMarketFoundationStepPostwriteV3,
     AuthenticatedProductMarketFounderCurrentCreationV3,
 };
+use crate::instructions::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
 };
@@ -465,6 +466,8 @@ pub(crate) struct AuthenticatedProductSeriesActivationCompletionV4 {
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
     final_foundation_donation_lamports: u64,
+    market_family_capability_policy_id: ContentId,
+    market_family_capability_authentication_id: ContentId,
     link_account: Pubkey,
     link_authentication_after: ContentId,
     link_semantic_after: SeriesMarketLinkV2Id,
@@ -477,6 +480,7 @@ pub(crate) struct AuthenticatedProductSeriesActivationCompletionV4 {
     funding_completion: Box<AuthenticatedProductSeriesFundingCompletionV4>,
     source: Box<AuthenticatedPreRootSourceOccurrencePostwriteV3>,
     direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+    physical: AuthenticatedSeriesPhysicalFounderV4,
 }
 
 impl AuthenticatedProductSeriesActivationCompletionV4 {
@@ -520,6 +524,7 @@ impl AuthenticatedProductSeriesActivationCompletionV4 {
         ContentId,
         ContentId,
         AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+        AuthenticatedSeriesPhysicalFounderV4,
     ) {
         (
             self.founder_creation_receipt_id,
@@ -529,6 +534,7 @@ impl AuthenticatedProductSeriesActivationCompletionV4 {
             self.root_semantic_after,
             self.founder_preauthorization_id,
             self.direct_capitalization,
+            self.physical,
         )
     }
 }
@@ -5624,6 +5630,9 @@ impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
             expected_obligation_configuration,
             expected_founder_link_semantic_id,
             accepted_market_core_receipt_id,
+            physical,
+            market_family_capability_policy_id,
+            market_family_capability_authentication_id,
         ) = activation_parts.into_components();
         require(
             expected_root_account == complete_root.account()
@@ -5671,6 +5680,9 @@ impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
             reservation,
             source,
             direct_capitalization,
+            physical,
+            market_family_capability_policy_id,
+            market_family_capability_authentication_id,
             self.root_account,
             admitted_root,
             link_account,
@@ -5688,12 +5700,13 @@ impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
 }
 
 /// Final callable founder receipt after RootV2, LinkV2, replayV2, FundingV4,
-/// and `0xba/v2` are all physically active. It retains no detachable raw
-/// capitalization or foundation-step capability.
+/// and `0xba/v2` are all physically active. It retains the unique move-only
+/// physical lineage, but no detachable foundation-step capability.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductMarketFounderActivatedV4 {
     id: ContentId,
     direct_activation: AuthenticatedProductDirectGlobalLivenessActivationV2,
+    physical: AuthenticatedSeriesPhysicalFounderV4,
     facts: Box<ProductMarketFounderActivatedFactsV4>,
 }
 
@@ -5726,6 +5739,10 @@ struct ProductMarketFounderActivatedFactsV4 {
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
     final_foundation_donation_lamports: u64,
+    physical_founder_id: ContentId,
+    physical_capitalization_id: ContentId,
+    market_family_capability_policy_id: ContentId,
+    market_family_capability_authentication_id: ContentId,
 }
 
 impl AuthenticatedProductMarketFounderActivatedV4 {
@@ -5796,6 +5813,21 @@ impl AuthenticatedProductMarketFounderActivatedV4 {
     pub(crate) const fn funding_authentication_id(&self) -> ContentId {
         self.facts.funding_authentication_id
     }
+    pub(crate) const fn physical_founder_id(&self) -> ContentId {
+        self.facts.physical_founder_id
+    }
+    pub(crate) const fn physical_capitalization_id(&self) -> ContentId {
+        self.facts.physical_capitalization_id
+    }
+    pub(crate) const fn market_family_capability_policy_id(&self) -> ContentId {
+        self.facts.market_family_capability_policy_id
+    }
+    pub(crate) const fn market_family_capability_authentication_id(&self) -> ContentId {
+        self.facts.market_family_capability_authentication_id
+    }
+    pub(crate) const fn physical(&self) -> &AuthenticatedSeriesPhysicalFounderV4 {
+        &self.physical
+    }
 }
 
 /// Sole callable current Product founder outer. The closure can consume only
@@ -5856,6 +5888,11 @@ where
     let root_transition_sequence_after = completion.root_transition_sequence_after();
     let final_foundation_donation_lamports =
         completion.final_foundation_donation_lamports();
+    let physical_founder_id = completion.physical.id();
+    let physical_capitalization_id = completion.physical.capitalization_id();
+    let market_family_capability_policy_id = completion.market_family_capability_policy_id;
+    let market_family_capability_authentication_id =
+        completion.market_family_capability_authentication_id;
     let facts = Box::new(ProductMarketFounderActivatedFactsV4 {
         activation_completion_id,
         foundation_complete_receipt_id,
@@ -5885,6 +5922,10 @@ where
         root_transition_sequence_before,
         root_transition_sequence_after,
         final_foundation_donation_lamports,
+        physical_founder_id,
+        physical_capitalization_id,
+        market_family_capability_policy_id,
+        market_family_capability_authentication_id,
     });
     let final_root = authenticate_market_lifecycle_root_v2(
         program_id,
@@ -5899,7 +5940,8 @@ where
             && final_root.state().transition_sequence() == root_transition_sequence_after,
         ClutchError::MismatchedState,
     )?;
-    let direct_activation = activate_product_direct_global_liveness_from_current_founder_v2(
+    let (direct_activation, physical) =
+        activate_product_direct_global_liveness_from_current_founder_v2(
         program_id,
         completion,
         direct_global_liveness_account,
@@ -5918,11 +5960,16 @@ where
         &root_transition_sequence_before.to_le_bytes(),
         &root_transition_sequence_after.to_le_bytes(),
         &final_foundation_donation_lamports.to_le_bytes(),
+        &physical_founder_id.bytes(),
+        &physical_capitalization_id.bytes(),
+        &market_family_capability_policy_id.bytes(),
+        &market_family_capability_authentication_id.bytes(),
     ]);
     require_live(id)?;
     Ok(AuthenticatedProductMarketFounderActivatedV4 {
         id,
         direct_activation,
+        physical,
         facts,
     })
 }
@@ -6159,6 +6206,9 @@ fn activate_record_and_complete_current_series_v4(
     reservation: AuthenticatedProductSeriesFundingReservationV4,
     source: AuthenticatedPreRootSourceOccurrencePostwriteV3,
     direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+    physical: AuthenticatedSeriesPhysicalFounderV4,
+    market_family_capability_policy_id: ContentId,
+    market_family_capability_authentication_id: ContentId,
     root_account: &AccountInfo<'_>,
     authenticated_root: AuthenticatedMarketLifecycleRootV2<'_>,
     link_account: &AccountInfo<'_>,
@@ -6180,6 +6230,10 @@ fn activate_record_and_complete_current_series_v4(
         source.capitalization().id(),
         direct_capitalization.global_capitalization_receipt_id(),
         direct_capitalization.global_bundle_binding_id(),
+        physical.id(),
+        physical.capitalization_id(),
+        market_family_capability_policy_id,
+        market_family_capability_authentication_id,
     ] {
         require_live(id)?;
     }
@@ -6516,6 +6570,10 @@ fn activate_record_and_complete_current_series_v4(
         &funding_completion.id().bytes(),
         &source.id().bytes(),
         &direct_capitalization.global_capitalization_receipt_id().bytes(),
+        &physical.id().bytes(),
+        &physical.capitalization_id().bytes(),
+        &market_family_capability_policy_id.bytes(),
+        &market_family_capability_authentication_id.bytes(),
     ]);
     require_live(id)?;
     Ok(AuthenticatedProductSeriesActivationCompletionV4 {
@@ -6546,6 +6604,9 @@ fn activate_record_and_complete_current_series_v4(
         funding_completion: Box::new(funding_completion),
         source: Box::new(source),
         direct_capitalization,
+        physical,
+        market_family_capability_policy_id,
+        market_family_capability_authentication_id,
     })
 }
 

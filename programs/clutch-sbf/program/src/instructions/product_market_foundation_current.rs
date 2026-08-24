@@ -47,6 +47,7 @@ use solana_pubkey::Pubkey;
 use super::product_direct_global_liveness::{
     AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
 };
+use super::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
 use super::product_series_current::{
     authenticate_series_funding_account_v4, authenticate_series_registry_account_v3,
     AuthenticatedMarketLifecycleRootV2,
@@ -88,6 +89,8 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
     fn market_liability_founding_id(&self) -> ContentId;
     fn claim_mint_founding_plan_id(&self) -> ContentId;
     fn claim_issuance_binding_id(&self) -> ContentId;
+    fn market_family_capability_policy_id(&self) -> ContentId;
+    fn market_family_capability_authentication_id(&self) -> ContentId;
     fn product_families(&self) -> MarketFamilyAggregatorV1;
     fn obligation_configuration(&self) -> SeriesLinkObligationConfigurationV2;
     fn founder_link_rent_principal_lamports(&self) -> u64;
@@ -126,6 +129,8 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
         _link_account: Pubkey,
         _replay_account: Pubkey,
         _direct_global_liveness_account: Pubkey,
+        _market_family_capability_policy_id: ContentId,
+        _market_family_capability_authentication_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
@@ -178,7 +183,7 @@ pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV3: Sized {
 
 /// Acyclic stage-one authority. It commits Active FundingV4 and deterministic
 /// future Source coordinates, never Pending Funding or an `0xba` postwrite.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     id: ContentId,
     foundation_owner_authentication_id: ContentId,
@@ -210,6 +215,8 @@ pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV3 
     realm_id: ContentId,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
+    market_family_capability_policy_id: ContentId,
+    market_family_capability_authentication_id: ContentId,
     product_template_id: ContentId,
     native_claim_basis_id: ContentId,
     recovery_policy_id: ContentId,
@@ -235,6 +242,7 @@ pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV3 
     source_spec_id: ContentId,
     source_work_funding: ComponentDebitV1,
     funding_debits: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    physical: AuthenticatedSeriesPhysicalFounderV4,
 }
 
 impl AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
@@ -309,6 +317,18 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     pub(crate) const fn clock_slot(&self) -> u64 { self.clock_slot }
     pub(crate) const fn clock_unix_timestamp(&self) -> u64 { self.clock_unix_timestamp }
     pub(crate) const fn clock_bucket(&self) -> u64 { self.clock_bucket }
+    pub(crate) const fn market_family_capability_policy_id(&self) -> ContentId {
+        self.market_family_capability_policy_id
+    }
+    pub(crate) const fn market_family_capability_authentication_id(&self) -> ContentId {
+        self.market_family_capability_authentication_id
+    }
+    pub(crate) const fn physical_capitalization_id(&self) -> ContentId {
+        self.physical.capitalization_id()
+    }
+    pub(crate) const fn physical_founder_id(&self) -> ContentId {
+        self.physical.id()
+    }
 }
 
 impl AuthenticatedSourceOccurrenceFoundationAuthorityV3
@@ -394,6 +414,9 @@ pub(crate) struct AuthenticatedProductMarketFounderActivationPartsV3 {
     obligation_configuration: SeriesLinkObligationConfigurationV2,
     founder_link_semantic_id: SeriesMarketLinkV2Id,
     accepted_market_core_receipt_id: ContentId,
+    physical: AuthenticatedSeriesPhysicalFounderV4,
+    market_family_capability_policy_id: ContentId,
+    market_family_capability_authentication_id: ContentId,
 }
 
 impl AuthenticatedProductMarketFounderActivationPartsV3 {
@@ -427,6 +450,9 @@ impl AuthenticatedProductMarketFounderActivationPartsV3 {
         SeriesLinkObligationConfigurationV2,
         SeriesMarketLinkV2Id,
         ContentId,
+        AuthenticatedSeriesPhysicalFounderV4,
+        ContentId,
+        ContentId,
     ) {
         (
             self.foundation_complete_receipt_id,
@@ -444,6 +470,9 @@ impl AuthenticatedProductMarketFounderActivationPartsV3 {
             self.obligation_configuration,
             self.founder_link_semantic_id,
             self.accepted_market_core_receipt_id,
+            self.physical,
+            self.market_family_capability_policy_id,
+            self.market_family_capability_authentication_id,
         )
     }
 }
@@ -818,10 +847,17 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
             founder_link_semantic_id,
             accepted_market_core_receipt_id,
         } = self;
+        let AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
+            id: founder_preauthorization_id,
+            physical,
+            market_family_capability_policy_id,
+            market_family_capability_authentication_id,
+            ..
+        } = preauthorization;
         Ok(AuthenticatedProductMarketFounderActivationPartsV3 {
             foundation_complete_receipt_id,
             founder_creation_receipt_id,
-            founder_preauthorization_id: preauthorization.id,
+            founder_preauthorization_id,
             root_account: root.account(),
             root_authentication_id: root.authentication_id(),
             root_data_id: root.data_id(),
@@ -834,6 +870,9 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
             obligation_configuration,
             founder_link_semantic_id,
             accepted_market_core_receipt_id,
+            physical,
+            market_family_capability_policy_id,
+            market_family_capability_authentication_id,
         })
     }
 
@@ -975,6 +1014,7 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v3
     registry_account: &AccountInfo<'_>,
     capability: &AuthenticatedRegistryCapabilityV4,
     funding: AuthenticatedSeriesFundingAccountV4,
+    physical: AuthenticatedSeriesPhysicalFounderV4,
     funding_account: &AccountInfo<'_>,
     bundle: AuthenticatedCompiledProductSeriesBundleV6,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
@@ -1016,6 +1056,21 @@ where
     let graph_id = graph.id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let state = funding.state();
+    let physical_capitalization = physical.capitalization();
+    let mut physical_component = 0usize;
+    while physical_component < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        require(
+            state.components[physical_component].remaining_principal
+                == physical_capitalization.principal()[physical_component]
+                && state.components[physical_component].donations
+                    == physical_capitalization.donations()[physical_component]
+                && state.components[physical_component].consumed_allocations == 0,
+            ClutchError::MismatchedState,
+        )?;
+        physical_component = physical_component
+            .checked_add(1)
+            .ok_or(ClutchError::Arithmetic)?;
+    }
     let funding_state_id = state.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
@@ -1028,7 +1083,7 @@ where
     let clock_snapshot = clock.snapshot();
 
     let live_registry = authenticate_series_registry_account_v3(
-        program_id, registry_account, series_id, false)?;
+        program_id, registry_account, series_id, true)?;
     let live_funding = authenticate_series_funding_account_v4(
         program_id, funding_account, series_id, true)?;
     require(
@@ -1040,6 +1095,23 @@ where
             && live_funding.data_id() == funding.data_id()
             && live_funding.authentication_id() == funding.authentication_id()
             && registry.value().activation_consumed
+            && physical.registry_capability_after_id() == capability.id()
+            && physical.registry_data_after_id() == registry.data_id()
+            && physical.registry_authentication_after_id() == registry.authentication_id()
+            && physical_capitalization.series_plan_id() == series_id
+            && physical_capitalization.funding_terms_id() == funding_terms_id.content_id()
+            && physical_capitalization.compiler_bundle_id() == bundle.bundle_id().content_id()
+            && physical_capitalization.funding_quote_id() == quote_id.content_id()
+            && physical_capitalization.attachment_plan_id() == attachment_id.content_id()
+            && physical_capitalization.registry_account() == registry.account()
+            && physical_capitalization.funding_account() == funding.account()
+            && physical_capitalization.funding_state_id().content_id() == funding_state_id
+            && physical_capitalization.funding_data_id() == funding.data_id()
+            && physical_capitalization.funding_authentication_id()
+                == funding.authentication_id()
+            && physical_capitalization.collateral_realm_id() == genesis.realm_id
+            && physical_capitalization.lamport_principal_refund() == principal_refund_owner
+            && physical_capitalization.neutral_lamport_sink() == neutral_lamport_sink
             && state.phase == SeriesFundingPhaseV4::Active
             && state.next_ordinal < state.instance_count
             && state.pending_market_instance_id == ContentId::ZERO
@@ -1125,18 +1197,25 @@ where
     }
 
     let foundation_owner_authentication_id = owner.authentication_id();
+    let physical_founder_id = physical.id();
+    let physical_capitalization_id = physical.capitalization_id();
+    let market_family_capability_policy_id = owner.market_family_capability_policy_id();
+    let market_family_capability_authentication_id =
+        owner.market_family_capability_authentication_id();
     let compiler_bundle_id = bundle.bundle_id().content_id();
     owner.authenticate_product_market_founder_preauthorization_v3(
         program_id, registry.authentication_id(), funding.authentication_id(), funding_state_id,
         compiler_bundle_id, publication.id(), ContentId::from_bytes(clock.id().bytes()),
         clock.bucket(), schedule_id.content_id(), graph_id.content_id(),
         lifecycle_root_account, founder_link_account, lifecycle_replay_account,
-        direct_global_liveness_account,
+        direct_global_liveness_account, market_family_capability_policy_id,
+        market_family_capability_authentication_id,
     )?;
     for id in [
         foundation_owner_authentication_id, owner.accepted_market_core_receipt_id(),
         owner.general_founding_capability_id(), owner.market_liability_founding_id(),
         owner.claim_mint_founding_plan_id(), owner.claim_issuance_binding_id(),
+        market_family_capability_policy_id, market_family_capability_authentication_id,
     ] {
         require_live(id)?;
     }
@@ -1145,6 +1224,10 @@ where
         PRODUCT_CURRENT_FOUNDER_PREAUTH_DOMAIN_V3,
         program_id.as_ref(),
         &foundation_owner_authentication_id.bytes(),
+        &physical_founder_id.bytes(),
+        &physical_capitalization_id.bytes(),
+        &market_family_capability_policy_id.bytes(),
+        &market_family_capability_authentication_id.bytes(),
         &owner.market_instance_id().bytes(),
         &owner.generation().to_le_bytes(),
         &series_id.bytes(),
@@ -1200,6 +1283,8 @@ where
         market_genesis_profile_id: genesis_id.content_id(), realm_id: genesis.realm_id,
         registry_release_id: capability.registry_release_id(),
         capability_profile_id: capability.capability_profile_id(),
+        market_family_capability_policy_id,
+        market_family_capability_authentication_id,
         product_template_id: bundle.bundle().product_template_id.content_id(),
         native_claim_basis_id: bundle.bundle().native_claim_basis_id.content_id(),
         recovery_policy_id: bundle.bundle().evidence_only_recovery_policy_id.content_id(),
@@ -1220,6 +1305,7 @@ where
         source_plane_contract_id: route.source_plane_contract_id(), source_spec_id: route.source_spec_id(),
         source_work_funding: publication.source_work_funding(),
         funding_debits: quote.components,
+        physical,
     })
 }
 
@@ -1485,6 +1571,8 @@ where
         &founder_link_semantic_id.bytes(),
         &accepted_market_core_receipt_id.bytes(),
         &owner.authentication_id().bytes(),
+        &preauthorization.market_family_capability_policy_id.bytes(),
+        &preauthorization.market_family_capability_authentication_id.bytes(),
     ]).to_bytes());
     require_live(id)?;
     Ok(AuthenticatedProductMarketFounderCurrentCreationV3 {
