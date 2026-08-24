@@ -587,8 +587,6 @@ pub enum SourceAccountRoleV2 {
     ReleasePayer,
     /// Program-derived, fully prepaid custody for every lifecycle rent debit/refund.
     SourceFundingCustody,
-    /// Stored payer-principal refund destination.
-    PrincipalRefund,
     /// Frozen neutral donation and surplus sink.
     NeutralSink,
     /// Immutable Product/failure policy binding.
@@ -755,7 +753,6 @@ const SEAL_RAW_PAGE_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::OpenRawPage, true, false),
     meta(SourceAccountRoleV2::OpenPageLineage, true, false),
     meta(SourceAccountRoleV2::RawPage, true, false),
-    meta(SourceAccountRoleV2::PrincipalRefund, true, false),
     meta(SourceAccountRoleV2::NeutralSink, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, true, false),
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
@@ -803,7 +800,6 @@ const SEAL_WINDOW_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::WorkLineage, true, false),
     meta(SourceAccountRoleV2::RawPage, false, false),
     meta(SourceAccountRoleV2::WindowSeal, true, false),
-    meta(SourceAccountRoleV2::PrincipalRefund, true, false),
     meta(SourceAccountRoleV2::NeutralSink, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, true, false),
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
@@ -869,17 +865,11 @@ const CLOSE_GENERATION_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::GenerationTarget, true, false),
     meta(SourceAccountRoleV2::GenerationLineage, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, false, false),
-    meta(SourceAccountRoleV2::Keeper, false, true),
     meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
-    meta(SourceAccountRoleV2::PrincipalRefund, true, false),
     meta(SourceAccountRoleV2::NeutralSink, true, false),
 ];
 
 const NO_ALIASES_V2: &[SourceAccountAliasV2] = &[];
-const CUSTODY_REFUND_ALIAS_V2: &[SourceAccountAliasV2] = &[SourceAccountAliasV2 {
-    left: SourceAccountRoleV2::SourceFundingCustody,
-    right: SourceAccountRoleV2::PrincipalRefund,
-}];
 
 /// Return the exact ordered account-role and alias contract for one action.
 pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> SourceAccountContractV2 {
@@ -899,7 +889,7 @@ pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> Source
             (INGEST_BOUNDARY_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::SealRawPage => {
-            (SEAL_RAW_PAGE_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
+            (SEAL_RAW_PAGE_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::InitializeWindowWork => {
             (INITIALIZE_WINDOW_WORK_METAS_V2, NO_ALIASES_V2)
@@ -908,7 +898,7 @@ pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> Source
             (FOLD_WINDOW_PAGE_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::SealWindow => {
-            (SEAL_WINDOW_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
+            (SEAL_WINDOW_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::EvaluateStatistic => {
             (EVALUATE_STATISTIC_METAS_V2, NO_ALIASES_V2)
@@ -920,7 +910,7 @@ pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> Source
             (REOPEN_GENERATION_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::CloseGeneration => {
-            (CLOSE_GENERATION_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
+            (CLOSE_GENERATION_METAS_V2, NO_ALIASES_V2)
         }
     };
     SourceAccountContractV2 {
@@ -1233,19 +1223,15 @@ mod tests {
     }
 
     #[test]
-    fn only_named_aliases_are_admitted_and_use_effective_union_privileges() {
+    fn protocol_state_aliases_are_refused() {
         let action = registry::SourceSeriesAction::SealRawPage;
         let contract = account_contract_v2(action);
         let custody = role_index(contract, SourceAccountRoleV2::SourceFundingCustody);
         let keeper = role_index(contract, SourceAccountRoleV2::Keeper);
-        let refund = role_index(contract, SourceAccountRoleV2::PrincipalRefund);
-        let mut accounts = observed(action);
-        let custody_key = accounts[custody].key;
-        accounts[refund].key = custody_key;
-        assert_eq!(validate_account_metas_v2(action, &accounts), Ok(()));
+        assert!(contract.aliases().is_empty());
 
         let mut keeper_alias = observed(action);
-        keeper_alias[keeper].key = custody_key;
+        keeper_alias[keeper].key = keeper_alias[custody].key;
         assert_eq!(
             validate_account_metas_v2(action, &keeper_alias),
             Err(CodecError::MismatchedBinding)
@@ -1281,5 +1267,30 @@ mod tests {
         assert!(!custody.signer);
         assert!(keeper.writable);
         assert!(keeper.signer);
+    }
+
+    #[test]
+    fn terminal_close_has_no_semantic_signer_or_external_payer() {
+        let action = registry::SourceSeriesAction::CloseGeneration;
+        let contract = account_contract_v2(action);
+        assert!((0..contract.len()).all(|index| !contract.meta(index).unwrap().signer));
+        assert!((0..contract.len()).all(|index| {
+            !matches!(
+                contract.meta(index).unwrap().role,
+                SourceAccountRoleV2::Keeper | SourceAccountRoleV2::ReleasePayer
+            )
+        }));
+        let custody = role_index(contract, SourceAccountRoleV2::SourceFundingCustody);
+        assert!(contract.aliases().is_empty());
+        assert_eq!(
+            (0..contract.len())
+                .filter(|index| {
+                    contract.meta(*index).unwrap().role
+                        == SourceAccountRoleV2::SourceFundingCustody
+                })
+                .count(),
+            1
+        );
+        assert!(contract.meta(custody).unwrap().writable);
     }
 }
