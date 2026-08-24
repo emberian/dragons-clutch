@@ -591,6 +591,13 @@ pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
 #[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2")]
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 =
     PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
+/// One-shot Dealer future Fractional-credit funding owner discriminator.
+pub const DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG: u8 = 0xbc;
+/// First Dealer future-credit funding owner version.
+pub const DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION: u8 = 1;
+/// Exact funding account bytes including the Dealer global envelope.
+pub const DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 516;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -605,6 +612,7 @@ const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb8);
+const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG == 0xbc);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
@@ -1815,6 +1823,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-series-obligation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+            version: DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-future-credit-funding-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3778,5 +3795,24 @@ mod tests {
         );
         assert!(matching.next().is_none());
         assert_eq!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG, 0xb8);
+    }
+
+    #[test]
+    fn dealer_future_credit_funding_coordinate_is_unique_and_disabled() {
+        let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+                DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            matching.next().map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled),
+        );
+        assert!(matching.next().is_none());
+        assert_eq!(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG, 0xbc);
+        assert_eq!(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES, 524);
     }
 }

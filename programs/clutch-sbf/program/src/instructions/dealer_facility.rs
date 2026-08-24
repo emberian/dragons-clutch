@@ -38,6 +38,7 @@ use clutch_dealer_runtime_contract::{
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
+    DealerFutureCreditFundingV1,
     DealerClaimWorkV1, DealerExitTicketV1, DealerLivenessCompartmentV1,
     DealerLivenessScheduleV1, DealerTerminalAllocationV1,
     DealerPhaseV2, DealerQueueExitLivenessV1,
@@ -128,6 +129,8 @@ use clutch_solana_layout::registry::{
     DEALER_EXIT_TICKET_ACCOUNT_VERSION,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES, DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION, DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
+    DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES, DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+    DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
     DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG, DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
     DEALER_LP_PAGE_V2_ACCOUNT_BYTES, DEALER_LP_PAGE_V2_ACCOUNT_TAG,
     DEALER_LP_PAGE_V2_ACCOUNT_VERSION, DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES,
@@ -141,6 +144,8 @@ use clutch_solana_layout::registry::{
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION, DEALER_STATE_V3_ACCOUNT_BYTES,
     DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
+    FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES,
+    FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES,
 };
 use clutch_solana_layout::order_page_v5::{
     verify_page_set_v5_streaming, OrderPageHeaderV5, OrderSlotCursorV5, ORDER_PAGE_V5_BYTES,
@@ -190,7 +195,7 @@ use super::genesis::{
 };
 
 const DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT: usize = 10;
-const INITIALIZE_ACCOUNT_COUNT: usize = 23 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
+const INITIALIZE_ACCOUNT_COUNT: usize = 24 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
 const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
 const LP_TRANSFER_ACCOUNT_COUNT: usize = 8 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
@@ -213,6 +218,10 @@ const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
 const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
+const _: () = assert!(
+    DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES
+        == 8 + clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1
+);
 
 /// Exact ordered current collateral deployment accounts for one Dealer
 /// liability movement. Hoard and ClaimLedger are always read-only here:
@@ -937,6 +946,35 @@ fn authenticate_dependency(
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok(dependency)
+}
+
+fn authenticate_future_credit_funding(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<(u8, DealerFutureCreditFundingV1)> {
+    let (bump, funding) = dealer_body::<DealerFutureCreditFundingV1>(
+        program_id,
+        account,
+        writable,
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::dealer_future_credit_funding_pda(program_id, &funding.facility_id.bytes()),
+        Some(bump),
+    )?;
+    require(
+        funding.funding_account_id == id(account.key)
+            && account.lamports()
+                >= funding
+                    .minimum_balance_lamports()
+                    .map_err(dealer_fault)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    Ok((bump, funding))
 }
 
 fn authenticate_schedule(
@@ -3156,12 +3194,20 @@ fn initialize_facility(
     let (dependency_address, dependency_bump) =
         seeds::dealer_funded_v2_pda(program_id, &facility_id.bytes());
     expect_pda(accounts[7].key, (dependency_address, dependency_bump), None)?;
+    let (future_credit_funding_address, future_credit_funding_bump) =
+        seeds::dealer_future_credit_funding_pda(program_id, &facility_id.bytes());
+    expect_pda(
+        accounts[33].key,
+        (future_credit_funding_address, future_credit_funding_bump),
+        None,
+    )?;
     for account in [
         &accounts[4],
         &accounts[5],
         &accounts[6],
         &accounts[7],
         &accounts[17],
+        &accounts[33],
     ] {
         require_creatable(account)?;
     }
@@ -3305,6 +3351,15 @@ fn initialize_facility(
         rent.minimum_balance(clutch_dealer_runtime_contract::DEALER_FACILITY_REPLAY_BYTES_V1)?;
     let dependency_principal = rent.minimum_balance(DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES)?;
     let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let future_credit_funding_principal =
+        rent.minimum_balance(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES)?;
+    let future_credit_live_principal =
+        rent.minimum_balance(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES)?;
+    let future_credit_tombstone_principal =
+        rent.minimum_balance(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES)?;
+    let future_credit_refundable_principal = future_credit_live_principal
+        .checked_sub(future_credit_tombstone_principal)
+        .ok_or(ClutchError::Arithmetic)?;
 
     let facility_position_pre = PositionAccountV3::new(PositionV3Fields {
         purpose: PositionPurposeV3::DealerFacility,
@@ -3460,6 +3515,28 @@ fn initialize_facility(
             donation_floor: accounts[7].lamports(),
         },
     };
+    let future_credit_funding = DealerFutureCreditFundingV1 {
+        funding_account_id: id(accounts[33].key),
+        policy_id: Id::from_bytes(policy_id),
+        facility_id,
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: market.collateral_policy_id,
+        collateral_release_id: market.collateral_release_id,
+        collateral_value_receipt_id: market.collateral_value_receipt_id,
+        dealer_state_account_id: id(accounts[4].key),
+        facility_position_account_id: id(accounts[5].key),
+        facility_position_binding_id: binding_id,
+        dealer_replay_account_id: id(accounts[6].key),
+        refund_owner: id(accounts[0].key),
+        neutral_sink: policy.neutral_sink,
+        founding_generation: 1,
+        funding_account_principal_lamports: future_credit_funding_principal,
+        credit_refundable_principal_lamports: future_credit_refundable_principal,
+        credit_tombstone_principal_lamports: future_credit_tombstone_principal,
+        donation_floor_lamports: accounts[33].lamports(),
+    };
+    future_credit_funding.validate().map_err(dealer_fault)?;
     let state = DealerStateV2 {
         policy_id: Id::from_bytes(policy_id),
         facility_id,
@@ -3615,6 +3692,31 @@ fn initialize_facility(
             &[state_bump],
         ],
     )?;
+    let future_credit_total_principal = future_credit_funding
+        .funding_account_principal_lamports
+        .checked_add(
+            future_credit_funding
+                .credit_principal_lamports()
+                .map_err(dealer_fault)?,
+        )
+        .ok_or(ClutchError::Arithmetic)?;
+    let observed_future_credit_donation = create_exact_payer_debit_pda(
+        program_id,
+        &accounts[0],
+        &accounts[33],
+        &accounts[21],
+        future_credit_total_principal,
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_FUTURE_CREDIT_FUNDING,
+            &facility_id.bytes(),
+            &[future_credit_funding_bump],
+        ],
+    )?;
+    require(
+        observed_future_credit_donation == future_credit_funding.donation_floor_lamports,
+        ClutchError::MismatchedState,
+    )?;
     let purpose_seed = [u8::from(PositionPurposeV3::DealerFacility)];
     create_full_principal_pda(
         program_id,
@@ -3765,6 +3867,19 @@ fn initialize_facility(
         DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
         receipt_bump,
         &receipt,
+    )?;
+    write_dealer_body(
+        &accounts[33],
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+        DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+        future_credit_funding_bump,
+        &future_credit_funding,
+    )?;
+    let (_, observed_future_credit_funding) =
+        authenticate_future_credit_funding(program_id, &accounts[33], true)?;
+    require(
+        observed_future_credit_funding == future_credit_funding,
+        ClutchError::MismatchedState,
     )?;
     write_dealer_body(
         &accounts[4],
@@ -8814,6 +8929,53 @@ pub fn process(
             claim_terminal_allocation(program_id, accounts, sequence, payload)
         }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
+    }
+}
+
+#[cfg(test)]
+mod future_credit_funding_adversarial_tests {
+    use super::INITIALIZE_ACCOUNT_COUNT;
+    use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaRoleV1, DealerRuntimePayloadV1};
+    use clutch_solana_layout::registry::DealerFacilityAction;
+
+    #[test]
+    fn initialize_contract_requires_the_exact_writable_future_credit_owner() {
+        let mut payload = [0u8; 48];
+        payload[0..8].copy_from_slice(&1u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&0u64.to_le_bytes());
+        payload[16..24].copy_from_slice(&3u64.to_le_bytes());
+        payload[24..32].copy_from_slice(&4u64.to_le_bytes());
+        payload[32..36].copy_from_slice(&5u32.to_le_bytes());
+        payload[40..48].copy_from_slice(&6u64.to_le_bytes());
+        let decoded = DealerRuntimePayloadV1::decode(DealerFacilityAction::Initialize, &payload)
+            .expect("canonical initialize payload");
+        let metas = meta_contract_v1(DealerFacilityAction::Initialize, decoded)
+            .expect("frozen initialize contract");
+        assert_eq!(metas.len(), INITIALIZE_ACCOUNT_COUNT);
+        assert_eq!(metas[33].role, DealerMetaRoleV1::FutureCreditFunding);
+        assert!(metas[33].writable);
+        assert!(!metas[33].signer);
+    }
+
+    #[test]
+    fn initialization_debits_both_principals_and_hostile_prefund_never_discounts_them() {
+        let source = include_str!("dealer_facility.rs");
+        let handler = source
+            .split("fn initialize_facility")
+            .nth(1)
+            .and_then(|value| value.split("fn sponsor_halt").next())
+            .expect("Initialize handler");
+        for guard in [
+            "future_credit_live_principal",
+            "future_credit_tombstone_principal",
+            "future_credit_total_principal",
+            "create_exact_payer_debit_pda",
+            "observed_future_credit_donation == future_credit_funding.donation_floor_lamports",
+            "authenticate_future_credit_funding(program_id, &accounts[33], true)",
+            "observed_future_credit_funding == future_credit_funding",
+        ] {
+            assert!(handler.contains(guard), "missing future-credit guard {guard}");
+        }
     }
 }
 

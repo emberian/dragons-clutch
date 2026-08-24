@@ -64,7 +64,7 @@ pub enum DealerRuntimeContractErrorV1 {
     InvalidBody,
 }
 
-/// Strict common global account header used only by Dealer tags `0x93..=0x9f`.
+/// Strict common global account header used by centrally allocated Dealer tags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerAccountEnvelopeV1 {
     /// Global central-registry account tag.
@@ -909,6 +909,8 @@ pub enum DealerMetaRoleV1 {
     FacilityReplay,
     /// Counted funded-dependency child.
     FundedDependencies,
+    /// One-shot future facility Fractional-credit rent owner.
+    FutureCreditFunding,
     /// Immutable Dealer quote schedule.
     LivenessSchedule,
     /// Immutable generic runtime-liveness policy.
@@ -1122,6 +1124,7 @@ const INITIALIZE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::GeneralReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FutureCreditFunding, DealerMetaOwnerV1::System, false, true),
 ];
 
 const CREATE_FIRST: &[DealerMetaSpecV1] = &[
@@ -2249,7 +2252,7 @@ mod current_value_account_contract_adversarial_tests {
 
     #[test]
     fn only_the_exact_system_program_role_may_use_the_zero_address() {
-        let mut keys = [[0u8; 32]; 33];
+        let mut keys = [[0u8; 32]; 34];
         let mut index = 0usize;
         while index < keys.len() {
             keys[index] = [u8::try_from(index + 1).expect("bounded account index"); 32];
@@ -2262,5 +2265,14 @@ mod current_value_account_contract_adversarial_tests {
             validate_meta_keys_distinct_v1(INITIALIZE, &keys),
             Err(DealerRuntimeContractErrorV1::InvalidField)
         );
+    }
+
+    #[test]
+    fn initialize_requires_the_fresh_future_credit_funding_pda() {
+        assert_eq!(INITIALIZE.len(), 34);
+        assert_eq!(INITIALIZE[33].role, DealerMetaRoleV1::FutureCreditFunding);
+        assert_eq!(INITIALIZE[33].owner, DealerMetaOwnerV1::System);
+        assert!(INITIALIZE[33].writable);
+        assert!(!INITIALIZE[33].signer);
     }
 }

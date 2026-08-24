@@ -28,6 +28,7 @@ mod facility;
 mod fee_bindings;
 mod fee_terminal;
 mod funding_dependencies;
+mod future_credit_funding;
 mod lease;
 mod lease_close_v3;
 mod lease_v2;
@@ -65,6 +66,7 @@ pub use facility::*;
 pub use fee_bindings::*;
 pub use fee_terminal::*;
 pub use funding_dependencies::*;
+pub use future_credit_funding::*;
 pub use lease::*;
 pub use lease_close_v3::*;
 pub use lease_v2::*;
@@ -137,6 +139,9 @@ pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for counted, rent-owned funded dependencies.
 pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/funded-dependencies/v2\0";
+/// Exact content domain for the one-shot future Fractional-credit funding owner.
+pub const DEALER_FUTURE_CREDIT_FUNDING_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/future-credit-funding/v1\0";
 /// Transcript domain for an authenticated external liveness bundle projection.
 pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0";

@@ -159,6 +159,9 @@ pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
 /// Counted facility-lifetime Product Series obligation.
 pub const SEED_DEALER_SERIES_OBLIGATION: &[u8] =
     clutch_dealer_runtime_contract::DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1;
+/// One-shot Dealer future Fractional-credit funding owner.
+pub const SEED_DEALER_FUTURE_CREDIT_FUNDING: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -1126,6 +1129,17 @@ pub fn dealer_state_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubk
 /// Canonical counted funded-dependency address.
 pub fn dealer_funded_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_FUNDED_V2, facility_id])
+}
+
+/// Canonical one-shot future Fractional-credit funding owner.
+pub fn dealer_future_credit_funding_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_FUTURE_CREDIT_FUNDING, facility_id],
+    )
 }
 
 /// Canonical Dealer LP page V2 address.
