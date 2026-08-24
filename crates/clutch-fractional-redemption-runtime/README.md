@@ -111,9 +111,10 @@ capability authenticates the exact Retiring ClaimLedger body, both live
 pre-deletion account bodies, both observed rent balances, and an action-10
 release narrowed from the loader-authenticated registry capability. Product's
 consumer can accept those private values but cannot construct them or replace
-their receipt. The shared actions 1 and 10 remain disabled until Product lands
-the atomic aggregator/root consumers and its private Foundation preallocation
-authority.
+their receipt. Product's atomic aggregator/root consumers and private
+Foundation preallocation authority are present. Actions 1 and 10, like actions
+2 through 9, remain disabled until the whole family passes release review and
+is admitted by one exact linked capability profile.
 
 ## Solana activation boundary
 
