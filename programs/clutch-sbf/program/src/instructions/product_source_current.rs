@@ -8,7 +8,9 @@
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
-use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
+use crate::instructions::product_series_current::{
+    AuthenticatedRegistryCapabilityV4, AuthenticatedRegistryCapabilityV5,
+};
 use crate::instructions::product_series::{
     IX_SERIES_ARTIFACT_ATTACHMENT, IX_SERIES_ARTIFACT_BASIS,
     IX_SERIES_ARTIFACT_FUNDING_TERMS,
@@ -18,14 +20,17 @@ use crate::instructions::product_series::{
     SERIES_ARTIFACT_ACCOUNT_COUNT_V1,
 };
 use clutch_product_series::{
-    assemble_compiled_product_series_bundle_v6, compile_source_semantic_inputs_v2,
+    assemble_compiled_product_series_bundle_v6, assemble_compiled_product_series_bundle_v7,
+    compile_source_semantic_inputs_v2,
     AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV6,
-    CompiledProductSeriesBundleV6Id,
+    CompiledProductSeriesBundleV6Id, CompiledProductSeriesBundleV7,
+    CompiledProductSeriesBundleV7Id,
     CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductSeriesBundleInputsV6, ProductTemplateV4,
-    RegistryCapabilityProjectionV2, SeriesAttachmentPlanV5, SeriesFundingComponentV2,
-    SeriesFundingQuoteV5, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
+    PriceMeasurePolicyV1, ProductSeriesBundleInputsV6, ProductSeriesBundleInputsV7,
+    ProductTemplateV4, RegistryCapabilityProjectionV2, SeriesAttachmentPlanV5,
+    SeriesAttachmentPlanV6, SeriesFundingComponentV2, SeriesFundingQuoteV5,
+    SeriesFundingQuoteV6, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
     SeriesPlanV5Id,
 };
 use clutch_source_plane_v3::{
@@ -278,6 +283,79 @@ impl AuthenticatedSeriesSourceArtifactsV5 {
     }
 }
 
+/// Exact nine-account QuoteV6/AttachmentV6 artifact graph.
+///
+/// This value is move-only so the current BundleV7 reconstruction and
+/// physical FundingV5 founder cannot be detached from the hostile artifact
+/// reads that selected the 50-slot foundation graph.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSeriesSourceArtifactsV6 {
+    series: Box<SeriesPlanV5>,
+    funding_terms: Box<SeriesFundingTermsV2>,
+    template: Box<ProductTemplateV4>,
+    basis: Box<NativeClaimBasisV1>,
+    recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
+    price_policy: Box<PriceMeasurePolicyV1>,
+    genesis: Box<MarketGenesisProfileV2>,
+    quote: Box<SeriesFundingQuoteV6>,
+    attachment: Box<SeriesAttachmentPlanV6>,
+}
+
+impl AuthenticatedSeriesSourceArtifactsV6 {
+    pub(crate) fn validate_registry_projection(
+        &self,
+        projection: &RegistryCapabilityProjectionV2,
+    ) -> Outcome<()> {
+        self.series
+            .validate_bindings_v6(
+                &self.template,
+                &self.basis,
+                &self.recovery,
+                &self.price_policy,
+                &self.genesis,
+                &self.attachment,
+                projection,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.funding_terms
+            .validate_bindings(
+                &self.series,
+                &self.template,
+                &self.basis,
+                &self.recovery,
+                &self.price_policy,
+                &self.genesis,
+                projection,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.quote
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.attachment
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            self.quote.evidence_only_recovery_policy_id
+                == self
+                    .recovery
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .content_id()
+                && self.attachment.funding_quote_id
+                    == self
+                        .quote
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            ClutchError::MismatchedState,
+        )
+    }
+
+    pub(crate) fn series(&self) -> &SeriesPlanV5 { &self.series }
+    pub(crate) fn funding_terms(&self) -> &SeriesFundingTermsV2 { &self.funding_terms }
+    pub(crate) fn quote(&self) -> &SeriesFundingQuoteV6 { &self.quote }
+    pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV6 { &self.attachment }
+}
+
 /// Hostile-authenticated current BundleV6 reconstructed from all semantic
 /// owners rather than accepted as an independent caller claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,6 +377,22 @@ impl AuthenticatedCompiledProductSeriesBundleV6 {
     pub(crate) const fn bundle_id(self) -> CompiledProductSeriesBundleV6Id {
         self.bundle_id
     }
+}
+
+/// Hostile-authenticated BundleV7 reconstructed from every current semantic
+/// owner. The move-only wrapper prevents a BundleV7 ID from replacing the
+/// exact artifact account and reconstructed body at the physical boundary.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedCompiledProductSeriesBundleV7 {
+    artifact_account: Pubkey,
+    bundle: CompiledProductSeriesBundleV7,
+    bundle_id: CompiledProductSeriesBundleV7Id,
+}
+
+impl AuthenticatedCompiledProductSeriesBundleV7 {
+    pub(crate) const fn artifact_account(&self) -> Pubkey { self.artifact_account }
+    pub(crate) const fn bundle(&self) -> &CompiledProductSeriesBundleV7 { &self.bundle }
+    pub(crate) const fn bundle_id(&self) -> CompiledProductSeriesBundleV7Id { self.bundle_id }
 }
 
 /// Private Source/ProfileV4/BundleV6 route selected by current Product state.
@@ -542,6 +636,135 @@ pub(crate) fn authenticate_series_source_artifacts_v5(
     })
 }
 
+/// Hostile-authenticate the current QuoteV6/AttachmentV6 artifact graph.
+pub(crate) fn authenticate_series_source_artifacts_v6(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    expected_series: SeriesPlanV5Id,
+    expected_funding_terms: SeriesFundingTermsV2Id,
+) -> Outcome<AuthenticatedSeriesSourceArtifactsV6> {
+    require_count(accounts, SERIES_ARTIFACT_ACCOUNT_COUNT_V1)?;
+    expected_series
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expected_funding_terms
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let series = authenticate_product_artifact_v1::<SeriesPlanV5>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_PLAN],
+        expected_series.content_id(),
+    )?
+    .into_value();
+    let funding_terms = authenticate_product_artifact_v1::<SeriesFundingTermsV2>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_FUNDING_TERMS],
+        expected_funding_terms.content_id(),
+    )?
+    .into_value();
+    require(
+        series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == expected_series
+            && funding_terms
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == expected_funding_terms
+            && funding_terms.series_plan_id == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+    let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_TEMPLATE],
+        series.product_template_id.content_id(),
+    )?
+    .into_value();
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_GENESIS],
+        series.market_genesis_profile_id.content_id(),
+    )?
+    .into_value();
+    let attachment = authenticate_product_artifact_v1::<SeriesAttachmentPlanV6>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_ATTACHMENT],
+        series.attachment_plan_id.content_id(),
+    )?
+    .into_value();
+    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_BASIS],
+        template.native_claim_basis_id.content_id(),
+    )?
+    .into_value();
+    let recovery = authenticate_product_artifact_v1::<EvidenceOnlyRecoveryPolicyV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_RECOVERY],
+        template.evidence_only_recovery_policy_id.content_id(),
+    )?
+    .into_value();
+    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_PRICE_POLICY],
+        genesis.price_measure_policy_id.content_id(),
+    )?
+    .into_value();
+    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV6>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_QUOTE],
+        attachment.funding_quote_id.content_id(),
+    )?
+    .into_value();
+    require(
+        template
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == series.product_template_id
+            && genesis
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == series.market_genesis_profile_id
+            && attachment
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .content_id()
+                == series.attachment_plan_id.content_id()
+            && recovery
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == template.evidence_only_recovery_policy_id
+            && price_policy
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == genesis.price_measure_policy_id
+            && quote
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == attachment.funding_quote_id
+            && quote.evidence_only_recovery_policy_id
+                == template.evidence_only_recovery_policy_id.content_id(),
+        ClutchError::MismatchedState,
+    )?;
+    template
+        .validate_bindings(&basis, &recovery)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    genesis
+        .validate_bindings(&basis, &price_policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedSeriesSourceArtifactsV6 {
+        series,
+        funding_terms,
+        template,
+        basis,
+        recovery,
+        price_policy,
+        genesis,
+        quote,
+        attachment,
+    })
+}
+
 /// Reconstruct and hostile-authenticate the sole current BundleV6 graph.
 pub(crate) fn authenticate_compiled_product_series_bundle_v6(
     program_id: &Pubkey,
@@ -589,6 +812,59 @@ pub(crate) fn authenticate_compiled_product_series_bundle_v6(
     )?;
     require(*decoded.value() == expected, ClutchError::MismatchedState)?;
     Ok(AuthenticatedCompiledProductSeriesBundleV6 {
+        artifact_account: *bundle_account.key,
+        bundle: expected,
+        bundle_id: expected_id,
+    })
+}
+
+/// Reconstruct and hostile-authenticate the sole current BundleV7 graph.
+pub(crate) fn authenticate_compiled_product_series_bundle_v7(
+    program_id: &Pubkey,
+    bundle_account: &AccountInfo<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedCompiledProductSeriesBundleV7> {
+    artifacts.validate_registry_projection(&registry.projection())?;
+    let expected = assemble_compiled_product_series_bundle_v7(ProductSeriesBundleInputsV7 {
+        registry: &registry.projection(),
+        source_release_manifest_id: ContentId::from_bytes(source_release.manifest_id().bytes()),
+        basis: &artifacts.basis,
+        recovery: &artifacts.recovery,
+        template: &artifacts.template,
+        price_policy: &artifacts.price_policy,
+        genesis: &artifacts.genesis,
+        funding_quote: &artifacts.quote,
+        attachment: &artifacts.attachment,
+        series: &artifacts.series,
+        funding_terms: &artifacts.funding_terms,
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_id = expected
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        artifacts
+            .series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == registry.series_plan_id()
+            && artifacts
+                .funding_terms
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == registry.funding_terms_id()
+            && expected_id == registry.compiler_bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let decoded = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV7>(
+        program_id,
+        bundle_account,
+        expected_id.content_id(),
+    )?;
+    require(*decoded.value() == expected, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedCompiledProductSeriesBundleV7 {
         artifact_account: *bundle_account.key,
         bundle: expected,
         bundle_id: expected_id,
@@ -966,6 +1242,43 @@ pub(crate) fn authenticate_source_resolution_input_v4(
 #[cfg(test)]
 mod adversarial_tests {
     use super::*;
+
+    #[test]
+    fn v7_artifact_graph_is_fresh_move_only_and_release_bound() {
+        let source = include_str!("product_source_current.rs");
+        let artifacts = source
+            .split_once("pub(crate) struct AuthenticatedSeriesSourceArtifactsV6")
+            .expect("V6 artifact authority")
+            .1
+            .split_once("/// Hostile-authenticated current BundleV6")
+            .expect("bounded V6 artifact authority")
+            .0;
+        let bundle = source
+            .split_once("pub(crate) struct AuthenticatedCompiledProductSeriesBundleV7")
+            .expect("V7 bundle authority")
+            .1
+            .split_once("/// Private Source/ProfileV4/BundleV6 route")
+            .expect("bounded V7 bundle authority")
+            .0;
+        let reconstruction = source
+            .split_once("pub(crate) fn authenticate_compiled_product_series_bundle_v7")
+            .expect("V7 bundle reconstruction")
+            .1
+            .split_once("/// Join exact Source deployment")
+            .expect("bounded V7 reconstruction")
+            .0;
+        assert!(artifacts.contains("SeriesFundingQuoteV6"));
+        assert!(artifacts.contains("SeriesAttachmentPlanV6"));
+        assert!(!artifacts.contains("#[derive(Clone, Copy"));
+        assert!(bundle.contains("CompiledProductSeriesBundleV7"));
+        assert!(!bundle.contains("Clone"));
+        assert!(!bundle.contains("Copy"));
+        assert!(reconstruction.contains("AuthenticatedRegistryCapabilityV5"));
+        assert!(reconstruction.contains("assemble_compiled_product_series_bundle_v7"));
+        assert!(!reconstruction.contains("SeriesFundingQuoteV5"));
+        assert!(!reconstruction.contains("SeriesAttachmentPlanV5"));
+        assert!(!reconstruction.contains("CompiledProductSeriesBundleV6"));
+    }
 
     #[test]
     fn current_publication_has_no_bundle_v5_or_quote_v4_authority() {
