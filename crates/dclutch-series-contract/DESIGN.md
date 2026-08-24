@@ -43,11 +43,12 @@ window, statistic, and resolution-policy identity; capability similarly uses
 the immutable `capability_template_id` directly. A future per-occurrence source
 compiler is a new pinned release rather than caller discretion.
 
-Before instantiation, the SBF release authenticates the recipe-selected
-CapacityProfile and proves that the fixed 104-byte, one-page occurrence
-artifact and categorical outcome width fit it. The fixed Product compiler
-release ID is checked by the pure recipe decoder rather than carried as an
-unused advisory field.
+Before accepting Create, and again before instantiation, the SBF release
+authenticates the recipe-selected CapacityProfile and proves that the fixed
+104-byte, one-page occurrence artifact and categorical outcome width fit it.
+Create therefore cannot strand prepaid principal behind an intrinsically
+inadmissible recipe. The fixed Product compiler release ID is checked by the
+pure recipe decoder rather than carried as an unused advisory field.
 
 The root persists the immutable refund authority as the one semantic owner of
 the beneficiary choice. The Rent contract's one-credit-per-authority PDA rule
