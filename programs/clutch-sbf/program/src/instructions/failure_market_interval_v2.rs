@@ -26,7 +26,7 @@ use crate::instructions::product_market::{
     authenticate_market_instance_terminal_v1, release_series_market_link_failure_v1,
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketInstanceTerminalV1,
     AuthenticatedSeriesFailureArchivePostwriteV2, AuthenticatedSeriesFailureSessionReleaseV1,
-    AuthenticatedSeriesMarketLinkV1,
+    AuthenticatedSeriesMarketLinkV1, AuthenticatedWritableFailureResolutionLinkV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -251,6 +251,7 @@ pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
     source_occurrence_id: SourceOccurrenceV1Id,
+    resolution_link_preauthorization_id: ProductContentId,
 }
 
 impl FailureMarketIntervalArchivePostwriteV2 {
@@ -278,6 +279,11 @@ impl FailureMarketIntervalArchivePostwriteV2 {
     /// canonical Idle reset clears the reusable cell's session-local body.
     pub(crate) const fn source_occurrence_id(self) -> SourceOccurrenceV1Id {
         self.source_occurrence_id
+    }
+
+    /// Exact Product-owned writable-link preauthorization consumed at release.
+    pub(crate) const fn resolution_link_preauthorization_id(self) -> ProductContentId {
+        self.resolution_link_preauthorization_id
     }
 }
 
@@ -318,6 +324,10 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
         ))
     }
 
+    fn resolution_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.resolution_link_preauthorization_id)
+    }
+
     fn authenticate_series_failure_archive_postwrite_v2(
         &self,
         archive_postwrite_id: ProductContentId,
@@ -328,6 +338,7 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
         source_occurrence_id: SourceOccurrenceV1Id,
         session_binding_id: ProductContentId,
         session_terminal_receipt_id: ProductContentId,
+        resolution_link_preauthorization_id: ProductContentId,
     ) -> Outcome<()> {
         require(
             archive_postwrite_id == self.id
@@ -338,7 +349,9 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
                 && source_occurrence_id == self.source_occurrence_id
                 && session_binding_id.bytes() == self.append.session_binding_id().bytes()
                 && session_terminal_receipt_id.bytes()
-                    == self.append.session_terminal_receipt_id().bytes(),
+                    == self.append.session_terminal_receipt_id().bytes()
+                && resolution_link_preauthorization_id
+                    == self.resolution_link_preauthorization_id,
             ClutchError::MismatchedState,
         )
     }
@@ -1136,7 +1149,9 @@ fn write_failure_market_interval_archive_v2<'a>(
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     cell_plan: FailureMarketIntervalCellPlanV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
+    resolution_link_preauthorization_id: ProductContentId,
 ) -> Outcome<FailureMarketIntervalArchivePostwriteV2> {
+    require_live_data_id(resolution_link_preauthorization_id)?;
     let source_occurrence_id = authenticated
         .cell
         .product_work()
@@ -1243,6 +1258,7 @@ fn write_failure_market_interval_archive_v2<'a>(
             &append.market_instance_id().bytes(),
             &append.generation().to_le_bytes(),
             &source_occurrence_id.bytes(),
+            &resolution_link_preauthorization_id.bytes(),
         ])
         .to_bytes(),
     );
@@ -1253,6 +1269,7 @@ fn write_failure_market_interval_archive_v2<'a>(
         append,
         reset,
         source_occurrence_id,
+        resolution_link_preauthorization_id,
     })
 }
 
@@ -1274,6 +1291,7 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     series_link_account: &AccountInfo<'a>,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    resolution_link: AuthenticatedWritableFailureResolutionLinkV1,
     admission: AuthenticatedFailureMarketRootV2,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     history_plan: FailureMarketIntervalHistoryPlanV2,
@@ -1335,11 +1353,13 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
         append,
         cell_plan,
         reset,
+        resolution_link.id(),
     )?;
     let release = release_series_market_link_failure_v1(
         program_id,
         series_link_account,
         link_before,
+        resolution_link,
         &archive,
         link_rebound_output,
     )?;
@@ -1359,7 +1379,9 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
             && release.append_receipt_id().bytes() == archive.append().id().bytes()
             && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
             && release.session_terminal_receipt_id()
-                == archive.append().session_terminal_receipt_id(),
+                == archive.append().session_terminal_receipt_id()
+            && release.resolution_link_preauthorization_id()
+                == archive.resolution_link_preauthorization_id(),
         ClutchError::MismatchedState,
     )?;
     let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
@@ -1977,6 +1999,15 @@ mod adversarial_account_tests {
             .find("Ok((archive, release, runtime_postwrite))")
             .unwrap();
         assert!(archive < release && release < runtime && runtime < success);
+        let archive_writer = source
+            .split("fn write_failure_market_interval_archive_v2")
+            .nth(1)
+            .and_then(|value| value.split("/// Atomically archive one exact terminal").next())
+            .expect("private paired archive writer");
+        assert!(archive_writer.contains("resolution_link_preauthorization_id"));
+        assert!(source[outer..].contains("resolution_link.id()"));
+        assert!(source[outer..]
+            .contains("release.resolution_link_preauthorization_id()"));
         assert_eq!(
             source
                 .matches("pub(crate) fn archive_failure_market_interval_session_v2")
