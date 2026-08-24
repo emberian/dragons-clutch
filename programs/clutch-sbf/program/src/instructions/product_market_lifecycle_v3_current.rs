@@ -9,7 +9,10 @@
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{transfer_data, SYSTEM_PROGRAM_ID};
-use crate::instructions::product_market_replay_current::AuthenticatedMarketLifecycleReplayV2;
+use crate::instructions::product_market_replay_current::{
+    settle_current_product_market_replay_foundation_v2, AuthenticatedMarketLifecycleReplayV2,
+    AuthenticatedProductMarketReplayFoundationPostwriteV2,
+};
 use crate::seeds;
 use clutch_product_series::{
     ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
@@ -101,10 +104,12 @@ impl<'state> AuthenticatedSeriesMarketLinkV3<'state> {
     pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
 }
 
-/// Move-only proof that Product transferred one exact ScheduleV4 principal
-/// from the canonical FoundationVault into the next uninitialized GraphV4
-/// account. Concrete account owners consume this value in the same
-/// instruction and return a typed postwrite; there is no ID-only constructor.
+/// Move-only proof that Product spent one exact ScheduleV4 principal from the
+/// canonical FoundationVault for the next GraphV4 slot. Ordinary slots receive
+/// the principal directly. Slot 13 instead repays the persisted replay
+/// bootstrap payer while the replay account remains funded and changes phase.
+/// Concrete account owners consume this value in the same instruction and
+/// return a typed postwrite; there is no ID-only constructor.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductMarketFoundationDebitV4 {
     id: ContentId,
@@ -402,6 +407,202 @@ pub(crate) fn authenticate_series_market_link_v3<'state>(
         binding_id,
         authentication_id,
     })
+}
+
+/// Spend canonical slot 13 by repaying the persisted replay bootstrap payer,
+/// transition the replay body to `FoundationSettled`, and return the exact
+/// debit/postwrite pair consumed by the sole RootV3 cursor. Unlike ordinary
+/// slots, the graph account remains funded and its lamport balance is unchanged.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
+    program_id: &Pubkey,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    replay: AuthenticatedMarketLifecycleReplayV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    replay_account: &AccountInfo<'a>,
+    foundation_vault: &AccountInfo<'a>,
+    bootstrap_payer: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<(
+    AuthenticatedProductMarketFoundationDebitV4,
+    AuthenticatedProductMarketReplayFoundationPostwriteV2,
+)> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let state = root.state();
+    let binding = state.binding_ref();
+    let replay_binding = replay.state().binding();
+    let replay_binding_id = replay_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let next_index = next_foundation_slot_index_v4(
+        state.foundation().expected_bitmap,
+        state.foundation().initialized_bitmap,
+    )?
+    .ok_or(ClutchError::MismatchedState)?;
+    let slot = foundation_slot_v4(next_index)?;
+    let replay_account_id = graph
+        .account(slot)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market = binding.market_instance_id.bytes();
+    let (expected_vault, _) = seeds::product_market_foundation_vault_pda(
+        program_id,
+        &market,
+        binding.generation,
+    );
+    let capital = state.capital();
+    let principal_lamports = schedule.slot_principal_lamports[next_index];
+    let principal_before_lamports = capital.principal_remaining_lamports;
+    let principal_after_lamports = principal_before_lamports
+        .checked_sub(principal_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let vault_lamports_before = foundation_vault.lamports();
+    let vault_donation_before_lamports = vault_lamports_before
+        .checked_sub(principal_before_lamports)
+        .ok_or(ClutchError::SeriesCustodyDeltaMismatch)?;
+    let replay_observed_lamports = replay.observed_lamports();
+    require(
+        root.is_writable()
+            && root.owner_program() == *program_id
+            && state.phase() == MarketLifecyclePhaseV3::Founding
+            && slot == MarketFoundationSlotV4::ProductReplayAnchor
+            && binding.foundation_schedule_id == schedule_id
+            && binding.foundation_account_graph_id == graph_id
+            && binding.market_instance_id == graph.market_instance_id
+            && binding.generation == graph.generation
+            && binding.market_lifecycle_replay_account_id.bytes()
+                == replay.account().to_bytes()
+            && binding.market_lifecycle_generation_binding_id == replay_binding_id
+            && replay_binding.market_instance_id == binding.market_instance_id
+            && replay_binding.generation == binding.generation
+            && replay_binding.foundation_schedule_id == schedule_id
+            && replay_binding.foundation_account_graph_id == graph_id
+            && replay.state().phase() == MarketLifecycleReplayPhaseV2::Founding
+            && replay.is_writable()
+            && replay.account() == *replay_account.key
+            && replay_account_id.bytes() == replay_account.key.to_bytes()
+            && principal_lamports == replay_binding.replay_rent_principal_lamports
+            && principal_lamports != 0
+            && capital.rent_refund_owner == replay_binding.rent_principal_refund_owner
+            && capital.neutral_lamport_sink == replay_binding.neutral_lamport_sink
+            && bootstrap_payer.key.to_bytes() == capital.rent_refund_owner.bytes()
+            && *foundation_vault.key == expected_vault
+            && binding.foundation_vault_id.bytes() == foundation_vault.key.to_bytes()
+            && vault_donation_before_lamports >= capital.vault_current_donation_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let founder_preauthorization_id = replay_binding_id.content_id();
+    let market_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let founder_creation_receipt_id = hashv(&[
+        PRODUCT_MARKET_FOUNDATION_CURRENT_MATERIAL_DOMAIN_V4,
+        program_id.as_ref(),
+        root.account().as_ref(),
+        &root.binding_id().bytes(),
+        &replay.authentication_id().bytes(),
+        &replay_binding.physical_capitalization_receipt_id.bytes(),
+        &founder_preauthorization_id.bytes(),
+    ]);
+    let foundation_steps_id = hashv(&[
+        PRODUCT_MARKET_FOUNDATION_CURRENT_STEPS_DOMAIN_V4,
+        program_id.as_ref(),
+        root.account().as_ref(),
+        &market_binding_id.bytes(),
+        &schedule_id.bytes(),
+        &graph_id.bytes(),
+        foundation_vault.key.as_ref(),
+        &capital.rent_refund_owner.bytes(),
+        &capital.neutral_lamport_sink.bytes(),
+    ]);
+    require_live(founder_creation_receipt_id)?;
+    require_live(foundation_steps_id)?;
+    let root_transition_sequence_after = state
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    let debit_id = hashv(&[
+        PRODUCT_MARKET_FOUNDATION_DEBIT_DOMAIN_V4,
+        &founder_creation_receipt_id.bytes(),
+        &founder_preauthorization_id.bytes(),
+        &foundation_steps_id.bytes(),
+        &market_binding_id.bytes(),
+        &root.authentication_id().bytes(),
+        &root.semantic_id().bytes(),
+        &root.data_id().bytes(),
+        &state.transition_sequence().to_le_bytes(),
+        &state.foundation().transcript_id.bytes(),
+        &[u8::try_from(next_index).map_err(|_| ClutchError::Arithmetic)?],
+        replay_account.key.as_ref(),
+        &principal_lamports.to_le_bytes(),
+        &principal_before_lamports.to_le_bytes(),
+        &principal_after_lamports.to_le_bytes(),
+        &vault_donation_before_lamports.to_le_bytes(),
+        &replay_observed_lamports.to_le_bytes(),
+    ]);
+    require_live(debit_id)?;
+    let postwrite = settle_current_product_market_replay_foundation_v2(
+        program_id,
+        replay,
+        replay_account,
+        foundation_vault,
+        bootstrap_payer,
+        system_program,
+    )?;
+    let vault_lamports_after = foundation_vault.lamports();
+    let vault_donation_after_lamports = vault_lamports_after
+        .checked_sub(principal_after_lamports)
+        .ok_or(ClutchError::SeriesCustodyDeltaMismatch)?;
+    require(
+        vault_lamports_after
+                == vault_lamports_before
+                    .checked_sub(principal_lamports)
+                    .ok_or(ClutchError::Arithmetic)?
+            && vault_donation_after_lamports == vault_donation_before_lamports
+            && replay_account.lamports() == replay_observed_lamports,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    Ok((
+        AuthenticatedProductMarketFoundationDebitV4 {
+            id: debit_id,
+            founder_creation_receipt_id,
+            founder_preauthorization_id,
+            foundation_steps_id,
+            market_binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            market_instance_id: binding.market_instance_id,
+            generation: binding.generation,
+            slot,
+            root_transition_sequence_after,
+            foundation_vault_account: *foundation_vault.key,
+            destination_account: *replay_account.key,
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            destination_donation_floor_lamports: replay_observed_lamports,
+            destination_balance_after_lamports: replay_observed_lamports,
+            vault_donation_before_lamports,
+            vault_donation_after_lamports,
+            rent_refund_owner: *bootstrap_payer.key,
+            neutral_lamport_sink: Pubkey::new_from_array(
+                capital.neutral_lamport_sink.bytes(),
+            ),
+        },
+        postwrite,
+    ))
 }
 
 /// Transfer exactly the next canonical ScheduleV4 principal out of the
