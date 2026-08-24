@@ -132,11 +132,14 @@ pub struct PositionReplayCloseRuntimeRequestV4<'a> {
 }
 
 /// Complete prospective V3 close image and lamport schedule.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedPositionReplayCloseV3 {
     position_account: Identity32V1,
     replay_account: Identity32V1,
     replay_terminal_semantic_id: Identity32V1,
+    signed_sequence: u64,
+    position_lamports_before: u64,
+    replay_lamports_before: u64,
     position_tombstone_bytes: [u8; POSITION_TOMBSTONE_V3_BYTES],
     recipient_credits: CoalescedRecipientCreditsV1,
     position_lamports_after: u64,
@@ -145,39 +148,54 @@ pub struct PreparedPositionReplayCloseV3 {
 
 impl PreparedPositionReplayCloseV3 {
     /// Position PDA rewritten to the permanent V3 tombstone image.
-    pub const fn position_account(self) -> Identity32V1 {
+    pub const fn position_account(&self) -> Identity32V1 {
         self.position_account
     }
 
     /// Current-generation Replay PDA deleted in the same atomic commit.
-    pub const fn replay_account(self) -> Identity32V1 {
+    pub const fn replay_account(&self) -> Identity32V1 {
         self.replay_account
     }
 
     /// Semantic ID of the exact terminal Replay bytes authenticated before
     /// deletion. The permanent Position tombstone retains the deleted Replay
     /// address and generation for replay refusal.
-    pub const fn replay_terminal_semantic_id(self) -> Identity32V1 {
+    pub const fn replay_terminal_semantic_id(&self) -> Identity32V1 {
         self.replay_terminal_semantic_id
     }
 
+    /// Exact sequence authenticated from the signed terminal instruction.
+    pub const fn signed_sequence(&self) -> u64 {
+        self.signed_sequence
+    }
+
+    /// Position lamports authenticated before any retirement mutation.
+    pub const fn position_lamports_before(&self) -> u64 {
+        self.position_lamports_before
+    }
+
+    /// Replay lamports authenticated before any retirement mutation.
+    pub const fn replay_lamports_before(&self) -> u64 {
+        self.replay_lamports_before
+    }
+
     /// Exact canonical Position V3 tombstone bytes.
-    pub const fn position_tombstone_bytes(self) -> [u8; POSITION_TOMBSTONE_V3_BYTES] {
+    pub const fn position_tombstone_bytes(&self) -> [u8; POSITION_TOMBSTONE_V3_BYTES] {
         self.position_tombstone_bytes
     }
 
     /// Alias-coalesced payer and neutral-sink credits.
-    pub const fn recipient_credits(self) -> CoalescedRecipientCreditsV1 {
+    pub const fn recipient_credits(&self) -> CoalescedRecipientCreditsV1 {
         self.recipient_credits
     }
 
     /// Exact permanent tombstone balance retained after close.
-    pub const fn position_lamports_after(self) -> u64 {
+    pub const fn position_lamports_after(&self) -> u64 {
         self.position_lamports_after
     }
 
     /// Replay must be physically absent after the same commit.
-    pub const fn replay_lamports_after(self) -> u64 {
+    pub const fn replay_lamports_after(&self) -> u64 {
         self.replay_lamports_after
     }
 }
@@ -275,6 +293,9 @@ pub fn authenticate_and_prepare_position_replay_close_v4<B: ReplayV3HashBackend>
         position_account: request.position.address(),
         replay_account: request.replay.address(),
         replay_terminal_semantic_id: plan.terminal_replay_semantic_id,
+        signed_sequence: request.signed_sequence,
+        position_lamports_before: request.position_lamports,
+        replay_lamports_before: request.replay_lamports,
         position_tombstone_bytes: plan.position_tombstone.encode()?,
         recipient_credits: plan.recipient_credits,
         position_lamports_after: plan.position_balance_after,

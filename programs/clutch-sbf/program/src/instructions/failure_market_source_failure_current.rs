@@ -270,6 +270,9 @@ pub(crate) struct AuthenticatedFailureMarketSourceFailurePostwriteV3<'link> {
     id: ProductContentId,
     link: AuthenticatedSeriesMarketLinkV2<'link>,
     release: AuthenticatedSeriesFailureSessionReleaseV3,
+    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
+    archive: FailureMarketIntervalArchivePostwriteV3,
     source_release: AuthenticatedPersistedSourceFailureProductReleaseV3,
     runtime: AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3,
 }
@@ -279,6 +282,17 @@ impl AuthenticatedFailureMarketSourceFailurePostwriteV3<'_> {
     pub(crate) const fn link(&self) -> &AuthenticatedSeriesMarketLinkV2<'_> { &self.link }
     pub(crate) const fn release(&self) -> &AuthenticatedSeriesFailureSessionReleaseV3 {
         &self.release
+    }
+    pub(crate) const fn source_terminal(&self) -> AuthenticatedSourceFailureTerminalPostwriteV1 {
+        self.source_terminal
+    }
+    pub(crate) const fn source_failure_receipt(
+        &self,
+    ) -> FailureMarketIntervalCellSourceFailureReceiptV2 {
+        self.source_failure_receipt
+    }
+    pub(crate) const fn archive(&self) -> FailureMarketIntervalArchivePostwriteV3 {
+        self.archive
     }
     pub(crate) const fn source_release(
         &self,
@@ -644,6 +658,9 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         id,
         link: link_released,
         release,
+        source_terminal,
+        source_failure_receipt,
+        archive,
         source_release: persisted_source_product_release,
         runtime,
     })

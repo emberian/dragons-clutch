@@ -32,10 +32,12 @@ mod foundation_funding_v3;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
+mod failure_begin_schedule;
 mod funding_state_v3;
 mod funding_state_v4;
 mod interval_consensus;
 mod market_family_aggregator;
+mod market_family_capability;
 mod market_lifecycle;
 mod market_lifecycle_v2;
 mod market_foundation_v3;
@@ -150,6 +152,12 @@ pub use funding_state_v2::{
     SeriesFundingStateV2, SeriesFundingTerminalProjectionV2, SERIES_COMPONENT_CAPITAL_BYTES_V2,
     SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_V2_DOMAIN,
 };
+pub use failure_begin_schedule::{
+    derive_product_failure_begin_schedule_projection_v1,
+    ProductFailureBeginCompilerProvenanceV1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1,
+};
 pub use funding_state_v3::{
     AuthenticatedSeriesFundingAuthorityV3, SeriesComponentCapitalV3, SeriesFundingPhaseV3,
     SeriesFundingStateV3, SeriesFundingTerminalProjectionV3, SERIES_COMPONENT_CAPITAL_BYTES_V3,
@@ -196,6 +204,10 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_EXHAUSTIVE_SUMMARY_BYTES_V1, MARKET_FAMILY_EXHAUSTIVE_SUMMARY_DOMAIN_V1,
     MARKET_FAMILY_TERMINAL_DOMAIN_V1, MARKET_FAMILY_TERMINAL_PROJECTION_BYTES_V1,
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
+};
+pub use market_family_capability::{
+    MarketFamilyCapabilityPolicyV1, MarketFamilyCapabilityPolicyV1Id,
+    MARKET_FAMILY_CAPABILITY_POLICY_BYTES_V1, MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1,
 };
 pub use market_lifecycle::{
     authenticate_market_foundation_account_graph_bytes_v2,
@@ -590,6 +602,10 @@ typed_id!(
 typed_id!(
     QuantizedIntervalConsensusWorkV1Id,
     "Typed identity of one complete structural interval-consensus work preimage."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV1Id,
+    "Typed identity of one exact current Product-compiled Failure Begin schedule and provenance."
 );
 typed_id!(
     ProductFailureBeginScheduleProjectionV2Id,

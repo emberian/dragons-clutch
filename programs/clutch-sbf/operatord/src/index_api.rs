@@ -6,6 +6,7 @@
 
 use crate::http::{JsonReadResponse, ReadApi};
 use clutch_local_real_pyth::account_index::CANONICAL_ACCOUNT_DECODER_SET;
+use clutch_local_real_pyth::action_material::CanonicalActionMaterialV1;
 use clutch_local_real_pyth::index_service::{
     ProcessedReconnectRollback, RpcIndexEngine, RpcIndexEngineEvent,
 };
@@ -282,11 +283,16 @@ impl ProcessedTransportState {
 }
 
 pub type SharedProcessedTransport = Arc<RwLock<ProcessedTransportState>>;
+/// Ephemeral, blockhash-free drafts derived from one finalized projection.
+/// They are never persisted as restart authority and are rejoined to the
+/// current release/cursor on every `/v1/actions` response.
+pub type SharedCanonicalActionMaterials = Arc<RwLock<Vec<CanonicalActionMaterialV1>>>;
 
 pub struct SharedIndexApi {
     engine: Arc<RwLock<RpcIndexEngine>>,
     selector: ResumableKeeperSelector,
     processed: SharedProcessedTransport,
+    action_materials: SharedCanonicalActionMaterials,
 }
 
 impl SharedIndexApi {
@@ -299,6 +305,21 @@ impl SharedIndexApi {
             engine,
             selector,
             processed,
+            action_materials: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    pub fn processed_with_action_materials(
+        engine: Arc<RwLock<RpcIndexEngine>>,
+        selector: ResumableKeeperSelector,
+        processed: SharedProcessedTransport,
+        action_materials: SharedCanonicalActionMaterials,
+    ) -> Self {
+        Self {
+            engine,
+            selector,
+            processed,
+            action_materials,
         }
     }
 
@@ -370,7 +391,18 @@ impl SharedIndexApi {
                     }),
                 });
             }
-            let reply = OperatorJsonApi::new(engine.index(), self.selector).handle(method, target);
+            let Ok(action_materials) = self.action_materials.read() else {
+                return Some(JsonReadResponse {
+                    status: 500,
+                    body: json!({"error": "canonical action-material lock is unavailable"}),
+                });
+            };
+            let reply = OperatorJsonApi::with_action_materials(
+                engine.index(),
+                self.selector,
+                &action_materials,
+            )
+            .handle(method, target);
             let mut body = reply.body;
             if method == "GET" && matches!(target, "/v1/health" | "/v1/releases") {
                 if let Some(object) = body.as_object_mut() {
@@ -469,6 +501,13 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
                     "familyTag": intent.family_tag.to_string(),
                     "familyVersion": intent.family_version.to_string(),
                     "localAction": intent.local_action.to_string()
+                })).collect::<Vec<_>>(),
+                "enabledIntentVariants": release.enabled_intent_variants.iter().map(|variant| json!({
+                    "familyTag": variant.coordinate().family_tag.to_string(),
+                    "familyVersion": variant.coordinate().family_version.to_string(),
+                    "localAction": variant.coordinate().local_action.to_string(),
+                    "payloadDiscriminator": variant.payload_discriminator().to_string(),
+                    "name": variant.name()
                 })).collect::<Vec<_>>(),
                 "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
             })

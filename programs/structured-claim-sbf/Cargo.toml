@@ -17,9 +17,9 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = ["custom-heap", "non-production-live-current"]
+default = ["custom-heap", "profile-successor-chain-attached-dev"]
 custom-heap = []
-non-production-live-current = []
+profile-successor-chain-attached-dev = []
 
 [dependencies]
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }
@@ -28,7 +28,7 @@ clutch-retirement = { path = "../../crates/clutch-retirement" }
 clutch-solana-layout = { path = "../solana-layout", default-features = false, features = ["profile-full"] }
 clutch-solana-reference = { path = "../solana-reference", default-features = false, features = ["profile-full"] }
 clutch-structured-claim = { path = "../../crates/clutch-structured-claim" }
-clutch-structured-claim-adapter = { path = "../structured-claim-adapter", default-features = false, features = ["profile-full", "live-current-wrapper"] }
+clutch-structured-claim-adapter = { path = "../structured-claim-adapter", default-features = false, features = ["profile-full", "profile-successor-chain-attached-dev"] }
 clutch-structured-claim-runtime-contract = { path = "../../crates/clutch-structured-claim-runtime-contract" }
 solana-account-info = "=3.1.1"
 solana-cpi = "=3.1.0"

@@ -3,7 +3,6 @@
   "use strict";
 
   const CHAIN = root.GlassChainClient;
-  const BUILDER = root.GlassSuccessorBuilder;
   const COMPILER = root.GlassCompilerProposal;
   const state = { configuration: null, snapshot: null, compilerProposal: null, construction: null };
   let compilerRevision = 0;
@@ -38,11 +37,6 @@
     if (!root.crypto || !root.crypto.subtle) return null;
     const output = await root.crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(output), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  };
-  const fromHex = (value) => {
-    const output = new Uint8Array(value.length / 2);
-    for (let index = 0; index < value.length; index += 2) output[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
-    return output;
   };
   const short = (value, head = 8, tail = 6) => value && value.length > head + tail + 2 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
 
@@ -153,9 +147,9 @@
     const target = $("capability-grid");
     reset(target);
     for (const capability of snapshot.capabilities) {
-      const card = create("section", "capability-card disabled");
+      const card = create("section", `capability-card ${capability.enabled ? "" : "disabled"}`.trim());
       const heading = create("div", "card-heading");
-      heading.append(create("h3", null, capability.label), create("span", "chip disabled-chip", capability.allocationStatus));
+      heading.append(create("h3", null, capability.label), create("span", `chip ${capability.enabled ? "" : "disabled-chip"}`.trim(), capability.allocationStatus));
       card.append(heading, create("p", null, capability.reason));
       const footer = create("p", "micro");
       footer.textContent = capability.indexedByRelease ? "Relevant decoder or projected state is visible for this release." : "Relevant decoder and projected state are absent from this bounded release view.";
@@ -212,14 +206,22 @@
   const renderKeeper = (snapshot) => {
     const select = $("keeper-action");
     reset(select);
-    const manual = create("option", null, snapshot.keeperActions.length === 0
-      ? "Manual explicit construction (no keeper cursor)"
-      : `${snapshot.keeperActions.length} projected keeper cursor(s); action coordinates not authenticated`);
-    manual.value = "";
-    select.append(manual);
-    const processed = snapshot.finality.requestedCommitment === "processed";
-    select.disabled = true;
-    $("build-workflow").disabled = processed;
+    const actions = snapshot.actionCapabilities.actions;
+    const callable = actions.filter((action) => action.callable);
+    const empty = create("option", null, callable.length === 0
+      ? `${actions.length} release-authenticated verdict(s); no canonical draft is callable`
+      : "Select one server-constructed canonical transaction draft");
+    empty.value = "";
+    select.append(empty);
+    actions.forEach((action, index) => {
+      const option = create("option", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}${action.callable ? "" : ` — unavailable: ${action.reason}`}`);
+      option.value = String(index);
+      option.disabled = !action.callable;
+      select.append(option);
+    });
+    select.disabled = snapshot.finality.requestedCommitment === "processed" || callable.length === 0;
+    $("build-workflow").disabled = true;
+    $("workflow-status").textContent = callable.length === 0 ? "no callable canonical draft" : "select a canonical draft";
   };
 
   const renderSnapshot = async (snapshot) => {
@@ -248,15 +250,10 @@
     }
   };
 
-  const keeperForSelection = () => {
+  const actionForSelection = () => {
     if (!state.snapshot || $("keeper-action").value === "") return null;
     const index = Number.parseInt($("keeper-action").value, 10);
-    return state.snapshot.keeperActions[index] || null;
-  };
-
-  const requireKeeperJoin = (draft, keeper) => {
-    if (!keeper) return null;
-    throw new Error(`Keeper action ${keeper.action} has no release-authenticated action coordinate in operatord; construction refuses instead of consulting a browser allocation mirror.`);
+    return state.snapshot.actionCapabilities.actions[index] || null;
   };
 
   const parseJsonField = (id, label) => {
@@ -294,7 +291,7 @@
       context.definitionValue,
       context.request
     );
-    const profileId = proposal.compiledProductSeriesBundleV5.identities.capabilityProfileId;
+    const profileId = proposal.compiledProductSeriesBundleV6.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
@@ -317,8 +314,8 @@
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
-      definition("BundleV5 ID / bytes", `${proposal.compiledProductSeriesBundleV5.id} / ${proposal.compiledProductSeriesBundleV5.byteLength}`),
-      definition("BundleV5 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV5.artifact.kind} / ${proposal.compiledProductSeriesBundleV5.artifact.pda}`),
+      definition("BundleV6 ID / bytes", `${proposal.compiledProductSeriesBundleV6.id} / ${proposal.compiledProductSeriesBundleV6.byteLength}`),
+      definition("BundleV6 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV6.artifact.kind} / ${proposal.compiledProductSeriesBundleV6.artifact.pda}`),
       definition("Exact market outcome / coverage", proposal.exactMarket ? `${proposal.exactMarket.outcome} / ${proposal.exactMarket.coverage}` : "not requested"),
       definition("Exact certificate / work manifest", proposal.exactMarket ? `${proposal.exactMarket.certificate ? proposal.exactMarket.certificate.outputId : "none"} / ${proposal.exactMarket.workManifest.id}` : "not requested"),
       definition("Capability profile join", profileId),
@@ -355,41 +352,12 @@
     if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
     if (state.snapshot.sourceConfiguration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
-    let draft;
-    try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
-    const keeper = keeperForSelection();
-    const coordinate = requireKeeperJoin(draft, keeper);
-    const transaction = BUILDER.build(draft, state.configuration, $("packet-limit").value.trim());
-    const enabledCoordinates = new Set(state.configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
-    for (const instruction of transaction.instructionCoordinates) {
-      const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
-      if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
-    }
-    const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
-    const output = Object.freeze({
-      schema: "dragons-clutch/operator/resumable-workflow-node/v1",
-      authority: "untrusted-chain-projection-plus-explicit-semantic-owner-material",
-      release: transaction.release,
-      observation: Object.freeze({
-        commitment: state.snapshot.finality.requestedCommitment,
-        projectedTipSlot: state.snapshot.finality.projectedTipSlot,
-        finalizedRootSlot: state.snapshot.finality.finalizedRootSlot,
-        selectedReleaseKey: state.configuration.release.releaseKey,
-        staleAccountCount: state.snapshot.finality.staleAccountCount,
-        unsafeForkAccountCount: state.snapshot.finality.unsafeForkAccountCount
-      }),
-      keeperSelection: keeper ? Object.freeze({ ...keeper, expectedCoordinate: coordinate }) : null,
-      unsignedTransaction: Object.freeze({ ...transaction, serializedTransactionSha256: transactionSha256 }),
-      reloadAuthoritativeAccounts: true,
-      wallet: "absent",
-      recentBlockhash: "absent",
-      signatures: Object.freeze([]),
-      signing: "absent",
-      submission: "absent"
-    });
+    const action = actionForSelection();
+    if (!action || !action.callable || !action.transactionDraft) throw new Error("No release-authenticated, state-callable server transaction draft is selected. Browser-authored protocol material is forbidden.");
+    const output = action.transactionDraft;
     state.construction = output;
     $("workflow-output").textContent = JSON.stringify(output, null, 2);
-    $("workflow-status").textContent = "constructed · runtime disabled";
+    $("workflow-status").textContent = "canonical unsigned draft inspected · blockhash/signing/submission absent";
     $("copy-workflow").disabled = false;
   };
 
@@ -445,6 +413,14 @@
       event.preventDefault();
       clearError("workflow-error");
       try { await buildWorkflow(); } catch (error) { setError("workflow-error", error.message); }
+    });
+    $("keeper-action").addEventListener("change", () => {
+      const action = actionForSelection();
+      const callable = Boolean(action && action.callable && action.transactionDraft);
+      $("build-workflow").disabled = !callable;
+      $("workflow-status").textContent = callable
+        ? "canonical unsigned draft available for inspection"
+        : "no callable canonical draft selected";
     });
     $("copy-workflow").addEventListener("click", () => { if (state.construction) copy($("workflow-output").textContent, $("copy-workflow")); });
   };

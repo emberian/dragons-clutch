@@ -16,13 +16,15 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_dealer_runtime_contract::{
     DealerActionReceiptV1, DealerClaimWorkV1, DealerEpochBindingV2, DealerExitTicketV1,
-    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1,
-    DealerPolicyV1, DealerRootTombstoneV2, DealerStateV2, DealerTerminalAllocationV1,
+    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerFutureCreditFundingV1,
+    DealerLeaseV2, DealerLivenessScheduleV1, DealerPolicyV1, DealerRootTombstoneV2,
+    DealerSeriesObligationBindingV2, DealerStateV2, DealerStateV3, DealerTerminalAllocationV1,
     FixedCodec as DealerFixedCodec, LpPageV2, SettlementPotV2, DEALER_FACILITY_REPLAY_BYTES_V1,
 };
+use clutch_direct_market_runtime::codec_v1::decode_direct_market_root_body_v1;
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_fractional_redemption_runtime::{
-    FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV2,
+    FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV3,
     FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_TAG,
     FRACTIONAL_CREDIT_ACCOUNT_VERSION, FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
     FRACTIONAL_CREDIT_TOMBSTONE_TAG, FRACTIONAL_CREDIT_TOMBSTONE_VERSION,
@@ -69,6 +71,10 @@ use clutch_solana_layout::failure_interval_consensus::{
     FailureIntervalConsensusPhaseV1, FailureIntervalConsensusReplayAccountV1,
     FailureIntervalConsensusWorkAccountV1,
 };
+use clutch_solana_layout::direct_market_v1::{
+    DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
+    DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
+};
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FailureMarketRootAccountV2, FailureReplayTombstoneV1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
@@ -77,7 +83,10 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
-use clutch_solana_layout::product_series::{SeriesFundingAccountV1, SeriesRegistryAccountV1};
+use clutch_solana_layout::product_series::{
+    SeriesFundingAccountV1, SeriesMarketLinkAccountV2, SeriesRegistryAccountV1,
+    SeriesRegistryAccountV3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
+};
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
@@ -87,14 +96,15 @@ use clutch_source_plane_v3::{
 };
 use clutch_source_plane_v3_runtime::{
     decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV2,
-    SourceWorkReceiptAccountV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
     REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
     SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
     SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
-    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
+    SOURCE_WORK_SCHEDULE_BYTES, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
+    WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
-    DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
+    StructuredClaimDescriptorV2, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
 };
 use sha2::{Digest, Sha256};
@@ -106,7 +116,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
+    "dragons-clutch/canonical-account-decoders/v6-current-dealer-terminal-targets-8-9";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -152,7 +162,7 @@ pub enum CanonicalAccountKind {
     CollateralHoardV2,
     CollateralClaimLedgerV3,
     CollateralResolutionV5,
-    FractionalPolicyV2,
+    FractionalPolicyV3,
     FractionalLedgerV1,
     FractionalCreditV2,
     FractionalCreditTombstoneV2,
@@ -174,8 +184,11 @@ pub enum CanonicalAccountKind {
     GeneralSettlementCashPot,
     GeneralFinalPot,
     SeriesRegistry,
+    SeriesRegistryV3,
     SeriesFunding,
+    SeriesMarketLinkV2,
     SourceRelease,
+    SourceWorkSchedule,
     SourceHead,
     SourceOpenRawPage,
     SourceRawPage,
@@ -198,6 +211,9 @@ pub enum CanonicalAccountKind {
     DealerPolicy,
     DealerLivenessSchedule,
     DealerStateV2,
+    DealerStateV3,
+    DealerSeriesObligationV2,
+    DealerFutureCreditFundingV1,
     DealerFundedDependenciesV2,
     DealerLpPageV2,
     DealerLeaseV2,
@@ -216,6 +232,10 @@ pub enum CanonicalAccountKind {
     FailureReplayTombstone,
     FailureIntervalConsensusWork,
     FailureIntervalConsensusReplay,
+    DirectMarketRootV1,
+    DirectSelectionV1,
+    DirectActionReplayV1,
+    DirectReservationV1,
 }
 
 impl CanonicalAccountKind {
@@ -225,7 +245,7 @@ impl CanonicalAccountKind {
             Self::CollateralHoardV2 => "collateral-hoard-v2",
             Self::CollateralClaimLedgerV3 => "collateral-claim-ledger-v3",
             Self::CollateralResolutionV5 => "collateral-resolution-v5",
-            Self::FractionalPolicyV2 => "fractional-policy-v2",
+            Self::FractionalPolicyV3 => "fractional-policy-v3",
             Self::FractionalLedgerV1 => "fractional-ledger-v1",
             Self::FractionalCreditV2 => "fractional-credit-v2",
             Self::FractionalCreditTombstoneV2 => "fractional-credit-tombstone-v2",
@@ -247,8 +267,11 @@ impl CanonicalAccountKind {
             Self::GeneralSettlementCashPot => "general-settlement-cash-pot",
             Self::GeneralFinalPot => "general-final-pot",
             Self::SeriesRegistry => "series-registry",
+            Self::SeriesRegistryV3 => "series-registry-v3",
             Self::SeriesFunding => "series-funding",
+            Self::SeriesMarketLinkV2 => "series-market-link-v2",
             Self::SourceRelease => "source-release",
+            Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
             Self::SourceOpenRawPage => "source-open-raw-page",
             Self::SourceRawPage => "source-raw-page",
@@ -271,6 +294,9 @@ impl CanonicalAccountKind {
             Self::DealerPolicy => "dealer-policy-v1",
             Self::DealerLivenessSchedule => "dealer-liveness-schedule-v1",
             Self::DealerStateV2 => "dealer-state-v2",
+            Self::DealerStateV3 => "dealer-state-v3",
+            Self::DealerSeriesObligationV2 => "dealer-series-obligation-v2",
+            Self::DealerFutureCreditFundingV1 => "dealer-future-credit-funding-v1",
             Self::DealerFundedDependenciesV2 => "dealer-funded-dependencies-v2",
             Self::DealerLpPageV2 => "dealer-lp-page-v2",
             Self::DealerLeaseV2 => "dealer-lease-v2",
@@ -289,6 +315,10 @@ impl CanonicalAccountKind {
             Self::FailureReplayTombstone => "failure-replay-tombstone",
             Self::FailureIntervalConsensusWork => "failure-interval-consensus-work-v1",
             Self::FailureIntervalConsensusReplay => "failure-interval-consensus-replay-v1",
+            Self::DirectMarketRootV1 => "direct-market-root-v1",
+            Self::DirectSelectionV1 => "direct-selection-v1",
+            Self::DirectActionReplayV1 => "direct-action-replay-v1",
+            Self::DirectReservationV1 => "direct-reservation-v1",
         }
     }
 }
@@ -404,8 +434,86 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::StructuredClaim => decode_structured(&account.data),
             CanonicalFamily::Dealer => decode_dealer(&account.data),
             CanonicalFamily::Failure => decode_failure(&account.data),
+            CanonicalFamily::Direct => decode_direct(&account.data),
         }
     }
+}
+
+fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    let projection = if tag_version(
+        data,
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG,
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION,
+    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES
+    {
+        let bytes: &[u8; registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES] = data
+            .try_into()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let frame = DirectMarketRootAccountV1::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let root = decode_direct_market_root_body_v1(frame.semantic_body())
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = root.binding();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Direct,
+            CanonicalAccountKind::DirectMarketRootV1,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.market_instance_id);
+        projection.secondary_binding = Some(binding.direct_root_account);
+        projection
+    } else if tag_version(
+        data,
+        registry::DIRECT_SELECTION_ACCOUNT_TAG,
+        registry::DIRECT_SELECTION_ACCOUNT_VERSION,
+    ) && data.len() == registry::DIRECT_SELECTION_ACCOUNT_BYTES
+    {
+        let bytes: &[u8; registry::DIRECT_SELECTION_ACCOUNT_BYTES] = data
+            .try_into()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        DirectSelectionAccountV1::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        CanonicalAccountProjection::contextual(
+            CanonicalFamily::Direct,
+            CanonicalAccountKind::DirectSelectionV1,
+            "exact DirectMarketRootV1 semantic body",
+        )
+    } else if tag_version(
+        data,
+        registry::DIRECT_ACTION_REPLAY_ACCOUNT_TAG,
+        registry::DIRECT_ACTION_REPLAY_ACCOUNT_VERSION,
+    ) && data.len() == registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES
+    {
+        let bytes: &[u8; registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] = data
+            .try_into()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        DirectActionReplayAccountV1::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        CanonicalAccountProjection::contextual(
+            CanonicalFamily::Direct,
+            CanonicalAccountKind::DirectActionReplayV1,
+            "exact DirectMarketRootV1 semantic body",
+        )
+    } else if tag_version(
+        data,
+        registry::DIRECT_RESERVATION_ACCOUNT_TAG,
+        registry::DIRECT_RESERVATION_ACCOUNT_VERSION,
+    ) && data.len() == registry::DIRECT_RESERVATION_ACCOUNT_BYTES
+    {
+        let bytes: &[u8; registry::DIRECT_RESERVATION_ACCOUNT_BYTES] = data
+            .try_into()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        DirectReservationAccountV1::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        CanonicalAccountProjection::contextual(
+            CanonicalFamily::Direct,
+            CanonicalAccountKind::DirectReservationV1,
+            "exact DirectMarketRootV1 semantic body",
+        )
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(projection))
 }
 
 fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
@@ -460,11 +568,11 @@ fn decode_fractional(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
         if data.len() != FRACTIONAL_POLICY_ACCOUNT_BYTES {
             return Err(AccountIndexError::CanonicalDecodeRefused);
         }
-        let value = FractionalPolicyV2::decode(data)
+        let value = FractionalPolicyV3::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::contextual(
             CanonicalFamily::Fractional,
-            CanonicalAccountKind::FractionalPolicyV2,
+            CanonicalAccountKind::FractionalPolicyV3,
             "Resolution V5 data identity and Realm collateral join",
         );
         projection.generation = Some(value.domain_generation);
@@ -783,6 +891,43 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
 fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
         data,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2,
+    ) && data.len() == SERIES_MARKET_LINK_ACCOUNT_BYTES_V2
+    {
+        let value = SeriesMarketLinkAccountV2::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::SeriesMarketLinkV2,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.series_plan_id.bytes());
+        projection.secondary_binding = Some(binding.compiler_bundle_id.bytes());
+        // A Link body alone cannot select a recipe from the published set or
+        // prove the corresponding descriptor/mint/Position/Replay absences.
+        // Structured scheduling therefore lives only in the closed hostile-
+        // state constructor, never in this generic/browser-facing hint.
+        projection.keeper_hint = None;
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
+    ) {
+        let value = SeriesRegistryAccountV3::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::SeriesRegistryV3,
+        );
+        projection.generation = Some(1);
+        projection.primary_binding = Some(value.series_plan_id.bytes());
+        projection.secondary_binding = Some(value.compiler_bundle_id.bytes());
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
     ) {
@@ -841,6 +986,22 @@ fn decode_source(
         projection.primary_binding = primary;
         projection
     };
+    if data.len() == SOURCE_WORK_SCHEDULE_BYTES {
+        if let Ok(value) = SourceWorkScheduleBindingV1::decode(data) {
+            let mut projection = runtime(
+                CanonicalAccountKind::SourceWorkSchedule,
+                Some(value.generation()),
+                Some(value.liveness_policy_id().bytes()),
+            );
+            projection.secondary_binding = Some(
+                value
+                    .id()
+                    .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?
+                    .bytes(),
+            );
+            return Ok(Some(projection));
+        }
+    }
     let projection = match data.first().copied() {
         Some(SOURCE_RELEASE_ACCOUNT_TAG)
             if data.get(1) == Some(&SOURCE_RELEASE_ACCOUNT_VERSION) =>
@@ -1052,12 +1213,14 @@ fn decode_liveness(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if data.starts_with(&RUNTIME_LIVENESS_POLICY_MAGIC_V1)
         && data.len() == RUNTIME_LIVENESS_POLICY_BYTES_V1
     {
-        let _ = RuntimeLivenessPolicyV1::decode(data)
+        let value = RuntimeLivenessPolicyV1::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        Ok(Some(CanonicalAccountProjection::canonical(
+        let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Liveness,
             CanonicalAccountKind::LivenessPolicy,
-        )))
+        );
+        projection.primary_binding = Some(value.policy_id.bytes());
+        Ok(Some(projection))
     } else if data.starts_with(&RUNTIME_LIVENESS_ACCOUNT_MAGIC_V1)
         && data.len() == RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
     {
@@ -1068,6 +1231,8 @@ fn decode_liveness(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             CanonicalAccountKind::LivenessCompartment,
         );
         projection.generation = Some(value.identity.generation);
+        projection.primary_binding = Some(value.identity.policy_id.bytes());
+        projection.secondary_binding = Some(value.identity.account_id.bytes());
         if value.phase == RuntimeCompartmentPhaseV1::Active && value.remaining_calls > 0 {
             let phase = u16::try_from(value.kind.index())
                 .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
@@ -1163,20 +1328,15 @@ fn decode_structured(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
     {
         return Ok(None);
     }
-    let value = StructuredClaimDescriptorV1::decode(data)
+    let value = StructuredClaimDescriptorV2::decode(data)
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
     let mut projection = CanonicalAccountProjection::canonical(
         CanonicalFamily::StructuredClaim,
         CanonicalAccountKind::StructuredClaimDescriptor,
     );
     projection.primary_binding = Some(value.market);
-    if value.state == DescriptorStateV1::Active {
-        projection.keeper_hint = Some(KeeperHint {
-            lane: None,
-            position: WorkflowPosition { phase: 10, item: 0 },
-            action: "inspect-structured-claim-retirement",
-        });
-    }
+    projection.secondary_binding = Some(value.structured_root_id);
+    projection.generation = Some(1);
     Ok(Some(projection))
 }
 
@@ -1275,6 +1435,51 @@ fn decode_dealer(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.generation);
         projection.primary_binding = Some(value.facility_id.bytes());
         projection.secondary_binding = Some(value.policy_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerStateV3>(
+        data,
+        registry::DEALER_STATE_V3_ACCOUNT_TAG,
+        registry::DEALER_STATE_V3_ACCOUNT_VERSION,
+        registry::DEALER_STATE_V3_ACCOUNT_BYTES,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerStateV3,
+        );
+        projection.generation = Some(value.base.generation);
+        projection.primary_binding = Some(value.base.facility_id.bytes());
+        projection.secondary_binding = Some(value.series_obligation_binding_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerSeriesObligationBindingV2>(
+        data,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerSeriesObligationV2,
+        );
+        projection.generation = Some(value.key.product_generation);
+        projection.primary_binding = Some(value.key.facility_id.bytes());
+        projection.secondary_binding = Some(value.key.market_instance_v2_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerFutureCreditFundingV1>(
+        data,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerFutureCreditFundingV1,
+        );
+        projection.generation = Some(value.founding_generation);
+        projection.primary_binding = Some(value.facility_id.bytes());
+        projection.secondary_binding = Some(value.market_instance_v2_id.bytes());
         return Ok(Some(projection));
     }
     if let Some(value) = decode_current_dealer_body::<DealerFundedDependenciesV2>(
@@ -1880,9 +2085,26 @@ pub struct IndexedAccountVersion {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinalizedAccountAbsence {
-    pub release_key: String,
-    pub slot: u64,
-    pub receive_sequence: u64,
+    release_key: String,
+    slot: u64,
+    receive_sequence: u64,
+}
+
+impl FinalizedAccountAbsence {
+    /// Checked release scan which established the absence.
+    pub fn release_key(&self) -> &str {
+        &self.release_key
+    }
+
+    /// Finalized scan slot at which the account was absent.
+    pub const fn slot(&self) -> u64 {
+        self.slot
+    }
+
+    /// Monotone local receive sequence of that finalized scan.
+    pub const fn receive_sequence(&self) -> u64 {
+        self.receive_sequence
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2338,6 +2560,41 @@ mod current_decoder_tests {
     use super::*;
 
     #[test]
+    fn source_work_schedule_is_a_canonical_indexed_semantic_owner() {
+        let schedule = SourceWorkScheduleBindingV1::new(
+            clutch_source_plane_v3::ContentId::from_bytes([1; 32]),
+            clutch_source_plane_v3::ContentId::from_bytes([2; 32]),
+            RuntimeKey::from_bytes([3; 32]),
+            RuntimeKey::from_bytes([4; 32]),
+            RuntimeKey::from_bytes([5; 32]),
+            RuntimeKey::from_bytes([6; 32]),
+            7,
+            8,
+            9,
+            44,
+            10,
+            [1; 8],
+            [2, 3, 4, 5, 6, 7, 8, 9],
+            [1; 4],
+            [1; 4],
+        )
+        .unwrap();
+        let bytes = schedule.encode().unwrap();
+        let projection = decode_source(
+            &bytes,
+            CanonicalDecoderContext {
+                source_neutral_sink: RuntimeKey::from_bytes([11; 32]),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(projection.kind, CanonicalAccountKind::SourceWorkSchedule);
+        assert_eq!(projection.generation, Some(7));
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some(schedule.id().unwrap().bytes()));
+    }
+
+    #[test]
     fn withdrawn_versions_do_not_enter_the_live_decoder_set() {
         let general_versions = [
             (WINDOW_ACCOUNT_TAG, 4, WINDOW_ACCOUNT_VERSION_V2),
@@ -2526,6 +2783,46 @@ mod current_decoder_tests {
                 Err(AccountIndexError::CanonicalDecodeRefused)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod direct_decoder_tests {
+    use super::*;
+
+    #[test]
+    fn reservation_frame_requires_root_context_and_canonical_header() {
+        let frame = DirectReservationAccountV1::new(
+            7,
+            [9; DIRECT_RESERVATION_BODY_BYTES_V1],
+        )
+        .unwrap();
+        let mut bytes = [0; registry::DIRECT_RESERVATION_ACCOUNT_BYTES];
+        frame.encode_into(&mut bytes).unwrap();
+        let projection = decode_direct(&bytes).unwrap().unwrap();
+        assert_eq!(projection.family, CanonicalFamily::Direct);
+        assert_eq!(projection.kind, CanonicalAccountKind::DirectReservationV1);
+        assert_eq!(
+            projection.decode_state,
+            DecodeState::RequiresContext("exact DirectMarketRootV1 semantic body")
+        );
+
+        bytes[3] = 1;
+        assert_eq!(
+            decode_direct(&bytes),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+    }
+
+    #[test]
+    fn retired_direct_account_versions_do_not_enter_current_family() {
+        assert_eq!(
+            decode_direct(&[
+                registry::DIRECT_RESERVATION_ACCOUNT_TAG,
+                registry::DIRECT_RESERVATION_ACCOUNT_VERSION.wrapping_add(1),
+            ]),
+            Ok(None)
+        );
     }
 }
 
@@ -2729,6 +3026,7 @@ mod processed_fork_tests {
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             enabled_intents: vec![],
+            enabled_intent_variants: vec![],
             families: vec![CanonicalFamily::General],
         };
         let release_key = release.key();

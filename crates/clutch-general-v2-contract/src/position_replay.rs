@@ -38,6 +38,7 @@ const COLLATERAL_CASH_FAMILY: u8 = 3;
 const FRACTIONAL_REDEMPTION_FAMILY: u8 = 4;
 const CLAIM_REPRESENTATION_FAMILY: u8 = 5;
 const DEALER_FAMILY: u8 = 6;
+const DIRECT_MARKET_FAMILY: u8 = 80;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -55,6 +56,9 @@ const PORTFOLIO_ARCHIVE_SELLER_ROLE: u8 = 13;
 const DEALER_BUYER_ROLE: u8 = 12;
 const DEALER_SELLER_ROLE: u8 = 13;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
+const DIRECT_MARKET_BUYER_ROLE: u8 = 1;
+const DIRECT_MARKET_SELLER_ROLE: u8 = 2;
+const DIRECT_MARKET_TREASURY_ROLE: u8 = 3;
 
 /// Exhaustive General Replay transition partition for schema v1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +120,32 @@ pub enum GeneralReplayTransitionKindV1 {
     /// Dealer action 16 seller delivery credits cash and closes the
     /// Position's Reservation liability.
     DealerDeliverSeller,
+    /// Direct Market V1 action 2 buyer Reservation admission.
+    DirectMarketAdmitBuyer,
+    /// Direct Market V1 action 2 seller Reservation admission.
+    DirectMarketAdmitSeller,
+    /// Direct Market V1 action 3 buyer Reservation cancellation.
+    DirectMarketCancelBuyer,
+    /// Direct Market V1 action 3 seller Reservation cancellation.
+    DirectMarketCancelSeller,
+    /// Direct Market V1 action 9 buyer settlement endpoint.
+    DirectMarketSettleBuyer,
+    /// Direct Market V1 action 9 seller settlement endpoint.
+    DirectMarketSettleSeller,
+    /// Direct Market V1 action 9 authenticated revenue-treasury credit.
+    DirectMarketSettleTreasury,
+    /// Direct Market V1 action 10 buyer empty-market lapse endpoint.
+    DirectMarketLapseEmptyBuyer,
+    /// Direct Market V1 action 10 seller empty-market lapse endpoint.
+    DirectMarketLapseEmptySeller,
+    /// Direct Market V1 action 11 buyer unselected lapse endpoint.
+    DirectMarketLapseUnselectedBuyer,
+    /// Direct Market V1 action 11 seller unselected lapse endpoint.
+    DirectMarketLapseUnselectedSeller,
+    /// Direct Market V1 action 12 buyer selected-book lapse endpoint.
+    DirectMarketLapseSelectedBuyer,
+    /// Direct Market V1 action 12 seller selected-book lapse endpoint.
+    DirectMarketLapseSelectedSeller,
 }
 
 impl GeneralReplayTransitionKindV1 {
@@ -283,6 +313,84 @@ impl GeneralReplayTransitionKindV1 {
                 16,
                 DEALER_SELLER_ROLE,
             ),
+            Self::DirectMarketAdmitBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketAdmitSeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
+            Self::DirectMarketCancelBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketCancelSeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
+            Self::DirectMarketSettleBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                9,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketSettleSeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                9,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
+            Self::DirectMarketSettleTreasury => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                9,
+                DIRECT_MARKET_TREASURY_ROLE,
+            ),
+            Self::DirectMarketLapseEmptyBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                10,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketLapseEmptySeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                10,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
+            Self::DirectMarketLapseUnselectedBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                11,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketLapseUnselectedSeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                11,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
+            Self::DirectMarketLapseSelectedBuyer => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                12,
+                DIRECT_MARKET_BUYER_ROLE,
+            ),
+            Self::DirectMarketLapseSelectedSeller => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                12,
+                DIRECT_MARKET_SELLER_ROLE,
+            ),
         }
     }
 
@@ -416,6 +524,45 @@ impl GeneralReplayTransitionKindV1 {
             }
             (DEALER_FAMILY, TRANSITION_VERSION_V1, 16, DEALER_SELLER_ROLE) => {
                 Ok(Self::DealerDeliverSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 2, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketAdmitBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 2, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketAdmitSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 3, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketCancelBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 3, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketCancelSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 9, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketSettleBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 9, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketSettleSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 9, DIRECT_MARKET_TREASURY_ROLE) => {
+                Ok(Self::DirectMarketSettleTreasury)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 10, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketLapseEmptyBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 10, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketLapseEmptySeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 11, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketLapseUnselectedBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 11, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketLapseUnselectedSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 12, DIRECT_MARKET_BUYER_ROLE) => {
+                Ok(Self::DirectMarketLapseSelectedBuyer)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 12, DIRECT_MARKET_SELLER_ROLE) => {
+                Ok(Self::DirectMarketLapseSelectedSeller)
             }
             _ => Err(CodecError::InvalidState),
         }
@@ -649,6 +796,11 @@ impl GeneralPositionReplayFoundingPlanV1 {
     /// Internally derived semantic identity of the founding Replay body.
     pub const fn replay_semantic_id(self) -> Id32 {
         self.replay_semantic_id
+    }
+
+    /// Canonical Replay V3 PDA bump retained by the hostile prestate.
+    pub const fn replay_bump(self) -> u8 {
+        self.replay_header.stored_bump()
     }
 
     /// Exact canonical 344-byte founding Replay body.
@@ -1016,21 +1168,31 @@ where
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let retires_reservation_child = matches!(
-        kind,
+    let expected_outstanding_reservations = match kind {
+        GeneralReplayTransitionKindV1::DirectMarketAdmitBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketAdmitSeller => pre_fields
+            .outstanding_reservations
+            .checked_add(1)
+            .ok_or(CodecError::InvalidState)?,
         GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
-            | GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive
-            | GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive
-            | GeneralReplayTransitionKindV1::DealerDeliverBuyer
-            | GeneralReplayTransitionKindV1::DealerDeliverSeller
-    );
-    let expected_outstanding_reservations = if retires_reservation_child {
-        pre_fields
+        | GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive
+        | GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive
+        | GeneralReplayTransitionKindV1::DealerDeliverBuyer
+        | GeneralReplayTransitionKindV1::DealerDeliverSeller
+        | GeneralReplayTransitionKindV1::DirectMarketCancelBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketCancelSeller
+        | GeneralReplayTransitionKindV1::DirectMarketSettleBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketSettleSeller
+        | GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller
+        | GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedSeller
+        | GeneralReplayTransitionKindV1::DirectMarketLapseSelectedBuyer
+        | GeneralReplayTransitionKindV1::DirectMarketLapseSelectedSeller => pre_fields
             .outstanding_reservations
             .checked_sub(1)
-            .ok_or(CodecError::InvalidState)?
-    } else {
-        pre_fields.outstanding_reservations
+            .ok_or(CodecError::InvalidState)?,
+        _ => pre_fields.outstanding_reservations,
     };
     let expected_poststate = PositionAccountV3::new(PositionV3Fields {
         cash_atoms: post_fields.cash_atoms,
@@ -1080,6 +1242,19 @@ where
             | GeneralReplayTransitionKindV1::DealerCollectBuyer
             | GeneralReplayTransitionKindV1::DealerDeliverBuyer
             | GeneralReplayTransitionKindV1::DealerDeliverSeller
+            | GeneralReplayTransitionKindV1::DirectMarketAdmitBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketAdmitSeller
+            | GeneralReplayTransitionKindV1::DirectMarketCancelBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketCancelSeller
+            | GeneralReplayTransitionKindV1::DirectMarketSettleBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketSettleSeller
+            | GeneralReplayTransitionKindV1::DirectMarketSettleTreasury
+            | GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller
+            | GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedSeller
+            | GeneralReplayTransitionKindV1::DirectMarketLapseSelectedBuyer
+            | GeneralReplayTransitionKindV1::DirectMarketLapseSelectedSeller
     );
     if (unchanged_required
         && (position_poststate.semantic != position_prestate.semantic
@@ -1162,6 +1337,15 @@ mod tests {
         body[130] = SETTLEMENT_FAMILY;
         body[131] = TRANSITION_VERSION_V1;
         body[132] = role;
+        body
+    }
+
+    fn direct_market_extension(
+        action: u8,
+        role: u8,
+    ) -> [u8; GENERAL_REPLAY_EXTENSION_V1_BYTES] {
+        let mut body = advanced_extension(action, role);
+        body[130] = DIRECT_MARKET_FAMILY;
         body
     }
 
@@ -1296,6 +1480,52 @@ mod tests {
                 .unwrap()
                 .last_kind(),
             Some(GeneralReplayTransitionKindV1::DealerDeliverBuyer)
+        );
+    }
+
+    #[test]
+    fn direct_market_roles_exhaustively_bind_fresh_family_actions() {
+        let cases = [
+            (2, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketAdmitBuyer),
+            (2, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketAdmitSeller),
+            (3, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketCancelBuyer),
+            (3, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketCancelSeller),
+            (9, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleBuyer),
+            (9, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleSeller),
+            (9, DIRECT_MARKET_TREASURY_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleTreasury),
+            (10, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer),
+            (10, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller),
+            (11, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer),
+            (11, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedSeller),
+            (12, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseSelectedBuyer),
+            (12, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseSelectedSeller),
+        ];
+        for (action, role, expected) in cases {
+            assert_eq!(
+                GeneralReplayExtensionV1::decode(&direct_market_extension(action, role))
+                    .unwrap()
+                    .last_kind(),
+                Some(expected)
+            );
+        }
+
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&direct_market_extension(2, 0)),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&direct_market_extension(
+                4,
+                DIRECT_MARKET_BUYER_ROLE,
+            )),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(
+                2,
+                DIRECT_MARKET_BUYER_ROLE,
+            )),
+            Err(CodecError::InvalidState)
         );
     }
 }

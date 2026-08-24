@@ -17,18 +17,14 @@ pub const WRAPPER_QUANTITY_PAYLOAD_BYTES: usize = 32 + (5 * 8);
 /// Exact vault-only mutation payload width.
 pub const VAULT_MUTATION_PAYLOAD_BYTES: usize = 32 + (2 * 8);
 
-/// Family-local structured-claim action allocation.
+/// Current family-local structured-claim actions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StructuredClaimActionV1 {
     /// Create the immutable descriptor, mint, and empty vault Position.
     CreateDescriptor = 1,
-    /// Mint wrappers from canonical cash-plus-residual backing.
-    WrapCanonical = 2,
     /// Mint wrappers from a full native-Egg vector and compress complete sets.
     WrapFull = 3,
-    /// Burn wrappers and return canonical cash-plus-residual backing.
-    UnwrapCanonical = 4,
     /// Burn wrappers and expand backing into a full native-Egg vector.
     UnwrapFull = 5,
     /// Move direct-burn surplus to beneficiary-free base donations.
@@ -40,18 +36,11 @@ pub enum StructuredClaimActionV1 {
 }
 
 impl StructuredClaimActionV1 {
-    /// First allocated family-local action.
-    pub const FIRST_TAG: u8 = 1;
-    /// Last allocated family-local action.
-    pub const LAST_TAG: u8 = 8;
-
-    /// Decode one exact family-local action.
+    /// Decode one exact current family-local action.
     pub const fn from_tag(tag: u8) -> Result<Self> {
         match tag {
             1 => Ok(Self::CreateDescriptor),
-            2 => Ok(Self::WrapCanonical),
             3 => Ok(Self::WrapFull),
-            4 => Ok(Self::UnwrapCanonical),
             5 => Ok(Self::UnwrapFull),
             6 => Ok(Self::CompactDonation),
             7 => Ok(Self::RedeemTerminal),
@@ -64,9 +53,7 @@ impl StructuredClaimActionV1 {
     pub const fn tag(self) -> u8 {
         match self {
             Self::CreateDescriptor => 1,
-            Self::WrapCanonical => 2,
             Self::WrapFull => 3,
-            Self::UnwrapCanonical => 4,
             Self::UnwrapFull => 5,
             Self::CompactDonation => 6,
             Self::RedeemTerminal => 7,
@@ -294,12 +281,8 @@ impl VaultMutationPayloadV1 {
 pub enum StructuredClaimPayloadV1 {
     /// Descriptor construction.
     CreateDescriptor(CreateDescriptorPayloadV1),
-    /// Canonical backing wrap.
-    WrapCanonical(WrapperQuantityPayloadV1),
     /// Full-vector wrap.
     WrapFull(WrapperQuantityPayloadV1),
-    /// Canonical backing unwind.
-    UnwrapCanonical(WrapperQuantityPayloadV1),
     /// Full-vector unwind.
     UnwrapFull(WrapperQuantityPayloadV1),
     /// Beneficiary-free surplus compaction.
@@ -310,7 +293,7 @@ pub enum StructuredClaimPayloadV1 {
     RetireDescriptor(VaultMutationPayloadV1),
 }
 
-/// Decode only the exact payload width belonging to one allocated action.
+/// Decode only the exact payload width belonging to one current action.
 pub fn decode_structured_claim_payload_v1(
     action_tag: u8,
     input: &[u8],
@@ -319,13 +302,7 @@ pub fn decode_structured_claim_payload_v1(
         StructuredClaimActionV1::CreateDescriptor => Ok(
             StructuredClaimPayloadV1::CreateDescriptor(CreateDescriptorPayloadV1::decode(input)?),
         ),
-        StructuredClaimActionV1::WrapCanonical => Ok(StructuredClaimPayloadV1::WrapCanonical(
-            WrapperQuantityPayloadV1::decode(input)?,
-        )),
         StructuredClaimActionV1::WrapFull => Ok(StructuredClaimPayloadV1::WrapFull(
-            WrapperQuantityPayloadV1::decode(input)?,
-        )),
-        StructuredClaimActionV1::UnwrapCanonical => Ok(StructuredClaimPayloadV1::UnwrapCanonical(
             WrapperQuantityPayloadV1::decode(input)?,
         )),
         StructuredClaimActionV1::UnwrapFull => Ok(StructuredClaimPayloadV1::UnwrapFull(

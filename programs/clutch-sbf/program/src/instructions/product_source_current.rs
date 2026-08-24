@@ -7,9 +7,7 @@
 
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::product_artifact::{
-    authenticate_product_artifact_v1,
-};
+use crate::instructions::product_artifact::authenticate_product_artifact_v1;
 use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
 use crate::instructions::product_series::{
     IX_SERIES_ARTIFACT_ATTACHMENT, IX_SERIES_ARTIFACT_BASIS,
@@ -203,7 +201,6 @@ impl AuthenticatedSourceSeriesAuthorityV3 for AuthenticatedProductSourceAuthorit
         Ok(self.resolved_coverage_policy_value)
     }
 }
-
 /// Exact nine-account QuoteV5/AttachmentV5 artifact graph.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedSeriesSourceArtifactsV5 {
@@ -279,10 +276,6 @@ impl AuthenticatedSeriesSourceArtifactsV5 {
     pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV5 {
         &self.attachment
     }
-
-    pub(crate) fn genesis(&self) -> &MarketGenesisProfileV2 {
-        &self.genesis
-    }
 }
 
 /// Hostile-authenticated current BundleV6 reconstructed from all semantic
@@ -316,7 +309,6 @@ pub(crate) struct AuthenticatedSourceProductRouteV4 {
     receiver_route_id: ContentId,
     source_release_manifest_id: ContentId,
     source_release_authentication_id: ContentId,
-    clock_policy_id: ContentId,
     source_plane_contract_id: ContentId,
     source_spec_id: ContentId,
     registry_release_id: ContentId,
@@ -344,10 +336,6 @@ impl AuthenticatedSourceProductRouteV4 {
 
     pub(crate) const fn source_release_authentication_id(self) -> ContentId {
         self.source_release_authentication_id
-    }
-
-    pub(crate) const fn clock_policy_id(self) -> ContentId {
-        self.clock_policy_id
     }
 
     pub(crate) const fn source_plane_contract_id(self) -> ContentId {
@@ -580,6 +568,20 @@ pub(crate) fn authenticate_compiled_product_series_bundle_v6(
     let expected_id = expected
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        artifacts
+            .series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == registry.series_plan_id()
+            && artifacts
+                .funding_terms
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == registry.funding_terms_id()
+            && expected_id == registry.compiler_bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
     let decoded = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
         program_id,
         bundle_account,
@@ -635,7 +637,6 @@ pub(crate) fn authenticate_source_product_route_v4(
             &receiver.id().bytes(),
             &route.release_manifest_id().bytes(),
             &route.release_authentication_id().bytes(),
-            &route.clock_policy_id().bytes(),
             &route.source_plane_contract_id().bytes(),
             &route.source_spec_id().bytes(),
             &registry.registry_release_id().bytes(),
@@ -658,7 +659,6 @@ pub(crate) fn authenticate_source_product_route_v4(
         source_release_authentication_id: ContentId::from_bytes(
             route.release_authentication_id().bytes(),
         ),
-        clock_policy_id: ContentId::from_bytes(route.clock_policy_id().bytes()),
         source_plane_contract_id: ContentId::from_bytes(route.source_plane_contract_id().bytes()),
         source_spec_id: ContentId::from_bytes(route.source_spec_id().bytes()),
         registry_release_id: registry.registry_release_id(),
@@ -970,7 +970,10 @@ mod adversarial_tests {
     #[test]
     fn current_publication_has_no_bundle_v5_or_quote_v4_authority() {
         let source = include_str!("product_source_current.rs");
-        let production = source.split("#[cfg(test)]").next().unwrap();
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("current Source production module");
         assert!(production.contains("CompiledProductSeriesBundleV6"));
         assert!(production.contains("SeriesFundingQuoteV5"));
         assert!(production.contains("SeriesAttachmentPlanV5"));
@@ -983,5 +986,6 @@ mod adversarial_tests {
         assert!(!production.contains("SeriesAttachmentPlanV4"));
         assert!(!production.contains("AuthenticatedRegistryCapabilityV3"));
         assert!(!production.contains("AuthenticatedProductSourceAuthorityV1"));
+        assert!(production.contains("expected_id == registry.compiler_bundle_id()"));
     }
 }

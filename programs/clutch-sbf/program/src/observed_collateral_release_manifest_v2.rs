@@ -50,3 +50,8 @@ const _: () = assert!(
     OBSERVED_COLLATERAL_RELEASES_V2.len()
         == OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2.len()
 );
+// Selecting this release-class Cargo feature must never produce an apparently
+// live ELF from the empty template. Both the Realm-selected collateral catalog
+// and the independent Token-2022 claim plane are mandatory for that identity.
+const _: () = assert!(!OBSERVED_COLLATERAL_RELEASES_V2.is_empty());
+const _: () = assert!(OBSERVED_CLAIM_ISSUANCE_RELEASE_V1.is_some());

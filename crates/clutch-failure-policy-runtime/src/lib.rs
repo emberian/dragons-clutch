@@ -17,6 +17,7 @@ pub mod market_interval_cell_v2;
 pub mod market_interval_history_v2;
 pub mod market_policy_v1;
 pub mod market_quote_v1;
+pub mod market_recovery_terminal_v2;
 pub mod market_replay_v2;
 pub mod market_runtime_v1;
 pub mod relation_execution_v1;

@@ -31,11 +31,11 @@
 //! Every broader settlement form still refuses.  See
 //! `docs/implementation/COUPLED_SETTLEMENT_V1.md`.
 //!
-//! Historical full-profile Resolve code consumes the legacy sealed Source
-//! archive used by bring-up fixtures. The checked chain-attached successor
-//! compiles that Source/SourceArchive/ObserveResolve authority out and admits
-//! no SourceSeries action until its whole real-Pyth and prepaid-liveness
-//! lifecycle is reachable. Candidate selection, entitlement creation, general
+//! Resolve authenticates and consumes the canonical sealed source archive,
+//! including its pinned adapter-release identity.  Provider ingestion and
+//! public archive construction are not routed: the current bank evidence
+//! installs canonical archive bytes at genesis and is not a provider-ingestion
+//! claim.  Candidate selection, entitlement creation, general
 //! partial/portfolio settlement, and the full blank-bank venue lifecycle also
 //! remain incomplete.  Evidence labels and the current dependency order live
 //! in `CURRENT_TRUTH.md` and `docs/V1_BACKLOG.md`; older bring-up documents are
@@ -83,11 +83,16 @@
 #[cfg(all(target_os = "solana", test))]
 compile_error!("host-forensic General fixtures cannot compile for Solana");
 
+#[cfg(feature = "non-production-mock-source")]
+compile_error!(
+    "the mock-source ELF has been withdrawn; use the successor Source plane or an explicit real-provider laboratory profile"
+);
+
 #[cfg(not(any(
     feature = "profile-full",
+    feature = "profile-successor-chain-attached-dev",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
-    feature = "profile-successor-chain-attached-v1",
     feature = "profile-non-production-dealer-policy-catalog-lab",
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 )))]
@@ -125,47 +130,30 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "non-production-product-series-lab"
-    ),
-    all(
-        feature = "profile-successor-chain-attached-v1",
-        any(
-            feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-general-source-v2-point",
-            feature = "profile-non-production-dealer-policy-catalog-lab",
-            feature = "profile-non-production-general-v2-empty-book-identity-lab"
-        )
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+#[cfg(all(
+    feature = "profile-successor-chain-attached-dev",
+    any(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-general-source-v2-point",
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab",
+        feature = "non-production-product-series-lab",
+        feature = "non-production-failure-recovery-lab",
+        feature = "non-production-real-pyth-lab",
+        feature = "laboratory-fixtures"
+    )
+))]
+compile_error!(
+    "the successor-chain-attached dev profile cannot include a legacy profile or per-family laboratory"
+);
 #[cfg(all(
     feature = "non-production-product-series-lab",
     not(feature = "profile-full")
 ))]
 compile_error!("the Product/Series artifact-catalog laboratory requires profile-full");
-#[cfg(all(
-    feature = "profile-successor-chain-attached-v1",
-    any(
-        feature = "non-production-mock-source",
-        feature = "non-production-real-pyth-lab",
-        feature = "laboratory-fixtures"
-    )
-))]
-compile_error!("the checked chain-attached successor cannot compile Source laboratory authority");
-#[cfg(all(
-    feature = "non-production-structured-custody-lab",
-    not(feature = "profile-full")
-))]
-compile_error!("the Structured custody laboratory requires profile-full");
-#[cfg(all(
-    feature = "non-production-structured-custody-lab",
-    any(
-        feature = "non-production-product-series-lab",
-        feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab"
-    )
-))]
-compile_error!("the Structured custody laboratory has its own exclusive artifact identity");
 
 pub mod accounts;
 pub mod capabilities;
@@ -179,24 +167,24 @@ pub mod instructions_sysvar;
 pub mod loader_state;
 #[cfg(feature = "observed-positive-collateral-release-manifest")]
 mod observed_collateral_release_manifest_v2;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod native_window;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod pyth_receiver;
 pub mod seeds;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_archive;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_archive_v2;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_generation;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_identity;
 pub mod source_plane_v3;
 pub mod source_plane_v3_actions;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_v2;
 pub mod token;
 

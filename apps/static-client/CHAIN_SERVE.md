@@ -61,9 +61,10 @@ successor versions (including Window V5, AdmissionNode V4/outer-v2,
 MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
 SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
 SelectedCandidate V1 is not a live decoder or browser mapping.
-The checked `fractional` family admits only Policy V2, Ledger V1,
-Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
-are withdrawn and invisible to live discovery.
+The checked `fractional` family admits only Policy V3, Ledger V1,
+Credit V2, and Tombstone V2. Policy V1 and the unprefundable pre-activation
+Policy V2 are withdrawn, as are the reinterpreted credit/tombstone V1 bytes;
+all are invisible to live discovery.
 It also admits only the current globally enveloped Dealer state graph (State,
 funded dependencies, LP pages, leases, pots, Epoch bindings, terminal work,
 tombstones, tickets, and receipts); raw historical Dealer V1 bodies are not
@@ -155,6 +156,26 @@ different cluster from entering that processed generation. It does not prove
 that the HTTP and WebSocket services share an operator, authenticate the RPC,
 or make its observations authoritative. All WebSocket observations remain
 untrusted and onchain execution must independently reload authority.
+
+## Action material and freshness
+
+`/v1/actions` enumerates the exact enabled-intent set from the checked release;
+it never infers capabilities from the presence of a decoded account. A row is
+callable only when one opaque typed semantic-owner constructor joins the same
+release, capability profile, finalized restart cursor, ordered account-role
+contract, fee payer, signer set, exact-integer equations, and deterministic
+blockhash-free transaction bytes. Duplicate material for one cursor fails
+closed.
+
+Action material is ephemeral and is not restart state. The daemon may retain it
+only in memory and rejoins it to the current release and cursor on every read.
+The browser validates all projected roles, signers, release coordinates,
+decimal integers, and transaction bounds before enabling inspection. It still
+cannot add a recent blockhash, read a key, sign, or submit. A future launcher
+must reacquire the complete named prestate and current slot before adding a
+blockhash, and must discard the draft and reacquire `/v1/session` plus
+`/v1/actions` after any submission attempt rather than advancing from an
+expected poststate.
 
 The RPC plan accepts HTTPS/WSS endpoints or canonical loopback
 `http://127.0.0.1:PORT` and `ws://127.0.0.1:PORT` pairs. Public reads remain

@@ -3,10 +3,9 @@
 """Offline gate for identity-linked capability profiles and ELF evidence.
 
 This checker reads local JSON only. It never builds, deploys, signs, or contacts
-RPC. V2 evidence is eligible only when it repeats the exact semantic-owner,
-central-registry, and exhaustive wire-surface manifest whose canonical digest
-defines the profile identity. Historical V1 measurements remain comparison-only
-evidence.
+RPC. V2 evidence is eligible only when it repeats the exact semantic-owner and
+central-registry manifest whose canonical digest defines the profile identity.
+Historical V1 measurements remain comparison-only evidence.
 """
 
 from __future__ import annotations
@@ -24,29 +23,48 @@ MANIFEST_SCHEMA = "dragons-clutch/capability-profile-manifest/v2"
 IDENTITY_DOMAIN = "dragons-clutch/capability-profile-identity/v2"
 HISTORICAL_MEASUREMENT_SCHEMA = "dragons-clutch/capability-profile-measurement/v1"
 LINKED_MEASUREMENT_SCHEMA = "dragons-clutch/capability-profile-measurement/v2"
-WIRE_SURFACE_SCHEMA = "dragons-clutch/wire-surface/v1"
-WIRE_SURFACE_IDENTITY_DOMAIN = "dragons-clutch/wire-surface-identity/v1"
 LOADER_V3_MAX_PERMITTED_DATA_LENGTH = 10 * 1024 * 1024
 PROGRAMDATA_METADATA_DATA_LEN_BYTES = 45
 
-OUTER_REQUEST_ACTIONS = [0, 1, 2]
-DIRECT_V3_TAGS = frozenset(range(36, 47))
-SOURCE_V1_TAGS = frozenset(range(23, 27))
-SOURCE_V2_TAGS = frozenset(range(70, 74))
-FULL_PROFILE_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
-SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE = "profile-successor-chain-attached-v1"
-# This is the complete local-action-zero wire surface of the first
-# chain-attached successor.  It intentionally excludes legacy market founding,
-# retired Source generations, old Direct generations, and every General value
-# or clearing action.  Current Direct V4 owns shared tags 7/14 and its
-# dedicated 36..=46 decoder; current Collateral owns 2..=5 and 15..=17.
-SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS = [
-    [tag, 3]
-    for tag in [2, 3, 4, 5, 7, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 68]
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE = "profile-successor-chain-attached-dev"
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL = (
+    "dragons-clutch/capability-profile/successor-chain-attached-dev/"
+    "complete-product-source-general-direct-fractional-structured-dealer-"
+    "failure-release-closure/v1"
+)
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_ID = (
+    "f1d4c9bbb89e89bf13fe0a54ae824220dc0d1109bdf21316e2953aa334afd4ca"
+)
+
+CURRENT_GENERAL_EXTENSION_TRIPLES = [
+    [74, 1, action] for action in (*range(1, 35), *range(36, 43))
 ]
-SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS = [
-    [tag, 3] for tag in range(36, 47)
+CURRENT_STRUCTURED_EXTENSION_TRIPLES = [
+    [75, 1, action] for action in (1, 3, 5, 6, 7, 8)
 ]
+CURRENT_DEALER_EXTENSION_TRIPLES = [[76, 1, action] for action in range(1, 26)]
+# Action25 retains one coarse registry coordinate, but the current dispatcher
+# admits only these hostile-decoded payload targets. They are emitted as
+# checked variants rather than falsely enabling the whole tuple.
+CURRENT_DEALER_PAYLOAD_VARIANTS = [
+    [76, 1, 25, 8],
+    [76, 1, 25, 9],
+]
+CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 13)]
+CURRENT_SERIES_EXTENSION_TRIPLES = [[77, 2, action] for action in range(13, 19)]
+CURRENT_RECOVERY_EXTENSION_TRIPLES = [[78, 1, action] for action in range(10, 14)]
+CURRENT_FRACTIONAL_EXTENSION_TRIPLES = [[79, 1, action] for action in range(1, 11)]
+CURRENT_DIRECT_EXTENSION_TRIPLES = [[80, 1, action] for action in range(1, 14)]
+SUCCESSOR_CHAIN_ATTACHED_DEV_EXTENSION_TRIPLES = sorted(
+    CURRENT_GENERAL_EXTENSION_TRIPLES
+    + CURRENT_STRUCTURED_EXTENSION_TRIPLES
+    + CURRENT_DEALER_EXTENSION_TRIPLES
+    + CURRENT_SOURCE_EXTENSION_TRIPLES
+    + CURRENT_SERIES_EXTENSION_TRIPLES
+    + CURRENT_RECOVERY_EXTENSION_TRIPLES
+    + CURRENT_FRACTIONAL_EXTENSION_TRIPLES
+    + CURRENT_DIRECT_EXTENSION_TRIPLES
+)
 
 CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("relation", "dragons-clutch/semantic-owner/relation"),
@@ -56,6 +74,10 @@ CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("clear-work-feed", "dragons-clutch/semantic-owner/clear-work-feed"),
     ("retirement", "dragons-clutch/semantic-owner/retirement"),
     ("source-plane", "dragons-clutch/semantic-owner/source-plane"),
+    (
+        "fractional-redemption",
+        "dragons-clutch/semantic-owner/fractional-redemption",
+    ),
     ("series-products", "dragons-clutch/semantic-owner/series-products"),
     ("recovery", "dragons-clutch/semantic-owner/recovery"),
     ("structured-claim", "dragons-clutch/semantic-owner/structured-claim"),
@@ -70,17 +92,20 @@ PROFILE_FEATURES = frozenset(
         "profile-full",
         "profile-direct-v3-source-v2-point",
         "profile-general-source-v2-point",
-        SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+        SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
     }
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "production-inert": None,
-    # SourcePlane V3 admits only a separately authenticated content-addressed
-    # SourceReleaseManifestV2. It changes the checked capability-profile
-    # identity but never compiles a fixture registry row into the ELF.
     "runtime-real-pyth-release": None,
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
+}
+COLLATERAL_RELEASE_IDENTITY_FEATURE: dict[str, str | None] = {
+    "production-inert": None,
+    "observed-positive-collateral-and-claim-release": (
+        "observed-positive-collateral-release-manifest"
+    ),
 }
 
 HEX_32 = re.compile(r"[0-9a-f]{64}\Z")
@@ -98,6 +123,9 @@ SYSCALL_NAME = re.compile(r"(?:abort|sol_[a-z0-9_]+)\Z")
 LINKED_MEASUREMENT_CODE_INPUTS: tuple[tuple[str, str], ...] = (
     ("checker", "programs/clutch-sbf/scripts/check_capability_profile.py"),
     ("producer", "programs/clutch-sbf/scripts/measure_capability_profiles.py"),
+)
+OBSERVED_RELEASE_MANIFEST_PATH = Path(
+    "programs/clutch-sbf/program/src/observed_collateral_release_manifest_v2.rs"
 )
 
 
@@ -165,6 +193,44 @@ def load_json(path: Path) -> Any:
         raise ProfileError(f"{path}: cannot read canonical JSON: {exc}") from exc
 
 
+def require_populated_observed_release_manifest(repo: Path) -> None:
+    """Refuse the public/dev selector until both checked release planes exist."""
+
+    path = repo / OBSERVED_RELEASE_MANIFEST_PATH
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ProfileError(f"{path}: cannot read observed release manifest: {exc}") from exc
+    releases = re.search(
+        r"OBSERVED_COLLATERAL_RELEASES_V2\s*:\s*\[AdapterReleaseV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    manifests = re.search(
+        r"OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2\s*:\s*"
+        r"\[CompiledCollateralReleaseManifestV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    claim = re.search(
+        r"OBSERVED_CLAIM_ISSUANCE_RELEASE_V1\s*:\s*"
+        r"Option<CompiledClaimIssuanceReleaseV1>\s*=\s*Some\s*\(",
+        source,
+    )
+    require(
+        releases is not None and manifests is not None,
+        "build_contract: observed-positive collateral manifest declarations are not canonical",
+    )
+    release_count = int(releases.group(1))
+    manifest_count = int(manifests.group(1))
+    require(
+        release_count > 0 and release_count == manifest_count,
+        "build_contract: observed-positive collateral release rows are absent or mismatched",
+    )
+    require(
+        claim is not None,
+        "build_contract: observed-positive claim release row is absent",
+    )
+
+
 def canonical_json_sha256(value: Any) -> str:
     encoded = json.dumps(
         value, ensure_ascii=True, separators=(",", ":"), sort_keys=True
@@ -174,7 +240,6 @@ def canonical_json_sha256(value: Any) -> str:
 
 IntentTriple = tuple[int, int, int]
 AccountCoordinate = tuple[int, int]
-IntentPair = tuple[int, int]
 
 
 def validate_intent_triples(value: Any, where: str) -> list[list[int]]:
@@ -226,198 +291,6 @@ def validate_account_coordinates(value: Any, where: str) -> list[list[int]]:
     require(len(set(parsed)) == len(parsed), f"{where}: duplicate account coordinate")
     require(parsed == sorted(parsed), f"{where}: noncanonical account-coordinate order")
     return [list(item) for item in parsed]
-
-
-def validate_intent_pairs(value: Any, where: str) -> list[list[int]]:
-    require(isinstance(value, list), f"{where}: expected array")
-    parsed: list[IntentPair] = []
-    for index, item in enumerate(value):
-        item_where = f"{where}[{index}]"
-        require(
-            isinstance(item, list) and len(item) == 2,
-            f"{item_where}: expected pair",
-        )
-        pair = tuple(
-            require_positive_int(field, f"{item_where}[{field_index}]")
-            for field_index, field in enumerate(item)
-        )
-        require(
-            all(field <= 255 for field in pair),
-            f"{item_where}: coordinate exceeds one byte",
-        )
-        parsed.append(pair)  # type: ignore[arg-type]
-    require(len(set(parsed)) == len(parsed), f"{where}: duplicate intent pair")
-    require(parsed == sorted(parsed), f"{where}: noncanonical intent-pair order")
-    return [list(item) for item in parsed]
-
-
-def validate_byte_discriminants(value: Any, where: str) -> list[int]:
-    require(isinstance(value, list), f"{where}: expected array")
-    parsed = [require_nonnegative_int(item, f"{where}[{index}]") for index, item in enumerate(value)]
-    require(all(item <= 255 for item in parsed), f"{where}: value exceeds one byte")
-    require(parsed == sorted(set(parsed)), f"{where}: noncanonical byte order")
-    return parsed
-
-
-def wire_surface_sha256(value: dict[str, Any]) -> str:
-    return canonical_json_sha256(
-        {"domain": WIRE_SURFACE_IDENTITY_DOMAIN, "wire_surface": value}
-    )
-
-
-def validate_wire_surface(
-    value: Any,
-    *,
-    build_contract: dict[str, Any],
-    capabilities: list[dict[str, Any]],
-    central_registry: dict[str, Any],
-) -> dict[str, Any]:
-    require(isinstance(value, dict), "wire_surface: expected object")
-    exact_keys(
-        value,
-        {
-            "schema",
-            "legacy_intent_pairs",
-            "dedicated_direct_intent_pairs",
-            "outer_request_actions",
-            "source_generation_discriminants",
-        },
-        "wire_surface",
-    )
-    require(
-        value["schema"] == WIRE_SURFACE_SCHEMA,
-        "wire_surface.schema: unsupported schema",
-    )
-    legacy = validate_intent_pairs(
-        value["legacy_intent_pairs"], "wire_surface.legacy_intent_pairs"
-    )
-    direct = validate_intent_pairs(
-        value["dedicated_direct_intent_pairs"],
-        "wire_surface.dedicated_direct_intent_pairs",
-    )
-    outer = validate_byte_discriminants(
-        value["outer_request_actions"], "wire_surface.outer_request_actions"
-    )
-    generations = validate_byte_discriminants(
-        value["source_generation_discriminants"],
-        "wire_surface.source_generation_discriminants",
-    )
-    require(
-        outer == OUTER_REQUEST_ACTIONS,
-        f"wire_surface.outer_request_actions: expected {OUTER_REQUEST_ACTIONS}",
-    )
-
-    legacy_set = {tuple(pair) for pair in legacy}
-    direct_set = {tuple(pair) for pair in direct}
-    require(
-        not legacy_set.intersection(direct_set),
-        "wire_surface: legacy and dedicated Direct intent pairs overlap",
-    )
-    require(
-        all(pair[0] not in DIRECT_V3_TAGS for pair in legacy_set),
-        "wire_surface.legacy_intent_pairs: dedicated Direct V3 tag misclassified",
-    )
-    require(
-        all(pair[0] in DIRECT_V3_TAGS for pair in direct_set),
-        "wire_surface.dedicated_direct_intent_pairs: non-Direct tag",
-    )
-    enabled_pairs = {
-        (tag, version)
-        for tag, version, local_action in central_registry["enabled_intent_triples"]
-        if local_action == 0
-    }
-    require(
-        legacy_set.union(direct_set) == enabled_pairs,
-        "wire_surface: intent pairs do not exactly match central-registry legacy/dedicated coverage",
-    )
-
-    source_tags = {tag for tag, _version in legacy_set if tag in SOURCE_V1_TAGS | SOURCE_V2_TAGS}
-    expected_generations: list[int] = []
-    if source_tags.intersection(SOURCE_V1_TAGS):
-        expected_generations.append(1)
-    if source_tags.intersection(SOURCE_V2_TAGS):
-        expected_generations.append(2)
-    require(
-        generations == expected_generations,
-        "wire_surface.source_generation_discriminants: legacy Source generation mismatch",
-    )
-
-    source_identity = build_contract["source_identity"]
-    if source_identity in {"production-inert", "runtime-real-pyth-release"}:
-        require(
-            not source_tags and generations == [],
-            "wire_surface: release-class profile retains legacy Source authority",
-        )
-
-    source_owner = next(row for row in capabilities if row["slot"] == "source-plane")
-    required_source_extensions = [
-        triple
-        for triple in source_owner["required_intent_triples"]
-        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
-    ]
-    all_required_source_extensions = [
-        triple
-        for row in capabilities
-        for triple in row["required_intent_triples"]
-        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
-    ]
-    require(
-        all_required_source_extensions == required_source_extensions,
-        "wire_surface: Source V3 actions have a non-Source semantic owner",
-    )
-    enabled_source_extensions = [
-        triple
-        for triple in central_registry["enabled_intent_triples"]
-        if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
-    ]
-    profile_feature = build_contract["cargo_profile_feature"]
-    if profile_feature == "profile-full":
-        require(
-            required_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
-            "wire_surface: current Source requirements must be exactly 77/v2 actions 1 through 4",
-        )
-        if source_owner["linkage"] == "linked":
-            require(
-                enabled_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
-                "wire_surface: linked current Source must enable exactly 77/v2 actions 1 through 4",
-            )
-        else:
-            require(
-                enabled_source_extensions == [],
-                "wire_surface: planned Source owner unexpectedly enables Source V3 actions",
-            )
-    elif profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
-        require(
-            required_source_extensions == [] and enabled_source_extensions == [],
-            "wire_surface: incomplete chain-attached Source lifecycle must disable actions 1 through 12",
-        )
-    else:
-        require(
-            required_source_extensions == [] and enabled_source_extensions == [],
-            "wire_surface: narrow profile unexpectedly retains Source V3 actions",
-        )
-
-    if profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
-        require(
-            legacy == SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS,
-            "wire_surface: chain-attached successor legacy intent set is not exact",
-        )
-        require(
-            direct == SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS,
-            "wire_surface: chain-attached successor Direct intent set is not exact",
-        )
-        require(
-            generations == [],
-            "wire_surface: chain-attached successor retains a legacy Source generation",
-        )
-
-    return {
-        "schema": WIRE_SURFACE_SCHEMA,
-        "legacy_intent_pairs": legacy,
-        "dedicated_direct_intent_pairs": direct,
-        "outer_request_actions": outer,
-        "source_generation_discriminants": generations,
-    }
 
 
 def validate_capabilities(value: Any) -> list[dict[str, Any]]:
@@ -573,6 +446,111 @@ def validate_registry(value: Any, capabilities: list[dict[str, Any]]) -> dict[st
     }
 
 
+def validate_successor_dependency_closure(
+    build_contract: dict[str, Any],
+    profile_label: str,
+    capabilities: list[dict[str, Any]],
+    central_registry: dict[str, Any],
+) -> None:
+    """Require the unified dev family graph as one indivisible capability."""
+
+    if (
+        build_contract["cargo_profile_feature"]
+        != SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE
+    ):
+        return
+    require(
+        profile_label == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+        "profile: successor-chain-attached dev label is not the frozen complete-closure identity",
+    )
+    require(
+        hashlib.sha256(profile_label.encode("utf-8")).hexdigest()
+        == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_ID,
+        "profile: successor-chain-attached dev label digest is not frozen",
+    )
+    require(
+        all(row["linkage"] == "linked" for row in capabilities),
+        "profile: successor-chain-attached dev requires every semantic owner linked",
+    )
+    enabled_extensions = [
+        triple
+        for triple in central_registry["enabled_intent_triples"]
+        if triple[2] != 0
+    ]
+    require(
+        enabled_extensions == SUCCESSOR_CHAIN_ATTACHED_DEV_EXTENSION_TRIPLES,
+        "profile: successor-chain-attached dev extension closure is incomplete or noncanonical",
+    )
+
+    rows = {row["slot"]: row for row in capabilities}
+    exclusive = (
+        ("source-plane", CURRENT_SOURCE_EXTENSION_TRIPLES),
+        ("series-products", CURRENT_SERIES_EXTENSION_TRIPLES),
+        ("recovery", CURRENT_RECOVERY_EXTENSION_TRIPLES),
+        ("structured-claim", CURRENT_STRUCTURED_EXTENSION_TRIPLES),
+        ("liquidity-dealer", CURRENT_DEALER_EXTENSION_TRIPLES),
+        ("fractional-redemption", CURRENT_FRACTIONAL_EXTENSION_TRIPLES),
+    )
+    for slot, expected in exclusive:
+        family_tags = {triple[0] for triple in expected}
+        owned = [
+            triple
+            for triple in rows[slot]["required_intent_triples"]
+            if triple[0] in family_tags and triple[2] != 0
+        ]
+        require(
+            owned == expected,
+            f"profile: {slot} does not own its exact successor action closure",
+        )
+        foreign = [
+            triple
+            for row in capabilities
+            if row["slot"] != slot
+            for triple in row["required_intent_triples"]
+            if triple in expected
+        ]
+        require(
+            foreign == [],
+            f"profile: {slot} successor actions have a second semantic owner",
+        )
+
+    shared_market_slots = {
+        "relation",
+        "score",
+        "price-measure",
+        "candidate-lifecycle",
+        "clear-work-feed",
+        "retirement",
+    }
+    for family_name, expected in (
+        ("General", CURRENT_GENERAL_EXTENSION_TRIPLES),
+        ("Direct", CURRENT_DIRECT_EXTENSION_TRIPLES),
+    ):
+        expected_set = {tuple(triple) for triple in expected}
+        owned = {
+            tuple(triple)
+            for row in capabilities
+            if row["slot"] in shared_market_slots
+            for triple in row["required_intent_triples"]
+            if tuple(triple) in expected_set
+        }
+        require(
+            owned == expected_set,
+            f"profile: {family_name} lifecycle/index action closure lacks semantic ownership",
+        )
+        foreign = [
+            triple
+            for row in capabilities
+            if row["slot"] not in shared_market_slots
+            for triple in row["required_intent_triples"]
+            if tuple(triple) in expected_set
+        ]
+        require(
+            foreign == [],
+            f"profile: {family_name} actions have a non-market semantic owner",
+        )
+
+
 def validate_build_contract(value: Any) -> dict[str, Any]:
     require(isinstance(value, dict), "build_contract: expected object")
     exact_keys(
@@ -580,6 +558,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
         {
             "cargo_profile_feature",
             "source_identity",
+            "collateral_release_identity",
             "expected_undefined_dynamic_symbols",
         },
         "build_contract",
@@ -598,6 +577,29 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
         source_identity in SOURCE_IDENTITY_FEATURE,
         "build_contract.source_identity: unknown class",
     )
+    collateral_release_identity = require_string(
+        value["collateral_release_identity"],
+        "build_contract.collateral_release_identity",
+    )
+    require(
+        collateral_release_identity in COLLATERAL_RELEASE_IDENTITY_FEATURE,
+        "build_contract.collateral_release_identity: unknown class",
+    )
+    if feature == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE:
+        require(
+            source_identity == "runtime-real-pyth-release",
+            "build_contract: successor-chain-attached dev requires the runtime real-Pyth release identity",
+        )
+        require(
+            collateral_release_identity
+            == "observed-positive-collateral-and-claim-release",
+            "build_contract: successor-chain-attached dev requires observed-positive collateral and claim releases",
+        )
+    if source_identity == "runtime-real-pyth-release":
+        require(
+            feature == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+            "build_contract: runtime real-Pyth release requires the successor-chain-attached dev profile",
+        )
     symbols = value["expected_undefined_dynamic_symbols"]
     require(
         isinstance(symbols, list),
@@ -624,6 +626,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
     return {
         "cargo_profile_feature": feature,
         "source_identity": source_identity,
+        "collateral_release_identity": collateral_release_identity,
         "expected_undefined_dynamic_symbols": parsed_symbols,
     }
 
@@ -643,6 +646,11 @@ def cargo_features(build_contract: dict[str, Any]) -> list[str]:
     source_feature = SOURCE_IDENTITY_FEATURE[str(build_contract["source_identity"])]
     if source_feature is not None:
         features.append(source_feature)
+    collateral_feature = COLLATERAL_RELEASE_IDENTITY_FEATURE[
+        str(build_contract["collateral_release_identity"])
+    ]
+    if collateral_feature is not None:
+        features.append(collateral_feature)
     return features
 
 
@@ -695,7 +703,6 @@ def profile_identity(
     build_contract: dict[str, Any],
     capabilities: list[dict[str, Any]],
     central_registry: dict[str, Any],
-    wire_surface: dict[str, Any],
     limits: dict[str, int],
 ) -> str:
     return canonical_json_sha256(
@@ -706,7 +713,6 @@ def profile_identity(
             "build_contract": build_contract,
             "capabilities": capabilities,
             "central_registry": central_registry,
-            "wire_surface": wire_surface,
             "artifact_budget_limits": limits,
         }
     )
@@ -1343,8 +1349,6 @@ def extract_linked_measurement(
     build_contract: dict[str, Any],
     capabilities: list[dict[str, Any]],
     central_registry: dict[str, Any],
-    wire_surface: dict[str, Any],
-    expected_wire_surface_sha256: str,
     limits: dict[str, int],
 ) -> dict[str, Any]:
     require(isinstance(evidence, dict), "measurement evidence: expected object")
@@ -1405,13 +1409,12 @@ def extract_linked_measurement(
             "name",
             "label",
             "source_identity",
+            "collateral_release_identity",
             "cargo_features",
             "capability_profile_identity_sha256",
             "identity_manifest_sha256",
             "semantic_owners",
             "central_registry",
-            "wire_surface",
-            "wire_surface_sha256",
             "reproducible",
             "measurements",
             "default_feature_equivalence",
@@ -1423,6 +1426,11 @@ def extract_linked_measurement(
     require(
         profile["source_identity"] == build_contract["source_identity"],
         "measurement evidence: source/lab identity mismatch",
+    )
+    require(
+        profile["collateral_release_identity"]
+        == build_contract["collateral_release_identity"],
+        "measurement evidence: collateral-release identity mismatch",
     )
     require(
         profile["cargo_features"] == cargo_features(build_contract),
@@ -1451,18 +1459,6 @@ def extract_linked_measurement(
     require(
         profile["central_registry"] == central_registry,
         "measurement evidence: central-registry manifest mismatch",
-    )
-    require(
-        profile["wire_surface"] == wire_surface,
-        "measurement evidence: wire-surface manifest mismatch",
-    )
-    require(
-        require_hex32(
-            profile["wire_surface_sha256"],
-            "measurement evidence.wire_surface_sha256",
-        )
-        == expected_wire_surface_sha256,
-        "measurement evidence: wire-surface identity mismatch",
     )
     require(
         profile["reproducible"] is True,
@@ -1514,6 +1510,7 @@ def extract_linked_measurement(
     needs_default_equivalence = (
         build_contract["cargo_profile_feature"] == "profile-full"
         and build_contract["source_identity"] == "production-inert"
+        and build_contract["collateral_release_identity"] == "production-inert"
     )
     if needs_default_equivalence:
         require(
@@ -1603,7 +1600,6 @@ def validate_manifest(
             "build_contract",
             "capabilities",
             "central_registry",
-            "wire_surface",
             "artifact_budget",
         },
         "manifest",
@@ -1634,36 +1630,21 @@ def validate_manifest(
         classification in {"planning", "deployable"},
         "profile.classification: unknown state",
     )
+
     build_contract = validate_build_contract(data["build_contract"])
-    if classification == "deployable":
-        require(
-            build_contract["source_identity"]
-            in {"production-inert", "runtime-real-pyth-release"},
-            "profile: non-production source identity cannot be deployable",
-        )
-    if build_contract["source_identity"] == "runtime-real-pyth-release":
-        require(
-            build_contract["cargo_profile_feature"]
-            == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-            "profile: runtime real-Pyth release requires the chain-attached successor profile",
-        )
     if (
-        build_contract["cargo_profile_feature"]
-        == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE
+        build_contract["collateral_release_identity"]
+        == "observed-positive-collateral-and-claim-release"
     ):
-        require(
-            build_contract["source_identity"] == "runtime-real-pyth-release",
-            "profile: chain-attached successor requires the runtime real-Pyth release identity",
-        )
+        require_populated_observed_release_manifest(repo)
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
-    wire_surface = validate_wire_surface(
-        data["wire_surface"],
-        build_contract=build_contract,
-        capabilities=capabilities,
-        central_registry=central_registry,
+    validate_successor_dependency_closure(
+        build_contract,
+        label,
+        capabilities,
+        central_registry,
     )
-    computed_wire_surface_sha256 = wire_surface_sha256(wire_surface)
     artifact_budget = data["artifact_budget"]
     require(isinstance(artifact_budget, dict), "artifact_budget: expected object")
     exact_keys(
@@ -1673,13 +1654,7 @@ def validate_manifest(
     )
     limits = validate_limits(artifact_budget["limits"])
     computed_identity = profile_identity(
-        name,
-        label,
-        build_contract,
-        capabilities,
-        central_registry,
-        wire_surface,
-        limits,
+        name, label, build_contract, capabilities, central_registry, limits
     )
     declared_identity = require_hex32(
         profile["identity_sha256"], "profile.identity_sha256"
@@ -1736,8 +1711,6 @@ def validate_manifest(
                 build_contract=build_contract,
                 capabilities=capabilities,
                 central_registry=central_registry,
-                wire_surface=wire_surface,
-                expected_wire_surface_sha256=computed_wire_surface_sha256,
                 limits=limits,
             )
         check_budget(measurement, limits)
@@ -1763,11 +1736,18 @@ def validate_manifest(
         "profile_identity_sha256": computed_identity,
         "classification": classification,
         "source_identity": build_contract["source_identity"],
+        "collateral_release_identity": build_contract[
+            "collateral_release_identity"
+        ],
         "cargo_features": cargo_features(build_contract),
         "capabilities": capabilities,
         "central_registry": central_registry,
-        "wire_surface": wire_surface,
-        "wire_surface_sha256": computed_wire_surface_sha256,
+        "enabled_intent_variants": (
+            CURRENT_DEALER_PAYLOAD_VARIANTS
+            if build_contract["cargo_profile_feature"]
+            == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE
+            else []
+        ),
         "limits": limits,
         "linked_capabilities": linked,
         "planned_capabilities": planned,

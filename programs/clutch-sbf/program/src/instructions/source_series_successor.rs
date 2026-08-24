@@ -1,9 +1,8 @@
-//! Capability-false SourceSeries 77/v2 successor actions.
+//! Current SourceSeries 77/v2 successor actions.
 //!
 //! These handlers are compiled so their exact account/state joins can be
-//! reviewed, but central dispatch remains the sole capability owner. Actions
-//! 5 through 12 stay disabled in every checked profile until the complete
-//! Source-to-ResolutionV5 chain is admitted.
+//! reviewed, while central dispatch remains the sole all-or-none capability
+//! owner. No handler or inner receipt independently enables a tuple.
 
 use super::source_series::require_live_intent;
 use crate::accounts::{require, Outcome};
@@ -101,9 +100,9 @@ pub(super) fn process_seal_raw_page(
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
     let custody = authenticate_source_funding_custody_v1(
-        program_id, route, schedule, &accounts[19],
+        program_id, route, schedule, &accounts[18],
     )?;
-    require_live_intent(program_id, &accounts[18], intent)?;
+    require_live_intent(program_id, &accounts[17], intent)?;
     let head_lineage =
         authenticate_lineage(program_id, route, &accounts[9], LineageAccessV1::Mutable)
             .map_err(Refusal::from)?;
@@ -129,11 +128,11 @@ pub(super) fn process_seal_raw_page(
         &accounts[11],
         &accounts[12],
         custody,
-        &accounts[19],
+        &accounts[18],
+        &accounts[18],
         &accounts[13],
-        &accounts[14],
+        &accounts[19],
         &accounts[20],
-        &accounts[21],
     )?;
     let close = execution.open_close.funding;
     require(
@@ -187,24 +186,24 @@ pub(super) fn process_seal_raw_page(
         schedule,
         kind,
         semantic_receipt_id,
-        &accounts[15],
+        &accounts[14],
         call_ordinal,
         ceiling,
-        accounts[18].key,
+        accounts[17].key,
         ceiling,
         custody,
+        &accounts[18],
         &accounts[19],
         &accounts[20],
-        &accounts[21],
     )?;
     apply_source_work_liveness(
         program_id,
         route,
         work,
+        &accounts[15],
         &accounts[16],
         &accounts[17],
         &accounts[18],
-        &accounts[19],
     )?;
     Ok(())
 }
@@ -464,9 +463,9 @@ pub(super) fn process_seal_window(
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
     let custody = authenticate_source_funding_custody_v1(
-        program_id, route, schedule, &accounts[21],
+        program_id, route, schedule, &accounts[20],
     )?;
-    require_live_intent(program_id, &accounts[20], intent)?;
+    require_live_intent(program_id, &accounts[19], intent)?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
     let window_input = authenticate_window_spec_input(program_id, route, &accounts[10])
         .map_err(Refusal::from)?;
@@ -506,11 +505,11 @@ pub(super) fn process_seal_window(
         &accounts[12],
         &accounts[14],
         custody,
-        &accounts[21],
+        &accounts[20],
+        &accounts[20],
         &accounts[15],
-        &accounts[16],
+        &accounts[21],
         &accounts[22],
-        &accounts[23],
     )?;
     let close = execution.work_close.funding;
     require(
@@ -570,24 +569,24 @@ pub(super) fn process_seal_window(
         schedule,
         kind,
         semantic_receipt_id,
-        &accounts[17],
+        &accounts[16],
         call_ordinal,
         ceiling,
-        accounts[20].key,
+        accounts[19].key,
         ceiling,
         custody,
+        &accounts[20],
         &accounts[21],
         &accounts[22],
-        &accounts[23],
     )?;
     apply_source_work_liveness(
         program_id,
         route,
         work_execution,
+        &accounts[17],
         &accounts[18],
         &accounts[19],
         &accounts[20],
-        &accounts[21],
     )?;
     Ok(())
 }
@@ -1095,9 +1094,8 @@ pub(super) fn process_close_generation(
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
     let custody = authenticate_source_funding_custody_v1(
-        program_id, route, schedule, &accounts[13],
+        program_id, route, schedule, &accounts[12],
     )?;
-    require(accounts[14].key == accounts[13].key, ClutchError::AccountAlias)?;
     let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
     require(
         clock.slot < intent.valid_before_slot
@@ -1149,8 +1147,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[14],
-            &accounts[15],
+            &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::OpenRawPage => close_open_page_generation(
@@ -1159,8 +1157,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[14],
-            &accounts[15],
+            &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::WindowWork => close_window_work_generation(
@@ -1169,8 +1167,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[14],
-            &accounts[15],
+            &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::StatisticResult => close_statistic_result_generation(
@@ -1179,8 +1177,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[14],
-            &accounts[15],
+            &accounts[12],
+            &accounts[13],
             terminal,
         ),
     }?;
@@ -1195,7 +1193,7 @@ pub(super) fn process_close_generation(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         !close.lineage_after.is_open
-            && custody.account() == runtime_key(accounts[14].key)
+            && custody.account() == runtime_key(accounts[12].key)
             && close.funding.generation == target_generation
             && close.funding.terminal_receipt_id.bytes()
                 == intent.semantic_terminal_receipt_id

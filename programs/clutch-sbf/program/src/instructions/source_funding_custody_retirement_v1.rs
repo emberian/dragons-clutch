@@ -1274,7 +1274,6 @@ mod adversarial_tests {
         assert!(source.contains("!account.is_signer"));
         assert!(source.contains("all_distinct_ids(&terminal_ids)"));
     }
-
     #[test]
     fn terminal_and_retirement_capabilities_are_non_clone_consumables() {
         let source = include_str!("source_funding_custody_retirement_v1.rs");

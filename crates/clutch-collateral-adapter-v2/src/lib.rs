@@ -25,6 +25,7 @@
 //! decoder or route is weakened by this crate.
 
 mod account;
+mod address_contract;
 mod binding;
 mod bearer_redemption_v3;
 mod claim;
@@ -44,6 +45,7 @@ mod series;
 mod transfer;
 
 pub use account::*;
+pub use address_contract::*;
 pub use bearer_redemption_v3::*;
 pub use binding::*;
 pub use claim::*;

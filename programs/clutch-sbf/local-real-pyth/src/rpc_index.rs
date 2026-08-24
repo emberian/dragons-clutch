@@ -61,6 +61,7 @@ pub enum CanonicalFamily {
     StructuredClaim,
     Dealer,
     Failure,
+    Direct,
 }
 
 impl CanonicalFamily {
@@ -79,6 +80,7 @@ impl CanonicalFamily {
             Self::StructuredClaim => "structured-claim",
             Self::Dealer => "dealer",
             Self::Failure => "failure",
+            Self::Direct => "direct",
         }
     }
 }
@@ -196,6 +198,8 @@ pub struct IndexedProgramRelease {
     /// Only centrally registered coordinates present in the checked manifest.
     /// A decoded family without a coordinate remains non-actionable.
     pub enabled_intents: Vec<CanonicalIntentCoordinate>,
+    /// Checked payload-scoped capabilities whose coarse tuple stays disabled.
+    pub enabled_intent_variants: Vec<CanonicalIntentVariantV1>,
     pub families: Vec<CanonicalFamily>,
 }
 
@@ -204,6 +208,42 @@ pub struct CanonicalIntentCoordinate {
     pub family_tag: u8,
     pub family_version: u8,
     pub local_action: u8,
+}
+
+/// One checked payload discriminator beneath an allocated intent coordinate.
+///
+/// This enum is closed so a browser cannot invent generic payload selectors.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CanonicalIntentVariantV1 {
+    DealerRetireActiveFacilityCredit,
+    DealerRetireUnusedFutureCredit,
+}
+
+impl CanonicalIntentVariantV1 {
+    #[must_use]
+    pub const fn coordinate(self) -> CanonicalIntentCoordinate {
+        CanonicalIntentCoordinate {
+            family_tag: clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+            family_version: clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+            local_action: clutch_solana_layout::registry::DealerFacilityAction::Retire.tag(),
+        }
+    }
+
+    #[must_use]
+    pub const fn payload_discriminator(self) -> u8 {
+        match self {
+            Self::DealerRetireActiveFacilityCredit => 8,
+            Self::DealerRetireUnusedFutureCredit => 9,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::DealerRetireActiveFacilityCredit => "dealer-retire-active-facility-credit",
+            Self::DealerRetireUnusedFutureCredit => "dealer-retire-unused-future-credit",
+        }
+    }
 }
 
 impl IndexedProgramRelease {
@@ -240,6 +280,15 @@ impl IndexedProgramRelease {
                 return Err(RpcIndexError::InvalidRelease);
             }
             previous_intent = Some(*intent);
+        }
+        let mut previous_variant = None;
+        for variant in &self.enabled_intent_variants {
+            if previous_variant.is_some_and(|value| value >= *variant)
+                || self.enabled_intents.binary_search(&variant.coordinate()).is_ok()
+            {
+                return Err(RpcIndexError::InvalidRelease);
+            }
+            previous_variant = Some(*variant);
         }
         Ok(())
     }
@@ -1054,6 +1103,7 @@ mod tests {
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             enabled_intents: vec![],
+            enabled_intent_variants: vec![],
             families: vec![CanonicalFamily::General],
         }
     }
@@ -1087,6 +1137,26 @@ mod tests {
     fn release_identity_refuses_a_zero_source_commit() {
         let mut value = release();
         value.source_commit = "0".repeat(40);
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+    }
+
+    #[test]
+    fn dealer_retire_variants_are_payload_scoped_and_canonical() {
+        let mut value = release();
+        value.families = vec![CanonicalFamily::Dealer];
+        value.enabled_intent_variants = vec![
+            CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit,
+            CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit,
+        ];
+        assert!(value.validate().is_ok());
+
+        value.enabled_intents = vec![
+            CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit.coordinate(),
+        ];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+
+        value.enabled_intents.clear();
+        value.enabled_intent_variants.swap(0, 1);
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 

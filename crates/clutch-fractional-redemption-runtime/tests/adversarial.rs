@@ -112,7 +112,7 @@ fn external_context(
     locked_claim_principal_atoms: u64,
 ) -> (
     BoundFractionalContextV1,
-    FractionalPolicyV2,
+    FractionalPolicyV3,
     FractionalLedgerV1,
 ) {
     let catalog = AdapterCatalogV2::new(&COLLATERAL_RELEASES).unwrap();
@@ -200,7 +200,7 @@ fn external_context(
         deletable_rent(46),
     )
     .unwrap();
-    let policy = FractionalPolicyV2 {
+    let policy = FractionalPolicyV3 {
         market_instance: rid(20),
         resolution_account: rid(21),
         resolution_data_id: rid_from_collateral(resolution.data_id(cid(21)).unwrap()),
@@ -477,6 +477,223 @@ fn canonical_internal_source(
     InternalPositionV1 { position_replay }
 }
 
+fn dealer_vector_prestate(
+    context: BoundFractionalContextV1,
+    native_eggs: [u64; MAX_OUTCOMES],
+    generation: u64,
+    replay_ordinal: u64,
+) -> Result<BoundDealerFacilityVectorPrestateV1> {
+    let facility_id = rid(60);
+    let state_account = rid(61);
+    let position_account = rid(62);
+    let replay_account = rid(63);
+    let binding_id = rid(64);
+    let position = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::DealerFacility,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count: context.policy().outcome_count,
+        stored_bump: 7,
+        generation,
+        market_instance_id: context.policy().market_instance,
+        realm_id: context.policy().realm,
+        collateral_policy_id: context.policy().collateral_policy,
+        collateral_release_id: context.policy().collateral_release,
+        owner: facility_id,
+        controller: state_account,
+        replay_account,
+        purpose_binding_id: binding_id,
+        cash_atoms: 4,
+        reserved_cash_atoms: 0,
+        native_eggs,
+        outstanding_reservations: 0,
+        rent: split_rent(60),
+    })
+    .unwrap();
+    let position_id = position.semantic_id(&TestSha256).unwrap();
+    bind_dealer_facility_vector_prestate_v1(
+        facility_id,
+        state_account,
+        rid(65),
+        position_account,
+        position,
+        position_id,
+        binding_id,
+        replay_account,
+        rid(66),
+        replay_ordinal,
+        rid(67),
+        rid(68),
+        rid(69),
+        rid(70),
+        rid(71),
+        rid(72),
+        rid(73),
+    )
+}
+
+#[test]
+fn dealer_vector_divides_once_and_retains_the_exact_remainder() {
+    let mut internal_supply = [0; MAX_OUTCOMES];
+    internal_supply[0] = 7;
+    internal_supply[1] = 7;
+    let (full, policy, ledger) =
+        external_context(0, 0, internal_supply, [0; MAX_OUTCOMES], 7);
+    let context = bind_fractional_internal_context_v1(
+        full.policy_account(),
+        policy,
+        full.ledger_account(),
+        ledger,
+        full.claim_ledger_account(),
+        full.claim_ledger(),
+        full.hoard(),
+        full.resolution(),
+        full.collateral(),
+    )
+    .unwrap();
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12).unwrap();
+    let mut quantities = [0u64; MAX_OUTCOMES];
+    quantities[0] = 1;
+    quantities[1] = 1;
+    let plan = prepare_dealer_facility_vector_transition_v1(
+        context,
+        DealerFacilityVectorRequestV1 {
+            expected_ledger_sequence: 1,
+            expected_credit_sequence: 1,
+            expected_position_generation: 9,
+            expected_replay_ordinal: 12,
+            outcome_count: 2,
+            quantities,
+        },
+        prestate,
+        CreditCreationV1::Fresh {
+            claimant: prestate.facility_id(),
+            stored_bump: 11,
+            rent: split_rent(60),
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.payout_atoms(), 1);
+    assert_eq!(plan.residue_numerator(), 0);
+    assert_eq!(plan.credit_after().numerator, 0);
+    assert_eq!(plan.ledger_after().aggregate_credit_numerator, 0);
+    assert_eq!(plan.ledger_after().active_credit_accounts, 1);
+    assert_eq!(plan.facility_position_after().cash_atoms(), 5);
+    assert_eq!(plan.facility_position_after().generation(), 10);
+    assert_eq!(plan.facility_position_after().native_eggs()[0], 6);
+    assert_eq!(plan.facility_position_after().native_eggs()[1], 6);
+
+    let mut remainder_quantities = [0u64; MAX_OUTCOMES];
+    remainder_quantities[0] = 1;
+    let remainder_plan = prepare_dealer_facility_vector_transition_v1(
+        context,
+        DealerFacilityVectorRequestV1 {
+            expected_ledger_sequence: 1,
+            expected_credit_sequence: 1,
+            expected_position_generation: 9,
+            expected_replay_ordinal: 12,
+            outcome_count: 2,
+            quantities: remainder_quantities,
+        },
+        prestate,
+        CreditCreationV1::Fresh {
+            claimant: prestate.facility_id(),
+            stored_bump: 11,
+            rent: split_rent(60),
+        },
+    )
+    .unwrap();
+    assert_eq!(remainder_plan.payout_atoms(), 0);
+    assert_eq!(remainder_plan.residue_numerator(), 1);
+    assert_eq!(remainder_plan.credit_after().numerator, 1);
+    assert_eq!(remainder_plan.ledger_after().aggregate_credit_numerator, 1);
+    assert_ne!(remainder_plan.vector_transition_id().bytes(), [0; 32]);
+}
+
+#[test]
+fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
+    let mut quantities = [0u64; MAX_OUTCOMES];
+    quantities[0] = 1;
+    let request = DealerFacilityVectorRequestV1 {
+        expected_ledger_sequence: 1,
+        expected_credit_sequence: 1,
+        expected_position_generation: 9,
+        expected_replay_ordinal: 12,
+        outcome_count: 2,
+        quantities,
+    };
+    let encoded = request.encode().unwrap();
+    assert_eq!(DealerFacilityVectorRequestV1::decode(&encoded), Ok(request));
+    let mut hostile_padding = encoded;
+    hostile_padding[33] = 1;
+    assert_eq!(
+        DealerFacilityVectorRequestV1::decode(&hostile_padding),
+        Err(Error::NonCanonicalPadding)
+    );
+    let mut hostile_tail = encoded;
+    hostile_tail[40 + 15 * 8..40 + 16 * 8].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(
+        DealerFacilityVectorRequestV1::decode(&hostile_tail),
+        Err(Error::NonCanonicalPadding)
+    );
+    let mut founding_replay = request;
+    founding_replay.expected_replay_ordinal = 0;
+    assert_eq!(founding_replay.encode(), Err(Error::MismatchedBinding));
+
+    let mut internal_supply = [0; MAX_OUTCOMES];
+    internal_supply[0] = 7;
+    let (full, policy, ledger) =
+        external_context(0, 0, internal_supply, [0; MAX_OUTCOMES], 1);
+    let context = bind_fractional_internal_context_v1(
+        full.policy_account(),
+        policy,
+        full.ledger_account(),
+        ledger,
+        full.claim_ledger_account(),
+        full.claim_ledger(),
+        full.hoard(),
+        full.resolution(),
+        full.collateral(),
+    )
+    .unwrap();
+    assert_eq!(
+        dealer_vector_prestate(context, internal_supply, 9, 0),
+        Err(Error::MismatchedBinding)
+    );
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12).unwrap();
+    let mut wrong_generation = request;
+    wrong_generation.expected_position_generation = 10;
+    assert_eq!(
+        prepare_dealer_facility_vector_transition_v1(
+            context,
+            wrong_generation,
+            prestate,
+            CreditCreationV1::Fresh {
+                claimant: prestate.facility_id(),
+                stored_bump: 11,
+                rent: split_rent(60),
+            },
+        ),
+        Err(Error::MismatchedBinding)
+    );
+
+    let exhausted = dealer_vector_prestate(context, internal_supply, u64::MAX, 12).unwrap();
+    let mut exhausted_request = request;
+    exhausted_request.expected_position_generation = u64::MAX;
+    assert_eq!(
+        prepare_dealer_facility_vector_transition_v1(
+            context,
+            exhausted_request,
+            exhausted,
+            CreditCreationV1::Fresh {
+                claimant: exhausted.facility_id(),
+                stored_bump: 11,
+                rent: split_rent(60),
+            },
+        ),
+        Err(Error::Arithmetic)
+    );
+}
+
 #[test]
 fn payout_lots_and_solvency_use_exact_integer_numerators() {
     let vector = payout();
@@ -536,18 +753,23 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     supply[1] = 1;
     let (_context, policy, ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
     let policy_bytes = policy.encode().unwrap();
-    assert_eq!(policy_bytes[1], 2);
-    assert_eq!(FractionalPolicyV2::decode(&policy_bytes), Ok(policy));
+    assert_eq!(policy_bytes[1], 3);
+    assert_eq!(FractionalPolicyV3::decode(&policy_bytes), Ok(policy));
     let mut withdrawn_policy = policy_bytes;
     withdrawn_policy[1] = 1;
     assert_eq!(
-        FractionalPolicyV2::decode(&withdrawn_policy),
+        FractionalPolicyV3::decode(&withdrawn_policy),
+        Err(Error::WrongVersion)
+    );
+    withdrawn_policy[1] = 2;
+    assert_eq!(
+        FractionalPolicyV3::decode(&withdrawn_policy),
         Err(Error::WrongVersion)
     );
     let mut hostile = policy_bytes;
     hostile[6] = 1;
     assert_eq!(
-        FractionalPolicyV2::decode(&hostile),
+        FractionalPolicyV3::decode(&hostile),
         Err(Error::NonCanonicalPadding)
     );
     let ledger_bytes = ledger.encode().unwrap();
@@ -616,7 +838,19 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     );
     assert_eq!(
         policy.pda_seeds().prefix(),
-        b"fractional-redemption-policy:v2"
+        b"fractional-redemption-policy:v3"
+    );
+    let mut different_resolution_body = policy;
+    different_resolution_body.resolution_data_id = rid(199);
+    assert_eq!(
+        different_resolution_body.pda_seeds(),
+        policy.pda_seeds(),
+        "Foundation address must not depend on the future Resolution body"
+    );
+    assert_ne!(
+        different_resolution_body.state_id().unwrap(),
+        policy.state_id().unwrap(),
+        "the immutable body must still commit the exact Resolution data identity"
     );
     assert_eq!(
         credit.pda_seeds().prefix(),
@@ -1135,6 +1369,13 @@ fn zero_credit_close_conserves_tombstone_refund_and_neutral_lamports() {
         160
     );
     assert_eq!(plan.tombstone.closed_next_sequence, 2);
+    assert_eq!(plan.credit_before_id, credit.state_id().unwrap());
+    assert_eq!(plan.tombstone_after_id, plan.tombstone.state_id().unwrap());
+    assert_ne!(plan.credit_before_id, plan.tombstone_after_id);
+
+    let donated = close_zero_credit_v1(context, 1, credit, 1, 161, rid(60)).unwrap();
+    assert_eq!(donated.funding.neutral_lamports, 21);
+    assert_ne!(plan.transition_id, donated.transition_id);
 }
 
 #[test]
@@ -1526,6 +1767,15 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
+    let initialize = fractional_account_contract_v1(FractionalRedemptionActionV1::Initialize);
+    assert_eq!(initialize.account_count, 32);
+    assert_eq!(initialize.foundation_core_accounts, 15);
+    assert_eq!(initialize.foundation_aux_accounts, 17);
+    assert!(initialize.foundation_outcome_pair_suffix);
+    assert_eq!(initialize.foundation_aux_writable_mask, 0);
+    assert_eq!(initialize.writable_mask, 0x1811);
+    assert_eq!(initialize.signer_mask, 0);
+
     let bearer = fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerExact);
     assert_eq!(bearer.account_count, 21);
     assert_eq!(bearer.writable_mask, 0x95300);
@@ -1586,4 +1836,14 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
     assert_eq!(seal.post_mint_accounts, 0);
     assert!(!seal.credit_creation_suffix);
     assert_eq!(seal.external_payout_extra_accounts, 0);
+
+    let terminal =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::CloseEmptyLedger);
+    assert_eq!(terminal.account_count, 32);
+    assert_eq!(terminal.foundation_core_accounts, 15);
+    assert_eq!(terminal.foundation_aux_accounts, 17);
+    assert!(terminal.foundation_outcome_pair_suffix);
+    assert_eq!(terminal.foundation_aux_writable_mask, 0x18000);
+    assert_eq!(terminal.writable_mask, 0x1811);
+    assert_eq!(terminal.signer_mask, 0);
 }

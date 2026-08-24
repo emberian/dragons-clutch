@@ -11,7 +11,8 @@ use crate::instructions::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV6, AuthenticatedSeriesSourceArtifactsV5,
 };
 use crate::instructions::product_series_current::{
-    authenticate_series_funding_account_v4, authenticate_series_registry_account_v3,
+    authenticate_registry_capability_v4, authenticate_series_funding_account_v4,
+    authenticate_series_registry_account_v3,
     AuthenticatedRegistryCapabilityV4, AuthenticatedSeriesFundingAccountV4,
 };
 use crate::source_plane_v3_actions::SourceLifecycleCapitalizationQuoteV1;
@@ -24,7 +25,7 @@ use clutch_product_series::{
     SeriesPlanV5, SeriesPlanV5Id, FixedCodec, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
-    SeriesFundingAccountV4, SERIES_COLLATERAL_VAULT_COUNT_V2,
+    SeriesFundingAccountV4, SeriesRegistryAccountV3, SERIES_COLLATERAL_VAULT_COUNT_V2,
     SERIES_FUNDING_ACCOUNT_BYTES_V4,
 };
 use solana_account_info::AccountInfo;
@@ -44,6 +45,8 @@ const SERIES_COLLATERAL_VAULT_POSTSTATE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-collateral-vault-poststate/v4\0";
 const SERIES_COLLATERAL_TRANSFER_POSTSTATE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-collateral-transfer-poststate/v4\0";
+const SERIES_PHYSICAL_FOUNDER_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/series-physical-founder/v4\0";
 
 /// Physical-only suffix appended after Product's already-authenticated current
 /// Registry/artifact graph. The roles and order are fixed so callers cannot
@@ -397,6 +400,22 @@ impl AuthenticatedSeriesPhysicalCapitalizationV4 {
         self.series_plan_id
     }
 
+    pub(crate) const fn funding_terms_id(&self) -> ContentId {
+        self.funding_terms_id
+    }
+
+    pub(crate) const fn compiler_bundle_id(&self) -> ContentId {
+        self.compiler_bundle_id
+    }
+
+    pub(crate) const fn funding_quote_id(&self) -> ContentId {
+        self.funding_quote_id
+    }
+
+    pub(crate) const fn attachment_plan_id(&self) -> ContentId {
+        self.attachment_plan_id
+    }
+
     pub(crate) const fn registry_account(&self) -> Pubkey {
         self.registry_account
     }
@@ -425,6 +444,22 @@ impl AuthenticatedSeriesPhysicalCapitalizationV4 {
         self.source_failure_terminal_rent_principal_lamports
     }
 
+    pub(crate) const fn collateral_realm_id(&self) -> ContentId {
+        self.collateral_realm_id
+    }
+
+    pub(crate) const fn collateral_profile_id(&self) -> ContentId {
+        self.collateral_profile_id
+    }
+
+    pub(crate) const fn lamport_principal_refund(&self) -> Pubkey {
+        self.lamport_principal_refund
+    }
+
+    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey {
+        self.neutral_lamport_sink
+    }
+
     pub(crate) fn principal(
         &self,
     ) -> &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2] {
@@ -436,6 +471,225 @@ impl AuthenticatedSeriesPhysicalCapitalizationV4 {
     ) -> &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2] {
         &self.donations
     }
+}
+
+/// Move-only proof that the exact physical capitalization was followed by the
+/// sole RegistryV3 replay-bit transition and hostile reauthentication.
+///
+/// The full physical receipt remains owned here. A current founder must move
+/// this value through preauthorization, reservation, Source publication, and
+/// FundingV4 completion; an ID-only projection cannot recreate it.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSeriesPhysicalFounderV4 {
+    id: ContentId,
+    capitalization: AuthenticatedSeriesPhysicalCapitalizationV4,
+    registry_data_before_id: ContentId,
+    registry_authentication_before_id: ContentId,
+    registry_data_after_id: ContentId,
+    registry_authentication_after_id: ContentId,
+    registry_capability_after_id: ContentId,
+}
+
+impl AuthenticatedSeriesPhysicalFounderV4 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn capitalization_id(&self) -> ContentId {
+        self.capitalization.id
+    }
+
+    pub(crate) const fn capitalization(&self) -> &AuthenticatedSeriesPhysicalCapitalizationV4 {
+        &self.capitalization
+    }
+
+    pub(crate) const fn registry_data_before_id(&self) -> ContentId {
+        self.registry_data_before_id
+    }
+
+    pub(crate) const fn registry_authentication_before_id(&self) -> ContentId {
+        self.registry_authentication_before_id
+    }
+
+    pub(crate) const fn registry_data_after_id(&self) -> ContentId {
+        self.registry_data_after_id
+    }
+
+    pub(crate) const fn registry_authentication_after_id(&self) -> ContentId {
+        self.registry_authentication_after_id
+    }
+
+    pub(crate) const fn registry_capability_after_id(&self) -> ContentId {
+        self.registry_capability_after_id
+    }
+
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id {
+        self.capitalization.series_plan_id
+    }
+
+    pub(crate) const fn attachment_plan_id(&self) -> ContentId {
+        self.capitalization.attachment_plan_id
+    }
+
+    pub(crate) const fn collateral_realm_id(&self) -> ContentId {
+        self.capitalization.collateral_realm_id
+    }
+
+    pub(crate) const fn collateral_profile_id(&self) -> ContentId {
+        self.capitalization.collateral_profile_id
+    }
+
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.capitalization.capability_profile_id
+    }
+
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.capitalization.registry_release_id
+    }
+}
+
+/// Consume the sole current Series activation bit after physical FundingV4
+/// capitalization, then hostile-reauthenticate the complete RegistryV4 loader
+/// authority and live FundingV4 account.
+///
+/// This transition is deliberately inseparable from the move-only physical
+/// receipt. It neither accepts a receipt ID nor exposes a generic RegistryV3
+/// writer.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn activate_current_series_registry_from_physical_v4<'a>(
+    program_id: &Pubkey,
+    capability_before: &AuthenticatedRegistryCapabilityV4,
+    physical: AuthenticatedSeriesPhysicalCapitalizationV4,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    program_account: &AccountInfo<'a>,
+    programdata_account: &AccountInfo<'a>,
+    release_artifact: &AccountInfo<'a>,
+    profile_artifact: &AccountInfo<'a>,
+) -> Outcome<(
+    AuthenticatedRegistryCapabilityV4,
+    AuthenticatedSeriesFundingAccountV4,
+    AuthenticatedSeriesPhysicalFounderV4,
+)> {
+    let series_plan_id = physical.series_plan_id;
+    let registry_before = authenticate_series_registry_account_v3(
+        program_id,
+        registry_account,
+        series_plan_id,
+        true,
+    )?;
+    let funding = authenticate_series_funding_account_v4(
+        program_id,
+        funding_account,
+        series_plan_id,
+        true,
+    )?;
+    let value_before = registry_before.value();
+    require(
+        !capability_before.activation_consumed()
+            && !value_before.activation_consumed
+            && capability_before.id() == physical.registry_capability_id
+            && capability_before.series_registry_account() == physical.registry_account
+            && capability_before.series_registry_authentication_id()
+                == physical.registry_authentication_id
+            && registry_before.account() == physical.registry_account
+            && registry_before.data_id() == physical.registry_data_id
+            && registry_before.authentication_id() == physical.registry_authentication_id
+            && registry_before.observed_lamports() == physical.registry_observed_lamports
+            && value_before.rent_principal_lamports
+                == physical.registry_rent_principal_lamports
+            && funding.account() == physical.funding_account
+            && funding.state().id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == physical.funding_state_id
+            && funding.data_id() == physical.funding_data_id
+            && funding.authentication_id() == physical.funding_authentication_id
+            && funding.value().rent_principal_lamports
+                == physical.funding_rent_principal_lamports
+            && capability_before.registry_release_id() == physical.registry_release_id
+            && capability_before.capability_profile_id() == physical.capability_profile_id
+            && capability_before.program_account() == physical.program_account
+            && capability_before.programdata_account() == physical.programdata_account
+            && capability_before.programdata_sha256() == physical.programdata_sha256,
+        ClutchError::MismatchedState,
+    )?;
+    let value_after = SeriesRegistryAccountV3 {
+        activation_consumed: true,
+        ..value_before
+    };
+    {
+        let mut data = registry_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        value_after.encode(&mut data)?;
+    }
+    let registry_after = authenticate_series_registry_account_v3(
+        program_id,
+        registry_account,
+        series_plan_id,
+        true,
+    )?;
+    require(
+        registry_after.value() == value_after
+            && registry_after.observed_lamports() == physical.registry_observed_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let registry_after_data_id = registry_after.data_id();
+    let registry_after_authentication_id = registry_after.authentication_id();
+    let capability_after = authenticate_registry_capability_v4(
+        program_id,
+        registry_after,
+        program_account,
+        programdata_account,
+        release_artifact,
+        profile_artifact,
+    )?;
+    require(
+        capability_after.activation_consumed()
+            && capability_after.series_registry_account() == physical.registry_account
+            && capability_after.series_plan_id() == series_plan_id
+            && capability_after.funding_terms_id().content_id() == physical.funding_terms_id
+            && capability_after.compiler_bundle_id().content_id() == physical.compiler_bundle_id
+            && capability_after.registry_release_id() == physical.registry_release_id
+            && capability_after.capability_profile_id() == physical.capability_profile_id
+            && capability_after.program_account() == physical.program_account
+            && capability_after.programdata_account() == physical.programdata_account
+            && capability_after.programdata_sha256() == physical.programdata_sha256,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_PHYSICAL_FOUNDER_DOMAIN_V4,
+            program_id.as_ref(),
+            &physical.id.bytes(),
+            registry_account.key.as_ref(),
+            &physical.registry_data_id.bytes(),
+            &physical.registry_authentication_id.bytes(),
+            &registry_after_data_id.bytes(),
+            &registry_after_authentication_id.bytes(),
+            &capability_after.id().bytes(),
+            funding_account.key.as_ref(),
+            &funding.data_id().bytes(),
+            &funding.authentication_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    let capability_after_id = capability_after.id();
+    Ok((
+        capability_after,
+        funding,
+        AuthenticatedSeriesPhysicalFounderV4 {
+            id,
+            registry_data_before_id: physical.registry_data_id,
+            registry_authentication_before_id: physical.registry_authentication_id,
+            registry_data_after_id,
+            registry_authentication_after_id,
+            registry_capability_after_id: capability_after_id,
+            capitalization: physical,
+        },
+    ))
 }
 
 /// Complete hostile retirement preflight over the same current physical graph.

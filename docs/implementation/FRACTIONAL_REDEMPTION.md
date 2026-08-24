@@ -1,11 +1,13 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **RUNTIME CONTRACT PROMOTED / COMPLETE ROUTES STAGED-DISABLED** (2026-08-23).
+Status: **ALL TEN ROUTES IMPLEMENTED / UNIFIED PROFILE CLOSURE IN FLIGHT** (2026-08-24).
 `crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
 no-allocation, fixed-layout transition and account contract. Intent family
-79/v1 and current accounts `0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
-remain `ReservedDisabled`; the complete exact-internal, exact-bearer, and
-claims-exhausted handlers are present, but no release capability is enabled.
+79/v1 and current accounts `0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
+remain `ReservedDisabled` while the in-flight unified profile has an empty
+capability mask. Concrete handlers exist for actions 1 through 10. The frozen
+complete profile admits that exact action range all-or-none only after every
+cross-family and observed-release dependency joins.
 `research/fractional-redemption` remains the
 derivation and exhaustive small-domain model, not a second runtime truth.
 
@@ -45,13 +47,16 @@ the direct route exact-refuses `r != 0`, while the credited Fractional route
 retains `r` atomically rather than flooring it or making it a permanent amount
 restriction.
 
-The canonical persisted schemas are policy `0xa4/v2`, aggregate ledger
+The canonical persisted schemas are policy `0xa4/v3`, aggregate ledger
 `0xa5/v1`, owner credit `0xa6/v2`, and credit tombstone `0xa7/v2`. The
 never-activated V1 policy, credit, and tombstone coordinates are explicitly
 withdrawn because their corresponding identity slots meant payout-vector
-digests. Current decoders refuse those versions; V2 uses fresh policy/credit
-PDA domains and a fresh policy-state identity domain. The unchanged aggregate
-ledger had no reinterpreted field and remains `0xa5/v1`.
+digests. Policy V2 is also withdrawn before activation: its PDA included the
+future final Resolution data ID and therefore could not be the fixed slot-11
+PDA prepaid during Product Foundation. Policy V3 keeps the exact data ID in
+the immutable body, but derives the address only from Market and Resolution
+account; credit V2 remains unchanged. Current decoders refuse every withdrawn
+version. The aggregate ledger had no reinterpreted field and remains `0xa5/v1`.
 
 ClaimLedger V3 no longer predicts those accounts before Resolution exists. It
 is founded with an explicit fractional `OpenUnlatched` state, zero a4/a5
@@ -59,7 +64,7 @@ identities, sequence zero, and a zero latch. Resolution activation changes only
 the liability lifecycle and Resolution account; it preserves that fractional
 state. Fractional Initialize alone performs the one-way `OpenUnlatched →
 Latched` transition after the exact Resolution V5 data identity is known,
-stores the canonical a4/v2 and a5/v1 accounts, advances sequence zero to one,
+stores the canonical a4/v3 and a5/v1 accounts, advances sequence zero to one,
 and emits the Product five-family admission receipt. Mixed zero/live identity
 encodings, fractional activity before the latch, and every relatch refuse.
 
@@ -396,14 +401,22 @@ Each account refunds only its own stored rent payer; hostile or unsolicited
 lamports go to the frozen neutral sink. Fractional projects the terminal
 receipt, committing both physical accounts and terminal state IDs, the
 ClaimLedger post/transition IDs, both exact payer/neutral rent splits, and a
-separately adapter-authenticated Fractional runtime/capability release ID. Its
+separately adapter-authenticated Fractional runtime/capability release ID.
+Before reading the complete outcome-mint supply vector, action 10 also
+authenticates the exact current independent Token-2022 claim Program and
+ProgramData release. That claim-release receipt is bound into the private
+terminal postwrite, Product root-write authority, and Product acceptance
+identity. Its
 crate-private SBF postwrite capability hostile-decodes the exact writable
 a4/a5/ClaimLedger bodies, authenticates all three PDAs, rechecks both observed
 rent balances, and derives the release only from a loader-authenticated
 registry capability narrowed to action 10. Product consumes that private value;
-it cannot construct a substitute receipt, invent a release, or reuse the Realm
-collateral release retained by the policy. The executable route remains
-disabled only until Product lands its stable atomic aggregator/root consumer.
+it cannot construct a substitute receipt, invent either release, or reuse the Realm
+collateral release retained by the policy. Action 9 remains claim-release
+independent because it reads no mint and performs no claim CPI. Product's stable atomic
+aggregator/root consumer is present, but the executable route remains disabled
+pending the whole-family release review, exact capability-profile admission,
+and linked artifact evidence described below.
 
 ## 6. Selected runtime contract and activation boundary
 
@@ -428,25 +441,35 @@ arithmetic truth. The runtime does not claim that a particular reachable
 B-spline family has a smaller universal lot without the corresponding gcd
 evidence.
 
-The exact-internal action-2, exact-bearer action-3, and claims-exhausted
-action-9 SBF handlers are present but capability-disabled until Product lands
-the stable five-family admission producer needed by action 1. The Fractional
-side already exposes a crate-private postwrite capability that proves exact
-a4/a5/ClaimLedger founding bodies and PDAs and carries the full admission
-receipt, including the canonical claim-issuance binding. Product Foundation
-remains the sole owner of the slot-11/12 debit and preallocation evidence: the
-prestates are prefunded zero-data System-owned writable PDAs, and Fractional
-Initialize must allocate/assign/write them without a second debit or refund.
+All ten SBF handlers are present but remain capability-refused in the in-flight
+profile. Action 1 consumes Product's private slot-11/12
+preallocation authority, allocates and assigns the exact prefunded PDAs without
+a second debit, hostile-reloads a4/a5/ClaimLedger, and promotes the private
+receipt into Product atomically. Action 10 hostile-verifies terminal
+postimages, consumes Product terminality first, then deletes both accounts and
+applies their independent principal/donation splits. Product Foundation
+remains the sole owner of the original debit and preallocation evidence.
 Action 3 already composes the real Token-2022
 burn adapter and Realm-selected collateral CPI, orders burn acceptance before
 collateral request exposure, and writes `0xa5`, ClaimLedger V3, and Hoard V2
 atomically. Action 9 advances only `0xa5` and ClaimLedger after exact canonical
 supply reaches zero; it requires neither a signer nor bearer-release authority.
-The remaining live-route blocker is Product's stable private per-slot
-preallocation authority plus its atomic admission/terminal consumers and final
-account order. Release-profile admission and local-bank adversarial execution
-remain open. Family 79/v1 stays `ReservedDisabled` until those boundaries are
-integrated and reviewed.
+Action 10 first authenticates the exact independent Token-2022 claim Program,
+ProgramData, checked release row, and ELF identity; only then may it observe
+mint supply or perform a terminal write. The resulting claim-release receipt
+is an independent field of Product's private terminal writer authority. Action
+9 remains independent because it performs neither a mint read nor claim CPI.
+Static hostile/valid contract cases are authored but intentionally not run in
+this integration tranche. Family 79/v1 stays `ReservedDisabled` until the
+unified complete-profile switch joins every family and positive checked
+collateral/claim release row.
+
+The action-1/action-10 outer now consumes the current 47-slot
+`MarketFoundationAccountGraphV3`: 15 fixed core accounts including the exact
+`HoardCollateralVault`, then one mint/custody pair per active outcome. It joins
+`MarketLifecycleRootV2`, `SeriesMarketLinkV2`, `SeriesFundingQuoteV5`, and
+read-only `SeriesRegistryV3`; the complete Product founder/terminal producer
+chain remains an explicit callability dependency.
 
 ## 7. Evidence and intentionally deferred validation
 

@@ -7,7 +7,7 @@
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::product_series::AuthenticatedSourceResolutionInputV3;
+use crate::instructions::product_source_current::AuthenticatedSourceResolutionInputV4;
 use crate::source_plane_v3::{authenticate_lineage, runtime_key};
 use crate::source_plane_v3_actions::{
     apply_source_terminal_liveness, authenticate_source_funding_custody_v1,
@@ -87,7 +87,7 @@ impl AuthenticatedSourceResolutionTerminalPolicyV1 {
     pub(crate) fn successful_resolution_no_reopen(
         resolution_v5_terminal_postwrite_id: ContentId,
         route: AuthenticatedSourceRouteV1,
-        source: AuthenticatedSourceResolutionInputV3,
+        source: AuthenticatedSourceResolutionInputV4,
         failure: FailureMarketIntervalCellResolutionReceiptV2,
         lineage: AuthenticatedReopenLineageV1,
     ) -> Outcome<Self> {
@@ -124,7 +124,7 @@ impl AuthenticatedSourceResolutionTerminalPolicyV1 {
     pub(crate) fn reconstructed_reopen_request(
         resolution_v5_terminal_postwrite_id: ContentId,
         route: AuthenticatedSourceRouteV1,
-        source: AuthenticatedSourceResolutionInputV3,
+        source: AuthenticatedSourceResolutionInputV4,
         failure: FailureMarketIntervalCellResolutionReceiptV2,
         lineage: AuthenticatedReopenLineageV1,
         target: SourceReopenTargetV1,
@@ -145,7 +145,7 @@ impl AuthenticatedSourceResolutionTerminalPolicyV1 {
     fn new(
         resolution_v5_terminal_postwrite_id: ContentId,
         route: AuthenticatedSourceRouteV1,
-        source: AuthenticatedSourceResolutionInputV3,
+        source: AuthenticatedSourceResolutionInputV4,
         failure: FailureMarketIntervalCellResolutionReceiptV2,
         lineage: AuthenticatedReopenLineageV1,
         choice: SourceResolutionTerminalChoiceV1,
@@ -215,7 +215,7 @@ impl AuthenticatedSourceResolutionTerminalPolicyV1 {
 
     fn validate_for(
         self,
-        source: AuthenticatedSourceResolutionInputV3,
+        source: AuthenticatedSourceResolutionInputV4,
         failure: FailureMarketIntervalCellResolutionReceiptV2,
         lineage: AuthenticatedReopenLineageV1,
     ) -> Outcome<()> {
@@ -242,7 +242,7 @@ pub(crate) trait AuthenticatedSourceResolutionV5TerminalV1 {
     fn authenticate_source_resolution_v5_terminal_v1(
         &self,
         _route: AuthenticatedSourceRouteV1,
-        _source: AuthenticatedSourceResolutionInputV3,
+        _source: AuthenticatedSourceResolutionInputV4,
         _failure: FailureMarketIntervalCellResolutionReceiptV2,
         _lineage: AuthenticatedReopenLineageV1,
     ) -> Outcome<AuthenticatedSourceResolutionTerminalPolicyV1> {
@@ -392,7 +392,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
-    source: AuthenticatedSourceResolutionInputV3,
+    source: AuthenticatedSourceResolutionInputV4,
     failure: FailureMarketIntervalCellResolutionReceiptV2,
     resolution_terminal: &A,
     lineage: AuthenticatedReopenLineageV1,
@@ -583,7 +583,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
 pub(crate) fn close_successful_source_statistic_result_v1(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
-    source: AuthenticatedSourceResolutionInputV3,
+    source: AuthenticatedSourceResolutionInputV4,
     terminal: AuthenticatedSourceResolutionTerminalV1,
     result_account: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
@@ -839,13 +839,22 @@ mod tests {
 
     #[test]
     fn source_input_identity_retains_exact_result_preimage() {
-        let source = include_str!("product_series.rs");
+        let source = include_str!("product_source_current.rs");
+        let terminal = include_str!("source_terminal_resolution_v5.rs");
+        let terminal_production = terminal
+            .split("#[cfg(test)]")
+            .next()
+            .expect("Source terminal production module");
         let input = source
-            .split("pub fn authenticate_source_resolution_input_v3")
+            .split("pub(crate) fn authenticate_source_resolution_input_v4")
             .nth(1)
             .and_then(|value| value.split("#[cfg(test)]").next())
             .expect("Source input constructor");
         assert!(input.contains("&handoff.result_account_data_id().bytes()"));
-        assert!(input.contains("result_account_data_id: handoff.result_account_data_id()"));
+        assert!(input.contains(
+            "result_account_data_id: ContentId::from_bytes(handoff.result_account_data_id().bytes())"
+        ));
+        assert!(terminal_production.contains("AuthenticatedSourceResolutionInputV4"));
+        assert!(!terminal_production.contains("AuthenticatedSourceResolutionInputV3"));
     }
 }

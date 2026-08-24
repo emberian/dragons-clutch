@@ -158,6 +158,79 @@ pub(crate) fn authenticate_product_failure_begin_schedule_v2<'root, 'link, Q>(
 where
     Q: AuthenticatedProductFailureBeginQuoteV2 + ?Sized,
 {
+    authenticate_product_failure_schedule_v2(
+        program_id, root_account, link_account, root_before, link_before, registry,
+        bundle_account, quote_account, series_account, template_account, basis_account,
+        recovery_account, price_policy_account, genesis_account, attachment_account,
+        market_account, failure_quote, attempt_index, true, 0, root_decode, link_decode,
+    )
+}
+
+/// Reauthenticate the exact persisted schedule for one already-pinned active
+/// session. This is read-only authority; it cannot pin or begin another
+/// Product session.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_product_failure_active_schedule_v2<'root, 'link, Q>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    root_before: AuthenticatedMarketLifecycleRootV2<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    bundle_account: &AccountInfo<'_>,
+    quote_account: &AccountInfo<'_>,
+    series_account: &AccountInfo<'_>,
+    template_account: &AccountInfo<'_>,
+    basis_account: &AccountInfo<'_>,
+    recovery_account: &AccountInfo<'_>,
+    price_policy_account: &AccountInfo<'_>,
+    genesis_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+    market_account: &AccountInfo<'_>,
+    failure_quote: &Q,
+    attempt_index: u8,
+    root_decode: &'root mut MarketLifecycleRootAccountV2,
+    link_decode: &'link mut SeriesMarketLinkAccountV2,
+) -> Outcome<AuthenticatedProductFailureBeginScheduleV2>
+where
+    Q: AuthenticatedProductFailureBeginQuoteV2 + ?Sized,
+{
+    authenticate_product_failure_schedule_v2(
+        program_id, root_account, link_account, root_before, link_before, registry,
+        bundle_account, quote_account, series_account, template_account, basis_account,
+        recovery_account, price_policy_account, genesis_account, attachment_account,
+        market_account, failure_quote, attempt_index, false, 1, root_decode, link_decode,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_product_failure_schedule_v2<'root, 'link, Q>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    root_before: AuthenticatedMarketLifecycleRootV2<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    bundle_account: &AccountInfo<'_>,
+    quote_account: &AccountInfo<'_>,
+    series_account: &AccountInfo<'_>,
+    template_account: &AccountInfo<'_>,
+    basis_account: &AccountInfo<'_>,
+    recovery_account: &AccountInfo<'_>,
+    price_policy_account: &AccountInfo<'_>,
+    genesis_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+    market_account: &AccountInfo<'_>,
+    failure_quote: &Q,
+    attempt_index: u8,
+    expected_link_writable: bool,
+    expected_active_failure_sessions: u32,
+    root_decode: &'root mut MarketLifecycleRootAccountV2,
+    link_decode: &'link mut SeriesMarketLinkAccountV2,
+) -> Outcome<AuthenticatedProductFailureBeginScheduleV2>
+where
+    Q: AuthenticatedProductFailureBeginQuoteV2 + ?Sized,
+{
     let expected_root_binding = root_before.state().binding();
     let expected_link_binding = link_before.state().binding();
     let root = authenticate_market_lifecycle_root_v2(
@@ -166,7 +239,7 @@ where
     let link = authenticate_series_market_link_v2(
         program_id, link_account, expected_link_binding.series_plan_id,
         expected_link_binding.ordinal, expected_link_binding.market_instance_id,
-        expected_link_binding.generation, *root_account.key, true, link_decode)?;
+        expected_link_binding.generation, *root_account.key, expected_link_writable, link_decode)?;
     require_cached_current_root_and_link(root_before, root, link_before, link)?;
     require_distinct_product_failure_begin_accounts_v2(
         registry,
@@ -200,7 +273,8 @@ where
         program_id, market_account, root_binding.market_instance_id.content_id())?;
     require_current_product_failure_begin_graph_v2(
         root, link, registry, &bundle, &quote, &series, &template, &basis,
-        &recovery, &price, &genesis, &attachment)?;
+        &recovery, &price, &genesis, &attachment, expected_link_writable,
+        expected_active_failure_sessions)?;
     let compiled = compile_ordinal_v6(
         series.value(), template.value(), basis.value(), recovery.value(), price.value(),
         genesis.value(), attachment.value(), &registry.projection(), link_binding.ordinal)
@@ -286,6 +360,8 @@ fn require_current_product_failure_begin_graph_v2(
     price: &AuthenticatedProductArtifactV1<PriceMeasurePolicyV1>,
     genesis: &AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
     attachment: &AuthenticatedProductArtifactV1<SeriesAttachmentPlanV5>,
+    expected_link_writable: bool,
+    expected_active_failure_sessions: u32,
 ) -> Outcome<()> {
     let root_state = root.state();
     let root_binding = root_state.binding();
@@ -297,13 +373,13 @@ fn require_current_product_failure_begin_graph_v2(
     let quote_value = quote.value();
     let foundation_schedule_id = quote_value.foundation.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(!root.is_writable() && link.is_writable()
+    require(!root.is_writable() && link.is_writable() == expected_link_writable
         && root_state.phase() == MarketLifecyclePhaseV2::Active
         && root_state.resolution_semantic_id() == ContentId::ZERO
         && root_state.resolution_data_id() == ContentId::ZERO
         && root_state.resolution_activation_receipt_id() == ContentId::ZERO
         && link_state.phase() == SeriesMarketLinkPhaseV2::Active
-        && link_state.active_failure_sessions() == 0
+        && link_state.active_failure_sessions() == expected_active_failure_sessions
         && link_binding.market_root_account_id.bytes() == root.account().to_bytes()
         && link_binding.market_binding_id == root_binding_id
         && link_binding.market_instance_id == root_binding.market_instance_id
@@ -435,5 +511,33 @@ mod source_contract_tests {
             assert!(source.contains(join), "missing current join: {join}");
         }
         assert!(source.contains("failure_quote.authenticate_product_failure_begin_quote_v2("));
+    }
+
+    #[test]
+    fn active_schedule_reauthentication_cannot_mint_a_second_pin() {
+        let source = include_str!("product_failure_begin_current.rs");
+        let begin = source
+            .split("pub(crate) fn authenticate_product_failure_begin_schedule_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("pub(crate) fn authenticate_product_failure_active_schedule_v2")
+                    .next()
+            })
+            .expect("current begin schedule owner");
+        let active = source
+            .split("pub(crate) fn authenticate_product_failure_active_schedule_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("fn authenticate_product_failure_schedule_v2")
+                    .next()
+            })
+            .expect("current active schedule owner");
+        assert!(begin.contains("attempt_index, true, 0"));
+        assert!(active.contains("attempt_index, false, 1"));
+        assert!(source.contains("require_cached_current_root_and_link("));
+        assert!(source.contains("link_state.active_failure_sessions() == expected_active_failure_sessions"));
+        assert!(source.contains("root_state.resolution_activation_receipt_id() == ContentId::ZERO"));
     }
 }
