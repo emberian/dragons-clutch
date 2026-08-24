@@ -15,8 +15,9 @@
 
 use core::cell::Ref;
 
+use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::{
-    revenue_policy_digest, RevenuePolicyV1,
+    decode_revenue_policy, revenue_policy_digest, RevenuePolicyV1, REVENUE_POLICY_BYTES,
 };
 use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, Identity32V1, BATCH_POLICY_BYTES,
@@ -154,6 +155,95 @@ pub struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
     /// Realm-owned immutable revenue-policy record.
     pub revenue_policy_record: &'a AccountInfo<'info>,
 }
+
+/// Immutable account frame for certifying traversal-derived V2 fee weights.
+///
+/// This is deliberately smaller than the recipient-allocation frame: weight
+/// construction precedes that account, so requiring it here would be circular.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectedFeeWeightAccountFrameV5<'a, 'info> {
+    /// Immutable selected composite-fee record.
+    pub selected_fee_record: &'a AccountInfo<'info>,
+    /// Exact immutable batch-policy artifact bytes.
+    pub batch_policy: &'a AccountInfo<'info>,
+    /// Exact content preimage of the Realm-selected revenue policy.
+    pub revenue_policy_preimage: &'a AccountInfo<'info>,
+    /// Realm-owned immutable revenue-policy record.
+    pub revenue_policy_record: &'a AccountInfo<'info>,
+}
+
+/// Traversal-owned facts expected by the selected-fee weight authenticator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedFeeWeightExpectationV2 {
+    realm: Id32,
+    market: Id32,
+    epoch: Id32,
+    candidate: Id32,
+    batch_policy: Id32,
+    price_scale: u64,
+    outcome_count: u8,
+}
+
+impl SelectedFeeWeightExpectationV2 {
+    /// Construct only from the hostile-authenticated MarketBinding/traversal.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        realm: Id32,
+        market: Id32,
+        epoch: Id32,
+        candidate: Id32,
+        batch_policy: Id32,
+        price_scale: u64,
+        outcome_count: u8,
+    ) -> Outcome<Self> {
+        require(
+            !realm.is_zero()
+                && !market.is_zero()
+                && !epoch.is_zero()
+                && !candidate.is_zero()
+                && !batch_policy.is_zero()
+                && price_scale != 0
+                && (2..=clutch_batch::relation_v1::MAX_OUTCOMES)
+                    .contains(&usize::from(outcome_count)),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            realm,
+            market,
+            epoch,
+            candidate,
+            batch_policy,
+            price_scale,
+            outcome_count,
+        })
+    }
+}
+
+/// Hostile-account-authenticated selected fee and its exact batch preimage.
+///
+/// Fields stay private so a caller cannot promote a semantic DTO into live
+/// fee-weight authority. This capability moves no value and does not certify
+/// any recipient allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSelectedFeeWeightV2 {
+    selected_fee_account: Id32,
+    selected_fee_data_id: Id32,
+    selected: SelectedCompositeFeeV1,
+    batch_policy: FrozenPolicyV1,
+}
+
+impl AuthenticatedSelectedFeeWeightV2 {
+    /// Exact immutable selected-fee PDA.
+    pub const fn selected_fee_account(&self) -> Id32 { self.selected_fee_account }
+    /// Canonical full-data commitment of the immutable selected-fee outer.
+    pub const fn selected_fee_data_id(&self) -> Id32 { self.selected_fee_data_id }
+    /// Constructor-authenticated selected fee semantic.
+    pub const fn selected(&self) -> &SelectedCompositeFeeV1 { &self.selected }
+    /// Constructor-authenticated batch-policy preimage.
+    pub const fn batch_policy(&self) -> &FrozenPolicyV1 { &self.batch_policy }
+}
+
+const _: () = assert!(core::mem::size_of::<AuthenticatedSelectedFeeWeightV2>() <= 512);
 
 /// Additional writable roles used only by the candidate-wide terminal close.
 ///
@@ -818,6 +908,19 @@ fn require_distinct_keys(keys: &[[u8; 32]; 7]) -> Outcome<()> {
     Ok(())
 }
 
+fn require_distinct_fee_weight_keys(keys: &[[u8; 32]; 4]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < keys.len() {
+        let mut right = left + 1;
+        while right < keys.len() {
+            require(keys[left] != keys[right], ClutchError::AccountAlias)?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
 fn require_distinct_frame(
     root_account: Id32,
     frame: &OwnerFeeSnapshotAccountFrameV5<'_, '_>,
@@ -938,6 +1041,114 @@ fn recipient_close_lamports_v5(
         ClutchError::MismatchedState,
     )?;
     Ok((rent.refundable_principal, donation))
+}
+
+/// Authenticate the selected-fee semantic needed before recipient allocation.
+///
+/// The exact batch and revenue preimages are rejoined to their persisted
+/// program-owned pins and to the selected-fee outer. No caller semantic,
+/// recipient row, or amount enters the returned private capability.
+pub fn authenticate_selected_fee_weight_v2(
+    program_id: &Pubkey,
+    expected: SelectedFeeWeightExpectationV2,
+    frame: SelectedFeeWeightAccountFrameV5<'_, '_>,
+) -> Outcome<AuthenticatedSelectedFeeWeightV2> {
+    for account in [
+        frame.selected_fee_record,
+        frame.batch_policy,
+        frame.revenue_policy_preimage,
+        frame.revenue_policy_record,
+    ] {
+        require(!account.is_signer, ClutchError::MismatchedState)?;
+        require(!account.executable, ClutchError::ExecutableAccount)?;
+        require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    require_distinct_fee_weight_keys(&[
+        frame.selected_fee_record.key.to_bytes(),
+        frame.batch_policy.key.to_bytes(),
+        frame.revenue_policy_preimage.key.to_bytes(),
+        frame.revenue_policy_record.key.to_bytes(),
+    ])?;
+    require_read_only_program_state(
+        program_id,
+        frame.selected_fee_record,
+        SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    )?;
+    require_read_only_program_state(program_id, frame.batch_policy, BATCH_POLICY_BYTES)?;
+    require_read_only_program_state(
+        program_id,
+        frame.revenue_policy_record,
+        REVENUE_POLICY_RECORD_BYTES,
+    )?;
+    require(
+        frame.revenue_policy_preimage.data_len() == REVENUE_POLICY_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+
+    let batch = decode_batch_policy(&borrow_data(frame.batch_policy)?)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let batch_id = batch_policy_digest(&batch)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        batch_id.0 == expected.batch_policy.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        frame.batch_policy.key,
+        seeds::batch_policy_pda(program_id, &expected.epoch.bytes(), &batch_id.0),
+        None,
+    )?;
+
+    let revenue = decode_revenue_policy(&borrow_data(frame.revenue_policy_preimage)?)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let revenue_digest = revenue_policy_digest(&revenue)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let revenue_record = RevenuePolicyRecordV1::decode(
+        &borrow_data(frame.revenue_policy_record)?,
+    )?;
+    expect_pda(
+        frame.revenue_policy_record.key,
+        seeds::revenue_policy_pda(program_id, &revenue_record.realm.bytes()),
+        Some(revenue_record.stored_bump),
+    )?;
+    require(
+        revenue_record.realm.bytes() == expected.realm.bytes()
+            && revenue_record.policy_digest.bytes() == revenue_digest.0
+            && revenue_record.treasury.bytes() == revenue.treasury,
+        ClutchError::MismatchedState,
+    )?;
+
+    let selected_data = borrow_data(frame.selected_fee_record)?;
+    let selected = SelectedFeeRecordV1AccountV1::decode(&selected_data, &batch, &revenue)?;
+    let selected_fee_account = id(frame.selected_fee_record.key);
+    let selected_fee_data_id = selected.data_id(&RuntimeSha256, selected_fee_account)?;
+    drop(selected_data);
+    expect_pda(
+        frame.selected_fee_record.key,
+        seeds::general_v2_selected_fee_record_pda(program_id, &expected.candidate.bytes()),
+        Some(selected.stored_bump),
+    )?;
+    require_selected_fee_binding_v5(
+        &selected.semantic,
+        &revenue_record,
+        ExpectedSelectedFeeBindingV5 {
+            fee_record: selected_fee_account,
+            realm: expected.realm,
+            market: expected.market,
+            epoch: expected.epoch,
+            candidate: expected.candidate,
+            batch_policy: expected.batch_policy,
+            revenue_policy: Id32::from_bytes(revenue_digest.0),
+            price_scale: expected.price_scale,
+            outcome_count: expected.outcome_count,
+        },
+    )?;
+    Ok(AuthenticatedSelectedFeeWeightV2 {
+        selected_fee_account,
+        selected_fee_data_id,
+        selected: selected.semantic,
+        batch_policy: batch,
+    })
 }
 
 /// Authenticate the immutable complete-book fee certificate for action 39.
@@ -1956,6 +2167,44 @@ mod tests {
         assert_eq!(
             require_selected_fee_binding_v5(&selected, &record, expected),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn fee_weight_expectation_refuses_zero_or_inactive_width_facts() {
+        let live = Id32::from_bytes([1; 32]);
+        assert!(SelectedFeeWeightExpectationV2::new(
+            live, live, live, live, live, 10_000, 16,
+        ).is_ok());
+        assert_eq!(
+            SelectedFeeWeightExpectationV2::new(
+                Id32::ZERO, live, live, live, live, 10_000, 16,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(
+            SelectedFeeWeightExpectationV2::new(
+                live, live, live, live, live, 10_000, 1,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(
+            SelectedFeeWeightExpectationV2::new(
+                live, live, live, live, live, 0, 16,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn fee_weight_account_roles_refuse_every_alias() {
+        let distinct = [[1; 32], [2; 32], [3; 32], [4; 32]];
+        assert_eq!(require_distinct_fee_weight_keys(&distinct), Ok(()));
+        let mut alias = distinct;
+        alias[3] = alias[1];
+        assert_eq!(
+            require_distinct_fee_weight_keys(&alias),
+            Err(Refusal::Adapter(ClutchError::AccountAlias))
         );
     }
 
