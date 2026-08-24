@@ -132,6 +132,16 @@ fn plan_resolved_failure_market_archive_v5(
     let cell = interval.cell();
     let history = interval.history();
     let failure_resolution = resolution.failure_resolution();
+    let source_resolution_postwrite_id = match source_terminal.policy() {
+        crate::instructions::source_terminal_resolution_v5::PersistedSourceResolutionTerminalPolicyV1::NoReopen(
+            value,
+        ) => value
+            .authenticated()
+            .resolution_v5_terminal_postwrite_id(),
+        crate::instructions::source_terminal_resolution_v5::PersistedSourceResolutionTerminalPolicyV1::ReopenRequest(
+            _,
+        ) => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+    };
     let terminal = project_failure_market_interval_terminal_history_facts_v2(cell, history)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
@@ -145,7 +155,8 @@ fn plan_resolved_failure_market_archive_v5(
                 == failure_resolution.id().bytes()
             && terminal.terminal_state_commitment.bytes()
                 == interval.cell_state_id().bytes()
-            && source_terminal.id() != ContentId::ZERO,
+            && source_terminal.id() != ContentId::ZERO
+            && source_resolution_postwrite_id == resolution.id(),
         ClutchError::MismatchedState,
     )?;
     let authority = FailureMarketResolvedArchiveAuthorityV5 { expected: terminal };
@@ -2277,6 +2288,7 @@ mod adversarial_tests {
             "terminal.session_terminal_receipt_id.bytes()",
             "failure_resolution.id().bytes()",
             "source_terminal.id() != ContentId::ZERO",
+            "source_resolution_postwrite_id == resolution.id()",
             "plan_append_failure_market_interval_history_v2",
             "plan_reset_failure_market_interval_cell_v2",
             "reset.append_receipt_id() == append.id()",

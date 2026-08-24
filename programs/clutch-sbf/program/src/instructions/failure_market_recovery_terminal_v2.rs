@@ -230,6 +230,8 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
                 .bytes()
                 == resolution.failure_resolution().id().bytes()
             && source_result_close.source_terminal_id() == source_terminal.id()
+            && source_terminal_policy.resolution_v5_terminal_postwrite_id()
+                == resolution.id()
             && source_result_close.source_resolution_input_id()
                 == source_terminal_policy.source_resolution_input_id()
             && source_result_close.result_account()
@@ -804,6 +806,8 @@ mod adversarial_recovery_close_tests {
             .expect("single close composer");
         for predicate in [
             "source_result_close.source_terminal_id() == source_terminal.id()",
+            "source_terminal_policy.resolution_v5_terminal_postwrite_id()",
+            "== resolution.id()",
             "source_result_close.source_resolution_input_id()",
             "source_result_close.result_account()",
             "source_result_close.lineage_account()",
