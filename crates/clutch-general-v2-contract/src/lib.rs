@@ -27,6 +27,7 @@ mod settlement_root;
 mod settlement_root_indexed;
 mod state;
 mod transition;
+mod treasury_service_ledger;
 
 pub use codec::{CodecError, Reader, Writer};
 pub use candidate_rank_v2::*;
@@ -50,6 +51,7 @@ pub use settlement_root::*;
 pub use settlement_root_indexed::*;
 pub use state::*;
 pub use transition::*;
+pub use treasury_service_ledger::*;
 
 /// Number of bytes in every persisted identity or digest.
 pub const ID_BYTES: usize = 32;
@@ -1163,6 +1165,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         tag: MARKET_BINDING_ACCOUNT_TAG,
         version: MARKET_BINDING_ACCOUNT_VERSION_V4,
         owner: "clutch-general-v2-contract/MarketBindingV4",
+    },
+    AccountAllocationV1 {
+        tag: TREASURY_SERVICE_LEDGER_ACCOUNT_TAG_V1,
+        version: TREASURY_SERVICE_LEDGER_ACCOUNT_VERSION_V1,
+        owner: "clutch-general-v2-contract/TreasuryServiceLedgerV1AccountV1",
     },
     AccountAllocationV1 {
         tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,

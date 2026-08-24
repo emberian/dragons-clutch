@@ -173,6 +173,12 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
 /// Current Product/Revenue-authorized General Market-binding version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V4: u8 = 4;
+/// Revenue-owned counted treasury-service-ledger discriminator.
+pub const REVENUE_TREASURY_SERVICE_LEDGER_ACCOUNT_TAG: u8 = 0xbb;
+/// First counted treasury-service-ledger version.
+pub const REVENUE_TREASURY_SERVICE_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// Exact counted treasury-service-ledger width.
+pub const REVENUE_TREASURY_SERVICE_LEDGER_ACCOUNT_BYTES: usize = 132;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -1140,6 +1146,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-market-binding-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: REVENUE_TREASURY_SERVICE_LEDGER_ACCOUNT_TAG,
+            version: REVENUE_TREASURY_SERVICE_LEDGER_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "revenue-treasury-service-ledger-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
