@@ -105,7 +105,7 @@ use clutch_general_v2_runtime::{
 };
 use clutch_product_series::{
     ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id,
-    MarketFamilyV1, MarketLifecyclePhaseV2, MarketLifecycleRootV3,
+    MarketFamilyV1, MarketLifecyclePhaseV2, MarketLifecyclePhaseV3, MarketLifecycleRootV3,
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
     QuantizedEdgePolicyV1, SeriesLinkObligationStatusV2, SeriesLinkObligationStatusV3,
     SeriesLinkObligationV2, SeriesLinkObligationV3, SeriesMarketLinkPhaseV2,
@@ -223,7 +223,7 @@ use clutch_solana_layout::product_series::{
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
     authenticate_dealer_meta_contract_v1, authenticate_dealer_series_obligation_v1,
-    authenticate_dealer_series_obligation_v2, authenticate_dealer_series_obligation_v3,
+    authenticate_dealer_series_obligation_v3,
     authenticate_dealer_state_v3,
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
@@ -306,14 +306,14 @@ const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
 const DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/dealer-position-replay-close-postwrite/v3\0";
-const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/dealer-product-resolution-authentication/v2\0";
+const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/dealer-product-resolution-authentication/v3\0";
 const DEALER_FUTURE_CREDIT_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-future-credit-postwrite/v1\0";
 const DEALER_FUTURE_CREDIT_UNUSED_CLOSE_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-future-credit-unused-close-postwrite/v1\0";
-const DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/dealer-family-terminal-receipt/v1\0";
+const DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/dealer-family-terminal-receipt/v3\0";
 const _: () = assert!(
     DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES
         == 8 + clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1
@@ -647,9 +647,9 @@ impl AuthenticatedProductLinkObligationAdmissionPostwriteV3
 }
 
 /// Compact non-authoritative projection retained only after hostile decoding
-/// current Product RootV2, LinkV2, and Dealer-owned `0xaf/v2` in one call.
+/// current Product RootV3, LinkV3, and Dealer-owned `0xaf/v3` in one call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AuthenticatedDealerProductResolutionV2 {
+struct AuthenticatedDealerProductResolutionV3 {
     root_account_id: Id,
     root_semantic_id: Id,
     root_data_id: Id,
@@ -746,7 +746,7 @@ enum AuthenticatedDealerTerminalValueV1 {
 /// it in the same Solana instruction so any later refusal rolls every physical
 /// custody, rent, State, Replay, and liveness write back atomically.
 #[derive(Debug)]
-pub(crate) struct AuthenticatedDealerFamilyTerminalReceiptV1 {
+pub(crate) struct AuthenticatedDealerFamilyTerminalReceiptV3 {
     receipt_id: ContentId,
     policy_id: ContentId,
     facility_id: ContentId,
@@ -765,6 +765,9 @@ pub(crate) struct AuthenticatedDealerFamilyTerminalReceiptV1 {
     series_plan_id: ContentId,
     compiler_bundle_id: ContentId,
     attachment_plan_id: ContentId,
+    obligation_configuration_id: ContentId,
+    obligation_admission_projection_id: ContentId,
+    obligation_admission_link_transition_sequence: u64,
     product_generation: u64,
     series_ordinal: u32,
     value_kind: u8,
@@ -774,7 +777,7 @@ pub(crate) struct AuthenticatedDealerFamilyTerminalReceiptV1 {
     action_receipt_semantic_id: ContentId,
 }
 
-impl AuthenticatedDealerFamilyTerminalReceiptV1 {
+impl AuthenticatedDealerFamilyTerminalReceiptV3 {
     pub(crate) const fn id(&self) -> ContentId { self.receipt_id }
     pub(crate) const fn policy_id(&self) -> ContentId { self.policy_id }
     pub(crate) const fn facility_id(&self) -> ContentId { self.facility_id }
@@ -813,6 +816,15 @@ impl AuthenticatedDealerFamilyTerminalReceiptV1 {
     pub(crate) const fn series_plan_id(&self) -> ContentId { self.series_plan_id }
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
     pub(crate) const fn attachment_plan_id(&self) -> ContentId { self.attachment_plan_id }
+    pub(crate) const fn obligation_configuration_id(&self) -> ContentId {
+        self.obligation_configuration_id
+    }
+    pub(crate) const fn obligation_admission_projection_id(&self) -> ContentId {
+        self.obligation_admission_projection_id
+    }
+    pub(crate) const fn obligation_admission_link_transition_sequence(&self) -> u64 {
+        self.obligation_admission_link_transition_sequence
+    }
     pub(crate) const fn product_generation(&self) -> u64 { self.product_generation }
     pub(crate) const fn series_ordinal(&self) -> u32 { self.series_ordinal }
     pub(crate) const fn value_kind(&self) -> u8 { self.value_kind }
@@ -829,9 +841,9 @@ impl AuthenticatedDealerFamilyTerminalReceiptV1 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn seal_dealer_family_terminal_receipt_v1(
+fn seal_dealer_family_terminal_receipt_v3(
     program_id: &Pubkey,
-    obligation: DealerSeriesObligationBindingV2,
+    obligation: DealerSeriesObligationBindingV3,
     state_account: &AccountInfo<'_>,
     state_after: DealerStateV3,
     close: DealerSeriesObligationValueClosePlanV3,
@@ -840,7 +852,7 @@ fn seal_dealer_family_terminal_receipt_v1(
     terminal_replay_ordinal: u64,
     action_receipt_semantic_id: ContentId,
     value: AuthenticatedDealerTerminalValueV1,
-) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV1> {
+) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV3> {
     let (value_kind, value_terminal_receipt_id, resolution_semantic_id, resolution_data_id) =
         match value {
             AuthenticatedDealerTerminalValueV1::ActiveFacilityCredit(receipt) => (
@@ -874,7 +886,7 @@ fn seal_dealer_family_terminal_receipt_v1(
     )?;
     let receipt_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1,
+            DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V3,
             program_id.as_ref(),
             &key.policy_id.bytes(),
             &key.facility_id.bytes(),
@@ -891,8 +903,14 @@ fn seal_dealer_family_terminal_receipt_v1(
             &key.product_market_binding_id.bytes(),
             &key.series_market_link_account_id.bytes(),
             &key.series_plan_v5_id.bytes(),
-            &key.compiler_bundle_v6_id.bytes(),
-            &key.attachment_plan_v5_id.bytes(),
+            &key.compiler_bundle_v7_id.bytes(),
+            &key.attachment_plan_v6_id.bytes(),
+            &key.obligation_configuration_v3_id.bytes(),
+            &obligation.owner_prewrite_id.bytes(),
+            &obligation.family_admission_receipt_id.bytes(),
+            &obligation.admission_owner_receipt_id.bytes(),
+            &obligation.admission_projection_id.bytes(),
+            &obligation.admission_link_transition_sequence.to_le_bytes(),
             &key.product_generation.to_le_bytes(),
             &key.series_ordinal.to_le_bytes(),
             &[value_kind],
@@ -904,7 +922,7 @@ fn seal_dealer_family_terminal_receipt_v1(
         .to_bytes(),
     );
     require(receipt_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
-    Ok(AuthenticatedDealerFamilyTerminalReceiptV1 {
+    Ok(AuthenticatedDealerFamilyTerminalReceiptV3 {
         receipt_id,
         policy_id: ContentId::from_bytes(key.policy_id.bytes()),
         facility_id: ContentId::from_bytes(key.facility_id.bytes()),
@@ -921,8 +939,16 @@ fn seal_dealer_family_terminal_receipt_v1(
         product_market_binding_id: ContentId::from_bytes(key.product_market_binding_id.bytes()),
         series_market_link_account: Pubkey::new_from_array(key.series_market_link_account_id.bytes()),
         series_plan_id: ContentId::from_bytes(key.series_plan_v5_id.bytes()),
-        compiler_bundle_id: ContentId::from_bytes(key.compiler_bundle_v6_id.bytes()),
-        attachment_plan_id: ContentId::from_bytes(key.attachment_plan_v5_id.bytes()),
+        compiler_bundle_id: ContentId::from_bytes(key.compiler_bundle_v7_id.bytes()),
+        attachment_plan_id: ContentId::from_bytes(key.attachment_plan_v6_id.bytes()),
+        obligation_configuration_id: ContentId::from_bytes(
+            key.obligation_configuration_v3_id.bytes(),
+        ),
+        obligation_admission_projection_id: ContentId::from_bytes(
+            obligation.admission_projection_id.bytes(),
+        ),
+        obligation_admission_link_transition_sequence: obligation
+            .admission_link_transition_sequence,
         product_generation: key.product_generation,
         series_ordinal: key.series_ordinal,
         value_kind,
@@ -2212,8 +2238,8 @@ fn authenticate_live_series_obligation_for_state_v3(
     account: &AccountInfo<'_>,
     state_account: &AccountInfo<'_>,
     state: &DealerStateV3,
-) -> Outcome<DealerSeriesObligationBindingV1> {
-    let authenticated = authenticate_dealer_series_obligation_v1(program_id, account, false)?;
+) -> Outcome<DealerSeriesObligationBindingV3> {
+    let authenticated = authenticate_dealer_series_obligation_v3(program_id, account, false)?;
     let binding = *authenticated.binding();
     let binding_id = binding.binding_id().map_err(dealer_fault)?;
     require(
@@ -2233,22 +2259,22 @@ fn authenticate_live_series_obligation_for_state_v3(
     Ok(binding)
 }
 
-/// Authenticate the current Product RootV2/LinkV2 owner of a live Dealer
+/// Authenticate the current Product RootV3/LinkV3 owner of a live Dealer
 /// obligation. The two large Product bodies are decoded in disjoint lexical
 /// scopes and collapsed only to their canonical semantic/authentication IDs.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn authenticate_current_product_resolution_v2(
+fn authenticate_current_product_resolution_v3(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
-    obligation: &DealerSeriesObligationBindingV2,
+    obligation: &DealerSeriesObligationBindingV3,
     state_account: &AccountInfo<'_>,
     state: &DealerStateV3,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
     value_authority: GeneralMarketValueAuthorityV2,
     link_writable: bool,
-) -> Outcome<AuthenticatedDealerProductResolutionV2> {
+) -> Outcome<AuthenticatedDealerProductResolutionV3> {
     obligation.validate().map_err(dealer_fault)?;
     let key = obligation.key;
     let bound = value_authority.liabilities.bound;
@@ -2281,8 +2307,8 @@ fn authenticate_current_product_resolution_v2(
         resolution_data_id,
         resolution_activation_receipt_id,
     ) = {
-        let mut root_body = MarketLifecycleRootAccountV2::decode_buffer();
-        let root = authenticate_market_lifecycle_root_v2(
+        let mut root_body = MarketLifecycleRootAccountV3::decode_buffer();
+        let root = authenticate_market_lifecycle_root_v3(
             program_id,
             root_account,
             MarketInstanceV2Id::from_bytes(key.market_instance_v2_id.bytes()),
@@ -2296,7 +2322,7 @@ fn authenticate_current_product_resolution_v2(
             .semantic_id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            root_state.phase() == MarketLifecyclePhaseV2::Active
+            root_state.phase() == MarketLifecyclePhaseV3::Active
                 && binding.id().map_err(|_| {
                     Refusal::Adapter(ClutchError::MismatchedState)
                 })?.bytes() == key.product_market_binding_id.bytes()
@@ -2332,8 +2358,8 @@ fn authenticate_current_product_resolution_v2(
         link_transition_sequence,
         dealer_admission_receipt_id,
     ) = {
-        let mut link_body = SeriesMarketLinkAccountV2::decode_buffer();
-        let link = authenticate_series_market_link_v2(
+        let mut link_body = SeriesMarketLinkAccountV3::decode_buffer();
+        let link = authenticate_series_market_link_v3(
             program_id,
             link_account,
             SeriesPlanV5Id::from_bytes(key.series_plan_v5_id.bytes()),
@@ -2350,10 +2376,14 @@ fn authenticate_current_product_resolution_v2(
             .semantic_id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            link_state.phase() == SeriesMarketLinkPhaseV2::Active
+            link_state.phase() == SeriesMarketLinkPhaseV3::Active
                 && binding.market_binding_id.bytes() == key.product_market_binding_id.bytes()
-                && binding.compiler_bundle_id.bytes() == key.compiler_bundle_v6_id.bytes()
-                && binding.attachment_plan_id.bytes() == key.attachment_plan_v5_id.bytes()
+                && binding.compiler_bundle_id.content_id().bytes()
+                    == key.compiler_bundle_v7_id.bytes()
+                && binding.attachment_plan_id.content_id().bytes()
+                    == key.attachment_plan_v6_id.bytes()
+                && binding.obligation_configuration_id.content_id().bytes()
+                    == key.obligation_configuration_v3_id.bytes()
                 && binding.capability_profile_id.bytes()
                     == root_capability_profile_id.bytes()
                 && binding.rent_refund_owner.bytes() == obligation.rent.payer.bytes()
@@ -2362,10 +2392,10 @@ fn authenticate_current_product_resolution_v2(
             ClutchError::MismatchedState,
         )?;
         require(
-            link_state.obligation_status(SeriesLinkObligationV2::Dealer)
-                == SeriesLinkObligationStatusV2::Live
+            link_state.obligation_status(SeriesLinkObligationV3::Dealer)
+                == SeriesLinkObligationStatusV3::Live
                 && link_state
-                    .obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer)
+                    .obligation_admission_receipt_id(SeriesLinkObligationV3::Dealer)
                     .bytes()
                     == obligation.admission_projection_id.bytes()
                 && link_state.transition_sequence()
@@ -2381,14 +2411,14 @@ fn authenticate_current_product_resolution_v2(
             id_from_content(link.authentication_id()),
             link_state.transition_sequence(),
             id_from_content(
-                link_state.obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer),
+                link_state.obligation_admission_receipt_id(SeriesLinkObligationV3::Dealer),
             ),
         )
     };
 
     let authentication_id = Id::from_bytes(
         solana_sha256_hasher::hashv(&[
-            DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2,
+            DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V3,
             root_account.key.as_ref(),
             link_account.key.as_ref(),
             &root_semantic_id.bytes(),
@@ -2413,7 +2443,7 @@ fn authenticate_current_product_resolution_v2(
         .to_bytes(),
     );
     authentication_id.validate_live().map_err(dealer_fault)?;
-    Ok(AuthenticatedDealerProductResolutionV2 {
+    Ok(AuthenticatedDealerProductResolutionV3 {
         root_account_id: id(root_account.key),
         root_semantic_id,
         root_data_id,
@@ -2512,7 +2542,7 @@ fn close_unused_future_credit_funding_v1(
 ) -> Outcome<AuthenticatedDealerFutureCreditUnusedCloseV1> {
     let authenticated_state = authenticate_dealer_state_v3(program_id, state_account, true)?;
     let authenticated_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, live_obligation_account, true)?;
+        authenticate_dealer_series_obligation_v3(program_id, live_obligation_account, true)?;
     let (_, funding) = authenticate_future_credit_funding(program_id, funding_account, true)?;
     require(
         refund_owner.is_writable
@@ -6450,7 +6480,7 @@ fn sponsor_halt(
         Some(state_after) => {
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
             let observed_obligation =
-                authenticate_dealer_series_obligation_v1(program_id, &accounts[15], false)?;
+                authenticate_dealer_series_obligation_v3(program_id, &accounts[15], false)?;
             let obligation_matches = match obligation.as_ref() {
                 Some(value) => observed_obligation.binding() == value,
                 None => false,
@@ -6775,7 +6805,7 @@ fn funded_unwind(
     let state_matches = match state_after_v3 {
         Some(state_after) => {
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-            let observed_obligation = authenticate_dealer_series_obligation_v1(
+            let observed_obligation = authenticate_dealer_series_obligation_v3(
                 program_id,
                 &accounts[obligation_index],
                 false,
@@ -6829,7 +6859,7 @@ fn resolve_facility_vector(
         ClutchError::MismatchedState,
     )?;
     let authenticated_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, &accounts[25], false)?;
+        authenticate_dealer_series_obligation_v3(program_id, &accounts[25], false)?;
     let obligation = *authenticated_obligation.binding();
     let obligation_id = obligation.binding_id().map_err(dealer_fault)?;
     require(
@@ -6958,7 +6988,7 @@ fn resolve_facility_vector(
         true,
         true,
     )?;
-    let product_resolution = authenticate_current_product_resolution_v2(
+    let product_resolution = authenticate_current_product_resolution_v3(
         program_id,
         &accounts[24],
         &accounts[26],
@@ -7275,7 +7305,7 @@ fn resolve_facility_vector(
     let observed_work = authenticate_claim_work_with_access(program_id, &accounts[17], true)?;
     let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
     let observed_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, &accounts[25], false)?;
+        authenticate_dealer_series_obligation_v3(program_id, &accounts[25], false)?;
     let observed_replay = DealerFacilityReplayV1::decode(&accounts[4].data.borrow())
         .map_err(dealer_fault)?;
     let resolution_liveness_data = accounts[12]
@@ -7308,7 +7338,7 @@ pub(crate) fn terminalize_dealer_family_for_product_v3(
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     payload_bytes: &[u8],
-) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV1> {
+) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV3> {
     let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, payload_bytes)
         .map_err(dealer_fault)?;
     let active_credit = payload.retire_target
@@ -7344,7 +7374,7 @@ pub(crate) fn terminalize_dealer_family_for_product_v3(
         ClutchError::MismatchedState,
     )?;
     let authenticated_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, &accounts[24], true)?;
+        authenticate_dealer_series_obligation_v3(program_id, &accounts[24], true)?;
     let obligation = *authenticated_obligation.binding();
     let obligation_presemantic_id = obligation.binding_id().map_err(dealer_fault)?;
     require(
@@ -7792,7 +7822,7 @@ pub(crate) fn terminalize_dealer_family_for_product_v3(
     )?;
     drop(retirement_data);
     let action_receipt_semantic_id = receipt.semantic_receipt_id().map_err(dealer_fault)?;
-    seal_dealer_family_terminal_receipt_v1(
+    seal_dealer_family_terminal_receipt_v3(
         program_id,
         obligation,
         &accounts[2],
@@ -8119,7 +8149,7 @@ fn claim_terminal_allocation(
 
     let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
     let observed_obligation =
-        authenticate_dealer_series_obligation_v1(program_id, &accounts[34], false)?;
+        authenticate_dealer_series_obligation_v3(program_id, &accounts[34], false)?;
     let (_, observed_allocation) = authenticate_terminal_allocation(program_id, &accounts[8])?;
     let (_, observed_receipt) = authenticate_action_receipt(program_id, &accounts[20])?;
     let (_, observed_facility_position, observed_facility_replay, _) =
@@ -8539,7 +8569,7 @@ fn queue_exit(
     let state_matches = match state_after_v3 {
         Some(state_after) => {
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-            let observed_obligation = authenticate_dealer_series_obligation_v1(
+            let observed_obligation = authenticate_dealer_series_obligation_v3(
                 program_id,
                 &accounts[obligation_index],
                 false,
@@ -8860,7 +8890,7 @@ fn bind_epoch(
         Some(state_after) => {
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
             let observed_obligation =
-                authenticate_dealer_series_obligation_v1(program_id, &accounts[24], false)?;
+                authenticate_dealer_series_obligation_v3(program_id, &accounts[24], false)?;
             let obligation_matches = match obligation.as_ref() {
                 Some(value) => observed_obligation.binding() == value,
                 None => false,
@@ -9154,7 +9184,7 @@ fn lapse_epoch(
         Some(state_after) => {
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
             let observed_obligation =
-                authenticate_dealer_series_obligation_v1(program_id, &accounts[25], false)?;
+                authenticate_dealer_series_obligation_v3(program_id, &accounts[25], false)?;
             let obligation_matches = match obligation.as_ref() {
                 Some(value) => observed_obligation.binding() == value,
                 None => false,
@@ -13223,7 +13253,7 @@ mod current_terminal_cut_adversarial_tests {
     fn dealer_family_receipt_has_no_product_supplied_authority() {
         let source = include_str!("dealer_facility.rs");
         let receipt = source
-            .split("fn seal_dealer_family_terminal_receipt_v1")
+            .split("fn seal_dealer_family_terminal_receipt_v3")
             .nth(1)
             .and_then(|value| value.split("struct AuthenticatedExistingDealerSeriesAdmissionV1").next())
             .expect("Dealer family receipt sealer");
@@ -13233,7 +13263,7 @@ mod current_terminal_cut_adversarial_tests {
             "close.close_receipt_id",
             "value_terminal_receipt_id",
             "action_receipt_semantic_id",
-            "DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1",
+            "DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V3",
         ] {
             assert!(receipt.contains(guard), "missing family receipt guard {guard}");
         }
@@ -13258,7 +13288,7 @@ mod current_terminal_cut_adversarial_tests {
             "prepare_dealer_series_obligation_value_close_v3",
             "release_dealer_account(&accounts[24])",
             "apply_liveness_transition",
-            "seal_dealer_family_terminal_receipt_v1",
+            "seal_dealer_family_terminal_receipt_v3",
             "series_obligation_children == 0",
         ] {
             assert!(handler.contains(guard), "missing terminal join {guard}");
@@ -13275,7 +13305,7 @@ mod current_terminal_cut_adversarial_tests {
             .find("prepare_dealer_series_obligation_value_close_v3")
             .expect("Dealer obligation close");
         let receipt = handler
-            .find("seal_dealer_family_terminal_receipt_v1")
+            .find("seal_dealer_family_terminal_receipt_v3")
             .expect("Dealer family receipt");
         assert!(position < fractional && fractional < obligation && obligation < receipt);
     }
@@ -13865,8 +13895,8 @@ mod resolve_vector_adversarial_tests {
             .and_then(|value| value.split("fn claim_terminal_allocation").next())
             .expect("Resolve handler");
         for guard in [
-            "authenticate_dealer_series_obligation_v2",
-            "authenticate_current_product_resolution_v2",
+            "authenticate_dealer_series_obligation_v3",
+            "authenticate_current_product_resolution_v3",
             "authenticate_future_credit_funding",
             "apply_dealer_facility_vector_transition_v1",
             "begin_terminal_resolution_v1",
@@ -13892,7 +13922,7 @@ mod future_credit_terminal_adversarial_tests {
             .expect("unused future-credit close helper");
         for guard in [
             "authenticate_dealer_state_v3",
-            "authenticate_dealer_series_obligation_v2",
+            "authenticate_dealer_series_obligation_v3",
             "authenticate_future_credit_funding",
             "prepare_unused_close",
             "plan.terminal_obligation_binding_id",

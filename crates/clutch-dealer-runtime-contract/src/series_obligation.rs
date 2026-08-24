@@ -916,7 +916,7 @@ pub fn prepare_dealer_series_obligation_close_v2(
 /// must consume the resulting move-only family receipt in the same outer.
 pub fn prepare_dealer_series_obligation_value_close_v3(
     state: DealerStateV3,
-    binding: &DealerSeriesObligationBindingV2,
+    binding: &DealerSeriesObligationBindingV3,
     dealer_value_terminal_receipt_id: Id,
     binding_lamports_before: u64,
 ) -> Result<DealerSeriesObligationValueClosePlanV3> {
@@ -932,7 +932,7 @@ pub fn prepare_dealer_series_obligation_value_close_v3(
         return Err(Error::InvalidPhase);
     }
     let live_binding_id = binding.binding_id()?;
-    let state_after = state.close_current_live_binding_after_value(
+    let state_after = state.close_product_v3_live_binding_after_value(
         binding,
         dealer_value_terminal_receipt_id,
     )?;

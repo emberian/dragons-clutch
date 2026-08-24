@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    add, DealerPhaseV2, DealerSeriesObligationBindingV2, DealerSeriesObligationPhaseV1,
+    add, DealerPhaseV2, DealerSeriesObligationBindingV3, DealerSeriesObligationPhaseV1,
     DealerStateV3, Error, FixedCodec, Id, Result,
     DEALER_FUTURE_CREDIT_FUNDING_CONTENT_DOMAIN_V1,
 };
@@ -213,7 +213,7 @@ impl DealerFutureCreditFundingV1 {
         &self,
         dealer_state_account_id: Id,
         state: &DealerStateV3,
-        live_obligation: &DealerSeriesObligationBindingV2,
+        live_obligation: &DealerSeriesObligationBindingV3,
         observed_balance_lamports: u64,
     ) -> Result<DealerFutureCreditUnusedCloseV1> {
         self.validate()?;
@@ -494,7 +494,7 @@ const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1 <= crate::MAX_SEMANT
 mod tests {
     use super::*;
     use crate::{
-        DealerChildCountsV2, DealerSeriesObligationKeyV2, DeletableRentOwnerV1,
+        DealerChildCountsV2, DealerSeriesObligationKeyV3, DeletableRentOwnerV1,
         RootRentOwnerV1, SponsorCapitalDispositionV1, MAX_OUTCOMES,
     };
 
@@ -526,8 +526,8 @@ mod tests {
         }
     }
 
-    fn terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV2) {
-        let key = DealerSeriesObligationKeyV2 {
+    fn terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV3) {
+        let key = DealerSeriesObligationKeyV3 {
                 binding_account_id: id(30),
                 policy_id: id(2),
                 facility_id: id(3),
@@ -538,17 +538,20 @@ mod tests {
                 product_market_binding_id: id(32),
                 series_plan_v5_id: id(33),
                 series_market_link_account_id: id(34),
-                compiler_bundle_v6_id: id(35),
-                attachment_plan_v5_id: id(36),
+                compiler_bundle_v7_id: id(35),
+                attachment_plan_v6_id: id(36),
+                obligation_configuration_v3_id: id(37),
                 product_generation: 1,
                 series_ordinal: 7,
             };
-        let live = DealerSeriesObligationBindingV2::new_live(
+        let live = DealerSeriesObligationBindingV3::new_live(
             key,
-            key.admission_owner_receipt_id(id(39), 1).unwrap(),
+            id(37),
+            id(38),
             id(38),
             id(39),
             id(40),
+            id(41),
             1,
             DeletableRentOwnerV1 {
                 payer: id(41),
@@ -558,19 +561,15 @@ mod tests {
             },
         )
         .unwrap();
-        let terminal_owner_receipt = live
-            .terminal_owner_receipt_id(id(26), id(44), 2)
-            .unwrap();
-        let terminal = live
-            .terminalized(
-                terminal_owner_receipt,
-                id(43),
-                id(44),
-                id(45),
-                id(26),
-                2,
-            )
-            .unwrap();
+        let mut terminal = live;
+        terminal.terminal_owner_receipt_id = id(42);
+        terminal.terminal_projection_id = id(43);
+        terminal.terminal_link_pre_semantic_id = id(44);
+        terminal.terminal_link_post_semantic_id = id(45);
+        terminal.terminal_state_receipt_id = id(26);
+        terminal.terminal_link_transition_sequence = 2;
+        terminal.phase = DealerSeriesObligationPhaseV1::Terminal;
+        terminal.validate().unwrap();
         let base = crate::DealerStateV2 {
             policy_id: id(2),
             facility_id: id(3),
@@ -630,7 +629,7 @@ mod tests {
         (state, terminal)
     }
 
-    fn value_terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV2) {
+    fn value_terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV3) {
         let (mut state, mut live) = terminal_graph();
         live.phase = DealerSeriesObligationPhaseV1::Live;
         live.terminal_owner_receipt_id = Id::ZERO;
@@ -704,26 +703,6 @@ mod tests {
         substituted.base.terminal_state_receipt_id = id(56);
         assert_eq!(
             value.prepare_unused_close(id(9), &substituted, &live, 217),
-            Err(Error::MismatchedBinding)
-        );
-    }
-
-    #[test]
-    fn current_obligation_close_decrements_only_the_exact_terminal_child() {
-        let (state, terminal) = terminal_graph();
-        let close = crate::prepare_dealer_series_obligation_close_v2(state, &terminal, 13)
-            .unwrap();
-        assert_eq!(close.state_after.series_obligation_children, 0);
-        assert_eq!(close.rent_payer_credit_lamports, 9);
-        assert_eq!(close.neutral_sink_credit_lamports, 4);
-        assert_eq!(
-            crate::prepare_dealer_series_obligation_close_v2(state, &terminal, 10),
-            Err(Error::InvalidPhase)
-        );
-        let mut substituted = terminal;
-        substituted.key.binding_account_id = id(56);
-        assert_eq!(
-            crate::prepare_dealer_series_obligation_close_v2(state, &substituted, 13),
             Err(Error::MismatchedBinding)
         );
     }

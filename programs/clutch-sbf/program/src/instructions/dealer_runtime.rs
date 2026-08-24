@@ -10,7 +10,7 @@
 
 use clutch_dealer_runtime_contract::{
     CoveredDealerTerminalV2, DealerSeriesObligationBindingV1,
-    DealerSeriesObligationBindingV2, DealerSeriesObligationBindingV3, DealerStateV3, FixedCodec, Id,
+    DealerSeriesObligationBindingV3, DealerStateV3, FixedCodec, Id,
 };
 use clutch_fractional_redemption_runtime::MAX_OUTCOMES as FRACTIONAL_MAX_OUTCOMES;
 use clutch_solana_layout::registry::{
@@ -18,7 +18,6 @@ use clutch_solana_layout::registry::{
     DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
     DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
@@ -149,14 +148,6 @@ pub(crate) struct AuthenticatedDealerSeriesObligationV1 {
     binding: DealerSeriesObligationBindingV1,
 }
 
-/// Private exact account capability for the current Product RootV2/LinkV2
-/// facility-lifetime obligation.
-pub(crate) struct AuthenticatedDealerSeriesObligationV2 {
-    account_id: Id,
-    bump: u8,
-    binding: DealerSeriesObligationBindingV2,
-}
-
 /// Private exact account capability for the Product RootV3/LinkV3 obligation.
 pub(crate) struct AuthenticatedDealerSeriesObligationV3 {
     account_id: Id,
@@ -269,23 +260,6 @@ impl AuthenticatedDealerSeriesObligationV1 {
     }
 }
 
-impl AuthenticatedDealerSeriesObligationV2 {
-    /// Exact authenticated physical account.
-    pub(crate) const fn account_id(&self) -> Id {
-        self.account_id
-    }
-
-    /// Exact canonical PDA bump.
-    pub(crate) const fn bump(&self) -> u8 {
-        self.bump
-    }
-
-    /// Borrow the complete current body without minting a detached DTO.
-    pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV2 {
-        &self.binding
-    }
-}
-
 impl AuthenticatedDealerSeriesObligationV3 {
     /// Exact authenticated physical account.
     pub(crate) const fn account_id(&self) -> Id { self.account_id }
@@ -347,60 +321,6 @@ pub(crate) fn authenticate_dealer_series_obligation_v1(
         ClutchError::MismatchedState,
     )?;
     Ok(AuthenticatedDealerSeriesObligationV1 {
-        account_id: Id::from_bytes(account.key.to_bytes()),
-        bump: envelope.bump,
-        binding,
-    })
-}
-
-/// Authenticate one exact current `0xaf/v2` Dealer facility obligation.
-pub(crate) fn authenticate_dealer_series_obligation_v2(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    writable: bool,
-) -> Outcome<AuthenticatedDealerSeriesObligationV2> {
-    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(!account.executable, ClutchError::ExecutableAccount)?;
-    require(!account.is_signer, ClutchError::MismatchedState)?;
-    require(
-        account.is_writable == writable,
-        if writable {
-            ClutchError::NotWritable
-        } else {
-            ClutchError::UnexpectedWritable
-        },
-    )?;
-    require(
-        account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
-        ClutchError::WrongDataLength,
-    )?;
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let (envelope, binding) =
-        decode_dealer_account_body_v1::<DealerSeriesObligationBindingV2>(
-            &data,
-            DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-            DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    drop(data);
-    expect_pda(
-        account.key,
-        seeds::dealer_series_obligation_pda(program_id, &binding.key.facility_id.bytes()),
-        Some(envelope.bump),
-    )?;
-    let floor = binding
-        .rent
-        .refundable_principal
-        .checked_add(binding.rent.donation_floor)
-        .ok_or(ClutchError::Arithmetic)?;
-    require(
-        binding.key.binding_account_id.bytes() == account.key.to_bytes()
-            && account.lamports() >= floor,
-        ClutchError::MismatchedState,
-    )?;
-    Ok(AuthenticatedDealerSeriesObligationV2 {
         account_id: Id::from_bytes(account.key.to_bytes()),
         bump: envelope.bump,
         binding,
@@ -704,14 +624,6 @@ pub const fn persisted_account_contract_v1(
             match version {
                 registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION => {
                     registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION
-                }
-                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2 => {
-                    return Some(DealerPersistedAccountContractV1 {
-                        tag,
-                        version,
-                        account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
-                        lifetime: DealerAccountLifetimeV1::CountedChild,
-                    });
                 }
                 registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3 => {
                     return Some(DealerPersistedAccountContractV1 {
