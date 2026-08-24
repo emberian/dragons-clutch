@@ -440,8 +440,8 @@ pub struct FractionalAccountContractV1 {
 /// Return the frozen account-count and mutability contract for one action.
 ///
 /// Account-role names and order are documented in the crate README. Concrete
-/// handlers exist for every action, but all ten central capability tuples stay
-/// disabled pending one whole-family release review.
+/// handlers and the checked current release expose all ten actions through one
+/// exact account/privilege contract.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {

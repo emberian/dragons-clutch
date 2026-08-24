@@ -956,7 +956,8 @@ impl OwnedInstructionDraft {
             .checked_sub(fixed)
             .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
             .ok_or(ConstructionError::InvalidAccountContract)?;
-        if !(1..=16).contains(&outcome_count)
+        if !(2..=clutch_product_series::MARKET_FOUNDATION_MAX_OUTCOMES_V4)
+            .contains(&outcome_count)
             || accounts.len() != fixed + 2 * outcome_count
         {
             return Err(ConstructionError::InvalidAccountContract);
