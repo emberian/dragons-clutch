@@ -47,10 +47,16 @@ fn aggregate(recipe_id: IdentityV1) -> CapitalizationAggregateV1 {
         capitalization_schedule_id: recipe().capitalization_schedule_id,
         occurrence_count: 3,
         total_principal: 60,
+        first_capitalization_id: capitalization_id(recipe_id, 0),
     }
 }
 
 fn capitalization(recipe_id: IdentityV1, index: u64) -> OccurrenceCapitalizationV1 {
+    let next_capitalization_id = if index < 2 {
+        Some(capitalization_id(recipe_id, index + 1))
+    } else {
+        None
+    };
     OccurrenceCapitalizationV1 {
         recipe_id,
         capitalization_schedule_id: recipe().capitalization_schedule_id,
@@ -58,7 +64,13 @@ fn capitalization(recipe_id: IdentityV1, index: u64) -> OccurrenceCapitalization
         market_principal: 15,
         ticket_rent: 5,
         total_principal: 20,
+        next_capitalization_id,
     }
+}
+
+fn capitalization_id(recipe_id: IdentityV1, index: u64) -> IdentityV1 {
+    content_identity(&capitalization(recipe_id, index).to_bytes())
+        .expect("capitalization content identity")
 }
 
 fn derived(recipe_id: IdentityV1, index: u64) -> DerivedOccurrenceV1 {
@@ -425,6 +437,125 @@ fn ticket_dust_is_a_top_up_not_a_public_liveness_veto() {
         ),
         Err(Error::AccountNotVacant)
     );
+}
+
+#[test]
+fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() {
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
+    assert_eq!(
+        root.next_capitalization_id,
+        Some(aggregate(recipe_id).first_capitalization_id)
+    );
+    let instruction = InstantiateNextV1 {
+        expected_index: 0,
+        expected_time: root.next_occurrence_time,
+        ticket_bump: 9,
+    };
+
+    let mut substituted = capitalization(recipe_id, 0);
+    substituted.market_principal = 14;
+    substituted.total_principal = 19;
+    let substituted_id = content_identity(&substituted.to_bytes()).expect("substituted identity");
+    let substituted_derived =
+        derive_occurrence_v1(recipe_id, &recipe(), 0, &substituted).expect("valid local item");
+    assert_eq!(
+        plan_instantiate_next_v1(
+            root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            derived_id(&substituted_derived),
+            &substituted_derived,
+            substituted_id,
+            &substituted,
+            instruction,
+            root.next_occurrence_time,
+            20,
+            5,
+            80,
+            vacant(0),
+        ),
+        Err(Error::CapitalizationMismatch)
+    );
+
+    let mut premature_end = capitalization(recipe_id, 0);
+    premature_end.next_capitalization_id = None;
+    let premature_id = content_identity(&premature_end.to_bytes()).expect("premature identity");
+    let premature_derived = derive_occurrence_v1(recipe_id, &recipe(), 0, &premature_end)
+        .expect("locally valid premature item");
+    assert_eq!(
+        plan_instantiate_next_v1(
+            root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            derived_id(&premature_derived),
+            &premature_derived,
+            premature_id,
+            &premature_end,
+            instruction,
+            root.next_occurrence_time,
+            20,
+            5,
+            80,
+            vacant(0),
+        ),
+        Err(Error::CapitalizationMismatch)
+    );
+
+    let first = instantiate(root, root_address, recipe_id, aggregate_id, escrow, 80);
+    let second = instantiate(
+        first.root_after,
+        root_address,
+        recipe_id,
+        aggregate_id,
+        escrow,
+        first.escrow_lamports_after,
+    );
+    let mut stranded = capitalization(recipe_id, 2);
+    stranded.market_principal = 14;
+    stranded.total_principal = 19;
+    let stranded_id = content_identity(&stranded.to_bytes()).expect("stranded identity");
+    let stranded_derived =
+        derive_occurrence_v1(recipe_id, &recipe(), 2, &stranded).expect("valid local item");
+    let hostile_root = SeriesRootV1 {
+        next_capitalization_id: Some(stranded_id),
+        ..second.root_after
+    };
+    assert!(hostile_root.validate_internal().is_ok());
+    assert_eq!(
+        plan_instantiate_next_v1(
+            hostile_root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            derived_id(&stranded_derived),
+            &stranded_derived,
+            stranded_id,
+            &stranded,
+            InstantiateNextV1 {
+                expected_index: 2,
+                expected_time: hostile_root.next_occurrence_time,
+                ticket_bump: 9,
+            },
+            hostile_root.next_occurrence_time,
+            20,
+            5,
+            second.escrow_lamports_after,
+            vacant(0),
+        ),
+        Err(Error::CapitalizationMismatch)
+    );
+    assert_eq!(hostile_root.remaining_principal, 20);
 }
 
 #[test]

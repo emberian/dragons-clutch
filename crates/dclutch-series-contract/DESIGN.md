@@ -58,13 +58,20 @@ a second caller-selectable RentCredit address.
 
 ## Present capitalization
 
-`CapitalizationAggregateV1` commits the exact sum of a finite schedule.
-`OccurrenceCapitalizationV1` is one schedule item and separates Market-founding
-principal from ticket-account principal. At release, that allocation must meet
-the authenticated current rent minimum; its complete committed amount moves to
-the ticket, so any overprovisioning is later RentCredit rather than a hidden
-fee. The adapter proves each item is the canonical item selected by the
-aggregate and capitalization derivation release.
+`CapitalizationAggregateV1` commits the exact sum of a finite schedule and the
+content identity of its first item. Every `OccurrenceCapitalizationV1` commits
+the exact next item identity, or canonical `None` only on the final item. The
+root owns the one exact next identity while traversing this content-addressed
+forward chain. This makes varied per-occurrence allocations possible without a
+fixed maximum, dynamic state, Merkle-proof wire, or caller choice. The final
+item must equal all remaining principal, so occurrence-count exhaustion can
+never strand an unreleaseable remainder.
+
+Each item separates Market-founding principal from ticket-account principal.
+At release, that allocation must meet the authenticated current rent minimum;
+its complete committed amount moves to the ticket, so any overprovisioning is
+later RentCredit rather than a hidden fee. The adapter proves each item is the
+canonical next item selected transitively by the aggregate head.
 
 At creation, a separate Series escrow must hold the aggregate's entire
 principal now, and a 48-byte permanent replay guard must be funded at its

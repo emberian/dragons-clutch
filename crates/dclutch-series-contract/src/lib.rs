@@ -18,11 +18,11 @@ pub const SERIES_RECIPE_BYTES_V1: usize = 464;
 /// Exact width of [`DerivedOccurrenceV1`].
 pub const DERIVED_OCCURRENCE_BYTES_V1: usize = 400;
 /// Exact width of [`CapitalizationAggregateV1`].
-pub const CAPITALIZATION_AGGREGATE_BYTES_V1: usize = 96;
+pub const CAPITALIZATION_AGGREGATE_BYTES_V1: usize = 128;
 /// Exact width of [`OccurrenceCapitalizationV1`].
-pub const OCCURRENCE_CAPITALIZATION_BYTES_V1: usize = 112;
+pub const OCCURRENCE_CAPITALIZATION_BYTES_V1: usize = 144;
 /// Exact width of [`SeriesRootV1`].
-pub const SERIES_ROOT_BYTES_V1: usize = 184;
+pub const SERIES_ROOT_BYTES_V1: usize = 216;
 /// Exact width of [`SeriesEscrowV1`].
 pub const SERIES_ESCROW_BYTES_V1: usize = 144;
 /// Exact width of the permanent [`SeriesReplayGuardV1`].
@@ -740,6 +740,8 @@ pub struct CapitalizationAggregateV1 {
     pub occurrence_count: u64,
     /// Exact sum of all Market and ticket-rent allocations.
     pub total_principal: u64,
+    /// Content identity of the exact first item in the gap-free funding chain.
+    pub first_capitalization_id: IdentityV1,
 }
 
 impl CapitalizationAggregateV1 {
@@ -767,6 +769,7 @@ impl CapitalizationAggregateV1 {
             capitalization_schedule_id: IdentityV1::decode_at(bytes, 48)?,
             occurrence_count: read_u64(bytes, 80)?,
             total_principal: read_u64(bytes, 88)?,
+            first_capitalization_id: IdentityV1::decode_at(bytes, 96)?,
         };
         value.validate()?;
         Ok(value)
@@ -780,6 +783,7 @@ impl CapitalizationAggregateV1 {
         put(&mut output, 48, &self.capitalization_schedule_id.to_bytes());
         put(&mut output, 80, &self.occurrence_count.to_le_bytes());
         put(&mut output, 88, &self.total_principal.to_le_bytes());
+        put(&mut output, 96, &self.first_capitalization_id.to_bytes());
         output
     }
 }
@@ -799,6 +803,8 @@ pub struct OccurrenceCapitalizationV1 {
     pub ticket_rent: u64,
     /// Checked sum of Market principal and ticket rent.
     pub total_principal: u64,
+    /// Exact next item identity, or `None` only for the final occurrence.
+    pub next_capitalization_id: Option<IdentityV1>,
 }
 
 impl OccurrenceCapitalizationV1 {
@@ -833,6 +839,7 @@ impl OccurrenceCapitalizationV1 {
             market_principal: read_u64(bytes, 88)?,
             ticket_rent: read_u64(bytes, 96)?,
             total_principal: read_u64(bytes, 104)?,
+            next_capitalization_id: read_optional_identity(bytes, 112)?,
         };
         value.validate()?;
         Ok(value)
@@ -848,6 +855,7 @@ impl OccurrenceCapitalizationV1 {
         put(&mut output, 88, &self.market_principal.to_le_bytes());
         put(&mut output, 96, &self.ticket_rent.to_le_bytes());
         put(&mut output, 104, &self.total_principal.to_le_bytes());
+        put_optional_identity(&mut output, 112, self.next_capitalization_id);
         output
     }
 }
@@ -909,6 +917,8 @@ pub struct SeriesRootV1 {
     pub released_principal: u64,
     /// Tickets not yet atomically consumed through Found.
     pub outstanding_tickets: u64,
+    /// Exact next funding item in the immutable content-addressed chain.
+    pub next_capitalization_id: Option<IdentityV1>,
     /// Immutable authority whose permanent RentCredit receives closes.
     pub refund_authority: IdentityV1,
     /// Lifecycle phase.
@@ -947,6 +957,7 @@ impl SeriesRootV1 {
             remaining_principal: aggregate.total_principal,
             released_principal: 0,
             outstanding_tickets: 0,
+            next_capitalization_id: Some(aggregate.first_capitalization_id),
             refund_authority,
             phase: SeriesPhaseV1::Active,
             pda_bump,
@@ -976,8 +987,18 @@ impl SeriesRootV1 {
             return Err(Error::RootInvariant);
         }
         match self.phase {
-            SeriesPhaseV1::Active if self.remaining_allocations > 0 => Ok(()),
-            SeriesPhaseV1::Exhausted if self.remaining_allocations == 0 => Ok(()),
+            SeriesPhaseV1::Active
+                if self.remaining_allocations > 0 && self.next_capitalization_id.is_some() =>
+            {
+                Ok(())
+            }
+            SeriesPhaseV1::Exhausted
+                if self.remaining_allocations == 0
+                    && self.remaining_principal == 0
+                    && self.next_capitalization_id.is_none() =>
+            {
+                Ok(())
+            }
             _ => Err(Error::RootInvariant),
         }
     }
@@ -1003,6 +1024,11 @@ impl SeriesRootV1 {
             || self.initial_principal != aggregate.total_principal
         {
             return Err(Error::AggregateMismatch);
+        }
+        if self.released_allocations == 0
+            && self.next_capitalization_id != Some(aggregate.first_capitalization_id)
+        {
+            return Err(Error::CapitalizationMismatch);
         }
         if self.phase == SeriesPhaseV1::Active
             && self.next_occurrence_time != recipe.time_at(self.next_occurrence_index)?
@@ -1038,6 +1064,7 @@ impl SeriesRootV1 {
             released_principal: read_u64(bytes, 136)?,
             outstanding_tickets: read_u64(bytes, 144)?,
             refund_authority: IdentityV1::decode_at(bytes, 152)?,
+            next_capitalization_id: read_optional_identity(bytes, 184)?,
             phase: SeriesPhaseV1::try_from(read_byte(bytes, 10)?)?,
             pda_bump: read_byte(bytes, 11)?,
         };
@@ -1063,6 +1090,7 @@ impl SeriesRootV1 {
         put(&mut output, 136, &self.released_principal.to_le_bytes());
         put(&mut output, 144, &self.outstanding_tickets.to_le_bytes());
         put(&mut output, 152, &self.refund_authority.to_bytes());
+        put_optional_identity(&mut output, 184, self.next_capitalization_id);
         output
     }
 }
@@ -1854,6 +1882,7 @@ pub fn plan_instantiate_next_v1(
     }
     if capitalization_id != expected_derived.capitalization_id
         || capitalization_id != derived.capitalization_id
+        || root.next_capitalization_id != Some(capitalization_id)
         || capitalization.recipe_id != recipe_id
         || capitalization.capitalization_schedule_id != recipe.capitalization_schedule_id
         || capitalization.occurrence_index != root.next_occurrence_index
@@ -1865,6 +1894,15 @@ pub fn plan_instantiate_next_v1(
         .remaining_allocations
         .checked_sub(1)
         .ok_or(Error::RootInvariant)?;
+    if remaining_allocations == 0 {
+        if capitalization.next_capitalization_id.is_some()
+            || capitalization.total_principal != root.remaining_principal
+        {
+            return Err(Error::CapitalizationMismatch);
+        }
+    } else if capitalization.next_capitalization_id.is_none() {
+        return Err(Error::CapitalizationMismatch);
+    }
     let released_allocations = root
         .released_allocations
         .checked_add(1)
@@ -1898,6 +1936,7 @@ pub fn plan_instantiate_next_v1(
         remaining_principal,
         released_principal,
         outstanding_tickets,
+        next_capitalization_id: capitalization.next_capitalization_id,
         phase,
         ..root
     };
@@ -2023,6 +2062,20 @@ pub fn plan_consume_ticket_v1(
     root.validate_for(recipe_id, aggregate_id, recipe, aggregate)?;
     derived.validate_for(recipe_id, recipe, instruction.expected_index)?;
     capitalization.validate()?;
+    let expected_derived = derive_occurrence_v1(
+        recipe_id,
+        recipe,
+        instruction.expected_index,
+        capitalization,
+    )?;
+    if *derived != expected_derived
+        || derived_occurrence_id != content_identity(&expected_derived.to_bytes())?
+    {
+        return Err(Error::DerivationMismatch);
+    }
+    if capitalization_id != expected_derived.capitalization_id {
+        return Err(Error::CapitalizationMismatch);
+    }
     if ticket.series_root_address != root_address
         || ticket.recipe_id != recipe_id
         || ticket.derived_occurrence_id != derived_occurrence_id
@@ -2343,6 +2396,21 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
 
 fn read_i64(bytes: &[u8], offset: usize) -> Result<i64> {
     Ok(i64::from_le_bytes(read_array(bytes, offset)?))
+}
+
+fn read_optional_identity(bytes: &[u8], offset: usize) -> Result<Option<IdentityV1>> {
+    let value = read_array(bytes, offset)?;
+    if is_zero(&value) {
+        Ok(None)
+    } else {
+        IdentityV1::new(value).map(Some)
+    }
+}
+
+fn put_optional_identity(output: &mut [u8], offset: usize, value: Option<IdentityV1>) {
+    if let Some(identity) = value {
+        put(output, offset, &identity.to_bytes());
+    }
 }
 
 fn put(output: &mut [u8], offset: usize, value: &[u8]) {
