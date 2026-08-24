@@ -446,6 +446,7 @@ impl AuthenticatedProductSeriesRetirementV4 {
     /// root close. Every expected Product fact comes from the hostile-decoded
     /// immutable MarketBindingV4; no caller-supplied terminal projection or
     /// detached receipt ID can authorize this cut.
+    #[cfg(any())]
     pub(crate) fn consume_for_general_indexed_close_v1(
         self,
         market_instance_id: clutch_general_v2_contract::Id32,
@@ -502,6 +503,17 @@ impl AuthenticatedProductSeriesRetirementV4 {
             ClutchError::MismatchedState,
         )?;
         Ok(self.id)
+    }
+
+    /// Historical RootV2/LinkV2 retirement cannot authorize the current
+    /// BundleV7/QuoteV6/ScheduleV4 General binding. The fresh Product
+    /// RootV3/LinkV3 outer replaces this method without a projection bridge.
+    pub(crate) fn consume_for_general_indexed_close_v1(
+        self,
+        _market_instance_id: clutch_general_v2_contract::Id32,
+        _authority: clutch_general_v2_contract::CurrentMarketAuthorityV4,
+    ) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
 

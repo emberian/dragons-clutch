@@ -33,7 +33,8 @@ use crate::source_plane_v3::authenticate_route_clock_bucket;
 use clutch_product_series::{
     ComponentDebitV1, ContentId, MarketFamilyAggregatorV1,
     MarketFoundationAccountGraphV3, MarketFoundationCapitalV2, MarketFoundationScheduleV3,
-    MarketFoundationSlotV3, MarketFoundationStepProjectionV3, MarketInstanceV2Id,
+    MarketFoundationSlotV3, MarketFoundationSlotV4, MarketFoundationStepProjectionV3,
+    MarketInstanceV2Id,
     MarketLifecycleBindingV2, MarketLifecyclePhaseV2,
     SeriesFundingPhaseV4, SeriesLinkObligationConfigurationV2, SeriesMarketDispositionV1,
     SeriesMarketLinkBindingV2, SeriesMarketLinkV2, SeriesMarketLinkV2Id, SeriesPlanV5Id,
@@ -173,6 +174,120 @@ pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV3: Sized {
         _principal_before_lamports: u64,
         _principal_after_lamports: u64,
         _minimum_donation_lamports: u64,
+        _foundation_vault_account: Pubkey,
+        _rent_refund_owner: Pubkey,
+        _neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Move-only proof that Product transferred one exact ScheduleV4 principal
+/// from the canonical FoundationVault into one still-unallocated slot PDA.
+///
+/// Only Product's 50-slot cursor may construct this value. Family writers
+/// consume it in the same instruction, allocate/assign/write their account,
+/// hostile-reopen the postimage, and return a V4 postwrite below. Keeping the
+/// debit and postwrite distinct prevents an expected PDA or semantic ID from
+/// standing in for a physical FoundationVault movement.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductMarketFoundationDebitV4 {
+    id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    slot: MarketFoundationSlotV4,
+    foundation_vault_account: Pubkey,
+    destination_account: Pubkey,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    destination_donation_floor_lamports: u64,
+    destination_balance_after_lamports: u64,
+    vault_donation_before_lamports: u64,
+    vault_donation_after_lamports: u64,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+}
+
+impl AuthenticatedProductMarketFoundationDebitV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn founder_creation_receipt_id(&self) -> ContentId {
+        self.founder_creation_receipt_id
+    }
+    pub(crate) const fn founder_preauthorization_id(&self) -> ContentId {
+        self.founder_preauthorization_id
+    }
+    pub(crate) const fn foundation_steps_id(&self) -> ContentId { self.foundation_steps_id }
+    pub(crate) const fn market_binding_id(&self) -> ContentId { self.market_binding_id }
+    pub(crate) const fn foundation_schedule_id(&self) -> ContentId {
+        self.foundation_schedule_id
+    }
+    pub(crate) const fn foundation_graph_id(&self) -> ContentId { self.foundation_graph_id }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn slot(&self) -> MarketFoundationSlotV4 { self.slot }
+    pub(crate) const fn foundation_vault_account(&self) -> Pubkey {
+        self.foundation_vault_account
+    }
+    pub(crate) const fn destination_account(&self) -> Pubkey { self.destination_account }
+    pub(crate) const fn principal_lamports(&self) -> u64 { self.principal_lamports }
+    pub(crate) const fn principal_before_lamports(&self) -> u64 {
+        self.principal_before_lamports
+    }
+    pub(crate) const fn principal_after_lamports(&self) -> u64 {
+        self.principal_after_lamports
+    }
+    pub(crate) const fn destination_donation_floor_lamports(&self) -> u64 {
+        self.destination_donation_floor_lamports
+    }
+    pub(crate) const fn destination_balance_after_lamports(&self) -> u64 {
+        self.destination_balance_after_lamports
+    }
+    pub(crate) const fn vault_donation_before_lamports(&self) -> u64 {
+        self.vault_donation_before_lamports
+    }
+    pub(crate) const fn vault_donation_after_lamports(&self) -> u64 {
+        self.vault_donation_after_lamports
+    }
+    pub(crate) const fn rent_refund_owner(&self) -> Pubkey { self.rent_refund_owner }
+    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
+}
+
+/// Move-only family proof for one exact current 50-slot postwrite.
+///
+/// Product consumes this only after matching the same debit/cursor, V4
+/// schedule and graph, exact principal frontier, donation observations, rent
+/// destinations, and hostile-reopened account identities.
+pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV4: Sized {
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v4(
+        self,
+        _debit_id: ContentId,
+        _founder_creation_receipt_id: ContentId,
+        _founder_preauthorization_id: ContentId,
+        _foundation_steps_id: ContentId,
+        _market_binding_id: ContentId,
+        _foundation_schedule_id: ContentId,
+        _foundation_graph_id: ContentId,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _slot: MarketFoundationSlotV4,
+        _account_id: ContentId,
+        _principal_lamports: u64,
+        _principal_before_lamports: u64,
+        _principal_after_lamports: u64,
+        _destination_donation_floor_lamports: u64,
+        _destination_balance_after_lamports: u64,
+        _vault_donation_before_lamports: u64,
+        _vault_donation_after_lamports: u64,
         _foundation_vault_account: Pubkey,
         _rent_refund_owner: Pubkey,
         _neutral_lamport_sink: Pubkey,

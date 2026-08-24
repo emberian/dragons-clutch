@@ -9,29 +9,32 @@
 //! founder consumes the private plan and returns an authenticated postwrite to
 //! Product; no public field tuple can stand in for that authority.
 
-use crate::accounts::{require, require_signer, Outcome};
+use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::genesis::{require_creatable, require_system_program, RentParameters};
+use crate::instructions::genesis::{
+    allocate_data, assign_data, require_system_program, RentParameters, SYSTEM_PROGRAM_ID,
+};
 use crate::seeds;
 use clutch_general_v2_contract::{
-    CurrentMarketAuthorityV4, GeneralFoundingPolicyV1, Id32,
+    CurrentMarketAuthorityV4, DeletableRentOwnerV1, GeneralFoundingPolicyV1, Id32,
     MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
     GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V4,
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
-use clutch_product_series::ContentId;
-use clutch_retirement::POSITION_V3_BYTES;
-use clutch_solana_layout::revenue::TREASURY_SERVICE_LEDGER_V1_BYTES;
+use clutch_product_series::{ContentId, MarketFoundationSlotV4};
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::revenue_policy_v2::{
-    derive_revenue_market_treasury_v1, found_revenue_market_treasury_v1,
-    AuthenticatedRevenuePolicyRecordV2, AuthenticatedTreasuryMarketFactsV1,
-    RevenueMarketTreasuryDerivationV1, RevenueMarketTreasuryFoundationV1,
+    derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
+    AuthenticatedTreasuryMarketFactsV1, RevenueMarketTreasuryDerivationV1,
 };
-use super::general_v2_settlement_producer_v5::{create_from_payer, rent_owner};
-use super::collateral_position_v3::authenticate_general_market_v4_with_data_ids;
+use super::product_market_foundation_current::{
+    AuthenticatedProductMarketFoundationDebitV4,
+    AuthenticatedProductMarketFoundationStepPostwriteV4,
+};
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/general/current-founding-join/v4\0";
@@ -47,8 +50,8 @@ impl Sha256BackendV1 for RuntimeSha256 {
 
 /// Product-owned current founding authority consumed by the General join.
 ///
-/// A concrete implementation must retain the exact authenticated RootV2,
-/// LinkV2, BundleV6, QuoteV5, AttachmentV5, ScheduleV3, GraphV3, collateral
+/// A concrete implementation must retain the exact authenticated current
+/// Product root/link, BundleV7, QuoteV6, AttachmentV6, ScheduleV4, GraphV4, collateral
 /// founding, and General-policy evidence.  The default authentication method
 /// refuses, so getters alone never confer authority.
 pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4:
@@ -73,11 +76,11 @@ pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4:
     fn series_market_link_account(&self) -> Id32;
     fn series_market_link_binding_v2_id(&self) -> Id32;
     fn series_ordinal(&self) -> u32;
-    fn compiler_bundle_v6_id(&self) -> Id32;
-    fn funding_quote_v5_id(&self) -> Id32;
-    fn attachment_plan_v5_id(&self) -> Id32;
-    fn foundation_schedule_v3_id(&self) -> Id32;
-    fn foundation_account_graph_v3_id(&self) -> Id32;
+    fn compiler_bundle_v7_id(&self) -> Id32;
+    fn funding_quote_v6_id(&self) -> Id32;
+    fn attachment_plan_v6_id(&self) -> Id32;
+    fn foundation_schedule_v4_id(&self) -> Id32;
+    fn foundation_account_graph_v4_id(&self) -> Id32;
     fn market_liability_founding_id(&self) -> Id32;
     fn claim_mint_founding_plan_id(&self) -> Id32;
     fn claim_issuance_binding_id(&self) -> Id32;
@@ -124,50 +127,33 @@ impl AuthenticatedGeneralMarketFoundingPlanV4 {
     pub(crate) const fn id(&self) -> ContentId { self.join_id }
 }
 
-/// Exact writable accounts created by the current Product-to-General founder.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GeneralMarketFoundationAccountFrameV4<'a, 'info> {
-    /// Explicit signer and principal owner for MarketBindingV4 and RuntimeV3.
-    pub(crate) general_rent_payer: &'a AccountInfo<'info>,
-    /// Separately named signer and principal owner for Position/Replay/0xbb.
-    pub(crate) treasury_rent_payer: &'a AccountInfo<'info>,
-    /// Fresh canonical MarketBinding `0x79/v4` PDA.
-    pub(crate) market_binding: &'a AccountInfo<'info>,
-    /// Fresh canonical General MarketRuntime PDA.
-    pub(crate) market_runtime: &'a AccountInfo<'info>,
-    /// Fresh Market-scoped ordinary treasury PositionV3.
-    pub(crate) treasury_position: &'a AccountInfo<'info>,
-    /// Fresh mandatory GEN1 ReplayV3 for the treasury Position.
-    pub(crate) treasury_replay: &'a AccountInfo<'info>,
-    /// Fresh counted treasury-service ledger `0xbb/v1`.
-    pub(crate) treasury_service_ledger: &'a AccountInfo<'info>,
-    /// Canonical System program.
-    pub(crate) system_program: &'a AccountInfo<'info>,
-}
-
-/// Private authenticated postwrite for the complete current General market
-/// state and its separately funded treasury custody graph.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AuthenticatedGeneralMarketFoundingPostwriteV4 {
-    binding_account: Pubkey,
-    binding: MarketBindingV4,
-    binding_data_id: Id32,
-    runtime_account: Pubkey,
-    runtime: MarketRuntimeV3AccountV1,
-    runtime_data_id: Id32,
-    treasury: RevenueMarketTreasuryFoundationV1,
-    join_id: ContentId,
-}
-
-impl AuthenticatedGeneralMarketFoundingPostwriteV4 {
-    pub(crate) const fn binding_account(self) -> Pubkey { self.binding_account }
-    pub(crate) const fn binding(self) -> MarketBindingV4 { self.binding }
-    pub(crate) const fn binding_data_id(self) -> Id32 { self.binding_data_id }
-    pub(crate) const fn runtime_account(self) -> Pubkey { self.runtime_account }
-    pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 { self.runtime }
-    pub(crate) const fn runtime_data_id(self) -> Id32 { self.runtime_data_id }
-    pub(crate) const fn treasury(self) -> RevenueMarketTreasuryFoundationV1 { self.treasury }
-    pub(crate) const fn join_id(self) -> ContentId { self.join_id }
+/// Private move-only postwrite for one Product-funded General core slot.
+/// Product consumes it by value before advancing the V4 foundation cursor.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedGeneralCoreFoundationPostwriteV4 {
+    debit_id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    market_instance_id: clutch_product_series::MarketInstanceV2Id,
+    generation: u64,
+    slot: MarketFoundationSlotV4,
+    account: Pubkey,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    destination_donation_floor_lamports: u64,
+    destination_balance_after_lamports: u64,
+    vault_donation_before_lamports: u64,
+    vault_donation_after_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    account_data_id: ContentId,
+    accepted_poststate_receipt_id: ContentId,
 }
 
 /// Derive and authenticate the complete current General founding graph.
@@ -227,11 +213,11 @@ where
         product.series_market_link_account(),
         product.series_market_link_binding_v2_id(),
         product.series_ordinal(),
-        product.compiler_bundle_v6_id(),
-        product.funding_quote_v5_id(),
-        product.attachment_plan_v5_id(),
-        product.foundation_schedule_v3_id(),
-        product.foundation_account_graph_v3_id(),
+        product.compiler_bundle_v7_id(),
+        product.funding_quote_v6_id(),
+        product.attachment_plan_v6_id(),
+        product.foundation_schedule_v4_id(),
+        product.foundation_account_graph_v4_id(),
         product.market_liability_founding_id(),
         product.claim_mint_founding_plan_id(),
         product.claim_issuance_binding_id(),
@@ -277,67 +263,11 @@ where
     })
 }
 
-fn require_foundation_accounts_distinct(
-    frame: GeneralMarketFoundationAccountFrameV4<'_, '_>,
-) -> Outcome<()> {
-    let accounts = [
-        frame.market_binding,
-        frame.market_runtime,
-        frame.treasury_position,
-        frame.treasury_replay,
-        frame.treasury_service_ledger,
-        frame.system_program,
-    ];
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
-            right += 1;
-        }
-        left += 1;
-    }
-    for payer in [frame.general_rent_payer, frame.treasury_rent_payer] {
-        for target in accounts {
-            require(payer.key != target.key, ClutchError::AccountAlias)?;
-        }
-    }
-    Ok(())
-}
-
-fn require_aggregate_principal(
-    frame: GeneralMarketFoundationAccountFrameV4<'_, '_>,
-    rent: &RentParameters,
-) -> Outcome<()> {
-    let general = rent
-        .minimum_balance(MARKET_BINDING_ACCOUNT_BYTES_V4)?
-        .checked_add(rent.minimum_balance(MARKET_RUNTIME_ACCOUNT_BYTES)?)
-        .ok_or(ClutchError::Arithmetic)?;
-    let service_ledger_principal = rent.minimum_balance(TREASURY_SERVICE_LEDGER_V1_BYTES)?;
-    let treasury = rent
-        .minimum_balance(POSITION_V3_BYTES)?
-        .checked_add(rent.minimum_balance(GENERAL_REPLAY_ACCOUNT_V1_BYTES)?)
-        .and_then(|value| value.checked_add(service_ledger_principal))
-        .ok_or(ClutchError::Arithmetic)?;
-    if frame.general_rent_payer.key == frame.treasury_rent_payer.key {
-        require(
-            frame.general_rent_payer.lamports()
-                >= general.checked_add(treasury).ok_or(ClutchError::Arithmetic)?,
-            ClutchError::AccountCreationFailed,
-        )
-    } else {
-        require(
-            frame.general_rent_payer.lamports() >= general
-                && frame.treasury_rent_payer.lamports() >= treasury,
-            ClutchError::AccountCreationFailed,
-        )
-    }
-}
-
 /// Atomically create and hostile-reauthenticate MarketBindingV4, RuntimeV3,
 /// the ordinary treasury Position, mandatory Replay, and counted `0xbb`.
 /// Both named payers transfer full rent principal; hostile prefunds remain
 /// account-owned donation floors and never discount either payer.
+#[cfg(any())]
 #[inline(never)]
 pub(crate) fn found_general_market_v4<P>(
     program_id: &Pubkey,
@@ -486,4 +416,244 @@ where
         treasury,
         join_id: plan.join_id,
     })
+}
+
+fn allocate_assign_product_funded_pda<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    account_bytes: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(account_bytes),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(&allocate, &[account.clone(), system_program.clone()], &[signer_seeds])
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(&assign, &[account.clone(), system_program.clone()], &[signer_seeds])
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))
+}
+
+fn authenticate_core_debit_v4(
+    plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: &AuthenticatedProductMarketFoundationDebitV4,
+    account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    slot: MarketFoundationSlotV4,
+    expected_account: Pubkey,
+    expected_bytes: usize,
+    rent: &RentParameters,
+) -> Outcome<()> {
+    require_system_program(system_program)?;
+    let principal = rent.minimum_balance(expected_bytes)?;
+    let authority = plan.authority;
+    require(
+        debit.id() != ContentId::ZERO
+            && debit.slot() == slot
+            && debit.destination_account() == expected_account
+            && *account.key == expected_account
+            && debit.market_instance_id().bytes() == plan.base.base().market_instance_v2_id.bytes()
+            && debit.generation() == authority.product_generation()
+            && debit.market_binding_id().bytes() == authority.product_market_binding_id().bytes()
+            && debit.foundation_schedule_id().bytes() == authority.foundation_schedule_v4_id().bytes()
+            && debit.foundation_graph_id().bytes() == authority.foundation_account_graph_v4_id().bytes()
+            && debit.founder_preauthorization_id().bytes()
+                == authority.product_preauthorization_id().bytes()
+            && debit.principal_lamports() == principal
+            && debit.principal_before_lamports()
+                == debit.principal_after_lamports()
+                    .checked_add(principal).ok_or(ClutchError::Arithmetic)?
+            && debit.destination_balance_after_lamports()
+                == debit.destination_donation_floor_lamports()
+                    .checked_add(principal).ok_or(ClutchError::Arithmetic)?
+            && debit.vault_donation_after_lamports() == debit.vault_donation_before_lamports()
+            && account.lamports() == debit.destination_balance_after_lamports()
+            && account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && account.data_len() == 0
+            && debit.foundation_vault_account() != *account.key
+            && debit.rent_refund_owner() != *account.key
+            && debit.neutral_lamport_sink() != *account.key
+            && debit.foundation_vault_account() != debit.rent_refund_owner()
+            && debit.foundation_vault_account() != debit.neutral_lamport_sink()
+            && debit.rent_refund_owner() != debit.neutral_lamport_sink()
+            && debit.neutral_lamport_sink().to_bytes() == plan.base.base().neutral_sink.bytes(),
+        ClutchError::MismatchedState,
+    )
+}
+
+fn core_slot_postwrite_v4(
+    program_id: &Pubkey,
+    plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    account: &AccountInfo<'_>,
+    slot: MarketFoundationSlotV4,
+    account_data_id: ContentId,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    let slot_index = u8::try_from(slot.index().map_err(|_| ClutchError::MismatchedState)?)
+        .map_err(|_| ClutchError::Arithmetic)?;
+    let accepted_poststate_receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/general/product-funded-slot/v4\0",
+            program_id.as_ref(), &plan.join_id.bytes(), &debit.id().bytes(), &[slot_index],
+            account.key.as_ref(), &account_data_id.bytes(),
+            &debit.principal_lamports().to_le_bytes(),
+            &debit.destination_donation_floor_lamports().to_le_bytes(),
+            &debit.destination_balance_after_lamports().to_le_bytes(),
+            debit.rent_refund_owner().as_ref(), debit.neutral_lamport_sink().as_ref(),
+        ]).to_bytes(),
+    );
+    require(accepted_poststate_receipt_id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedGeneralCoreFoundationPostwriteV4 {
+        debit_id: debit.id(),
+        founder_creation_receipt_id: debit.founder_creation_receipt_id(),
+        founder_preauthorization_id: debit.founder_preauthorization_id(),
+        foundation_steps_id: debit.foundation_steps_id(),
+        market_binding_id: debit.market_binding_id(),
+        foundation_schedule_id: debit.foundation_schedule_id(),
+        foundation_graph_id: debit.foundation_graph_id(),
+        market_instance_id: debit.market_instance_id(), generation: debit.generation(), slot,
+        account: *account.key, principal_lamports: debit.principal_lamports(),
+        principal_before_lamports: debit.principal_before_lamports(),
+        principal_after_lamports: debit.principal_after_lamports(),
+        destination_donation_floor_lamports: debit.destination_donation_floor_lamports(),
+        destination_balance_after_lamports: debit.destination_balance_after_lamports(),
+        vault_donation_before_lamports: debit.vault_donation_before_lamports(),
+        vault_donation_after_lamports: debit.vault_donation_after_lamports(),
+        foundation_vault_account: debit.foundation_vault_account(),
+        rent_refund_owner: debit.rent_refund_owner(),
+        neutral_lamport_sink: debit.neutral_lamport_sink(), account_data_id,
+        accepted_poststate_receipt_id,
+    })
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV4
+    for AuthenticatedGeneralCoreFoundationPostwriteV4
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v4(
+        self, debit_id: ContentId, founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId, foundation_steps_id: ContentId,
+        market_binding_id: ContentId, foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64, slot: MarketFoundationSlotV4, account_id: ContentId,
+        principal_lamports: u64, principal_before_lamports: u64,
+        principal_after_lamports: u64, destination_donation_floor_lamports: u64,
+        destination_balance_after_lamports: u64, vault_donation_before_lamports: u64,
+        vault_donation_after_lamports: u64, foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey, neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        require(
+            debit_id == self.debit_id
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && market_instance_id == self.market_instance_id && generation == self.generation
+                && slot == self.slot && account_id.bytes() == self.account.to_bytes()
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && destination_donation_floor_lamports == self.destination_donation_floor_lamports
+                && destination_balance_after_lamports == self.destination_balance_after_lamports
+                && vault_donation_before_lamports == self.vault_donation_before_lamports
+                && vault_donation_after_lamports == self.vault_donation_after_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && self.account_data_id != ContentId::ZERO
+                && self.accepted_poststate_receipt_id != ContentId::ZERO,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.accepted_poststate_receipt_id, self.vault_donation_after_lamports))
+    }
+}
+
+/// Product-funded ScheduleV4 slot 1 writer. No signer payer is admitted.
+#[inline(never)]
+pub(crate) fn write_product_funded_market_binding_v4(
+    program_id: &Pubkey, plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4, account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>, rent: &RentParameters,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    authenticate_core_debit_v4(plan, &debit, account, system_program,
+        MarketFoundationSlotV4::MarketBinding, plan.market_binding_account,
+        MARKET_BINDING_ACCOUNT_BYTES_V4, rent)?;
+    let owner = DeletableRentOwnerV1::from_persisted(
+        Id32::from_bytes(debit.rent_refund_owner().to_bytes()), debit.principal_lamports(),
+        debit.destination_donation_floor_lamports())?;
+    let body = MarketBindingV4::new(plan.base, plan.authority, owner)?;
+    let market = plan.base.base().market_instance_v2_id.bytes();
+    let bump = [plan.market_binding_bump];
+    allocate_assign_product_funded_pda(program_id, account, system_program,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
+        &[seeds::SEED_GENERAL_V2_MARKET_BINDING, &market, &bump])?;
+    {
+        let mut data = account.try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        body.encode(&mut data)?;
+        require(MarketBindingV4::decode(&data)? == body, ClutchError::MismatchedState)?;
+    }
+    let data = account.try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        b"dragons-clutch/sbf/general-market-binding/data/v4\0", account.key.as_ref(), &data,
+    ]).to_bytes());
+    drop(data);
+    core_slot_postwrite_v4(program_id, plan, debit, account,
+        MarketFoundationSlotV4::MarketBinding, data_id)
+}
+
+/// Product-funded ScheduleV4 slot 2 writer. No signer payer is admitted.
+#[inline(never)]
+pub(crate) fn write_product_funded_market_runtime_v3(
+    program_id: &Pubkey, plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4, account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>, rent: &RentParameters,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    authenticate_core_debit_v4(plan, &debit, account, system_program,
+        MarketFoundationSlotV4::MarketRuntime, plan.market_runtime_account,
+        MARKET_RUNTIME_ACCOUNT_BYTES, rent)?;
+    let owner = DeletableRentOwnerV1::from_persisted(
+        Id32::from_bytes(debit.rent_refund_owner().to_bytes()), debit.principal_lamports(),
+        debit.destination_donation_floor_lamports())?;
+    let body = MarketRuntimeV3AccountV1 {
+        market_binding: Id32::from_bytes(plan.market_binding_account.to_bytes()),
+        market_instance_v2_id: plan.base.base().market_instance_v2_id,
+        next_epoch_index: 0, next_epoch_generation: 1,
+        created_epoch_count: 0, retired_epoch_count: 0, rent: owner,
+        stored_bump: plan.market_runtime_bump, flags: 0,
+    };
+    body.validate()?;
+    let binding = plan.market_binding_account.to_bytes();
+    let bump = [plan.market_runtime_bump];
+    allocate_assign_product_funded_pda(program_id, account, system_program,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+        &[seeds::SEED_GENERAL_V2_MARKET_RUNTIME, &binding, &bump])?;
+    {
+        let mut data = account.try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        body.encode(&mut data)?;
+        require(MarketRuntimeV3AccountV1::decode(&data)? == body, ClutchError::MismatchedState)?;
+    }
+    let data = account.try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        b"dragons-clutch/sbf/general-market-runtime/data/v3\0", account.key.as_ref(), &data,
+    ]).to_bytes());
+    drop(data);
+    core_slot_postwrite_v4(program_id, plan, debit, account,
+        MarketFoundationSlotV4::MarketRuntime, data_id)
 }

@@ -792,6 +792,45 @@ pub struct GeneralPositionReplayFoundingPlanV1 {
     replay_body: [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
 }
 
+/// Exact pure founding plan for the Position half of a Product-funded
+/// treasury pair.  This split exists because ScheduleV4 capitalizes slots 47
+/// and 48 independently while preserving one canonical semantic constructor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralPositionFoundingPlanV1 {
+    position: PositionAccountV3,
+    position_semantic_id: Id32,
+    position_body: [u8; clutch_retirement::POSITION_V3_BYTES],
+}
+
+impl GeneralPositionFoundingPlanV1 {
+    /// Canonical zero-liability Position postimage.
+    pub const fn position(self) -> PositionAccountV3 { self.position }
+    /// Semantic identity of the exact Position postimage.
+    pub const fn position_semantic_id(self) -> Id32 { self.position_semantic_id }
+    /// Canonical Position bytes.
+    pub const fn position_body(&self) -> &[u8; clutch_retirement::POSITION_V3_BYTES] {
+        &self.position_body
+    }
+}
+
+/// Exact pure founding plan for the Replay half of a Product-funded treasury
+/// pair.  The caller must supply the semantic identity of the already
+/// authenticated slot-47 Position postimage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralReplayFoundingPlanV1 {
+    replay_semantic_id: Id32,
+    replay_body: [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
+}
+
+impl GeneralReplayFoundingPlanV1 {
+    /// Semantic identity of the exact Replay postimage.
+    pub const fn replay_semantic_id(self) -> Id32 { self.replay_semantic_id }
+    /// Canonical Replay bytes.
+    pub const fn replay_body(&self) -> &[u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES] {
+        &self.replay_body
+    }
+}
+
 impl GeneralPositionReplayFoundingPlanV1 {
     /// Canonical zero-balance Position body at founding generation one.
     pub const fn position(self) -> PositionAccountV3 {
@@ -846,6 +885,44 @@ pub fn found_general_position_replay_v1<B>(
 where
     B: PositionV3Sha256Backend + ReplayV3HashBackend,
 {
+    let position_plan = found_general_position_v1(
+        position_account, replay_account, market_instance_id, realm_id,
+        collateral_policy_id, collateral_release_id, owner, general_market_runtime,
+        outcome_count, position_bump, position_rent, backend,
+    )?;
+    let replay_plan = found_general_replay_v1(
+        position_account, replay_account, owner, general_market_runtime,
+        replay_bump, replay_rent, position_plan.position_semantic_id, backend,
+    )?;
+    Ok(GeneralPositionReplayFoundingPlanV1 {
+        position: position_plan.position,
+        position_semantic_id: position_plan.position_semantic_id,
+        position_body: position_plan.position_body,
+        replay_semantic_id: replay_plan.replay_semantic_id,
+        replay_body: replay_plan.replay_body,
+    })
+}
+
+/// Construct the unique zero-liability PositionV3 postimage independently of
+/// its later ScheduleV4 Replay slot.
+#[allow(clippy::too_many_arguments)]
+pub fn found_general_position_v1<B>(
+    position_account: Identity32V1,
+    replay_account: Identity32V1,
+    market_instance_id: Identity32V1,
+    realm_id: Identity32V1,
+    collateral_policy_id: Identity32V1,
+    collateral_release_id: Identity32V1,
+    owner: Identity32V1,
+    general_market_runtime: Identity32V1,
+    outcome_count: u8,
+    position_bump: u8,
+    position_rent: RentSplitV2,
+    backend: &B,
+) -> Result<GeneralPositionFoundingPlanV1, CodecError>
+where
+    B: PositionV3Sha256Backend,
+{
     if position_account == replay_account
         || owner == replay_account
         || general_market_runtime == replay_account
@@ -882,6 +959,36 @@ where
             .bytes(),
     )?;
     let position_body = position.encode().map_err(|_| CodecError::InvalidState)?;
+    Ok(GeneralPositionFoundingPlanV1 {
+        position,
+        position_semantic_id,
+        position_body,
+    })
+}
+
+/// Construct the unique GEN1 ReplayV3 postimage for an already-authenticated
+/// founding Position semantic identity.
+#[allow(clippy::too_many_arguments)]
+pub fn found_general_replay_v1<B>(
+    position_account: Identity32V1,
+    replay_account: Identity32V1,
+    owner: Identity32V1,
+    general_market_runtime: Identity32V1,
+    replay_bump: u8,
+    replay_rent: DeletableRentOwnerV1,
+    position_semantic_id: Id32,
+    backend: &B,
+) -> Result<GeneralReplayFoundingPlanV1, CodecError>
+where
+    B: ReplayV3HashBackend,
+{
+    if position_account == replay_account
+        || owner == replay_account
+        || general_market_runtime == replay_account
+        || position_semantic_id.is_zero()
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
     let extension = GeneralReplayExtensionV1::initial(
         Id32::new(general_market_runtime.bytes())?,
         position_semantic_id,
@@ -916,10 +1023,7 @@ where
     envelope
         .encode_into(&mut replay_body, backend)
         .map_err(|_| CodecError::InvalidState)?;
-    Ok(GeneralPositionReplayFoundingPlanV1 {
-        position,
-        position_semantic_id,
-        position_body,
+    Ok(GeneralReplayFoundingPlanV1 {
         replay_semantic_id,
         replay_body,
     })

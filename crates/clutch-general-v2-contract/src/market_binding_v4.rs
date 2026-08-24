@@ -4,7 +4,7 @@
 //!
 //! V3 remains the immutable historical BundleV5/AttachmentV4 schema. V4 starts
 //! again from the complete V2 General body and binds the current Product
-//! RootV2/LinkV2/GraphV3/ScheduleV3/QuoteV5/AttachmentV5/BundleV6 authority.
+//! RootV2/LinkV2/GraphV4/ScheduleV4/QuoteV6/AttachmentV6/BundleV7 authority.
 //! It also pins the Realm-founded RevenuePolicyV2 authority and the two
 //! Market-scoped treasury accounts created by the Product-to-General founder.
 //! Mutable Position and service-ledger bodies remain owned by those accounts;
@@ -23,12 +23,12 @@ const PRODUCT_GENERATION_OFFSET: usize = PRODUCT_BINDING_ID_OFFSET + 32;
 const SERIES_LINK_ACCOUNT_OFFSET: usize = PRODUCT_GENERATION_OFFSET + 8;
 const SERIES_LINK_BINDING_ID_OFFSET: usize = SERIES_LINK_ACCOUNT_OFFSET + 32;
 const SERIES_ORDINAL_OFFSET: usize = SERIES_LINK_BINDING_ID_OFFSET + 32;
-const COMPILER_BUNDLE_V6_ID_OFFSET: usize = SERIES_ORDINAL_OFFSET + 4;
-const FUNDING_QUOTE_V5_ID_OFFSET: usize = COMPILER_BUNDLE_V6_ID_OFFSET + 32;
-const ATTACHMENT_PLAN_V5_ID_OFFSET: usize = FUNDING_QUOTE_V5_ID_OFFSET + 32;
-const FOUNDATION_SCHEDULE_V3_ID_OFFSET: usize = ATTACHMENT_PLAN_V5_ID_OFFSET + 32;
-const FOUNDATION_GRAPH_V3_ID_OFFSET: usize = FOUNDATION_SCHEDULE_V3_ID_OFFSET + 32;
-const MARKET_LIABILITY_FOUNDING_ID_OFFSET: usize = FOUNDATION_GRAPH_V3_ID_OFFSET + 32;
+const COMPILER_BUNDLE_V7_ID_OFFSET: usize = SERIES_ORDINAL_OFFSET + 4;
+const FUNDING_QUOTE_V6_ID_OFFSET: usize = COMPILER_BUNDLE_V7_ID_OFFSET + 32;
+const ATTACHMENT_PLAN_V6_ID_OFFSET: usize = FUNDING_QUOTE_V6_ID_OFFSET + 32;
+const FOUNDATION_SCHEDULE_V4_ID_OFFSET: usize = ATTACHMENT_PLAN_V6_ID_OFFSET + 32;
+const FOUNDATION_GRAPH_V4_ID_OFFSET: usize = FOUNDATION_SCHEDULE_V4_ID_OFFSET + 32;
+const MARKET_LIABILITY_FOUNDING_ID_OFFSET: usize = FOUNDATION_GRAPH_V4_ID_OFFSET + 32;
 const CLAIM_MINT_FOUNDING_PLAN_ID_OFFSET: usize = MARKET_LIABILITY_FOUNDING_ID_OFFSET + 32;
 const CLAIM_ISSUANCE_BINDING_ID_OFFSET: usize = CLAIM_MINT_FOUNDING_PLAN_ID_OFFSET + 32;
 const GENERAL_FOUNDING_CAPABILITY_ID_OFFSET: usize = CLAIM_ISSUANCE_BINDING_ID_OFFSET + 32;
@@ -53,11 +53,11 @@ pub struct CurrentMarketAuthorityV4 {
     series_market_link_account: Id32,
     series_market_link_binding_v2_id: Id32,
     series_ordinal: u32,
-    compiler_bundle_v6_id: Id32,
-    funding_quote_v5_id: Id32,
-    attachment_plan_v5_id: Id32,
-    foundation_schedule_v3_id: Id32,
-    foundation_account_graph_v3_id: Id32,
+    compiler_bundle_v7_id: Id32,
+    funding_quote_v6_id: Id32,
+    attachment_plan_v6_id: Id32,
+    foundation_schedule_v4_id: Id32,
+    foundation_account_graph_v4_id: Id32,
     market_liability_founding_id: Id32,
     claim_mint_founding_plan_id: Id32,
     claim_issuance_binding_id: Id32,
@@ -82,11 +82,11 @@ impl CurrentMarketAuthorityV4 {
         series_market_link_account: Id32,
         series_market_link_binding_v2_id: Id32,
         series_ordinal: u32,
-        compiler_bundle_v6_id: Id32,
-        funding_quote_v5_id: Id32,
-        attachment_plan_v5_id: Id32,
-        foundation_schedule_v3_id: Id32,
-        foundation_account_graph_v3_id: Id32,
+        compiler_bundle_v7_id: Id32,
+        funding_quote_v6_id: Id32,
+        attachment_plan_v6_id: Id32,
+        foundation_schedule_v4_id: Id32,
+        foundation_account_graph_v4_id: Id32,
         market_liability_founding_id: Id32,
         claim_mint_founding_plan_id: Id32,
         claim_issuance_binding_id: Id32,
@@ -107,11 +107,11 @@ impl CurrentMarketAuthorityV4 {
             series_market_link_account,
             series_market_link_binding_v2_id,
             series_ordinal,
-            compiler_bundle_v6_id,
-            funding_quote_v5_id,
-            attachment_plan_v5_id,
-            foundation_schedule_v3_id,
-            foundation_account_graph_v3_id,
+            compiler_bundle_v7_id,
+            funding_quote_v6_id,
+            attachment_plan_v6_id,
+            foundation_schedule_v4_id,
+            foundation_account_graph_v4_id,
             market_liability_founding_id,
             claim_mint_founding_plan_id,
             claim_issuance_binding_id,
@@ -143,17 +143,17 @@ impl CurrentMarketAuthorityV4 {
     }
     /// Zero-based Series ordinal.
     pub const fn series_ordinal(self) -> u32 { self.series_ordinal }
-    /// Current Product compiler BundleV6 identity.
-    pub const fn compiler_bundle_v6_id(self) -> Id32 { self.compiler_bundle_v6_id }
-    /// Current Product funding QuoteV5 identity.
-    pub const fn funding_quote_v5_id(self) -> Id32 { self.funding_quote_v5_id }
-    /// Current Product AttachmentV5 identity.
-    pub const fn attachment_plan_v5_id(self) -> Id32 { self.attachment_plan_v5_id }
-    /// Exact 47-slot ScheduleV3 identity.
-    pub const fn foundation_schedule_v3_id(self) -> Id32 { self.foundation_schedule_v3_id }
-    /// Exact 47-slot physical GraphV3 identity.
-    pub const fn foundation_account_graph_v3_id(self) -> Id32 {
-        self.foundation_account_graph_v3_id
+    /// Current Product compiler BundleV7 identity.
+    pub const fn compiler_bundle_v7_id(self) -> Id32 { self.compiler_bundle_v7_id }
+    /// Current Product funding QuoteV6 identity.
+    pub const fn funding_quote_v6_id(self) -> Id32 { self.funding_quote_v6_id }
+    /// Current Product AttachmentV6 identity.
+    pub const fn attachment_plan_v6_id(self) -> Id32 { self.attachment_plan_v6_id }
+    /// Exact 50-slot ScheduleV4 identity.
+    pub const fn foundation_schedule_v4_id(self) -> Id32 { self.foundation_schedule_v4_id }
+    /// Exact 50-slot physical GraphV4 identity.
+    pub const fn foundation_account_graph_v4_id(self) -> Id32 {
+        self.foundation_account_graph_v4_id
     }
     /// Collateral-owned liability-founding transcript.
     pub const fn market_liability_founding_id(self) -> Id32 { self.market_liability_founding_id }
@@ -221,11 +221,11 @@ impl CurrentMarketAuthorityV4 {
             self.product_market_binding_id,
             self.series_market_link_account,
             self.series_market_link_binding_v2_id,
-            self.compiler_bundle_v6_id,
-            self.funding_quote_v5_id,
-            self.attachment_plan_v5_id,
-            self.foundation_schedule_v3_id,
-            self.foundation_account_graph_v3_id,
+            self.compiler_bundle_v7_id,
+            self.funding_quote_v6_id,
+            self.attachment_plan_v6_id,
+            self.foundation_schedule_v4_id,
+            self.foundation_account_graph_v4_id,
             self.market_liability_founding_id,
             self.claim_mint_founding_plan_id,
             self.claim_issuance_binding_id,
@@ -307,11 +307,11 @@ impl MarketBindingV4 {
         output[SERIES_ORDINAL_OFFSET..SERIES_ORDINAL_OFFSET + 4]
             .copy_from_slice(&self.authority.series_ordinal.to_le_bytes());
         for (offset, id) in [
-            (COMPILER_BUNDLE_V6_ID_OFFSET, self.authority.compiler_bundle_v6_id),
-            (FUNDING_QUOTE_V5_ID_OFFSET, self.authority.funding_quote_v5_id),
-            (ATTACHMENT_PLAN_V5_ID_OFFSET, self.authority.attachment_plan_v5_id),
-            (FOUNDATION_SCHEDULE_V3_ID_OFFSET, self.authority.foundation_schedule_v3_id),
-            (FOUNDATION_GRAPH_V3_ID_OFFSET, self.authority.foundation_account_graph_v3_id),
+            (COMPILER_BUNDLE_V7_ID_OFFSET, self.authority.compiler_bundle_v7_id),
+            (FUNDING_QUOTE_V6_ID_OFFSET, self.authority.funding_quote_v6_id),
+            (ATTACHMENT_PLAN_V6_ID_OFFSET, self.authority.attachment_plan_v6_id),
+            (FOUNDATION_SCHEDULE_V4_ID_OFFSET, self.authority.foundation_schedule_v4_id),
+            (FOUNDATION_GRAPH_V4_ID_OFFSET, self.authority.foundation_account_graph_v4_id),
             (MARKET_LIABILITY_FOUNDING_ID_OFFSET, self.authority.market_liability_founding_id),
             (CLAIM_MINT_FOUNDING_PLAN_ID_OFFSET, self.authority.claim_mint_founding_plan_id),
             (CLAIM_ISSUANCE_BINDING_ID_OFFSET, self.authority.claim_issuance_binding_id),
@@ -363,11 +363,11 @@ impl MarketBindingV4 {
             read_id(input, SERIES_LINK_ACCOUNT_OFFSET)?,
             read_id(input, SERIES_LINK_BINDING_ID_OFFSET)?,
             read_u32(input, SERIES_ORDINAL_OFFSET)?,
-            read_id(input, COMPILER_BUNDLE_V6_ID_OFFSET)?,
-            read_id(input, FUNDING_QUOTE_V5_ID_OFFSET)?,
-            read_id(input, ATTACHMENT_PLAN_V5_ID_OFFSET)?,
-            read_id(input, FOUNDATION_SCHEDULE_V3_ID_OFFSET)?,
-            read_id(input, FOUNDATION_GRAPH_V3_ID_OFFSET)?,
+            read_id(input, COMPILER_BUNDLE_V7_ID_OFFSET)?,
+            read_id(input, FUNDING_QUOTE_V6_ID_OFFSET)?,
+            read_id(input, ATTACHMENT_PLAN_V6_ID_OFFSET)?,
+            read_id(input, FOUNDATION_SCHEDULE_V4_ID_OFFSET)?,
+            read_id(input, FOUNDATION_GRAPH_V4_ID_OFFSET)?,
             read_id(input, MARKET_LIABILITY_FOUNDING_ID_OFFSET)?,
             read_id(input, CLAIM_MINT_FOUNDING_PLAN_ID_OFFSET)?,
             read_id(input, CLAIM_ISSUANCE_BINDING_ID_OFFSET)?,
@@ -501,9 +501,9 @@ mod tests {
                 Id32::ZERO, current.product_market_binding_id(), current.product_generation(),
                 current.series_market_link_account(),
                 current.series_market_link_binding_v2_id(),
-                current.series_ordinal(), current.compiler_bundle_v6_id(),
-                current.funding_quote_v5_id(), current.attachment_plan_v5_id(),
-                current.foundation_schedule_v3_id(), current.foundation_account_graph_v3_id(),
+                current.series_ordinal(), current.compiler_bundle_v7_id(),
+                current.funding_quote_v6_id(), current.attachment_plan_v6_id(),
+                current.foundation_schedule_v4_id(), current.foundation_account_graph_v4_id(),
                 current.market_liability_founding_id(), current.claim_mint_founding_plan_id(),
                 current.claim_issuance_binding_id(), current.general_founding_capability_id(),
                 current.product_preauthorization_id(), current.revenue_policy_record_account(),
@@ -517,9 +517,9 @@ mod tests {
             current.product_market_root_account(), current.product_market_binding_id(),
             current.product_generation(), current.product_market_root_account(),
             current.series_market_link_binding_v2_id(), current.series_ordinal(),
-            current.compiler_bundle_v6_id(), current.funding_quote_v5_id(),
-            current.attachment_plan_v5_id(), current.foundation_schedule_v3_id(),
-            current.foundation_account_graph_v3_id(), current.market_liability_founding_id(),
+            current.compiler_bundle_v7_id(), current.funding_quote_v6_id(),
+            current.attachment_plan_v6_id(), current.foundation_schedule_v4_id(),
+            current.foundation_account_graph_v4_id(), current.market_liability_founding_id(),
             current.claim_mint_founding_plan_id(), current.claim_issuance_binding_id(),
             current.general_founding_capability_id(), current.product_preauthorization_id(),
             current.revenue_policy_record_account(), current.revenue_policy_record_v2_id(),
