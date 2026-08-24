@@ -43,6 +43,11 @@ use super::super::product_series::replay_v3::{
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
 use super::super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2;
+use super::super::collateral_shared_core_terminal_v3::{
+    AuthenticatedClaimLedgerPhysicalTerminalV3,
+    AuthenticatedHoardPhysicalTerminalV3,
+    AuthenticatedMarketLiabilityPhysicalTerminalsV3,
+};
 use super::super::source_funding_custody_retirement_v1::{
     authenticate_source_family_terminal_authority_v3,
     consume_source_family_terminal_into_product_v3, retire_source_funding_custody_v3,
@@ -96,6 +101,12 @@ const PRODUCT_SERIES_FUNDING_TERMINAL_AUTHORITY_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-funding-terminal-authority/v5\0";
 const PRODUCT_SERIES_LIFECYCLE_TERMINAL_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-lifecycle-terminal/v5\0";
+const PRODUCT_CLAIM_LEDGER_SHARED_CORE_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-claim-ledger-shared-core-postwrite/v5\0";
+const PRODUCT_HOARD_SHARED_CORE_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-hoard-shared-core-postwrite/v5\0";
+const PRODUCT_MARKET_LIABILITY_TERMINALS_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-market-liability-terminals/v5\0";
 const PRODUCT_SOURCE_SHARED_CORE_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-source-shared-core-postwrite/v5\0";
 const PRODUCT_MARKET_BEGIN_RETIREMENT_DOMAIN_V5: &[u8] =
@@ -1084,6 +1095,307 @@ where
         root_semantic_after_id: reopened.semantic_id(),
         root_transition_sequence_before,
         root_transition_sequence_after: sequence_after,
+    })
+}
+
+/// Move-only Product postwrite after both collateral-liability shared cores
+/// are physically closed and consumed into consecutive RootV3 projections.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductMarketLiabilityTerminalsV5 {
+    id: ContentId,
+    claim_ledger: AuthenticatedClaimLedgerPhysicalTerminalV3,
+    hoard: AuthenticatedHoardPhysicalTerminalV3,
+    claim_projection_id: ContentId,
+    hoard_projection_id: ContentId,
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+}
+
+impl AuthenticatedProductMarketLiabilityTerminalsV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn claim_physical_id(&self) -> ContentId { self.claim_ledger.id() }
+    pub(crate) const fn hoard_physical_id(&self) -> ContentId { self.hoard.id() }
+    pub(crate) const fn claim_projection_id(&self) -> ContentId {
+        self.claim_projection_id
+    }
+    pub(crate) const fn hoard_projection_id(&self) -> ContentId {
+        self.hoard_projection_id
+    }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_binding_id(&self) -> ContentId { self.root_binding_id }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+}
+
+/// Consume central's ordered ClaimLedger/Hoard physical pair. ClaimLedger is
+/// latched first and Hoard second; neither physical receipt can be detached or
+/// replayed into a caller-selected shared-core slot.
+#[inline(never)]
+pub(crate) fn consume_market_liability_physical_terminals_v5<'root>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    terminals: AuthenticatedMarketLiabilityPhysicalTerminalsV3<'root>,
+) -> Outcome<AuthenticatedProductMarketLiabilityTerminalsV5> {
+    let (root, claim_ledger, hoard) = terminals.into_product_parts();
+    let claim_root = claim_ledger.root();
+    let hoard_root = hoard.root();
+    require(
+        root.account() == *root_account.key
+            && root.is_writable()
+            && root.state().phase() == MarketLifecyclePhaseV3::Retiring
+            && root.binding_id() == claim_root.market_binding_id()
+            && root.binding_id() == hoard_root.market_binding_id()
+            && root.binding().market_instance_id == claim_root.market_instance_id()
+            && root.binding().market_instance_id == hoard_root.market_instance_id()
+            && root.binding().generation == claim_root.generation()
+            && root.binding().generation == hoard_root.generation()
+            && root.data_id() == claim_root.root_data_id()
+            && root.data_id() == hoard_root.root_data_id()
+            && root.authentication_id() == claim_root.root_authentication_id()
+            && root.authentication_id() == hoard_root.root_authentication_id()
+            && root.semantic_id() == claim_root.root_semantic_id()
+            && root.semantic_id() == hoard_root.root_semantic_id()
+            && root.state().transition_sequence() == claim_root.root_transition_sequence()
+            && root.state().transition_sequence() == hoard_root.root_transition_sequence()
+            && root
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::ClaimLedger)
+                .is_zero()
+            && root
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::Hoard)
+                .is_zero()
+            && claim_ledger.owner() == MarketSharedCoreV3::ClaimLedger
+            && hoard.owner() == MarketSharedCoreV3::Hoard
+            && claim_ledger.owner_release_id() == hoard.owner_release_id()
+            && claim_ledger.release_authority_id() == hoard.release_authority_id()
+            && claim_ledger.refund_owner() == hoard.refund_owner()
+            && claim_ledger.neutral_sink() == hoard.neutral_sink()
+            && claim_ledger.refund_lamports_after()
+                == claim_ledger
+                    .refund_lamports_before()
+                    .checked_add(claim_ledger.principal_lamports())
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && claim_ledger.sink_lamports_after()
+                == claim_ledger
+                    .sink_lamports_before()
+                    .checked_add(claim_ledger.donation_lamports())
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && hoard.refund_lamports_before() == claim_ledger.refund_lamports_after()
+            && hoard.sink_lamports_before() == claim_ledger.sink_lamports_after()
+            && hoard.refund_lamports_after()
+                == hoard
+                    .refund_lamports_before()
+                    .checked_add(hoard.state_principal_lamports())
+                    .and_then(|value| value.checked_add(hoard.token_principal_lamports()))
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && hoard.sink_lamports_after()
+                == hoard
+                    .sink_lamports_before()
+                    .checked_add(hoard.state_donation_lamports())
+                    .and_then(|value| value.checked_add(hoard.token_donation_lamports()))
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    for id in [
+        claim_ledger.id(),
+        claim_ledger.owner_account_id(),
+        claim_ledger.owner_release_id(),
+        claim_ledger.release_authority_id(),
+        claim_ledger.account_data_before_id(),
+        claim_ledger.account_semantic_before_id(),
+        claim_ledger.account_authentication_before_id(),
+        claim_ledger.account_closed_state_id(),
+        hoard.id(),
+        hoard.owner_account_id(),
+        hoard.owner_release_id(),
+        hoard.release_authority_id(),
+        hoard.account_data_before_id(),
+        hoard.account_semantic_before_id(),
+        hoard.account_authentication_before_id(),
+        hoard.account_closed_state_id(),
+        hoard.token_account_id(),
+        hoard.token_data_before_id(),
+        hoard.token_authentication_before_id(),
+        hoard.token_closed_state_id(),
+        hoard.collateral_release_deployment_receipt_id(),
+    ] {
+        require_live(id)?;
+    }
+
+    let claim_sequence = root
+        .state()
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        claim_sequence == claim_ledger.root_transition_sequence(),
+        ClutchError::MismatchedState,
+    )?;
+    let claim_projection = MarketSharedCoreTerminalProjectionV3::new(
+        *root.binding(),
+        MarketSharedCoreV3::ClaimLedger,
+        claim_ledger.owner_account_id(),
+        claim_ledger.owner_release_id(),
+        claim_ledger.id(),
+        claim_sequence,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_next = (*root.state())
+        .consume_shared_core_terminal(claim_projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_binding_id = root.binding_id();
+    let root_data_before_id = root.data_id();
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    write_market_lifecycle_root_v3(root_account, root.value(), &claim_next)?;
+    drop(root);
+
+    let mut claim_reopen = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let after_claim = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        claim_root.market_instance_id(),
+        claim_root.generation(),
+        true,
+        &mut claim_reopen,
+    )?;
+    require(
+        after_claim.state() == &claim_next
+            && after_claim
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::ClaimLedger)
+                == claim_projection.id()
+            && after_claim.state().transition_sequence() == claim_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let claim_postwrite_id = hashv(&[
+        PRODUCT_CLAIM_LEDGER_SHARED_CORE_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &claim_ledger.id().bytes(),
+        &claim_projection.id().bytes(),
+        root_account.key.as_ref(),
+        &root_data_before_id.bytes(),
+        &after_claim.data_id().bytes(),
+        &root_authentication_before_id.bytes(),
+        &after_claim.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &after_claim.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &claim_sequence.to_le_bytes(),
+    ]);
+    require_live(claim_postwrite_id)?;
+
+    let hoard_sequence = after_claim
+        .state()
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        hoard_sequence == hoard.root_transition_sequence(),
+        ClutchError::MismatchedState,
+    )?;
+    let hoard_projection = MarketSharedCoreTerminalProjectionV3::new(
+        *after_claim.binding(),
+        MarketSharedCoreV3::Hoard,
+        hoard.owner_account_id(),
+        hoard.owner_release_id(),
+        hoard.id(),
+        hoard_sequence,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let hoard_next = (*after_claim.state())
+        .consume_shared_core_terminal(hoard_projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_data_after_id = after_claim.data_id();
+    let claim_authentication_after_id = after_claim.authentication_id();
+    let claim_semantic_after_id = after_claim.semantic_id();
+    drop(after_claim);
+    write_market_lifecycle_root_v3(root_account, &claim_reopen, &hoard_next)?;
+
+    let mut hoard_reopen = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let after_hoard = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        claim_root.market_instance_id(),
+        claim_root.generation(),
+        true,
+        &mut hoard_reopen,
+    )?;
+    require(
+        after_hoard.state() == &hoard_next
+            && after_hoard
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::Hoard)
+                == hoard_projection.id()
+            && after_hoard.state().transition_sequence() == hoard_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let hoard_postwrite_id = hashv(&[
+        PRODUCT_HOARD_SHARED_CORE_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &hoard.id().bytes(),
+        &hoard_projection.id().bytes(),
+        root_account.key.as_ref(),
+        &claim_data_after_id.bytes(),
+        &after_hoard.data_id().bytes(),
+        &claim_authentication_after_id.bytes(),
+        &after_hoard.authentication_id().bytes(),
+        &claim_semantic_after_id.bytes(),
+        &after_hoard.semantic_id().bytes(),
+        &claim_sequence.to_le_bytes(),
+        &hoard_sequence.to_le_bytes(),
+    ]);
+    require_live(hoard_postwrite_id)?;
+    let id = hashv(&[
+        PRODUCT_MARKET_LIABILITY_TERMINALS_DOMAIN_V5,
+        program_id.as_ref(),
+        &claim_postwrite_id.bytes(),
+        &hoard_postwrite_id.bytes(),
+        &claim_ledger.id().bytes(),
+        &hoard.id().bytes(),
+        &claim_projection.id().bytes(),
+        &hoard_projection.id().bytes(),
+        root_account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &root_authentication_before_id.bytes(),
+        &after_hoard.authentication_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &hoard_sequence.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductMarketLiabilityTerminalsV5 {
+        id,
+        claim_ledger,
+        hoard,
+        claim_projection_id: claim_projection.id(),
+        hoard_projection_id: hoard_projection.id(),
+        root_account: *root_account.key,
+        root_binding_id,
+        root_data_before_id,
+        root_data_after_id: after_hoard.data_id(),
+        root_authentication_before_id,
+        root_authentication_after_id: after_hoard.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: after_hoard.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: hoard_sequence,
     })
 }
 
