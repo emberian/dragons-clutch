@@ -274,6 +274,11 @@ impl AuthenticatedSeriesSourceArtifactsV6 {
 
     pub(crate) fn series(&self) -> &SeriesPlanV5 { &self.series }
     pub(crate) fn funding_terms(&self) -> &SeriesFundingTermsV2 { &self.funding_terms }
+    pub(crate) fn template(&self) -> &ProductTemplateV4 { &self.template }
+    pub(crate) fn basis(&self) -> &NativeClaimBasisV1 { &self.basis }
+    pub(crate) fn recovery(&self) -> &EvidenceOnlyRecoveryPolicyV1 { &self.recovery }
+    pub(crate) fn price_policy(&self) -> &PriceMeasurePolicyV1 { &self.price_policy }
+    pub(crate) fn genesis(&self) -> &MarketGenesisProfileV2 { &self.genesis }
     pub(crate) fn quote(&self) -> &SeriesFundingQuoteV6 { &self.quote }
     pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV6 { &self.attachment }
 }

@@ -43,6 +43,7 @@ pub const FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2: usize = FAILURE_MARKET_SESSIO
 pub enum FailureMarketAccountRoleV2 {
     MarketLifecycleRoot,
     SeriesMarketLink,
+    SeriesFunding,
     FailureAdmissionRoot,
     FailureRuntimeRoot,
     FailureIntervalCell,
@@ -141,6 +142,7 @@ use FailureMarketAccountRoleV2 as Role;
 pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] = &[
     meta(Role::MarketLifecycleRoot, false, false, false),
     meta(Role::SeriesMarketLink, true, false, false),
+    meta(Role::SeriesFunding, false, false, false),
     meta(Role::FailureAdmissionRoot, false, false, false),
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
@@ -153,6 +155,7 @@ pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] =
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
     meta(Role::SeriesPlanArtifact, false, false, false),
+    meta(Role::SeriesFundingTermsArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
     meta(Role::RecoveryPolicyArtifact, false, false, false),
@@ -192,6 +195,7 @@ pub const BEGIN_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] =
 pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] = &[
     meta(Role::MarketLifecycleRoot, false, false, false),
     meta(Role::SeriesMarketLink, false, false, false),
+    meta(Role::SeriesFunding, false, false, false),
     meta(Role::FailureAdmissionRoot, false, false, false),
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
@@ -204,6 +208,7 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
     meta(Role::SeriesPlanArtifact, false, false, false),
+    meta(Role::SeriesFundingTermsArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
     meta(Role::RecoveryPolicyArtifact, false, false, false),
@@ -241,6 +246,7 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
 pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] = &[
     meta(Role::MarketLifecycleRoot, true, false, false),
     meta(Role::SeriesMarketLink, true, false, false),
+    meta(Role::SeriesFunding, false, false, false),
     meta(Role::FailureAdmissionRoot, false, false, false),
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
@@ -308,6 +314,7 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
 pub const ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2] = &[
     meta(Role::MarketLifecycleRoot, false, false, false),
     meta(Role::SeriesMarketLink, true, false, false),
+    meta(Role::SeriesFunding, false, false, false),
     meta(Role::FailureAdmissionRoot, false, false, false),
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
