@@ -50,7 +50,17 @@ use clutch_collateral_adapter_v2::{
     ResolutionV5, CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES, RESOLUTION_V5_BYTES,
 };
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    FailureMarketIntervalCellResolutionPlanV2, FailureMarketIntervalCellResolutionReceiptV2,
+    plan_reset_failure_market_interval_cell_v2,
+    project_failure_market_interval_terminal_history_facts_v2,
+    FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellPlanV2,
+    FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
+    FailureMarketIntervalCellResolutionReceiptV2,
+};
+use clutch_failure_policy_runtime::market_interval_history_v2::{
+    plan_append_failure_market_interval_history_v2,
+    AuthenticatedFailureMarketIntervalTerminalV2, FailureMarketIntervalHistoryAppendReceiptV2,
+    FailureMarketIntervalHistoryPlanV2, FailureMarketIntervalTerminalDispositionV2,
+    FailureMarketIntervalTerminalFactsV2,
 };
 use clutch_failure_policy_runtime::market_runtime_v1::{
     plan_resolve_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
@@ -83,6 +93,85 @@ const FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5: &[u8] =
 /// Stable byte committed for the only disposition admitted by this composer.
 const RESOLVED_DISPOSITION_BYTE_V2: u8 = 1;
 const _: () = assert!(clutch_retirement::MAX_OUTCOMES * 8 == 128);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketResolvedArchiveAuthorityV5 {
+    expected: FailureMarketIntervalTerminalFactsV2,
+}
+
+impl AuthenticatedFailureMarketIntervalTerminalV2 for FailureMarketResolvedArchiveAuthorityV5 {
+    fn authenticate_failure_market_interval_terminal(
+        &self,
+        expected: FailureMarketIntervalTerminalFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketResolvedArchivePlanV5 {
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+}
+
+/// Derive the sole resolved-session append/reset batch after Product,
+/// Failure, Collateral, and Source terminal postwrites all exist. This is not
+/// a generic terminal DTO: every fact comes from the hostile-reopened resolved
+/// cell and its private resolution/Source receipts.
+fn plan_resolved_failure_market_archive_v5(
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+    resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
+    source_terminal: AuthenticatedSourceResolutionTerminalV1,
+) -> Outcome<FailureMarketResolvedArchivePlanV5> {
+    let cell = interval.cell();
+    let history = interval.history();
+    let failure_resolution = resolution.failure_resolution();
+    let terminal = project_failure_market_interval_terminal_history_facts_v2(cell, history)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        resolution.cell_account() == interval.cell_account()
+            && resolution.cell_authentication_after() == interval.cell_authentication_id()
+            && resolution.cell_state_after()
+                == ContentId::from_bytes(interval.cell_state_id().bytes())
+            && cell.disposition() == FailureMarketIntervalCellDispositionV2::Resolved
+            && terminal.disposition == FailureMarketIntervalTerminalDispositionV2::Resolved
+            && terminal.session_terminal_receipt_id.bytes()
+                == failure_resolution.id().bytes()
+            && terminal.terminal_state_commitment.bytes()
+                == interval.cell_state_id().bytes()
+            && source_terminal.id() != ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    let authority = FailureMarketResolvedArchiveAuthorityV5 { expected: terminal };
+    let (history_plan, append) = plan_append_failure_market_interval_history_v2(
+        &authority,
+        history,
+        admission.state(),
+        interval.quote(),
+        terminal,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let (cell_plan, reset) = plan_reset_failure_market_interval_cell_v2(cell, append)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        append.session_terminal_receipt_id().bytes() == failure_resolution.id().bytes()
+            && reset.append_receipt_id() == append.id()
+            && reset.terminal_cell() == interval.cell_state_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(FailureMarketResolvedArchivePlanV5 {
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+    })
+}
 
 /// Exact final-postwrite facts required before Source may terminalize.
 ///
@@ -2167,5 +2256,32 @@ mod adversarial_tests {
             .find("Ok((postwrite, interval_after, runtime_after, source_terminal))")
             .expect("sole successful return");
         assert!(failure < source_terminal && source_terminal < success);
+    }
+
+    #[test]
+    fn resolved_archive_plan_accepts_only_the_final_cell_and_source_terminal() {
+        let source = include_str!("failure_market_resolution_v5.rs");
+        let planner = source
+            .split("fn plan_resolved_failure_market_archive_v5")
+            .nth(1)
+            .and_then(|value| {
+                value.split("/// Stable byte committed for the only disposition")
+                    .next()
+            })
+            .expect("resolved archive planner");
+        for predicate in [
+            "resolution.cell_authentication_after() == interval.cell_authentication_id()",
+            "resolution.cell_state_after()",
+            "cell.disposition() == FailureMarketIntervalCellDispositionV2::Resolved",
+            "terminal.disposition == FailureMarketIntervalTerminalDispositionV2::Resolved",
+            "terminal.session_terminal_receipt_id.bytes()",
+            "failure_resolution.id().bytes()",
+            "source_terminal.id() != ContentId::ZERO",
+            "plan_append_failure_market_interval_history_v2",
+            "plan_reset_failure_market_interval_cell_v2",
+            "reset.append_receipt_id() == append.id()",
+        ] {
+            assert!(planner.contains(predicate), "missing archive guard {predicate}");
+        }
     }
 }
