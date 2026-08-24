@@ -33,6 +33,11 @@ const REDEEM_OUTCOME_OFFSET: usize = HEADER_BYTES + 16;
 const REDEEM_RESERVED_OFFSET: usize = REDEEM_OUTCOME_OFFSET + 1;
 const REDEEM_RESERVED_BYTES: usize = 7;
 
+const TRANSFER_CLAIMS_OUTCOME_COUNT_OFFSET: usize = HEADER_BYTES + 8;
+const TRANSFER_CLAIMS_RESERVED_OFFSET: usize = TRANSFER_CLAIMS_OUTCOME_COUNT_OFFSET + 1;
+const TRANSFER_CLAIMS_RESERVED_BYTES: usize = 7;
+const TRANSFER_CLAIMS_QUANTITIES_OFFSET: usize = HEADER_BYTES + 16;
+
 /// Exact immutable-Realm creation instruction width.
 pub const CREATE_REALM_BYTES: usize = HEADER_BYTES + REALM_BYTES;
 /// Exact atomic Market and resolution-Fund founding instruction width.
@@ -53,6 +58,8 @@ pub const SWEEP_SURPLUS_BYTES: usize = HEADER_BYTES + 8;
 pub const CLOSE_EMPTY_POSITION_BYTES: usize = HEADER_BYTES + 16;
 /// Exact empty collateral-Vault retirement instruction width.
 pub const RETIRE_EMPTY_VAULT_BYTES: usize = HEADER_BYTES + 16;
+/// Exact claims-transfer instruction width for the current measured Market profile.
+pub const TRANSFER_CLAIMS_BYTES: usize = HEADER_BYTES + 16 + (MAX_OUTCOMES * 8);
 
 /// Canonical semantic instruction family tags.
 ///
@@ -78,6 +85,8 @@ pub enum InstructionTag {
     RedeemResolvedOutcome = 0x43,
     /// Sweep only physical collateral above the Market Hoard.
     SweepSurplus = 0x44,
+    /// Transfer a selected nonzero vector of outcome claims.
+    TransferClaims = 0x45,
     /// Close an empty Position and retire its direct child.
     CloseEmptyPosition = 0x50,
     /// Close an empty Vault and retire its direct child.
@@ -95,6 +104,7 @@ impl InstructionTag {
             0x42 => Ok(Self::MergeCompleteSet),
             0x43 => Ok(Self::RedeemResolvedOutcome),
             0x44 => Ok(Self::SweepSurplus),
+            0x45 => Ok(Self::TransferClaims),
             0x50 => Ok(Self::CloseEmptyPosition),
             0x51 => Ok(Self::RetireEmptyVault),
             _ => Err(Error::UnknownInstructionTag),
@@ -111,6 +121,7 @@ impl InstructionTag {
             Self::MergeCompleteSet => 0x42,
             Self::RedeemResolvedOutcome => 0x43,
             Self::SweepSurplus => 0x44,
+            Self::TransferClaims => 0x45,
             Self::CloseEmptyPosition => 0x50,
             Self::RetireEmptyVault => 0x51,
         }
@@ -136,6 +147,8 @@ pub enum InstructionV1 {
     RedeemResolvedOutcome(RedeemResolvedOutcomeV1),
     /// Permissionless physical surplus sweep.
     SweepSurplus(SweepSurplusV1),
+    /// Transfer a selected nonzero vector of outcome claims.
+    TransferClaims(TransferClaimsV1),
     /// Empty Position close.
     CloseEmptyPosition(CloseEmptyPositionV1),
     /// Empty collateral Vault retirement.
@@ -167,6 +180,9 @@ impl InstructionV1 {
                 RedeemResolvedOutcomeV1::decode(bytes).map(Self::RedeemResolvedOutcome)
             }
             InstructionTag::SweepSurplus => SweepSurplusV1::decode(bytes).map(Self::SweepSurplus),
+            InstructionTag::TransferClaims => {
+                TransferClaimsV1::decode(bytes).map(Self::TransferClaims)
+            }
             InstructionTag::CloseEmptyPosition => {
                 CloseEmptyPositionV1::decode(bytes).map(Self::CloseEmptyPosition)
             }
@@ -187,6 +203,7 @@ impl InstructionV1 {
             Self::MergeCompleteSet(_) => InstructionTag::MergeCompleteSet,
             Self::RedeemResolvedOutcome(_) => InstructionTag::RedeemResolvedOutcome,
             Self::SweepSurplus(_) => InstructionTag::SweepSurplus,
+            Self::TransferClaims(_) => InstructionTag::TransferClaims,
             Self::CloseEmptyPosition(_) => InstructionTag::CloseEmptyPosition,
             Self::RetireEmptyVault(_) => InstructionTag::RetireEmptyVault,
         }
@@ -610,6 +627,122 @@ impl SweepSurplusV1 {
     }
 }
 
+/// A selected nonzero vector of outcome-claim transfers.
+///
+/// `MAX_OUTCOMES` is the current chain measured-profile bound. Raising this
+/// wire capacity must follow a Market profile lift; it is not a claim about a
+/// mathematical ontology of possible outcomes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransferClaimsV1 {
+    generation: u64,
+    outcome_count: u8,
+    quantities: [u64; MAX_OUTCOMES],
+}
+
+impl TransferClaimsV1 {
+    /// Validate the exact Market profile width and its canonical quantity vector.
+    pub fn new(
+        generation: u64,
+        outcome_count: u8,
+        quantities: [u64; MAX_OUTCOMES],
+    ) -> Result<Self> {
+        validate_outcome_count(outcome_count)?;
+        let selected = usize::from(outcome_count);
+        let mut has_quantity = false;
+        let mut index = 0usize;
+        while index < MAX_OUTCOMES {
+            let quantity = *quantities.get(index).ok_or(Error::InvalidLength)?;
+            if index < selected {
+                has_quantity |= quantity != 0;
+            } else if quantity != 0 {
+                return Err(Error::NonCanonicalReservedBytes);
+            }
+            index += 1;
+        }
+        if !has_quantity {
+            return Err(Error::ZeroQuantity);
+        }
+        Ok(Self {
+            generation,
+            outcome_count,
+            quantities,
+        })
+    }
+
+    /// Decode one exact canonical claim-transfer body.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        require_header(bytes, TRANSFER_CLAIMS_BYTES, InstructionTag::TransferClaims)?;
+        require_zero(
+            bytes,
+            TRANSFER_CLAIMS_RESERVED_OFFSET,
+            TRANSFER_CLAIMS_RESERVED_BYTES,
+        )?;
+        let mut quantities = [0; MAX_OUTCOMES];
+        let mut index = 0usize;
+        while index < MAX_OUTCOMES {
+            let offset = TRANSFER_CLAIMS_QUANTITIES_OFFSET
+                .checked_add(index.checked_mul(8).ok_or(Error::InvalidLength)?)
+                .ok_or(Error::InvalidLength)?;
+            let slot = quantities.get_mut(index).ok_or(Error::InvalidLength)?;
+            *slot = read_u64(bytes, offset)?;
+            index += 1;
+        }
+        Self::new(
+            read_u64(bytes, GENERATION_OFFSET)?,
+            read_byte(bytes, TRANSFER_CLAIMS_OUTCOME_COUNT_OFFSET)?,
+            quantities,
+        )
+    }
+
+    /// Encode into the exact caller-owned output without partial mutation.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        let mut encoded = [0; TRANSFER_CLAIMS_BYTES];
+        write_header(&mut encoded, InstructionTag::TransferClaims)?;
+        write_u64(&mut encoded, GENERATION_OFFSET, self.generation)?;
+        put(
+            &mut encoded,
+            TRANSFER_CLAIMS_OUTCOME_COUNT_OFFSET,
+            &[self.outcome_count],
+        )?;
+        let mut index = 0usize;
+        while index < MAX_OUTCOMES {
+            let offset = TRANSFER_CLAIMS_QUANTITIES_OFFSET
+                .checked_add(index.checked_mul(8).ok_or(Error::OutputLength)?)
+                .ok_or(Error::OutputLength)?;
+            let quantity = *self.quantities.get(index).ok_or(Error::OutputLength)?;
+            write_u64(&mut encoded, offset, quantity)?;
+            index += 1;
+        }
+        commit(output, &encoded)
+    }
+
+    /// Return immutable Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the exhaustive ordered outcome count for this Market profile.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Return all fixed-width quantities, including canonical zero padding.
+    pub const fn quantities(self) -> [u64; MAX_OUTCOMES] {
+        self.quantities
+    }
+
+    /// Return one selected outcome quantity, rejecting an index outside the Market width.
+    pub fn quantity(self, outcome: u8) -> Result<u64> {
+        if outcome >= self.outcome_count {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        self.quantities
+            .get(usize::from(outcome))
+            .copied()
+            .ok_or(Error::InvalidOutcomeCount)
+    }
+}
+
 /// Empty-Position close and child-retirement replay body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CloseEmptyPositionV1 {
@@ -886,8 +1019,8 @@ mod tests {
         .expect("valid Realm")
     }
 
-    fn encode_all() -> [([u8; 256], usize, InstructionTag); 10] {
-        let mut outputs = [([0; 256], 0, InstructionTag::CreateRealm); 10];
+    fn encode_all() -> [([u8; 256], usize, InstructionTag); 11] {
+        let mut outputs = [([0; 256], 0, InstructionTag::CreateRealm); 11];
         let mut cursor = 0usize;
 
         let mut create_realm = [0; CREATE_REALM_BYTES];
@@ -983,6 +1116,18 @@ mod tests {
             InstructionTag::SweepSurplus,
         );
 
+        let mut transfer = [0; TRANSFER_CLAIMS_BYTES];
+        TransferClaimsV1::new(9, 2, [13, 21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+            .expect("valid transfer")
+            .encode(&mut transfer)
+            .expect("transfer encoding");
+        put_case(
+            &mut outputs,
+            &mut cursor,
+            &transfer,
+            InstructionTag::TransferClaims,
+        );
+
         let mut close = [0; CLOSE_EMPTY_POSITION_BYTES];
         CloseEmptyPositionV1::new(9, 3)
             .encode(&mut close)
@@ -1009,7 +1154,7 @@ mod tests {
     }
 
     fn put_case(
-        cases: &mut [([u8; 256], usize, InstructionTag); 10],
+        cases: &mut [([u8; 256], usize, InstructionTag); 11],
         cursor: &mut usize,
         input: &[u8],
         tag: InstructionTag,
@@ -1148,5 +1293,121 @@ mod tests {
             Err(Error::OutputLength)
         );
         assert_eq!(output, before);
+    }
+
+    #[test]
+    fn transfer_claims_uses_the_stable_fixed_profile_wire() {
+        assert_eq!(TRANSFER_CLAIMS_BYTES, 160);
+        assert_eq!(InstructionTag::TransferClaims.byte(), 0x45);
+
+        let mut outcome_count = u8::try_from(MIN_OUTCOMES).expect("profile minimum fits u8");
+        let maximum = u8::try_from(MAX_OUTCOMES).expect("profile maximum fits u8");
+        while usize::from(outcome_count) <= MAX_OUTCOMES {
+            let mut quantities = [0; MAX_OUTCOMES];
+            let selected = usize::from(outcome_count);
+            let first = quantities.get_mut(0).expect("current profile has outcomes");
+            *first = u64::from(outcome_count);
+            let last_selected = quantities
+                .get_mut(selected - 1)
+                .expect("selected coordinate is bounded");
+            *last_selected = 99;
+            let transfer =
+                TransferClaimsV1::new(7, outcome_count, quantities).expect("canonical transfer");
+            assert_eq!(transfer.generation(), 7);
+            assert_eq!(transfer.outcome_count(), outcome_count);
+            assert_eq!(transfer.quantities(), quantities);
+            assert_eq!(transfer.quantity(0), Ok(u64::from(outcome_count)));
+            assert_eq!(
+                transfer.quantity(outcome_count),
+                Err(Error::InvalidOutcomeCount)
+            );
+
+            let mut encoded = [0; TRANSFER_CLAIMS_BYTES];
+            transfer.encode(&mut encoded).expect("transfer encoding");
+            assert_eq!(encoded.get(TAG_OFFSET), Some(&0x45));
+            assert_eq!(
+                encoded.get(TRANSFER_CLAIMS_OUTCOME_COUNT_OFFSET),
+                Some(&outcome_count)
+            );
+            assert_eq!(TransferClaimsV1::decode(&encoded), Ok(transfer));
+            assert_eq!(
+                InstructionV1::decode(&encoded),
+                Ok(InstructionV1::TransferClaims(transfer))
+            );
+
+            if outcome_count == maximum {
+                break;
+            }
+            outcome_count += 1;
+        }
+    }
+
+    #[test]
+    fn transfer_claims_refuses_noncanonical_vectors_and_wire_forms() {
+        let zero = [0; MAX_OUTCOMES];
+        assert_eq!(TransferClaimsV1::new(1, 2, zero), Err(Error::ZeroQuantity));
+        assert_eq!(
+            TransferClaimsV1::new(1, 1, zero),
+            Err(Error::InvalidOutcomeCount)
+        );
+        assert_eq!(
+            TransferClaimsV1::new(1, 17, zero),
+            Err(Error::InvalidOutcomeCount)
+        );
+
+        let mut nonzero_padding = [0; MAX_OUTCOMES];
+        let selected = nonzero_padding.get_mut(0).expect("selected coordinate");
+        *selected = 1;
+        let padding = nonzero_padding.get_mut(2).expect("padding coordinate");
+        *padding = 1;
+        assert_eq!(
+            TransferClaimsV1::new(1, 2, nonzero_padding),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+
+        let mut quantities = [0; MAX_OUTCOMES];
+        let selected = quantities.get_mut(1).expect("selected coordinate");
+        *selected = 5;
+        let transfer = TransferClaimsV1::new(1, 2, quantities).expect("canonical transfer");
+        let mut encoded = [0; TRANSFER_CLAIMS_BYTES];
+        transfer.encode(&mut encoded).expect("transfer encoding");
+
+        assert_eq!(
+            TransferClaimsV1::decode(encoded.get(..TRANSFER_CLAIMS_BYTES - 1).expect("short")),
+            Err(Error::InvalidLength)
+        );
+        let mut trailing = [0; TRANSFER_CLAIMS_BYTES + 1];
+        trailing
+            .get_mut(..TRANSFER_CLAIMS_BYTES)
+            .expect("transfer prefix")
+            .copy_from_slice(&encoded);
+        assert_eq!(
+            TransferClaimsV1::decode(&trailing),
+            Err(Error::InvalidLength)
+        );
+
+        let mut reserved = encoded;
+        let byte = reserved
+            .get_mut(TRANSFER_CLAIMS_RESERVED_OFFSET)
+            .expect("reserved byte");
+        *byte = 1;
+        assert_eq!(
+            TransferClaimsV1::decode(&reserved),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+
+        let mut padded = encoded;
+        let padding_offset = TRANSFER_CLAIMS_QUANTITIES_OFFSET + (2 * 8);
+        let byte = padded.get_mut(padding_offset).expect("padding quantity");
+        *byte = 1;
+        assert_eq!(
+            TransferClaimsV1::decode(&padded),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+
+        let before = [0x5a; TRANSFER_CLAIMS_BYTES + 1];
+        let mut wrong_output = before;
+        assert_eq!(transfer.encode(&mut wrong_output), Err(Error::OutputLength));
+        assert_eq!(wrong_output, before);
     }
 }
