@@ -88,12 +88,25 @@ pub fn encode_direct_action_replay_body_v1(
     value: DirectActionReplayV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
+    let mut output = [0u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1];
+    encode_direct_action_replay_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode the permanent replay directly into exact caller-owned storage.
+pub fn encode_direct_action_replay_body_into_v1(
+    value: DirectActionReplayV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
     value.validate_against(root)?;
     if value.candidate_liveness_pending {
         return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
     }
-    let mut output = [0u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    if output.len() != DIRECT_ACTION_REPLAY_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_epoch_semantics_id)?;
@@ -110,8 +123,7 @@ pub fn encode_direct_action_replay_body_v1(
     writer.id(value.candidate_liveness_last_receipt_id)?;
     writer.id(value.candidate_liveness_batch_receipt_id)?;
     writer.u8(if value.candidate_liveness_pending { 1 } else { 0 })?;
-    writer.finish()?;
-    Ok(output)
+    writer.finish()
 }
 
 /// Decode and validate one hostile permanent replay body.
@@ -155,9 +167,22 @@ pub fn encode_direct_reservation_body_v1(
     value: DirectReservationV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
-    value.validate_against_root(root)?;
     let mut output = [0u8; DIRECT_RESERVATION_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    encode_direct_reservation_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode one Reservation directly into exact caller-owned storage.
+pub fn encode_direct_reservation_body_into_v1(
+    value: DirectReservationV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate_against_root(root)?;
+    if output.len() != DIRECT_RESERVATION_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_epoch_semantics_id)?;
@@ -185,8 +210,7 @@ pub fn encode_direct_reservation_body_v1(
     write_rent(&mut writer, value.rent)?;
     writer.u8(reservation_phase_byte(value.phase))?;
     writer.id(value.terminal_receipt_id)?;
-    writer.finish()?;
-    Ok(output)
+    writer.finish()
 }
 
 /// Decode and validate one hostile Reservation body.
@@ -234,9 +258,22 @@ pub fn encode_direct_selection_body_v1(
     value: DirectSelectionV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_SELECTION_BODY_BYTES_V1], DirectMarketErrorV1> {
-    value.validate_against(root)?;
     let mut output = [0u8; DIRECT_SELECTION_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    encode_direct_selection_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode one complete Selection directly into exact caller-owned storage.
+pub fn encode_direct_selection_body_into_v1(
+    value: DirectSelectionV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate_against(root)?;
+    if output.len() != DIRECT_SELECTION_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_root_account)?;
@@ -287,8 +324,7 @@ pub fn encode_direct_selection_body_v1(
     writer.id(value.candidate_bond_refund_receipt_id)?;
     write_rent(&mut writer, value.rent)?;
     writer.u8(selection_phase_byte(value.phase))?;
-    writer.finish()?;
-    Ok(output)
+    writer.finish()
 }
 
 /// Decode, reverify, and validate one hostile Selection body.

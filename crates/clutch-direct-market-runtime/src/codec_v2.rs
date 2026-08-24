@@ -472,9 +472,11 @@ pub fn write_direct_root_transition_body_v2<B: DirectHashBackendV1>(
 
 /// Decode the permanent b3 body only through an authenticated current root.
 pub fn decode_direct_action_replay_body_for_transition_v2(
-    input: &[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1],
+    input: &[u8],
     transition: &AuthenticatedDirectRootTransitionV2,
 ) -> Result<DirectActionReplayV1, DirectMarketErrorV1> {
+    let input = <&[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1]>::try_from(input)
+        .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
     crate::codec_v1::decode_direct_action_replay_body_v1(
         input,
         transition.projected_root,
@@ -492,11 +494,26 @@ pub fn encode_direct_action_replay_body_for_transition_v2(
     )
 }
 
+/// Encode permanent b3 directly into caller-owned storage through current b1/v2.
+pub fn encode_direct_action_replay_body_into_transition_v2(
+    value: DirectActionReplayV1,
+    transition: &AuthenticatedDirectRootTransitionV2,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    crate::codec_v1::encode_direct_action_replay_body_into_v1(
+        value,
+        transition.projected_root,
+        output,
+    )
+}
+
 /// Decode unchanged b2 bytes only through an authenticated current root.
 pub fn decode_direct_selection_body_for_transition_v2(
-    input: &[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1],
+    input: &[u8],
     transition: &AuthenticatedDirectRootTransitionV2,
 ) -> Result<DirectSelectionV1, DirectMarketErrorV1> {
+    let input = <&[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1]>::try_from(input)
+        .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
     crate::codec_v1::decode_direct_selection_body_v1(input, transition.projected_root)
 }
 
@@ -508,11 +525,26 @@ pub fn encode_direct_selection_body_for_transition_v2(
     crate::codec_v1::encode_direct_selection_body_v1(value, transition.projected_root)
 }
 
+/// Encode unchanged b2 directly into caller-owned storage through current b1/v2.
+pub fn encode_direct_selection_body_into_transition_v2(
+    value: DirectSelectionV1,
+    transition: &AuthenticatedDirectRootTransitionV2,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    crate::codec_v1::encode_direct_selection_body_into_v1(
+        value,
+        transition.projected_root,
+        output,
+    )
+}
+
 /// Decode unchanged b4 bytes only through an authenticated current root.
 pub fn decode_direct_reservation_body_for_transition_v2(
-    input: &[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1],
+    input: &[u8],
     transition: &AuthenticatedDirectRootTransitionV2,
 ) -> Result<DirectReservationV1, DirectMarketErrorV1> {
+    let input = <&[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1]>::try_from(input)
+        .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
     crate::codec_v1::decode_direct_reservation_body_v1(input, transition.projected_root)
 }
 
@@ -522,6 +554,19 @@ pub fn encode_direct_reservation_body_for_transition_v2(
     transition: &AuthenticatedDirectRootTransitionV2,
 ) -> Result<[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_reservation_body_v1(value, transition.projected_root)
+}
+
+/// Encode unchanged b4 directly into caller-owned storage through current b1/v2.
+pub fn encode_direct_reservation_body_into_transition_v2(
+    value: DirectReservationV1,
+    transition: &AuthenticatedDirectRootTransitionV2,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    crate::codec_v1::encode_direct_reservation_body_into_v1(
+        value,
+        transition.projected_root,
+        output,
+    )
 }
 
 fn current_root_semantic_id_from_projection_v2<B: DirectHashBackendV1>(
