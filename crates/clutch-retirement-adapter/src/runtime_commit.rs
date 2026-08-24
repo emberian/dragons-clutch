@@ -14,9 +14,11 @@ use clutch_retirement::{
     EpochRootRetirementPlanV2, GeneralEpochLifecycleProjectionV2, Identity32V1,
     PositionLifecycleStateV2, PositionReplayReopenPlanV2, PositionReplayRetirementPlanV2,
     ReplayLifecycleStateV1, RetirementErrorV2, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
-    POSITION_TOMBSTONE_V2_BYTES, POSITION_V2_BYTES, PROJECTED_REPLAY_SUCCESSOR_BYTES,
+    POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_V3_BYTES, POSITION_V2_BYTES,
+    PROJECTED_REPLAY_SUCCESSOR_BYTES,
 };
 
+use crate::position_v3_bridge::PreparedPositionReplayCloseV3;
 use crate::{PositionAccountV2, ReplaySuccessorAccountV1, RetirementAdapterErrorV2};
 
 fn total_credits_v1(credits: CoalescedRecipientCreditsV1) -> Result<u64, RetirementAdapterErrorV2> {
@@ -312,6 +314,137 @@ pub fn execute_position_replay_close_v2<R: RetirementCloseRuntimeV1>(
     runtime.set_source_balance(commit.position, commit.position_balance_after)?;
     runtime.set_source_balance(commit.replay, 0)?;
     runtime.assign_system(commit.replay)
+}
+
+/// SBF-side mutation and postwrite-authentication boundary for a Position V3
+/// plus current-generation Replay close.
+///
+/// Implementations must bind every identity to the same authenticated account
+/// used to prepare the commit, recheck the two source balances and every
+/// alias-coalesced recipient pre-balance, and borrow every writable cell in
+/// [`Self::preflight_position_replay_close_v3`] before the first resize. The
+/// Replay's exact terminal semantic ID and signed sequence are part of that
+/// preflight; a merely terminal-looking replacement is not sufficient.
+pub trait PositionReplayCloseRuntimeV3 {
+    /// Backend error propagated unchanged to the instruction entry point.
+    type Error;
+
+    /// Reauthenticate the complete prospective commit without mutating it.
+    fn preflight_position_replay_close_v3(
+        &mut self,
+        commit: &PreparedPositionReplayCloseV3,
+    ) -> Result<(), Self::Error>;
+
+    /// Reallocate one still-program-owned source to an exact smaller length.
+    fn resize_program_owned_v3(
+        &mut self,
+        account: Identity32V1,
+        new_len: usize,
+    ) -> Result<(), Self::Error>;
+
+    /// Write one exact prepared byte image after resizing.
+    fn write_exact_v3(
+        &mut self,
+        account: Identity32V1,
+        bytes: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    /// Set one authenticated, alias-coalesced recipient to its absolute balance.
+    fn set_recipient_balance_v3(
+        &mut self,
+        recipient: Identity32V1,
+        balance_after: u64,
+    ) -> Result<(), Self::Error>;
+
+    /// Set one still-program-owned source to its absolute post-balance.
+    fn set_source_balance_v3(
+        &mut self,
+        source: Identity32V1,
+        balance_after: u64,
+    ) -> Result<(), Self::Error>;
+
+    /// Release the zero-data, zero-lamport Replay to the System program.
+    fn assign_replay_system_v3(&mut self, replay: Identity32V1) -> Result<(), Self::Error>;
+
+    /// Reauthenticate exact bytes, owners, lengths, and balances after writes.
+    fn authenticate_position_replay_close_v3_postwrite(
+        &mut self,
+        commit: &PreparedPositionReplayCloseV3,
+    ) -> Result<(), Self::Error>;
+}
+
+/// Non-copy evidence that the fixed V3 close order and hostile postwrite
+/// authentication both completed.
+///
+/// The runtime-facing instruction composer must consume this value when it
+/// mints its own terminal receipt. It cannot duplicate success evidence by
+/// copying a boolean or caller-supplied identifier.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ExecutedPositionReplayCloseV3 {
+    committed: PreparedPositionReplayCloseV3,
+}
+
+impl ExecutedPositionReplayCloseV3 {
+    /// Position PDA now holding the exact permanent V3 tombstone.
+    pub const fn position_account(&self) -> Identity32V1 {
+        self.committed.position_account()
+    }
+
+    /// Replay PDA now System-owned, empty, and zero-lamport.
+    pub const fn replay_account(&self) -> Identity32V1 {
+        self.committed.replay_account()
+    }
+
+    /// Semantic ID of the terminal Replay bytes observed before deletion.
+    pub const fn replay_terminal_semantic_id(&self) -> Identity32V1 {
+        self.committed.replay_terminal_semantic_id()
+    }
+
+    /// Exact signed terminal sequence authenticated before deletion.
+    pub const fn signed_sequence(&self) -> u64 {
+        self.committed.signed_sequence()
+    }
+
+    /// Alias-coalesced absolute recipient post-balances that were committed.
+    pub const fn recipient_credits(&self) -> CoalescedRecipientCreditsV1 {
+        self.committed.recipient_credits()
+    }
+
+    /// Exact permanent tombstone balance observed after the commit.
+    pub const fn position_lamports_after(&self) -> u64 {
+        self.committed.position_lamports_after()
+    }
+}
+
+/// Execute the sole Position V3 plus Replay V3 retirement mutation order.
+///
+/// No CPI is permitted after preflight. Position is first reduced to its exact
+/// tombstone image and Replay data is erased while both remain program-owned;
+/// recipient credits are then written once per coalesced identity, source
+/// balances are set absolutely, and Replay ownership is released last. A
+/// non-copy receipt is returned only after an exact hostile postwrite check.
+pub fn execute_position_replay_close_v3<R: PositionReplayCloseRuntimeV3>(
+    runtime: &mut R,
+    commit: PreparedPositionReplayCloseV3,
+) -> Result<ExecutedPositionReplayCloseV3, R::Error> {
+    runtime.preflight_position_replay_close_v3(&commit)?;
+    runtime.resize_program_owned_v3(commit.position_account(), POSITION_TOMBSTONE_V3_BYTES)?;
+    runtime.write_exact_v3(
+        commit.position_account(),
+        &commit.position_tombstone_bytes(),
+    )?;
+    runtime.resize_program_owned_v3(commit.replay_account(), 0)?;
+    for credit in commit.recipient_credits().entries.into_iter().flatten() {
+        runtime.set_recipient_balance_v3(credit.recipient, credit.balance_after)?;
+    }
+    runtime.set_source_balance_v3(
+        commit.position_account(),
+        commit.position_lamports_after(),
+    )?;
+    runtime.set_source_balance_v3(commit.replay_account(), commit.replay_lamports_after())?;
+    runtime.assign_replay_system_v3(commit.replay_account())?;
+    runtime.authenticate_position_replay_close_v3_postwrite(&commit)?;
+    Ok(ExecutedPositionReplayCloseV3 { committed: commit })
 }
 
 /// Execute the fixed Epoch/Window/Budget mutation order after all pure joins.

@@ -45,23 +45,24 @@ pub fn find(program_id: &Pubkey, seeds: &[&[u8]]) -> (Pubkey, u8) {
 }
 
 /// Realm account seed prefix.
-pub const SEED_REALM: &[u8] = b"dragons-clutch:realm:v1";
+pub const SEED_REALM: &[u8] = clutch_collateral_adapter_v2::REALM_PDA_SEED_V1;
 /// Profile account seed prefix.
-pub const SEED_PROFILE: &[u8] = b"dragons-clutch:profile:v1";
+pub const SEED_PROFILE: &[u8] = clutch_collateral_adapter_v2::PROFILE_PDA_SEED_V1;
 /// Market account seed prefix.
 pub const SEED_MARKET: &[u8] = b"dragons-clutch:market:v1";
 /// Hoard account seed prefix.
 pub const SEED_HOARD: &[u8] = b"dragons-clutch:hoard:v1";
 /// Full-width MarketInstance Hoard V2 seed prefix.
-pub const SEED_HOARD_V2: &[u8] = b"dc:hoard:v2";
+pub const SEED_HOARD_V2: &[u8] = clutch_collateral_adapter_v2::HOARD_V2_PDA_SEED_V1;
 /// Position account seed prefix.
 pub const SEED_POSITION: &[u8] = b"dragons-clutch:position:v1";
 /// Reference-only kernel-aggregate account seed prefix.
 pub const SEED_KERNEL: &[u8] = b"dragons-clutch:kernel:v1";
 /// Full-width native ClaimLedger V3 seed prefix.
-pub const SEED_CLAIM_LEDGER_V3: &[u8] = b"dc:claim-ledger:v3";
-/// Immutable exact fractional-redemption policy V2.
-pub const SEED_FRACTIONAL_POLICY_V2: &[u8] =
+pub const SEED_CLAIM_LEDGER_V3: &[u8] =
+    clutch_collateral_adapter_v2::CLAIM_LEDGER_V3_PDA_SEED_V1;
+/// Immutable exact fractional-redemption policy V3.
+pub const SEED_FRACTIONAL_POLICY_V3: &[u8] =
     clutch_fractional_redemption_runtime::FRACTIONAL_POLICY_PDA_PREFIX;
 /// Sole aggregate numerator-credit ledger V1.
 pub const SEED_FRACTIONAL_LEDGER_V1: &[u8] =
@@ -156,8 +157,14 @@ pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
 /// Counted CoveredDealer selection attachment.
 pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
     clutch_dealer_runtime_contract::DEALER_COVERED_SELECTION_PDA_DOMAIN_V1;
+/// Counted facility-lifetime Product Series obligation.
+pub const SEED_DEALER_SERIES_OBLIGATION: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1;
+/// One-shot Dealer future Fractional-credit funding owner.
+pub const SEED_DEALER_FUTURE_CREDIT_FUNDING: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
-pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
+pub const SEED_POLICY: &[u8] = clutch_collateral_adapter_v2::COLLATERAL_POLICY_PDA_SEED_V1;
 /// Canonical full-width batch-policy artifact seed prefix.
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
 /// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
@@ -183,7 +190,7 @@ pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Immutable Source-selected runtime-liveness policy account prefix.
 pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
-/// Program-owned exact-principal Source lifecycle custody ledger.
+/// Zero-data, System-owned prepaid Source lifecycle rent custody.
 pub const SEED_SOURCE_FUNDING_CUSTODY_V1: &[u8] = b"dc:source-funding:v1";
 /// Mutable prepaid Source liveness compartment for one lifecycle.
 pub const SEED_SOURCE_COMPARTMENT_V1: &[u8] = b"dc:source-compartment:v1";
@@ -326,6 +333,8 @@ pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
 /// Permanent compact Product Market-lifecycle replay anchor.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
+/// Non-persisted Market-family namespace anchor.
+pub const SEED_PRODUCT_MARKET_FAMILY_ROOT_V1: &[u8] = b"dc:product-family-root:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
 /// Permanent counted Product Series-lifecycle replay.
@@ -572,6 +581,28 @@ pub fn product_market_lifecycle_replay_pda(
             SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             market_instance_v2_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive one canonical non-persisted Product family namespace anchor.
+///
+/// The returned address is committed by the sole persisted family aggregator.
+/// It is never initialized as a second family-root account; physical family
+/// state must authenticate itself as a child of this exact address.
+pub fn product_market_family_root_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+    family: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_FAMILY_ROOT_V1,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+            &[family],
         ],
     )
 }
@@ -959,20 +990,22 @@ pub fn purpose_replay_v3_pda(
     )
 }
 
-/// Canonical immutable fractional policy for one exact Resolution V5 body.
-pub fn fractional_policy_v2_pda(
+/// Canonical prefundable immutable fractional policy for one Resolution account.
+///
+/// The persisted V3 body still binds the exact authenticated Resolution V5
+/// semantic/data identities. Only the address domain excludes the future data
+/// identity so Product Foundation can preallocate it before resolution.
+pub fn fractional_policy_v3_pda(
     program_id: &Pubkey,
     market_instance: &[u8; 32],
     resolution_account: &[u8; 32],
-    resolution_data_id: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(
         program_id,
         &[
-            SEED_FRACTIONAL_POLICY_V2,
+            SEED_FRACTIONAL_POLICY_V3,
             market_instance,
             resolution_account,
-            resolution_data_id,
         ],
     )
 }
@@ -1165,6 +1198,17 @@ pub fn dealer_funded_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pub
     find(program_id, &[SEED_DEALER_FUNDED_V2, facility_id])
 }
 
+/// Canonical one-shot future Fractional-credit funding owner.
+pub fn dealer_future_credit_funding_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_FUTURE_CREDIT_FUNDING, facility_id],
+    )
+}
+
 /// Canonical Dealer LP page V2 address.
 pub fn dealer_lp_page_v2_pda(
     program_id: &Pubkey,
@@ -1271,6 +1315,14 @@ pub fn dealer_covered_selection_pda(
         ],
         program_id,
     )
+}
+
+/// Counted facility-lifetime Product Series-obligation binding.
+pub fn dealer_series_obligation_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_SERIES_OBLIGATION, facility_id])
 }
 
 /// Canonical full-width batch-policy artifact address.
@@ -1706,11 +1758,13 @@ pub const SEED_OUTCOME_MINT_V2: &[u8] = b"dc:outcome-mint:v2";
 /// Shortened from the plan's `hoard-authority`, which does not fit a seed.
 pub const SEED_HOARD_AUTHORITY: &[u8] = b"dragons-clutch:hoard-auth:v1";
 /// Full-width Hoard V2 signing authority.
-pub const SEED_HOARD_AUTHORITY_V2: &[u8] = b"dc:hoard-auth:v2";
+pub const SEED_HOARD_AUTHORITY_V2: &[u8] =
+    clutch_collateral_adapter_v2::HOARD_AUTHORITY_V2_PDA_SEED_V1;
 /// Hoard token-account seed prefix; 29 bytes.
 pub const SEED_HOARD_TOKEN: &[u8] = b"dragons-clutch:hoard-token:v1";
 /// Full-width Hoard V2 collateral token account.
-pub const SEED_HOARD_TOKEN_V2: &[u8] = b"dc:hoard-token:v2";
+pub const SEED_HOARD_TOKEN_V2: &[u8] =
+    clutch_collateral_adapter_v2::HOARD_TOKEN_V2_PDA_SEED_V1;
 
 /// Canonical outcome-mint address and bump.
 ///

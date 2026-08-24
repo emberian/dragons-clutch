@@ -39,20 +39,30 @@ use crate::capabilities;
 use crate::error::ClutchError;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::error::Refusal;
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 use crate::instructions::dealer_facility;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::instructions::dealer_policy;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, revenue_policy_v2, source_ingest_v2,
+    failure_market_dispatch_v2, fractional_redemption, genesis,
 };
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
+use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
-use crate::instructions::{direct_market_v2, resolution_work, source_ingest};
+use crate::instructions::direct_market_v1;
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
+use crate::instructions::{resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
@@ -77,7 +87,6 @@ enum Route {
     Artifact,
     Genesis,
     FractionalRedemption,
-    RealmRevenueV2,
     #[cfg(feature = "profile-full")]
     SourceIngest,
     SourceIngestV2,
@@ -87,7 +96,7 @@ enum Route {
     DealerPolicy,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
-    #[cfg(feature = "non-production-structured-custody-lab")]
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
     StructuredClaim,
     DecodeOnly,
 }
@@ -161,20 +170,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::FractionalRedemption
             }
-            Some(clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_TAG)
-                if instruction_data.get(14).copied()
-                    == Some(clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_VERSION)
-                    && instruction_data.get(15).copied().is_some_and(|action| {
-                        capabilities::extension_intent_action_enabled(
-                            clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_TAG,
-                            clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_VERSION,
-                            action,
-                        )
-                    }) =>
-            {
-                Route::RealmRevenueV2
-            }
-            #[cfg(feature = "non-production-structured-custody-lab")]
+            #[cfg(feature = "profile-successor-chain-attached-dev")]
             Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
                 if instruction_data.get(14).copied()
                     == Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION)
@@ -204,7 +200,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
                 Route::MergeMaterialize
             }
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
             Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
             Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
@@ -220,7 +219,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_HINT
@@ -231,13 +233,17 @@ fn route_hint(instruction_data: &[u8]) -> Route {
              * The two never share a frame: V1's append holds three provider
              * account views and v2's holds six, and the pull authentication
              * join below it is the deepest call in either family. */
+            #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_V2_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT,
             ) => Route::SourceIngestV2,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_BEGIN_RESOLUTION_WORK_HINT
                 | INTENT_FOLD_RESOLUTION_WORK_HINT
@@ -246,6 +252,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             ) => Route::ResolutionWork,
             _ => Route::DecodeOnly,
         },
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
         _ => Route::DecodeOnly,
     }
@@ -287,8 +294,20 @@ pub fn process(
         }
         return process_direct_market(program_id, accounts, instruction_data);
     }
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
+    if let Some(action) = enabled_dealer_terminal_retirement_action(instruction_data) {
+        return process_dealer_terminal_retirement(
+            program_id,
+            accounts,
+            instruction_data,
+            action,
+        );
+    }
     if let Some(action) = disabled_dealer_facility_action(instruction_data) {
         return crate::instructions::dealer_runtime::process_reserved_disabled(action);
+    }
+    if let Some(action) = recovery_v2_action(instruction_data) {
+        return process_recovery_v2(program_id, accounts, instruction_data, action);
     }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
@@ -298,7 +317,10 @@ pub fn process(
         Route::MergeMaterialize => {
             process_merge_materialize(program_id, accounts, instruction_data)
         }
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::ObserveResolve => decode_only(instruction_data),
         Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
         Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
@@ -306,23 +328,137 @@ pub fn process(
         Route::FractionalRedemption => {
             process_fractional_redemption(program_id, accounts, instruction_data)
         }
-        Route::RealmRevenueV2 => {
-            process_realm_revenue_v2(program_id, accounts, instruction_data)
-        }
-        #[cfg(feature = "profile-full")]
+        #[cfg(all(
+            feature = "profile-full",
+            not(feature = "profile-successor-chain-attached-dev")
+        ))]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::SourceIngest => decode_only(instruction_data),
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
-        #[cfg(feature = "profile-full")]
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::SourceIngestV2 => decode_only(instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            not(feature = "profile-successor-chain-attached-dev")
+        ))]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::ResolutionWork => decode_only(instruction_data),
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
-        #[cfg(feature = "non-production-structured-custody-lab")]
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
         Route::StructuredClaim => {
             process_structured_claim(program_id, accounts, instruction_data)
         }
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Hostile-decode the exact action-25 payload before any account is observed.
+///
+/// Returning `None` is intentionally fail-closed: the ordinary disabled
+/// Dealer-family path then refuses every historical target under the still
+/// disabled coarse `(76, 1, 25)` tuple.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+fn enabled_dealer_terminal_retirement_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::DealerFacilityAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    let ExtensionAction::DealerFacility(action) = request.envelope.action else {
+        return None;
+    };
+    if action != clutch_solana_layout::registry::DealerFacilityAction::Retire {
+        return None;
+    }
+    let payload = crate::instructions::dealer_runtime::DealerRuntimePayloadV1::decode(
+        action,
+        request.envelope.payload,
+    )
+    .ok()?;
+    capabilities::dealer_terminal_retire_target_enabled(payload.retire_target).then_some(action)
+}
+
+/// Enter the sole current Dealer terminal-cut composer after the payload-only
+/// capability decision. The request is decoded again in this bounded frame so
+/// the routing hint never becomes authority.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+#[inline(never)]
+fn process_dealer_terminal_retirement(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+    expected_action: clutch_solana_layout::registry::DealerFacilityAction,
+) -> Outcome<()> {
+    let request = ExtensionRequest::decode(instruction_data)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::DealerFacility(action) if action == expected_action => {
+            let payload = crate::instructions::dealer_runtime::DealerRuntimePayloadV1::decode(
+                action,
+                request.envelope.payload,
+            )
+            .map_err(|_| ClutchError::NonCanonical)?;
+            if !capabilities::dealer_terminal_retire_target_enabled(payload.retire_target) {
+                return Err(ClutchError::UnsupportedInstruction.into());
+            }
+            dealer_facility::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
+    }
+}
+
+/// Identify one exact allocated Recovery78/v1 action without decoding its
+/// family payload. Current actions 10 through 13 enter the fresh V2 contract;
+/// withdrawn actions 1 through 9 enter its exhaustive account-free refusal.
+fn recovery_v2_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::RecoveryAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) => Some(action),
+        _ => None,
+    }
+}
+
+/// Decode the strict extension envelope and enter only the current checked,
+/// capability-disabled Failure contract. The module itself refuses before
+/// payload or account access while every Recovery capability remains false.
+#[inline(never)]
+fn process_recovery_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+    expected_action: clutch_solana_layout::registry::RecoveryAction,
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) if action == expected_action => {
+            failure_market_dispatch_v2::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
     }
 }
 
@@ -355,9 +491,8 @@ fn process_dealer_policy(
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
-        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -387,9 +522,8 @@ fn process_recurring_series(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::Recovery(_)
-        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -444,7 +578,7 @@ fn process_direct_market(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::DirectMarket(action) => direct_market_v2::process(
+        ExtensionAction::DirectMarket(action) => direct_market_v1::process(
             program_id,
             accounts,
             request.sequence,
@@ -522,28 +656,6 @@ fn process_fractional_redemption(
     }
 }
 
-/// Decode the strict Realm/revenue successor envelope after exact capability
-/// admission and enter its V2-only handler.
-#[inline(never)]
-fn process_realm_revenue_v2(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request =
-        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
-    match request.envelope.action {
-        ExtensionAction::RealmRevenueV2(action) => revenue_policy_v2::process(
-            program_id,
-            accounts,
-            request.sequence,
-            action,
-            request.envelope.payload,
-        ),
-        _ => unexpected_route(),
-    }
-}
-
 /// Identify one exact allocated-but-disabled Dealer facility action.
 ///
 /// Policy-catalog actions remain owned by their explicitly non-production
@@ -582,7 +694,7 @@ fn disabled_dealer_facility_action(
     }
 }
 
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 #[inline(never)]
 fn process_structured_claim(
     program_id: &Pubkey,
@@ -592,55 +704,11 @@ fn process_structured_claim(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor,
-        ) => structured_custody::process_create(
+        ExtensionAction::StructuredClaim(action) => structured_custody::process_current_action(
             program_id,
             accounts,
             request.sequence,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::WrapFull,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::WrapFull,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::UnwrapFull,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::UnwrapFull,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::CompactDonation,
-        ) => structured_custody::process_compact_donation(
-            program_id,
-            accounts,
-            request.sequence,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::RedeemTerminal,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::RedeemTerminal,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::RetireDescriptor,
-        ) => structured_custody::process_retire_descriptor(
-            program_id,
-            accounts,
-            request.sequence,
+            action,
             request.envelope.payload,
         ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
@@ -749,6 +817,7 @@ fn process_merge_materialize(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -839,7 +908,10 @@ fn process_genesis(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
 fn process_source_ingest(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -858,6 +930,7 @@ fn process_source_ingest(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_source_ingest_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -876,7 +949,10 @@ fn process_source_ingest_v2(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
 fn process_resolution_work(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -2078,5 +2154,63 @@ mod extension_registry_tests {
         bytes.push(0);
         assert!(!disabled_canonical_tag(&bytes));
         assert!(!disabled_canonical_tag(&bytes[..15]));
+    }
+}
+
+#[cfg(all(test, feature = "profile-successor-chain-attached-dev"))]
+mod dealer_terminal_payload_capability_tests {
+    extern crate std;
+
+    use super::enabled_dealer_terminal_retirement_action;
+    use crate::instructions::dealer_runtime::{
+        DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+        DEALER_RETIRE_STATE_ROOT_V1,
+        DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+    };
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+    use std::vec;
+    use std::vec::Vec;
+
+    fn request(target: u8) -> Vec<u8> {
+        let mut bytes = vec![0u8; 56];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[10] = super::ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&43u16.to_le_bytes());
+        bytes[13] = DEALER_FAMILY_TAG;
+        bytes[14] = DEALER_FAMILY_VERSION;
+        bytes[15] = DealerFacilityAction::Retire.tag();
+        let payload = &mut bytes[16..56];
+        payload[0..8].copy_from_slice(&11u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&17u64.to_le_bytes());
+        payload[16] = target;
+        payload[24..28].copy_from_slice(&19u32.to_le_bytes());
+        payload[32..40].copy_from_slice(&23u64.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn only_the_two_complete_terminal_payloads_route() {
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(
+                DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+            )),
+            Some(DealerFacilityAction::Retire),
+        );
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(
+                DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+            )),
+            Some(DealerFacilityAction::Retire),
+        );
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(DEALER_RETIRE_STATE_ROOT_V1)),
+            None,
+        );
+        let mut noncanonical = request(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
+        noncanonical[34] = 1;
+        assert_eq!(enabled_dealer_terminal_retirement_action(&noncanonical), None);
     }
 }

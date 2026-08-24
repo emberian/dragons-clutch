@@ -12,10 +12,9 @@
 //! deployment hashing, PDA authentication, hostile account projection, exact
 //! CPI staging, and post-CPI reconciliation.
 //!
-//! Every adapter profile currently keeps every family-local action disabled.
-//! The `live-current-wrapper` feature compiles the current implementation seam
-//! but does not admit it until Product, deployment-release, and collateral
-//! receipts form one exact account plane.
+//! The default adapter remains disabled. The explicit
+//! `profile-successor-chain-attached-dev` wrapper profile admits only actions
+//! 1/3/5/6/7/8 through one exact wrapper/base/Token-2022 release join.
 
 mod accounts;
 mod custody;
@@ -23,6 +22,7 @@ mod current_account_contract;
 mod current_lifecycle;
 mod envelope;
 mod identity;
+mod release_manifest;
 mod token2022_wire;
 
 pub use accounts::{
@@ -37,7 +37,9 @@ pub use custody::{
     STRUCTURED_CUSTODY_ACCOUNT_COUNT, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
 };
 pub use current_account_contract::{
-    current_structured_action_contract_v1, CurrentStructuredActionContractV1,
+    current_structured_account_meta_v1, current_structured_action_contract_v1,
+    current_structured_alias_allowed_v1, CurrentStructuredAccountMetaV1,
+    CurrentStructuredActionContractV1,
     CurrentStructuredTokenEffectV1, CURRENT_STRUCTURED_ACTION_CONTRACTS_V1,
     IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1, STRUCTURED_COMPACTION_ACCOUNT_COUNT_V1,
     STRUCTURED_CREATE_ACCOUNT_COUNT_V1, STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1,
@@ -68,6 +70,15 @@ pub use identity::{
     BoundDescriptorV1, PdaVerifierV1, RuntimeDeploymentsV1, DESCRIPTOR_SEED, MINT_AUTHORITY_SEED,
     MINT_SEED, SERIES_SCOPED_WRAPPER_PRODUCT_DOMAIN_V2, VAULT_OWNER_SEED,
 };
+pub use release_manifest::{
+    joined_structured_action_mask_v1, StructuredCheckedCapabilityManifestV1,
+    StructuredReleaseRoleV1, STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_BASE_CAPABILITY_MANIFEST_LABEL_V1, STRUCTURED_CHECKED_CAPABILITY_MANIFESTS_V1,
+    STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1, STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_LABEL_V1,
+    STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_LABEL_V1,
+};
 pub use token2022_wire::{
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     decode_retired_canonical_wrapper_mint_v1, plan_token_2022_cpi_v1,
@@ -83,41 +94,16 @@ pub use clutch_structured_claim_runtime_contract as runtime_contract;
 /// Canonical key or digest bytes.
 pub type Key = [u8; 32];
 
-/// Capability-manifest identity required by every wrapper loader release while
-/// Structured runtime coordinates remain authority-join-disabled.
-pub const STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_LABEL_V1: &str =
-    "dragons-clutch/structured-claim-wrapper/non-production-authority-join-disabled/v1";
-/// SHA-256 identity of [`STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_LABEL_V1`].
-pub const STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1: Key = [
-    0x26, 0xd5, 0x38, 0x9b, 0x08, 0x17, 0x9e, 0x2b, 0x8e, 0xc2, 0x1f, 0x67, 0x10, 0x53, 0x8f, 0x11,
-    0xdb, 0xe1, 0xfa, 0xa1, 0xaf, 0xe7, 0xad, 0xb2, 0xda, 0x52, 0x0b, 0x03, 0xe3, 0xf8, 0xc0, 0x9c,
-];
-/// Reviewed central-program profile admitted by the Structured laboratory
-/// release-set join. This is the exact `profile-full` manifest identity; the
-/// separate Structured feature adds no executable tuple while the join is
-/// disabled.
-pub const STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1: Key = [
-    0x05, 0x1c, 0x8a, 0xde, 0xc7, 0x94, 0x74, 0x2b, 0x76, 0x9f, 0x0f, 0x5a, 0x19, 0xfd, 0xeb, 0x3c,
-    0x16, 0x4e, 0xef, 0xf6, 0x66, 0xcf, 0x43, 0x1e, 0x65, 0x4d, 0x3f, 0x9e, 0x4b, 0xc2, 0x93, 0xb0,
-];
-/// Reviewed Token-2022 interface-manifest identity required by the Structured
-/// release-set authenticator. This is distinct from any wrapper/base profile.
-pub const STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1: Key = [
-    0x00, 0x09, 0xef, 0xd5, 0x4d, 0xd2, 0xf4, 0x43, 0xf1, 0x42, 0x1b, 0xad, 0x0e, 0x46, 0xb5, 0x60,
-    0x2d, 0x2c, 0xf9, 0x82, 0xaf, 0x0a, 0x1a, 0xdd, 0xb1, 0xa2, 0x28, 0xd9, 0xba, 0xf8, 0x55, 0x5d,
-];
-
 /// Exact release/account wiring compiled for the current Structured source.
 ///
-/// The action set is implemented but the three checked release identities all
-/// describe disabled profiles, so `admitted_action_mask` remains zero. A
-/// release cannot activate these handlers merely by flipping a feature bit: it
-/// must rotate and reauthenticate the exact wrapper/base manifests and ELFs.
+/// The admitted mask is the intersection of three disjoint checked semantic
+/// manifests. Each live instruction additionally authenticates the exact
+/// `RegistryProgramReleaseV2` Program/ProgramData/hash/slot/locus body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredCurrentReleaseContractV1 {
     /// Actions with one closed current account contract.
     pub implemented_action_mask: u16,
-    /// Actions admitted by the exact checked releases; currently empty.
+    /// Actions admitted by all exact checked releases.
     pub admitted_action_mask: u16,
     /// Exact current source/account/token-effect contract identity.
     pub account_contract_id: Key,
@@ -129,19 +115,21 @@ pub struct StructuredCurrentReleaseContractV1 {
     pub token_2022_capability_manifest_id: Key,
 }
 
-/// Current release contract. Source completeness and release admission remain
-/// deliberately disjoint.
+/// Current release contract for the unified successor development profile.
 pub const STRUCTURED_CURRENT_RELEASE_CONTRACT_V1: StructuredCurrentReleaseContractV1 =
     StructuredCurrentReleaseContractV1 {
         implemented_action_mask: IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
-        admitted_action_mask: 0,
+        admitted_action_mask: STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1,
         account_contract_id: STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1,
         wrapper_capability_manifest_id: STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
         base_capability_manifest_id: STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
         token_2022_capability_manifest_id: STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
     };
 
-const _: () = assert!(STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask == 0);
+const _: () = assert!(
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask
+        == IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
+);
 const _: () = assert!(
     STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask
         & !STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.implemented_action_mask
@@ -156,7 +144,7 @@ pub enum Error {
     WrongFamily,
     /// The extension family version is not version one.
     WrongFamilyVersion,
-    /// The family-local action is not allocated by the canonical contract.
+    /// The family-local action has no current runtime-contract variant.
     UnknownAction,
     /// This allocated action has no runtime capability in the current ELF.
     CapabilityDisabled,

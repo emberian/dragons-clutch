@@ -15,8 +15,9 @@ use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
     CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV5,
     CompiledProductSeriesBundleV6, ContentId,
-    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProfileV2,
+    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketFamilyCapabilityPolicyV1,
+    MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryCapabilityProjectionV2,
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
@@ -93,6 +94,7 @@ product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
 product_artifact_type!(SeriesFundingQuoteV5, SeriesFundingQuoteV5);
 product_artifact_type!(SeriesAttachmentPlanV5, SeriesAttachmentPlanV5);
 product_artifact_type!(CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6);
+product_artifact_type!(MarketFamilyCapabilityPolicyV1, MarketFamilyCapabilityPolicyV1);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
     const KIND: ArtifactKind = ArtifactKind::NativeClaimBasisV1;

@@ -29,18 +29,20 @@ JSON keys refuse. Its canonical identity is SHA-256 of compact, key-sorted
 UTF-8 JSON containing:
 
 - the canonical profile name and label;
-- the Cargo profile feature and source identity;
+- the Cargo profile feature, source identity, and collateral/claim release
+  identity;
 - the expected final undefined dynamic-symbol/syscall surface;
-- all eleven semantic-owner rows;
+- all twelve semantic-owner rows;
 - the central-registry version, digest, exact enabled intent triples, and exact
   linked account coordinates; and
 - ELF, `.text`, chosen ProgramData `max_len`, and persistent-loader-rent limits.
 
-The eleven semantic-owner slots, in canonical order, are `relation`, `score`,
+The twelve semantic-owner slots, in canonical order, are `relation`, `score`,
 `price-measure`, `candidate-lifecycle`, `clear-work-feed`, `retirement`,
-`source-plane`, `series-products`, `recovery`, `structured-claim`, and
-`liquidity-dealer`. Every row binds an owner name, version, digest, linkage
-state, required intent triples, and required account coordinates.
+`source-plane`, `fractional-redemption`, `series-products`, `recovery`,
+`structured-claim`, and `liquidity-dealer`. Every row binds an owner name,
+version, digest, linkage state, required intent triples, and required account
+coordinates.
 
 Intent coordinates are `[outer_tag, version, local_action]`. Legacy two-byte
 intents use local action zero; successor envelopes use their nonzero
@@ -67,6 +69,7 @@ profile.
 | Identity | Additional Cargo feature | Meaning |
 | --- | --- | --- |
 | `production-inert` | none | Ordinary artifact identity; this name does not claim a production source release. |
+| `runtime-real-pyth-release` | none | Checked runtime Source release identity; valid only with the unified successor dev profile and never enables fixture code. |
 | `non-production-mock-source-lab` | `non-production-mock-source` | Fabricated-provider laboratory ELF. |
 | `non-production-real-pyth-lab` | `non-production-real-pyth-lab` | Captured real-program/local-synthetic-observation laboratory ELF. |
 
@@ -74,6 +77,36 @@ The source class and exact Cargo features are in the profile identity. A mock
 ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
+
+`build_contract.collateral_release_identity` is independent of the Source
+selector. `production-inert` adds no row. The only positive selector,
+`observed-positive-collateral-and-claim-release`, adds
+`observed-positive-collateral-release-manifest` and refuses unless the checked
+source contains at least one exact positive-slot collateral release row and one
+independent claim-issuance release. Fractional capability can never be
+described by the unified profile with either plane absent.
+
+## Unified successor development closure
+
+`profile-successor-chain-attached-dev` is the sole integrated successor
+selector. Its complete identity label is
+`dragons-clutch/capability-profile/successor-chain-attached-dev/complete-product-source-general-direct-fractional-structured-dealer-failure-release-closure/v1`;
+the SHA-256 label identity is
+`f1d4c9bbb89e89bf13fe0a54ae824220dc0d1109bdf21316e2953aa334afd4ca`.
+That identity is valid only for the complete callable closure: Product-owned
+SourceSeries actions 13--18, Source actions 1--12, General actions 1--34 and
+36--42, Direct actions 1--13, Fractional actions 1--10, Structured actions
+1/3/5/6/7/8, Dealer actions 1--25, and Recovery actions 10--13. General action
+35, Structured actions 2/4, and Recovery actions 1--9 remain withdrawn.
+
+The checker requires all twelve semantic owners linked, exact central tuple
+coverage, exclusive family ownership where one family owns the semantics, and
+market-semantic ownership of every General and Direct tuple. A partial family,
+a second owner, an inert collateral/claim selector, or an empty checked release
+manifest refuses. While implementation lanes are still converging, the Rust
+program uses a different explicitly in-flight identity and an empty successor
+mask; that identity is not the complete closure above and is not an acceptance
+state.
 
 The separately named
 `profile-non-production-dealer-policy-catalog-lab` is a capability profile,

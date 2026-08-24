@@ -8,10 +8,6 @@
 pub mod account_index;
 #[cfg(feature = "operator")]
 pub mod action_material;
-#[cfg(feature = "operator")]
-pub mod direct_candidate_material;
-#[cfg(feature = "operator")]
-pub mod direct_terminal_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]

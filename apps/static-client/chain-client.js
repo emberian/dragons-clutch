@@ -34,7 +34,7 @@
     "collateral-hoard-v2": "collateral",
     "collateral-claim-ledger-v3": "collateral",
     "collateral-resolution-v5": "collateral",
-    "fractional-policy-v2": "collateral",
+    "fractional-policy-v3": "collateral",
     "fractional-ledger-v1": "collateral",
     "fractional-credit-v2": "collateral",
     "fractional-credit-tombstone-v2": "collateral",

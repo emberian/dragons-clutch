@@ -15,10 +15,10 @@ use crate::source_plane_v3::{
 use crate::source_plane_v3_actions::{
     apply_source_terminal_liveness, authenticate_source_funding_custody_v1,
     bind_terminal_execution, close_statistic_result_generation,
-    persist_source_failure_terminal_v1, retire_absent_statistic_result_lineage_v1,
+    persist_source_failure_terminal_v3, retire_absent_statistic_result_lineage_v1,
     AuthenticatedAbsentStatisticResultLineageRetirementV1,
     AuthenticatedSourceTerminalSemanticV1, CloseRuntimeAccountResultV1,
-    PersistedSourceFailureTerminalV1, SourceTerminalExecutionV1,
+    PersistedSourceFailureTerminalV3, SourceTerminalExecutionV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     RuntimeAtomicTransitionV1, RuntimeTransitionActionV1,
@@ -157,7 +157,9 @@ impl AuthenticatedSourceFailureHandoffV1 {
         }
     }
 
-    fn facts(
+    /// Project the one canonical noncircular authority tuple consumed by the
+    /// post-Product-pin Failure owner and by this terminal composer.
+    pub(crate) fn authority_facts(
         self,
         route: AuthenticatedSourceRouteV1,
         schedule: SourceWorkScheduleBindingV1,
@@ -375,7 +377,7 @@ impl AuthenticatedSourceFailurePhysicalDispositionV1 {
 pub(crate) struct AuthenticatedSourceFailureTerminalPostwriteV1 {
     id: ContentId,
     authority_facts: SourceFailureTerminalAuthorityFactsV1,
-    persisted_policy: PersistedSourceFailureTerminalV1,
+    persisted_policy: PersistedSourceFailureTerminalV3,
     terminal: SourceTerminalExecutionV1,
     liveness: RuntimeAtomicTransitionV1,
     physical: AuthenticatedSourceFailurePhysicalDispositionV1,
@@ -394,7 +396,7 @@ impl AuthenticatedSourceFailureTerminalPostwriteV1 {
         self.authority_facts.source_failure_kind
     }
 
-    pub(crate) const fn persisted_policy(self) -> PersistedSourceFailureTerminalV1 {
+    pub(crate) const fn persisted_policy(self) -> PersistedSourceFailureTerminalV3 {
         self.persisted_policy
     }
 
@@ -482,7 +484,7 @@ pub(crate) fn compose_source_failure_terminal_v1<
             && all_distinct(&account_keys),
         ClutchError::MismatchedState,
     )?;
-    let facts = source.facts(
+    let facts = source.authority_facts(
         route,
         schedule,
         runtime_key(terminal_policy_account.key),
@@ -532,7 +534,7 @@ pub(crate) fn compose_source_failure_terminal_v1<
         source.disposition(),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let persisted_policy = persist_source_failure_terminal_v1(
+    let persisted_policy = persist_source_failure_terminal_v3(
         program_id,
         route,
         body,
@@ -543,10 +545,11 @@ pub(crate) fn compose_source_failure_terminal_v1<
         rent_sysvar,
     )?;
     require(
-        persisted_policy.authenticated().body() == body
+        persisted_policy.authenticated().value().terminal() == body
             && persisted_policy
                 .authenticated()
-                .body()
+                .value()
+                .terminal()
                 .source_failure_terminal_authority_id()
                 == facts.id(),
         ClutchError::MismatchedState,
@@ -754,7 +757,7 @@ mod adversarial_tests {
             .find("authenticate_source_failure_terminal_authority_v1")
             .expect("post-pin preauthorization");
         let persist = body
-            .find("persist_source_failure_terminal_v1")
+            .find("persist_source_failure_terminal_v3")
             .expect("durable Source terminal");
         let terminal = body
             .find("bind_terminal_execution")
@@ -796,5 +799,6 @@ mod adversarial_tests {
         let c = RuntimeKey::from_bytes([3; 32]);
         assert!(all_distinct(&[a, b, c]));
         assert!(!all_distinct(&[a, b, a]));
+        assert!(!all_distinct(&[a, b, b]));
     }
 }

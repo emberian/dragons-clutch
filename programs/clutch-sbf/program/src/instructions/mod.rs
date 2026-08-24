@@ -57,26 +57,45 @@ pub mod dealer_runtime;
 // Legacy Direct V2/V3 source remains in-tree for historical review, but is
 // deliberately absent from this executable module graph. Their allocated
 // wire coordinates are decode-only and refuse at the capability boundary.
-/// Historical b1/v1 Direct account plane; compiled for review but never routed.
+/// Capability-disabled current Direct `80/1` account/authentication plane.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
-/// Capability-disabled current b1/v2 Direct account/authentication plane.
-#[cfg(feature = "profile-full")]
-pub(crate) mod direct_market_v2;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_v2;
+/// Sole current Product/Source/Failure zero-payout attempt composer.
+pub(crate) mod failure_market_source_failure_current;
+/// Sole current action-10 Product/Source/Failure branch owner.
+pub(crate) mod failure_market_action10_current;
+pub(crate) mod failure_market_action11_current;
+/// Sole current action-12 RootV2/Product/Source/Failure owner.
+pub(crate) mod failure_market_action12_current;
+/// Concrete checked owners for current Market Failure actions 10-13.
+pub(crate) mod failure_market_actions_v2;
+/// Capability-disabled atomic paid Failure interval advance.
+pub(crate) mod failure_market_interval_advance_v2;
+/// Always-compiled checked-disabled current Failure action contract.
+pub mod failure_market_dispatch_v2;
+/// Shared hostile Product/Failure authentication for callable actions 10-13.
+pub(crate) mod failure_market_execution_v2;
+/// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
+pub(crate) mod failure_market_resolution_v5;
+/// Capability-disabled aggregate/replay/family-terminal composer.
+pub(crate) mod failure_market_family_terminal_v2;
 /// Capability-disabled permanent shared-Market Failure replay seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_replay_v2;
-#[cfg(feature = "non-production-failure-recovery-lab")]
+/// Capability-disabled atomic shared-Market Recovery close.
+pub(crate) mod failure_market_recovery_terminal_v2;
 pub mod failure_market_admission;
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_market_runtime;
+/// Withdrawn occurrence-scoped Recovery78/v1 adapter; no current route imports it.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
+mod fractional_lifecycle;
+mod fractional_product_consumer;
+/// Capability-disabled current Product compiler authority for Failure Begin.
+pub(crate) mod product_failure_begin;
 pub mod fractional_redemption;
 pub(crate) mod full_principal_funding_v1;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
@@ -139,8 +158,6 @@ pub mod general_v2_settlement_root;
 /// action-24 materialization is reachable under the same profile.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_producer_v5;
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-pub(crate) mod general_market_foundation_v4;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
@@ -157,7 +174,7 @@ pub(crate) mod general_market_foundation_v3;
 pub mod market_init;
 #[cfg(test)]
 pub mod merge_materialize;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
@@ -165,13 +182,15 @@ pub mod product_artifact;
 pub(crate) mod product_general_family;
 /// Private full-payer capitalization and authentication of Product `0xba/v2`.
 pub(crate) mod product_direct_global_liveness;
-/// Private 47-slot Product founder authority; no standalone route is exposed.
-pub(crate) mod product_market_foundation_init;
 /// Current RegistryV3/BundleV6/QuoteV5 Failure attempt compiler authority.
 pub(crate) mod product_failure_begin_current;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-/// Sole acyclic Product RootV2 founder authority and 0xba/v2 join.
+/// Capability-disabled Product FoundationVault/Recovery/founder compositor.
+pub(crate) mod product_market_foundation_init;
+/// Immutable current five-family mask and namespace-anchor authority.
+pub(crate) mod product_market_family_capability_current;
+/// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain
 /// independently capability-gated, including in source-empty releases.
@@ -179,15 +198,12 @@ pub mod product_series;
 pub(crate) mod product_series_current;
 /// Current Product V3/V5/V6 to Source occurrence publication authority.
 pub(crate) mod product_source_current;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod resolution_work;
-/// Realm-owned immutable fee-bearing RevenuePolicyV2 founding and private
-/// Product/General authentication receipt.
-pub mod revenue_policy_v2;
 pub mod series_failure_funding;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_ingest;
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
@@ -201,11 +217,13 @@ pub(crate) mod source_failure_terminal_v1;
 /// Post-release bridge from Source absence/refusal to Product's exact current
 /// LinkV2 release receipt. Failure owns the default-refusing join.
 pub(crate) mod source_failure_product_release_v1;
+/// Private successful Source-to-current-Product release binding.
+pub(crate) mod source_resolution_product_release_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.
 pub(crate) mod source_terminal_resolution_v5;
 pub mod split;
 /// Wrapper-signed Structured custody and current full-vector lifecycle.
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 pub mod structured_custody;

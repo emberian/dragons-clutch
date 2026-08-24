@@ -12,6 +12,8 @@
 //! registry, failure, liveness, and occurrence adapters instead of accepting
 //! caller-shaped authentication facts.
 
+pub(crate) mod physical_v4;
+
 use core::cell::Cell;
 
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
@@ -1555,6 +1557,15 @@ impl AuthenticatedProductSourceAuthorityV1 {
     /// Join a registered-Series capability receipt to one exact Source release.
     pub fn from_series_registry(
         registry: AuthenticatedRegistryCapabilityV3,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Outcome<Self> {
+        Self::from_projection(registry.projection(), source_release)
+    }
+
+    /// Join the current hostile-authenticated RegistryV3 capability to one
+    /// exact Source release without projecting a reusable caller authority.
+    pub(crate) fn from_current_series_registry(
+        registry: &super::product_series_current::AuthenticatedRegistryCapabilityV4,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Outcome<Self> {
         Self::from_projection(registry.projection(), source_release)

@@ -75,25 +75,33 @@ create a Market. Those routes remain blocked on SourcePlane V3, authenticated
 registry selectors, full-width Instance identity, and mutable component-owned
 funding state.
 
-The distinct `non-production-structured-custody-lab` feature compiles the staged
-current Structured custody owners, including full-vector wrap/unwind, donated
-surplus compaction, terminal redemption, and descriptor retirement. It does
-not admit a Structured tuple: the central and wrapper action masks are both
-exactly zero, so every Structured request refuses before account loading.
-The wrapper and base consume the same exact account-count contract for current
-actions 1/3/5/6/7/8; the separately authenticated release contract admits none
-of those implemented sources.
+Structured custody is joining the single
+`profile-successor-chain-attached-dev` product rather than retaining a separate
+laboratory identity. The wrapper and base share one exact account-count
+contract for current actions 1/3/5/6/7/8 and authenticate their own checked
+ProgramData/ELF release manifests before value observation or mutation.
+Actions 2/4 remain withdrawn.
 
 The staged handlers hostile-decode the current Realm collateral chain, Product
 lineage, Hoard V2, ClaimLedger V3, Position V3 and Replay V3 owners, descriptor
 root, wrapper/base Token-2022 deployments, FundingTerms-selected neutral sink,
 and exact collateral release receipts. Value-moving compositions preserve the
 named rent-principal and donation boundaries and bind their hostile-reloaded
-poststates. These sources are implementation checkpoints, not an admitted or
-deployable market surface.
+poststates. The unified profile remains an implementation checkpoint until
+every required family tuple and observed-positive collateral/claim release row
+is present.
 
-No build, measurement, SVM, or validator evidence exists yet for this staged
-feature.
+SourceSeries `77/v2` actions 1 through 12 remain compiled but not callable at
+this checkpoint. Their action handlers and per-generation close are concrete,
+but Product has not yet called the private
+`retire_source_funding_custody_v1` whole-lifecycle drain. Enabling Source before
+that exact Product retirement join would allow prepaid custody to be founded
+without a callable final refund/donation disposition. Failure `78/v1` actions
+10 through 13 are independently callable because their current session
+resolve/archive and Product slot-10 transition are already joined.
+
+No build, measurement, SVM, or validator evidence exists yet for the unified
+profile.
 
 ```sh
 # one-time source/build preparation; subsequent builds are offline

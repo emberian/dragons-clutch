@@ -21,14 +21,14 @@ use clutch_general_v2_contract::{
     GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32,
 };
 use clutch_retirement::{
-    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionV3Sha256Backend, RentSplitV2,
-    ReplayV3HashBackend,
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3,
+    PositionPurposeV3, PositionV3Sha256Backend, RentSplitV2, ReplayV3HashBackend,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
     Error, FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerPhaseV1,
-    FractionalLedgerV1, FractionalPolicyV2, PayoutVectorV1, Result, MAX_OUTCOMES,
+    FractionalLedgerV1, FractionalPolicyV3, PayoutVectorV1, Result, MAX_OUTCOMES,
 };
 
 /// Semantic domain for the unique Fractional child admission consumed by the
@@ -51,6 +51,12 @@ pub const FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
 /// Fractional-owned identity of one exact external owner-credit payout action.
 pub const FRACTIONAL_EXTERNAL_CREDIT_TRANSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional/external-credit-transition/v1\0";
+/// Semantic domain for the private Dealer action-23 vector transition.
+pub const DEALER_FACILITY_VECTOR_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/dealer-facility-vector-transition/v1\0";
+/// Semantic domain for one exact live-credit to tombstone close.
+pub const FRACTIONAL_CREDIT_CLOSE_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional-redemption/credit-close-transition/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -94,7 +100,7 @@ fn map_collateral<T>(result: clutch_collateral_adapter_v2::Result<T>) -> Result<
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundFractionalContextV1 {
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -114,7 +120,7 @@ impl BoundFractionalContextV1 {
         self.policy_account
     }
     /// Validated immutable policy.
-    pub const fn policy(self) -> FractionalPolicyV2 {
+    pub const fn policy(self) -> FractionalPolicyV3 {
         self.policy
     }
     /// Exact aggregate ledger PDA.
@@ -193,7 +199,7 @@ impl BoundFractionalContextV1 {
 #[allow(clippy::too_many_arguments)]
 fn validate_canonical_ledgers(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -235,7 +241,7 @@ fn validate_canonical_ledgers(
 /// Bind every semantic owner needed by one fractional action.
 pub fn bind_fractional_context_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -306,7 +312,7 @@ pub fn bind_fractional_context_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn bind_fractional_internal_context_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -408,11 +414,11 @@ impl FractionalFamilyAdmissionReceiptV1 {
     pub const fn claim_issuance_binding(self) -> Identity32V1 {
         self.claim_issuance_binding
     }
-    /// Exact immutable a4/v2 physical account.
+    /// Exact immutable a4/v3 physical account.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
-    /// Immutable a4/v2 state identity.
+    /// Immutable a4/v3 state identity.
     pub const fn policy_state_id(self) -> Identity32V1 {
         self.policy_state_id
     }
@@ -478,7 +484,7 @@ impl VerifiedFractionalFamilyAdmissionPostwriteV1 {
 pub fn verify_fractional_family_admission_postwrite_v1(
     plan: FractionalInitializationPlanV1,
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,
@@ -548,7 +554,7 @@ pub fn verify_fractional_family_admission_postwrite_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_fractional_ledger_v1(
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     claim_ledger_account: Identity32V1,
     claim_ledger: ClaimLedgerV3,
@@ -1264,6 +1270,444 @@ pub fn redeem_internal_exact_v1(
             )?))
         },
     )
+}
+
+/// Structurally bound Dealer facility state consumed by the private vector
+/// transition inside Dealer action 23.
+///
+/// These fields do not confer SBF authority. The live adapter must construct
+/// this value only after authenticating the exact Dealer State, facility
+/// Position, Dealer Replay, Product obligation/root authority, and the
+/// one-shot future-credit rent-principal receipt in the same instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundDealerFacilityVectorPrestateV1 {
+    facility_id: Identity32V1,
+    dealer_state_account: Identity32V1,
+    dealer_state_pre_semantic_id: Identity32V1,
+    facility_position_account: Identity32V1,
+    facility_position: PositionAccountV3,
+    facility_position_pre_semantic_id: Identity32V1,
+    facility_position_binding_id: Identity32V1,
+    dealer_replay_account: Identity32V1,
+    dealer_replay_pre_semantic_id: Identity32V1,
+    dealer_replay_ordinal: u64,
+    product_obligation_account: Identity32V1,
+    product_obligation_semantic_id: Identity32V1,
+    product_root_account: Identity32V1,
+    product_root_semantic_id: Identity32V1,
+    product_authority_receipt_id: Identity32V1,
+    facility_credit_account: Identity32V1,
+    facility_credit_funding_receipt_id: Identity32V1,
+}
+
+impl BoundDealerFacilityVectorPrestateV1 {
+    /// Exact Dealer facility semantic owner.
+    pub const fn facility_id(self) -> Identity32V1 {
+        self.facility_id
+    }
+
+    /// Exact Dealer State account.
+    pub const fn dealer_state_account(self) -> Identity32V1 {
+        self.dealer_state_account
+    }
+
+    /// Dealer-authenticated State preimage identity.
+    pub const fn dealer_state_pre_semantic_id(self) -> Identity32V1 {
+        self.dealer_state_pre_semantic_id
+    }
+
+    /// Exact facility Position account.
+    pub const fn facility_position_account(self) -> Identity32V1 {
+        self.facility_position_account
+    }
+
+    /// Canonical facility Position prestate.
+    pub const fn facility_position(self) -> PositionAccountV3 {
+        self.facility_position
+    }
+
+    /// Canonical facility Position preimage identity.
+    pub const fn facility_position_pre_semantic_id(self) -> Identity32V1 {
+        self.facility_position_pre_semantic_id
+    }
+
+    /// Exact Dealer Replay account.
+    pub const fn dealer_replay_account(self) -> Identity32V1 {
+        self.dealer_replay_account
+    }
+
+    /// Dealer-authenticated Replay preimage identity.
+    pub const fn dealer_replay_pre_semantic_id(self) -> Identity32V1 {
+        self.dealer_replay_pre_semantic_id
+    }
+
+    /// Exact next Dealer Replay ordinal.
+    pub const fn dealer_replay_ordinal(self) -> u64 {
+        self.dealer_replay_ordinal
+    }
+
+    /// Canonical facility-owned a6/v2 account derived after Resolution.
+    pub const fn facility_credit_account(self) -> Identity32V1 {
+        self.facility_credit_account
+    }
+
+    /// One-shot pre-Resolution rent-principal funding receipt.
+    pub const fn facility_credit_funding_receipt_id(self) -> Identity32V1 {
+        self.facility_credit_funding_receipt_id
+    }
+}
+
+/// Bind the exact Dealer-owned authority facts around one facility Position.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_dealer_facility_vector_prestate_v1(
+    facility_id: Identity32V1,
+    dealer_state_account: Identity32V1,
+    dealer_state_pre_semantic_id: Identity32V1,
+    facility_position_account: Identity32V1,
+    facility_position: PositionAccountV3,
+    facility_position_pre_semantic_id: Identity32V1,
+    facility_position_binding_id: Identity32V1,
+    dealer_replay_account: Identity32V1,
+    dealer_replay_pre_semantic_id: Identity32V1,
+    dealer_replay_ordinal: u64,
+    product_obligation_account: Identity32V1,
+    product_obligation_semantic_id: Identity32V1,
+    product_root_account: Identity32V1,
+    product_root_semantic_id: Identity32V1,
+    product_authority_receipt_id: Identity32V1,
+    facility_credit_account: Identity32V1,
+    facility_credit_funding_receipt_id: Identity32V1,
+) -> Result<BoundDealerFacilityVectorPrestateV1> {
+    facility_position
+        .validate()
+        .map_err(|_| Error::PositionRefused)?;
+    let fields = facility_position.fields();
+    let recomputed_position_id = facility_position
+        .semantic_id(&FractionalSha256V1)
+        .map_err(|_| Error::PositionRefused)?;
+    if fields.purpose != PositionPurposeV3::DealerFacility
+        || fields.lifecycle != PositionLifecycleV3::Open
+        || fields.owner != facility_id
+        || fields.controller != dealer_state_account
+        || fields.purpose_binding_id != facility_position_binding_id
+        || fields.replay_account != dealer_replay_account
+        || dealer_replay_ordinal == 0
+        || fields.generation == 0
+        || fields.reserved_cash_atoms != 0
+        || fields.outstanding_reservations != 0
+        || recomputed_position_id != facility_position_pre_semantic_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let account_ids = [
+        dealer_state_account,
+        facility_position_account,
+        dealer_replay_account,
+        product_obligation_account,
+        product_root_account,
+        facility_credit_account,
+    ];
+    let mut left = 0usize;
+    while left < account_ids.len() {
+        let mut right = left + 1;
+        while right < account_ids.len() {
+            if account_ids[left] == account_ids[right] {
+                return Err(Error::MismatchedBinding);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(BoundDealerFacilityVectorPrestateV1 {
+        facility_id,
+        dealer_state_account,
+        dealer_state_pre_semantic_id,
+        facility_position_account,
+        facility_position,
+        facility_position_pre_semantic_id,
+        facility_position_binding_id,
+        dealer_replay_account,
+        dealer_replay_pre_semantic_id,
+        dealer_replay_ordinal,
+        product_obligation_account,
+        product_obligation_semantic_id,
+        product_root_account,
+        product_root_semantic_id,
+        product_authority_receipt_id,
+        facility_credit_account,
+        facility_credit_funding_receipt_id,
+    })
+}
+
+/// Complete one-sequence Fractional successor returned to Dealer action 23.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerFacilityVectorTransitionV1 {
+    prestate: BoundDealerFacilityVectorPrestateV1,
+    quantities: [u64; MAX_OUTCOMES],
+    ledger_before_id: Identity32V1,
+    ledger_after: FractionalLedgerV1,
+    custody_after: FractionalClaimRedemptionPlanV3,
+    credit_after: FractionalCreditV2,
+    credit_after_id: Identity32V1,
+    facility_position_after: PositionAccountV3,
+    facility_position_after_id: Identity32V1,
+    payout_atoms: u64,
+    residue_numerator: u64,
+    vector_transition_id: Identity32V1,
+}
+
+impl DealerFacilityVectorTransitionV1 {
+    /// Exact authenticated facility prestate.
+    pub const fn prestate(self) -> BoundDealerFacilityVectorPrestateV1 {
+        self.prestate
+    }
+
+    /// Exact outcome-ordered quantities consumed together.
+    pub const fn quantities(self) -> [u64; MAX_OUTCOMES] {
+        self.quantities
+    }
+
+    /// a5 semantic identity before the vector transition.
+    pub const fn ledger_before_id(self) -> Identity32V1 {
+        self.ledger_before_id
+    }
+
+    /// Complete a5 successor.
+    pub const fn ledger_after(self) -> FractionalLedgerV1 {
+        self.ledger_after
+    }
+
+    /// Atomic ClaimLedger/Hoard successor.
+    pub const fn custody_after(self) -> FractionalClaimRedemptionPlanV3 {
+        self.custody_after
+    }
+
+    /// Newly initialized facility-owned a6/v2 successor.
+    pub const fn credit_after(self) -> FractionalCreditV2 {
+        self.credit_after
+    }
+
+    /// Semantic identity of the exact a6/v2 postimage.
+    pub const fn credit_after_id(self) -> Identity32V1 {
+        self.credit_after_id
+    }
+
+    /// Canonical facility Position successor.
+    pub const fn facility_position_after(self) -> PositionAccountV3 {
+        self.facility_position_after
+    }
+
+    /// Semantic identity of the facility Position successor.
+    pub const fn facility_position_after_id(self) -> Identity32V1 {
+        self.facility_position_after_id
+    }
+
+    /// Whole collateral atoms reclassified into facility Position cash.
+    pub const fn payout_atoms(self) -> u64 {
+        self.payout_atoms
+    }
+
+    /// Exact sub-atom numerator retained in the facility-owned credit.
+    pub const fn residue_numerator(self) -> u64 {
+        self.residue_numerator
+    }
+
+    /// Digest Dealer Replay must commit for its atomic action-23 successor.
+    pub const fn vector_transition_id(self) -> Identity32V1 {
+        self.vector_transition_id
+    }
+}
+
+/// Prepare the sole bounded-vector Fractional transition for Dealer Resolve.
+///
+/// The fixed-width dot product is accumulated in canonical outcome order and
+/// divided exactly once. Its remainder is retained in a newly initialized
+/// facility-owned a6/v2 credit, and a5 K changes by that same numerator.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_dealer_facility_vector_transition_v1(
+    context: BoundFractionalContextV1,
+    request: crate::DealerFacilityVectorRequestV1,
+    prestate: BoundDealerFacilityVectorPrestateV1,
+    credit_creation: CreditCreationV1,
+) -> Result<DealerFacilityVectorTransitionV1> {
+    let position_fields = prestate.facility_position.fields();
+    if request.outcome_count != context.policy.outcome_count
+        || request.outcome_count != context.payout.outcome_count
+        || request.expected_position_generation != prestate.facility_position.generation()
+        || request.expected_replay_ordinal != prestate.dealer_replay_ordinal
+        || request.expected_credit_sequence != 1
+        || context.ledger.phase != FractionalLedgerPhaseV1::Live
+        || position_fields.market_instance_id != context.policy.market_instance
+        || position_fields.realm_id != context.policy.realm
+        || position_fields.collateral_policy_id != context.policy.collateral_policy
+        || position_fields.collateral_release_id != context.policy.collateral_release
+        || position_fields.outcome_count != context.policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let CreditCreationV1::Fresh {
+        claimant,
+        stored_bump: _,
+        rent: _,
+    } = credit_creation
+    else {
+        return Err(Error::AlreadyInitialized);
+    };
+    if claimant != prestate.facility_id {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        context.claim_ledger,
+        context.hoard,
+        context.ledger.aggregate_credit_numerator,
+    )?;
+    let canonical = canonical_supply(context.claim_ledger)?;
+    let mut position_eggs = prestate.facility_position.native_eggs();
+    let mut weighted_numerator = 0u128;
+    let mut index = 0usize;
+    while index < MAX_OUTCOMES {
+        let quantity = request.quantities[index];
+        if index < usize::from(request.outcome_count) {
+            if canonical[index] < quantity {
+                return Err(Error::InsufficientClaims);
+            }
+            position_eggs[index] = position_eggs[index]
+                .checked_sub(quantity)
+                .ok_or(Error::InsufficientClaims)?;
+            weighted_numerator = weighted_numerator
+                .checked_add(
+                    u128::from(quantity)
+                        .checked_mul(u128::from(context.payout.weights[index]))
+                        .ok_or(Error::Arithmetic)?,
+                )
+                .ok_or(Error::Arithmetic)?;
+        } else if quantity != 0 {
+            return Err(Error::NonCanonicalPadding);
+        }
+        index += 1;
+    }
+    let (mut credit_after, created_count) = open_credit(
+        context,
+        CreditPrestateV1::Create(credit_creation),
+        prestate.facility_id,
+        request.expected_credit_sequence,
+    )?;
+    if created_count != 1 || credit_after.numerator != 0 {
+        return Err(Error::AggregateMismatch);
+    }
+    let denominator = u128::from(context.payout.denominator);
+    let payout_atoms = u64::try_from(weighted_numerator / denominator)
+        .map_err(|_| Error::Arithmetic)?;
+    let residue_numerator = u64::try_from(weighted_numerator % denominator)
+        .map_err(|_| Error::Arithmetic)?;
+    credit_after.numerator = residue_numerator;
+    let ledger_before_id = context.ledger.state_id()?;
+    let mut ledger_after = context.ledger.advanced(request.expected_ledger_sequence)?;
+    ledger_after.active_credit_accounts = ledger_after
+        .active_credit_accounts
+        .checked_add(1)
+        .ok_or(Error::Arithmetic)?;
+    ledger_after.aggregate_credit_numerator = ledger_after
+        .aggregate_credit_numerator
+        .checked_add(u128::from(residue_numerator))
+        .ok_or(Error::Arithmetic)?;
+    credit_after.validate_with(
+        context.policy_account,
+        context.policy,
+        context.ledger_account,
+        ledger_after,
+        context.payout,
+    )?;
+    let custody_after = prepare_canonical_redemption(
+        context,
+        ledger_after,
+        request.expected_ledger_sequence,
+        FractionalClaimSupplyMutationV3::BurnInternalVector {
+            amounts: request.quantities,
+        },
+        payout_atoms,
+        FractionalPayoutDispositionV3::InternalPositionCash,
+    )?;
+    let old = prestate.facility_position.fields();
+    let mut position_after_fields = old;
+    position_after_fields.generation = old
+        .generation
+        .checked_add(1)
+        .ok_or(Error::Arithmetic)?;
+    position_after_fields.cash_atoms = old
+        .cash_atoms
+        .checked_add(payout_atoms)
+        .ok_or(Error::Arithmetic)?;
+    position_after_fields.native_eggs = position_eggs;
+    let facility_position_after = PositionAccountV3::new(position_after_fields)
+        .map_err(|_| Error::PositionRefused)?;
+    let facility_position_after_id = facility_position_after
+        .semantic_id(&FractionalSha256V1)
+        .map_err(|_| Error::PositionRefused)?;
+    let credit_after_id = credit_after.state_id()?;
+    let ledger_after_id = ledger_after.state_id()?;
+    let fractional = custody_after.fractional();
+    let mut hasher = Sha256::new();
+    hasher.update(DEALER_FACILITY_VECTOR_TRANSITION_DOMAIN_V1);
+    for identity in [
+        prestate.facility_id,
+        prestate.dealer_state_account,
+        prestate.dealer_state_pre_semantic_id,
+        prestate.facility_position_account,
+        prestate.facility_position_pre_semantic_id,
+        facility_position_after_id,
+        prestate.facility_position_binding_id,
+        prestate.dealer_replay_account,
+        prestate.dealer_replay_pre_semantic_id,
+        prestate.product_obligation_account,
+        prestate.product_obligation_semantic_id,
+        prestate.product_root_account,
+        prestate.product_root_semantic_id,
+        prestate.product_authority_receipt_id,
+        prestate.facility_credit_account,
+        prestate.facility_credit_funding_receipt_id,
+        context.resolution_semantic_id,
+        context.resolution_data_id,
+        ledger_before_id,
+        ledger_after_id,
+        runtime_identity(fractional.claim_ledger_before_id())?,
+        runtime_identity(fractional.claim_ledger_after_id())?,
+        runtime_identity(custody_after.hoard_before_id())?,
+        runtime_identity(custody_after.hoard_after_id())?,
+        credit_after_id,
+        runtime_identity(custody_after.receipt_id())?,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(request.expected_ledger_sequence.to_le_bytes());
+    hasher.update(request.expected_credit_sequence.to_le_bytes());
+    hasher.update(request.expected_position_generation.to_le_bytes());
+    hasher.update(request.expected_replay_ordinal.to_le_bytes());
+    hasher.update([request.outcome_count]);
+    let mut quantity_index = 0usize;
+    while quantity_index < MAX_OUTCOMES {
+        hasher.update(request.quantities[quantity_index].to_le_bytes());
+        quantity_index += 1;
+    }
+    hasher.update(payout_atoms.to_le_bytes());
+    hasher.update(residue_numerator.to_le_bytes());
+    let vector_transition_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(DealerFacilityVectorTransitionV1 {
+        prestate,
+        quantities: request.quantities,
+        ledger_before_id,
+        ledger_after,
+        custody_after,
+        credit_after,
+        credit_after_id,
+        facility_position_after,
+        facility_position_after_id,
+        payout_atoms,
+        residue_numerator,
+        vector_transition_id,
+    })
 }
 
 /// Redeem an exact bearer lot without creating claimant-credit state.
@@ -2382,14 +2826,20 @@ pub struct CreditCloseFundingPlanV1 {
 /// Complete zero-credit close plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreditClosePlanV1 {
+    /// Canonical live `0xa6/v2` prestate identity.
+    pub credit_before_id: Identity32V1,
     /// Permanent replay-prevention successor at the same PDA.
     pub tombstone: FractionalCreditTombstoneV2,
+    /// Canonical permanent tombstone poststate identity.
+    pub tombstone_after_id: Identity32V1,
     /// Sole aggregate-credit owner successor.
     pub ledger_after: FractionalLedgerV1,
     /// Canonical unchanged-supply ClaimLedger successor and cross-account IDs.
     pub claim_ledger_after: FractionalClaimLedgerPlanV3,
     /// Exact rent disposition; collateral/credit principal is never included.
     pub funding: CreditCloseFundingPlanV1,
+    /// Canonical identity of the complete a5/ClaimLedger/a6 close transition.
+    pub transition_id: Identity32V1,
 }
 
 /// Close only a zero-numerator credit into its permanent tombstone.
@@ -2411,6 +2861,8 @@ pub fn close_zero_credit_v1(
     if credit.numerator != 0 {
         return Err(Error::CreditOutstanding);
     }
+    let credit_before_id = credit.state_id()?;
+    let ledger_before_id = context.ledger.state_id()?;
     let credit_after_sequence = credit.advanced(expected_credit_sequence)?.next_sequence;
     let rent = credit.rent;
     rent.validate().map_err(|_| Error::RentRefused)?;
@@ -2435,31 +2887,58 @@ pub fn close_zero_credit_v1(
     ledger_after.validate()?;
     let claim_ledger_after =
         prepare_canonical_claim_latch(context, ledger_after, expected_ledger_sequence)?;
+    let tombstone = FractionalCreditTombstoneV2 {
+        policy_account: credit.policy_account,
+        ledger_account: credit.ledger_account,
+        market_instance: credit.market_instance,
+        resolution_account: credit.resolution_account,
+        resolution_data_id: credit.resolution_data_id,
+        claimant: credit.claimant,
+        domain_generation: credit.domain_generation,
+        account_generation: credit.account_generation,
+        closed_next_sequence: credit_after_sequence,
+        stored_bump: credit.stored_bump,
+        permanent_tombstone_principal: rent.permanent_tombstone_principal,
+    };
+    let tombstone_after_id = tombstone.state_id()?;
+    let ledger_after_id = ledger_after.state_id()?;
+    let funding = CreditCloseFundingPlanV1 {
+        payer: rent.payer,
+        payer_refund_lamports: rent.refundable_live_principal,
+        tombstone_lamports: rent.permanent_tombstone_principal,
+        neutral_sink,
+        neutral_lamports: actual_lamports
+            .checked_sub(principal)
+            .ok_or(Error::RentRefused)?,
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_CREDIT_CLOSE_TRANSITION_DOMAIN_V1);
+    for id in [
+        context.policy.state_id()?,
+        ledger_before_id,
+        ledger_after_id,
+        credit_before_id,
+        tombstone_after_id,
+        claim_ledger_after.claim_ledger_before_id(),
+        claim_ledger_after.claim_ledger_after_id(),
+        funding.payer,
+        funding.neutral_sink,
+    ] {
+        hasher.update(id.bytes());
+    }
+    hasher.update(funding.payer_refund_lamports.to_le_bytes());
+    hasher.update(funding.tombstone_lamports.to_le_bytes());
+    hasher.update(funding.neutral_lamports.to_le_bytes());
+    let transition_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
     Ok(CreditClosePlanV1 {
-        tombstone: FractionalCreditTombstoneV2 {
-            policy_account: credit.policy_account,
-            ledger_account: credit.ledger_account,
-            market_instance: credit.market_instance,
-            resolution_account: credit.resolution_account,
-            resolution_data_id: credit.resolution_data_id,
-            claimant: credit.claimant,
-            domain_generation: credit.domain_generation,
-            account_generation: credit.account_generation,
-            closed_next_sequence: credit_after_sequence,
-            stored_bump: credit.stored_bump,
-            permanent_tombstone_principal: rent.permanent_tombstone_principal,
-        },
+        credit_before_id,
+        tombstone,
+        tombstone_after_id,
         ledger_after,
         claim_ledger_after,
-        funding: CreditCloseFundingPlanV1 {
-            payer: rent.payer,
-            payer_refund_lamports: rent.refundable_live_principal,
-            tombstone_lamports: rent.permanent_tombstone_principal,
-            neutral_sink,
-            neutral_lamports: actual_lamports
-                .checked_sub(principal)
-                .ok_or(Error::RentRefused)?,
-        },
+        funding,
+        transition_id,
     })
 }
 
@@ -2661,7 +3140,7 @@ impl FractionalDomainTerminalRequirementV1 {
         self.native_claim_basis_id
     }
 
-    /// Physical immutable `0xa4/v2` account to delete.
+    /// Physical immutable `0xa4/v3` account to delete.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
@@ -2729,7 +3208,7 @@ impl EmptyLedgerClosePlanV1 {
         self.terminal_requirement
     }
 
-    /// Independent rent-only disposition for immutable `0xa4/v2`.
+    /// Independent rent-only disposition for immutable `0xa4/v3`.
     pub const fn policy_funding(self) -> FractionalAccountCloseFundingV1 {
         self.policy_funding
     }
@@ -2839,7 +3318,7 @@ impl FractionalFamilyTerminalReceiptV1 {
         self.domain_generation
     }
 
-    /// Physical immutable a4/v2 account deleted atomically.
+    /// Physical immutable a4/v3 account deleted atomically.
     pub const fn policy_account(self) -> Identity32V1 {
         self.policy_account
     }
@@ -3001,7 +3480,7 @@ pub fn verify_fractional_family_terminal_postwrite_v1(
     close: EmptyLedgerClosePlanV1,
     terminal: FractionalFamilyTerminalReceiptV1,
     policy_account: Identity32V1,
-    policy: FractionalPolicyV2,
+    policy: FractionalPolicyV3,
     ledger_account: Identity32V1,
     ledger: FractionalLedgerV1,
     claim_ledger_account: Identity32V1,

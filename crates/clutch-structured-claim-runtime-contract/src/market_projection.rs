@@ -6,9 +6,9 @@
 //! allowing an untyped market key to stand in for `MarketInstanceV2`.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId,
+    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6Id, ContentId,
     MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id, ProductTemplateV4,
-    SeriesAttachmentPlanV4, SeriesAttachmentPlanV4Id, SeriesPlanV5, SeriesPlanV5Id,
+    SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesPlanV5, SeriesPlanV5Id,
 };
 
 use crate::{Error, Result};
@@ -61,11 +61,11 @@ pub struct StructuredMarketProjectionV1 {
     /// Shared Product/Source generation.
     pub generation: u64,
     /// Operational attachment fixed by the Series.
-    pub attachment_plan_id: SeriesAttachmentPlanV4Id,
+    pub attachment_plan_id: SeriesAttachmentPlanV5Id,
     /// Exact wrapper-recipe set owned by the authenticated attachment body.
     pub wrapper_recipe_set_id: ContentId,
     /// Exact authenticated successor compiler bundle.
-    pub compiler_output_id: CompiledProductSeriesBundleV5Id,
+    pub compiler_output_id: CompiledProductSeriesBundleV6Id,
     /// Product compiler release fixed by the Product template.
     pub compiler_release_id: ContentId,
     /// Exact loader-authenticated central Registry ReleaseV2.
@@ -240,8 +240,8 @@ pub fn project_structured_market_v1(
     ordinal: u32,
     generation: u64,
     market: &MarketInstancePreimageV2,
-    attachment: &SeriesAttachmentPlanV4,
-    compiler_output: &CompiledProductSeriesBundleV5,
+    attachment: &SeriesAttachmentPlanV5,
+    compiler_output: &CompiledProductSeriesBundleV6,
     template: &ProductTemplateV4,
     genesis: &MarketGenesisProfileV2,
     owner_release_id: ContentId,
@@ -346,9 +346,9 @@ mod tests {
             series_market_link_account: [3; 32],
             ordinal: 0,
             generation: 1,
-            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([4; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([4; 32]),
             wrapper_recipe_set_id: ContentId::from_bytes([5; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes([6; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes([6; 32]),
             compiler_release_id: ContentId::from_bytes([7; 32]),
             registry_release_id: ContentId::from_bytes([8; 32]),
             capability_profile_id: ContentId::from_bytes([9; 32]),
@@ -393,9 +393,9 @@ mod tests {
             series_market_link_account: [3; 32],
             ordinal: 3,
             generation: 4,
-            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([5; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([5; 32]),
             wrapper_recipe_set_id: ContentId::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes([7; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes([7; 32]),
             compiler_release_id: ContentId::from_bytes([8; 32]),
             registry_release_id: ContentId::from_bytes([9; 32]),
             capability_profile_id: ContentId::from_bytes([10; 32]),

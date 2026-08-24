@@ -5,16 +5,16 @@
 use sha2::{Digest, Sha256};
 
 use crate::{
-    DealerActionLivenessAuthorizationV1, DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1,
+    DealerActionLivenessAuthorizationV1, DealerAssetTransferAmountsV1, DealerAssetTransferBundleV2,
     DealerEpochBindingV2, DealerFacilityReplayV1,
     CoveredDealerSelectionV1, DealerFundedDependenciesV2, DealerLeaseSelectionEvidenceV3,
     DealerLeaseV2,
-    DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1,
+    DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV2,
     DealerPotCustodyTransitionV1, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
     DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1, DealerStateV2,
     DealerTransferPositionV3, DealerTransitionIntentV1, DealerTransitionLivenessModeV1, Error,
-    FacilityPositionBindingV2, Id, PreparedDealerPositionPotTransferV1,
-    CoveredDealerRowAssetTransitionV1, CoveredDealerSettlementRowV1,
+    FacilityPositionBindingV2, Id, PreparedDealerPositionPotTransferV2,
+    CoveredDealerRowAssetTransitionV2, CoveredDealerSettlementRowV1,
     PreparedDealerReplayTransitionV1, Result, SettlementPotV2, MAX_OUTCOMES,
 };
 use clutch_general_v2_contract::SettlementRootV1AccountV1;
@@ -31,7 +31,7 @@ pub struct PreparedDealerBeginLeaseV3 {
     /// Epoch child after binding the exact Lease account and candidate.
     pub epoch_after: DealerEpochBindingV2,
     /// Exact Facility Position-to-new-Pot transfer.
-    pub transfer: PreparedDealerPositionPotTransferV1,
+    pub transfer: PreparedDealerPositionPotTransferV2,
     /// Same-generation Replay advance binding State, transfer, fee, and liveness.
     pub replay: PreparedDealerReplayTransitionV1,
     /// Canonical pre-creation Pot intent, never a persisted balance owner.
@@ -116,7 +116,7 @@ pub fn prepare_covered_dealer_row_progress_v1(
     schedule: &DealerLivenessScheduleV1,
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
-    transition: CoveredDealerRowAssetTransitionV1,
+    transition: CoveredDealerRowAssetTransitionV2,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
     current_slot: u64,
@@ -232,7 +232,7 @@ pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
     runtime: &DealerRuntimeLivenessBindingV1,
     select_begin: &DealerActionLivenessAuthorizationV1,
     selected_fee: &DealerSelectedFeeRecordBindingV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     facility_position: DealerTransferPositionV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
@@ -302,7 +302,7 @@ pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
     {
         return Err(Error::ConservationFailure);
     }
-    let transfer = crate::prepare_dealer_position_pot_transfer_v1(
+    let transfer = crate::prepare_dealer_position_pot_transfer_v2(
         DealerRuntimeActionV1::SelectLeaseAndBegin,
         market,
         facility_position,
@@ -323,7 +323,7 @@ pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
             native_eggs: pot.facility_sell_eggs,
         },
     )?;
-    let bundle: DealerAssetTransferBundleV1 = transfer.bundle();
+    let bundle: DealerAssetTransferBundleV2 = transfer.bundle();
     if bundle.source_pre_semantic_id != state.facility_position_id
         || bundle.source_post_semantic_id != lease.facility_position_leased_id
         || pot.facility_position_pre_id != state.facility_position_id
@@ -409,7 +409,7 @@ pub fn prepare_begin_covered_lease_pot_v4(
     runtime: &DealerRuntimeLivenessBindingV1,
     select_begin: &DealerActionLivenessAuthorizationV1,
     selected_fee: &DealerSelectedFeeRecordBindingV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     facility_position: DealerTransferPositionV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,

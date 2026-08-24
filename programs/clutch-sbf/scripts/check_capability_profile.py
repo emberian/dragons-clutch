@@ -26,6 +26,46 @@ LINKED_MEASUREMENT_SCHEMA = "dragons-clutch/capability-profile-measurement/v2"
 LOADER_V3_MAX_PERMITTED_DATA_LENGTH = 10 * 1024 * 1024
 PROGRAMDATA_METADATA_DATA_LEN_BYTES = 45
 
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE = "profile-successor-chain-attached-dev"
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL = (
+    "dragons-clutch/capability-profile/successor-chain-attached-dev/"
+    "complete-product-source-general-direct-fractional-structured-dealer-"
+    "failure-release-closure/v1"
+)
+SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_ID = (
+    "f1d4c9bbb89e89bf13fe0a54ae824220dc0d1109bdf21316e2953aa334afd4ca"
+)
+
+CURRENT_GENERAL_EXTENSION_TRIPLES = [
+    [74, 1, action] for action in (*range(1, 35), *range(36, 43))
+]
+CURRENT_STRUCTURED_EXTENSION_TRIPLES = [
+    [75, 1, action] for action in (1, 3, 5, 6, 7, 8)
+]
+CURRENT_DEALER_EXTENSION_TRIPLES = [[76, 1, action] for action in range(1, 26)]
+# Action25 retains one coarse registry coordinate, but the current dispatcher
+# admits only these hostile-decoded payload targets. They are emitted as
+# checked variants rather than falsely enabling the whole tuple.
+CURRENT_DEALER_PAYLOAD_VARIANTS = [
+    [76, 1, 25, 8],
+    [76, 1, 25, 9],
+]
+CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 13)]
+CURRENT_SERIES_EXTENSION_TRIPLES = [[77, 2, action] for action in range(13, 19)]
+CURRENT_RECOVERY_EXTENSION_TRIPLES = [[78, 1, action] for action in range(10, 14)]
+CURRENT_FRACTIONAL_EXTENSION_TRIPLES = [[79, 1, action] for action in range(1, 11)]
+CURRENT_DIRECT_EXTENSION_TRIPLES = [[80, 1, action] for action in range(1, 14)]
+SUCCESSOR_CHAIN_ATTACHED_DEV_EXTENSION_TRIPLES = sorted(
+    CURRENT_GENERAL_EXTENSION_TRIPLES
+    + CURRENT_STRUCTURED_EXTENSION_TRIPLES
+    + CURRENT_DEALER_EXTENSION_TRIPLES
+    + CURRENT_SOURCE_EXTENSION_TRIPLES
+    + CURRENT_SERIES_EXTENSION_TRIPLES
+    + CURRENT_RECOVERY_EXTENSION_TRIPLES
+    + CURRENT_FRACTIONAL_EXTENSION_TRIPLES
+    + CURRENT_DIRECT_EXTENSION_TRIPLES
+)
+
 CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("relation", "dragons-clutch/semantic-owner/relation"),
     ("score", "dragons-clutch/semantic-owner/score"),
@@ -34,6 +74,10 @@ CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("clear-work-feed", "dragons-clutch/semantic-owner/clear-work-feed"),
     ("retirement", "dragons-clutch/semantic-owner/retirement"),
     ("source-plane", "dragons-clutch/semantic-owner/source-plane"),
+    (
+        "fractional-redemption",
+        "dragons-clutch/semantic-owner/fractional-redemption",
+    ),
     ("series-products", "dragons-clutch/semantic-owner/series-products"),
     ("recovery", "dragons-clutch/semantic-owner/recovery"),
     ("structured-claim", "dragons-clutch/semantic-owner/structured-claim"),
@@ -48,12 +92,20 @@ PROFILE_FEATURES = frozenset(
         "profile-full",
         "profile-direct-v3-source-v2-point",
         "profile-general-source-v2-point",
+        SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
     }
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "production-inert": None,
+    "runtime-real-pyth-release": None,
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
+}
+COLLATERAL_RELEASE_IDENTITY_FEATURE: dict[str, str | None] = {
+    "production-inert": None,
+    "observed-positive-collateral-and-claim-release": (
+        "observed-positive-collateral-release-manifest"
+    ),
 }
 
 HEX_32 = re.compile(r"[0-9a-f]{64}\Z")
@@ -71,6 +123,9 @@ SYSCALL_NAME = re.compile(r"(?:abort|sol_[a-z0-9_]+)\Z")
 LINKED_MEASUREMENT_CODE_INPUTS: tuple[tuple[str, str], ...] = (
     ("checker", "programs/clutch-sbf/scripts/check_capability_profile.py"),
     ("producer", "programs/clutch-sbf/scripts/measure_capability_profiles.py"),
+)
+OBSERVED_RELEASE_MANIFEST_PATH = Path(
+    "programs/clutch-sbf/program/src/observed_collateral_release_manifest_v2.rs"
 )
 
 
@@ -136,6 +191,44 @@ def load_json(path: Path) -> Any:
             return json.load(source, object_pairs_hook=reject_duplicate_keys)
     except (OSError, json.JSONDecodeError) as exc:
         raise ProfileError(f"{path}: cannot read canonical JSON: {exc}") from exc
+
+
+def require_populated_observed_release_manifest(repo: Path) -> None:
+    """Refuse the public/dev selector until both checked release planes exist."""
+
+    path = repo / OBSERVED_RELEASE_MANIFEST_PATH
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ProfileError(f"{path}: cannot read observed release manifest: {exc}") from exc
+    releases = re.search(
+        r"OBSERVED_COLLATERAL_RELEASES_V2\s*:\s*\[AdapterReleaseV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    manifests = re.search(
+        r"OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2\s*:\s*"
+        r"\[CompiledCollateralReleaseManifestV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    claim = re.search(
+        r"OBSERVED_CLAIM_ISSUANCE_RELEASE_V1\s*:\s*"
+        r"Option<CompiledClaimIssuanceReleaseV1>\s*=\s*Some\s*\(",
+        source,
+    )
+    require(
+        releases is not None and manifests is not None,
+        "build_contract: observed-positive collateral manifest declarations are not canonical",
+    )
+    release_count = int(releases.group(1))
+    manifest_count = int(manifests.group(1))
+    require(
+        release_count > 0 and release_count == manifest_count,
+        "build_contract: observed-positive collateral release rows are absent or mismatched",
+    )
+    require(
+        claim is not None,
+        "build_contract: observed-positive claim release row is absent",
+    )
 
 
 def canonical_json_sha256(value: Any) -> str:
@@ -353,6 +446,111 @@ def validate_registry(value: Any, capabilities: list[dict[str, Any]]) -> dict[st
     }
 
 
+def validate_successor_dependency_closure(
+    build_contract: dict[str, Any],
+    profile_label: str,
+    capabilities: list[dict[str, Any]],
+    central_registry: dict[str, Any],
+) -> None:
+    """Require the unified dev family graph as one indivisible capability."""
+
+    if (
+        build_contract["cargo_profile_feature"]
+        != SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE
+    ):
+        return
+    require(
+        profile_label == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+        "profile: successor-chain-attached dev label is not the frozen complete-closure identity",
+    )
+    require(
+        hashlib.sha256(profile_label.encode("utf-8")).hexdigest()
+        == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_ID,
+        "profile: successor-chain-attached dev label digest is not frozen",
+    )
+    require(
+        all(row["linkage"] == "linked" for row in capabilities),
+        "profile: successor-chain-attached dev requires every semantic owner linked",
+    )
+    enabled_extensions = [
+        triple
+        for triple in central_registry["enabled_intent_triples"]
+        if triple[2] != 0
+    ]
+    require(
+        enabled_extensions == SUCCESSOR_CHAIN_ATTACHED_DEV_EXTENSION_TRIPLES,
+        "profile: successor-chain-attached dev extension closure is incomplete or noncanonical",
+    )
+
+    rows = {row["slot"]: row for row in capabilities}
+    exclusive = (
+        ("source-plane", CURRENT_SOURCE_EXTENSION_TRIPLES),
+        ("series-products", CURRENT_SERIES_EXTENSION_TRIPLES),
+        ("recovery", CURRENT_RECOVERY_EXTENSION_TRIPLES),
+        ("structured-claim", CURRENT_STRUCTURED_EXTENSION_TRIPLES),
+        ("liquidity-dealer", CURRENT_DEALER_EXTENSION_TRIPLES),
+        ("fractional-redemption", CURRENT_FRACTIONAL_EXTENSION_TRIPLES),
+    )
+    for slot, expected in exclusive:
+        family_tags = {triple[0] for triple in expected}
+        owned = [
+            triple
+            for triple in rows[slot]["required_intent_triples"]
+            if triple[0] in family_tags and triple[2] != 0
+        ]
+        require(
+            owned == expected,
+            f"profile: {slot} does not own its exact successor action closure",
+        )
+        foreign = [
+            triple
+            for row in capabilities
+            if row["slot"] != slot
+            for triple in row["required_intent_triples"]
+            if triple in expected
+        ]
+        require(
+            foreign == [],
+            f"profile: {slot} successor actions have a second semantic owner",
+        )
+
+    shared_market_slots = {
+        "relation",
+        "score",
+        "price-measure",
+        "candidate-lifecycle",
+        "clear-work-feed",
+        "retirement",
+    }
+    for family_name, expected in (
+        ("General", CURRENT_GENERAL_EXTENSION_TRIPLES),
+        ("Direct", CURRENT_DIRECT_EXTENSION_TRIPLES),
+    ):
+        expected_set = {tuple(triple) for triple in expected}
+        owned = {
+            tuple(triple)
+            for row in capabilities
+            if row["slot"] in shared_market_slots
+            for triple in row["required_intent_triples"]
+            if tuple(triple) in expected_set
+        }
+        require(
+            owned == expected_set,
+            f"profile: {family_name} lifecycle/index action closure lacks semantic ownership",
+        )
+        foreign = [
+            triple
+            for row in capabilities
+            if row["slot"] not in shared_market_slots
+            for triple in row["required_intent_triples"]
+            if tuple(triple) in expected_set
+        ]
+        require(
+            foreign == [],
+            f"profile: {family_name} actions have a non-market semantic owner",
+        )
+
+
 def validate_build_contract(value: Any) -> dict[str, Any]:
     require(isinstance(value, dict), "build_contract: expected object")
     exact_keys(
@@ -360,6 +558,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
         {
             "cargo_profile_feature",
             "source_identity",
+            "collateral_release_identity",
             "expected_undefined_dynamic_symbols",
         },
         "build_contract",
@@ -378,6 +577,29 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
         source_identity in SOURCE_IDENTITY_FEATURE,
         "build_contract.source_identity: unknown class",
     )
+    collateral_release_identity = require_string(
+        value["collateral_release_identity"],
+        "build_contract.collateral_release_identity",
+    )
+    require(
+        collateral_release_identity in COLLATERAL_RELEASE_IDENTITY_FEATURE,
+        "build_contract.collateral_release_identity: unknown class",
+    )
+    if feature == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE:
+        require(
+            source_identity == "runtime-real-pyth-release",
+            "build_contract: successor-chain-attached dev requires the runtime real-Pyth release identity",
+        )
+        require(
+            collateral_release_identity
+            == "observed-positive-collateral-and-claim-release",
+            "build_contract: successor-chain-attached dev requires observed-positive collateral and claim releases",
+        )
+    if source_identity == "runtime-real-pyth-release":
+        require(
+            feature == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+            "build_contract: runtime real-Pyth release requires the successor-chain-attached dev profile",
+        )
     symbols = value["expected_undefined_dynamic_symbols"]
     require(
         isinstance(symbols, list),
@@ -404,6 +626,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
     return {
         "cargo_profile_feature": feature,
         "source_identity": source_identity,
+        "collateral_release_identity": collateral_release_identity,
         "expected_undefined_dynamic_symbols": parsed_symbols,
     }
 
@@ -423,6 +646,11 @@ def cargo_features(build_contract: dict[str, Any]) -> list[str]:
     source_feature = SOURCE_IDENTITY_FEATURE[str(build_contract["source_identity"])]
     if source_feature is not None:
         features.append(source_feature)
+    collateral_feature = COLLATERAL_RELEASE_IDENTITY_FEATURE[
+        str(build_contract["collateral_release_identity"])
+    ]
+    if collateral_feature is not None:
+        features.append(collateral_feature)
     return features
 
 
@@ -1181,6 +1409,7 @@ def extract_linked_measurement(
             "name",
             "label",
             "source_identity",
+            "collateral_release_identity",
             "cargo_features",
             "capability_profile_identity_sha256",
             "identity_manifest_sha256",
@@ -1197,6 +1426,11 @@ def extract_linked_measurement(
     require(
         profile["source_identity"] == build_contract["source_identity"],
         "measurement evidence: source/lab identity mismatch",
+    )
+    require(
+        profile["collateral_release_identity"]
+        == build_contract["collateral_release_identity"],
+        "measurement evidence: collateral-release identity mismatch",
     )
     require(
         profile["cargo_features"] == cargo_features(build_contract),
@@ -1276,6 +1510,7 @@ def extract_linked_measurement(
     needs_default_equivalence = (
         build_contract["cargo_profile_feature"] == "profile-full"
         and build_contract["source_identity"] == "production-inert"
+        and build_contract["collateral_release_identity"] == "production-inert"
     )
     if needs_default_equivalence:
         require(
@@ -1397,8 +1632,19 @@ def validate_manifest(
     )
 
     build_contract = validate_build_contract(data["build_contract"])
+    if (
+        build_contract["collateral_release_identity"]
+        == "observed-positive-collateral-and-claim-release"
+    ):
+        require_populated_observed_release_manifest(repo)
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
+    validate_successor_dependency_closure(
+        build_contract,
+        label,
+        capabilities,
+        central_registry,
+    )
     artifact_budget = data["artifact_budget"]
     require(isinstance(artifact_budget, dict), "artifact_budget: expected object")
     exact_keys(
@@ -1490,9 +1736,18 @@ def validate_manifest(
         "profile_identity_sha256": computed_identity,
         "classification": classification,
         "source_identity": build_contract["source_identity"],
+        "collateral_release_identity": build_contract[
+            "collateral_release_identity"
+        ],
         "cargo_features": cargo_features(build_contract),
         "capabilities": capabilities,
         "central_registry": central_registry,
+        "enabled_intent_variants": (
+            CURRENT_DEALER_PAYLOAD_VARIANTS
+            if build_contract["cargo_profile_feature"]
+            == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE
+            else []
+        ),
         "limits": limits,
         "linked_capabilities": linked,
         "planned_capabilities": planned,

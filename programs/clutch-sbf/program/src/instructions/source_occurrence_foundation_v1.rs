@@ -160,6 +160,18 @@ impl AuthenticatedSourceWorkCapitalizationV1 {
     pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
     }
+
+    /// Exact pending FundingV2 debit and physical custody movement retained by
+    /// Product's founder and later Source-custody retirement owners.
+    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV1 {
+        self.facts
+    }
+
+    /// Rent-derived complete lifecycle allocation. Product persists its ID and
+    /// exact total so retirement cannot relabel spent principal or donations.
+    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+        self.quote
+    }
 }
 
 /// Fully capitalize one Source lifecycle from FundingV2's exact pending debit.
@@ -225,7 +237,7 @@ pub(crate) fn capitalize_source_work_v1<
             && state.pending_debits[SeriesFundingComponentV2::SourceWork.index()]
                 == publication.source_work_funding()
             && publication.source_work_funding().collateral_atoms == 0
-            && publication.source_work_funding().lamports == quote.total_lamports
+            && publication.source_work_funding().lamports == quote.total_lamports()
             && custody_account.owner == &SYSTEM_PROGRAM_ID
             && custody_account.data_is_empty()
             && custody_account.is_writable
@@ -320,7 +332,7 @@ pub(crate) fn capitalize_source_work_v1<
         source_vault_balance_after,
         custody_balance_before: 0,
         custody_balance_after: pending.lamports,
-        capitalization_quote_id: quote.id,
+        capitalization_quote_id: quote.id(),
     };
     let product_preauthorization_id =
         authority.authenticate_source_occurrence_foundation_v1(&facts)?;
@@ -379,7 +391,7 @@ pub(crate) fn capitalize_source_work_v1<
             &occurrence_id.bytes(),
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
-            &quote.id.bytes(),
+            &quote.id().bytes(),
             &bootstrap.id().bytes(),
             &bootstrap.account_data_id().bytes(),
             &bootstrap
@@ -1103,7 +1115,7 @@ pub(crate) fn capitalize_source_work_v3<
             && state.pending_debits[SeriesFundingComponentV2::SourceWork.index()]
                 == publication.source_work_funding()
             && publication.source_work_funding().collateral_atoms == 0
-            && publication.source_work_funding().lamports == quote.total_lamports
+            && publication.source_work_funding().lamports == quote.total_lamports()
             && custody_account.owner == &SYSTEM_PROGRAM_ID
             && custody_account.data_is_empty()
             && custody_account.is_writable
@@ -1212,7 +1224,7 @@ pub(crate) fn capitalize_source_work_v3<
         source_vault_balance_after,
         custody_balance_before: 0,
         custody_balance_after: pending.lamports,
-        capitalization_quote_id: ContentId::from_bytes(quote.id.bytes()),
+        capitalization_quote_id: ContentId::from_bytes(quote.id().bytes()),
     };
     let product_preauthorization_id =
         authority.authenticate_source_occurrence_foundation_v3(&facts)?;
@@ -1277,7 +1289,7 @@ pub(crate) fn capitalize_source_work_v3<
             &occurrence_id.bytes(),
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
-            &quote.id.bytes(),
+            &quote.id().bytes(),
             &bootstrap.id().bytes(),
             &bootstrap.account_data_id().bytes(),
             &bootstrap

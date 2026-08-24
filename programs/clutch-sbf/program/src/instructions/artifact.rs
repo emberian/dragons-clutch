@@ -22,7 +22,8 @@ use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV6,
-    FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2,
+    FixedCodec as RegistryFixedCodec, MarketFamilyCapabilityPolicyV1,
+    RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryProgramReleaseV1,
     RegistryProgramReleaseV2, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
     SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesFundingQuoteV2,
@@ -30,6 +31,7 @@ use clutch_product_series::{
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
     COMPILED_PRODUCT_SERIES_BUNDLE_V4_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
     COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
+    MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1,
     REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
     REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
     REGISTRY_PROGRAM_RELEASE_V2_DOMAIN, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
@@ -44,6 +46,10 @@ use clutch_solana_layout::artifact::{
 #[cfg(target_os = "solana")]
 use clutch_solana_layout::{CodecError, TermsAccount, HASH_BYTES};
 use clutch_solana_layout::{Hash32, Intent};
+#[cfg(target_os = "solana")]
+use clutch_structured_claim_runtime_contract::{
+    WrapperRecipeHashV1, WrapperRecipeSetV1,
+};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -463,7 +469,9 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::CompiledProductSeriesBundleV5
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
-        | ArtifactKind::CompiledProductSeriesBundleV6) => {
+        | ArtifactKind::CompiledProductSeriesBundleV6
+        | ArtifactKind::WrapperRecipeSetV1
+        | ArtifactKind::MarketFamilyCapabilityPolicyV1) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -485,6 +493,33 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
 #[inline(never)]
 fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
     #[cfg(target_os = "solana")]
+    if binding.kind == ArtifactKind::WrapperRecipeSetV1 {
+        struct RuntimeRecipeSha256V1;
+
+        impl WrapperRecipeHashV1 for RuntimeRecipeSha256V1 {
+            fn hashv(&self, slices: &[&[u8]]) -> [u8; 32] {
+                solana_sha256_hasher::hashv(slices).to_bytes()
+            }
+        }
+
+        binding.validate()?;
+        require(
+            binding.context == Hash32::ZERO && body.len() == usize::from(binding.exact_len),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        let value = WrapperRecipeSetV1::decode(body, &RuntimeRecipeSha256V1)
+            .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+        require(
+            value
+                .id(&RuntimeRecipeSha256V1)
+                .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?
+                == binding.digest.bytes(),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        return Ok(0);
+    }
+
+    #[cfg(target_os = "solana")]
     if matches!(
         binding.kind,
         ArtifactKind::RegistryProgramReleaseV1
@@ -505,6 +540,7 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
             | ArtifactKind::SeriesFundingQuoteV5
             | ArtifactKind::SeriesAttachmentPlanV5
             | ArtifactKind::CompiledProductSeriesBundleV6
+            | ArtifactKind::MarketFamilyCapabilityPolicyV1
     ) {
         binding.validate()?;
         require(
@@ -601,6 +637,11 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                 CompiledProductSeriesBundleV6::decode(body)
                     .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
                 COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN
+            }
+            ArtifactKind::MarketFamilyCapabilityPolicyV1 => {
+                MarketFamilyCapabilityPolicyV1::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1
             }
             _ => return Err(ClutchError::MismatchedState.into()),
         };
@@ -879,7 +920,9 @@ fn create_final<'a>(
         | ArtifactKind::CompiledProductSeriesBundleV5
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
-        | ArtifactKind::CompiledProductSeriesBundleV6) => {
+        | ArtifactKind::CompiledProductSeriesBundleV6
+        | ArtifactKind::WrapperRecipeSetV1
+        | ArtifactKind::MarketFamilyCapabilityPolicyV1) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,

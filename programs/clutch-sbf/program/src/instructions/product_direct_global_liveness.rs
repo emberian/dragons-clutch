@@ -43,6 +43,7 @@ use super::product_market_foundation_current::
 use super::product_series_current::{
     AuthenticatedMarketLifecycleRootV2, AuthenticatedProductSeriesActivationCompletionV4,
 };
+use super::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
 
 const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-lifecycle/v2";
@@ -607,7 +608,10 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
     completion: AuthenticatedProductSeriesActivationCompletionV4,
     manifest_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
-) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV2> {
+) -> Outcome<(
+    AuthenticatedProductDirectGlobalLivenessActivationV2,
+    AuthenticatedSeriesPhysicalFounderV4,
+)> {
     let (
         founder_creation_receipt_id,
         expected_root_account,
@@ -616,6 +620,7 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
         expected_root_semantic_id,
         expected_preauthorization_id,
         capitalization,
+        physical,
     ) = completion.into_direct_activation_parts();
     let root_binding_id = root.state().binding_ref().id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -687,11 +692,11 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
         &reopened.data_id.bytes(), &reopened.authentication_id.bytes(),
     ]).to_bytes());
     id.validate().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedProductDirectGlobalLivenessActivationV2 {
+    Ok((AuthenticatedProductDirectGlobalLivenessActivationV2 {
         id, state: next, account_data_id: reopened.data_id,
         account_authentication_id: reopened.authentication_id,
         founder_creation_receipt_id, root_semantic_id, root_authentication_id,
-    })
+    }, physical))
 }
 
 #[inline(never)]

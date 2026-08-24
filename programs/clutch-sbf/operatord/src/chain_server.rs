@@ -19,8 +19,9 @@ use clutch_local_real_pyth::account_index::{
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
-    CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, PlannedRpcRequest,
-    RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
+    CanonicalFamily, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
+    IndexedProgramRelease, PlannedRpcRequest, RpcAcquisitionBounds, RpcClusterBinding,
+    RpcIndexPlan,
 };
 use clutch_sbf::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_METADATA_LEN,
@@ -77,6 +78,7 @@ struct ReleaseWire {
     capability_profile_id: String,
     source_commit: String,
     enabled_intents: Vec<IntentWire>,
+    enabled_intent_variants: Vec<IntentVariantWire>,
     families: Vec<String>,
 }
 
@@ -86,6 +88,15 @@ struct IntentWire {
     family_tag: String,
     family_version: String,
     local_action: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct IntentVariantWire {
+    family_tag: String,
+    family_version: String,
+    local_action: String,
+    payload_discriminator: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,6 +255,35 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let enabled_intent_variants = release
+            .enabled_intent_variants
+            .into_iter()
+            .map(|variant| {
+                let coordinate = CanonicalIntentCoordinate {
+                    family_tag: parse_unsigned(
+                        &variant.family_tag,
+                        &format!("releases[{index}].enabledIntentVariants.familyTag"),
+                    )?,
+                    family_version: parse_unsigned(
+                        &variant.family_version,
+                        &format!("releases[{index}].enabledIntentVariants.familyVersion"),
+                    )?,
+                    local_action: parse_unsigned(
+                        &variant.local_action,
+                        &format!("releases[{index}].enabledIntentVariants.localAction"),
+                    )?,
+                };
+                let discriminator: u8 = parse_unsigned(
+                    &variant.payload_discriminator,
+                    &format!("releases[{index}].enabledIntentVariants.payloadDiscriminator"),
+                )?;
+                match (coordinate, discriminator) {
+                    (coordinate, 8) if coordinate == CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit.coordinate() => Ok(CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit),
+                    (coordinate, 9) if coordinate == CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit.coordinate() => Ok(CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit),
+                    _ => Err("release names an unknown payload-scoped capability".into()),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         releases.push(IndexedProgramRelease {
             program_id: address(&release.program_id, &format!("releases[{index}].programId"))?,
             program_data: address(
@@ -265,6 +305,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
             )?,
             source_commit: release.source_commit,
             enabled_intents,
+            enabled_intent_variants,
             families,
         });
     }

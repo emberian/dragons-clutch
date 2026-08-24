@@ -61,9 +61,10 @@ successor versions (including Window V5, AdmissionNode V4/outer-v2,
 MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
 SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
 SelectedCandidate V1 is not a live decoder or browser mapping.
-The checked `fractional` family admits only Policy V2, Ledger V1,
-Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
-are withdrawn and invisible to live discovery.
+The checked `fractional` family admits only Policy V3, Ledger V1,
+Credit V2, and Tombstone V2. Policy V1 and the unprefundable pre-activation
+Policy V2 are withdrawn, as are the reinterpreted credit/tombstone V1 bytes;
+all are invisible to live discovery.
 It also admits only the current globally enveloped Dealer state graph (State,
 funded dependencies, LP pages, leases, pots, Epoch bindings, terminal work,
 tombstones, tickets, and receipts); raw historical Dealer V1 bodies are not

@@ -19,7 +19,7 @@ use crate::{
     DealerReplayAccountBindingV1, DealerRuntimeActionV1,
     DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
     DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error, FixedCodec, Id,
-    LpEntryV2, LpPageV2, PreparedDealerPositionPairTransferV1,
+    LpEntryV2, LpPageV2, PreparedDealerGeneralPositionTransferV3,
     PreparedDealerReplayTransitionV1, Result, DEALER_LP_PAGE_SET_INIT_DOMAIN_V2,
     LP_ENTRIES_PER_PAGE, NO_NEXT_LP_PAGE,
 };
@@ -56,7 +56,7 @@ pub struct PreparedDealerLpContributionV2 {
     /// Authoritative State after the exact share and Position update.
     pub state_after: DealerStateV2,
     /// Position-to-Position transfer prepared by the canonical Position V3 owner.
-    pub transfer: PreparedDealerPositionPairTransferV1,
+    pub transfer: PreparedDealerGeneralPositionTransferV3,
     /// Exact caller-funded Replay advance.
     pub replay: PreparedDealerReplayTransitionV1,
 }
@@ -69,7 +69,7 @@ pub struct PreparedDealerLpWithdrawalV2 {
     /// Authoritative State after the exact share and Position update.
     pub state_after: DealerStateV2,
     /// Position-to-Position transfer prepared by the canonical Position V3 owner.
-    pub transfer: PreparedDealerPositionPairTransferV1,
+    pub transfer: PreparedDealerGeneralPositionTransferV3,
     /// Exact caller-funded Replay advance.
     pub replay: PreparedDealerReplayTransitionV1,
 }
@@ -262,7 +262,7 @@ pub fn prepare_lp_contribution_v2(
     page: &LpPageV2,
     lp_owner: Id,
     share_delta: u64,
-    transfer: PreparedDealerPositionPairTransferV1,
+    transfer: PreparedDealerGeneralPositionTransferV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
 ) -> Result<PreparedDealerLpContributionV2> {
@@ -271,7 +271,8 @@ pub fn prepare_lp_contribution_v2(
     if state.phase != DealerPhaseV2::Funding || share_delta == 0 || page.sealed {
         return Err(Error::InvalidPhase);
     }
-    let bundle = transfer.bundle();
+    let position_transfer = transfer.transfer();
+    let bundle = position_transfer.bundle();
     bundle.validate()?;
     if bundle.action != DealerRuntimeActionV1::Contribute
         || bundle.source_kind != DealerAssetEndpointKindV1::GeneralPosition
@@ -342,7 +343,7 @@ pub fn prepare_lp_contribution_v2(
         DealerRuntimeActionV1::Contribute,
         Id::ZERO,
         DealerTransitionLivenessModeV1::CallerFunded,
-        bundle.bundle_id()?,
+        transfer.commitment_id(),
         bundle.destination_pre_semantic_id,
         bundle.destination_post_semantic_id,
     )?;
@@ -363,7 +364,7 @@ pub fn prepare_lp_withdrawal_v2(
     page: &LpPageV2,
     lp_owner: Id,
     share_delta: u64,
-    transfer: PreparedDealerPositionPairTransferV1,
+    transfer: PreparedDealerGeneralPositionTransferV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
 ) -> Result<PreparedDealerLpWithdrawalV2> {
@@ -375,7 +376,8 @@ pub fn prepare_lp_withdrawal_v2(
     {
         return Err(Error::InvalidPhase);
     }
-    let bundle = transfer.bundle();
+    let position_transfer = transfer.transfer();
+    let bundle = position_transfer.bundle();
     bundle.validate()?;
     if bundle.action != DealerRuntimeActionV1::WithdrawFunding
         || bundle.source_kind != DealerAssetEndpointKindV1::FacilityPosition
@@ -436,7 +438,7 @@ pub fn prepare_lp_withdrawal_v2(
         DealerRuntimeActionV1::WithdrawFunding,
         Id::ZERO,
         DealerTransitionLivenessModeV1::CallerFunded,
-        bundle.bundle_id()?,
+        transfer.commitment_id(),
         bundle.source_pre_semantic_id,
         bundle.source_post_semantic_id,
     )?;

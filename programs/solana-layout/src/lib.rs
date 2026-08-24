@@ -25,7 +25,7 @@ compile_error!("withdrawn General V3 test decoders are host-only");
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
+    feature = "profile-successor-chain-attached-dev"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
 #[cfg(any(
@@ -39,9 +39,8 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
         feature = "profile-general-source-v2-point"
     ),
     all(
-        feature = "profile-successor-chain-attached-v1",
+        feature = "profile-successor-chain-attached-dev",
         any(
-            feature = "profile-full",
             feature = "profile-direct-v3-source-v2-point",
             feature = "profile-general-source-v2-point"
         )
@@ -435,18 +434,18 @@ mod capability_profile_tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
     fn chain_attached_successor_decoder_has_no_legacy_source_or_general_arm() {
-        assert_enabled(&[2, 3, 4, 5, 7, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 68]);
+        assert_enabled(&[2, 3, 4, 5, 10, 11, 15, 16, 17, 18, 19, 20, 21, 68]);
         assert_disabled(&[
-            1, 6, 8, 9, 12, 13, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+            1, 6, 7, 8, 9, 12, 13, 14, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
             35, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
             64, 65, 66, 67, 69, 70, 71, 72, 73,
         ]);
     }
 
     #[test]
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
     fn chain_attached_successor_encoder_refuses_legacy_source_generations() {
         let terms = super::Hash32::from_bytes([7; 32]);
         let mut bytes = [0; super::MAX_INTENT_BYTES];
@@ -5646,10 +5645,8 @@ impl Intent {
                 | Self::Merge { .. }
                 | Self::Materialize { .. }
                 | Self::Dematerialize { .. }
-                | Self::PlaceOrder { .. }
                 | Self::InitRealm { .. }
                 | Self::InitProfileV2 { .. }
-                | Self::InitOrderPage { .. }
                 | Self::Endow { .. }
                 | Self::RedeemExternal { .. }
                 | Self::WithdrawCash { .. }
@@ -5746,7 +5743,7 @@ impl Intent {
     }
     /// Validate and encode into a caller-provided buffer.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
-        if cfg!(feature = "profile-successor-chain-attached-v1")
+        if cfg!(feature = "profile-successor-chain-attached-dev")
             && !self.is_successor_chain_attached_legacy()
         {
             return Err(CodecError::WrongTag);
@@ -5762,7 +5759,7 @@ impl Intent {
                 && !cfg!(any(
                     feature = "profile-full",
                     feature = "profile-direct-v3-source-v2-point",
-                    feature = "profile-successor-chain-attached-v1"
+                    feature = "profile-successor-chain-attached-dev"
                 ))
             {
                 return Err(CodecError::WrongTag);
@@ -6571,17 +6568,15 @@ impl Intent {
             return Err(CodecError::Truncated);
         };
         let tag = input[0];
-        if cfg!(feature = "profile-successor-chain-attached-v1")
+        if cfg!(feature = "profile-successor-chain-attached-dev")
             && !matches!(
                 tag,
                 SPLIT_TAG
                     | MERGE_TAG
                     | MATERIALIZE_TAG
                     | DEMATERIALIZE_TAG
-                    | PLACE_TAG
                     | INIT_REALM_TAG
                     | INIT_PROFILE_TAG
-                    | INIT_ORDER_PAGE_TAG
                     | ENDOW_TAG
                     | REDEEM_EXTERNAL_TAG
                     | WITHDRAW_CASH_TAG
@@ -6762,7 +6757,7 @@ impl Intent {
                     _ => return Err(CodecError::InvalidEnum),
                 })
             }
-            #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+            #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
             INIT_SOURCE_SPEC_V2_TAG => {
                 let terms = r.hash()?;
                 let spec_body = r.bytes::<SOURCE_SPEC_BODY_V2_BYTES>()?;
@@ -6770,7 +6765,7 @@ impl Intent {
                 check_hash(terms)?;
                 Ok(Self::InitSourceSpecV2 { terms, spec_body })
             }
-            #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+            #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
             INIT_SOURCE_ARCHIVE_V2_TAG
             | APPEND_SOURCE_ARCHIVE_V2_TAG
             | SEAL_SOURCE_ARCHIVE_V2_TAG => {
@@ -6787,7 +6782,6 @@ impl Intent {
             #[cfg(any(
                 feature = "profile-full",
                 feature = "profile-direct-v3-source-v2-point",
-                feature = "profile-successor-chain-attached-v1",
                 feature = "non-production-legacy-general-v3-hostile-decode"
             ))]
             PLACE_TAG => {
@@ -6988,7 +6982,6 @@ impl Intent {
             #[cfg(any(
                 feature = "profile-full",
                 feature = "profile-direct-v3-source-v2-point",
-                feature = "profile-successor-chain-attached-v1",
                 feature = "non-production-legacy-general-v3-hostile-decode"
             ))]
             INIT_ORDER_PAGE_TAG => {
