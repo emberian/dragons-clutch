@@ -94,8 +94,10 @@ pub use root_bundle::{
 };
 pub use runtime_commit::{
     execute_epoch_root_close_v1, execute_position_replay_close_v2,
+    execute_position_replay_close_v3,
     execute_position_replay_reopen_v2, prepare_epoch_root_close_v1,
     prepare_position_replay_close_v2, prepare_position_replay_reopen_v2,
+    ExecutedPositionReplayCloseV3, PositionReplayCloseRuntimeV3,
     PositionReplayReopenRuntimeV2, PreparedEpochRootCloseV1, PreparedPositionReplayCloseV2,
     PreparedPositionReplayReopenV2, RetirementCloseRuntimeV1,
 };
