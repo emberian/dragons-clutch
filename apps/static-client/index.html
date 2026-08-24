@@ -172,22 +172,16 @@ Registration remains authority.</pre>
       <section id="construct" class="content-section" aria-labelledby="construct-title">
         <div class="section-intro split-intro">
           <div>
-            <p class="eyebrow">Exact outer transaction · no authority</p>
-            <h2 id="construct-title">Construct an unsigned successor workflow node</h2>
+            <p class="eyebrow">Canonical transaction material · no wallet</p>
+            <h2 id="construct-title">Inspect a server-constructed successor workflow node</h2>
           </div>
-          <p>The browser owns only the Solana outer message boundary. Semantic crates must supply the exact payload, ordered account roles, signer public keys, and balanced integer equations. No caller boolean can enable a route.</p>
+          <p>operatord constructs the exact semantic-owner payload, ordered accounts, signer public identities, and blockhash-free Solana transaction from freshly reacquired state. The browser validates and displays that artifact; it never accepts caller-shaped protocol bytes.</p>
         </div>
 
         <div class="constructor-layout">
           <form id="workflow-form" class="workflow-form">
-            <label class="field"><span>Chain-derived keeper cursor</span><select id="keeper-action" disabled><option value="">Manual explicit construction (no keeper cursor)</option></select><small>Projected cursors remain non-selectable until operatord authenticates their exact action coordinate.</small></label>
-            <label class="field"><span>Transport packet limit bytes</span><input id="packet-limit" inputmode="numeric" pattern="[0-9]*" value="1232" required></label>
-            <label class="field"><span>Semantic-owner construction draft JSON</span><textarea id="draft-json" class="mono" spellcheck="false" placeholder="Explicit object with payer and 1..16 instructions. Each instruction names flow, family, familyTag, familyVersion, localAction as decimal strings, payloadHex, semanticOwner, ordered accounts, requiredSigners, and exact equations." required></textarea><small>No example payload or allocation map is embedded: exact frame coordinates and bytes must come from the selected release's semantic owner.</small></label>
-            <details class="draft-contract">
-              <summary>Draft field contract</summary>
-              <p><code>payer</code> is a public base58 address. Each instruction carries <code>flow</code>, <code>family</code>, explicit decimal-byte <code>familyTag</code>, <code>familyVersion</code>, and <code>localAction</code>, optional descriptive <code>actionName</code>, lowercase <code>payloadHex</code>, <code>semanticOwner</code> (<code>package</code>, <code>schema</code>, <code>releaseSha256</code>), ordered <code>accounts</code> (<code>address</code>, <code>isSigner</code>, <code>isWritable</code>), <code>requiredSigners</code>, and one or more <code>equations</code> with equal canonical decimal <code>left</code>/<code>right</code>. Coordinates are construction material, never a capability verdict. Each equation's typed <code>unit</code> is lamports, collateral/fee/wrapper atoms with a mint, price units with a positive scale, or Egg atoms with a Market ID and outcome.</p>
-            </details>
-            <button id="build-workflow" class="primary-button" type="submit" disabled>Construct blockhash-free transaction</button>
+            <label class="field"><span>Release-authenticated callable action</span><select id="keeper-action" disabled><option value="">No action verdict acquired</option></select><small>Unavailable verdicts remain visible but cannot be selected. A scheduling cursor by itself never enables this control.</small></label>
+            <button id="build-workflow" class="primary-button" type="submit" disabled>Inspect canonical blockhash-free draft</button>
             <p id="workflow-error" class="form-error" role="alert" hidden></p>
           </form>
 
@@ -210,14 +204,13 @@ Submission: absent</pre>
           <h2 id="boundary-title">A wallet is not hidden in the page</h2>
         </div>
         <div class="boundary-grid">
-          <article><h3>Available here</h3><p>Explicit release configuration, bounded read-only acquisition, fork/finality/staleness display, account-family projections, keeper cursors, successor envelopes, exact legacy message compilation, zero-signature transaction bytes, and canonical decimal integer metadata.</p></article>
-          <article><h3>Still external</h3><p>operatord must expose release-authenticated capability admission and Rust semantic-owner construction material. A separate explicitly reviewed wallet launcher must acquire a recent blockhash, reauthenticate state, present exact effects, sign, and submit. This client cannot perform any of those acts.</p></article>
+          <article><h3>Available here</h3><p>Explicit release configuration, bounded read-only acquisition, fork/finality/staleness display, canonical account projections, exact action-level capability verdicts, and—only when complete—server-constructed zero-signature, zero-blockhash transaction material with decimal integer metadata.</p></article>
+          <article><h3>Still external</h3><p>A separate explicitly reviewed wallet launcher must reacquire every named prestate, acquire a recent blockhash and fee-payer authorization, present exact effects, sign, submit, discard the draft, and reacquire the canonical session. This client does none of those acts.</p></article>
         </div>
       </section>
     </main>
 
     <footer class="footer"><span>DRAGON'S CLUTCH · UNTRUSTED CHAIN PROJECTION</span><span>NO WALLET · NO SIGNATURE · NO SUBMISSION</span></footer>
-    <script src="successor-builder.js"></script>
     <script src="chain-client.js"></script>
     <script src="compiler-proposal.js"></script>
     <script src="app.js"></script>

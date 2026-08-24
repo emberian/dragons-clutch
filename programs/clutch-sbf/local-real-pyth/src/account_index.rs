@@ -87,11 +87,12 @@ use clutch_source_plane_v3::{
 };
 use clutch_source_plane_v3_runtime::{
     decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV2,
-    SourceWorkReceiptAccountV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
     REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
     SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
     SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
-    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
+    SOURCE_WORK_SCHEDULE_BYTES, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
+    WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
     DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
@@ -106,7 +107,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
+    "dragons-clutch/canonical-account-decoders/v4-source-work-schedule";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -176,6 +177,7 @@ pub enum CanonicalAccountKind {
     SeriesRegistry,
     SeriesFunding,
     SourceRelease,
+    SourceWorkSchedule,
     SourceHead,
     SourceOpenRawPage,
     SourceRawPage,
@@ -249,6 +251,7 @@ impl CanonicalAccountKind {
             Self::SeriesRegistry => "series-registry",
             Self::SeriesFunding => "series-funding",
             Self::SourceRelease => "source-release",
+            Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
             Self::SourceOpenRawPage => "source-open-raw-page",
             Self::SourceRawPage => "source-raw-page",
@@ -841,6 +844,22 @@ fn decode_source(
         projection.primary_binding = primary;
         projection
     };
+    if data.len() == SOURCE_WORK_SCHEDULE_BYTES {
+        if let Ok(value) = SourceWorkScheduleBindingV1::decode(data) {
+            let mut projection = runtime(
+                CanonicalAccountKind::SourceWorkSchedule,
+                Some(value.generation()),
+                Some(value.liveness_policy_id().bytes()),
+            );
+            projection.secondary_binding = Some(
+                value
+                    .id()
+                    .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?
+                    .bytes(),
+            );
+            return Ok(Some(projection));
+        }
+    }
     let projection = match data.first().copied() {
         Some(SOURCE_RELEASE_ACCOUNT_TAG)
             if data.get(1) == Some(&SOURCE_RELEASE_ACCOUNT_VERSION) =>
@@ -1052,12 +1071,14 @@ fn decode_liveness(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if data.starts_with(&RUNTIME_LIVENESS_POLICY_MAGIC_V1)
         && data.len() == RUNTIME_LIVENESS_POLICY_BYTES_V1
     {
-        let _ = RuntimeLivenessPolicyV1::decode(data)
+        let value = RuntimeLivenessPolicyV1::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        Ok(Some(CanonicalAccountProjection::canonical(
+        let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Liveness,
             CanonicalAccountKind::LivenessPolicy,
-        )))
+        );
+        projection.primary_binding = Some(value.policy_id.bytes());
+        Ok(Some(projection))
     } else if data.starts_with(&RUNTIME_LIVENESS_ACCOUNT_MAGIC_V1)
         && data.len() == RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
     {
@@ -1068,6 +1089,8 @@ fn decode_liveness(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             CanonicalAccountKind::LivenessCompartment,
         );
         projection.generation = Some(value.identity.generation);
+        projection.primary_binding = Some(value.identity.policy_id.bytes());
+        projection.secondary_binding = Some(value.identity.account_id.bytes());
         if value.phase == RuntimeCompartmentPhaseV1::Active && value.remaining_calls > 0 {
             let phase = u16::try_from(value.kind.index())
                 .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
@@ -2336,6 +2359,41 @@ impl CanonicalAccountIndex {
 #[cfg(test)]
 mod current_decoder_tests {
     use super::*;
+
+    #[test]
+    fn source_work_schedule_is_a_canonical_indexed_semantic_owner() {
+        let schedule = SourceWorkScheduleBindingV1::new(
+            clutch_source_plane_v3::ContentId::from_bytes([1; 32]),
+            clutch_source_plane_v3::ContentId::from_bytes([2; 32]),
+            RuntimeKey::from_bytes([3; 32]),
+            RuntimeKey::from_bytes([4; 32]),
+            RuntimeKey::from_bytes([5; 32]),
+            RuntimeKey::from_bytes([6; 32]),
+            7,
+            8,
+            9,
+            44,
+            10,
+            [1; 8],
+            [2, 3, 4, 5, 6, 7, 8, 9],
+            [1; 4],
+            [1; 4],
+        )
+        .unwrap();
+        let bytes = schedule.encode().unwrap();
+        let projection = decode_source(
+            &bytes,
+            CanonicalDecoderContext {
+                source_neutral_sink: RuntimeKey::from_bytes([11; 32]),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(projection.kind, CanonicalAccountKind::SourceWorkSchedule);
+        assert_eq!(projection.generation, Some(7));
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some(schedule.id().unwrap().bytes()));
+    }
 
     #[test]
     fn withdrawn_versions_do_not_enter_the_live_decoder_set() {
