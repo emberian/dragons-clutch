@@ -1,0 +1,17 @@
+[package]
+name = "dclutch-market-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-product-contract = { path = "../dclutch-product-contract" }
+
+[lints]
+workspace = true

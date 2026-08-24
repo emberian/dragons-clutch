@@ -22,7 +22,8 @@ pub enum ResolutionKind {
 }
 
 impl ResolutionKind {
-    const fn decode(value: u8) -> Result<Self> {
+    /// Decode the canonical provider-neutral resolution-route byte.
+    pub const fn decode(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::Occurrence),
             1 => Ok(Self::Failure),
@@ -31,7 +32,8 @@ impl ResolutionKind {
         }
     }
 
-    const fn byte(self) -> u8 {
+    /// Return the canonical provider-neutral resolution-route byte.
+    pub const fn byte(self) -> u8 {
         match self {
             Self::Occurrence => 0,
             Self::Failure => 1,
