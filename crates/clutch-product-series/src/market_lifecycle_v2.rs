@@ -731,7 +731,8 @@ pub struct SeriesMarketLinkBindingV2 {
     pub source_occurrence_account_id: ContentId,
     /// Full hostile account-authentication receipt.
     pub source_occurrence_account_authentication_id: ContentId,
-    /// Product/Source occurrence join receipt.
+    /// Move-only Product pre-root Source postwrite identity. The inner
+    /// occurrence record/account/authentication remain in the preceding fields.
     pub source_occurrence_receipt_id: ContentId,
     /// Authenticated Source release.
     pub source_release_id: ContentId,

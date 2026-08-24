@@ -39,9 +39,10 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::product_market_foundation_current::
-    {AuthenticatedProductMarketFounderCurrentCreationV3,
-    AuthenticatedProductMarketFounderFoundationPreauthorizationV3};
-use super::product_series_current::AuthenticatedMarketLifecycleRootV2;
+    AuthenticatedProductMarketFounderFoundationPreauthorizationV3;
+use super::product_series_current::{
+    AuthenticatedMarketLifecycleRootV2, AuthenticatedProductSeriesActivationCompletionV4,
+};
 
 const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-lifecycle/v2";
@@ -598,15 +599,24 @@ fn authenticate_expected_product_direct_global_liveness_postwrite_v2(
 }
 
 /// Final current Founding-to-Active write. The caller must first consume the
-/// same non-copy creation authority in Product's concrete RootV2/LinkV2/
-/// FundingV4/replayV2 tail, then hostile-reopen the resulting Active RootV2.
+/// unique creation authority through Product's concrete RootV2/LinkV2/
+/// replayV2/FundingV4 tail and pass only that tail's move-only receipt.
 #[inline(never)]
 pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
     program_id: &Pubkey,
-    creation: AuthenticatedProductMarketFounderCurrentCreationV3,
+    completion: AuthenticatedProductSeriesActivationCompletionV4,
     manifest_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
 ) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV2> {
+    let (
+        founder_creation_receipt_id,
+        expected_root_account,
+        expected_root_binding_id,
+        expected_root_authentication_id,
+        expected_root_semantic_id,
+        expected_preauthorization_id,
+        capitalization,
+    ) = completion.into_direct_activation_parts();
     let root_binding_id = root.state().binding().id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_semantic_id = root.state().semantic_id()
@@ -615,14 +625,14 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
     require(
         root.is_writable()
             && root.state().phase() == clutch_product_series::MarketLifecyclePhaseV2::Active
-            && root.state().binding() == *creation.market_binding()
+            && root.account() == expected_root_account
+            && root_binding_id == expected_root_binding_id
+            && root.authentication_id() == expected_root_authentication_id
+            && root_semantic_id == expected_root_semantic_id
             && root.state().binding().direct_global_liveness_binding_id
-                == creation.direct_global_liveness_binding_id(),
+                == capitalization.global_bundle_binding_id(),
         ClutchError::MismatchedState,
     )?;
-    let (founder_creation_receipt_id, expected_root_account,
-        expected_preauthorization_id, capitalization) =
-        creation.into_direct_activation_parts();
     require(
         root.account() == expected_root_account
             && manifest_account.key != &root.account(),

@@ -15,6 +15,10 @@ use crate::instructions::product_artifact::{
 use crate::instructions::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV6, AuthenticatedSeriesSourceArtifactsV5,
 };
+use crate::instructions::product_direct_global_liveness::
+    AuthenticatedProductDirectGlobalLivenessCapitalizationV2;
+use crate::instructions::source_occurrence_foundation_v1::
+    AuthenticatedPreRootSourceOccurrencePostwriteV3;
 use crate::seeds;
 use clutch_product_series::{
     authenticate_market_foundation_account_graph_bytes_v3,
@@ -28,10 +32,9 @@ use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionAuthorizationV4,
     SeriesFundingCompletionAuthorizationV4Id, SeriesFundingCompletionBindingV4,
     SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
-    SeriesFundingReservationBindingV4Id, SeriesFundingStateV3, SeriesFundingStateV4,
+    SeriesFundingReservationBindingV4Id, SeriesFundingStateV4,
     SeriesFundingStateV4Id,
-    AuthenticatedSeriesFundingAuthorityV3, SeriesFundingComponentV2,
-    SeriesFundingPhaseV3, SeriesFundingQuoteV5, SeriesFundingTermsV2Id,
+    SeriesFundingComponentV2, SeriesFundingQuoteV5, SeriesFundingTermsV2Id,
     RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2,
     SeriesLifecycleReplayBindingV2Id,
@@ -39,16 +42,17 @@ use clutch_product_series::{
     SeriesLifecycleReplayV2, SeriesLinkObligationAdmissionProjectionV2,
     SeriesLinkObligationDispositionV2, SeriesLinkObligationStatusV2,
     SeriesLinkObligationTerminalProjectionV2, SeriesLinkObligationV2,
-    SeriesMarketDispositionV1, SeriesMarketLinkPhaseV2, SeriesMarketLinkV2,
+    SeriesMarketAdmissionProjectionV2, SeriesMarketDispositionV1,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkV2,
     SeriesMarketLinkV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
-    SeriesFundingAccountV3, SeriesFundingAccountV4, SeriesLifecycleReplayAccountV2,
+    SeriesFundingAccountV4, SeriesLifecycleReplayAccountV2,
     SeriesMarketLinkAccountV2,
     SeriesRegistryAccountV3, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V3, SERIES_FUNDING_ACCOUNT_BYTES_V4,
+    SERIES_FUNDING_ACCOUNT_BYTES_V4,
     SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
     SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
 };
@@ -61,14 +65,16 @@ const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-capability-refs/v3\0";
 const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/registry-capability-authentication/v4\0";
-const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/series-funding-account-authentication/v3\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v4\0";
 const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
 const SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-completion-postwrite/v4\0";
+const PRODUCT_CURRENT_LINK_ACTIVATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-current-link-activation/v4\0";
+const PRODUCT_CURRENT_ACTIVATION_COMPLETION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-current-activation-completion/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -95,10 +101,6 @@ const PRODUCT_FRACTIONAL_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-fractional-admission/v2\0";
 const PRODUCT_FRACTIONAL_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-fractional-terminal/v2\0";
-const PRODUCT_CURRENT_LINK_ACTIVATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/product-current-link-activation/v2\0";
-const SERIES_FUNDING_COMPLETION_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/sbf/series-funding-completion/v3\0";
 const SERIES_LIFECYCLE_REPLAY_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/series-lifecycle-replay-postwrite/v2\0";
 const MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V2: &[u8] =
@@ -262,27 +264,6 @@ impl AuthenticatedRegistryCapabilityV4 {
     }
 }
 
-/// Exact current 0x80/version3 funding authentication.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedSeriesFundingAccountV3 {
-    account: Pubkey,
-    value: SeriesFundingAccountV3,
-    observed_lamports: u64,
-    writable: bool,
-    data_id: ContentId,
-    authentication_id: ContentId,
-}
-
-impl AuthenticatedSeriesFundingAccountV3 {
-    pub(crate) const fn account(self) -> Pubkey { self.account }
-    pub(crate) const fn value(self) -> SeriesFundingAccountV3 { self.value }
-    pub(crate) const fn state(self) -> SeriesFundingStateV3 { self.value.state }
-    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
-    pub(crate) const fn is_writable(self) -> bool { self.writable }
-    pub(crate) const fn data_id(self) -> ContentId { self.data_id }
-    pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
-}
-
 /// Exact current 0x80/version4 acyclic funding authentication.
 ///
 /// The receipt is non-Copy; downstream code borrows the decoded body so the
@@ -328,8 +309,8 @@ pub(crate) struct AuthenticatedProductSeriesFundingReservationV4 {
 struct AuthenticatedSeriesFundingCompletionAuthorizationV4 {
     id: SeriesFundingCompletionAuthorizationV4Id,
     facts: Box<SeriesFundingCompletionAuthorizationV4>,
-    projected_state_after: SeriesFundingStateV4,
-    reservation: AuthenticatedProductSeriesFundingReservationV4,
+    projected_state_after: Box<SeriesFundingStateV4>,
+    reservation: Box<AuthenticatedProductSeriesFundingReservationV4>,
 }
 
 impl AuthenticatedSeriesFundingCompletionAuthorizationV4 {
@@ -428,6 +409,78 @@ impl AuthenticatedProductSeriesFundingCompletionV4 {
     pub(crate) const fn completed_ordinal(&self) -> u32 { self.completed_ordinal }
     pub(crate) const fn rebound(&self) -> &AuthenticatedSeriesFundingAccountV4 {
         &self.rebound
+    }
+}
+
+/// Sole move-only Product postwrite after RootV2/LinkV2 activation, replayV2
+/// admission, and FundingV4 completion. The Direct capitalization cannot be
+/// extracted until every Product write named by this receipt is complete.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesActivationCompletionV4 {
+    id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_authentication_after: ContentId,
+    root_semantic_after: ContentId,
+    link_account: Pubkey,
+    link_authentication_after: ContentId,
+    link_semantic_after: SeriesMarketLinkV2Id,
+    link_activation_receipt_id: ContentId,
+    market_admission_receipt_id: ContentId,
+    replay_account: Pubkey,
+    replay_authentication_after: ContentId,
+    replay_state_after_id: ContentId,
+    replay_admission_projection_id: ContentId,
+    funding_completion: Box<AuthenticatedProductSeriesFundingCompletionV4>,
+    source: Box<AuthenticatedPreRootSourceOccurrencePostwriteV3>,
+    direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+}
+
+impl AuthenticatedProductSeriesActivationCompletionV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn founder_creation_receipt_id(&self) -> ContentId {
+        self.founder_creation_receipt_id
+    }
+    pub(crate) const fn founder_preauthorization_id(&self) -> ContentId {
+        self.founder_preauthorization_id
+    }
+    pub(crate) const fn funding_completion(
+        &self,
+    ) -> &AuthenticatedProductSeriesFundingCompletionV4 {
+        &self.funding_completion
+    }
+    pub(crate) const fn source(
+        &self,
+    ) -> &AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+        &self.source
+    }
+
+    pub(super) fn into_direct_activation_parts(
+        self,
+    ) -> (
+        ContentId,
+        Pubkey,
+        ContentId,
+        ContentId,
+        ContentId,
+        ContentId,
+        AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+    ) {
+        (
+            self.founder_creation_receipt_id,
+            self.root_account,
+            self.root_binding_id,
+            self.root_authentication_after,
+            self.root_semantic_after,
+            self.founder_preauthorization_id,
+            self.direct_capitalization,
+        )
     }
 }
 
@@ -2196,43 +2249,6 @@ pub(crate) fn authenticate_registry_capability_from_refs_v4(
     })
 }
 
-pub(crate) fn authenticate_series_funding_account_v3(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    expected_series_plan_id: SeriesPlanV5Id,
-    require_writable: bool,
-) -> Outcome<AuthenticatedSeriesFundingAccountV3> {
-    require(
-        !account.is_signer && !account.executable && account.is_writable == require_writable
-            && account.owner == program_id && account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V3,
-        ClutchError::MismatchedState,
-    )?;
-    let data = account.try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let value = SeriesFundingAccountV3::decode(&data)?;
-    require(value.state.series_plan_id == expected_series_plan_id, ClutchError::MismatchedState)?;
-    let (expected, bump) = seeds::series_funding_pda(program_id, &expected_series_plan_id.bytes());
-    expect_pda(account.key, (expected, bump), Some(value.stored_bump))?;
-    let data_id = hash_data(&data);
-    drop(data);
-    let state_id = value.state.id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let observed_lamports = account.lamports();
-    require(observed_lamports >= value.rent_principal_lamports, ClutchError::MismatchedState)?;
-    let mut vault_rent = [0u8; 40];
-    for (index, principal) in value.collateral_vault_rent_principal_lamports.iter().enumerate() {
-        let at = index.checked_mul(8).ok_or(ClutchError::Arithmetic)?;
-        vault_rent[at..at + 8].copy_from_slice(&principal.to_le_bytes());
-    }
-    let authentication_id = hashv(&[
-        SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3, account.key.as_ref(), program_id.as_ref(),
-        &data_id.bytes(), &state_id.bytes(), &value.rent_principal_lamports.to_le_bytes(),
-        &vault_rent, &observed_lamports.to_le_bytes(), &[value.stored_bump],
-    ]);
-    require_live(authentication_id)?;
-    Ok(AuthenticatedSeriesFundingAccountV3 { account: *account.key, value, observed_lamports,
-        writable: account.is_writable, data_id, authentication_id })
-}
-
 /// Hostile-authenticate only the exact acyclic FundingV4 account coordinate.
 /// Historical FundingV1-V3 bytes are refused by exact length/version decode.
 pub(crate) fn authenticate_series_funding_account_v4(
@@ -2338,66 +2354,6 @@ pub(crate) fn authenticate_series_lifecycle_replay_v2(
     require_live(authentication_id)?;
     Ok(AuthenticatedSeriesLifecycleReplayV2 { account: *account.key, value, observed_lamports,
         writable: account.is_writable, data_id, authentication_id })
-}
-
-/// Private raw FundingV3 writer. Current event composers must derive one exact
-/// legal successor and consume it before this semantic-owner boundary writes.
-fn write_series_funding_state_v3(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    authenticated: AuthenticatedSeriesFundingAccountV3,
-    successor: SeriesFundingStateV3,
-) -> Outcome<AuthenticatedSeriesFundingAccountV3> {
-    let before = authenticated.value();
-    require(
-        account.is_writable
-            && *account.key == authenticated.account()
-            && account.owner == program_id
-            && successor.series_plan_id == before.state.series_plan_id
-            && successor.funding_terms_id == before.state.funding_terms_id
-            && successor.funding_quote_id == before.state.funding_quote_id
-            && successor.attachment_plan_id == before.state.attachment_plan_id
-            && successor.compiler_bundle_id == before.state.compiler_bundle_id
-            && successor.instance_count == before.state.instance_count,
-        ClutchError::MismatchedState,
-    )?;
-    let live = authenticate_series_funding_account_v3(
-        program_id,
-        account,
-        before.state.series_plan_id,
-        true,
-    )?;
-    require(
-        live == authenticated,
-        ClutchError::MismatchedState,
-    )?;
-    let successor_account = SeriesFundingAccountV3 {
-        state: successor,
-        rent_principal_lamports: before.rent_principal_lamports,
-        collateral_vault_rent_principal_lamports: before
-            .collateral_vault_rent_principal_lamports,
-        stored_bump: before.stored_bump,
-    };
-    {
-        let mut data = account
-            .try_borrow_mut_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        successor_account.encode(&mut data)?;
-    }
-    let rebound = authenticate_series_funding_account_v3(
-        program_id,
-        account,
-        before.state.series_plan_id,
-        true,
-    )?;
-    require(
-        rebound.value() == successor_account
-            && rebound.observed_lamports() == authenticated.observed_lamports()
-            && rebound.authentication_id() != authenticated.authentication_id()
-            && rebound.data_id() != authenticated.data_id(),
-        ClutchError::MismatchedState,
-    )?;
-    Ok(rebound)
 }
 
 /// Private raw FundingV4 writer. Only the sole reservation/completion/abort
@@ -2724,7 +2680,7 @@ fn authorize_series_funding_completion_v4(
     series: &SeriesPlanV5,
     quote: &SeriesFundingQuoteV5,
     attachment: &SeriesAttachmentPlanV5,
-    facts: SeriesFundingCompletionAuthorizationV4,
+    facts: Box<SeriesFundingCompletionAuthorizationV4>,
 ) -> Outcome<AuthenticatedSeriesFundingCompletionAuthorizationV4> {
     let reservation_binding_id = reservation.binding().id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -2747,9 +2703,9 @@ fn authorize_series_funding_completion_v4(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok(AuthenticatedSeriesFundingCompletionAuthorizationV4 {
         id,
-        facts: Box::new(facts),
-        projected_state_after,
-        reservation,
+        facts,
+        projected_state_after: Box::new(projected_state_after),
+        reservation: Box::new(reservation),
     })
 }
 
@@ -2768,7 +2724,7 @@ fn complete_series_funding_v4_with_binding(
 ) -> Outcome<AuthenticatedProductSeriesFundingCompletionV4> {
     let authorization_id = authorization.id();
     let projected_state_after_id = authorization.facts().funding_projected_state_after_id;
-    let reservation = authorization.reservation;
+    let reservation = *authorization.reservation;
     let reservation_binding_id = reservation
         .binding()
         .id()
@@ -2823,7 +2779,7 @@ fn complete_series_funding_v4_with_binding(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         after_state_id == projected_state_after_id
-            && rebound.state() == &authorization.projected_state_after
+            && rebound.state() == &*authorization.projected_state_after
             && rebound.state().phase != clutch_product_series::SeriesFundingPhaseV4::Pending
             && rebound.state().pending_pre_source_reservation_binding_id.is_zero()
             && rebound.state().pending_reservation_receipt_id.is_zero()
@@ -3668,194 +3624,79 @@ fn write_series_market_link_v2<'next>(
     Ok(rebound)
 }
 
-/// Private final receipt for the inseparable RootV2/LinkV2 activation,
-/// FundingV3 completion, and replayV2 admission transition.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductSeriesActivationCompletionV3 {
-    id: ContentId,
-    series_plan_id: SeriesPlanV5Id,
-    ordinal: u32,
-    market_instance_id: MarketInstanceV2Id,
-    generation: u64,
-    root_account: Pubkey,
-    root_authentication_after: ContentId,
-    link_account: Pubkey,
-    link_authentication_after: ContentId,
-    link_activation_receipt_id: ContentId,
-    market_admission_receipt_id: ContentId,
-    funding_account: Pubkey,
-    funding_authentication_before: ContentId,
-    funding_authentication_after: ContentId,
-    funding_state_before_id: ContentId,
-    funding_state_after_id: ContentId,
-    funding_completion_receipt_id: ContentId,
-    replay_account: Pubkey,
-    replay_authentication_before: ContentId,
-    replay_authentication_after: ContentId,
-    replay_state_before_id: ContentId,
-    replay_state_after_id: ContentId,
-    replay_admission_projection_id: ContentId,
-}
-
-impl AuthenticatedProductSeriesActivationCompletionV3 {
-    pub(crate) const fn id(&self) -> ContentId { self.id }
-    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
-    pub(crate) const fn ordinal(&self) -> u32 { self.ordinal }
-    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
-        self.market_instance_id
-    }
-    pub(crate) const fn generation(&self) -> u64 { self.generation }
-    pub(crate) const fn link_activation_receipt_id(&self) -> ContentId {
-        self.link_activation_receipt_id
-    }
-    pub(crate) const fn funding_completion_receipt_id(&self) -> ContentId {
-        self.funding_completion_receipt_id
-    }
-    pub(crate) const fn replay_admission_projection_id(&self) -> ContentId {
-        self.replay_admission_projection_id
-    }
-}
-
-struct ExactSeriesFundingCompletionAuthorityV3 {
-    state_before_id: ContentId,
-    completion_receipt_id: ContentId,
-}
-
-impl AuthenticatedSeriesFundingAuthorityV3 for ExactSeriesFundingCompletionAuthorityV3 {
-    fn authenticate_activation(
-        &self,
-        _series: &SeriesPlanV5,
-        _funding_terms_id: SeriesFundingTermsV2Id,
-        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
-        _quote: &SeriesFundingQuoteV5,
-        _attachment: &SeriesAttachmentPlanV5,
-        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-    ) -> clutch_product_series::Result<()> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-
-    fn current_bucket(
-        &self,
-        _series: &SeriesPlanV5,
-    ) -> clutch_product_series::Result<u64> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-
-    fn authenticate_reservation(
-        &self,
-        _state: &SeriesFundingStateV3,
-        _ordinal: u32,
-        _market_instance_id: MarketInstanceV2Id,
-        _source_occurrence_id: SourceOccurrenceV1Id,
-        _series_market_link_id: ContentId,
-        _disposition: SeriesMarketDispositionV1,
-        _debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-        _reservation_receipt_id: ContentId,
-    ) -> clutch_product_series::Result<()> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-
-    fn authenticate_pending_completion(
-        &self,
-        state: &SeriesFundingStateV3,
-        completion_receipt_id: ContentId,
-    ) -> clutch_product_series::Result<()> {
-        let state_id = state.id()?.content_id();
-        if state_id != self.state_before_id
-            || completion_receipt_id != self.completion_receipt_id
-        {
-            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
-        }
-        Ok(())
-    }
-
-    fn authenticate_pending_abort(
-        &self,
-        _state: &SeriesFundingStateV3,
-        _abort_receipt_id: ContentId,
-    ) -> clutch_product_series::Result<()> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-
-    fn authenticate_donation(
-        &self,
-        _state: &SeriesFundingStateV3,
-        _component: SeriesFundingComponentV2,
-        _amount: ComponentDebitV1,
-    ) -> clutch_product_series::Result<()> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-
-    fn authenticate_close(
-        &self,
-        _state: &SeriesFundingStateV3,
-        _terminal_receipt_id: ContentId,
-    ) -> clutch_product_series::Result<()> {
-        Err(clutch_product_series::Error::UnauthenticatedAuthority)
-    }
-}
-
-/// Internal current transition. The future founder compositor must call this
-/// directly with the exact accepted MarketCore receipt retained by its
-/// non-Copy current creation authority; no intermediate half is exported.
+/// Private current founder tail. The sole outer must obtain every move-only
+/// argument by consuming the exhaustive foundation-complete authority; none
+/// of these facts is a caller-facing DTO or an alternate raw writer.
 #[allow(clippy::too_many_arguments)]
-fn activate_complete_and_record_current_series_v3(
+#[inline(never)]
+fn activate_record_and_complete_current_series_v4(
     program_id: &Pubkey,
     registry: &AuthenticatedRegistryCapabilityV4,
     bundle: AuthenticatedCompiledProductSeriesBundleV6,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
     graph: &MarketFoundationAccountGraphV3,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
     accepted_market_core_receipt_id: ContentId,
+    reservation: AuthenticatedProductSeriesFundingReservationV4,
+    source: AuthenticatedPreRootSourceOccurrencePostwriteV3,
+    direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
     root_account: &AccountInfo<'_>,
     authenticated_root: AuthenticatedMarketLifecycleRootV2<'_>,
     link_account: &AccountInfo<'_>,
     authenticated_link: AuthenticatedSeriesMarketLinkV2<'_>,
     funding_account: &AccountInfo<'_>,
-    authenticated_funding: AuthenticatedSeriesFundingAccountV3,
     replay_account: &AccountInfo<'_>,
     authenticated_replay: AuthenticatedSeriesLifecycleReplayV2,
     root_successor_output: &mut MarketLifecycleRootV2,
     root_rebound_output: &mut MarketLifecycleRootAccountV2,
     link_rebound_output: &mut SeriesMarketLinkAccountV2,
-) -> Outcome<AuthenticatedProductSeriesActivationCompletionV3> {
-    require_live(accepted_market_core_receipt_id)?;
-    let root = authenticated_root.state();
-    let root_binding = root.binding();
-    let link = authenticated_link.state();
-    let link_binding = link.binding();
-    let funding = authenticated_funding.state();
-    let replay = authenticated_replay.state();
-    let replay_binding: SeriesLifecycleReplayBindingV2 = replay.binding();
+) -> Outcome<AuthenticatedProductSeriesActivationCompletionV4> {
+    for id in [
+        founder_creation_receipt_id,
+        founder_preauthorization_id,
+        accepted_market_core_receipt_id,
+        source.id(),
+        source.capitalization().id(),
+        direct_capitalization.global_capitalization_receipt_id(),
+        direct_capitalization.global_bundle_binding_id(),
+    ] {
+        require_live(id)?;
+    }
     let series = artifacts.series();
     let quote = artifacts.quote();
     let attachment = artifacts.attachment();
-    let bundle_value = bundle.bundle();
-    let quote_id = quote
-        .id()
+    let series_id = series.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let attachment_id = attachment
-        .id()
+    let quote_id = quote.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let series_id = series
-        .id()
+    let attachment_id = attachment.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let schedule_id = quote
-        .foundation
-        .id()
+    let schedule_id = quote.foundation.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    graph
-        .validate(&quote.foundation)
+    graph.validate(&quote.foundation)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let graph_id = graph
-        .id(&quote.foundation)
+    let graph_id = graph.id(&quote.foundation)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let root_binding_id = root_binding
-        .id()
+    let root = authenticated_root.state();
+    let root_binding = root.binding();
+    let root_binding_id = root_binding.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let link_semantic_before = link
-        .semantic_id()
+    let link = authenticated_link.state();
+    let link_binding = link.binding();
+    let link_semantic_before = link.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay = authenticated_replay.state();
+    let replay_binding: SeriesLifecycleReplayBindingV2 = replay.binding();
+    let replay_binding_id = replay_binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let reservation_binding = reservation.binding();
+    let reservation_binding_id = reservation_binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_pending_state_id = reservation.funding_state_pending_id()?;
+    let funding = reservation.pending();
+    let source_occurrence = source.occurrence();
+    let source_capitalization_id = source.capitalization().id();
     let market_admission = SeriesMarketAdmissionProjectionV2::new(root_binding, *link, 1)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let market_admission_receipt_id = market_admission.id();
@@ -3865,39 +3706,38 @@ fn activate_complete_and_record_current_series_v3(
         &market_admission_receipt_id.bytes(),
         &2_u64.to_le_bytes(),
     ]);
-    let funding_state_before_id = funding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
-    let replay_state_before_id = replay
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
-    let disposition_byte = match link_binding.disposition {
-        SeriesMarketDispositionV1::Founder => 1,
-        SeriesMarketDispositionV1::Converger => 2,
-    };
     require(
         authenticated_root.is_writable()
             && authenticated_link.is_writable()
-            && authenticated_funding.is_writable()
+            && funding.is_writable()
             && authenticated_replay.is_writable()
+            && root_account.is_writable
+            && link_account.is_writable
+            && funding_account.is_writable
+            && replay_account.is_writable
             && root_account.key != link_account.key
             && root_account.key != funding_account.key
             && root_account.key != replay_account.key
             && link_account.key != funding_account.key
             && link_account.key != replay_account.key
             && funding_account.key != replay_account.key
+            && authenticated_root.account() == *root_account.key
+            && authenticated_link.account() == *link_account.key
+            && funding.account() == *funding_account.key
+            && authenticated_replay.account() == *replay_account.key
             && root.phase() == MarketLifecyclePhaseV2::Founding
+            && root.foundation().complete()
+            && root.capital().principal_remaining_lamports == 0
             && root.admitted_series_links() == 1
             && root.live_series_links() == 1
             && root.retired_series_links() == 0
             && root.series_link_transcript_id() == expected_root_link_transcript
             && link.phase() == SeriesMarketLinkPhaseV2::PendingMarket
-            && funding.phase == SeriesFundingPhaseV3::Pending
             && replay.phase() == SeriesLifecycleReplayPhaseV2::Open
             && root_binding.foundation_schedule_id == schedule_id
             && root_binding.foundation_account_graph_id == graph_id
+            && root_binding.direct_global_liveness_binding_id
+                == direct_capitalization.global_bundle_binding_id()
             && graph.market_instance_id == root_binding.market_instance_id
             && graph.generation == root_binding.generation
             && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
@@ -3910,28 +3750,40 @@ fn activate_complete_and_record_current_series_v3(
             && link_binding.attachment_plan_id == attachment_id
             && link_binding.compiler_bundle_id == bundle.bundle_id()
             && link_binding.capability_profile_id == registry.capability_profile_id()
-            && funding.series_plan_id == series_id
-            && funding.funding_terms_id == registry.funding_terms_id()
-            && funding.funding_quote_id == quote_id
-            && funding.attachment_plan_id == attachment_id
-            && funding.compiler_bundle_id == bundle.bundle_id()
-            && funding.pending_ordinal == link_binding.ordinal
-            && funding.pending_market_instance_id == link_binding.market_instance_id.content_id()
-            && funding.pending_source_occurrence_id
-                == link_binding.source_occurrence_id.content_id()
-            && funding.pending_series_market_link_id == link_semantic_before.content_id()
-            && funding.pending_disposition == Some(link_binding.disposition)
-            && funding.pending_reservation_receipt_id == link_binding.funding_debit_receipt_id
-            && funding.transition_sequence == link_binding.funding_transition_sequence
+            && link_binding.source_occurrence_id.content_id()
+                == source_occurrence.occurrence_record_id()
+            && link_binding.source_occurrence_account_id.bytes()
+                == source_occurrence.occurrence_account().bytes()
+            && link_binding.source_occurrence_account_authentication_id
+                == source_occurrence.occurrence_account_authentication_id()
+            && link_binding.source_occurrence_receipt_id == source.id()
+            && link_binding.funding_state_account_id.bytes() == funding_account.key.to_bytes()
+            && link_binding.funding_debit_receipt_id
+                == reservation.reservation_receipt_id()
+            && link_binding.funding_transition_sequence == funding.state().transition_sequence
+            && source.product_preauthorization_id() == founder_preauthorization_id
+            && source.capitalization().product_preauthorization_id()
+                == founder_preauthorization_id
+            && source.capitalization().facts().funding_reservation_postwrite_id
+                == reservation.id()
+            && source.capitalization().facts().pending_pre_source_reservation_binding_id
+                == reservation_binding_id.content_id()
+            && reservation_binding.market_binding_id == root_binding_id
+            && reservation_binding.market_root_account_id.bytes()
+                == root_account.key.to_bytes()
+            && reservation_binding.series_market_link_account_id.bytes()
+                == link_account.key.to_bytes()
+            && reservation_binding.source_occurrence_id == link_binding.source_occurrence_id
+            && reservation_binding.product_founder_preauthorization_id
+                == founder_preauthorization_id
+            && reservation_binding.direct_global_liveness_capitalization_id
+                == direct_capitalization.global_capitalization_receipt_id()
             && registry.series_plan_id() == series_id
             && registry.compiler_bundle_id() == bundle.bundle_id()
-            && bundle_value.series_plan_id == series_id
-            && bundle_value.funding_terms_id == registry.funding_terms_id()
-            && bundle_value.funding_quote_id == quote_id
-            && bundle_value.attachment_plan_id == attachment_id
-            && bundle_value.registry_release_id == registry.registry_release_id()
-            && bundle_value.capability_profile_id.content_id()
-                == registry.capability_profile_id()
+            && bundle.bundle().series_plan_id == series_id
+            && bundle.bundle().funding_terms_id == registry.funding_terms_id()
+            && bundle.bundle().funding_quote_id == quote_id
+            && bundle.bundle().attachment_plan_id == attachment_id
             && replay_binding.series_plan_id == series_id
             && replay_binding.funding_terms_id == registry.funding_terms_id()
             && replay_binding.funding_quote_id == quote_id
@@ -3950,13 +3802,13 @@ fn activate_complete_and_record_current_series_v3(
         ClutchError::MismatchedState,
     )?;
 
-    let root_semantic_before = root
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    *root_successor_output = (*root)
-        .activate(&quote.foundation, accepted_market_core_receipt_id)
+    let root_semantic_before = root.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_authentication_before = authenticated_root.authentication_id();
+    *root_successor_output = (*root).activate(
+        &quote.foundation,
+        accepted_market_core_receipt_id,
+    ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let rebound_root = write_market_lifecycle_root_v2(
         program_id,
         root_account,
@@ -3964,13 +3816,10 @@ fn activate_complete_and_record_current_series_v3(
         root_successor_output,
         root_rebound_output,
     )?;
-    let root_semantic_after = rebound_root
-        .state()
-        .semantic_id()
+    let root_semantic_after = rebound_root.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
-    let link_successor = (*link)
-        .activate(1, market_admission_receipt_id)
+    let link_successor = (*link).activate(1, market_admission_receipt_id)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let link_authentication_before = authenticated_link.authentication_id();
     let rebound_link = write_series_market_link_v2(
@@ -3980,12 +3829,14 @@ fn activate_complete_and_record_current_series_v3(
         &link_successor,
         link_rebound_output,
     )?;
-    let link_semantic_after = rebound_link
-        .state()
-        .semantic_id()
+    let link_semantic_after = rebound_link.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let disposition_byte = match link_binding.disposition {
+        SeriesMarketDispositionV1::Founder => 1,
+        SeriesMarketDispositionV1::Converger => 2,
+    };
     let link_activation_receipt_id = hashv(&[
-        PRODUCT_CURRENT_LINK_ACTIVATION_DOMAIN_V2,
+        PRODUCT_CURRENT_LINK_ACTIVATION_DOMAIN_V4,
         program_id.as_ref(),
         root_account.key.as_ref(),
         &root_authentication_before.bytes(),
@@ -4003,61 +3854,51 @@ fn activate_complete_and_record_current_series_v3(
     ]);
     require_live(link_activation_receipt_id)?;
 
-    let funding_completion_receipt_id = hashv(&[
-        SERIES_FUNDING_COMPLETION_DOMAIN_V3,
-        program_id.as_ref(),
-        funding_account.key.as_ref(),
-        &authenticated_funding.authentication_id().bytes(),
-        &authenticated_funding.data_id().bytes(),
-        &funding_state_before_id.bytes(),
-        &link_activation_receipt_id.bytes(),
-        &market_admission_receipt_id.bytes(),
-        &series_id.bytes(),
-        &link_binding.ordinal.to_le_bytes(),
-        &link_binding.market_instance_id.bytes(),
-        &link_binding.generation.to_le_bytes(),
-        &link_binding.source_occurrence_id.bytes(),
-        &bundle.bundle_id().bytes(),
-        &[disposition_byte],
-    ]);
-    require_live(funding_completion_receipt_id)?;
-    let completion_authority = ExactSeriesFundingCompletionAuthorityV3 {
-        state_before_id: funding_state_before_id,
-        completion_receipt_id: funding_completion_receipt_id,
-    };
-    let mut funding_successor = funding;
-    let completed_ordinal = funding_successor
-        .complete_pending(
-            &completion_authority,
-            series,
-            quote,
-            attachment,
-            funding_completion_receipt_id,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(completed_ordinal == link_binding.ordinal, ClutchError::MismatchedState)?;
-    let rebound_funding = write_series_funding_state_v3(
-        program_id,
-        funding_account,
-        authenticated_funding,
-        funding_successor,
+    let authorization_facts = Box::new(SeriesFundingCompletionAuthorizationV4 {
+        reservation_binding_id,
+        funding_account_id: ContentId::from_bytes(funding_account.key.to_bytes()),
+        funding_account_authentication_pending_id:
+            reservation.funding_authentication_pending_id(),
+        funding_pending_state_id,
+        source_capitalization_receipt_id: source_capitalization_id,
+        pre_root_source_occurrence_id: source.id(),
+        market_root_account_id: ContentId::from_bytes(root_account.key.to_bytes()),
+        market_binding_id: root_binding_id,
+        root_semantic_before_id: root_semantic_before,
+        root_semantic_after_id: root_semantic_after,
+        series_market_link_account_id: ContentId::from_bytes(link_account.key.to_bytes()),
+        link_semantic_before_id: link_semantic_before.content_id(),
+        link_semantic_after_id: link_semantic_after.content_id(),
+        market_admission_receipt_id,
+        link_activation_receipt_id,
+        accepted_market_core_receipt_id,
+        funding_projected_state_after_id: reservation.pending().state()
+            .project_pending_completion_poststate(series, quote, attachment)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    });
+    let authorization = authorize_series_funding_completion_v4(
+        reservation,
+        series,
+        quote,
+        attachment,
+        authorization_facts,
     )?;
-    let funding_state_after_id = rebound_funding
-        .state()
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
-
+    let completion_authorization_id = authorization.id();
+    let projected_funding_state_after_id = authorization
+        .projected_state_after
+        .id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay_state_before_id = replay.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.content_id();
+    let replay_authentication_before = authenticated_replay.authentication_id();
     let admission = SeriesLifecycleAdmissionProjectionV2 {
-        binding_id: replay_binding
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        binding_id: replay_binding_id,
         series_plan_id: series_id,
         ordinal: link_binding.ordinal,
         funding_account_id: ContentId::from_bytes(funding_account.key.to_bytes()),
-        funding_state_before_id,
-        funding_state_after_id,
-        occurrence_completion_receipt_id: funding_completion_receipt_id,
+        funding_state_before_id: funding_pending_state_id.content_id(),
+        funding_state_after_id: projected_funding_state_after_id.content_id(),
+        occurrence_completion_receipt_id: completion_authorization_id.content_id(),
         link_account_id: ContentId::from_bytes(link_account.key.to_bytes()),
         link_activation_receipt_id,
         market_admission_receipt_id,
@@ -4067,11 +3908,9 @@ fn activate_complete_and_record_current_series_v3(
         disposition: link_binding.disposition,
         generation: link_binding.generation,
     };
-    let replay_admission_projection_id = admission
-        .id()
+    let replay_admission_projection_id = admission.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let replay_successor = replay
-        .record_admission(admission)
+    let replay_successor = replay.record_admission(admission)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let rebound_replay = write_series_lifecycle_replay_v2(
         program_id,
@@ -4079,48 +3918,91 @@ fn activate_complete_and_record_current_series_v3(
         authenticated_replay,
         replay_successor,
     )?;
-    let replay_state_after_id = rebound_replay
-        .state()
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
+    let replay_state_after_id = rebound_replay.state().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.content_id();
+    let completion_binding = SeriesFundingCompletionBindingV4 {
+        completion_authorization_id,
+        lifecycle_replay_account_id: ContentId::from_bytes(replay_account.key.to_bytes()),
+        lifecycle_replay_state_before_id: replay_state_before_id,
+        lifecycle_replay_state_after_id: replay_state_after_id,
+        lifecycle_replay_authentication_before_id: replay_authentication_before,
+        lifecycle_replay_authentication_after_id: rebound_replay.authentication_id(),
+        lifecycle_replay_admission_projection_id: replay_admission_projection_id,
+    };
+    let completion_binding_id = completion_binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_completion = complete_series_funding_v4_with_binding(
+        program_id,
+        funding_account,
+        authorization,
+        series,
+        quote,
+        attachment,
+        completion_binding,
+    )?;
+    require(
+        funding_completion.completion_authorization_id() == completion_authorization_id
+            && funding_completion.projected_state_after_id()
+                == projected_funding_state_after_id
+            && funding_completion.completion_binding_id() == completion_binding_id
+            && funding_completion.completed_ordinal() == link_binding.ordinal,
+        ClutchError::MismatchedState,
+    )?;
     let id = hashv(&[
-        SERIES_LIFECYCLE_REPLAY_POSTWRITE_DOMAIN_V2,
+        PRODUCT_CURRENT_ACTIVATION_COMPLETION_DOMAIN_V4,
         program_id.as_ref(),
+        &founder_creation_receipt_id.bytes(),
+        &founder_preauthorization_id.bytes(),
+        root_account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &root_authentication_before.bytes(),
+        &rebound_root.authentication_id().bytes(),
+        &root_semantic_before.bytes(),
+        &root_semantic_after.bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_before.bytes(),
+        &rebound_link.authentication_id().bytes(),
+        &link_semantic_before.bytes(),
+        &link_semantic_after.bytes(),
+        &link_activation_receipt_id.bytes(),
+        &market_admission_receipt_id.bytes(),
         replay_account.key.as_ref(),
-        &authenticated_replay.authentication_id().bytes(),
+        &replay_authentication_before.bytes(),
         &rebound_replay.authentication_id().bytes(),
         &replay_state_before_id.bytes(),
         &replay_state_after_id.bytes(),
         &replay_admission_projection_id.bytes(),
-        &funding_completion_receipt_id.bytes(),
-        &link_activation_receipt_id.bytes(),
+        &completion_authorization_id.bytes(),
+        &completion_binding_id.bytes(),
+        &funding_completion.id().bytes(),
+        &source.id().bytes(),
+        &direct_capitalization.global_capitalization_receipt_id().bytes(),
     ]);
     require_live(id)?;
-    Ok(AuthenticatedProductSeriesActivationCompletionV3 {
+    Ok(AuthenticatedProductSeriesActivationCompletionV4 {
         id,
+        founder_creation_receipt_id,
+        founder_preauthorization_id,
         series_plan_id: series_id,
         ordinal: link_binding.ordinal,
         market_instance_id: link_binding.market_instance_id,
         generation: link_binding.generation,
         root_account: rebound_root.account(),
+        root_binding_id,
         root_authentication_after: rebound_root.authentication_id(),
+        root_semantic_after,
         link_account: rebound_link.account(),
         link_authentication_after: rebound_link.authentication_id(),
+        link_semantic_after,
         link_activation_receipt_id,
         market_admission_receipt_id,
-        funding_account: rebound_funding.account(),
-        funding_authentication_before: authenticated_funding.authentication_id(),
-        funding_authentication_after: rebound_funding.authentication_id(),
-        funding_state_before_id,
-        funding_state_after_id,
-        funding_completion_receipt_id,
         replay_account: rebound_replay.account(),
-        replay_authentication_before: authenticated_replay.authentication_id(),
         replay_authentication_after: rebound_replay.authentication_id(),
-        replay_state_before_id,
         replay_state_after_id,
         replay_admission_projection_id,
+        funding_completion: Box::new(funding_completion),
+        source: Box::new(source),
+        direct_capitalization,
     })
 }
 
@@ -4806,20 +4688,45 @@ mod source_contract_tests {
     }
 
     #[test]
-    fn current_activation_completion_and_replay_are_one_private_transition() {
+    fn current_completion_authorization_and_replay_writers_are_private() {
         let source = include_str!("product_series_current.rs");
-        assert!(source.contains("fn activate_complete_and_record_current_series_v3("));
+        assert!(!source.contains("activate_complete_and_record_current_series_v3"));
+        assert!(!source.contains("AuthenticatedProductSeriesActivationCompletionV3"));
+        assert!(!source.contains("AuthenticatedSeriesFundingAccountV3"));
+        assert!(!source.contains("fn write_series_funding_state_v3("));
+        assert!(source.contains("fn authorize_series_funding_completion_v4("));
         assert!(!source.contains(
-            "pub(crate) fn activate_complete_and_record_current_series_v3("
+            "pub(crate) fn authorize_series_funding_completion_v4("
         ));
-        assert!(source.contains("fn write_series_funding_state_v3("));
         assert!(source.contains("fn write_series_lifecycle_replay_v2("));
-        assert!(!source.contains("pub(crate) fn write_series_funding_state_v3("));
         assert!(!source.contains("pub(crate) fn write_series_lifecycle_replay_v2("));
-        assert!(source.contains("root.series_link_transcript_id() == expected_root_link_transcript"));
-        assert!(source.contains("funding.pending_series_market_link_id == link_semantic_before.content_id()"));
-        assert!(source.contains("funding.pending_reservation_receipt_id == link_binding.funding_debit_receipt_id"));
-        assert!(source.contains(".record_admission(admission)"));
+        assert!(source.contains("project_pending_completion_poststate(series, quote, attachment)"));
+        assert!(source.contains("binding.completion_authorization_id == authorization_id"));
+    }
+
+    #[test]
+    fn current_founder_tail_orders_authorization_replay_then_funding_clear() {
+        let source = include_str!("product_series_current.rs");
+        let tail = source
+            .split("fn activate_record_and_complete_current_series_v4(")
+            .nth(1)
+            .unwrap()
+            .split("/// Promote one exact unresolved")
+            .next()
+            .unwrap();
+        let authorization = tail
+            .find("authorize_series_funding_completion_v4(")
+            .unwrap();
+        let replay = tail.find(".record_admission(admission)").unwrap();
+        let funding = tail
+            .find("complete_series_funding_v4_with_binding(")
+            .unwrap();
+        assert!(authorization < replay && replay < funding);
+        assert!(tail.contains("occurrence_completion_receipt_id: completion_authorization_id.content_id()"));
+        assert!(tail.contains("funding_state_after_id: projected_funding_state_after_id.content_id()"));
+        assert!(tail.contains("completion_authorization_id,"));
+        assert!(source.contains("struct AuthenticatedProductSeriesActivationCompletionV4"));
+        assert!(source.contains("pub(super) fn into_direct_activation_parts("));
     }
 
     #[test]
