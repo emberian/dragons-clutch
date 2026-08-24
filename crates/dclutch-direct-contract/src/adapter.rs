@@ -1098,6 +1098,8 @@ pub enum AccountRoleV2 {
     Realm,
     /// Immutable Market-selected fee policy.
     VenuePolicy,
+    /// Canonical raw-record staging cursor, required to be finalized-absent.
+    VenuePolicyStagingCursor,
     /// Immutable capability manifest selecting the fee-policy content digest.
     CapabilityManifest,
     /// Maker replay-root PDA.
@@ -1142,26 +1144,26 @@ pub struct AdapterAccountMetaV2 {
 /// Return exact instruction account count for action.
 pub fn account_count_v2(action: AdapterActionV2, participants: usize) -> Result<usize> {
     match action {
-        AdapterActionV2::RegisterBuy => one_participant(participants, 16),
-        AdapterActionV2::RegisterSell => one_participant(participants, 11),
+        AdapterActionV2::RegisterBuy => one_participant(participants, 17),
+        AdapterActionV2::RegisterSell => one_participant(participants, 12),
         AdapterActionV2::CancelBuy => one_participant(participants, 13),
         AdapterActionV2::CancelSell => one_participant(participants, 8),
         AdapterActionV2::ExpireBuy => one_participant(participants, 12),
         AdapterActionV2::ExpireSell => one_participant(participants, 7),
-        AdapterActionV2::Ordinary => exact_participants(participants, 2, 20),
-        AdapterActionV2::Split => settlement_count(participants, 11, 6),
-        AdapterActionV2::Merge => settlement_count(participants, 11, 5),
+        AdapterActionV2::Ordinary => exact_participants(participants, 2, 21),
+        AdapterActionV2::Split => settlement_count(participants, 12, 6),
+        AdapterActionV2::Merge => settlement_count(participants, 12, 5),
         AdapterActionV2::CloseReplayRegistration => one_participant(participants, 2),
         AdapterActionV2::CloseReplayRoot => one_participant(participants, 5),
         AdapterActionV2::CancelThrough => one_participant(participants, 3),
         AdapterActionV2::CloseInvalidatedBuy => one_participant(participants, 12),
         AdapterActionV2::CloseInvalidatedSell => one_participant(participants, 7),
-        AdapterActionV2::InlineOrdinary => exact_participants(participants, 2, 18),
+        AdapterActionV2::InlineOrdinary => exact_participants(participants, 2, 19),
         AdapterActionV2::InlineSplit | AdapterActionV2::InlineMerge => {
             if participants != 2 {
                 return Err(Error::InvalidInlineWidth);
             }
-            settlement_count(participants, 14, 3)
+            settlement_count(participants, 15, 3)
         }
     }
 }
@@ -1212,6 +1214,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
@@ -1232,6 +1235,7 @@ pub fn account_role_v2(
                 AccountRoleV2::RentCredit,
                 AccountRoleV2::Market,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
@@ -1307,6 +1311,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::FeeRecipient,
                 AccountRoleV2::CollateralMint,
@@ -1332,6 +1337,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::MarketVault,
                 AccountRoleV2::Custody,
@@ -1356,6 +1362,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::MarketVault,
                 AccountRoleV2::Custody,
@@ -1431,6 +1438,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::FeeRecipient,
                 AccountRoleV2::CollateralMint,
@@ -1453,6 +1461,7 @@ pub fn account_role_v2(
                 AccountRoleV2::Market,
                 AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
+                AccountRoleV2::VenuePolicyStagingCursor,
                 AccountRoleV2::CapabilityManifest,
                 AccountRoleV2::MarketVault,
                 AccountRoleV2::Custody,
@@ -1583,6 +1592,7 @@ const fn expected_privileges(
         AccountRoleV2::Market
         | AccountRoleV2::Realm
         | AccountRoleV2::VenuePolicy
+        | AccountRoleV2::VenuePolicyStagingCursor
         | AccountRoleV2::CapabilityManifest
         | AccountRoleV2::Custody
         | AccountRoleV2::CollateralMint
@@ -1602,11 +1612,11 @@ pub const MEASURED_LOOKUP_TABLES_V2: usize = 1;
 /// Transaction signatures in measured permissionless profile.
 pub const MEASURED_TRANSACTION_SIGNATURES_V2: usize = 1;
 /// Measured ordinary serialized v0 bytes.
-pub const MEASURED_ORDINARY_V0_BYTES_V2: usize = 310;
+pub const MEASURED_ORDINARY_V0_BYTES_V2: usize = 312;
 /// Measured buy-registration serialized v0 bytes with cross-instruction message.
-pub const MEASURED_BUY_REGISTRATION_V0_BYTES_V2: usize = 632;
+pub const MEASURED_BUY_REGISTRATION_V0_BYTES_V2: usize = 634;
 /// Measured sell-registration serialized v0 bytes.
-pub const MEASURED_SELL_REGISTRATION_V0_BYTES_V2: usize = 622;
+pub const MEASURED_SELL_REGISTRATION_V0_BYTES_V2: usize = 624;
 /// Measured Buy cancellation serialized v0 bytes.
 pub const MEASURED_CANCEL_BUY_V0_BYTES_V2: usize = 521;
 /// Measured Sell cancellation serialized v0 bytes.
@@ -1622,22 +1632,22 @@ pub const MEASURED_CLOSE_ROOT_V0_BYTES_V2: usize = 262;
 /// Measured O(1) cancel-through serialized v0 bytes.
 pub const MEASURED_CANCEL_THROUGH_V0_BYTES_V1: usize = 501;
 /// Measured immediate ordinary serialized v0 bytes.
-pub const MEASURED_INLINE_ORDINARY_V0_BYTES_V2: usize = 997;
+pub const MEASURED_INLINE_ORDINARY_V0_BYTES_V2: usize = 999;
 /// Measured immediate N=2 complementary serialized v0 bytes.
-pub const MEASURED_INLINE_COMPLEMENTARY_N2_V0_BYTES_V2: usize = 1_009;
+pub const MEASURED_INLINE_COMPLEMENTARY_N2_V0_BYTES_V2: usize = 1_011;
 /// Measured inline complementary reference bytes for N=2..16. Admission still
 /// refuses every entry after N=2 because it exceeds the 1,232-byte packet.
 pub const MEASURED_INLINE_COMPLEMENTARY_REFERENCE_V0_BYTES_V2: [usize; 15] = [
-    1_009, 1_366, 1_723, 2_080, 2_437, 2_794, 3_151, 3_508, 3_865, 4_222, 4_579, 4_936, 5_293,
-    5_650, 6_007,
+    1_011, 1_368, 1_725, 2_082, 2_439, 2_796, 3_153, 3_510, 3_867, 4_224, 4_581, 4_938, 5_295,
+    5_652, 6_009,
 ];
 /// Measured split serialized v0 bytes for N=2..16.
 pub const MEASURED_SPLIT_V0_BYTES_V2: [usize; 15] = [
-    324, 345, 366, 387, 408, 429, 450, 471, 492, 513, 535, 556, 577, 598, 619,
+    326, 347, 368, 389, 410, 431, 452, 473, 494, 515, 537, 558, 579, 600, 621,
 ];
 /// Measured merge serialized v0 bytes for N=2..16.
 pub const MEASURED_MERGE_V0_BYTES_V2: [usize; 15] = [
-    320, 339, 358, 377, 396, 415, 434, 453, 472, 491, 511, 530, 549, 568, 587,
+    322, 341, 360, 379, 398, 417, 436, 455, 474, 493, 513, 532, 551, 570, 589,
 ];
 
 /// One pinned measured transaction shape.

@@ -929,9 +929,9 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         measured_settlement_envelope_v2(AdapterActionV2::InlineSplit, 3),
         Err(Error::InvalidInlineWidth)
     );
-    assert_eq!(measured_inline_complementary_reference_v2(2)?, 1_009);
-    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_366);
-    assert_eq!(measured_inline_complementary_reference_v2(16)?, 6_007);
+    assert_eq!(measured_inline_complementary_reference_v2(2)?, 1_011);
+    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_368);
+    assert_eq!(measured_inline_complementary_reference_v2(16)?, 6_009);
     Ok(())
 }
 
@@ -982,9 +982,9 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
     );
 
     let split16 = measured_settlement_envelope_v2(AdapterActionV2::Split, 16)?;
-    assert_eq!(split16.instruction_accounts, 107);
-    assert_eq!(split16.total_account_locks, 109);
-    assert_eq!(split16.serialized_transaction_bytes, 619);
+    assert_eq!(split16.instruction_accounts, 108);
+    assert_eq!(split16.total_account_locks, 110);
+    assert_eq!(split16.serialized_transaction_bytes, 621);
     assert!(split16.serialized_transaction_bytes < SOLANA_PACKET_DATA_SIZE_3_0);
     let packet = PacketAdmissionV2 {
         serialized_transaction_bytes: split16.serialized_transaction_bytes,
@@ -1198,18 +1198,18 @@ fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
 fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> Result<()> {
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::RegisterBuy, 1)?,
-        16
+        17
     );
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::RegisterSell, 1)?,
-        11
+        12
     );
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Ordinary, 2)?, 20);
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Split, 16)?, 107);
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Merge, 16)?, 91);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Ordinary, 2)?, 21);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Split, 16)?, 108);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Merge, 16)?, 92);
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::InlineOrdinary, 2)?,
-        18
+        19
     );
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::CancelThrough, 1)?,
@@ -1220,26 +1220,30 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         12
     );
     assert_eq!(
-        adapter::account_role_v2(AdapterActionV2::InlineOrdinary, 2, 11)?,
+        adapter::account_role_v2(AdapterActionV2::InlineOrdinary, 2, 12)?,
         adapter::AccountRoleV2::InstructionsSysvar
     );
     assert_eq!(
-        adapter::account_role_v2(AdapterActionV2::InlineSplit, 2, 7)?,
+        adapter::account_role_v2(AdapterActionV2::InlineSplit, 2, 8)?,
         adapter::AccountRoleV2::Custody
+    );
+    assert_eq!(
+        adapter::account_role_v2(AdapterActionV2::RegisterBuy, 1, 5)?,
+        adapter::AccountRoleV2::VenuePolicyStagingCursor
     );
 
     let mut split = [adapter::AdapterAccountMetaV2 {
         key: [0; 32],
         is_signer: false,
         is_writable: false,
-    }; 23];
+    }; 24];
     for (index, meta) in split.iter_mut().enumerate() {
         meta.key = key(u8::try_from(index + 1).map_err(|_| Error::ArithmeticOverflow)?);
-        meta.is_writable = matches!(index, 0 | 4 | 6 | 11..=22);
+        meta.is_writable = matches!(index, 0 | 5 | 7 | 12..=23);
     }
-    split[9].key = [0; 32];
+    split[10].key = [0; 32];
     adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
-    split[22].key = split[16].key;
+    split[23].key = split[17].key;
     adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
     split[0].is_writable = false;
     assert_eq!(
@@ -1251,13 +1255,13 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         key: [0; 32],
         is_signer: false,
         is_writable: false,
-    }; 16];
+    }; 17];
     for (index, meta) in register.iter_mut().enumerate() {
         meta.key = key(u8::try_from(index + 40).map_err(|_| Error::ArithmeticOverflow)?);
         meta.is_signer = index == 0;
-        meta.is_writable = matches!(index, 0 | 2 | 6..=8 | 10);
+        meta.is_writable = matches!(index, 0 | 2 | 7..=9 | 11);
     }
-    register[13].key = [0; 32];
+    register[14].key = [0; 32];
     adapter::validate_account_frame_v2(AdapterActionV2::RegisterBuy, 1, &register)?;
     register[2].is_writable = false;
     assert_eq!(
@@ -1269,13 +1273,13 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         key: [0; 32],
         is_signer: false,
         is_writable: false,
-    }; 18];
+    }; 19];
     for (index, meta) in inline.iter_mut().enumerate() {
         meta.key = key(u8::try_from(index + 70).map_err(|_| Error::ArithmeticOverflow)?);
         meta.is_signer = index == 0;
-        meta.is_writable = matches!(index, 0 | 2 | 6 | 12..=17);
+        meta.is_writable = matches!(index, 0 | 2 | 7 | 13..=18);
     }
-    inline[9].key = [0; 32];
+    inline[10].key = [0; 32];
     adapter::validate_account_frame_v2(AdapterActionV2::InlineOrdinary, 2, &inline)?;
     inline[2].is_writable = false;
     assert_eq!(
@@ -1301,12 +1305,12 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
     );
 
     let inline_envelope = adapter::measured_action_envelope_v2(AdapterActionV2::InlineOrdinary, 2)?;
-    assert_eq!(inline_envelope.instruction_accounts, 18);
-    assert_eq!(inline_envelope.total_account_locks, 20);
-    assert_eq!(inline_envelope.serialized_transaction_bytes, 997);
+    assert_eq!(inline_envelope.instruction_accounts, 19);
+    assert_eq!(inline_envelope.total_account_locks, 21);
+    assert_eq!(inline_envelope.serialized_transaction_bytes, 999);
     let split16 = adapter::measured_action_envelope_v2(AdapterActionV2::Split, 16)?;
-    assert_eq!(split16.total_account_locks, 109);
-    assert_eq!(split16.serialized_transaction_bytes, 619);
+    assert_eq!(split16.total_account_locks, 110);
+    assert_eq!(split16.serialized_transaction_bytes, 621);
     let cancel_through = adapter::measured_action_envelope_v2(AdapterActionV2::CancelThrough, 1)?;
     assert_eq!(cancel_through.serialized_transaction_bytes, 501);
     assert_eq!(cancel_through.total_account_locks, 6);

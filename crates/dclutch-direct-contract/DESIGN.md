@@ -119,13 +119,17 @@ offchain bundles of native outcome claims, not a second Direct liability basis.
 
 The signed `fee_config` is the SHA-256 digest of one exact 88-byte
 `VenueFeePolicyV2`, not an address supplied by a matcher. The policy is a
-canonical immutable raw record under schema/release ID
+canonical finalized immutable raw record under schema/release ID
 `VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2`; its address is derived from
-`[b"dclutch-raw-record-v1", schema_release_id, fee_config]`. Every register and
-settlement frame carries both that record and the Market's immutable capability
-manifest. The adapter hashes and hostile-decodes both, checks the manifest hash
-against Market identity, requires the unique founding entry selected by
-`fee_config`, and verifies policy Market, generation, fee rate, and recipient.
+`[b"dclutch-raw-record-v1", schema_release_id, fee_config]`, while the required
+vacant staging address is derived from
+`[b"dclutch-record-stage-v1", schema_release_id, fee_config]`. Every register and
+settlement frame carries that record, its canonical finalized-absent staging
+cursor, and the Market's immutable capability manifest. The adapter uses the
+record contract's consumer-authentication path, hashes and hostile-decodes both
+records, checks the manifest hash against Market identity, requires the unique
+founding entry selected by `fee_config`, and verifies policy Market, generation,
+fee rate, and recipient.
 This makes policy selection a Market-founding fact rather than a caller-shaped
 program-owned account assertion.
 
@@ -183,22 +187,22 @@ have separate public codecs.
 
 | Action | Instruction accounts | Required shape summary |
 |---|---:|---|
-| Register Buy | 16 | System payer, RentCredit, writable Market, Realm, policy, manifest, root, record, escrow, Position, source, mint, token, System, Rent, Instructions |
-| Register Sell | 11 | System payer, RentCredit, writable Market, policy, manifest, root, record, Position, System, Rent, Instructions |
+| Register Buy | 17 | System payer, RentCredit, writable Market, Realm, policy + absent staging cursor, manifest, root, record, escrow, Position, source, mint, token, System, Rent, Instructions |
+| Register Sell | 12 | System payer, RentCredit, writable Market, policy + absent staging cursor, manifest, root, record, Position, System, Rent, Instructions |
 | Cancel Buy | 13 | Market, Realm, root, record, escrow, Position, refund source, RentCredit, mint, token, System, Rent, Instructions |
 | Cancel Sell | 8 | Market, root, record, Position, RentCredit, System, Rent, Instructions |
 | Expire Buy | 12 | Cancel Buy without Instructions |
 | Expire Sell | 7 | Cancel Sell without Instructions |
-| Ordinary | 20 | token/policy/manifest base 9 + persisted Sell 5 + persisted Buy 6 |
-| Split N | `11 + 6N` | writable Market/vault, policy/manifest and Realm/mint/token/Custody base + N Buy custody groups |
-| Merge N | `11 + 5N` | writable Market/vault, policy/manifest and Realm/mint/token/Custody base + N Sell custody groups |
+| Ordinary | 21 | token/policy/finality/manifest base 10 + persisted Sell 5 + persisted Buy 6 |
+| Split N | `12 + 6N` | writable Market/vault, policy/finality/manifest and Realm/mint/token/Custody base + N Buy custody groups |
+| Merge N | `12 + 5N` | writable Market/vault, policy/finality/manifest and Realm/mint/token/Custody base + N Sell custody groups |
 | Close registration | 2 | writable Market and replay root |
 | Close root | 5 | writable Market, root, RentCredit, System, Rent |
 | Cancel through | 3 | Market, replay root, Instructions |
 | Close invalidated Buy | 12 | Expire Buy frame; no Clock meta exists |
 | Close invalidated Sell | 7 | Expire Sell frame; no Clock meta exists |
-| Inline ordinary | 18 | creation/signature/token/policy base 12 + two root/Position/collateral groups |
-| Inline split/merge N=2 | `14 + 3N = 20` | inline base adds manifest, writable vault, and Custody metadata |
+| Inline ordinary | 19 | creation/signature/token/policy/finality base 13 + two root/Position/collateral groups |
+| Inline split/merge N=2 | `15 + 3N = 21` | inline base adds policy finality, manifest, writable vault, and Custody metadata |
 
 Every inline route carries InstructionsSysvar. No route carries Clock. RentCredit
 aliases are permitted only with other RentCredit roles; unsafe cross-role and
@@ -217,44 +221,44 @@ and 128 loaded-account locks.
 
 | Action | Ix accounts | Direct data | Ed25519 data | Serialized bytes | Locks |
 |---|---:|---:|---:|---:|---:|
-| Register Buy | 16 | 248 | 112 | 632 | 18 |
-| Register Sell | 11 | 248 | 112 | 622 | 13 |
+| Register Buy | 17 | 248 | 112 | 634 | 19 |
+| Register Sell | 12 | 248 | 112 | 624 | 14 |
 | Cancel Buy | 13 | 112 | 112 | 521 | 16 |
 | Cancel Sell | 8 | 112 | 112 | 511 | 11 |
 | Expire Buy | 12 | 16 | — | 276 | 14 |
 | Expire Sell | 7 | 16 | — | 266 | 9 |
-| Ordinary | 20 | 34 | — | 310 | 22 |
+| Ordinary | 21 | 34 | — | 312 | 23 |
 | Close registration | 2 | 16 | — | 256 | 4 |
 | Close root | 5 | 16 | — | 262 | 7 |
 | Cancel through | 3 | 112 | 112 | 501 | 6 |
 | Close invalidated Buy | 12 | 16 | — | 276 | 14 |
 | Close invalidated Sell | 7 | 16 | — | 266 | 9 |
-| Inline ordinary | 18 | 498 | 222 | 997 | 20 |
-| Inline complement N=2 | 20 | 506 | 222 | 1,009 | 22 |
+| Inline ordinary | 19 | 498 | 222 | 999 | 21 |
+| Inline complement N=2 | 21 | 506 | 222 | 1,011 | 23 |
 
 Registered complete-set geometry remains within both physical limits:
 
 | N | Split accounts | Split bytes | Split locks | Merge accounts | Merge bytes | Merge locks |
 |---:|---:|---:|---:|---:|---:|---:|
-| 2 | 23 | 324 | 25 | 21 | 320 | 23 |
-| 3 | 29 | 345 | 31 | 26 | 339 | 28 |
-| 4 | 35 | 366 | 37 | 31 | 358 | 33 |
-| 5 | 41 | 387 | 43 | 36 | 377 | 38 |
-| 6 | 47 | 408 | 49 | 41 | 396 | 43 |
-| 7 | 53 | 429 | 55 | 46 | 415 | 48 |
-| 8 | 59 | 450 | 61 | 51 | 434 | 53 |
-| 9 | 65 | 471 | 67 | 56 | 453 | 58 |
-| 10 | 71 | 492 | 73 | 61 | 472 | 63 |
-| 11 | 77 | 513 | 79 | 66 | 491 | 68 |
-| 12 | 83 | 535 | 85 | 71 | 511 | 73 |
-| 13 | 89 | 556 | 91 | 76 | 530 | 78 |
-| 14 | 95 | 577 | 97 | 81 | 549 | 83 |
-| 15 | 101 | 598 | 103 | 86 | 568 | 88 |
-| 16 | 107 | 619 | 109 | 91 | 587 | 93 |
+| 2 | 24 | 326 | 26 | 22 | 322 | 24 |
+| 3 | 30 | 347 | 32 | 27 | 341 | 29 |
+| 4 | 36 | 368 | 38 | 32 | 360 | 34 |
+| 5 | 42 | 389 | 44 | 37 | 379 | 39 |
+| 6 | 48 | 410 | 50 | 42 | 398 | 44 |
+| 7 | 54 | 431 | 56 | 47 | 417 | 49 |
+| 8 | 60 | 452 | 62 | 52 | 436 | 54 |
+| 9 | 66 | 473 | 68 | 57 | 455 | 59 |
+| 10 | 72 | 494 | 74 | 62 | 474 | 64 |
+| 11 | 78 | 515 | 80 | 67 | 493 | 69 |
+| 12 | 84 | 537 | 86 | 72 | 513 | 74 |
+| 13 | 90 | 558 | 92 | 77 | 532 | 79 |
+| 14 | 96 | 579 | 98 | 82 | 551 | 84 |
+| 15 | 102 | 600 | 104 | 87 | 570 | 89 |
+| 16 | 108 | 621 | 110 | 92 | 589 | 94 |
 
-Inline complementary N=2 fits at 1,009 bytes. N=3 is 1,366 bytes and refuses.
-The exact N=2..16 reference sequence is `1009, 1366, 1723, 2080, 2437, 2794,
-3151, 3508, 3865, 4222, 4579, 4936, 5293, 5650, 6007`. Independently, even a
+Inline complementary N=2 fits at 1,011 bytes. N=3 is 1,368 bytes and refuses.
+The exact N=2..16 reference sequence is `1011, 1368, 1725, 2082, 2439, 2796,
+3153, 3510, 3867, 4224, 4581, 4938, 5295, 5652, 6009`. Independently, even a
 perfectly shared message leaves N=16 native Ed25519 scaffolding at
 `2 + 16*(14+32+64) = 1,762` bytes before message or transaction framing.
 Registered custody is therefore required for complementary N>=3. Ordinary and
@@ -276,7 +280,8 @@ source delegation, escrow authority, custody, RentCredit beneficiary, and close
 effects, but it does not execute them. The SBF adapter must still:
 
 - decode canonical Market/Realm/Position/policy/manifest/root/record state,
-  content hashes, raw-record identities, and PDA bumps;
+  content hashes, finalized raw-record identities and staging absence, and PDA
+  bumps;
 - use trusted `Clock::get()`, decode the 48-byte `RentCreditV1`, verify its
   `dclutch-rent-contract` owner, and derive its key from the projected domain,
   refund authority, and persisted bump;
