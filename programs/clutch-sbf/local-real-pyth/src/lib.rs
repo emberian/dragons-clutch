@@ -34,6 +34,8 @@ pub mod plane;
 pub mod provider;
 #[cfg(feature = "operator")]
 pub mod rpc_index;
+#[cfg(feature = "operator")]
+pub mod source_action12_material;
 #[cfg(feature = "builder")]
 pub mod session;
 #[cfg(feature = "campaign")]
