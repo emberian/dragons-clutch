@@ -22,7 +22,9 @@ use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
-    SeriesFundingStateV3, SeriesFundingStateV4,
+    AuthenticatedSeriesFundingAuthorityV4, SeriesFundingReservationBindingV4,
+    SeriesFundingReservationBindingV4Id, SeriesFundingStateV3, SeriesFundingStateV4,
+    SeriesFundingStateV4Id,
     AuthenticatedSeriesFundingAuthorityV3, SeriesFundingComponentV2,
     SeriesFundingPhaseV3, SeriesFundingQuoteV5, SeriesFundingTermsV2Id,
     RegistryCapabilityProjectionV2,
@@ -55,6 +57,8 @@ const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v3\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v4\0";
+const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -289,6 +293,53 @@ impl AuthenticatedSeriesFundingAccountV4 {
     pub(crate) const fn is_writable(&self) -> bool { self.writable }
     pub(crate) const fn data_id(&self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+}
+
+/// Non-detachable hostile Pending postwrite produced by the sole current
+/// founder reservation transition.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesFundingReservationV4 {
+    id: ContentId,
+    binding: Box<SeriesFundingReservationBindingV4>,
+    reservation_receipt_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_before_id: SeriesFundingStateV4Id,
+    funding_data_before_id: ContentId,
+    funding_authentication_before_id: ContentId,
+    pending: AuthenticatedSeriesFundingAccountV4,
+}
+
+impl AuthenticatedProductSeriesFundingReservationV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) fn binding(&self) -> &SeriesFundingReservationBindingV4 { &self.binding }
+    pub(crate) const fn reservation_receipt_id(&self) -> ContentId {
+        self.reservation_receipt_id
+    }
+    pub(crate) const fn funding_account(&self) -> Pubkey { self.funding_account }
+    pub(crate) const fn funding_state_before_id(&self) -> SeriesFundingStateV4Id {
+        self.funding_state_before_id
+    }
+    pub(crate) const fn funding_data_before_id(&self) -> ContentId {
+        self.funding_data_before_id
+    }
+    pub(crate) const fn funding_authentication_before_id(&self) -> ContentId {
+        self.funding_authentication_before_id
+    }
+    pub(crate) fn funding_state_pending_id(&self) -> Outcome<SeriesFundingStateV4Id> {
+        self.pending
+            .state()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    pub(crate) const fn funding_data_pending_id(&self) -> ContentId {
+        self.pending.data_id()
+    }
+    pub(crate) const fn funding_authentication_pending_id(&self) -> ContentId {
+        self.pending.authentication_id()
+    }
+    pub(crate) const fn pending(&self) -> &AuthenticatedSeriesFundingAccountV4 {
+        &self.pending
+    }
 }
 
 /// Exact current permanent 0xb8/version2 replay authentication.
@@ -2744,6 +2795,185 @@ fn write_series_funding_state_v4(
     Ok(rebound)
 }
 
+#[derive(Debug)]
+struct ExactSeriesFundingReservationAuthorityV4 {
+    state_before_id: SeriesFundingStateV4Id,
+    binding_id: SeriesFundingReservationBindingV4Id,
+    reservation_receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV4 for ExactSeriesFundingReservationAuthorityV4 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+        _quote: &SeriesFundingQuoteV5,
+        _attachment: &SeriesAttachmentPlanV5,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        state: &SeriesFundingStateV4,
+        binding: &SeriesFundingReservationBindingV4,
+        reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if state.id()? != self.state_before_id
+            || binding.id()? != self.binding_id
+            || reservation_receipt_id != self.reservation_receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &clutch_product_series::SeriesFundingCompletionBindingV4,
+        _completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &clutch_product_series::SeriesFundingAbortBindingV4,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+}
+
+/// Private raw reserve half. The sole exported current founder compositor must
+/// construct the binding from its retained V3 preauthorization and exact 0xba
+/// capitalization; no other module can persist Pending through this function.
+#[inline(never)]
+fn reserve_series_funding_v4_with_binding(
+    program_id: &Pubkey,
+    funding_account: &AccountInfo<'_>,
+    authenticated_funding: AuthenticatedSeriesFundingAccountV4,
+    series: &SeriesPlanV5,
+    quote: &SeriesFundingQuoteV5,
+    attachment: &SeriesAttachmentPlanV5,
+    binding: SeriesFundingReservationBindingV4,
+    reservation_receipt_id: ContentId,
+) -> Outcome<AuthenticatedProductSeriesFundingReservationV4> {
+    require(
+        authenticated_funding.is_writable()
+            && authenticated_funding.account() == *funding_account.key
+            && binding.funding_account_id.bytes() == funding_account.key.to_bytes()
+            && binding.funding_account_authentication_before_id
+                == authenticated_funding.authentication_id()
+            && binding.funding_state_before_id
+                == authenticated_funding
+                    .state()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && binding.funding_transition_sequence_before
+                == authenticated_funding.state().transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    require_live(reservation_receipt_id)?;
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let before_state_id = authenticated_funding
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let before_data_id = authenticated_funding.data_id();
+    let before_authentication_id = authenticated_funding.authentication_id();
+    let authority = ExactSeriesFundingReservationAuthorityV4 {
+        state_before_id: before_state_id,
+        binding_id,
+        reservation_receipt_id,
+    };
+    let mut successor = *authenticated_funding.state();
+    let reserved_ordinal = successor
+        .reserve_created(
+            &authority,
+            series,
+            quote,
+            attachment,
+            &binding,
+            reservation_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(reserved_ordinal == binding.ordinal, ClutchError::MismatchedState)?;
+    let rebound = write_series_funding_state_v4(
+        program_id,
+        funding_account,
+        authenticated_funding,
+        successor,
+    )?;
+    let pending_state_id = rebound
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound.state().phase == clutch_product_series::SeriesFundingPhaseV4::Pending
+            && rebound.state().pending_pre_source_reservation_binding_id
+                == binding_id.content_id()
+            && rebound.state().pending_reservation_receipt_id == reservation_receipt_id
+            && rebound.state().pending_clock_receipt_id == binding.clock_receipt_id
+            && rebound.state().pending_clock_bucket == binding.clock_bucket,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4,
+        program_id.as_ref(),
+        funding_account.key.as_ref(),
+        &before_state_id.bytes(),
+        &before_data_id.bytes(),
+        &before_authentication_id.bytes(),
+        &binding_id.bytes(),
+        &reservation_receipt_id.bytes(),
+        &pending_state_id.bytes(),
+        &rebound.data_id().bytes(),
+        &rebound.authentication_id().bytes(),
+        &binding.clock_receipt_id.bytes(),
+        &binding.clock_bucket.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesFundingReservationV4 {
+        id,
+        binding: Box::new(binding),
+        reservation_receipt_id,
+        funding_account: *funding_account.key,
+        funding_state_before_id: before_state_id,
+        funding_data_before_id: before_data_id,
+        funding_authentication_before_id: before_authentication_id,
+        pending: rebound,
+    })
+}
+
 /// Private raw replayV2 writer. No projection or count-only receipt can invoke
 /// it outside the single Product lifecycle compositor.
 fn write_series_lifecycle_replay_v2(
@@ -4673,6 +4903,15 @@ mod source_contract_tests {
         assert!(!source.contains("pub(crate) fn write_series_funding_state_v4("));
         assert!(source.contains("rebound.authentication_id() != authentication_before"));
         assert!(source.contains("rebound.data_id() != data_before"));
+        assert!(source.contains("struct AuthenticatedProductSeriesFundingReservationV4"));
+        assert!(source.contains("fn reserve_series_funding_v4_with_binding("));
+        assert!(!source.contains("pub(crate) fn reserve_series_funding_v4_with_binding("));
+        assert!(source.contains(
+            "pending_pre_source_reservation_binding_id\n                == binding_id.content_id()"
+        ));
+        assert!(source.contains(
+            "pending_clock_receipt_id == binding.clock_receipt_id"
+        ));
     }
 
     #[test]
