@@ -10,22 +10,21 @@
 use core::cell::Ref;
 
 use clutch_batch::portfolio_execution_v2::{
-    authenticate_exact_portfolio_pair_v2,
+    authenticate_exact_portfolio_pair_streaming_v2,
     authenticate_portfolio_receipt_sibling_set_v2,
-    authenticate_selected_portfolio_order_for_materialization_v2,
+    authenticate_selected_portfolio_order_streaming_for_materialization_v2,
     AuthenticatedPortfolioReceiptSiblingSetV2, PortfolioAccountExpectationV2,
     PortfolioAccountRoleV2, PortfolioAdapterV2, PortfolioReceiptSiblingTraversalSetV2,
     PortfolioReceiptSiblingTraversalV2, PortfolioSelectionMembershipExpectationV2,
+    PortfolioSelectionStreamV2, PortfolioExecutionErrorV2,
     PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioSourceOrderKindV2,
     PortfolioTransitionExpectationV2, PortfolioValuationBoundaryV2,
     SelectedPortfolioOrderRecordV2, PORTFOLIO_EXECUTION_VERSION_V2,
     PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
 };
 use clutch_batch::relation_v1::MAX_OUTCOMES;
-use clutch_batch::relation_v2::{
-    EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2,
-};
-use clutch_batch::{Side, MAX_ORDERS};
+use clutch_batch::relation_v2::{EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2};
+use clutch_batch::Side;
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
@@ -35,9 +34,12 @@ use clutch_general_v2_contract::{
     CandidateFeedHeaderV2, Id32, MarketBindingV2, Sha256BackendV1,
 };
 use clutch_general_v2_runtime::{
-    bind_settlement_root_traversal_v4, derive_settlement_traversal_projection_v4,
-    project_owner_blind_book_costed_v1, GeneralOrderPageInputV5,
-    SettlementTraversalProjectionV4,
+    authenticate_settlement_feed_view_v5, authenticate_settlement_order_book_view_v5,
+    bind_settlement_root_traversal_v5, derive_settlement_traversal_projection_v5,
+    project_owner_blind_book_stream_costed_v1, read_authenticated_feed_fill_v5,
+    read_authenticated_feed_slice_v5, GeneralOrderPageInputV5, SettlementAdapterErrorV1,
+    SettlementOrderBookBindingV5, SettlementTraversalAccessV5,
+    SettlementTraversalProjectionV5, StreamedOwnerBlindOrderV5,
 };
 use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{
@@ -64,19 +66,6 @@ use super::general_v2_settlement_root::{
     authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
 };
 use super::product_artifact::authenticate_product_artifact_v1;
-
-static EMPTY_PORTFOLIO_MATERIALIZATION_CANDIDATE_V5: EconomicCandidateV2 =
-    EconomicCandidateV2 {
-        fills: [0; MAX_ORDERS],
-        honored_aon_mask: 0,
-        virtual_split: 0,
-        virtual_merge: 0,
-    };
-static EMPTY_PORTFOLIO_MATERIALIZATION_SIBLINGS_V5:
-    [PortfolioReceiptSiblingTraversalV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2] = [
-    PortfolioReceiptSiblingTraversalV2::EMPTY;
-    PORTFOLIO_PAIR_MAX_RECEIPTS_V2
-];
 
 /// Named immutable account frame shared by settlement-root creation and every
 /// later action that must reproduce the candidate-wide V5 traversal.
@@ -110,18 +99,19 @@ pub struct SettlementTraversalAccountFrameV5<'a, 'info> {
 
 /// Program-authenticated immutable traversal facts.
 #[derive(Debug)]
-pub struct AuthenticatedSettlementTraversalV5 {
+pub struct AuthenticatedSettlementTraversalV5<'info> {
     market: MarketBindingV2,
     collateral: BoundCollateralProfileV2,
-    genesis: MarketGenesisProfileV2,
+    retained_feed: AccountInfo<'info>,
+    pages: [Option<AccountInfo<'info>>; MAX_ORDER_PAGES],
+    book_binding: SettlementOrderBookBindingV5,
     feed_account: Id32,
-    feed: CandidateFeedHeaderV2,
     frame_accounts: [Id32; 11],
     page_semantic_ids: [Id32; MAX_ORDER_PAGES],
-    traversal: Box<SettlementTraversalProjectionV4>,
+    projection: SettlementTraversalProjectionV5,
 }
 
-impl AuthenticatedSettlementTraversalV5 {
+impl AuthenticatedSettlementTraversalV5<'_> {
     /// Exact MarketBinding V2 body.
     pub const fn market(&self) -> &MarketBindingV2 {
         &self.market
@@ -132,11 +122,6 @@ impl AuthenticatedSettlementTraversalV5 {
         self.collateral
     }
 
-    /// Exact authenticated Genesis V2 body.
-    pub const fn genesis(&self) -> &MarketGenesisProfileV2 {
-        &self.genesis
-    }
-
     /// Canonical retained Feed account.
     pub const fn feed_account(&self) -> Id32 {
         self.feed_account
@@ -144,22 +129,29 @@ impl AuthenticatedSettlementTraversalV5 {
 
     /// Exact sealed Feed header.
     pub const fn feed(&self) -> CandidateFeedHeaderV2 {
-        self.feed
+        self.projection.feed()
     }
 
     /// Exhaustive candidate-wide settlement projection.
-    pub const fn traversal(&self) -> &SettlementTraversalProjectionV4 {
-        &self.traversal
+    pub const fn projection(&self) -> &SettlementTraversalProjectionV5 {
+        &self.projection
+    }
+
+    /// Borrow-bound exact Feed/page access. The authority retains the same
+    /// read-only AccountInfos whose full byte IDs were authenticated at
+    /// construction, so no caller body can be substituted here.
+    pub fn traversal(&self) -> &dyn SettlementTraversalAccessV5 {
+        self
     }
 
     fn order_placement(
         &self,
         order_index: u8,
     ) -> Option<AuthenticatedPortfolioOrderPlacementV5> {
-        let projection = self.traversal.order_projection();
-        let page_index = projection.order_page_index(order_index)?;
-        let page_slot = projection.order_page_slot(order_index)?;
-        let page_account = projection.order_page_account(order_index)?;
+        let order = self.order(order_index).ok()??;
+        let page_index = order.page_index();
+        let page_slot = order.page_slot();
+        let page_account = order.page_account();
         let page_semantic_id = *self.page_semantic_ids.get(usize::from(page_index))?;
         if page_semantic_id.is_zero() {
             return None;
@@ -170,6 +162,50 @@ impl AuthenticatedSettlementTraversalV5 {
             page_account,
             page_semantic_id,
         })
+    }
+}
+
+impl SettlementTraversalAccessV5 for AuthenticatedSettlementTraversalV5<'_> {
+    fn projection(&self) -> &SettlementTraversalProjectionV5 { &self.projection }
+
+    fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1> {
+        if order_index >= self.book_binding.order_count() {
+            return Ok(None);
+        }
+        let page_index = usize::from(self.book_binding.order_page_index(order_index)?);
+        let page = self.pages[page_index]
+            .as_ref()
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let data = page
+            .try_borrow_data()
+            .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?;
+        self.book_binding.read_order(
+            self.projection.domain(),
+            GeneralOrderPageInputV5 { account: id(page.key), body: &data },
+            order_index,
+        )
+    }
+
+    fn settlement_slice(
+        &self,
+        slice_index: u16,
+    ) -> Result<clutch_general_v2_runtime::CanonicalSettlementSliceV1, SettlementAdapterErrorV1> {
+        let data = self
+            .retained_feed
+            .try_borrow_data()
+            .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?;
+        read_authenticated_feed_slice_v5(&data, self.projection.feed(), slice_index)
+    }
+
+    fn selected_fill(&self, order_index: u8) -> Result<u64, SettlementAdapterErrorV1> {
+        let data = self
+            .retained_feed
+            .try_borrow_data()
+            .map_err(|_| SettlementAdapterErrorV1::BindingMismatch)?;
+        read_authenticated_feed_fill_v5(&data, self.projection.feed(), order_index)
     }
 }
 
@@ -184,20 +220,20 @@ struct AuthenticatedPortfolioOrderPlacementV5 {
 /// Existing SettlementRoot and immutable traversal after both SBF account
 /// authentication and the pure exhaustive equality bind succeed.
 #[derive(Clone, Copy, Debug)]
-pub struct AuthenticatedRootSettlementTraversalV5<'a> {
+pub struct AuthenticatedRootSettlementTraversalV5<'a, 'info> {
     root: AuthenticatedGeneralSettlementRootV1,
-    traversal: &'a AuthenticatedSettlementTraversalV5,
+    traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
     access: RootTraversalAccessV5,
 }
 
-impl<'a> AuthenticatedRootSettlementTraversalV5<'a> {
+impl<'a, 'info> AuthenticatedRootSettlementTraversalV5<'a, 'info> {
     /// Program-owned canonical root account and exact decoded body.
     pub const fn root(&self) -> &AuthenticatedGeneralSettlementRootV1 {
         &self.root
     }
 
     /// Exact immutable traversal equality-bound to the root.
-    pub const fn traversal(&self) -> &'a AuthenticatedSettlementTraversalV5 {
+    pub const fn traversal(&self) -> &'a AuthenticatedSettlementTraversalV5<'info> {
         self.traversal
     }
 }
@@ -225,6 +261,12 @@ impl PositionV3Sha256Backend for RuntimeSha256 {
 
 fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
+}
+
+fn settlement_outcome<T>(
+    value: Result<T, SettlementAdapterErrorV1>,
+) -> Outcome<T> {
+    value.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
@@ -310,10 +352,10 @@ fn require_frame_distinct(frame: SettlementTraversalAccountFrameV5<'_, '_>) -> O
 /// identity, or child expectation enters this constructor. Page count and all
 /// settlement expectations come from the exact page set and sealed Feed.
 #[inline(never)]
-pub fn authenticate_settlement_traversal_v5(
+pub fn authenticate_settlement_traversal_v5<'a, 'info>(
     program_id: &Pubkey,
-    frame: SettlementTraversalAccountFrameV5<'_, '_>,
-) -> Outcome<AuthenticatedSettlementTraversalV5> {
+    frame: SettlementTraversalAccountFrameV5<'a, 'info>,
+) -> Outcome<AuthenticatedSettlementTraversalV5<'info>> {
     require(
         (1..=MAX_ORDER_PAGES).contains(&frame.pages.len()),
         ClutchError::WrongAccountCount,
@@ -464,27 +506,44 @@ pub fn authenticate_settlement_traversal_v5(
         };
         page_index += 1;
     }
-    let order_projection = Box::new(project_owner_blind_book_costed_v1(
+    let order_stream = project_owner_blind_book_stream_costed_v1(
         &page_inputs[..frame.pages.len()],
         feed.order_set,
         &domain,
         &market,
         &grid,
-    )?);
-    let traversal = Box::new(derive_settlement_traversal_projection_v4(
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let order_view = settlement_outcome(authenticate_settlement_order_book_view_v5(
+        &order_stream,
+        &page_inputs[..frame.pages.len()],
+    ))?;
+    let feed_view = settlement_outcome(authenticate_settlement_feed_view_v5(
         id(frame.retained_feed.key),
         &feed_data,
-        &order_projection,
+    ))?;
+    let projection = settlement_outcome(derive_settlement_traversal_projection_v5(
+        feed_view,
+        &order_view,
         base.series_funding_terms_v2_id,
         base.settlement_policy_id,
         collateral,
-    )?);
+    ))?;
+    let book_binding = order_view.binding();
+    let mut retained_pages: [Option<AccountInfo<'info>>; MAX_ORDER_PAGES] =
+        [None, None, None, None];
+    page_index = 0;
+    while page_index < frame.pages.len() {
+        retained_pages[page_index] = Some(frame.pages[page_index].clone());
+        page_index += 1;
+    }
     Ok(AuthenticatedSettlementTraversalV5 {
         market,
         collateral,
-        genesis,
+        retained_feed: frame.retained_feed.clone(),
+        pages: retained_pages,
+        book_binding,
         feed_account: id(frame.retained_feed.key),
-        feed,
         frame_accounts: [
             id(frame.retained_feed.key),
             id(frame.market_binding.key),
@@ -499,17 +558,17 @@ pub fn authenticate_settlement_traversal_v5(
             id(frame.market_genesis.key),
         ],
         page_semantic_ids,
-        traversal,
+        projection,
     })
 }
 
 /// Authenticate one writable counted root and equality-bind the immutable
 /// traversal before any action-specific root mutation is prepared.
-pub fn authenticate_writable_root_settlement_traversal_v5<'a>(
+pub fn authenticate_writable_root_settlement_traversal_v5<'a, 'info>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    traversal: &'a AuthenticatedSettlementTraversalV5,
-) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a>> {
+    traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
+) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a, 'info>> {
     authenticate_root_settlement_traversal_v5(
         program_id,
         root_account,
@@ -520,11 +579,11 @@ pub fn authenticate_writable_root_settlement_traversal_v5<'a>(
 
 /// Authenticate one read-only counted root and equality-bind the immutable
 /// traversal before any action-specific child transition is prepared.
-pub fn authenticate_readonly_root_settlement_traversal_v5<'a>(
+pub fn authenticate_readonly_root_settlement_traversal_v5<'a, 'info>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    traversal: &'a AuthenticatedSettlementTraversalV5,
-) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a>> {
+    traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
+) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a, 'info>> {
     authenticate_root_settlement_traversal_v5(
         program_id,
         root_account,
@@ -533,20 +592,20 @@ pub fn authenticate_readonly_root_settlement_traversal_v5<'a>(
     )
 }
 
-fn authenticate_root_settlement_traversal_v5<'a>(
+fn authenticate_root_settlement_traversal_v5<'a, 'info>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    traversal: &'a AuthenticatedSettlementTraversalV5,
+    traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
     access: RootTraversalAccessV5,
-) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a>> {
+) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a, 'info>> {
     let root_id = id(root_account.key);
     for account in traversal.frame_accounts {
         require(root_id != account, ClutchError::AccountAlias)?;
     }
     let mut page = 0u16;
-    while usize::from(page) < usize::from(traversal.traversal().order_projection().page_count()) {
+    while usize::from(page) < usize::from(traversal.projection().page_count()) {
         require(
-            traversal.traversal().order_projection().page_account(page) != Some(root_id),
+            traversal.projection().page_account(page) != Some(root_id),
             ClutchError::AccountAlias,
         )?;
         page = page
@@ -568,7 +627,7 @@ fn authenticate_root_settlement_traversal_v5<'a>(
             feed.settlement_candidate_id,
         )?,
     };
-    bind_settlement_root_traversal_v4(root.account(), root.root(), traversal.traversal())
+    bind_settlement_root_traversal_v5(root.account(), root.root(), traversal.projection())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok(AuthenticatedRootSettlementTraversalV5 {
         root,
@@ -583,6 +642,43 @@ struct AuthenticatedPortfolioMaterializationEndpointV5 {
     placement: AuthenticatedPortfolioOrderPlacementV5,
     position_account: Id32,
     position_semantic_id: Id32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PortfolioMaterializationSelectionStreamV5<'a> {
+    traversal: &'a dyn SettlementTraversalAccessV5,
+}
+
+impl PortfolioSelectionStreamV2 for PortfolioMaterializationSelectionStreamV5<'_> {
+    fn order_count(&self) -> u8 {
+        self.traversal.projection().feed().order_count
+    }
+
+    fn order(&self, order_index: u8) -> Result<EconomicOrderV2, PortfolioExecutionErrorV2> {
+        self.traversal
+            .order(order_index)
+            .map_err(|_| PortfolioExecutionErrorV2::OrderMismatch)?
+            .map(|order| *order.economic_order())
+            .ok_or(PortfolioExecutionErrorV2::OrderMismatch)
+    }
+
+    fn selected_fill(&self, order_index: u8) -> Result<u64, PortfolioExecutionErrorV2> {
+        self.traversal
+            .selected_fill(order_index)
+            .map_err(|_| PortfolioExecutionErrorV2::CandidateMismatch)
+    }
+
+    fn honored_aon_mask(&self) -> u64 {
+        self.traversal.projection().feed().honored_aon_mask
+    }
+
+    fn virtual_split(&self) -> u64 {
+        self.traversal.projection().feed().virtual_split
+    }
+
+    fn virtual_merge(&self) -> u64 {
+        self.traversal.projection().feed().virtual_merge
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -661,6 +757,33 @@ impl PortfolioAdapterV2 for PortfolioMaterializationSelectionAdapterV5 {
             && candidate.fills.get(at).copied() == Some(record.selected_fill_units)
     }
 
+    fn authenticate_streamed_selection_membership(
+        &self,
+        expected: &PortfolioSelectionMembershipExpectationV2,
+        relation_order: &EconomicOrderV2,
+        selected_fill: u64,
+    ) -> bool {
+        let record = expected.record;
+        let Some(endpoint) = self
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.membership.order_index == record.order_index)
+        else {
+            return false;
+        };
+        endpoint.membership.order_id == record.order_id
+            && endpoint.membership.owner == record.owner_id
+            && endpoint.placement.page_index == record.page_index
+            && endpoint.placement.page_slot == record.page_slot
+            && endpoint.placement.page_account.bytes() == record.order_page_account_id
+            && endpoint.placement.page_semantic_id.bytes() == record.order_page_semantic_id
+            && endpoint.position_account.bytes() == record.position_account_id
+            && endpoint.position_semantic_id.bytes() == record.position_pre_semantic_id
+            && relation_order.order_id == record.order_id
+            && relation_order.side == record.side
+            && selected_fill == record.selected_fill_units
+    }
+
     fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
         false
     }
@@ -683,7 +806,7 @@ impl PortfolioAdapterV2 for PortfolioMaterializationSelectionAdapterV5 {
 #[inline(never)]
 pub fn authenticate_portfolio_materialization_sibling_set_v5(
     program_id: &Pubkey,
-    authority: &AuthenticatedRootSettlementTraversalV5<'_>,
+    authority: &AuthenticatedRootSettlementTraversalV5<'_, '_>,
     buyer_reservation: &AccountInfo<'_>,
     buyer_position: &AccountInfo<'_>,
     seller_reservation: &AccountInfo<'_>,
@@ -708,16 +831,10 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         }
         require(endpoint_id != authority.root.account(), ClutchError::AccountAlias)?;
         let mut page = 0u16;
-        while usize::from(page)
-            < usize::from(authority.traversal.traversal().order_projection().page_count())
+        while usize::from(page) < usize::from(authority.traversal.projection().page_count())
         {
             require(
-                authority
-                    .traversal
-                    .traversal()
-                    .order_projection()
-                    .page_account(page)
-                    != Some(endpoint_id),
+                authority.traversal.projection().page_account(page) != Some(endpoint_id),
                 ClutchError::AccountAlias,
             )?;
             page = page
@@ -772,9 +889,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
             && feed.virtual_merge == 0,
         ClutchError::MismatchedState,
     )?;
-    let entry = traversal
-        .settlement_slice(0)
-        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let entry = settlement_outcome(traversal.settlement_slice(0))?;
     let (buy_order_index, sell_order_index) = match (
         entry.buy(),
         entry.sell(),
@@ -788,15 +903,17 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
     };
     require(
-        traversal.first_slice(buy_order_index) == Some(0)
-            && traversal.first_slice(sell_order_index) == Some(0),
+        settlement_outcome(traversal.first_slice(buy_order_index))? == Some(0)
+            && settlement_outcome(traversal.first_slice(sell_order_index))? == Some(0),
         ClutchError::MismatchedState,
     )?;
     let buy_membership = traversal
         .settlement_membership(buy_order_index)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     let sell_membership = traversal
         .settlement_membership(sell_order_index)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         buy_membership.side == clutch_owner_settlement::SettlementSideV1::Buy
@@ -823,36 +940,22 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         1,
     )?;
     let root_semantic_id = root.data_id(&RuntimeSha256, authority.root.account())?;
-    let feed_semantic_id = traversal.candidate_bundle_digest();
+    let feed_semantic_id = traversal.projection().candidate_bundle_digest();
     require(
         feed_semantic_id == root.candidate_bundle_digest(),
         ClutchError::MismatchedState,
     )?;
 
-    let mut candidate = super::orders_batch::boxed_copy_of(
-        &EMPTY_PORTFOLIO_MATERIALIZATION_CANDIDATE_V5,
-    )?;
-    candidate.honored_aon_mask = feed.honored_aon_mask;
-    let mut order = 0usize;
-    while order < usize::from(feed.order_count) {
-        let order_index = u8::try_from(order)
-            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        if let Some(membership) = traversal.settlement_membership(order_index) {
-            candidate.fills[order] = membership.entitled_units;
-        }
-        order += 1;
-    }
+    let selection = PortfolioMaterializationSelectionStreamV5 { traversal };
     let mut prices = [0u64; MAX_OUTCOMES];
     let mut outcome = 0usize;
     while outcome < usize::from(feed.outcome_count) {
         let outcome_index = u8::try_from(outcome)
             .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        prices[outcome] = traversal
-            .outcome_price(outcome_index)
-            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        prices[outcome] = settlement_outcome(traversal.outcome_price(outcome_index))?;
         outcome += 1;
     }
-    let domain = *traversal.order_projection().base().domain();
+    let domain = *traversal.projection().domain();
     let price = PricePreconditionV2 {
         policy_digest: domain.price_policy_digest,
         semantic_price_digest: feed.candidate_price_digest.bytes(),
@@ -881,31 +984,30 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         feed_semantic_id,
         endpoints: [buyer, seller],
     };
-    let authenticated_buyer = authenticate_selected_portfolio_order_for_materialization_v2(
+    let authenticated_buyer =
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
         &adapter,
         program_id.to_bytes(),
         &domain,
-        traversal.order_projection().base().book(),
-        &candidate,
+        &selection,
         feed.base_relation_candidate_id.bytes(),
         buyer_record,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let authenticated_seller = authenticate_selected_portfolio_order_for_materialization_v2(
+    let authenticated_seller =
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
         &adapter,
         program_id.to_bytes(),
         &domain,
-        traversal.order_projection().base().book(),
-        &candidate,
+        &selection,
         feed.base_relation_candidate_id.bytes(),
         seller_record,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let pair = authenticate_exact_portfolio_pair_v2(
+    let pair = authenticate_exact_portfolio_pair_streaming_v2(
         &domain,
-        traversal.order_projection().base().book(),
+        &selection,
         &price,
-        &candidate,
         PortfolioValuationBoundaryV2::ExactReceiptDivisionV1,
         authenticated_buyer,
         authenticated_seller,
@@ -927,16 +1029,13 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
             == counts.expected_receipts,
         ClutchError::MismatchedState,
     )?;
-    let mut sibling_set = super::orders_batch::boxed_copy_of(
-        &EMPTY_PORTFOLIO_MATERIALIZATION_SIBLINGS_V5,
-    )?;
+    let mut sibling_set =
+        [PortfolioReceiptSiblingTraversalV2::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
     let mut sibling_index = 0usize;
     while sibling_index < derived_count {
         let slice_index = u16::try_from(sibling_index)
             .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        let slice = traversal
-            .settlement_slice(slice_index)
-            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let slice = settlement_outcome(traversal.settlement_slice(slice_index))?;
         let (slice_buy, slice_sell) = match (slice.buy(), slice.sell(), slice.route()) {
             (
                 clutch_general_v2_runtime::SettlementLegV1::Order(buy),
@@ -958,9 +1057,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
             sell_order_index,
             outcome: slice.outcome(),
             quantity: slice.quantity(),
-            price: traversal
-                .outcome_price(slice.outcome())
-                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?,
+            price: settlement_outcome(traversal.outcome_price(slice.outcome()))?,
         };
         sibling_index += 1;
     }
@@ -969,7 +1066,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         PortfolioReceiptSiblingTraversalSetV2 {
             sibling_count: u8::try_from(derived_count)
                 .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
-            siblings: *sibling_set,
+            siblings: sibling_set,
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
@@ -977,7 +1074,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
 
 fn authenticate_portfolio_materialization_endpoint_v5(
     program_id: &Pubkey,
-    authority: &AuthenticatedRootSettlementTraversalV5<'_>,
+    authority: &AuthenticatedRootSettlementTraversalV5<'_, '_>,
     membership: clutch_owner_settlement::AuthenticatedOrderMembershipV2,
     reservation_account: &AccountInfo<'_>,
     position_account: &AccountInfo<'_>,
@@ -1003,10 +1100,9 @@ fn authenticate_portfolio_materialization_endpoint_v5(
             && body.epoch.bytes() == root.epoch().bytes()
             && body.owner.bytes() == membership.owner
             && body.order_id.bytes() == membership.order_id
-            && body.price_grid.bytes()
-                == traversal.order_projection().base().price_grid_id().bytes()
-            && body.terms.bytes() == traversal.terms().bytes()
-            && body.policy.bytes() == traversal.reservation_policy().bytes()
+            && body.price_grid.bytes() == traversal.projection().price_grid_id().bytes()
+            && body.terms.bytes() == traversal.projection().terms().bytes()
+            && body.policy.bytes() == traversal.projection().reservation_policy().bytes()
             && body.position_generation == membership.position_generation
             && body.order_generation == membership.order_generation
             && body.page_index == placement.page_index
@@ -1035,7 +1131,7 @@ fn authenticate_portfolio_materialization_endpoint_v5(
         PositionPurposeV3::General,
         &purpose_binding.bytes(),
     );
-    let position_binding = traversal.position_market_binding();
+    let position_binding = traversal.projection().position_market_binding();
     require(
         *position_account.key == expected_position.0
             && fields.stored_bump == expected_position.1
@@ -1068,7 +1164,7 @@ fn authenticate_portfolio_materialization_endpoint_v5(
 }
 
 fn portfolio_materialization_record_v5(
-    authority: &AuthenticatedRootSettlementTraversalV5<'_>,
+    authority: &AuthenticatedRootSettlementTraversalV5<'_, '_>,
     endpoint: AuthenticatedPortfolioMaterializationEndpointV5,
     side: Side,
     root_semantic_id: Id32,
@@ -1076,7 +1172,7 @@ fn portfolio_materialization_record_v5(
 ) -> Outcome<SelectedPortfolioOrderRecordV2> {
     let root = authority.root.root();
     let traversal = authority.traversal.traversal();
-    let domain = traversal.order_projection().base().domain();
+    let domain = traversal.projection().domain();
     let feed = authority.traversal.feed();
     Ok(SelectedPortfolioOrderRecordV2 {
         version: PORTFOLIO_EXECUTION_VERSION_V2,
@@ -1089,7 +1185,9 @@ fn portfolio_materialization_record_v5(
         page_index: endpoint.placement.page_index,
         settlement_root_epoch_generation: root.epoch_generation(),
         position_generation: endpoint.membership.position_generation,
-        selected_fill_units: endpoint.membership.entitled_units,
+        selected_fill_units: settlement_outcome(
+            traversal.selected_fill(endpoint.membership.order_index),
+        )?,
         market_semantics_digest: domain.market_semantics_digest,
         epoch_semantics_digest: domain.epoch_semantics_digest,
         economic_candidate_digest: feed.base_relation_candidate_id.bytes(),

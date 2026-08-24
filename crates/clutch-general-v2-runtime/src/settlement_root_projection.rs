@@ -15,7 +15,7 @@ use clutch_owner_settlement::{
     OwnerSettlementExpectationBasisBookV4, SettlementCashPotExpectationV1, VirtualCashDirectionV1,
 };
 
-use crate::{SettlementAdapterErrorV1, SettlementTraversalProjectionV4};
+use crate::{SettlementAdapterErrorV1, SettlementTraversalProjectionV5};
 
 /// Candidate-wide fee facts accepted by the root expectation join.
 ///
@@ -68,7 +68,7 @@ impl SettlementRootExpectationProjectionV1 {
 
 /// Derive action-39 expectations solely from checked traversal and fee owners.
 pub fn derive_settlement_root_expectation_v1(
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
     fee: CandidateFeeAggregateProjectionV1<'_>,
 ) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
     let feed = traversal.feed();
@@ -79,7 +79,9 @@ pub fn derive_settlement_root_expectation_v1(
                 .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
             if book.fee_record() != selected.fee_record()
                 || book.settlement_candidate() != selected.selected_candidate()
-                || book.owner_count() != u8::try_from(traversal.owner_basis().owner_count())
+                || book.owner_count() != u8::try_from(
+                    traversal.expected_owner_count(),
+                )
                     .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?
                 || selected_fee_atoms == 0
                 || selected.market().0 != feed.market.bytes()
@@ -110,7 +112,7 @@ pub fn derive_settlement_root_expectation_v1(
 /// total: it reads the conserved collected total from the certified allocation
 /// and equality-binds its owner digest/count to the exhaustive traversal.
 pub fn derive_settlement_root_expectation_from_certified_fee_v2(
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
     selected: &SelectedCompositeFeeV1,
     certified: &CertifiedRecipientAllocationV2,
 ) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
@@ -121,7 +123,7 @@ pub fn derive_settlement_root_expectation_from_certified_fee_v2(
         || allocation.fee_record() != selected.fee_record()
         || certified.owner_order_set_digest().0
             != traversal.owner_order_set_digest().bytes()
-        || certified.owner_count() != traversal.owner_basis().owner_count()
+        || certified.owner_count() != traversal.expected_owner_count()
         || selected.market().0 != feed.market.bytes()
         || selected.epoch().0 != feed.epoch.bytes()
         || selected.selected_candidate().0 != feed.settlement_candidate_id.bytes()
@@ -138,18 +140,27 @@ pub fn derive_settlement_root_expectation_from_certified_fee_v2(
 }
 
 fn derive_settlement_root_expectation_from_fee_total_v1(
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
     fee_record: [u8; 32],
     selected_fee_atoms: u64,
 ) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
     let feed = traversal.feed();
-    let cash = derive_cash_expectation_from_basis_v1(
-        traversal.owner_basis(),
+    let cash = SettlementCashPotExpectationV1 {
+        market: feed.market.bytes(),
+        epoch: feed.epoch.bytes(),
+        candidate: feed.settlement_candidate_id.bytes(),
+        owner_order_set_digest: traversal.owner_order_set_digest().bytes(),
         fee_record,
+        price_scale: feed.price_scale,
+        owner_count: traversal.expected_owner_count(),
+        consideration_debit_atoms: traversal.consideration_debit_atoms(),
+        seller_credit_atoms: traversal.seller_credit_atoms(),
         selected_fee_atoms,
-        traversal.virtual_cash_direction(),
-        traversal.virtual_cash_atoms(),
-    )?;
+        rounding_pot_price_units: traversal.rounding_pot_price_units(),
+        virtual_cash_direction: traversal.virtual_cash_direction(),
+        virtual_cash_atoms: traversal.virtual_cash_atoms(),
+    };
+    cash.validate()?;
     if cash.market != feed.market.bytes()
         || cash.epoch != feed.epoch.bytes()
         || cash.candidate != feed.settlement_candidate_id.bytes()

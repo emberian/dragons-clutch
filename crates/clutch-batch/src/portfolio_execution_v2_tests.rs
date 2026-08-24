@@ -1,6 +1,8 @@
 use super::portfolio_execution_v2::{
-    authenticate_exact_portfolio_pair_v2, authenticate_portfolio_receipt_sibling_set_v2,
+    authenticate_exact_portfolio_pair_streaming_v2, authenticate_exact_portfolio_pair_v2,
+    authenticate_portfolio_receipt_sibling_set_v2,
     authenticate_selected_portfolio_order_for_materialization_v2,
+    authenticate_selected_portfolio_order_streaming_for_materialization_v2,
     authenticate_selected_portfolio_order_v2, portfolio_pair_transition_commitment_v2,
     prepare_portfolio_pair_execution_borrowed_v2, prepare_portfolio_pair_execution_v2,
     AuthenticatedPortfolioPairV2, PortfolioAccountExpectationV2, PortfolioAccountRoleV2,
@@ -10,6 +12,7 @@ use super::portfolio_execution_v2::{
     PortfolioReplayPrestateV2, PortfolioReservationLifecycleV2,
     PortfolioReservationPrestateV2, PortfolioSourceOrderKindV2,
     PortfolioSelectionMembershipExpectationV2, PortfolioSettlementReceiptV5Prestate,
+    PortfolioSelectionStreamV2,
     PortfolioSettlementReceiptV5SetPrestate,
     PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioTransitionExpectationV2,
     PortfolioValuationBoundaryV2,
@@ -112,6 +115,15 @@ impl PortfolioAdapterV2 for AccessContractAdapter {
         true
     }
 
+    fn authenticate_streamed_selection_membership(
+        &self,
+        _expected: &PortfolioSelectionMembershipExpectationV2,
+        _relation_order: &EconomicOrderV2,
+        _selected_fill: u64,
+    ) -> bool {
+        true
+    }
+
     fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
         false
     }
@@ -121,6 +133,46 @@ impl PortfolioAdapterV2 for AccessContractAdapter {
         _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
     ) -> Option<[[u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]> {
         None
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FixtureSelectionStream<'a> {
+    book: &'a EconomicBookV2,
+    candidate: &'a EconomicCandidateV2,
+}
+
+impl PortfolioSelectionStreamV2 for FixtureSelectionStream<'_> {
+    fn order_count(&self) -> u8 {
+        self.book.len
+    }
+
+    fn order(&self, order_index: u8) -> Result<EconomicOrderV2, PortfolioExecutionErrorV2> {
+        self.book
+            .orders
+            .get(usize::from(order_index))
+            .copied()
+            .ok_or(PortfolioExecutionErrorV2::OrderMismatch)
+    }
+
+    fn selected_fill(&self, order_index: u8) -> Result<u64, PortfolioExecutionErrorV2> {
+        self.candidate
+            .fills
+            .get(usize::from(order_index))
+            .copied()
+            .ok_or(PortfolioExecutionErrorV2::CandidateMismatch)
+    }
+
+    fn honored_aon_mask(&self) -> u64 {
+        self.candidate.honored_aon_mask
+    }
+
+    fn virtual_split(&self) -> u64 {
+        self.candidate.virtual_split
+    }
+
+    fn virtual_merge(&self) -> u64 {
+        self.candidate.virtual_merge
     }
 }
 
@@ -1023,6 +1075,93 @@ fn materialization_selection_has_a_disjoint_root_and_position_access_contract() 
             role: PortfolioAccountRoleV2::SettlementRoot,
         })
     );
+}
+
+#[test]
+fn streamed_materialization_matches_owned_pair_and_refuses_hostile_streams() {
+    let fixture = pair_fixture(20);
+    let adapter = AccessContractAdapter {
+        materialization: true,
+    };
+    let selection = FixtureSelectionStream {
+        book: &fixture.book,
+        candidate: &fixture.candidate,
+    };
+    assert_eq!(
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            &fixture.domain,
+            &selection,
+            fixture.candidate_digest,
+            fixture.buyer_record,
+        ),
+        Err(PortfolioExecutionErrorV2::SelectionMembershipAuthenticationFailed)
+    );
+    let buyer = authenticate_selected_portfolio_order_streaming_for_materialization_v2(
+        &adapter,
+        id(200),
+        &fixture.domain,
+        &selection,
+        fixture.candidate_digest,
+        fixture.buyer_record,
+    )
+    .unwrap();
+    let seller = authenticate_selected_portfolio_order_streaming_for_materialization_v2(
+        &adapter,
+        id(200),
+        &fixture.domain,
+        &selection,
+        fixture.candidate_digest,
+        fixture.seller_record,
+    )
+    .unwrap();
+    let streamed = authenticate_exact_portfolio_pair_streaming_v2(
+        &fixture.domain,
+        &selection,
+        &fixture.price,
+        PortfolioValuationBoundaryV2::ExactReceiptDivisionV1,
+        buyer,
+        seller,
+    )
+    .unwrap();
+    assert_eq!(streamed, authenticated_pair(&fixture));
+
+    let mut reordered_book = fixture.book;
+    reordered_book.orders.swap(0, 1);
+    let reordered = FixtureSelectionStream {
+        book: &reordered_book,
+        candidate: &fixture.candidate,
+    };
+    assert!(matches!(
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
+            &adapter,
+            id(200),
+            &fixture.domain,
+            &reordered,
+            fixture.candidate_digest,
+            fixture.buyer_record,
+        ),
+        Err(PortfolioExecutionErrorV2::Economic(_))
+    ));
+
+    let mut padded_candidate = fixture.candidate;
+    padded_candidate.honored_aon_mask |= 1u64 << (MAX_ORDERS - 1);
+    let padded = FixtureSelectionStream {
+        book: &fixture.book,
+        candidate: &padded_candidate,
+    };
+    assert!(matches!(
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
+            &adapter,
+            id(200),
+            &fixture.domain,
+            &padded,
+            fixture.candidate_digest,
+            fixture.buyer_record,
+        ),
+        Err(PortfolioExecutionErrorV2::Economic(_))
+    ));
 }
 
 #[test]
