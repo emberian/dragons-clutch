@@ -61,9 +61,6 @@ pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_v2;
-/// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
-#[cfg(feature = "non-production-failure-recovery-lab")]
-pub(crate) mod failure_market_resolution_v5;
 /// Capability-disabled permanent shared-Market Failure replay seam.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_replay_v2;
@@ -151,8 +148,6 @@ pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
-/// Capability-disabled atomic Fractional family postwrite promotion into Product.
-pub(crate) mod product_fractional_family;
 /// Disabled narrow Product authority for founding the current General Market owner.
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
