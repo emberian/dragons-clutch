@@ -11,7 +11,8 @@ use crate::rpc_index::{
     ObservedRpcAccountRemoval, RpcAccountRemovalKind, RpcCommitment,
 };
 use crate::transaction_builder::{
-    ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft, SemanticOwner,
+    ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
+    ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_liveness::runtime_adapter_v1::{
@@ -349,6 +350,24 @@ impl ChainDerivedFailureSourceAction10MaterialV1 {
             self.call_ordinal,
             &payload,
         )
+        .map_err(map_construction)
+    }
+
+    /// Compile the exact unsigned blockhash-free transaction with the already
+    /// authenticated keeper as its fee payer and sole signer identity.
+    pub fn unsigned_transaction(
+        &self,
+        release: &IndexedProgramRelease,
+        transport: TransactionTransport,
+    ) -> Result<UnsignedProtocolTransaction> {
+        let draft = self.unsigned_instruction(release)?;
+        ProtocolTransactionBuilder::new(
+            self.keeper,
+            self.program_id,
+            self.release_manifest_sha256,
+            transport,
+        )
+        .and_then(|builder| builder.build_atomic(&[draft]))
         .map_err(map_construction)
     }
 }

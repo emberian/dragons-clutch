@@ -809,6 +809,11 @@ impl OwnedInstructionDraft {
                 SourceSeriesAction::InitializeHead
                     | SourceSeriesAction::OpenRawPage
                     | SourceSeriesAction::IngestBoundaryBatch
+                    | SourceSeriesAction::SealRawPage
+                    | SourceSeriesAction::InitializeWindowWork
+                    | SourceSeriesAction::FoldWindowPages
+                    | SourceSeriesAction::SealWindow
+                    | SourceSeriesAction::EvaluateStatistic
             )
         {
             return Err(ConstructionError::UnallocatedRegistryCoordinate);
@@ -1743,6 +1748,81 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble any physically dispatched SourceSeries `77/v2` request from
+    /// material whose hostile chain decoder already selected the exact action,
+    /// payload and ordered account frame. This boundary checks the immutable
+    /// release admission again and never supplies a signer or blockhash.
+    #[cfg(feature = "operator")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn checked_release_source_request_v2(
+        release: &crate::rpc_index::IndexedProgramRelease,
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        action: clutch_solana_layout::registry::SourceSeriesAction,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use crate::rpc_index::{CanonicalFamily, CanonicalIntentCoordinate};
+        use clutch_solana_layout::source_series::decode_payload_v2;
+
+        let central_action = ExtensionAction::SourceV3(action);
+        let family = central_action.family();
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: family.tag(),
+            family_version: family.version(),
+            local_action: central_action.local_tag(),
+        };
+        let sequence_is_valid = match action {
+            clutch_solana_layout::registry::SourceSeriesAction::RegisterRelease
+            | clutch_solana_layout::registry::SourceSeriesAction::CloseGeneration => sequence == 0,
+            _ => sequence != 0,
+        };
+        release
+            .validate()
+            .map_err(|_| ConstructionError::UnallocatedRegistryCoordinate)?;
+        if !sequence_is_valid
+            || release.program_id == Address::default()
+            || semantic_owner.release_sha256 != release.release_manifest_sha256
+            || !release.families.contains(&CanonicalFamily::Source)
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+            || decode_payload_v2(action, payload).is_err()
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::SourcePlaneV3,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id: release.program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainSuccessorRequest { binding, sequence },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble one current Structured wrapper call through the semantic
     /// owner's exact action/count/privilege contract. The wrapper program, not
     /// the central base, is the instruction target. Payload bytes must already
@@ -2131,22 +2211,19 @@ impl OwnedInstructionDraft {
                 let ExtensionAction::SourceV3(action) = request.envelope.action else {
                     return Err(ConstructionError::WrongFlow);
                 };
-                let sequence_is_valid = if matches!(
-                    action,
-                    clutch_solana_layout::registry::SourceSeriesAction::CloseGeneration
-                ) {
-                    sequence == 0
-                } else {
-                    sequence != 0
+                let sequence_is_valid = match action {
+                    clutch_solana_layout::registry::SourceSeriesAction::RegisterRelease
+                    | clutch_solana_layout::registry::SourceSeriesAction::CloseGeneration => {
+                        sequence == 0
+                    }
+                    _ => sequence != 0,
                 };
-                if !matches!(
-                    action,
-                    clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
-                        | clutch_solana_layout::registry::SourceSeriesAction::OpenRawPage
-                        | clutch_solana_layout::registry::SourceSeriesAction::IngestBoundaryBatch
-                        | clutch_solana_layout::registry::SourceSeriesAction::EmitFailureHandoff
-                        | clutch_solana_layout::registry::SourceSeriesAction::CloseGeneration
-                ) || !sequence_is_valid
+                if !sequence_is_valid
+                    || clutch_solana_layout::source_series::decode_payload_v2(
+                        action,
+                        request.envelope.payload,
+                    )
+                    .is_err()
                 {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
@@ -3133,6 +3210,18 @@ impl ProtocolTransactionBuilder {
                 .iter()
                 .any(|account| account.pubkey == self.payer && !account.is_writable)
             {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if matches!(draft.wire, OwnedWireContract::MainSuccessorRequest { .. })
+                && draft
+                    .accounts
+                    .iter()
+                    .any(|account| account.pubkey == self.payer && !(account.is_signer && account.is_writable))
+            {
+                // A transaction payer is globally signer+writable. It may
+                // alias only an exact Source role already carrying both
+                // privileges; otherwise message privilege union widens the
+                // frozen account ABI before the program sees it.
                 return Err(ConstructionError::InvalidAccountContract);
             }
             if matches!(draft.wire, OwnedWireContract::MainFailureRequestV1 { .. })

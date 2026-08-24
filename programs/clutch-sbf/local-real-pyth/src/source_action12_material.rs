@@ -12,7 +12,8 @@ use crate::rpc_index::{
     RpcCommitment,
 };
 use crate::transaction_builder::{
-    ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft, SemanticOwner,
+    ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
+    ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::registry::{ExtensionFamily, SourceSeriesAction};
@@ -271,6 +272,33 @@ impl ChainDerivedSourceAction12MaterialV1 {
             ],
             &payload,
         )
+        .map_err(map_construction)
+    }
+
+    /// Compile the exact unsigned blockhash-free close transaction. Action 12
+    /// has no protocol signer role, so the transport payer must be disjoint
+    /// from every frozen instruction account or construction refuses.
+    pub fn unsigned_transaction(
+        &self,
+        release: &IndexedProgramRelease,
+        transaction_payer: Address,
+        transport: TransactionTransport,
+    ) -> Result<UnsignedProtocolTransaction> {
+        if self
+            .ordered_accounts
+            .iter()
+            .any(|account| account.pubkey == transaction_payer)
+        {
+            return Err(SourceAction12MaterialError::Construction);
+        }
+        let draft = self.unsigned_instruction(release)?;
+        ProtocolTransactionBuilder::new(
+            transaction_payer,
+            self.program_id,
+            self.release_manifest_sha256,
+            transport,
+        )
+        .and_then(|builder| builder.build_atomic(&[draft]))
         .map_err(map_construction)
     }
 }

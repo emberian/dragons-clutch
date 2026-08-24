@@ -33,7 +33,7 @@ use clutch_owner_settlement::{
     SettlementCashPotV1, VirtualMergeReceiptInputV1, VirtualSplitReceiptInputV1,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5, MarketGenesisProfileV2, RegistryCapabilityProjectionV2,
+    CompiledProductSeriesBundleV7, MarketGenesisProfileV2, RegistryCapabilityProjectionV2,
     SeriesFundingQuoteV1, SeriesFundingTermsV2,
 };
 use clutch_retirement::PositionAccountV3;
@@ -168,7 +168,7 @@ impl ReleasedConfigAccount {
 pub struct OperatorSourcePolicySelectionV1 {
     pub registry_release_id: [u8; 32],
     pub capability_profile_id: [u8; 32],
-    pub compiled_product_bundle_v5_id: [u8; 32],
+    pub compiled_product_bundle_v7_id: [u8; 32],
     pub market_genesis_profile_id: [u8; 32],
     pub realm_id: [u8; 32],
     pub profile_id: [u8; 32],
@@ -187,7 +187,7 @@ impl OperatorSourcePolicySelectionV1 {
         let identities = [
             self.registry_release_id,
             self.capability_profile_id,
-            self.compiled_product_bundle_v5_id,
+            self.compiled_product_bundle_v7_id,
             self.market_genesis_profile_id,
             self.realm_id,
             self.profile_id,
@@ -213,7 +213,7 @@ impl OperatorSourcePolicySelectionV1 {
     /// Source policy selected by this operator release.
     fn validate_product_route(
         self,
-        bundle: &CompiledProductSeriesBundleV5,
+        bundle: &CompiledProductSeriesBundleV7,
         registry: &RegistryCapabilityProjectionV2,
         genesis: &MarketGenesisProfileV2,
     ) -> Result<()> {
@@ -229,7 +229,7 @@ impl OperatorSourcePolicySelectionV1 {
             .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
         let owners = registry.semantic_owners;
         let collateral = registry.realm_collateral;
-        if bundle_id.bytes() != self.compiled_product_bundle_v5_id
+        if bundle_id.bytes() != self.compiled_product_bundle_v7_id
             || bundle.market_genesis_profile_id != genesis_id
             || bundle.registry_release_id.bytes() != self.registry_release_id
             || bundle.capability_profile_id.bytes() != self.capability_profile_id
@@ -385,7 +385,7 @@ impl ExplicitOperatorReleaseManifest {
                 for identity in [
                     policy.registry_release_id,
                     policy.capability_profile_id,
-                    policy.compiled_product_bundle_v5_id,
+                    policy.compiled_product_bundle_v7_id,
                     policy.market_genesis_profile_id,
                     policy.realm_id,
                     policy.profile_id,
@@ -578,7 +578,7 @@ pub struct InitializeHeadAccountsV2 {
     pub liveness_policy: Address,
     pub source_compartment: Address,
     pub keeper: Address,
-    pub payer: Address,
+    pub source_funding_custody: Address,
     pub system_program: Address,
     pub rent_sysvar: Address,
 }
@@ -595,7 +595,7 @@ pub struct OpenRawPageAccountsV2 {
     pub liveness_policy: Address,
     pub source_compartment: Address,
     pub keeper: Address,
-    pub payer: Address,
+    pub source_funding_custody: Address,
     pub system_program: Address,
     pub rent_sysvar: Address,
 }
@@ -620,7 +620,99 @@ pub struct IngestBoundaryAccountsV2 {
     pub liveness_policy: Address,
     pub source_compartment: Address,
     pub keeper: Address,
-    pub payer: Address,
+    pub source_funding_custody: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealRawPageAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub source_head: Address,
+    pub head_lineage: Address,
+    pub open_raw_page: Address,
+    pub open_page_lineage: Address,
+    pub raw_page: Address,
+    pub neutral_sink: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub source_funding_custody: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializeWindowWorkAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub source_occurrence: Address,
+    pub window_spec: Address,
+    pub window_work: Address,
+    pub work_lineage: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub source_funding_custody: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoldWindowPagesAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub source_occurrence: Address,
+    pub window_spec: Address,
+    pub window_work: Address,
+    pub work_lineage: Address,
+    pub raw_page: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub source_funding_custody: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealWindowAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub clock_sysvar: Address,
+    pub source_occurrence: Address,
+    pub window_spec: Address,
+    pub window_work: Address,
+    pub work_lineage: Address,
+    pub raw_page: Address,
+    pub window_seal: Address,
+    pub neutral_sink: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub source_funding_custody: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvaluateStatisticAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub clock_sysvar: Address,
+    pub source_occurrence: Address,
+    pub window_spec: Address,
+    pub statistic_key: Address,
+    pub window_seal: Address,
+    pub evaluator_program: Address,
+    pub evaluator_program_data: Address,
+    pub statistic_result: Address,
+    pub result_lineage: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub source_funding_custody: Address,
     pub system_program: Address,
     pub rent_sysvar: Address,
 }
@@ -632,6 +724,11 @@ pub enum EnabledSourceActionAccountsV2 {
     InitializeHead(InitializeHeadAccountsV2),
     OpenRawPage(OpenRawPageAccountsV2),
     IngestBoundary(IngestBoundaryAccountsV2),
+    SealRawPage(SealRawPageAccountsV2),
+    InitializeWindowWork(InitializeWindowWorkAccountsV2),
+    FoldWindowPages(FoldWindowPagesAccountsV2),
+    SealWindow(SealWindowAccountsV2),
+    EvaluateStatistic(EvaluateStatisticAccountsV2),
 }
 
 /// One exact ordered role exposed to operator/session projections.
@@ -650,6 +747,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(_) => SourceSeriesAction::InitializeHead,
             Self::OpenRawPage(_) => SourceSeriesAction::OpenRawPage,
             Self::IngestBoundary(_) => SourceSeriesAction::IngestBoundaryBatch,
+            Self::SealRawPage(_) => SourceSeriesAction::SealRawPage,
+            Self::InitializeWindowWork(_) => SourceSeriesAction::InitializeWindowWork,
+            Self::FoldWindowPages(_) => SourceSeriesAction::FoldWindowPages,
+            Self::SealWindow(_) => SourceSeriesAction::SealWindow,
+            Self::EvaluateStatistic(_) => SourceSeriesAction::EvaluateStatistic,
         }
     }
 
@@ -658,6 +760,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.route,
             Self::OpenRawPage(accounts) => accounts.route,
             Self::IngestBoundary(accounts) => accounts.route,
+            Self::SealRawPage(accounts) => accounts.route,
+            Self::InitializeWindowWork(accounts) => accounts.route,
+            Self::FoldWindowPages(accounts) => accounts.route,
+            Self::SealWindow(accounts) => accounts.route,
+            Self::EvaluateStatistic(accounts) => accounts.route,
         }
     }
 
@@ -669,17 +776,35 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.keeper,
             Self::OpenRawPage(accounts) => accounts.keeper,
             Self::IngestBoundary(accounts) => accounts.keeper,
+            Self::SealRawPage(accounts) => accounts.keeper,
+            Self::InitializeWindowWork(accounts) => accounts.keeper,
+            Self::FoldWindowPages(accounts) => accounts.keeper,
+            Self::SealWindow(accounts) => accounts.keeper,
+            Self::EvaluateStatistic(accounts) => accounts.keeper,
         }
     }
 
-    /// Public payer identity selected by the semantic account contract. The
-    /// outer builder must use this exact address as its fee payer.
+    /// Public transaction payer identity. Current transition actions already
+    /// require the keeper as writable signer, so using it as fee payer does
+    /// not widen the frozen account privileges.
     #[must_use]
     pub const fn payer_address(self) -> Address {
+        self.keeper_address()
+    }
+
+    /// Release-selected custody holding prepaid work and rent principal. It
+    /// is never a signer and never a transaction fee payer.
+    #[must_use]
+    pub const fn source_funding_custody(self) -> Address {
         match self {
-            Self::InitializeHead(accounts) => accounts.payer,
-            Self::OpenRawPage(accounts) => accounts.payer,
-            Self::IngestBoundary(accounts) => accounts.payer,
+            Self::InitializeHead(accounts) => accounts.source_funding_custody,
+            Self::OpenRawPage(accounts) => accounts.source_funding_custody,
+            Self::IngestBoundary(accounts) => accounts.source_funding_custody,
+            Self::SealRawPage(accounts) => accounts.source_funding_custody,
+            Self::InitializeWindowWork(accounts) => accounts.source_funding_custody,
+            Self::FoldWindowPages(accounts) => accounts.source_funding_custody,
+            Self::SealWindow(accounts) => accounts.source_funding_custody,
+            Self::EvaluateStatistic(accounts) => accounts.source_funding_custody,
         }
     }
 
@@ -688,6 +813,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.source_compartment,
             Self::OpenRawPage(accounts) => accounts.source_compartment,
             Self::IngestBoundary(accounts) => accounts.source_compartment,
+            Self::SealRawPage(accounts) => accounts.source_compartment,
+            Self::InitializeWindowWork(accounts) => accounts.source_compartment,
+            Self::FoldWindowPages(accounts) => accounts.source_compartment,
+            Self::SealWindow(accounts) => accounts.source_compartment,
+            Self::EvaluateStatistic(accounts) => accounts.source_compartment,
         }
     }
 
@@ -696,6 +826,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.liveness_policy,
             Self::OpenRawPage(accounts) => accounts.liveness_policy,
             Self::IngestBoundary(accounts) => accounts.liveness_policy,
+            Self::SealRawPage(accounts) => accounts.liveness_policy,
+            Self::InitializeWindowWork(accounts) => accounts.liveness_policy,
+            Self::FoldWindowPages(accounts) => accounts.liveness_policy,
+            Self::SealWindow(accounts) => accounts.liveness_policy,
+            Self::EvaluateStatistic(accounts) => accounts.liveness_policy,
         }
     }
 
@@ -704,6 +839,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.source_head,
             Self::OpenRawPage(accounts) => accounts.source_head,
             Self::IngestBoundary(accounts) => accounts.source_head,
+            Self::SealRawPage(accounts) => accounts.source_head,
+            Self::InitializeWindowWork(_)
+            | Self::FoldWindowPages(_)
+            | Self::SealWindow(_)
+            | Self::EvaluateStatistic(_) => Address::new_from_array([0; 32]),
         }
     }
 
@@ -712,6 +852,11 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.head_lineage,
             Self::OpenRawPage(accounts) => accounts.head_lineage,
             Self::IngestBoundary(accounts) => accounts.head_lineage,
+            Self::SealRawPage(accounts) => accounts.head_lineage,
+            Self::InitializeWindowWork(_)
+            | Self::FoldWindowPages(_)
+            | Self::SealWindow(_)
+            | Self::EvaluateStatistic(_) => Address::new_from_array([0; 32]),
         }
     }
 
@@ -720,13 +865,24 @@ impl EnabledSourceActionAccountsV2 {
             Self::InitializeHead(accounts) => accounts.system_program,
             Self::OpenRawPage(accounts) => accounts.system_program,
             Self::IngestBoundary(accounts) => accounts.system_program,
+            Self::SealRawPage(accounts) => accounts.system_program,
+            Self::InitializeWindowWork(accounts) => accounts.system_program,
+            Self::FoldWindowPages(accounts) => accounts.system_program,
+            Self::SealWindow(accounts) => accounts.system_program,
+            Self::EvaluateStatistic(accounts) => accounts.system_program,
         }
     }
 
     const fn work_kind(self) -> SourceWorkKindV1 {
         match self {
             Self::IngestBoundary(_) => SourceWorkKindV1::AppendBoundaryBatch,
-            Self::InitializeHead(_) | Self::OpenRawPage(_) => SourceWorkKindV1::TerminalLifecycle,
+            Self::SealRawPage(_) => SourceWorkKindV1::SealRawPage,
+            Self::FoldWindowPages(_) => SourceWorkKindV1::FoldWindowPages,
+            Self::SealWindow(_) => SourceWorkKindV1::SealWindow,
+            Self::EvaluateStatistic(_) => SourceWorkKindV1::EvaluateStatistic,
+            Self::InitializeHead(_)
+            | Self::OpenRawPage(_)
+            | Self::InitializeWindowWork(_) => SourceWorkKindV1::TerminalLifecycle,
         }
     }
 
@@ -746,7 +902,7 @@ impl EnabledSourceActionAccountsV2 {
             || route.parser_program_data.to_bytes() != release.base.parser.programdata.bytes()
             || route.parser_config.to_bytes() != release.base.parser_config.bytes()
             || route.source_spec.to_bytes() != release.base.source_spec_account.bytes()
-            || self.payer_address().to_bytes() != schedule.payer().bytes()
+            || self.source_funding_custody().to_bytes() != schedule.payer().bytes()
             || self.source_compartment().to_bytes() != schedule.source_compartment_account().bytes()
             || self.system_program().to_bytes() != release.base.system_program.bytes()
         {
@@ -761,34 +917,37 @@ impl EnabledSourceActionAccountsV2 {
                 return Err(WorkflowGraphError::ActionStateMismatch);
             }
         }
-        let expected_head_lineage = observation
-            .lineages
-            .iter()
-            .find(|lineage| {
-                lineage.lineage.family == LineageFamilyV1::SourceHead
-                    && match self {
-                        Self::InitializeHead(_) => {
+        if matches!(
+            self,
+            Self::InitializeHead(_)
+                | Self::OpenRawPage(_)
+                | Self::IngestBoundary(_)
+                | Self::SealRawPage(_)
+        ) {
+            let expected_head_lineage = observation
+                .lineages
+                .iter()
+                .find(|lineage| {
+                    lineage.lineage.family == LineageFamilyV1::SourceHead
+                        && if matches!(self, Self::InitializeHead(_)) {
                             lineage.expectation == SourceLineageExpectation::NeverCreated
+                        } else {
+                            matches!(
+                                lineage.expectation,
+                                SourceLineageExpectation::OpenAtGeneration(generation)
+                                    if generation == observation.generation
+                            )
                         }
-                        Self::OpenRawPage(_) => matches!(
-                            lineage.expectation,
-                            SourceLineageExpectation::OpenAtGeneration(generation)
-                                if generation == observation.generation
-                        ),
-                        Self::IngestBoundary(_) => matches!(
-                            lineage.expectation,
-                            SourceLineageExpectation::OpenAtGeneration(generation)
-                                if generation == observation.generation
-                        ),
-                    }
-            })
-            .ok_or(WorkflowGraphError::ActionStateMismatch)?;
-        if self.head_lineage().to_bytes() != expected_head_lineage.lineage.lineage_account.bytes()
-            || !matches!(self, Self::InitializeHead(_))
-                && self.source_head().to_bytes()
-                    != expected_head_lineage.lineage.active_account.bytes()
-        {
-            return Err(WorkflowGraphError::ActionStateMismatch);
+                })
+                .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+            if self.head_lineage().to_bytes()
+                != expected_head_lineage.lineage.lineage_account.bytes()
+                || !matches!(self, Self::InitializeHead(_))
+                    && self.source_head().to_bytes()
+                        != expected_head_lineage.lineage.active_account.bytes()
+            {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
         }
         if let Self::IngestBoundary(accounts) = self {
             let expected_open_lineage = observation
@@ -811,6 +970,78 @@ impl EnabledSourceActionAccountsV2 {
                 return Err(WorkflowGraphError::ActionStateMismatch);
             }
         }
+        if let Self::SealRawPage(accounts) = self {
+            let expected_open_lineage = observation
+                .lineages
+                .iter()
+                .find(|lineage| {
+                    lineage.lineage.family == LineageFamilyV1::OpenRawPage
+                        && matches!(
+                            lineage.expectation,
+                            SourceLineageExpectation::OpenAtGeneration(generation)
+                                if generation == observation.generation
+                        )
+                })
+                .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+            if accounts.open_page_lineage.to_bytes()
+                != expected_open_lineage.lineage.lineage_account.bytes()
+                || accounts.open_raw_page.to_bytes()
+                    != expected_open_lineage.lineage.active_account.bytes()
+            {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
+        }
+        let work_lineage = match self {
+            Self::InitializeWindowWork(accounts) => Some((
+                accounts.work_lineage,
+                accounts.window_work,
+                SourceLineageExpectation::NeverCreated,
+            )),
+            Self::FoldWindowPages(accounts) => Some((
+                accounts.work_lineage,
+                accounts.window_work,
+                SourceLineageExpectation::OpenAtGeneration(observation.generation),
+            )),
+            Self::SealWindow(accounts) => Some((
+                accounts.work_lineage,
+                accounts.window_work,
+                SourceLineageExpectation::OpenAtGeneration(observation.generation),
+            )),
+            _ => None,
+        };
+        if let Some((lineage_account, active_account, expectation)) = work_lineage {
+            let observed = observation
+                .lineages
+                .iter()
+                .find(|lineage| {
+                    lineage.lineage.family == LineageFamilyV1::WindowWork
+                        && lineage.expectation == expectation
+                })
+                .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+            if lineage_account.to_bytes() != observed.lineage.lineage_account.bytes()
+                || expectation != SourceLineageExpectation::NeverCreated
+                    && active_account.to_bytes() != observed.lineage.active_account.bytes()
+            {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
+        }
+        if let Self::EvaluateStatistic(accounts) = self {
+            let observed = observation
+                .lineages
+                .iter()
+                .find(|lineage| {
+                    lineage.lineage.family == LineageFamilyV1::StatisticResult
+                        && matches!(
+                            lineage.expectation,
+                            SourceLineageExpectation::NeverCreated
+                                | SourceLineageExpectation::ClosedAtGeneration(_)
+                        )
+                })
+                .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+            if accounts.result_lineage.to_bytes() != observed.lineage.lineage_account.bytes() {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
+        }
         Ok(())
     }
 
@@ -827,7 +1058,7 @@ impl EnabledSourceActionAccountsV2 {
                     accounts.liveness_policy,
                     accounts.source_compartment,
                     accounts.keeper,
-                    accounts.payer,
+                    accounts.source_funding_custody,
                     accounts.system_program,
                     accounts.rent_sysvar,
                 ]);
@@ -843,7 +1074,7 @@ impl EnabledSourceActionAccountsV2 {
                     accounts.liveness_policy,
                     accounts.source_compartment,
                     accounts.keeper,
-                    accounts.payer,
+                    accounts.source_funding_custody,
                     accounts.system_program,
                     accounts.rent_sysvar,
                 ]);
@@ -864,7 +1095,99 @@ impl EnabledSourceActionAccountsV2 {
                     accounts.liveness_policy,
                     accounts.source_compartment,
                     accounts.keeper,
-                    accounts.payer,
+                    accounts.source_funding_custody,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::SealRawPage(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.source_head,
+                    accounts.head_lineage,
+                    accounts.open_raw_page,
+                    accounts.open_page_lineage,
+                    accounts.raw_page,
+                    accounts.neutral_sink,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.source_funding_custody,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::InitializeWindowWork(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.source_occurrence,
+                    accounts.window_spec,
+                    accounts.window_work,
+                    accounts.work_lineage,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.source_funding_custody,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::FoldWindowPages(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.source_occurrence,
+                    accounts.window_spec,
+                    accounts.window_work,
+                    accounts.work_lineage,
+                    accounts.raw_page,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.source_funding_custody,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::SealWindow(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.clock_sysvar,
+                    accounts.source_occurrence,
+                    accounts.window_spec,
+                    accounts.window_work,
+                    accounts.work_lineage,
+                    accounts.raw_page,
+                    accounts.window_seal,
+                    accounts.neutral_sink,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.source_funding_custody,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::EvaluateStatistic(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.clock_sysvar,
+                    accounts.source_occurrence,
+                    accounts.window_spec,
+                    accounts.statistic_key,
+                    accounts.window_seal,
+                    accounts.evaluator_program,
+                    accounts.evaluator_program_data,
+                    accounts.statistic_result,
+                    accounts.result_lineage,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.source_funding_custody,
                     accounts.system_program,
                     accounts.rent_sysvar,
                 ]);
@@ -1283,8 +1606,8 @@ pub struct SourceCrankObservation<'a> {
     /// independently authenticates its owner, content-addressed PDA and bytes.
     pub release: &'a SourceReleaseManifestV2,
     /// Hostile-decoded current compiler graph. The SBF adapter independently
-    /// authenticates the content-addressed BundleV5 account.
-    pub product_bundle: &'a CompiledProductSeriesBundleV5,
+    /// authenticates the content-addressed BundleV7 account.
+    pub product_bundle: &'a CompiledProductSeriesBundleV7,
     /// ProfileV4-derived Registry projection observed for this route.
     pub registry: &'a RegistryCapabilityProjectionV2,
     /// Exact Realm/Profile Genesis body named by BundleV5.
@@ -2593,7 +2916,7 @@ mod operator_release_manifest_tests {
         OperatorSourcePolicySelectionV1 {
             registry_release_id: [30; 32],
             capability_profile_id: [31; 32],
-            compiled_product_bundle_v5_id: [32; 32],
+            compiled_product_bundle_v7_id: [32; 32],
             market_genesis_profile_id: [33; 32],
             realm_id: [34; 32],
             profile_id: [35; 32],
@@ -2614,7 +2937,7 @@ mod operator_release_manifest_tests {
 
     fn product_selection() -> (
         OperatorSourcePolicySelectionV1,
-        CompiledProductSeriesBundleV5,
+        CompiledProductSeriesBundleV7,
         RegistryCapabilityProjectionV2,
         MarketGenesisProfileV2,
     ) {
@@ -2635,7 +2958,7 @@ mod operator_release_manifest_tests {
             coordinate_domain_min: 1,
             coordinate_domain_max: 2,
         };
-        let bundle = CompiledProductSeriesBundleV5 {
+        let bundle = CompiledProductSeriesBundleV7 {
             registry_release_id: product_id(30),
             capability_profile_id: product::RegistryCapabilityProfileV4Id::from_bytes([31; 32]),
             source_release_manifest_id: product_id(39),
@@ -2649,8 +2972,8 @@ mod operator_release_manifest_tests {
             product_template_id: product::ProductTemplateId::from_bytes([55; 32]),
             price_measure_policy_id: product::PriceMeasurePolicyV1Id::from_bytes([44; 32]),
             market_genesis_profile_id: genesis.id().unwrap(),
-            funding_quote_id: product::SeriesFundingQuoteV4Id::from_bytes([56; 32]),
-            attachment_plan_id: product::SeriesAttachmentPlanV4Id::from_bytes([57; 32]),
+            funding_quote_id: product::SeriesFundingQuoteV6Id::from_bytes([56; 32]),
+            attachment_plan_id: product::SeriesAttachmentPlanV6Id::from_bytes([57; 32]),
             series_plan_id: product::SeriesPlanV5Id::from_bytes([58; 32]),
             funding_terms_id: product::SeriesFundingTermsV2Id::from_bytes([59; 32]),
         };
@@ -2701,7 +3024,7 @@ mod operator_release_manifest_tests {
             },
         };
         let mut selection = policy();
-        selection.compiled_product_bundle_v5_id = bundle.id().unwrap().bytes();
+        selection.compiled_product_bundle_v7_id = bundle.id().unwrap().bytes();
         selection.market_genesis_profile_id = genesis.id().unwrap().bytes();
         (selection, bundle, registry, genesis)
     }
@@ -2826,7 +3149,7 @@ mod source_account_projection_tests {
     }
 
     #[test]
-    fn initialize_head_projection_preserves_authoritative_roles_and_alias() {
+    fn initialize_head_projection_preserves_keeper_and_custody_roles() {
         let projection = EnabledSourceActionAccountsV2::InitializeHead(InitializeHeadAccountsV2 {
             route: route(),
             generation_request: address(9),
@@ -2836,18 +3159,18 @@ mod source_account_projection_tests {
             liveness_policy: address(13),
             source_compartment: address(14),
             keeper: address(15),
-            payer: address(15),
-            system_program: address(16),
-            rent_sysvar: address(17),
+            source_funding_custody: address(16),
+            system_program: address(17),
+            rent_sysvar: address(18),
         })
         .ordered_projection()
         .unwrap();
         assert_eq!(projection.len(), 18);
         assert_eq!(projection[0].role, SourceAccountRoleV2::SourceRelease);
         assert_eq!(projection[14].role, SourceAccountRoleV2::Keeper);
-        assert_eq!(projection[15].role, SourceAccountRoleV2::Payer);
-        assert_eq!(projection[14].address, projection[15].address);
-        assert!(projection[14].signer && projection[15].signer);
+        assert_eq!(projection[15].role, SourceAccountRoleV2::SourceFundingCustody);
+        assert_ne!(projection[14].address, projection[15].address);
+        assert!(projection[14].signer && !projection[15].signer);
         assert_eq!(projection[17].role, SourceAccountRoleV2::RentSysvar);
     }
 
@@ -2863,7 +3186,7 @@ mod source_account_projection_tests {
             liveness_policy: address(14),
             source_compartment: address(15),
             keeper: address(16),
-            payer: address(17),
+            source_funding_custody: address(17),
             system_program: address(1),
             rent_sysvar: address(18),
         });
@@ -2889,9 +3212,9 @@ mod source_account_projection_tests {
             liveness_policy: address(19),
             source_compartment: address(20),
             keeper: address(21),
-            payer: address(21),
-            system_program: address(22),
-            rent_sysvar: address(23),
+            source_funding_custody: address(22),
+            system_program: address(23),
+            rent_sysvar: address(24),
         }
     }
 
@@ -2910,8 +3233,8 @@ mod source_account_projection_tests {
         );
         assert_eq!(projection[12].role, SourceAccountRoleV2::ReceiverConfig);
         assert_eq!(projection[20].role, SourceAccountRoleV2::Keeper);
-        assert_eq!(projection[21].role, SourceAccountRoleV2::Payer);
-        assert_eq!(projection[20].address, projection[21].address);
+        assert_eq!(projection[21].role, SourceAccountRoleV2::SourceFundingCustody);
+        assert_ne!(projection[20].address, projection[21].address);
     }
 
     #[test]
