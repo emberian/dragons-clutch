@@ -19,8 +19,10 @@ collateral profile; it is not protocol ontology.
 
 Every implementation layer joins through four immutable identities:
 
-1. `MarketIdentity`: Realm, terms, claim basis, resolution policy, capability
-   manifest, and generation.
+1. `MarketIdentity`: Realm, occurrence-specific Product instance, claim basis,
+   resolution policy, capability manifest, and generation. The Product
+   instance links reusable Terms, its concrete Occurrence, ClaimBasis, and
+   CapacityProfile.
 2. `CapabilityManifest`: the exact selected facility releases, immutable
    configurations, dependencies, activation deadlines, and prepaid deferred
    creation obligations.

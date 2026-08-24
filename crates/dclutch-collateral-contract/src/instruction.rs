@@ -250,8 +250,9 @@ impl FoundMarketAndFundV1 {
     /// resolution-policy, and capability-manifest records supplied by the
     /// exact account frame. It must also reconstruct the canonical categorical
     /// unit-claim basis from `outcome_count`, hash it, and match
-    /// `identity.claim_basis_id()`. Product Terms remain a semantic content
-    /// commitment and are not made into a universal runtime account.
+    /// `identity.claim_basis_id()`. The occurrence-specific Product Instance
+    /// remains a content commitment rather than universal mutable runtime
+    /// state and must be authenticated by the founding adapter.
     pub fn new(
         identity: MarketIdentity,
         outcome_count: u8,

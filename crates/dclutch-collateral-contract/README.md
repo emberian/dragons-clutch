@@ -9,8 +9,10 @@ historical Dragon's Clutch action table. Provider-specific resolution data is
 outside this crate. Market founding authenticates immutable resolution-policy
 and capability-manifest accounts committed by the canonical Market identity.
 It reconstructs the canonical categorical unit-claim basis from the founding
-outcome count rather than requiring a universal ClaimBasis account. Product
-Terms remain content-addressed semantics rather than universal runtime state.
+outcome count rather than requiring a universal ClaimBasis account. Market
+identity commits an occurrence-specific Product Instance which links reusable
+Terms, Occurrence, ClaimBasis, and CapacityProfile content without making each
+record universal mutable runtime state.
 
 The categorical width `2..=16` is a **provisional measured-profile bound**
 shared with the current Realm and Market contracts. Its lifting path is a new

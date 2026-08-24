@@ -31,7 +31,7 @@ pub const MARKET_ROOT_MAGIC: [u8; 8] = *b"DCLTROOT";
 pub const MARKET_ROOT_SCHEMA_VERSION: u16 = 1;
 
 const REALM_OFFSET: usize = 0;
-const TERMS_OFFSET: usize = 32;
+const PRODUCT_INSTANCE_OFFSET: usize = 32;
 const CLAIM_BASIS_OFFSET: usize = 64;
 const RESOLUTION_POLICY_OFFSET: usize = 96;
 const CAPABILITY_MANIFEST_OFFSET: usize = 128;
@@ -132,7 +132,7 @@ impl ContentId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketIdentity {
     realm_id: ContentId,
-    terms_id: ContentId,
+    product_instance_id: ContentId,
     claim_basis_id: ContentId,
     resolution_policy_id: ContentId,
     capability_manifest_id: ContentId,
@@ -143,7 +143,7 @@ impl MarketIdentity {
     /// Construct one validated immutable Market identity preimage.
     pub const fn new(
         realm_id: ContentId,
-        terms_id: ContentId,
+        product_instance_id: ContentId,
         claim_basis_id: ContentId,
         resolution_policy_id: ContentId,
         capability_manifest_id: ContentId,
@@ -151,7 +151,7 @@ impl MarketIdentity {
     ) -> Self {
         Self {
             realm_id,
-            terms_id,
+            product_instance_id,
             claim_basis_id,
             resolution_policy_id,
             capability_manifest_id,
@@ -166,7 +166,7 @@ impl MarketIdentity {
         }
         Ok(Self {
             realm_id: read_content_id(bytes, REALM_OFFSET)?,
-            terms_id: read_content_id(bytes, TERMS_OFFSET)?,
+            product_instance_id: read_content_id(bytes, PRODUCT_INSTANCE_OFFSET)?,
             claim_basis_id: read_content_id(bytes, CLAIM_BASIS_OFFSET)?,
             resolution_policy_id: read_content_id(bytes, RESOLUTION_POLICY_OFFSET)?,
             capability_manifest_id: read_content_id(bytes, CAPABILITY_MANIFEST_OFFSET)?,
@@ -178,7 +178,11 @@ impl MarketIdentity {
     pub fn to_bytes(self) -> [u8; MARKET_IDENTITY_BYTES] {
         let mut output = [0u8; MARKET_IDENTITY_BYTES];
         copy_at(&mut output, REALM_OFFSET, self.realm_id.as_bytes());
-        copy_at(&mut output, TERMS_OFFSET, self.terms_id.as_bytes());
+        copy_at(
+            &mut output,
+            PRODUCT_INSTANCE_OFFSET,
+            self.product_instance_id.as_bytes(),
+        );
         copy_at(
             &mut output,
             CLAIM_BASIS_OFFSET,
@@ -207,9 +211,9 @@ impl MarketIdentity {
         self.realm_id
     }
 
-    /// Return the terms content identity.
-    pub const fn terms_id(self) -> ContentId {
-        self.terms_id
+    /// Return the occurrence-specific Product-instance content identity.
+    pub const fn product_instance_id(self) -> ContentId {
+        self.product_instance_id
     }
 
     /// Return the claim-basis content identity.
@@ -559,7 +563,7 @@ mod tests {
         let canonical = identity(7)?.to_bytes();
         for offset in [
             REALM_OFFSET,
-            TERMS_OFFSET,
+            PRODUCT_INSTANCE_OFFSET,
             CLAIM_BASIS_OFFSET,
             RESOLUTION_POLICY_OFFSET,
             CAPABILITY_MANIFEST_OFFSET,
