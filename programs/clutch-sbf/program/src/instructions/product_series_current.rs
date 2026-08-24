@@ -59,10 +59,12 @@ use clutch_product_series::{
     AuthenticatedMarketFoundationAccountGraphBytesV3, CompiledProductSeriesBundleV6, ContentId,
     FixedCodec,
     MarketFoundationAccountGraphV3, MarketFoundationScheduleV3, MarketFoundationSlotV3,
+    MarketFoundationAccountGraphV4, MarketFoundationScheduleV4, MarketFoundationSlotV4,
     MarketInstancePreimageV2, MarketInstanceV2Id,
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
+    MarketLifecyclePhaseV3, MarketLifecycleRootV3,
     AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionAuthorizationV4,
     SeriesFundingCompletionAuthorizationV4Id, SeriesFundingCompletionBindingV4,
     SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
@@ -76,17 +78,21 @@ use clutch_product_series::{
     SeriesLinkObligationTerminalProjectionV2, SeriesLinkObligationV2,
     SeriesMarketAdmissionProjectionV2, SeriesMarketDispositionV1,
     SeriesMarketLinkPhaseV2, SeriesMarketLinkV2,
+    SeriesMarketLinkV3,
     SeriesMarketLinkV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
+    MarketLifecycleRootAccountV3,
     SeriesFundingAccountV4, SeriesFundingAccountV5, SeriesLifecycleReplayAccountV2,
-    SeriesMarketLinkAccountV2,
+    SeriesMarketLinkAccountV2, SeriesMarketLinkAccountV3,
     SeriesRegistryAccountV3, SeriesRegistryAccountV4, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
+    MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3,
     SERIES_FUNDING_ACCOUNT_BYTES_V4, SERIES_FUNDING_ACCOUNT_BYTES_V5,
     SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
-    SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
+    SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V3,
     SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use solana_account_info::AccountInfo;
@@ -141,8 +147,12 @@ const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-lifecycle-account-authentication/v2\0";
+const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/market-lifecycle-account-authentication/v3\0";
 const MARKET_FOUNDATION_PREALLOCATION_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/market-foundation-preallocation-authentication/v3\0";
+const MARKET_FOUNDATION_PREALLOCATION_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/market-foundation-preallocation-authentication/v4\0";
 const SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-wrapper-authentication/v2\0";
 const SERIES_WRAPPER_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -788,6 +798,29 @@ impl<'state> AuthenticatedMarketLifecycleRootV2<'state> {
     pub(crate) const fn owner_program(self) -> Pubkey { self.owner_program }
     pub(crate) const fn value(self) -> &'state MarketLifecycleRootAccountV2 { self.value }
     pub(crate) const fn state(self) -> &'state MarketLifecycleRootV2 { &self.value.state }
+    pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+    pub(crate) const fn is_writable(self) -> bool { self.writable }
+    pub(crate) const fn data_id(self) -> ContentId { self.data_id }
+    pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
+}
+
+/// Exact current 50-slot Product root authentication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedMarketLifecycleRootV3<'state> {
+    account: Pubkey,
+    owner_program: Pubkey,
+    value: &'state MarketLifecycleRootAccountV3,
+    observed_lamports: u64,
+    writable: bool,
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl<'state> AuthenticatedMarketLifecycleRootV3<'state> {
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    pub(crate) const fn owner_program(self) -> Pubkey { self.owner_program }
+    pub(crate) const fn value(self) -> &'state MarketLifecycleRootAccountV3 { self.value }
+    pub(crate) const fn state(self) -> &'state MarketLifecycleRootV3 { &self.value.state }
     pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
     pub(crate) const fn is_writable(self) -> bool { self.writable }
     pub(crate) const fn data_id(self) -> ContentId { self.data_id }
@@ -3848,6 +3881,85 @@ pub(crate) fn authenticate_market_lifecycle_root_v2<'state>(
     Ok(AuthenticatedMarketLifecycleRootV2 { account: *account.key, owner_program: *program_id,
         value: output, observed_lamports, writable: account.is_writable, data_id,
         authentication_id })
+}
+
+pub(crate) fn authenticate_market_lifecycle_root_v3<'state>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_market_instance_id: MarketInstanceV2Id,
+    expected_generation: u64,
+    require_writable: bool,
+    output: &'state mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedMarketLifecycleRootV3<'state>> {
+    require(
+        !account.is_signer && !account.executable && account.is_writable == require_writable
+            && account.owner == program_id
+            && account.data_len() == MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account.try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV3::decode_into(&data, output)?;
+    let binding = output.state.binding();
+    let observed_lamports = account.lamports();
+    require(binding.market_instance_id == expected_market_instance_id
+        && binding.generation == expected_generation
+        && observed_lamports >= output.rent_principal_lamports,
+        ClutchError::MismatchedState)?;
+    let (expected, bump) = seeds::product_market_lifecycle_root_pda(
+        program_id, &expected_market_instance_id.bytes(), expected_generation);
+    expect_pda(account.key, (expected, bump), Some(output.stored_bump))?;
+    let data_id = hash_data(&data);
+    drop(data);
+    let semantic_id = output.state.semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_id = hashv(&[
+        MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V3, account.key.as_ref(), program_id.as_ref(),
+        &data_id.bytes(), &semantic_id.bytes(), &output.rent_principal_lamports.to_le_bytes(),
+        &observed_lamports.to_le_bytes(), &[output.stored_bump],
+    ]);
+    require_live(authentication_id)?;
+    Ok(AuthenticatedMarketLifecycleRootV3 { account: *account.key, owner_program: *program_id,
+        value: output, observed_lamports, writable: account.is_writable, data_id,
+        authentication_id })
+}
+
+fn write_market_lifecycle_root_v3<'next>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV3<'_>,
+    successor: &MarketLifecycleRootV3,
+    rebound_output: &'next mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedMarketLifecycleRootV3<'next>> {
+    let binding = authenticated.state().binding_ref();
+    require(account.is_writable && *account.key == authenticated.account()
+        && account.owner == program_id && successor.binding_ref() == binding,
+        ClutchError::MismatchedState)?;
+    let live = authenticate_market_lifecycle_root_v3(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(live.account() == authenticated.account()
+        && live.owner_program() == authenticated.owner_program()
+        && live.value() == authenticated.value()
+        && live.observed_lamports() == authenticated.observed_lamports()
+        && live.data_id() == authenticated.data_id()
+        && live.authentication_id() == authenticated.authentication_id(),
+        ClutchError::MismatchedState)?;
+    let rent_principal_lamports = authenticated.value().rent_principal_lamports;
+    let stored_bump = authenticated.value().stored_bump;
+    let mut data = account.try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV3::encode_parts(
+        successor, rent_principal_lamports, stored_bump, &mut data)?;
+    drop(data);
+    let rebound = authenticate_market_lifecycle_root_v3(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(rebound.state() == successor
+        && rebound.value().rent_principal_lamports == rent_principal_lamports
+        && rebound.value().stored_bump == stored_bump,
+        ClutchError::MismatchedState)?;
+    Ok(rebound)
 }
 
 #[allow(clippy::too_many_arguments)]
