@@ -6,6 +6,7 @@
 //! is completed before the first byte or lamport changes.
 
 use core::cell::{Ref, RefMut};
+use std::boxed::Box;
 
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
@@ -132,14 +133,14 @@ fn require_destinations_disjoint_from_state(
 fn decode_binding(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-) -> Outcome<MarketBindingV4> {
+) -> Outcome<Box<MarketBindingV4>> {
     require_program_account(
         program_id,
         account,
         false,
         Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
     )?;
-    let binding = MarketBindingV4::decode(&borrow_data(account)?)?;
+    let binding = Box::new(MarketBindingV4::decode(&borrow_data(account)?)?);
     let canonical = seeds::general_v2_market_binding_pda(
         program_id,
         &binding.base().base().market_instance_v2_id.bytes(),
