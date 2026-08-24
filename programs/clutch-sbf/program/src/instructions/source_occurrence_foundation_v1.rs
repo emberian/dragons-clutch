@@ -15,7 +15,7 @@ use crate::instructions::product_series::{
     publish_source_semantic_inputs_v1, AuthenticatedSeriesFundingAccountV2,
     AuthenticatedSourceSemanticPublicationV1,
 };
-use crate::instructions::product_series_current::AuthenticatedProductSeriesFundingReservationV4;
+use crate::instructions::product_series_funding_v5_current::AuthenticatedProductSeriesFundingReservationV5;
 use crate::instructions::product_source_current::{
     publish_source_semantic_inputs_v2, AuthenticatedSourceSemanticPublicationV2,
 };
@@ -34,11 +34,11 @@ use crate::source_plane_v3_actions::{
 use clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1;
 use clutch_product_series::{
     ComponentDebitV1, ContentId, SeriesFundingComponentV2, SeriesFundingPhaseV2,
-    SeriesFundingPhaseV4, SeriesMarketDispositionV1,
+    SeriesFundingPhaseV5, SeriesMarketDispositionV1,
 };
 use clutch_solana_layout::product_series::{
-    SeriesFundingAccountV2, SeriesFundingAccountV4, SERIES_FUNDING_ACCOUNT_BYTES_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V4,
+    SeriesFundingAccountV2, SeriesFundingAccountV5, SERIES_FUNDING_ACCOUNT_BYTES_V2,
+    SERIES_FUNDING_ACCOUNT_BYTES_V5,
 };
 use clutch_source_plane_v3::FixedCodec;
 use clutch_source_plane_v3_runtime::{
@@ -253,6 +253,7 @@ pub(crate) fn capitalize_source_work_v1<
     let funding_account_data_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[&funding_data[..]]).to_bytes(),
     );
+    let funding_account_authentication_id = funding.authentication_id();
     drop(funding_data);
     require(observed == funding.value(), ClutchError::MismatchedState)?;
     expect_pda(
@@ -541,7 +542,7 @@ impl AuthenticatedPreRootSourceOccurrenceV1 {
 }
 
 /// Final non-Copy Source founder postwrite retained after Product consumes the
-/// unique FundingV4 reservation in its completion transition.
+/// unique FundingV5 reservation in its completion transition.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedPreRootSourceOccurrencePostwriteV3 {
     id: ContentId,
@@ -861,7 +862,7 @@ const PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V3: &[u8] =
 const SOURCE_GENERATION_POLICY_DOMAIN_V3: &[u8] =
     b"dragons-clutch/product-source-generation-policy/v3";
 
-/// Exact current FundingStateV4/BundleV6 capitalization facts offered to the
+/// Exact current FundingStateV5/BundleV7 capitalization facts offered to the
 /// Product founder preauthorization. Every semantic ID is derived from the
 /// hostile-decoded current accounts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -922,13 +923,13 @@ pub(crate) struct AuthenticatedSourceWorkCapitalizationV3 {
     facts: SourceWorkCapitalizationFactsV3,
     quote: SourceLifecycleCapitalizationQuoteV1,
     custody: AuthenticatedSourceFundingCustodyV1,
-    funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV5,
 }
 
 /// Retained Source capitalization postwrite after the sole Product founder
-/// compositor consumes the non-Copy FundingV4 reservation. This is not an ID
+/// compositor consumes the non-Copy FundingV5 reservation. This is not an ID
 /// projection: it retains the exact live 0xbd custody authority and every
-/// hostile FundingV4/source-capital fact required by retirement.
+/// hostile FundingV5/source-capital fact required by retirement.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedSourceWorkCapitalizationPostwriteV3 {
     id: ContentId,
@@ -983,14 +984,14 @@ impl AuthenticatedSourceWorkCapitalizationV3 {
 
     pub(crate) const fn funding_reservation(
         &self,
-    ) -> &AuthenticatedProductSeriesFundingReservationV4 {
+    ) -> &AuthenticatedProductSeriesFundingReservationV5 {
         &self.funding_reservation
     }
 
     fn into_product_founder_parts(
         self,
     ) -> (
-        AuthenticatedProductSeriesFundingReservationV4,
+        AuthenticatedProductSeriesFundingReservationV5,
         AuthenticatedSourceWorkCapitalizationPostwriteV3,
     ) {
         let Self {
@@ -1014,7 +1015,7 @@ impl AuthenticatedSourceWorkCapitalizationV3 {
     }
 }
 
-/// Fully capitalize one current Source lifecycle from FundingStateV4's exact
+/// Fully capitalize one current Source lifecycle from FundingStateV5's exact
 /// pending SourceWork debit.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn capitalize_source_work_v3<
@@ -1025,7 +1026,7 @@ pub(crate) fn capitalize_source_work_v3<
     source_route: AuthenticatedSourceRouteV1,
     publication: AuthenticatedSourceSemanticPublicationV2,
     schedule: SourceWorkScheduleBindingV1,
-    funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV5,
     funding_account: &AccountInfo<'_>,
     source_work_vault: &AccountInfo<'_>,
     custody_account: &AccountInfo<'_>,
@@ -1071,8 +1072,8 @@ pub(crate) fn capitalize_source_work_v3<
             && funding_account.is_writable
             && !funding_account.is_signer
             && !funding_account.executable
-            && funding_account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V4
-            && state.phase == SeriesFundingPhaseV4::Pending
+            && funding_account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V5
+            && state.phase == SeriesFundingPhaseV5::Pending
             && state.pending_disposition == Some(SeriesMarketDispositionV1::Founder)
             && state.pending_ordinal == occurrence.ordinal
             && state.pending_source_occurrence_id == occurrence_id
@@ -1127,7 +1128,7 @@ pub(crate) fn capitalize_source_work_v3<
     let funding_data = funding_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let observed = SeriesFundingAccountV4::decode(&funding_data)?;
+    let observed = SeriesFundingAccountV5::decode(&funding_data)?;
     let funding_account_data_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[&funding_data[..]]).to_bytes(),
     );
@@ -1176,16 +1177,15 @@ pub(crate) fn capitalize_source_work_v3<
     require(
         funding.data_id() == funding_account_data_id
             && funding_reservation.funding_account() == *funding_account.key
-            && funding_reservation
-                .funding_state_pending_id()?
+            && state
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                 .content_id()
                 == state_id
-            && funding_reservation.funding_data_pending_id() == funding_account_data_id
-            && funding_reservation.funding_authentication_pending_id()
-                == funding.authentication_id(),
+            && funding.data_id() == funding_account_data_id
+            && funding.authentication_id() == funding_account_authentication_id,
         ClutchError::MismatchedState,
     )?;
-    let funding_account_authentication_id = funding.authentication_id();
     let facts = SourceWorkCapitalizationFactsV3 {
         series_plan_id: state.series_plan_id.content_id(),
         funding_terms_id: state.funding_terms_id.content_id(),
@@ -1445,14 +1445,14 @@ impl AuthenticatedPreRootSourceOccurrenceV3 {
         ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
     }
 
-    /// Consume the sole FundingV4 reservation into Product's completion owner
+    /// Consume the sole FundingV5 reservation into Product's completion owner
     /// while retaining a non-Copy Source postwrite with the full published
     /// graph and live 0xbd custody authority. No ID-only projection can make
     /// this split or reconstruct either half.
     pub(crate) fn into_product_founder_parts(
         self,
     ) -> (
-        AuthenticatedProductSeriesFundingReservationV4,
+        AuthenticatedProductSeriesFundingReservationV5,
         AuthenticatedPreRootSourceOccurrencePostwriteV3,
     ) {
         let Self {
@@ -1695,7 +1695,7 @@ mod current_adversarial_tests {
     }
 
     #[test]
-    fn current_capitalization_is_funding_v4_quote_v5_bundle_v6_only() {
+    fn current_capitalization_is_funding_v5_quote_v6_bundle_v7_only() {
         let source = include_str!("source_occurrence_foundation_v1.rs");
         let current = source
             .split("pub(crate) fn capitalize_source_work_v3")
@@ -1704,13 +1704,13 @@ mod current_adversarial_tests {
             .split("pub(crate) struct AuthenticatedPreRootSourceOccurrenceV3")
             .next()
             .expect("bounded current capitalization");
-        assert!(current.contains("AuthenticatedProductSeriesFundingReservationV4"));
-        assert!(current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V4"));
-        assert!(current.contains("SeriesFundingPhaseV4::Pending"));
+        assert!(current.contains("AuthenticatedProductSeriesFundingReservationV5"));
+        assert!(current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V5"));
+        assert!(current.contains("SeriesFundingPhaseV5::Pending"));
         assert!(current.contains("funding_reservation.binding()"));
-        assert!(current.contains("funding_reservation.funding_state_pending_id()?"));
-        assert!(current.contains("funding_reservation.funding_data_pending_id()"));
-        assert!(current.contains("funding_reservation.funding_authentication_pending_id()"));
+        assert!(current.contains("state\n                .id()"));
+        assert!(current.contains("funding.data_id() == funding_account_data_id"));
+        assert!(current.contains("funding.authentication_id() == funding_account_authentication_id"));
         assert!(current.contains("reservation_binding.product_founder_preauthorization_id"));
         assert!(current.contains("pending_pre_source_reservation_binding_id"));
         assert!(current.contains("pending_clock_receipt_id"));
@@ -1756,7 +1756,7 @@ mod current_adversarial_tests {
         assert!(split.contains("AuthenticatedPreRootSourceOccurrencePostwriteV3"));
         assert!(!split.contains(".clone()"));
         assert!(!source.contains(
-            "pub(crate) fn funding_reservation(self) -> AuthenticatedProductSeriesFundingReservationV4"
+            "pub(crate) fn funding_reservation(self) -> AuthenticatedProductSeriesFundingReservationV5"
         ));
     }
 }
