@@ -683,9 +683,9 @@ impl<'index> OperatorJsonApi<'index> {
                     404,
                     json!({
                         "error": "account absent from a later finalized release scan",
-                        "releaseKey": absence.release_key.as_str(),
-                        "finalizedAbsenceSlot": absence.slot.to_string(),
-                        "receiveSequence": absence.receive_sequence.to_string()
+                        "releaseKey": absence.release_key(),
+                        "finalizedAbsenceSlot": absence.slot().to_string(),
+                        "receiveSequence": absence.receive_sequence().to_string()
                     }),
                 ),
                 None => response(
@@ -1382,6 +1382,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
         WorkflowLane::Candidate => "candidate",
         WorkflowLane::KeeperReceipts => "keeper-receipts",
         WorkflowLane::RecoveryRetirement => "recovery-retirement",
+        WorkflowLane::StructuredLifecycle => "structured-lifecycle",
     }
 }
 
