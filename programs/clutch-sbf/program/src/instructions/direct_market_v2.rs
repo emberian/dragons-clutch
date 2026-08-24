@@ -35,10 +35,11 @@ use clutch_direct_market_runtime::lifecycle_v2::{
     prepare_direct_reservation_admission_v2, prepare_direct_reservation_cancel_v2,
     begin_direct_candidate_verification_v2, bind_direct_candidate_work_batch_v2,
     finalize_direct_selection_v2, prepare_direct_candidate_work_batch_v2,
-    prepare_direct_economic_terminal_v2, submit_direct_candidate_v2,
+    prepare_direct_economic_terminal_v2, prepare_direct_selection_freeze_v2,
+    submit_direct_candidate_v2,
     verify_next_direct_candidate_v2, AuthenticatedDirectEconomicTerminalV2,
     AuthenticatedDirectReservationAdmissionV2, AuthenticatedDirectReservationCancelV2,
-    DirectRootReplayTransitionV2,
+    AuthenticatedDirectSelectionFreezeV2, DirectRootReplayTransitionV2,
 };
 use clutch_direct_market_runtime::current_v2::DirectCurrentGeneralAuthorityV2;
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
@@ -52,6 +53,11 @@ use clutch_direct_market_runtime::settlement_v1::{
 use clutch_direct_market_runtime::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketActionV1,
     DirectMarketErrorV1, DirectRentOwnerV1, DirectTerminalReasonV1,
+};
+use clutch_batch::direct_pair_v1::DirectEconomicBookV1;
+use clutch_batch::relation_v2::{
+    EconomicDomainV2, PricePreconditionV2, ECONOMIC_RELATION_VERSION_V2,
+    EMPTY_ECONOMIC_ORDER_V2,
 };
 use clutch_batch::{PartialPolicy, Side};
 use clutch_batch::relation_v1::FrozenPolicyV1;
@@ -72,9 +78,10 @@ use clutch_liveness::runtime_v1::{
 };
 use clutch_liveness::Id as LivenessId;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
+use clutch_price_measure::PriceVectorV3;
 use clutch_product_series::{
     CompiledProductSeriesBundleV6, ContentId, MarketGenesisProfileV2,
-    MarketInstancePreimageV2,
+    MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
 };
 use clutch_retirement::{PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::direct_market_v1::{
@@ -106,6 +113,10 @@ const DIRECT_MARKET_V2_MAX_PAYLOAD_BYTES: usize = 80;
 const DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2: usize = 4;
 const DIRECT_ADMIT_ORDER_FIXED_ACCOUNTS_V2: usize = 19;
 const DIRECT_CANCEL_ORDER_ACCOUNTS_V2: usize = 16;
+const DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2: usize = 12;
+
+const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/price-authentication/v2\0";
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V2 == RUNTIME_ROOT_BODY_BYTES_V2);
 const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2 == 2_502);
@@ -181,8 +192,10 @@ pub(crate) fn process(
             )?;
             process_direct_finalize_selection_v2(program_id, accounts, sequence, payload)
         }
+        DirectMarketAction::FreezeBook => {
+            process_direct_freeze_book_v2(program_id, accounts, sequence, payload)
+        }
         DirectMarketAction::InitializeMarket
-        | DirectMarketAction::FreezeBook
         | DirectMarketAction::SettlePair
         | DirectMarketAction::LapseEmpty
         | DirectMarketAction::LapseUnselected
@@ -560,6 +573,231 @@ impl AuthenticatedDirectReservationCancelV2 for DirectReservationCancelAuthority
             Err(DirectMarketErrorV1::UnauthenticatedAuthority)
         }
     }
+}
+
+/// Execute action 4 over the exhaustive root-derived active Reservation set.
+/// The payload carries no count, price, work amount, or liveness ordinal.
+#[inline(never)]
+fn process_direct_freeze_book_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(
+        accounts.len() >= DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2,
+        ClutchError::AccountCount,
+    )?;
+    require(payload.is_empty(), ClutchError::WrongDataLength)?;
+    let root = authenticate_direct_market_root_writable_v2(program_id, &accounts[0])?;
+    let reservation_count = usize::from(root.transition().live_reservations());
+    require(reservation_count <= 2, ClutchError::MismatchedState)?;
+    let liveness_start = DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2
+        .checked_add(reservation_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let expected_count = liveness_start
+        .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    require_distinct(&accounts[..liveness_start])?;
+    require_direct_freeze_liveness_aliases_v2(accounts, liveness_start)?;
+
+    let direct_replay = authenticate_direct_action_replay_writable_v2(
+        program_id,
+        &accounts[1],
+        &root,
+    )?;
+    require_signer(&accounts[3])?;
+    require(accounts[3].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[4])?;
+    let rent_parameters = read_rent(&accounts[5])?;
+    let observed_slot = read_clock_slot(&accounts[6])?;
+    let (selection_pda, selection_bump) =
+        seeds::direct_selection_v1_pda(program_id, &root.account());
+    let donation_floor_lamports = authenticate_fresh_direct_pda_v2(
+        &accounts[2],
+        (selection_pda, selection_bump),
+    )?;
+    let principal_lamports = rent_parameters.minimum_balance(DIRECT_SELECTION_ACCOUNT_BYTES)?;
+    let selection_rent = DirectRentOwnerV1 {
+        payer: accounts[3].key.to_bytes(),
+        principal_lamports,
+        donation_floor_lamports,
+    };
+    selection_rent.validate().map_err(map_direct_error_v2)?;
+
+    let mut authenticated: [Option<AuthenticatedDirectReservationV2>; 2] = [None; 2];
+    let mut index = 0usize;
+    while index < reservation_count {
+        authenticated[index] = Some(authenticate_direct_reservation_readonly_v2(
+            program_id,
+            &accounts[DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2 + index],
+            &root,
+        )?);
+        index += 1;
+    }
+    if reservation_count == 2 {
+        let left = authenticated[0]
+            .take()
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let right = authenticated[1]
+            .take()
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        authenticated = if right.value().order_id() < left.value().order_id() {
+            [Some(right), Some(left)]
+        } else {
+            [Some(left), Some(right)]
+        };
+    }
+    let mut reservations = [None; 2];
+    index = 0;
+    while index < reservation_count {
+        reservations[index] = Some(
+            authenticated[index]
+                .as_ref()
+                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+                .value(),
+        );
+        index += 1;
+    }
+    let price = authenticate_direct_price_precondition_v2(
+        program_id,
+        &root,
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        reservations,
+    )?;
+    let root_bump = root.bump();
+    let replay_bump = direct_replay.bump();
+    let mut state = DirectRootReplayTransitionV2::authenticate(
+        root.into_transition(),
+        direct_replay.value(),
+    )
+    .map_err(map_direct_error_v2)?;
+    let authority = DirectSelectionFreezeAuthoritySbfV2 {
+        root_semantic_id: state.root().root_semantic_id(),
+        replay: state.replay(),
+        selection_account: accounts[2].key.to_bytes(),
+        rent: selection_rent,
+        reservations,
+        price: &price,
+        sequence,
+        slot: observed_slot,
+    };
+    let plan = Box::new(
+        prepare_direct_selection_freeze_v2(
+            &authority,
+            &mut state,
+            sequence,
+            observed_slot,
+            accounts[2].key.to_bytes(),
+            selection_rent,
+            reservations,
+            price.domain(),
+            price.price(),
+            &DirectRuntimeSha256V2,
+        )
+        .map_err(map_direct_error_v2)?,
+    );
+    apply_direct_candidate_work_v2(
+        program_id,
+        &accounts[liveness_start..],
+        &accounts[1],
+        &mut state,
+        &plan.selection,
+        DirectMarketActionV1::FreezeBook,
+    )?;
+
+    let root_bytes = accounts[0].key.to_bytes();
+    let bump_seed = [selection_bump];
+    let signer_seeds: [&[u8]; 3] = [
+        seeds::SEED_DIRECT_SELECTION_V1,
+        &root_bytes,
+        &bump_seed,
+    ];
+    create_current_direct_account_v2(
+        program_id,
+        &accounts[3],
+        &accounts[2],
+        &accounts[4],
+        &rent_parameters,
+        DIRECT_SELECTION_ACCOUNT_BYTES,
+        principal_lamports,
+        donation_floor_lamports,
+        &signer_seeds,
+    )?;
+    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_action_replay_v2(
+        &accounts[1],
+        replay_bump,
+        state.replay(),
+        state.root(),
+    )?;
+    write_fresh_direct_selection_v2(
+        &accounts[2],
+        selection_bump,
+        plan.selection,
+        state.root(),
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DirectSelectionFreezeAuthoritySbfV2<'a> {
+    root_semantic_id: [u8; 32],
+    replay: DirectActionReplayV1,
+    selection_account: [u8; 32],
+    rent: DirectRentOwnerV1,
+    reservations: [Option<DirectReservationV1>; 2],
+    price: &'a AuthenticatedDirectPricePreconditionV2,
+    sequence: u64,
+    slot: u64,
+}
+
+impl AuthenticatedDirectSelectionFreezeV2 for DirectSelectionFreezeAuthoritySbfV2<'_> {
+    fn authenticate_freeze_v2(
+        &self,
+        state: &DirectRootReplayTransitionV2,
+        selection_account: [u8; 32],
+        rent: DirectRentOwnerV1,
+        reservations: &[Option<DirectReservationV1>; 2],
+        domain: &EconomicDomainV2,
+        price: &PricePreconditionV2,
+        consumed_sequence: u64,
+        observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if state.root().root_semantic_id() == self.root_semantic_id
+            && state.replay() == self.replay
+            && selection_account == self.selection_account
+            && rent == self.rent
+            && reservations == &self.reservations
+            && domain == &self.price.domain()
+            && price == &self.price.price()
+            && self.price.authentication_id() != [0; 32]
+            && consumed_sequence == self.sequence
+            && observed_slot == self.slot
+        {
+            Ok(())
+        } else {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
+    }
+}
+
+/// Private exact Product/PriceGrid authority retained only for action 4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedDirectPricePreconditionV2 {
+    domain: EconomicDomainV2,
+    price: PricePreconditionV2,
+    authentication_id: [u8; 32],
+}
+
+impl AuthenticatedDirectPricePreconditionV2 {
+    const fn domain(self) -> EconomicDomainV2 { self.domain }
+    const fn price(self) -> PricePreconditionV2 { self.price }
+    const fn authentication_id(self) -> [u8; 32] { self.authentication_id }
 }
 
 /// Execute action 8. A nonempty Selection uses the compact finalization frame;
@@ -1062,6 +1300,162 @@ impl AuthenticatedDirectEconomicTerminalV2 for DirectEconomicTerminalAuthoritySb
 const _: () = assert!(
     core::mem::size_of::<DirectEconomicTerminalAuthoritySbfV2<'static>>() <= 512
 );
+
+/// Authenticate the current BundleV6, native basis, price policy, Genesis,
+/// and canonical grid before b2 may retain a price vector.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_direct_price_precondition_v2(
+    program_id: &Pubkey,
+    root: &AuthenticatedDirectMarketRootV2,
+    bundle_account: &AccountInfo<'_>,
+    basis_account: &AccountInfo<'_>,
+    price_policy_account: &AccountInfo<'_>,
+    genesis_account: &AccountInfo<'_>,
+    price_grid_account: &AccountInfo<'_>,
+    reservations: [Option<DirectReservationV1>; 2],
+) -> Outcome<AuthenticatedDirectPricePreconditionV2> {
+    let transition = root.transition();
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+        program_id,
+        bundle_account,
+        ContentId::from_bytes(transition.compiler_bundle_v6_id()),
+    )?;
+    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        basis_account,
+        bundle.value().native_claim_basis_id.content_id(),
+    )?;
+    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        price_policy_account,
+        bundle.value().price_measure_policy_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        genesis_account,
+        bundle.value().market_genesis_profile_id.content_id(),
+    )?;
+    require(
+        bundle.value().price_measure_policy_id.content_id().bytes()
+                == transition.price_policy_id()
+            && genesis.value().realm_id.bytes() == transition.realm_id()
+            && genesis.value().profile_id.bytes() == transition.collateral_profile_id()
+            && genesis.value().relation_policy_id.bytes() == transition.relation_policy_id()
+            && genesis.value().fee_policy_id.bytes()
+                == transition.fee_policy().revenue_policy_v2_digest
+            && genesis.value().price_measure_policy_id.content_id().bytes()
+                == transition.price_policy_id()
+            && basis.value().outcome_count == transition.outcome_count(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        price_grid_account.owner == program_id
+            && !price_grid_account.is_signer
+            && !price_grid_account.executable
+            && !price_grid_account.is_writable
+            && price_grid_account.data_len() == account_len::PRICE_GRID,
+        ClutchError::MismatchedState,
+    )?;
+    let grid_data = price_grid_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let grid = PriceGridAccount::decode(&grid_data)?;
+    expect_pda(
+        price_grid_account.key,
+        seeds::grid_pda(program_id, &grid.realm.0, &grid.grid.0),
+        Some(grid.stored_bump),
+    )?;
+    require(
+        grid.realm.0 == transition.realm_id()
+            && grid.grid.0 == genesis.value().price_grid_id.bytes()
+            && grid.price_scale == transition.price_scale(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut encoded_limits = [[0u8; 16]; 2];
+    let mut book = DirectEconomicBookV1 {
+        orders: [EMPTY_ECONOMIC_ORDER_V2; 2],
+        len: 0,
+    };
+    let mut index = 0usize;
+    while index < reservations.len() {
+        if let Some(reservation) = reservations[index] {
+            transition
+                .child_reservation_semantic_id(reservation, &DirectRuntimeSha256V2)
+                .map_err(map_direct_error_v2)?;
+            let limit = reservation.limit_price_units_per_egg();
+            grid.tick_of(
+                u64::try_from(limit)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            )?;
+            encoded_limits[index] = limit.to_le_bytes();
+            book.orders[index] = reservation.economic_order().map_err(map_direct_error_v2)?;
+            book.len = book
+                .len
+                .checked_add(1)
+                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        index += 1;
+    }
+    let domain = EconomicDomainV2 {
+        relation_version: ECONOMIC_RELATION_VERSION_V2,
+        market_semantics_digest: transition.market_instance_id(),
+        epoch_semantics_digest: transition.direct_epoch_semantics_id(),
+        relation_policy_digest: transition.relation_policy_id(),
+        price_policy_digest: transition.price_policy_id(),
+        epoch_index: transition.direct_window_index().map_err(map_direct_error_v2)?,
+        outcome_count: transition.outcome_count(),
+        price_scale: transition.price_scale(),
+    };
+    let price = clutch_direct_market_runtime::selection_v1::canonical_direct_price_precondition_v1(
+        &domain,
+        &book,
+    )
+    .map_err(map_direct_error_v2)?;
+    let active = usize::from(transition.outcome_count());
+    index = 0;
+    while index < price.prices.len() {
+        if index < active {
+            grid.tick_of(price.prices[index])?;
+        } else {
+            require(price.prices[index] == 0, ClutchError::NonCanonical)?;
+        }
+        index += 1;
+    }
+    let price_vector = PriceVectorV3 {
+        basis_degree: basis.value().basis_degree,
+        native_outcome_count: transition.outcome_count(),
+        price_scale: grid.price_scale,
+        prices: price.prices,
+    };
+    price_policy
+        .value()
+        .validate_candidate_price_contract(basis.value(), &price_vector, grid.price_scale)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let grid_data_id = solana_sha256_hasher::hashv(&[&grid_data[..]]).to_bytes();
+    drop(grid_data);
+    let authentication_id = solana_sha256_hasher::hashv(&[
+        DIRECT_PRICE_AUTHENTICATION_DOMAIN_V2,
+        &transition.root_semantic_id(),
+        bundle_account.key.as_ref(),
+        basis_account.key.as_ref(),
+        price_policy_account.key.as_ref(),
+        genesis_account.key.as_ref(),
+        price_grid_account.key.as_ref(),
+        &grid_data_id,
+        &encoded_limits[0],
+        &encoded_limits[1],
+        &price.semantic_price_digest,
+    ])
+    .to_bytes();
+    require_live_id_v2(authentication_id)?;
+    Ok(AuthenticatedDirectPricePreconditionV2 {
+        domain,
+        price,
+        authentication_id,
+    })
+}
 
 /// Authenticate action 2's exact current BundleV6/Genesis/Grid price limit.
 /// The Bundle identity comes only from b1/v2; no payload policy identity is an
@@ -1938,6 +2332,41 @@ fn require_direct_candidate_liveness_aliases_v2(
     Ok(())
 }
 
+/// Action 4 allows the liveness keeper and payer to coalesce only with the
+/// immutable Selection-creation payer at index 3. Policy and Candidate never
+/// alias the semantic prefix, and no Reservation can become a recipient.
+fn require_direct_freeze_liveness_aliases_v2(
+    accounts: &[AccountInfo<'_>],
+    liveness_start: usize,
+) -> Outcome<()> {
+    require(
+        accounts.len()
+            == liveness_start
+                .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2)
+                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::AccountCount,
+    )?;
+    let policy = &accounts[liveness_start];
+    let candidate = &accounts[liveness_start + 1];
+    let keeper = &accounts[liveness_start + 2];
+    let payer = &accounts[liveness_start + 3];
+    let creation_payer = accounts[3].key;
+    let mut index = 0usize;
+    while index < liveness_start {
+        require(
+            policy.key != accounts[index].key
+                && candidate.key != accounts[index].key
+                && (keeper.key != accounts[index].key
+                    || accounts[index].key == creation_payer)
+                && (payer.key != accounts[index].key
+                    || accounts[index].key == creation_payer),
+            ClutchError::AccountAlias,
+        )?;
+        index += 1;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct AuthenticatedDirectMarketRootV2 {
     account: Pubkey,
@@ -2334,6 +2763,29 @@ fn write_direct_selection_v2(
         .map_err(map_direct_error_v2)
 }
 
+fn write_fresh_direct_selection_v2(
+    account: &AccountInfo<'_>,
+    bump: u8,
+    value: DirectSelectionV1,
+    transition: &AuthenticatedDirectRootTransitionV2,
+) -> Outcome<()> {
+    require(
+        account.is_writable
+            && !account.executable
+            && account.data_len() == DIRECT_SELECTION_ACCOUNT_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    data[0] = DIRECT_SELECTION_ACCOUNT_TAG;
+    data[1] = DIRECT_SELECTION_ACCOUNT_VERSION;
+    data[2] = bump;
+    data[3] = 0;
+    encode_direct_selection_body_into_transition_v2(value, transition, &mut data[4..])
+        .map_err(map_direct_error_v2)
+}
+
 fn write_direct_reservation_v2(
     account: &AccountInfo<'_>,
     bump: u8,
@@ -2653,6 +3105,20 @@ mod tests {
         }
         assert_eq!(DIRECT_CANCEL_ORDER_ACCOUNTS_V2, 16);
         assert!(20 <= DIRECT_MARKET_V2_MAX_ACCOUNTS);
+    }
+
+    #[test]
+    fn freeze_book_frame_has_no_caller_count_or_recipient_suffix() {
+        for live_reservations in 0usize..=2 {
+            let liveness_start = DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2
+                .checked_add(live_reservations)
+                .expect("bounded root count");
+            let total = liveness_start
+                .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2)
+                .expect("bounded liveness suffix");
+            assert!(matches!(total, 16 | 17 | 18));
+        }
+        assert!(18 <= DIRECT_MARKET_V2_MAX_ACCOUNTS);
     }
 
     #[test]
