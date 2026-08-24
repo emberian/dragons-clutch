@@ -9,6 +9,8 @@
 
 use sha2::{Digest, Sha256};
 
+use clutch_batch::exact_integer::exact_mul_div_rem;
+
 use crate::{live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
 /// Fresh semantic version for selected-execution fee weighting.
@@ -391,8 +393,13 @@ pub fn composite_fee_hamilton_share_v2(
     if exact_weight == 0 || total_weight == 0 || exact_weight > total_weight {
         return Err(Error::InvalidWidth);
     }
-    let (floor_atoms, remainder) =
-        mul_u64_u128_div_rem(total_atoms, exact_weight, total_weight)?;
+    let (floor_atoms, remainder) = exact_mul_div_rem(
+        u128::from(total_atoms),
+        exact_weight,
+        total_weight,
+    )
+    .map_err(|_| Error::ArithmeticOverflow)?;
+    let floor_atoms = u64::try_from(floor_atoms).map_err(|_| Error::AmountOutOfRange)?;
     Ok(CompositeFeeHamiltonShareV2 { floor_atoms, remainder })
 }
 
@@ -477,43 +484,6 @@ pub fn allocate_composite_fee_weight_atoms_v2(
         atoms,
         total_atoms,
     })
-}
-
-/// Exact `(left * weight) / denominator` for `u64 * u128` without a wider
-/// primitive or overflow. The quotient is at most `left` because
-/// `weight <= denominator` for every row in a total-weight book.
-fn mul_u64_u128_div_rem(
-    left: u64,
-    weight: u128,
-    denominator: u128,
-) -> Result<(u64, u128)> {
-    if denominator == 0 || weight > denominator {
-        return Err(Error::InvalidWidth);
-    }
-    let mut quotient = 0u64;
-    let mut remainder = 0u128;
-    let mut bit = 64u32;
-    while bit != 0 {
-        bit -= 1;
-        quotient = quotient.checked_mul(2).ok_or(Error::ArithmeticOverflow)?;
-        let mut digit = 0u64;
-        if remainder >= denominator - remainder {
-            remainder -= denominator - remainder;
-            digit = 1;
-        } else {
-            remainder += remainder;
-        }
-        if ((left >> bit) & 1) != 0 {
-            if remainder >= denominator - weight {
-                remainder -= denominator - weight;
-                digit = digit.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            } else {
-                remainder += weight;
-            }
-        }
-        quotient = quotient.checked_add(digit).ok_or(Error::ArithmeticOverflow)?;
-    }
-    Ok((quotient, remainder))
 }
 
 #[cfg(test)]
