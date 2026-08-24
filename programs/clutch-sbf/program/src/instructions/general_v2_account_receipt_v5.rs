@@ -277,6 +277,7 @@ fn account_receipt_end_v5(
         market_instance: &accounts[IX_MARKET_INSTANCE],
         market_genesis: &accounts[IX_MARKET_GENESIS],
         pages,
+    };
     let traversal = authenticate_settlement_traversal_v5(program_id, traversal_frame)?;
     let root_traversal = authenticate_readonly_root_settlement_traversal_v5(
         program_id,
