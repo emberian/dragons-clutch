@@ -5,6 +5,7 @@ members = [
     "crates/dclutch-operator",
     "crates/dclutch-pyth-svm",
     "crates/dclutch-pyth-contract",
+    "crates/dclutch-realm-contract",
     "programs/dclutch-sbf",
 ]
 resolver = "2"

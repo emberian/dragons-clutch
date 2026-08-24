@@ -303,6 +303,10 @@ name = "dclutch-pyth-svm"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-sbf"
 version = "0.1.0"
 dependencies = [
