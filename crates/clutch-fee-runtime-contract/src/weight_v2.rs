@@ -598,6 +598,42 @@ mod tests {
     }
 
     #[test]
+    fn indexed_cache_commitment_accepts_exact_empty_and_refuses_hidden_tail() {
+        let empty = composite_fee_weight_transcript_from_indexed_rows_v2(
+            id(8),
+            11,
+            0,
+            |_| Ok(None),
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.total_weight(), 0);
+
+        let rows = [
+            CompositeFeeWeightRowV2::structural(id(1), 5).unwrap(),
+            CompositeFeeWeightRowV2::structural(id(2), 7).unwrap(),
+        ];
+        let exact = composite_fee_weight_transcript_from_indexed_rows_v2(
+            id(8),
+            11,
+            2,
+            |index| Ok(rows.get(usize::from(index)).copied()),
+        )
+        .unwrap();
+        assert_eq!(exact.len(), 2);
+        assert_eq!(exact.total_weight(), 12);
+        assert_eq!(
+            composite_fee_weight_transcript_from_indexed_rows_v2(
+                id(8),
+                11,
+                1,
+                |index| Ok(rows.get(usize::from(index)).copied()),
+            ),
+            Err(Error::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
     fn zero_unsorted_duplicate_and_nonzero_tail_rows_refuse() {
         assert_eq!(
             CompositeFeeWeightRowV2::structural(id(1), 0),
