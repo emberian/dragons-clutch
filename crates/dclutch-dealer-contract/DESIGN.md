@@ -1,8 +1,10 @@
 # Covered multi-LP Dealer V1
 
 Status: implemented SDK-free semantic, instruction, exact-frame, derivation,
-and Market/capability activation contract. It is not yet a Solana account-memory
-or CPI adapter, deployed program, or performance claim.
+and Market/capability activation contract. A hostile SVM account/CPI adapter
+exists for the complete eight-action lifecycle, but shared program routing,
+local-validator execution, unsigned operator material, and performance
+measurement remain integration work. This is not a deployed-program claim.
 
 ## Mechanism and authority
 
@@ -107,8 +109,9 @@ System Program, and Rent where required. Account privilege is exact, not a
 minimum. Ordinary aliases refuse except (a) activator/system-payer with LP owner
 on creation and (b) multiple semantic rent destinations that resolve to the same
 permanent RentCredit. Pool/config/LP/custody/Position aliases always refuse.
-Reset has exactly Market, Pool, and config accounts: Clock is trusted adapter
-input and is never an instruction meta or caller field.
+Reset has exactly Market, Pool, finalized config, and the config's canonical
+vacant staging-cursor proof: Clock is trusted adapter input and is never an
+instruction meta or caller field.
 
 Native claims are not tokens and Dealer does not create one token Vault per
 claim. All categorized Pool claim inventory lives physically in one canonical
@@ -116,8 +119,9 @@ claim. All categorized Pool claim inventory lives physically in one canonical
 `["dclutch/position/v1", Market, Pool]` derivation. LP/trader Position and Pool
 Position are separate exact roles and may never alias. Dealer's `claim_reserves`
 are the categorized LP ledger mirrored by that Position; the adapter requires
-exact equality before and after every transition. Three Realm-collateral token
-Vaults are instead derived under
+the physical balances to cover the categorized ledger and checks each receipt's
+exact physical delta. Three Realm-collateral token Vaults are instead derived
+under
 `["dclutch/dealer-vault/v1", Pool, compartment_tag]` for principal, realized
 fees, and service funding. Their physical separation enforces the kernel's
 compartment ontology. Permissionless token or native-claim deposits above the
@@ -348,11 +352,13 @@ Actual transaction compilation, LUT contents, compute, CPI depth, and rollback
 remain SBF/local-validator measurements; these byte calculations are not
 throughput claims.
 
-## Required SBF and operator seams
+## Implemented SBF boundary and remaining integration seams
 
-This crate contains no Solana SDK, account memory, CPI, token-account parser,
-signature parser, PDA hash function, Clock parser, or content hashing code. A
-callable adapter must still:
+This pure crate contains no Solana SDK, account memory, CPI, token-account
+parser, signature parser, PDA hash function, Clock parser, or content hashing
+code. The sibling SBF Dealer module implements the following boundary; shared
+top-level routing and adversarial runtime execution must still establish it as
+callable:
 
 1. authenticate the Market root/capability manifest, apply the exact Dealer and
    shared FundingState seed preimages, and derive/authenticate Pool, config,
@@ -374,9 +380,10 @@ callable adapter must still:
    treating only recorded funded principal as attributed and all excess as an
    unclassified gift;
 8. maintain Market-child/position descendant counts and atomic rollback across
-   every token, state, and close operation; and
-9. derive unsigned operator material from authenticated accounts and exact
-   receipts. Static clients and indexes remain untrusted projections.
+   every token, state, and close operation.
 
-Until those seams execute under adversarial local-validator tests, this is a
-pure contract implementation, not an end-to-end liquidity claim.
+Unsigned operator material remains separate integration work and must be
+derived from authenticated accounts and exact receipts; static clients and
+indexes remain untrusted projections. Until shared routing and these paths
+execute under adversarial local-validator tests, this is not an end-to-end
+liquidity claim.
