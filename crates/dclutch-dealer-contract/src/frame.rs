@@ -199,7 +199,7 @@ pub fn dealer_account_count<const N: usize>(action: DealerActionV1) -> Result<us
         DealerActionV1::Trade => 12,
         DealerActionV1::ResetLadder => 3,
         DealerActionV1::CloseLpPosition => 7,
-        DealerActionV1::RetirePool => 15,
+        DealerActionV1::RetirePool => 16,
     };
     Ok(base)
 }
@@ -322,6 +322,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::PoolFeeVault,
                 DealerAccountRoleV1::PoolServiceVault,
                 DealerAccountRoleV1::ServiceRefundVault,
+                DealerAccountRoleV1::ParticipantPosition,
                 DealerAccountRoleV1::PoolPositionRentCredit,
                 DealerAccountRoleV1::PoolRentCredit,
                 DealerAccountRoleV1::ConfigRentCredit,

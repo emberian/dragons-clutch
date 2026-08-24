@@ -190,7 +190,7 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::RetirePool),
-        Ok(15)
+        Ok(16)
     );
 
     let mut hostile = frame::<2>(DealerActionV1::Trade);
@@ -284,7 +284,7 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
     let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
     assert_eq!(activate_bytes, 976);
     assert_eq!(add_bytes, 783);
-    assert_eq!(retire_bytes, 696);
+    assert_eq!(retire_bytes, 729);
     assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(add_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(retire_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);

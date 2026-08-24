@@ -114,8 +114,12 @@ exact equality before and after every transition. Three Realm-collateral token
 Vaults are instead derived under
 `["dclutch/dealer-vault/v1", Pool, compartment_tag]` for principal, realized
 fees, and service funding. Their physical separation enforces the kernel's
-compartment ontology. The Pool Position's eventual close lamports go only to
-the permanent RentCredit derived for the Pool authority.
+compartment ontology. Permissionless token or native-claim deposits above the
+categorized ledger are unclassified gifts, not fees or LP value. Retirement
+routes token excess to the immutable service-refund Vault and claim excess to
+that authority's canonical Position before closing custody. The Pool Position's
+eventual close lamports go only to the permanent RentCredit derived for the Pool
+authority.
 
 The Pool has four disjoint value compartments:
 
@@ -324,13 +328,13 @@ Instruction and exact-frame widths are:
 | Trade | 56 | 12 | 12 |
 | Timed reset | 24 | 3 | 3 |
 | Close LP position | 64 | 7 | 7 |
-| Retire Pool/config | 32 | 15 | 15 |
+| Retire Pool/config | 32 | 16 | 16 |
 
 These counts exclude the executing Dealer program ID from the instruction's
 account-index vector. All remain below the pinned 128 account-lock ceiling. A
 one-signature, one-instruction legacy message under the canonical short-vector
 serialization model is 976 bytes for N=16 Activate, 783 bytes for N=16
-Add/Remove (including their 216-byte limit wires), and 696 bytes for Retire with
+Add/Remove (including their 216-byte limit wires), and 729 bytes for Retire with
 a separate fee payer. They fit the 1,232-byte packet individually without a
 lookup table. Multi-instruction composition may still require v0/LUT transport.
 Actual transaction compilation, LUT contents, compute, CPI depth, and rollback
