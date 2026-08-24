@@ -121,7 +121,7 @@ pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
 }
 
 /// Private non-Copy terminal capability consumed by Product retirement.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceFundingCustodyLifecycleTerminalV1 {
     id: ContentId,
     facts: SourceFundingCustodyLifecycleTerminalFactsV1,
@@ -245,7 +245,7 @@ pub(crate) trait AuthenticatedSourceFundingCustodyRetirementAuthorityV2 {
 }
 
 /// Private ledger-close postwrite consumed before Funding may close.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceFundingCustodyRetirementV2 {
     id: ContentId,
     product_retirement_authority_id: ContentId,
@@ -254,19 +254,19 @@ pub(crate) struct AuthenticatedSourceFundingCustodyRetirementV2 {
 }
 
 impl AuthenticatedSourceFundingCustodyRetirementV2 {
-    pub(crate) const fn id(self) -> ContentId {
+    pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn product_retirement_authority_id(self) -> ContentId {
+    pub(crate) const fn product_retirement_authority_id(&self) -> ContentId {
         self.product_retirement_authority_id
     }
 
-    pub(crate) const fn facts(self) -> SourceFundingCustodyRetirementFactsV2 {
+    pub(crate) const fn facts(&self) -> SourceFundingCustodyRetirementFactsV2 {
         self.facts
     }
 
-    pub(crate) const fn custody_account_data_after_id(self) -> ContentId {
+    pub(crate) const fn custody_account_data_after_id(&self) -> ContentId {
         self.custody_account_data_after_id
     }
 }
@@ -557,5 +557,27 @@ mod adversarial_tests {
         assert!(retire.contains("ledger_before.donation_lamports"));
         assert!(source.contains("!account.is_signer"));
         assert!(source.contains("all_distinct_ids(&terminal_ids)"));
+    }
+
+    #[test]
+    fn terminal_and_retirement_capabilities_are_non_clone_consumables() {
+        let source = include_str!("source_funding_custody_retirement_v1.rs");
+        for name in [
+            "AuthenticatedSourceFundingCustodyLifecycleTerminalV1",
+            "AuthenticatedSourceFundingCustodyRetirementV2",
+        ] {
+            let prefix = source
+                .split(&format!("pub(crate) struct {name}"))
+                .next()
+                .expect("capability declaration")
+                .rsplit("#[derive(")
+                .next()
+                .expect("derive list")
+                .split(")]" )
+                .next()
+                .expect("bounded derive list");
+            assert!(!prefix.contains("Clone"));
+            assert!(!prefix.contains("Copy"));
+        }
     }
 }
