@@ -77,9 +77,10 @@ semantic-owner codecs. The Dealer upload-stage allocation is explicitly
 non-production and is not part of live discovery.
 
 When a checked release explicitly selects the `fractional` family, Glass
-recognizes only the current Resolution-data-bound Policy V2, Ledger V1, Credit
-V2, and Tombstone V2 layouts. Withdrawn fractional V1 layouts are not fallback
-DTOs, and their presence does not create redemption capability.
+recognizes only the current physical-Resolution-account/Resolution-data-bound
+Policy V3, Ledger V1, Credit V2, and Tombstone V2 layouts. Withdrawn Policy V1,
+unprefundable Policy V2, and credit/tombstone V1 layouts are not fallback DTOs,
+and their presence does not create redemption capability.
 
 ## Projection semantics
 
