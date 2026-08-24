@@ -8,6 +8,8 @@
 //! before closing FundingV5 and handing its own move-only receipt directly to
 //! General action47 in the same instruction.
 
+use super::{AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccountV5};
+
 use super::super::failure_market_family_terminal_v2::{
     authenticate_failure_market_source_failure_lifecycle_terminal_v3,
     AuthenticatedFailureMarketFamilyTerminalReceiptV3,
@@ -16,6 +18,9 @@ use super::super::failure_market_family_terminal_v2::{
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
 use super::super::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+};
+use super::super::product_source_current::{
+    AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
 use super::super::source_funding_custody_retirement_v1::{
@@ -27,12 +32,18 @@ use super::super::source_funding_custody_retirement_v1::{
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use clutch_product_series::{
-    AuthenticatedMarketFamilyAuthorityV1, ContentId, MarketFamilyAggregatorV1,
+    AuthenticatedMarketFamilyAuthorityV1, AuthenticatedSeriesFundingAuthorityV5,
+    ComponentDebitV1, ContentId, MarketFamilyAggregatorV1,
     MarketFamilyV1, MarketInstanceV2Id, MarketLifecyclePhaseV3,
     MarketSharedCoreTerminalProjectionV3, MarketSharedCoreV3,
     SeriesLinkObligationDispositionV3, SeriesLinkObligationTerminalProjectionV3,
     SeriesLinkObligationV3, SeriesMarketLinkPhaseV3, SeriesMarketLinkV3Id,
-    SeriesPlanV5Id,
+    SeriesFundingAbortBindingV5, SeriesFundingComponentV2,
+    SeriesFundingCompletionBindingV5, SeriesFundingPhaseV5, SeriesFundingQuoteV6,
+    SeriesFundingReservationBindingV5, SeriesFundingStateV5,
+    SeriesFundingTerminalProjectionV5, SeriesAttachmentPlanV6, SeriesPlanV5,
+    SeriesPlanV5Id, SeriesFundingTermsV2Id, CompiledProductSeriesBundleV7Id,
+    SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
@@ -47,6 +58,10 @@ const PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-failure-core-terminal-postwrite/v5\0";
 const PRODUCT_STRUCTURED_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-structured-family-terminal-postwrite/v5\0";
+const PRODUCT_SERIES_FUNDING_TERMINAL_AUTHORITY_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-series-funding-terminal-authority/v5\0";
+const PRODUCT_SERIES_LIFECYCLE_TERMINAL_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-series-lifecycle-terminal/v5\0";
 
 fn hashv(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
@@ -1258,4 +1273,273 @@ pub(crate) fn retire_failed_source_and_count_series_link_v5(
         neutral_sink,
         system_program,
     )
+}
+
+struct ExactProductSeriesFundingTerminalAuthorityV5 {
+    id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
+    compiler_bundle_id: CompiledProductSeriesBundleV7Id,
+    transition_sequence: u64,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV5 for ExactProductSeriesFundingTerminalAuthorityV5 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: CompiledProductSeriesBundleV7Id,
+        _quote: &SeriesFundingQuoteV6,
+        _attachment: &SeriesAttachmentPlanV6,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV5,
+        _binding: &SeriesFundingReservationBindingV5,
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        _state: &SeriesFundingStateV5,
+        _binding: &SeriesFundingCompletionBindingV5,
+        _completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV5,
+        _binding: &SeriesFundingAbortBindingV5,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV5,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        state: &SeriesFundingStateV5,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.id.is_zero()
+            || terminal_receipt_id != self.id
+            || state.phase != SeriesFundingPhaseV5::Closed
+            || state.series_plan_id != self.series_plan_id
+            || state.funding_terms_id != self.funding_terms_id
+            || state.compiler_bundle_id != self.compiler_bundle_id
+            || state.transition_sequence != self.transition_sequence
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Move-only terminal seal consumed only by current physical FundingV5
+/// retirement.  It owns the hostile Registry/artifact/Funding graph and the
+/// Source→RootV3/LinkV3 postwrite which authorized the exact projection.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesLifecycleTerminalV5 {
+    id: ContentId,
+    physical_authority_id: ContentId,
+    source: AuthenticatedProductSourceSeriesRetirementV5,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: Box<AuthenticatedSeriesFundingAccountV5>,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: AuthenticatedSeriesSourceArtifactsV6,
+    terminal_projection: SeriesFundingTerminalProjectionV5,
+    terminal_projection_id: ContentId,
+}
+
+impl AuthenticatedProductSeriesLifecycleTerminalV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn physical_authority_id(&self) -> ContentId {
+        self.physical_authority_id
+    }
+    pub(crate) const fn source(&self) -> &AuthenticatedProductSourceSeriesRetirementV5 {
+        &self.source
+    }
+    pub(crate) const fn registry(&self) -> &AuthenticatedRegistryCapabilityV5 {
+        &self.registry
+    }
+    pub(crate) const fn funding(&self) -> &AuthenticatedSeriesFundingAccountV5 {
+        &self.funding
+    }
+    pub(crate) const fn bundle(&self) -> &AuthenticatedCompiledProductSeriesBundleV7 {
+        &self.bundle
+    }
+    pub(crate) const fn artifacts(&self) -> &AuthenticatedSeriesSourceArtifactsV6 {
+        &self.artifacts
+    }
+    pub(crate) const fn terminal_projection(&self) -> SeriesFundingTerminalProjectionV5 {
+        self.terminal_projection
+    }
+    pub(crate) const fn terminal_projection_id(&self) -> ContentId {
+        self.terminal_projection_id
+    }
+
+    pub(crate) fn authenticate_physical_preflight_v5(
+        &self,
+        registry: &AuthenticatedRegistryCapabilityV5,
+        funding: &AuthenticatedSeriesFundingAccountV5,
+        projection: SeriesFundingTerminalProjectionV5,
+    ) -> Outcome<ContentId> {
+        require(
+            self.physical_authority_id == projection.terminal_receipt_id
+                && self.terminal_projection == projection
+                && self.terminal_projection_id
+                    == projection
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                && self.registry.id() == registry.id()
+                && self.registry.series_registry_account()
+                    == registry.series_registry_account()
+                && self.registry.series_registry_authentication_id()
+                    == registry.series_registry_authentication_id()
+                && self.funding.as_ref() == funding
+                && self.source.source.funding_account.bytes() == funding.account().to_bytes()
+                && self.source.source.funding_account_data_id == funding.data_id()
+                && self.source.source.funding_account_authentication_id
+                    == funding.authentication_id(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
+}
+
+/// Seal the exact Closed FundingV5 projection after Source custody and the
+/// current LinkV3 have physically terminated.  No Funding bytes are mutated;
+/// the returned capability must be consumed by physical retirement in the
+/// same instruction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn terminalize_product_series_funding_v5(
+    source: AuthenticatedProductSourceSeriesRetirementV5,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: AuthenticatedSeriesFundingAccountV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedProductSeriesLifecycleTerminalV5> {
+    artifacts.validate_registry_projection(&registry.projection())?;
+    let series_plan_id = artifacts
+        .series()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let quote_id = artifacts
+        .quote()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_id = artifacts
+        .attachment()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry.activation_consumed()
+            && registry.series_plan_id() == series_plan_id
+            && registry.funding_terms_id() == funding_terms_id
+            && registry.compiler_bundle_id() == bundle.bundle_id()
+            && bundle.bundle().series_plan_id == series_plan_id
+            && bundle.bundle().funding_terms_id == funding_terms_id
+            && bundle.bundle().funding_quote_id == quote_id
+            && bundle.bundle().attachment_plan_id == attachment_id
+            && funding.state().phase == SeriesFundingPhaseV5::Closed
+            && funding.state().series_plan_id == series_plan_id
+            && funding.state().funding_terms_id == funding_terms_id
+            && funding.state().funding_quote_id == quote_id
+            && funding.state().attachment_plan_id == attachment_id
+            && funding.state().compiler_bundle_id == bundle.bundle_id()
+            && source.source.funding_account.bytes() == funding.account().to_bytes()
+            && source.source.funding_state_id.bytes()
+                == funding
+                    .state()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes()
+            && source.source.funding_account_data_id == funding.data_id()
+            && source.source.funding_account_authentication_id == funding.authentication_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_SERIES_FUNDING_TERMINAL_AUTHORITY_DOMAIN_V5,
+        &source.id.bytes(),
+        &source.failure.id.bytes(),
+        &source.source.id.bytes(),
+        &source.root_authentication_after_id.bytes(),
+        &source.root_semantic_after_id.bytes(),
+        &source.root_transition_sequence_after.to_le_bytes(),
+        &source.link_authentication_after_id.bytes(),
+        &source.link_semantic_after_id.bytes(),
+        &source.link_transition_sequence_after.to_le_bytes(),
+        &registry.id().bytes(),
+        &funding.data_id().bytes(),
+        &funding.authentication_id().bytes(),
+        &bundle.bundle_id().bytes(),
+    ]);
+    require_live(id)?;
+    let authority = ExactProductSeriesFundingTerminalAuthorityV5 {
+        id,
+        series_plan_id,
+        funding_terms_id,
+        compiler_bundle_id: bundle.bundle_id(),
+        transition_sequence: funding.state().transition_sequence,
+    };
+    let projection = funding
+        .state()
+        .close(
+            &authority,
+            artifacts.series(),
+            artifacts.quote(),
+            artifacts.attachment(),
+            id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection_id = projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let seal_id = hashv(&[
+        PRODUCT_SERIES_LIFECYCLE_TERMINAL_DOMAIN_V5,
+        &id.bytes(),
+        &projection_id.bytes(),
+        &registry.id().bytes(),
+        &funding.data_id().bytes(),
+        &funding.authentication_id().bytes(),
+    ]);
+    require_live(seal_id)?;
+    // The projection's private terminal receipt is the physical authority ID;
+    // the outer seal is retained separately and cannot be substituted for it.
+    Ok(AuthenticatedProductSeriesLifecycleTerminalV5 {
+        id: seal_id,
+        physical_authority_id: id,
+        source,
+        registry,
+        funding: Box::new(funding),
+        bundle,
+        artifacts,
+        terminal_projection: projection,
+        terminal_projection_id: projection_id,
+    })
 }
