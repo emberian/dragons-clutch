@@ -20,6 +20,8 @@ use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1;
 use clutch_failure_policy_runtime::market_runtime_v1::{
     admit_failure_market_runtime_v1, AuthenticatedFailureMarketRuntimeAdmissionV1,
     FailureMarketRuntimeAdmissionReceiptV1, FailureMarketRuntimeRootFundingFactsV1,
+    FailureMarketSourceFailureTransitionPlanV2,
+    FailureMarketSourceFailureTransitionReceiptIdV2,
     FailureMarketRuntimeStateCommitmentV1, FailureMarketRuntimeTerminalPlanV2,
     FailureMarketRuntimeV1, FailureMarketSessionTransitionPlanV1,
     FailureMarketSessionTransitionReceiptIdV1, FAILURE_MARKET_RUNTIME_BYTES_V1,
@@ -37,6 +39,8 @@ use solana_pubkey::Pubkey;
 const _: () = assert!(FAILURE_MARKET_RUNTIME_BODY_BYTES_V1 == FAILURE_MARKET_RUNTIME_BYTES_V1);
 const FAILURE_MARKET_RUNTIME_SESSION_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/failure-market-runtime-session-postwrite/v1\0";
+const FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/failure-market-runtime-source-failure-postwrite/v2\0";
 
 /// Exact authenticated mutable market-scoped Failure runtime root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +107,53 @@ pub(crate) trait AuthenticatedFailureMarketRuntimeSessionWriteV1 {
         _expected: FailureMarketRuntimeSessionWriteFactsV1,
     ) -> clutch_failure_policy_runtime::Result<()> {
         Err(clutch_failure_policy_runtime::Error::BindingMismatch)
+    }
+}
+
+/// Exact direct Source-failure runtime postwrite expected by the compound owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketRuntimeSourceFailureWriteFactsV2 {
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    pub runtime_after: FailureMarketRuntimeStateCommitmentV1,
+    pub transition_receipt_id: FailureMarketSourceFailureTransitionReceiptIdV2,
+}
+
+/// Default-refusing authority for the final write of one zero-payout attempt.
+pub(crate) trait AuthenticatedFailureMarketRuntimeSourceFailureWriteV2 {
+    fn authenticate_failure_market_runtime_source_failure_write_v2(
+        &self,
+        _expected: FailureMarketRuntimeSourceFailureWriteFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        Err(clutch_failure_policy_runtime::Error::BindingMismatch)
+    }
+}
+
+/// Hostile-reopened runtime postimage after one direct Source failure fold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV2 {
+    id: ProductContentId,
+    root: AuthenticatedFailureMarketRuntimeRootV1,
+    transition_receipt_id: FailureMarketSourceFailureTransitionReceiptIdV2,
+    runtime_before: FailureMarketRuntimeStateCommitmentV1,
+}
+
+impl AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV2 {
+    pub(crate) const fn id(self) -> ProductContentId {
+        self.id
+    }
+
+    pub(crate) const fn root(self) -> AuthenticatedFailureMarketRuntimeRootV1 {
+        self.root
+    }
+
+    pub(crate) const fn transition_receipt_id(
+        self,
+    ) -> FailureMarketSourceFailureTransitionReceiptIdV2 {
+        self.transition_receipt_id
+    }
+
+    pub(crate) const fn runtime_before(self) -> FailureMarketRuntimeStateCommitmentV1 {
+        self.runtime_before
     }
 }
 
@@ -525,6 +576,109 @@ pub(crate) fn write_failure_market_runtime_session_plan_v1<
     })
 }
 
+/// Persist the final runtime transcript only after the same instruction has
+/// written the Refused cell, appended history, reset the cell, terminalized
+/// Source state, and released the exact Product link. Any refusal rolls every
+/// earlier mutation back under SVM instruction atomicity.
+pub(crate) fn write_failure_market_runtime_source_failure_plan_v2<
+    A: AuthenticatedFailureMarketRuntimeSourceFailureWriteV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root: &AccountInfo<'_>,
+    admission_root: AuthenticatedFailureMarketRootV2,
+    authenticated: AuthenticatedFailureMarketRuntimeRootV1,
+    plan: FailureMarketSourceFailureTransitionPlanV2,
+    authority: &A,
+) -> Outcome<AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV2> {
+    require(
+        authenticated.account == *runtime_root.key && runtime_root.is_writable,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(live == authenticated, ClutchError::MismatchedState)?;
+    let runtime_before = live.state_commitment;
+    let resulting = plan.resulting_runtime();
+    let runtime_after = resulting
+        .commitment()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = FailureMarketRuntimeSourceFailureWriteFactsV2 {
+        runtime_before,
+        runtime_after,
+        transition_receipt_id: plan.receipt_id(),
+    };
+    authority
+        .authenticate_failure_market_runtime_source_failure_write_v2(facts)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut after = live.state;
+    after
+        .commit_source_failure_plan(plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(after == resulting, ClutchError::MismatchedState)?;
+    let balance_before = runtime_root.lamports();
+    let mut runtime_body = [0; FAILURE_MARKET_RUNTIME_BYTES_V1];
+    after
+        .encode_into(&mut runtime_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRuntimeRootAccountV1 {
+        bump: live.bump,
+        runtime_body,
+    };
+    {
+        let mut data = runtime_root
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let output: &mut [u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1] = data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        record
+            .encode_into(output)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    }
+    require(
+        runtime_root.lamports() == balance_before,
+        ClutchError::MismatchedState,
+    )?;
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(
+        reopened.state == after
+            && reopened.state_commitment == runtime_after
+            && reopened.state_commitment != runtime_before,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V2,
+            runtime_root.key.as_ref(),
+            &runtime_before.bytes(),
+            &runtime_after.bytes(),
+            &facts.transition_receipt_id.bytes(),
+            &balance_before.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ProductContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV2 {
+        id,
+        root: reopened,
+        transition_receipt_id: facts.transition_receipt_id,
+        runtime_before,
+    })
+}
+
 /// Persist one exact Recovery-close or final-family runtime transition.
 ///
 /// The pure plan has private prestates and can only follow the typed terminal
@@ -619,5 +773,47 @@ mod adversarial_runtime_writer_tests {
             + write;
         assert!(preopen < write && write < balance && balance < postopen);
         assert!(!writer[..postopen].contains("try_borrow_mut_lamports"));
+    }
+
+    #[test]
+    fn source_failure_runtime_writer_is_last_hostile_checked_and_balance_preserving() {
+        let source = include_str!("failure_market_runtime.rs");
+        let writer = source
+            .split("pub(crate) fn write_failure_market_runtime_source_failure_plan_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Persist one exact Recovery-close")
+                    .next()
+            })
+            .expect("private source-failure runtime writer");
+        let preopen = writer
+            .find("let live = authenticate_failure_market_runtime_root_v1")
+            .expect("live prestate");
+        let authority = writer
+            .find("authenticate_failure_market_runtime_source_failure_write_v2")
+            .expect("private compound authority");
+        let commit = writer
+            .find("commit_source_failure_plan")
+            .expect("typed pure plan commit");
+        let write = writer
+            .find("record.encode_into(output)")
+            .expect("canonical body write");
+        let balance = writer
+            .find("runtime_root.lamports() == balance_before")
+            .expect("lamport preservation");
+        let postopen = writer[write..]
+            .find("let reopened = authenticate_failure_market_runtime_root_v1")
+            .expect("hostile poststate reopen")
+            + write;
+        assert!(
+            preopen < authority
+                && authority < commit
+                && commit < write
+                && write < balance
+                && balance < postopen
+        );
+        assert!(!writer[..postopen].contains("try_borrow_mut_lamports"));
+        assert!(!writer.contains("close_failure_market_recovery"));
     }
 }
