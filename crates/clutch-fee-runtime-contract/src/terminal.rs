@@ -1524,7 +1524,6 @@ pub fn build_aborted_fee_terminal_receipt_v1(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finish_terminal(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,

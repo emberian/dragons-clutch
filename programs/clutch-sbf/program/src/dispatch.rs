@@ -87,6 +87,7 @@ enum Route {
     Artifact,
     Genesis,
     FractionalRedemption,
+    RealmRevenueV2,
     #[cfg(feature = "profile-full")]
     SourceIngest,
     SourceIngestV2,
@@ -491,8 +492,9 @@ fn process_dealer_policy(
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
+        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
     }
 }
 
@@ -522,8 +524,9 @@ fn process_recurring_series(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
+        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
     }
 }
 
@@ -578,7 +581,7 @@ fn process_direct_market(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::DirectMarket(action) => direct_market_v1::process(
+        ExtensionAction::DirectMarket(action) => direct_market_v2::process(
             program_id,
             accounts,
             request.sequence,
@@ -653,6 +656,28 @@ fn process_fractional_redemption(
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
         | ExtensionAction::DirectMarket(_) => unexpected_route(),
+    }
+}
+
+/// Decode the strict Realm/revenue successor envelope after exact capability
+/// admission and enter its V2-only handler.
+#[inline(never)]
+fn process_realm_revenue_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::RealmRevenueV2(action) => revenue_policy_v2::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        _ => unexpected_route(),
     }
 }
 

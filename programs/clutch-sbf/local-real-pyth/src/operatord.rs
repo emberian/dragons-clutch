@@ -167,6 +167,169 @@ impl ResumableKeeperSelector {
     }
 }
 
+fn merge_chain_material_cursors(
+    mut cursors: Vec<KeeperActionSelection>,
+    index: &CanonicalAccountIndex,
+    batch: Option<&DirectAction8OperatorBatchV2>,
+    release: &IndexedProgramRelease,
+    maximum_actions: usize,
+) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
+    let action8 = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: DirectMarketAction::FinalizeSelection.tag(),
+    };
+    let Some(batch) = batch else { return Ok(cursors); };
+    if batch.release_key() != release.key() || batch.snapshot_receipt_id() == [0; 32] {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let current_finalized_slot = index
+        .forks()
+        .finalized_root()
+        .map(|(slot, _)| slot)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if current_finalized_slot < batch.observed_slot()
+        || current_finalized_slot >= batch.valid_before_slot()
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let finalized = index.current_accounts(RpcCommitment::Finalized);
+    for typed in batch.materials() {
+        let material = typed.canonical();
+        if material.release_key() != release.key()
+            || material.release_manifest_sha256() != release.release_manifest_sha256
+            || material.capability_profile_id() != release.capability_profile_id
+            || material.cursor().lane != WorkflowLane::Candidate
+            || material.driver_account() == Address::default()
+            || material.driver_account_slot() == 0
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let mut current_driver = finalized
+            .iter()
+            .filter(|version| version.account.address == material.driver_account());
+        let driver = current_driver
+            .next()
+            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+        let freshness = material.freshness();
+        if current_driver.next().is_some()
+            || driver.account.provenance.release_key != release.key()
+            || driver.account.provenance.commitment != RpcCommitment::Finalized
+            || driver.account.provenance.slot < material.driver_account_slot()
+            || current_finalized_slot < freshness.observed_slot
+            || current_finalized_slot >= freshness.valid_before_slot
+            || driver.account.lamports != typed.driver_lamports()
+            || driver.data_sha256 != typed.driver_data_sha256()
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        for fact in typed
+            .dependency_facts()
+            .iter()
+            .filter(|fact| fact.owner == release.program_id.to_bytes())
+        {
+            let address = Address::new_from_array(fact.address);
+            let mut versions = finalized
+                .iter()
+                .filter(|version| version.account.address == address);
+            let version = versions
+                .next()
+                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+            if versions.next().is_some()
+                || version.account.owner.to_bytes() != fact.owner
+                || version.account.provenance.slot < fact.slot
+                || version.account.lamports != fact.lamports
+                || version.data_sha256 != fact.data_sha256
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+        }
+        if cursors.iter().any(|cursor| {
+            cursor.account == material.driver_account()
+                || cursor.cursor == material.cursor()
+        }) {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let mut dependencies = material
+            .account_roles()
+            .iter()
+            .map(|role| role.address())
+            .collect::<Vec<_>>();
+        dependencies.sort();
+        dependencies.dedup();
+        cursors.push(KeeperActionSelection {
+            account: material.driver_account(),
+            release_key: material.release_key().to_string(),
+            action: "finalize-direct-selection-current-v2",
+            cursor: material.cursor(),
+            account_slot: material.driver_account_slot(),
+            observed_commitment: RpcCommitment::Finalized,
+            effective_commitment: RpcCommitment::Finalized,
+            branch: IndexedBranch::FinalizedScan,
+            dependencies,
+        });
+    }
+    cursors.sort_by(|left, right| {
+        (left.action, left.account.to_bytes(), left.cursor.position.phase, left.cursor.position.item)
+            .cmp(&(
+                right.action,
+                right.account.to_bytes(),
+                right.cursor.position.phase,
+                right.cursor.position.item,
+            ))
+    });
+    if cursors.len() > maximum_actions {
+        return Err(KeeperSelectionError::InvalidCapacity);
+    }
+    Ok(cursors)
+}
+
+fn select_operator_release<'a>(
+    releases: &'a [IndexedProgramRelease],
+    materials: &[CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
+) -> Result<&'a IndexedProgramRelease, KeeperSelectionError> {
+    if materials.iter().any(|material| {
+        material.coordinate()
+            == (CanonicalIntentCoordinate {
+                family_tag: DIRECT_MARKET_FAMILY_TAG,
+                family_version: DIRECT_MARKET_FAMILY_VERSION,
+                local_action: DirectMarketAction::FinalizeSelection.tag(),
+            })
+    }) {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let mut keys = materials
+        .iter()
+        .map(|material| material.release_key().to_string())
+        .collect::<BTreeSet<_>>();
+    if let Some(batch) = direct_action8_batch {
+        keys.insert(batch.release_key().to_string());
+    }
+    if keys.is_empty() {
+        keys.extend(
+            releases
+                .iter()
+                .filter(|release| !release.enabled_intents.is_empty())
+                .map(IndexedProgramRelease::key),
+        );
+    }
+    let keys = keys.into_iter().collect::<Vec<_>>();
+    let [key] = keys.as_slice() else {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    };
+    let mut matching = releases
+        .iter()
+        .filter(|release| release.key() == key.as_str());
+    let release = matching
+        .next()
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if matching.next().is_some() {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    Ok(release)
+}
+
 fn dependency_versions<'a>(
     accounts: &[&'a IndexedAccountVersion],
     driver: &'a IndexedAccountVersion,
@@ -502,19 +665,41 @@ impl<'index> OperatorJsonApi<'index> {
     /// codec or by the immutable checked release/transport binding.
     fn session(&self) -> OperatorJsonResponse {
         let plan = self.index.acquisition_plan();
-        let [release] = plan.releases.as_slice() else {
-            return response(
-                409,
-                json!({
+        let release = match select_operator_release(
+            &plan.releases,
+            self.action_materials,
+            self.direct_action8_batch,
+        ) {
+            Ok(release) => release,
+            Err(error) => {
+                return response(409, json!({
                     "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
                     "status": "unavailable",
-                    "reason": "a canonical browser session requires exactly one checked release"
-                }),
-            );
+                    "reason": error.to_string()
+                }));
+            }
         };
         let accounts = self.index.current_accounts(RpcCommitment::Finalized);
         let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
-            Ok(cursors) => cursors,
+            Ok(cursors) => match merge_chain_material_cursors(
+                cursors,
+                self.index,
+                self.direct_action8_batch,
+                release,
+                self.selector.maximum_actions,
+            ) {
+                Ok(cursors) => cursors,
+                Err(error) => {
+                    return response(
+                        409,
+                        json!({
+                            "schema": "dragons-clutch/operator-session-unavailable/v1",
+                            "status": "unavailable",
+                            "reason": error.to_string()
+                        }),
+                    );
+                }
+            },
             Err(error) => {
                 return response(
                     409,

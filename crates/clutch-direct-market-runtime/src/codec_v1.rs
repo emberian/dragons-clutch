@@ -18,6 +18,9 @@ use clutch_batch::{PartialPolicy, Side};
 
 use crate::reservation_v1::{DirectReservationPhaseV1, DirectReservationV1};
 use crate::selection_v1::{DirectSelectionPhaseV1, DirectSelectionV1};
+use crate::liveness_v1::{
+    DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1,
+};
 use crate::{
     DirectActionReplayV1, DirectMarketBindingV1, DirectMarketErrorV1, DirectMarketRootV1,
     DirectRentOwnerV1, DirectReplayPhaseV1, DirectRootPhaseV1, DirectScheduleV1,
@@ -25,11 +28,11 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_226;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_722;
 /// Exact semantic bytes inside the `0xb2/1` frame.
-pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
+pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_625;
 /// Exact semantic bytes inside the `0xb3/1` frame.
-pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 321;
+pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 390;
 /// Exact semantic bytes inside the `0xb4/1` frame.
 pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 469;
 
@@ -85,9 +88,25 @@ pub fn encode_direct_action_replay_body_v1(
     value: DirectActionReplayV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
-    value.validate_against(root)?;
     let mut output = [0u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    encode_direct_action_replay_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode the permanent replay directly into exact caller-owned storage.
+pub fn encode_direct_action_replay_body_into_v1(
+    value: DirectActionReplayV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate_against(root)?;
+    if value.candidate_liveness_pending {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    if output.len() != DIRECT_ACTION_REPLAY_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_epoch_semantics_id)?;
@@ -100,8 +119,11 @@ pub fn encode_direct_action_replay_body_v1(
     writer.id(value.foundation_receipt_id)?;
     writer.id(value.economic_terminal_receipt_id)?;
     writer.id(value.family_terminal_receipt_id)?;
-    writer.finish()?;
-    Ok(output)
+    writer.u32(value.candidate_liveness_completed_calls)?;
+    writer.id(value.candidate_liveness_last_receipt_id)?;
+    writer.id(value.candidate_liveness_batch_receipt_id)?;
+    writer.u8(if value.candidate_liveness_pending { 1 } else { 0 })?;
+    writer.finish()
 }
 
 /// Decode and validate one hostile permanent replay body.
@@ -123,8 +145,19 @@ pub fn decode_direct_action_replay_body_v1(
         foundation_receipt_id: reader.id()?,
         economic_terminal_receipt_id: reader.id()?,
         family_terminal_receipt_id: reader.id()?,
+        candidate_liveness_completed_calls: reader.u32()?,
+        candidate_liveness_last_receipt_id: reader.id()?,
+        candidate_liveness_batch_receipt_id: reader.id()?,
+        candidate_liveness_pending: match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(DirectMarketErrorV1::InvalidCount),
+        },
     };
     reader.finish()?;
+    if value.candidate_liveness_pending {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
     value.validate_against(root)?;
     Ok(value)
 }
@@ -134,9 +167,22 @@ pub fn encode_direct_reservation_body_v1(
     value: DirectReservationV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
-    value.validate_against_root(root)?;
     let mut output = [0u8; DIRECT_RESERVATION_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    encode_direct_reservation_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode one Reservation directly into exact caller-owned storage.
+pub fn encode_direct_reservation_body_into_v1(
+    value: DirectReservationV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate_against_root(root)?;
+    if output.len() != DIRECT_RESERVATION_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_epoch_semantics_id)?;
@@ -164,8 +210,7 @@ pub fn encode_direct_reservation_body_v1(
     write_rent(&mut writer, value.rent)?;
     writer.u8(reservation_phase_byte(value.phase))?;
     writer.id(value.terminal_receipt_id)?;
-    writer.finish()?;
-    Ok(output)
+    writer.finish()
 }
 
 /// Decode and validate one hostile Reservation body.
@@ -213,9 +258,22 @@ pub fn encode_direct_selection_body_v1(
     value: DirectSelectionV1,
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_SELECTION_BODY_BYTES_V1], DirectMarketErrorV1> {
-    value.validate_against(root)?;
     let mut output = [0u8; DIRECT_SELECTION_BODY_BYTES_V1];
-    let mut writer = BodyWriter::new(&mut output);
+    encode_direct_selection_body_into_v1(value, root, &mut output)?;
+    Ok(output)
+}
+
+/// Encode one complete Selection directly into exact caller-owned storage.
+pub fn encode_direct_selection_body_into_v1(
+    value: DirectSelectionV1,
+    root: DirectMarketRootV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate_against(root)?;
+    if output.len() != DIRECT_SELECTION_BODY_BYTES_V1 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
     writer.id(value.direct_root_account)?;
@@ -240,6 +298,11 @@ pub fn encode_direct_selection_body_v1(
         writer.id(value.candidate_digests[index])?;
         index += 1;
     }
+    index = 0;
+    while index < 3 {
+        writer.id(value.candidate_submitters[index])?;
+        index += 1;
+    }
     writer.u8(value.candidate_count)?;
     writer.u8(value.verification_cursor)?;
     writer.u8(value.verified_mask)?;
@@ -258,10 +321,10 @@ pub fn encode_direct_selection_body_v1(
         _ => return Err(DirectMarketErrorV1::InvalidCount),
     }
     writer.id(value.terminal_receipt_id)?;
+    writer.id(value.candidate_bond_refund_receipt_id)?;
     write_rent(&mut writer, value.rent)?;
     writer.u8(selection_phase_byte(value.phase))?;
-    writer.finish()?;
-    Ok(output)
+    writer.finish()
 }
 
 /// Decode, reverify, and validate one hostile Selection body.
@@ -289,6 +352,7 @@ pub fn decode_direct_selection_body_v1(
         read_candidate(&mut reader)?,
     ];
     let candidate_digests = [reader.id()?, reader.id()?, reader.id()?];
+    let candidate_submitters = [reader.id()?, reader.id()?, reader.id()?];
     let candidate_count = reader.u8()?;
     let verification_cursor = reader.u8()?;
     let verified_mask = reader.u8()?;
@@ -337,6 +401,7 @@ pub fn decode_direct_selection_body_v1(
         price,
         candidates,
         candidate_digests,
+        candidate_submitters,
         candidate_count,
         verification_cursor,
         verified_mask,
@@ -344,6 +409,7 @@ pub fn decode_direct_selection_body_v1(
         selected_candidate_index,
         selected_pair,
         terminal_receipt_id: reader.id()?,
+        candidate_bond_refund_receipt_id: reader.id()?,
         rent: read_rent(&mut reader)?,
         phase: decode_selection_phase(reader.u8()?)?,
     };
@@ -404,6 +470,7 @@ fn write_binding(
     writer.u32(value.fee_split_den)?;
     writer.id(value.candidate_lifecycle_policy_id)?;
     writer.id(value.candidate_liveness_policy_id)?;
+    write_candidate_liveness(&mut *writer, value.candidate_liveness)?;
     writer.id(value.direct_schedule_policy_id)?;
     writer.id(value.product_root_account)?;
     writer.id(value.product_market_binding_id)?;
@@ -447,6 +514,7 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         fee_split_den: reader.u32()?,
         candidate_lifecycle_policy_id: reader.id()?,
         candidate_liveness_policy_id: reader.id()?,
+        candidate_liveness: read_candidate_liveness(&mut *reader)?,
         direct_schedule_policy_id: reader.id()?,
         product_root_account: reader.id()?,
         product_market_binding_id: reader.id()?,
@@ -467,6 +535,72 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         price_policy_id: reader.id()?,
         price_scale: reader.u64()?,
     })
+}
+
+fn write_candidate_liveness(
+    writer: &mut BodyWriter<'_>,
+    value: DirectCandidateLivenessBindingV1,
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate()?;
+    writer.id(value.policy_account)?;
+    writer.id(value.policy_data_id)?;
+    writer.id(value.global_lifecycle_id)?;
+    writer.id(value.global_bundle_binding_id)?;
+    writer.id(value.global_capitalization_receipt_id)?;
+    writer.id(value.global_bundle_commitment_id)?;
+    writer.id(value.candidate_account)?;
+    writer.id(value.candidate_data_id)?;
+    writer.id(value.candidate_semantic_owner)?;
+    writer.id(value.candidate_quote_schedule_id)?;
+    writer.id(value.candidate_receipt_program_id)?;
+    writer.u64(value.candidate_generation)?;
+    writer.u32(value.first_call_ordinal)?;
+    writer.u32(value.reserved_calls)?;
+    writer.u64(value.reserved_work_lamports)?;
+    writer.id(value.allocation_receipt_id)?;
+    writer.u64(value.work_schedule.freeze_book_lamports)?;
+    writer.u64(value.work_schedule.begin_verification_lamports)?;
+    writer.u64(value.work_schedule.verify_candidate_lamports)?;
+    writer.u64(value.work_schedule.finalize_selection_lamports)?;
+    writer.u64(value.work_schedule.economic_terminal_lamports)?;
+    writer.u64(value.work_schedule.retire_terminal_lamports)?;
+    writer.u64(value.work_schedule.retained_candidate_bond_lamports)?;
+    writer.id(value.work_schedule_id)
+}
+
+fn read_candidate_liveness(
+    reader: &mut BodyReader<'_>,
+) -> Result<DirectCandidateLivenessBindingV1, DirectMarketErrorV1> {
+    let value = DirectCandidateLivenessBindingV1 {
+        policy_account: reader.id()?,
+        policy_data_id: reader.id()?,
+        global_lifecycle_id: reader.id()?,
+        global_bundle_binding_id: reader.id()?,
+        global_capitalization_receipt_id: reader.id()?,
+        global_bundle_commitment_id: reader.id()?,
+        candidate_account: reader.id()?,
+        candidate_data_id: reader.id()?,
+        candidate_semantic_owner: reader.id()?,
+        candidate_quote_schedule_id: reader.id()?,
+        candidate_receipt_program_id: reader.id()?,
+        candidate_generation: reader.u64()?,
+        first_call_ordinal: reader.u32()?,
+        reserved_calls: reader.u32()?,
+        reserved_work_lamports: reader.u64()?,
+        allocation_receipt_id: reader.id()?,
+        work_schedule: DirectCandidateWorkScheduleV1 {
+            freeze_book_lamports: reader.u64()?,
+            begin_verification_lamports: reader.u64()?,
+            verify_candidate_lamports: reader.u64()?,
+            finalize_selection_lamports: reader.u64()?,
+            economic_terminal_lamports: reader.u64()?,
+            retire_terminal_lamports: reader.u64()?,
+            retained_candidate_bond_lamports: reader.u64()?,
+        },
+        work_schedule_id: reader.id()?,
+    };
+    value.validate()?;
+    Ok(value)
 }
 
 fn write_schedule(
@@ -786,9 +920,9 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_226);
-const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
-const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_722);
+const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_625);
+const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 390);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 469);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);
 const _: EconomicOrderV2 = EMPTY_ECONOMIC_ORDER_V2;

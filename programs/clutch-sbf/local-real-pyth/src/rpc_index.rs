@@ -486,6 +486,7 @@ impl RpcIndexPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcRequestPurpose {
     ProgramScan,
+    ExactAccountSnapshot,
     ProgramSubscription,
     BlockSubscription,
     SlotSubscription,
@@ -500,6 +501,134 @@ pub struct PlannedRpcRequest {
     pub commitment: RpcCommitment,
     pub purpose: RpcRequestPurpose,
     pub body: Value,
+}
+
+/// Opaque bounded finalized `getMultipleAccounts` request. Its address set is
+/// constructed only by a crate-owned semantic planner from hostile-decoded
+/// chain identities; the transport can issue but cannot reshape it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalizedExactAccountSnapshotRequestV1 {
+    request: PlannedRpcRequest,
+    addresses: Vec<Address>,
+}
+
+/// Transport-decoded finalized context. Private fields prevent accidental
+/// reshaping after the bounded decoder; this remains an untrusted offchain
+/// observation and never replaces onchain reauthentication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinalizedSnapshotReceiptV1 {
+    cluster_key: String,
+    release_key: String,
+    slot: u64,
+    receipt_id: [u8; 32],
+}
+
+/// Opaque finalized account acquisition.  Current semantic planners consume
+/// this value instead of caller-assembled `ObservedRpcAccount` vectors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinalizedAccountSnapshotV1 {
+    receipt: FinalizedSnapshotReceiptV1,
+    accounts: Vec<ObservedRpcAccount>,
+}
+
+impl FinalizedAccountSnapshotV1 {
+    #[must_use]
+    pub const fn receipt(&self) -> &FinalizedSnapshotReceiptV1 { &self.receipt }
+
+    #[must_use]
+    pub fn accounts(&self) -> &[ObservedRpcAccount] { &self.accounts }
+}
+
+impl FinalizedSnapshotReceiptV1 {
+    #[must_use]
+    pub fn cluster_key(&self) -> &str { &self.cluster_key }
+    #[must_use]
+    pub fn release_key(&self) -> &str { &self.release_key }
+    #[must_use]
+    pub const fn slot(&self) -> u64 { self.slot }
+    #[must_use]
+    pub const fn receipt_id(&self) -> [u8; 32] { self.receipt_id }
+}
+
+fn finalized_snapshot_receipt_v1(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    slot: u64,
+    address_commitment: [u8; 32],
+) -> Result<FinalizedSnapshotReceiptV1> {
+    if request.commitment != RpcCommitment::Finalized
+        || slot == 0
+        || address_commitment == [0; 32]
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    let cluster_key = plan.cluster.key();
+    let receipt_id = Sha256::new()
+        .chain_update(b"dragons-clutch/operator/finalized-snapshot-receipt/v1\0")
+        .chain_update(cluster_key.as_bytes())
+        .chain_update(request.release_key.as_bytes())
+        .chain_update(request.request_id.to_le_bytes())
+        .chain_update(slot.to_le_bytes())
+        .chain_update(address_commitment)
+        .finalize()
+        .into();
+    Ok(FinalizedSnapshotReceiptV1 {
+        cluster_key,
+        release_key: request.release_key.clone(),
+        slot,
+        receipt_id,
+    })
+}
+
+impl FinalizedExactAccountSnapshotRequestV1 {
+    #[must_use]
+    pub const fn request(&self) -> &PlannedRpcRequest { &self.request }
+
+    #[must_use]
+    pub fn addresses(&self) -> &[Address] { &self.addresses }
+}
+
+pub(crate) fn finalized_exact_account_snapshot_request_v1(
+    plan: &RpcIndexPlan,
+    release_key: &str,
+    request_id: u64,
+    minimum_context_slot: u64,
+    mut addresses: Vec<Address>,
+) -> Result<FinalizedExactAccountSnapshotRequestV1> {
+    plan.validate()?;
+    let release = plan.release(release_key)?;
+    if request_id == 0
+        || minimum_context_slot == 0
+        || addresses.is_empty()
+        || addresses.len() > plan.bounds.maximum_accounts_per_scan
+    {
+        return Err(RpcIndexError::InvalidBound);
+    }
+    addresses.sort();
+    if addresses.iter().any(|address| *address == Address::default()) {
+        return Err(RpcIndexError::InvalidAccount);
+    }
+    let width = addresses.len();
+    addresses.dedup();
+    if addresses.len() != width { return Err(RpcIndexError::InvalidAccount); }
+    let request = PlannedRpcRequest {
+        request_id,
+        release_key: release.key(),
+        program_id: release.program_id,
+        commitment: RpcCommitment::Finalized,
+        purpose: RpcRequestPurpose::ExactAccountSnapshot,
+        body: json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "getMultipleAccounts",
+            "params": [addresses.iter().map(ToString::to_string).collect::<Vec<_>>(), {
+                "commitment": "finalized",
+                "encoding": "base64",
+                "minContextSlot": minimum_context_slot
+            }]
+        }),
+    };
+    Ok(FinalizedExactAccountSnapshotRequestV1 { request, addresses })
 }
 
 pub fn decode_response_result<'a>(
@@ -530,7 +659,9 @@ fn require_notification_envelope(
         RpcRequestPurpose::BlockSubscription => "blockNotification",
         RpcRequestPurpose::SlotSubscription => "slotsUpdatesNotification",
         RpcRequestPurpose::RootSubscription => "rootNotification",
-        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+        RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountSnapshot => {
+            return Err(RpcIndexError::WrongRequest)
+        }
     };
     if notification.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || notification.get("method").and_then(Value::as_str) != Some(method)
@@ -564,7 +695,9 @@ pub fn decode_subscription_registration(
         | RpcRequestPurpose::RootSubscription => {
             require_topology_request(plan, request, request.purpose)?;
         }
-        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+        RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountSnapshot => {
+            return Err(RpcIndexError::WrongRequest)
+        }
     }
     result
         .as_u64()
@@ -584,6 +717,8 @@ pub fn notification_subscription_id(notification: &Value) -> Result<u64> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcObservationSource {
     FinalizedScan,
+    /// Exact finalized address snapshot derived from decoded chain state.
+    FinalizedExactAccountSnapshot { request_id: u64 },
     ProcessedSubscription { subscription_id: u64 },
 }
 
@@ -917,6 +1052,108 @@ pub fn decode_program_scan_result(
         });
     }
     Ok(output)
+}
+
+/// Decode a finalized owner scan and retain its opaque bounded context receipt.
+/// Existing index callers may keep using `decode_program_scan_result`; current
+/// cross-owner semantic planners must retain this receipt.
+pub fn decode_program_scan_snapshot_v1(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    result: &Value,
+    receive_sequence_start: u64,
+) -> Result<FinalizedAccountSnapshotV1> {
+    let accounts = decode_program_scan_result(
+        plan,
+        request,
+        result,
+        receive_sequence_start,
+    )?;
+    let slot = program_scan_context_slot(result)?;
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/program-scan-addresses/v1\0");
+    hash.update((accounts.len() as u64).to_le_bytes());
+    for account in &accounts { hash.update(account.address.to_bytes()); }
+    let receipt = finalized_snapshot_receipt_v1(plan, request, slot, hash.finalize().into())?;
+    Ok(FinalizedAccountSnapshotV1 { receipt, accounts })
+}
+
+/// Decode the exact response to one opaque chain-derived address request.
+/// Every returned row remains finalized, order-bound, and owner-unrestricted;
+/// action-specific decoders enforce the required System/program owner later.
+pub fn decode_finalized_exact_account_snapshot_v1(
+    plan: &RpcIndexPlan,
+    request: &FinalizedExactAccountSnapshotRequestV1,
+    result: &Value,
+    receive_sequence_start: u64,
+) -> Result<FinalizedAccountSnapshotV1> {
+    plan.validate()?;
+    let wire = request.request();
+    if wire.purpose != RpcRequestPurpose::ExactAccountSnapshot
+        || wire.commitment != RpcCommitment::Finalized
+        || wire.request_id == 0
+        || plan.release(&wire.release_key)?.program_id != wire.program_id
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    require_bounded_json(plan, result)?;
+    let slot = result
+        .get("context")
+        .and_then(|value| value.get("slot"))
+        .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    let values = result
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if values.len() != request.addresses.len() {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    let mut total = 0usize;
+    let mut output = Vec::with_capacity(values.len());
+    for (index, (address, value)) in request.addresses.iter().zip(values).enumerate() {
+        if value.is_null() { return Err(RpcIndexError::InvalidAccount); }
+        let data = decode_account_value(value, plan.bounds)?;
+        if data.executable { return Err(RpcIndexError::InvalidAccount); }
+        total = total
+            .checked_add(data.data.len())
+            .ok_or(RpcIndexError::ResponseTooLarge)?;
+        if total > plan.bounds.maximum_total_response_bytes {
+            return Err(RpcIndexError::ResponseTooLarge);
+        }
+        output.push(ObservedRpcAccount {
+            address: *address,
+            owner: data.owner,
+            lamports: data.lamports,
+            executable: data.executable,
+            rent_epoch: data.rent_epoch,
+            data: data.data,
+            provenance: RpcObservationProvenance {
+                cluster_key: plan.cluster.key(),
+                release_key: wire.release_key.clone(),
+                slot,
+                commitment: RpcCommitment::Finalized,
+                source: RpcObservationSource::FinalizedExactAccountSnapshot {
+                    request_id: wire.request_id,
+                },
+                receive_sequence: receive_sequence_start
+                    .checked_add(
+                        u64::try_from(index).map_err(|_| RpcIndexError::InvalidBound)?,
+                    )
+                    .ok_or(RpcIndexError::InvalidBound)?,
+            },
+        });
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/exact-snapshot-addresses/v1\0");
+    hash.update((request.addresses.len() as u64).to_le_bytes());
+    for address in &request.addresses { hash.update(address.to_bytes()); }
+    let receipt = finalized_snapshot_receipt_v1(plan, wire, slot, hash.finalize().into())?;
+    Ok(FinalizedAccountSnapshotV1 {
+        receipt,
+        accounts: output,
+    })
 }
 
 pub fn program_scan_context_slot(result: &Value) -> Result<u64> {

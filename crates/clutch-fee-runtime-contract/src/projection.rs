@@ -14,7 +14,8 @@ use crate::allocation::{
 };
 use crate::intent::{OwnerFeeTransitionIntentV1, RecipientAllocationIntentV1};
 use crate::selected::{
-    AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
+    AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1,
+    SelectedCompositeFeeAccess, SelectedCompositeFeeV1,
 };
 use crate::{live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -815,8 +816,8 @@ pub fn project_pre_row_owner_fee_v3(
 /// owner/order cardinality and selected-fee identities; it seals and returns
 /// the complete expectation without lowering through V3. The caller must
 /// separately authenticate the SettlementRoot and derive the supplied row PDA.
-pub fn project_pre_row_owner_fee_v4(
-    selected: &SelectedCompositeFeeV1,
+pub fn project_pre_row_owner_fee_v4<S: SelectedCompositeFeeAccess + ?Sized>(
+    selected: &S,
     owner_settlement_account: Id,
     basis: OwnerSettlementExpectationBasisV4,
     snapshot: AuthenticatedPayerAllocationSnapshotV1,
