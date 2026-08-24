@@ -529,6 +529,20 @@ pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG: u8 = 0xb6;
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION: u8 = 1;
 /// Largest exact active selected-candidate adjacency account body.
 pub const GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES: usize = 2_448;
+/// Compact General fee-retirement and durable-terminal account family.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
+/// Streaming owner-finalization accumulator version.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
+/// Durable candidate-wide closure-manifest version.
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
+/// Durable candidate-wide fee-terminal version.
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
+/// Exact rent-owned streaming accumulator bytes.
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 596;
+/// Exact rent-owned durable closure-manifest bytes.
+pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 276;
+/// Exact rent-owned durable fee-terminal bytes.
+pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_BYTES: usize = 596;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
@@ -552,6 +566,8 @@ const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 0xb9);
+const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 185);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1668,6 +1684,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-indexed-settlement-root-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-retirement-accumulator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-closure-manifest-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-terminal-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
