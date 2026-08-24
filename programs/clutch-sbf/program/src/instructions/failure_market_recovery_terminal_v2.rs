@@ -11,7 +11,7 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_interval_v2::{
     authenticate_failure_market_interval_accounts_v2, AuthenticatedFailureMarketIntervalAccountsV2,
@@ -161,7 +161,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
     recovery_account: &AccountInfo<'a>,
     recovery_refund_owner: &AccountInfo<'a>,
     neutral_sink: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     archive: FailureMarketIntervalArchivePostwriteV3,
     archive_runtime: AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
@@ -180,7 +180,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         neutral_sink.clone(),
     ])?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(live_admission == admission, ClutchError::MismatchedState)?;
     let live_runtime = authenticate_failure_market_runtime_root_v1(
         program_id,
@@ -423,7 +423,7 @@ fn authenticate_failure_recovery_terminal_prestate_v2(
     recovery_account: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     terminal: FailureMarketRecoveryTerminalReceiptV2,
 ) -> Outcome<AuthenticatedFailureMarketRecoveryLivenessTerminalPrestateV2> {
     require(

@@ -10,7 +10,7 @@
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_interval_v2::{
     authenticate_failure_market_recovery_quote_v1,
@@ -66,7 +66,7 @@ pub(crate) struct AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     registry: AuthenticatedRegistryCapabilityV3,
     bundle: AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
     funding_quote: AuthenticatedProductArtifactV1<SeriesFundingQuoteV4>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
@@ -97,7 +97,7 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     ) -> &AuthenticatedProductArtifactV1<SeriesFundingQuoteV4> {
         &self.funding_quote
     }
-    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV2 {
+    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV3 {
         self.admission
     }
     pub(crate) const fn runtime(&self) -> AuthenticatedFailureMarketRuntimeRootV1 {
@@ -512,7 +512,7 @@ pub(crate) fn authenticate_failure_market_execution_v2<'root, 'link>(
     root_output: &'root mut MarketLifecycleRootAccountV1,
     link_output: &'link mut SeriesMarketLinkAccountV1,
 ) -> Outcome<AuthenticatedFailureMarketExecutionV2<'root, 'link>> {
-    let admission = authenticate_failure_market_root_v2(program_id, admission_account, false)?;
+    let admission = authenticate_failure_market_root_v3(program_id, admission_account, false)?;
     let policy = admission.state().binding().facts();
     let root = authenticate_market_lifecycle_root_v1(
         program_id,

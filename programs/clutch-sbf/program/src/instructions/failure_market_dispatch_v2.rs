@@ -15,9 +15,7 @@ use crate::instructions::failure_market_action10_current::process_begin_failure_
 use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
 use crate::instructions::failure_market_action13_current::process_archive_failure_market_session_v3;
-use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
-use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -26,10 +24,9 @@ use solana_pubkey::Pubkey;
 pub const FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2: usize = 8;
 /// Canonical Product Foundation GraphV3 preimage width (47 exact slots).
 pub const FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3: usize = 1_576;
-/// Begin/archive carry only the two immutable Failure content preimages.
-pub const FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2: usize =
-    FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
-        + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
+/// Begin/archive need no caller payload: RootV3 retains both immutable
+/// preimages required to reopen the interval pair.
+pub const FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2: usize = 0;
 /// Paid advance additionally carries one padded coordinate request.
 pub const FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2: usize =
     FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2 + FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2;
@@ -333,25 +330,15 @@ pub const ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
 /// Current caller-neutral payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureMarketActionPayloadV2<'a> {
-    Begin {
-        recovery_quote_schedule: &'a [u8],
-        interval_funding_preimage: &'a [u8],
-    },
+    Begin,
     Advance {
         requested_coordinates: u16,
-        recovery_quote_schedule: &'a [u8],
-        interval_funding_preimage: &'a [u8],
     },
     Resolve {
-        recovery_quote_schedule: &'a [u8],
-        interval_funding_preimage: &'a [u8],
         replay_funding_preimage: &'a [u8],
         foundation_account_graph: &'a [u8],
     },
-    Archive {
-        recovery_quote_schedule: &'a [u8],
-        interval_funding_preimage: &'a [u8],
-    },
+    Archive,
 }
 
 /// Return the exact current account contract; legacy actions have none.
@@ -382,18 +369,13 @@ pub fn decode_payload_v2(
     action: RecoveryAction,
     payload: &[u8],
 ) -> Outcome<FailureMarketActionPayloadV2<'_>> {
-    let quote_end = FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
-    let interval_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
     match action {
         RecoveryAction::BeginIntervalConsensus => {
             require(
                 payload.len() == FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2,
                 ClutchError::NonCanonical,
             )?;
-            Ok(FailureMarketActionPayloadV2::Begin {
-                recovery_quote_schedule: &payload[..quote_end],
-                interval_funding_preimage: &payload[quote_end..interval_end],
-            })
+            Ok(FailureMarketActionPayloadV2::Begin)
         }
         RecoveryAction::AdvanceIntervalConsensus => {
             require(
@@ -408,13 +390,8 @@ pub fn decode_payload_v2(
             )?;
             let requested_coordinates = u16::from_le_bytes([payload[0], payload[1]]);
             require(requested_coordinates != 0, ClutchError::NonCanonical)?;
-            let quote_start = FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2;
-            let quote_end = quote_start + FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
-            let interval_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
             Ok(FailureMarketActionPayloadV2::Advance {
                 requested_coordinates,
-                recovery_quote_schedule: &payload[quote_start..quote_end],
-                interval_funding_preimage: &payload[quote_end..interval_end],
             })
         }
         RecoveryAction::ResolveIntervalConsensus => {
@@ -422,11 +399,9 @@ pub fn decode_payload_v2(
                 payload.len() == FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2,
                 ClutchError::NonCanonical,
             )?;
-            let replay_end = interval_end + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
+            let replay_end = FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
             Ok(FailureMarketActionPayloadV2::Resolve {
-                recovery_quote_schedule: &payload[..quote_end],
-                interval_funding_preimage: &payload[quote_end..interval_end],
-                replay_funding_preimage: &payload[interval_end..replay_end],
+                replay_funding_preimage: &payload[..replay_end],
                 foundation_account_graph: &payload[replay_end..],
             })
         }
@@ -435,10 +410,7 @@ pub fn decode_payload_v2(
                 payload.len() == FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2,
                 ClutchError::NonCanonical,
             )?;
-            Ok(FailureMarketActionPayloadV2::Archive {
-                recovery_quote_schedule: &payload[..quote_end],
-                interval_funding_preimage: &payload[quote_end..interval_end],
-            })
+            Ok(FailureMarketActionPayloadV2::Archive)
         }
         RecoveryAction::InitializeFailureRoot
         | RecoveryAction::TriggerSourceFailure
@@ -605,11 +577,11 @@ mod adversarial_contract_tests {
         let session = [1_u8; FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2];
         assert!(matches!(
             decode_payload_v2(RecoveryAction::BeginIntervalConsensus, &session),
-            Ok(FailureMarketActionPayloadV2::Begin { .. })
+            Ok(FailureMarketActionPayloadV2::Begin)
         ));
         assert!(matches!(
             decode_payload_v2(RecoveryAction::CloseIntervalConsensusWork, &session),
-            Ok(FailureMarketActionPayloadV2::Archive { .. })
+            Ok(FailureMarketActionPayloadV2::Archive)
         ));
         let resolve = [1_u8; FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2];
         assert!(matches!(

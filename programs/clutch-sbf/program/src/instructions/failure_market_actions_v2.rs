@@ -4,6 +4,7 @@
 //! Each handler starts from the exact checked wire/account contract and then
 //! hostile-reopens every semantic owner. This module contains no fallback DTO
 //! path and never imports the withdrawn occurrence-scoped ExternalV2 runtime.
+#![cfg(any())]
 
 use std::boxed::Box;
 
