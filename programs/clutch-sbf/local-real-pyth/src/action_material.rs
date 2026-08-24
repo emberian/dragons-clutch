@@ -134,6 +134,7 @@ pub struct CanonicalActionMaterialV1 {
     capability_profile_id: [u8; 32],
     coordinate: CanonicalIntentCoordinate,
     driver_account: Address,
+    driver_account_slot: u64,
     cursor: ResumableWorkflowCursor,
     freshness: ActionFreshnessBoundaryV1,
     fee_payer: Address,
@@ -166,6 +167,11 @@ impl CanonicalActionMaterialV1 {
     #[must_use]
     pub const fn driver_account(&self) -> Address {
         self.driver_account
+    }
+
+    #[must_use]
+    pub const fn driver_account_slot(&self) -> u64 {
+        self.driver_account_slot
     }
 
     #[must_use]
@@ -217,6 +223,7 @@ impl CanonicalActionMaterialV1 {
             && self.capability_profile_id == release.capability_profile_id
             && self.coordinate == coordinate
             && self.driver_account == selection.account
+            && self.driver_account_slot == selection.account_slot
             && self.cursor == selection.cursor
             && selection.release_key == self.release_key
             && selection.effective_commitment == crate::rpc_index::RpcCommitment::Finalized
@@ -330,6 +337,7 @@ pub fn construct_source_action_material_v1(
         release.capability_profile_id,
         coordinate,
         selection.account,
+        selection.account_slot,
         selection.cursor,
         freshness,
         builder.payer(),
@@ -342,6 +350,7 @@ pub fn construct_source_action_material_v1(
         capability_profile_id: release.capability_profile_id,
         coordinate,
         driver_account: selection.account,
+        driver_account_slot: selection.account_slot,
         cursor: selection.cursor,
         freshness,
         fee_payer: builder.payer(),
@@ -456,6 +465,7 @@ fn action_material_id(
     capability_profile_id: [u8; 32],
     coordinate: CanonicalIntentCoordinate,
     driver_account: Address,
+    driver_account_slot: u64,
     cursor: ResumableWorkflowCursor,
     freshness: ActionFreshnessBoundaryV1,
     fee_payer: Address,
@@ -473,6 +483,7 @@ fn action_material_id(
         coordinate.local_action,
     ]);
     hash.update(driver_account.to_bytes());
+    hash.update(driver_account_slot.to_le_bytes());
     hash.update(cursor.workflow_id);
     hash.update([workflow_lane_byte(cursor.lane)]);
     hash.update(cursor.generation.to_le_bytes());
@@ -721,6 +732,7 @@ mod tests {
             [2; 32],
             coordinate,
             address(3),
+            10,
             cursor(),
             ActionFreshnessBoundaryV1 {
                 observed_slot: 10,
@@ -739,6 +751,7 @@ mod tests {
             [2; 32],
             coordinate,
             address(3),
+            10,
             cursor(),
             ActionFreshnessBoundaryV1 {
                 observed_slot: 10,

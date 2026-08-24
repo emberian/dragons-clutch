@@ -898,6 +898,7 @@ fn callable_action_verdict_json(
             "draftId": hex32(material.draft_id()),
             "constructionSchema": transaction.schema,
             "driverAccount": material.driver_account().to_string(),
+            "driverAccountSlot": material.driver_account_slot().to_string(),
             "releaseManifestSha256": hex32(material.release_manifest_sha256()),
             "capabilityProfileId": hex32(material.capability_profile_id()),
             "feePayer": material.fee_payer().to_string(),
