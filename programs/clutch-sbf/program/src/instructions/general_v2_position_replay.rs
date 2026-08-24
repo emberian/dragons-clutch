@@ -81,8 +81,8 @@ pub(crate) fn authenticate_current_general_position_replay_v1(
     )
 }
 
-/// Authenticate the current ordinary-General Position/Replay pair under the
-/// sole live MarketBinding V2 account and derive the body-owned next ordinal.
+/// Authenticate a historical V2 ordinary-General Position/Replay pair and
+/// derive the body-owned next ordinal for decode-only compatibility paths.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_current_general_position_replay_v2(
     program_id: &Pubkey,
