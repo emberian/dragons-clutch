@@ -221,6 +221,140 @@ impl<const N: usize> MarketStateV1<N> {
             .map_err(|error| Error::InvalidLedger { error })
     }
 
+    /// Deposit collateral and issue one complete set while the Market is open.
+    ///
+    /// The caller remains responsible for performing the corresponding real
+    /// collateral and claim-token transfers in one atomic adapter instruction.
+    pub fn split_complete_set(&mut self, quantity: u64) -> Result<()> {
+        if self.root.phase() != RootPhase::Open {
+            return Err(Error::InvalidLedger {
+                error: dclutch_kernel::Error::InvalidPhase,
+            });
+        }
+        let mut candidate = *self;
+        let mut ledger = candidate.to_kernel_ledger()?;
+        ledger
+            .split_complete_set(quantity)
+            .map_err(|error| Error::InvalidLedger { error })?;
+        candidate.replace_economic_state(ledger);
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Burn one complete set and release its exact collateral while open.
+    ///
+    /// The returned state transition does not itself perform token or
+    /// collateral transfers; a composing adapter must keep those transfers in
+    /// the same atomic instruction.
+    pub fn merge_complete_set(&mut self, quantity: u64) -> Result<()> {
+        if self.root.phase() != RootPhase::Open {
+            return Err(Error::InvalidLedger {
+                error: dclutch_kernel::Error::InvalidPhase,
+            });
+        }
+        let mut candidate = *self;
+        let mut ledger = candidate.to_kernel_ledger()?;
+        ledger
+            .merge_complete_set(quantity)
+            .map_err(|error| Error::InvalidLedger { error })?;
+        candidate.replace_economic_state(ledger);
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Burn resolved claims and return their exact collateral payout.
+    ///
+    /// Redemption remains available while retirement is in progress. The
+    /// composing adapter must perform the matching claim burn and collateral
+    /// transfer atomically with persistence of this transition.
+    pub fn redeem_outcome(&mut self, outcome: usize, quantity: u64) -> Result<u64> {
+        if !matches!(self.root.phase(), RootPhase::Resolved | RootPhase::Retiring) {
+            return Err(Error::InvalidLedger {
+                error: dclutch_kernel::Error::InvalidPhase,
+            });
+        }
+        let mut candidate = *self;
+        let mut ledger = candidate.to_kernel_ledger()?;
+        let payout = ledger
+            .redeem(outcome, quantity)
+            .map_err(|error| Error::InvalidLedger { error })?;
+        candidate.replace_economic_state(ledger);
+        candidate.validate()?;
+        *self = candidate;
+        Ok(payout)
+    }
+
+    /// Register one direct physical child under generation and count guards.
+    pub fn register_direct_child(
+        &mut self,
+        expected_generation: u64,
+        expected_prior_count: u64,
+    ) -> Result<()> {
+        let mut candidate = *self;
+        candidate
+            .root
+            .register_child(expected_generation, expected_prior_count)
+            .map_err(|error| Error::InvalidMarketRoot { error })?;
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Retire one direct physical child under generation and count guards.
+    pub fn retire_direct_child(
+        &mut self,
+        expected_generation: u64,
+        expected_prior_count: u64,
+    ) -> Result<()> {
+        let mut candidate = *self;
+        candidate
+            .root
+            .retire_child(expected_generation, expected_prior_count)
+            .map_err(|error| Error::InvalidMarketRoot { error })?;
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Resolve an open Market, retain its canonical receipt, and retire its Fund child.
+    ///
+    /// `expected_prior_child_count` is the exact count before consuming that
+    /// one Fund obligation. Other live direct children remain registered. A
+    /// composing adapter must authenticate the concrete Fund account before
+    /// invoking this semantic transition.
+    pub fn resolve_with_receipt(
+        &mut self,
+        expected_generation: u64,
+        expected_prior_child_count: u64,
+        receipt: ResolutionReceiptV1,
+    ) -> Result<()> {
+        if receipt.kind() == ReceiptKind::Empty {
+            return Err(Error::PhaseReceiptMismatch);
+        }
+        validate_receipt_policy(&receipt, &self.policy)?;
+
+        let mut candidate = *self;
+        let mut ledger = candidate.to_kernel_ledger()?;
+        ledger
+            .resolve(usize::from(receipt.winner()))
+            .map_err(|error| Error::InvalidLedger { error })?;
+        candidate
+            .root
+            .transition_phase(expected_generation, RootPhase::Resolved)
+            .map_err(|error| Error::InvalidMarketRoot { error })?;
+        candidate
+            .root
+            .retire_child(expected_generation, expected_prior_child_count)
+            .map_err(|error| Error::InvalidMarketRoot { error })?;
+        candidate.receipt = receipt;
+        candidate.replace_economic_state(ledger);
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
     /// Return the embedded Market root.
     pub const fn root(&self) -> MarketRoot {
         self.root
@@ -249,6 +383,12 @@ impl<const N: usize> MarketStateV1<N> {
     /// Borrow the inline canonical resolution receipt.
     pub const fn receipt(&self) -> &ResolutionReceiptV1 {
         &self.receipt
+    }
+
+    fn replace_economic_state(&mut self, ledger: CategoricalLedger<N>) {
+        let (hoard_atoms, supply, _) = ledger.into_parts();
+        self.hoard_atoms = hoard_atoms;
+        self.supply = supply;
     }
 }
 
@@ -319,7 +459,7 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_core_contract::{CapabilitySet, ContentId, MarketIdentity};
+    use dclutch_core_contract::{CapabilitySet, ContentId, Error as RootError, MarketIdentity};
     use dclutch_kernel::{Error as LedgerError, MAX_OUTCOMES};
 
     use crate::{
@@ -367,6 +507,19 @@ mod tests {
                 root.transition_phase(7, RootPhase::Retired)
                     .map_err(|error| Error::InvalidMarketRoot { error })?;
             }
+        }
+        Ok(root)
+    }
+
+    fn open_root_with_children(child_count: u64) -> Result<MarketRoot> {
+        let mut root = root(RootPhase::Open)?;
+        let mut prior_count = 0u64;
+        while prior_count < child_count {
+            root.register_child(7, prior_count)
+                .map_err(|error| Error::InvalidMarketRoot { error })?;
+            prior_count = prior_count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
         }
         Ok(root)
     }
@@ -437,6 +590,17 @@ mod tests {
         state.encode(exact)?;
         assert_eq!(MarketStateV1::<N>::decode(exact), Ok(state));
         Ok(())
+    }
+
+    fn open_market<const N: usize>(child_count: u64) -> Result<MarketStateV1<N>> {
+        MarketStateV1::new(
+            open_root_with_children(child_count)?,
+            policy::<N>()?,
+            feed_profile()?,
+            0,
+            [0; N],
+            empty::<N>()?,
+        )
     }
 
     #[test]
@@ -822,6 +986,281 @@ mod tests {
             MarketStateV1::<17>::encoded_len(),
             Err(Error::InvalidOutcomeCount)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn owned_economic_transitions_preserve_conservation_and_return_payouts() -> Result<()> {
+        let mut market = open_market::<3>(4)?;
+        market.split_complete_set(10)?;
+        assert_eq!(market.hoard_atoms(), 10);
+        assert_eq!(market.supply(), &[10, 10, 10]);
+        market.merge_complete_set(3)?;
+        assert_eq!(market.hoard_atoms(), 7);
+        assert_eq!(market.supply(), &[7, 7, 7]);
+
+        let receipt = price_receipt::<3>(1)?;
+        market.resolve_with_receipt(7, 4, receipt)?;
+        assert_eq!(market.root().phase(), RootPhase::Resolved);
+        assert_eq!(market.root().outstanding_children(), 3);
+        assert_eq!(market.receipt(), &receipt);
+
+        assert_eq!(market.redeem_outcome(0, 7), Ok(0));
+        assert_eq!(market.hoard_atoms(), 7);
+        assert_eq!(market.supply(), &[0, 7, 7]);
+        assert_eq!(market.redeem_outcome(1, 7), Ok(7));
+        assert_eq!(market.hoard_atoms(), 0);
+        assert_eq!(market.supply(), &[0, 0, 7]);
+        assert_eq!(market.redeem_outcome(2, 7), Ok(0));
+        assert_eq!(market.supply(), &[0, 0, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn failure_resolution_retires_only_fund_and_preserves_other_children() -> Result<()> {
+        let mut market = open_market::<3>(5)?;
+        market.split_complete_set(9)?;
+        let receipt = ResolutionReceiptV1::failure(
+            2,
+            3,
+            Clock {
+                slot: 41,
+                unix_timestamp: 117,
+            },
+        )?;
+        market.resolve_with_receipt(7, 5, receipt)?;
+        assert_eq!(market.root().outstanding_children(), 4);
+        assert_eq!(market.receipt(), &receipt);
+        assert_eq!(market.redeem_outcome(2, 9), Ok(9));
+        assert_eq!(market.hoard_atoms(), 0);
+        assert_eq!(market.supply(), &[9, 9, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_refusals_are_atomic() -> Result<()> {
+        let terminal = price_receipt::<2>(0)?;
+        let mut resolved = MarketStateV1::new(
+            root(RootPhase::Resolved)?,
+            policy::<2>()?,
+            feed_profile()?,
+            2,
+            [2, 2],
+            terminal,
+        )?;
+        let before = resolved;
+        assert_eq!(
+            resolved.split_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidPhase
+            })
+        );
+        assert_eq!(resolved, before);
+        assert_eq!(
+            resolved.merge_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidPhase
+            })
+        );
+        assert_eq!(resolved, before);
+
+        let mut open = open_market::<2>(1)?;
+        open.split_complete_set(2)?;
+        let before = open;
+        assert_eq!(
+            open.redeem_outcome(0, 1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidPhase
+            })
+        );
+        assert_eq!(open, before);
+
+        let mut retiring = MarketStateV1::new(
+            root(RootPhase::Retiring)?,
+            policy::<2>()?,
+            feed_profile()?,
+            0,
+            [0, 0],
+            empty::<2>()?,
+        )?;
+        let before = retiring;
+        assert_eq!(
+            retiring.split_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidPhase
+            })
+        );
+        assert_eq!(retiring, before);
+        assert_eq!(
+            retiring.merge_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidPhase
+            })
+        );
+        assert_eq!(retiring, before);
+
+        let mut retiring_terminal = MarketStateV1::new(
+            root(RootPhase::Retiring)?,
+            policy::<2>()?,
+            feed_profile()?,
+            2,
+            [2, 2],
+            terminal,
+        )?;
+        assert_eq!(retiring_terminal.redeem_outcome(0, 2), Ok(2));
+        assert_eq!(retiring_terminal.hoard_atoms(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_and_supply_refusals_are_atomic() -> Result<()> {
+        let mut overflow = MarketStateV1::new(
+            root(RootPhase::Open)?,
+            policy::<2>()?,
+            feed_profile()?,
+            u64::MAX,
+            [u64::MAX, u64::MAX],
+            empty::<2>()?,
+        )?;
+        let before = overflow;
+        assert_eq!(
+            overflow.split_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::ArithmeticOverflow
+            })
+        );
+        assert_eq!(overflow, before);
+
+        let mut empty_market = open_market::<2>(0)?;
+        let before = empty_market;
+        assert_eq!(
+            empty_market.merge_complete_set(1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InsufficientSupply
+            })
+        );
+        assert_eq!(empty_market, before);
+
+        let mut resolved = open_market::<2>(1)?;
+        resolved.split_complete_set(3)?;
+        resolved.resolve_with_receipt(7, 1, price_receipt::<2>(0)?)?;
+        let before = resolved;
+        assert_eq!(
+            resolved.redeem_outcome(0, 4),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InsufficientSupply
+            })
+        );
+        assert_eq!(resolved, before);
+        assert_eq!(
+            resolved.redeem_outcome(2, 1),
+            Err(Error::InvalidLedger {
+                error: LedgerError::InvalidOutcome
+            })
+        );
+        assert_eq!(resolved, before);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_child_guards_and_count_boundaries_are_atomic() -> Result<()> {
+        let mut market = open_market::<2>(0)?;
+        market.register_direct_child(7, 0)?;
+        assert_eq!(market.root().outstanding_children(), 1);
+        market.retire_direct_child(7, 1)?;
+        assert_eq!(market.root().outstanding_children(), 0);
+
+        let before = market;
+        assert_eq!(
+            market.register_direct_child(8, 0),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::GenerationMismatch
+            })
+        );
+        assert_eq!(market, before);
+        assert_eq!(
+            market.register_direct_child(7, 1),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::ChildCountMismatch
+            })
+        );
+        assert_eq!(market, before);
+        assert_eq!(
+            market.retire_direct_child(7, 0),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::ChildCountUnderflow
+            })
+        );
+        assert_eq!(market, before);
+        Ok(())
+    }
+
+    #[test]
+    fn resolution_receipts_and_replay_guards_refuse_atomically() -> Result<()> {
+        let valid_receipt = price_receipt::<3>(1)?;
+        let mut stale_generation = open_market::<3>(2)?;
+        stale_generation.split_complete_set(4)?;
+        let before = stale_generation;
+        assert_eq!(
+            stale_generation.resolve_with_receipt(8, 2, valid_receipt),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::GenerationMismatch
+            })
+        );
+        assert_eq!(stale_generation, before);
+
+        let mut stale_count = open_market::<3>(2)?;
+        stale_count.split_complete_set(4)?;
+        let before = stale_count;
+        assert_eq!(
+            stale_count.resolve_with_receipt(7, 1, valid_receipt),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::ChildCountMismatch
+            })
+        );
+        assert_eq!(stale_count, before);
+
+        let mut no_fund = open_market::<3>(0)?;
+        let before = no_fund;
+        assert_eq!(
+            no_fund.resolve_with_receipt(7, 0, valid_receipt),
+            Err(Error::InvalidMarketRoot {
+                error: RootError::ChildCountUnderflow
+            })
+        );
+        assert_eq!(no_fund, before);
+
+        let mut empty_receipt_market = open_market::<3>(1)?;
+        let before = empty_receipt_market;
+        assert_eq!(
+            empty_receipt_market.resolve_with_receipt(7, 1, empty::<3>()?),
+            Err(Error::PhaseReceiptMismatch)
+        );
+        assert_eq!(empty_receipt_market, before);
+
+        let mut wrong_price_winner = open_market::<3>(1)?;
+        let before = wrong_price_winner;
+        assert_eq!(
+            wrong_price_winner.resolve_with_receipt(7, 1, price_receipt::<3>(2)?),
+            Err(Error::ReceiptPolicyWinnerMismatch)
+        );
+        assert_eq!(wrong_price_winner, before);
+
+        let wrong_failure = ResolutionReceiptV1::failure(
+            0,
+            3,
+            Clock {
+                slot: 41,
+                unix_timestamp: 117,
+            },
+        )?;
+        let mut wrong_failure_winner = open_market::<3>(1)?;
+        let before = wrong_failure_winner;
+        assert_eq!(
+            wrong_failure_winner.resolve_with_receipt(7, 1, wrong_failure),
+            Err(Error::ReceiptPolicyWinnerMismatch)
+        );
+        assert_eq!(wrong_failure_winner, before);
         Ok(())
     }
 }
