@@ -613,6 +613,7 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-rent 4.3.0",
+ "solana-sdk-ids",
  "solana-sha256-hasher",
  "solana-signer",
  "solana-system-interface 3.2.0",

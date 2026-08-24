@@ -93,6 +93,8 @@ pub enum ProtocolFlow {
     GeneralV2Candidate,
     GeneralV2Settlement,
     GeneralV2Fees,
+    /// Immutable Realm revenue founding and terminal record close.
+    RealmRevenue,
     /// Current Direct `80/1` successor family; every action remains disabled.
     DirectMarketV1,
     DirectEggSettlement,
@@ -230,6 +232,11 @@ pub enum OwnedWireContract {
     MainSuccessorRequest {
         binding: SuccessorRegistryBinding,
         sequence: u64,
+    },
+    /// Exact release-enabled RealmRevenueV2 replay request. Both actions use
+    /// sequence zero; the semantic owner fixes payload and account roles.
+    RealmRevenueRequestV1 {
+        binding: SuccessorRegistryBinding,
     },
     /// Exact replay request for the allocated-but-disabled Direct `80/1`
     /// family. This remains distinct from an enabled Source request so a
@@ -497,6 +504,53 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble one enabled RealmRevenueV2 request from the exact semantic
+    /// payload and ordered account contract. Only the closed action-material
+    /// constructor calls this after checking the coordinate in the indexed
+    /// release; no admission boolean is accepted here.
+    pub(crate) fn enabled_realm_revenue_request_v1(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        action: clutch_solana_layout::registry::RealmRevenueV2Action,
+        payload: &[u8],
+    ) -> Result<Self> {
+        let central_action = ExtensionAction::RealmRevenueV2(action);
+        let family = central_action.family();
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence: 0,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::RealmRevenue,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::RealmRevenueRequestV1 { binding },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble a production-inert structured-claim successor whose local
     /// action codec remains owned outside the central action registry. General
     /// V2 and Source/Series callers must use
@@ -673,6 +727,7 @@ impl OwnedInstructionDraft {
                         family == ExtensionFamily::SourceSeries
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
+                    ProtocolFlow::RealmRevenue => family == ExtensionFamily::RealmRevenueV2,
                     ProtocolFlow::CollateralCustodyV3
                     | ProtocolFlow::DirectMarketV1
                     | ProtocolFlow::Liveness => false,
@@ -723,6 +778,55 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::RealmRevenueRequestV1 { binding } => {
+                use clutch_solana_layout::registry::RealmRevenueV2Action;
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let ExtensionAction::RealmRevenueV2(action) = request.envelope.action else {
+                    return Err(ConstructionError::WrongFlow);
+                };
+                let exact_roles = match action {
+                    RealmRevenueV2Action::InitializeFeeBearingRealmV2 => {
+                        self.accounts.len() == 6
+                            && self.accounts[0].is_signer
+                            && self.accounts[0].is_writable
+                            && !self.accounts[1].is_signer
+                            && self.accounts[1].is_writable
+                            && !self.accounts[2].is_signer
+                            && !self.accounts[2].is_writable
+                            && !self.accounts[3].is_signer
+                            && self.accounts[3].is_writable
+                            && !self.accounts[4].is_signer
+                            && !self.accounts[4].is_writable
+                            && !self.accounts[5].is_signer
+                            && !self.accounts[5].is_writable
+                            && self.required_signers.as_slice() == [self.accounts[0].pubkey]
+                    }
+                    RealmRevenueV2Action::CloseRevenuePolicyRecordV2 => {
+                        self.accounts.len() == 4
+                            && self.accounts.iter().all(|account| !account.is_signer)
+                            && !self.accounts[0].is_writable
+                            && self.accounts[1].is_writable
+                            && self.accounts[2].is_writable
+                            && self.accounts[3].is_writable
+                            && self.required_signers.is_empty()
+                    }
+                };
+                if request.sequence != 0
+                    || request.envelope.family != ExtensionFamily::RealmRevenueV2
+                    || binding.family != ExtensionFamily::RealmRevenueV2
+                    || request.envelope.action.local_tag() != binding.local_action
+                    || self.registry_binding != Some(binding)
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || self.flow != ProtocolFlow::RealmRevenue
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || binding.central_action != Some(ExtensionAction::RealmRevenueV2(action))
+                    || !exact_roles
+                {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
             }
             OwnedWireContract::DisabledDirectMarketRequestV1 { binding, sequence } => {
                 let request = ExtensionRequest::decode(&self.data)
@@ -934,6 +1038,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::RealmRevenueRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program

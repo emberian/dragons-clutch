@@ -935,6 +935,7 @@ pub struct PlannedWorkflowNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
+    Revenue(clutch_solana_layout::registry::RealmRevenueV2Action),
     SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
@@ -2411,6 +2412,11 @@ fn construct(
             // No checked release currently admits a General successor. Keep
             // historical observation/parser types for hostile read-only
             // inspection, but do not turn any of them into transaction bytes.
+            return Err(WorkflowGraphError::NotReady);
+        }
+        CanonicalActionCoordinate::Revenue(_) => {
+            // Revenue uses its release-bound replay constructor directly in
+            // `action_material`; generic workflow payloads never shape it.
             return Err(WorkflowGraphError::NotReady);
         }
         CanonicalActionCoordinate::Series(action) => {

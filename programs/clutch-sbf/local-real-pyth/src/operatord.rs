@@ -18,9 +18,11 @@ use crate::rpc_index::{
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{IntegerUnit, ProtocolFlow, RuntimeAdmission};
 use clutch_solana_layout::registry::{
-    GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
+    GeneralV2Action, RealmRevenueV2Action, RecurringSeriesAction, RecoveryAction,
+    SourceSeriesAction,
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
-    RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
+    REALM_REVENUE_V2_FAMILY_TAG, REALM_REVENUE_V2_FAMILY_VERSION, RECOVERY_FAMILY_VERSION,
+    SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
 use clutch_solana_layout::source_series::account_contract_v2;
 use serde_json::{json, Value};
@@ -1030,6 +1032,20 @@ fn coordinate_description(
     {
         return ("general", "general-v2-action", None);
     }
+    if coordinate.family_tag == REALM_REVENUE_V2_FAMILY_TAG
+        && coordinate.family_version == REALM_REVENUE_V2_FAMILY_VERSION
+    {
+        let action = match RealmRevenueV2Action::from_tag(coordinate.local_action) {
+            Some(RealmRevenueV2Action::InitializeFeeBearingRealmV2) => {
+                "initialize-fee-bearing-realm-v2"
+            }
+            Some(RealmRevenueV2Action::CloseRevenuePolicyRecordV2) => {
+                "close-revenue-policy-record-v2"
+            }
+            None => "unknown-realm-revenue-action",
+        };
+        return ("realm-revenue", action, None);
+    }
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
     {
@@ -1046,6 +1062,8 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
         ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
         ProtocolFlow::GeneralV2Fees => "general-v2-fees",
+        ProtocolFlow::RealmRevenue => "realm-revenue",
+        ProtocolFlow::DirectMarketV1 => "direct-market-v1",
         ProtocolFlow::DirectEggSettlement => "direct-egg-settlement",
         ProtocolFlow::Liveness => "liveness",
         ProtocolFlow::ProductSeries => "product-series",
