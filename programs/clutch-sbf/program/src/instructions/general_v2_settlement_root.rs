@@ -101,6 +101,18 @@ impl AuthenticatedGeneralSettlementRootV1 {
         matches!(&self.body, AuthenticatedGeneralSettlementRootBodyV1::Indexed(_))
     }
 
+    /// Full retained-Feed byte identity carried only by the indexed root.
+    pub fn selected_feed_data_id(&self) -> Outcome<Id32> {
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
+                Ok(root.selected_feed_data_id())
+            }
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(_) => {
+                Err(Refusal::Adapter(ClutchError::MismatchedState))
+            }
+        }
+    }
+
     /// Version-specific full root body ID. Indexed roots never collapse to
     /// the legacy base transcript.
     pub fn data_id<B: Sha256BackendV1>(&self, backend: &B) -> Outcome<Id32> {

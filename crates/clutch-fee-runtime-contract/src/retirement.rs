@@ -10,6 +10,7 @@ use crate::projection::{
     CertifiedRecipientAllocationV2, SelectedOwnerFeeBookHashV1, SelectedOwnerFeeBookV1,
 };
 use crate::selected::SelectedCompositeFeeV1;
+use crate::intent::RecipientAllocationIntentV1;
 use crate::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, CandidateFeeAccountClosuresV1,
     CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1,
@@ -29,8 +30,11 @@ pub const FEE_CLOSURE_SET_DATA_ID_DOMAIN_V1: &[u8] =
 /// Commitment domain for the accumulator's terminal authority receipt.
 pub const FEE_RETIREMENT_AUTHORITY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fee-retirement-authority/v1\0";
+/// Commitment domain for ordered ordinary-Position fee credits.
+pub const FEE_VALUE_DISPOSITION_FOLD_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fee-value-disposition/v1\0";
 /// Exact semantic body width of the streaming accumulator.
-pub const FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES: usize = 544;
+pub const FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES: usize = 656;
 /// Canonical semantic discriminator of the streaming accumulator.
 pub const FEE_RETIREMENT_ACCUMULATOR_MAGIC_V1: [u8; 8] = *b"DCFEEACC";
 /// Canonical semantic body version.
@@ -54,29 +58,102 @@ pub struct FeeRetirementAccumulatorV1 {
     recipient_allocation: Id,
     recipient_allocation_data_id: Id,
     treasury_ledger: Id,
+    settlement_cash_pot: Id,
+    treasury_position: Id,
     owner_fee_book_data_id: Id,
     owner_order_set_digest: Id,
     expected_owner_row_fold: Id,
     observed_owner_row_fold: Id,
     owner_closure_fold: Id,
+    value_disposition_fold: Id,
     prior_owner: Id,
     expected_owner_count: u8,
     processed_owner_count: u8,
+    expected_maker_count: u8,
+    processed_maker_count: u8,
+    treasury_distributed: bool,
     expected_fee_atoms: u128,
     processed_fee_atoms: u128,
+    distributed_maker_atoms: u64,
+    distributed_treasury_atoms: u64,
     owner_refund_lamports: u64,
     owner_neutral_credit_lamports: u64,
 }
 
 /// Complete, non-forgeable authority consumed by candidate-wide terminal
 /// construction after all owner finalizations have been closed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct CompletedFeeRetirementV1 {
     accumulator: FeeRetirementAccumulatorV1,
     closure_set_data_id: Id,
     terminal_authority_receipt: Id,
     payer_refund_lamports: u64,
     neutral_credit_lamports: u64,
+}
+
+/// Adapter-authenticated value transition for one ordinary Position credit.
+/// The Position and Replay semantic owners authenticate these identities; this
+/// owner binds their exact ordered transition to the fee allocation and cash
+/// pot without duplicating either account body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeePositionCreditTransitionV1 {
+    pub position_account: Id,
+    pub replay_account: Id,
+    pub position_prestate: Id,
+    pub position_poststate: Id,
+    pub replay_prestate: Id,
+    pub replay_poststate: Id,
+    pub cash_pot_account: Id,
+    pub cash_pot_prestate: Id,
+    pub cash_pot_poststate: Id,
+    pub credited_atoms: u64,
+}
+
+/// One-shot authority proving the exact treasury credit was the terminal
+/// recipient in the ordered value-disposition fold.
+#[derive(Debug, Eq, PartialEq)]
+pub struct TreasuryDistributionAuthorizationV1 {
+    pub(crate) fee_record: Id,
+    pub(crate) treasury_owner: Id,
+    pub(crate) treasury_position: Id,
+    pub(crate) settlement_candidate: Id,
+    pub(crate) revenue_policy: Id,
+    pub(crate) credited_atoms: u64,
+    pub(crate) value_disposition_receipt: Id,
+}
+
+impl FeePositionCreditTransitionV1 {
+    fn validate(self) -> Result<()> {
+        independent(&[
+            self.position_account,
+            self.replay_account,
+            self.cash_pot_account,
+        ])?;
+        for identity in [
+            self.position_prestate,
+            self.position_poststate,
+            self.replay_prestate,
+            self.replay_poststate,
+            self.cash_pot_prestate,
+            self.cash_pot_poststate,
+        ] {
+            live(identity)?;
+        }
+        if self.credited_atoms == 0 {
+            if self.position_prestate != self.position_poststate
+                || self.replay_prestate != self.replay_poststate
+                || self.cash_pot_prestate != self.cash_pot_poststate
+            {
+                return Err(Error::InvalidTerminalDisposition);
+            }
+        } else if self.position_prestate == self.position_poststate
+            || self.replay_prestate == self.replay_poststate
+            || self.cash_pot_prestate == self.cash_pot_poststate
+        {
+            return Err(Error::InvalidTerminalDisposition);
+        }
+        Ok(())
+    }
 }
 
 impl FeeRetirementAccumulatorV1 {
@@ -91,8 +168,10 @@ impl FeeRetirementAccumulatorV1 {
         recipient_allocation: Id,
         recipient_allocation_data_id: Id,
         treasury_ledger: Id,
+        settlement_cash_pot: Id,
         selected: &SelectedCompositeFeeV1,
         book: &SelectedOwnerFeeBookV1,
+        owner_fee_book_data_id: Id,
         certified: &CertifiedRecipientAllocationV2,
         owner_order_set_digest: Id,
         hash: &H,
@@ -107,14 +186,16 @@ impl FeeRetirementAccumulatorV1 {
             recipient_allocation,
             recipient_allocation_data_id,
             treasury_ledger,
-            book.owner_fee_book_data_id(hash)?,
+            settlement_cash_pot,
+            selected.treasury_position(),
+            owner_fee_book_data_id,
             owner_order_set_digest,
         ])?;
         let allocation = certified.allocation();
         if book.fee_record() != selected.fee_record()
             || book.settlement_candidate() != selected.selected_candidate()
             || book.revenue_policy() != selected.revenue_policy()
-            || certified.owner_fee_book_data_id() != book.owner_fee_book_data_id(hash)?
+            || certified.owner_fee_book_data_id() != owner_fee_book_data_id
             || certified.owner_order_set_digest() != owner_order_set_digest
             || certified.owner_count() != u16::from(book.owner_count())
             || allocation.fee_record() != selected.fee_record()
@@ -122,9 +203,15 @@ impl FeeRetirementAccumulatorV1 {
         {
             return Err(Error::MismatchedBinding);
         }
-        let expected_owner_row_fold = fold_book(book, hash)?;
-        let observed_owner_row_fold = fold_start(book.owner_fee_book_data_id(hash)?, hash)?;
+        let expected_owner_row_fold = fold_book(book, owner_fee_book_data_id, hash)?;
+        let observed_owner_row_fold = fold_start(owner_fee_book_data_id, hash)?;
         let owner_closure_fold = closure_fold_start(selected.fee_record(), hash)?;
+        let value_disposition_fold = value_fold_start(
+            selected.fee_record(),
+            recipient_allocation_data_id,
+            settlement_cash_pot,
+            hash,
+        )?;
         let value = Self {
             runtime_program,
             runtime_release,
@@ -135,16 +222,24 @@ impl FeeRetirementAccumulatorV1 {
             recipient_allocation,
             recipient_allocation_data_id,
             treasury_ledger,
-            owner_fee_book_data_id: book.owner_fee_book_data_id(hash)?,
+            settlement_cash_pot,
+            treasury_position: selected.treasury_position(),
+            owner_fee_book_data_id,
             owner_order_set_digest,
             expected_owner_row_fold,
             observed_owner_row_fold,
             owner_closure_fold,
+            value_disposition_fold,
             prior_owner: Id([0; 32]),
             expected_owner_count: book.owner_count(),
             processed_owner_count: 0,
+            expected_maker_count: allocation.maker_len(),
+            processed_maker_count: 0,
+            treasury_distributed: false,
             expected_fee_atoms: book.selected_fee_atoms(),
             processed_fee_atoms: 0,
+            distributed_maker_atoms: 0,
+            distributed_treasury_atoms: 0,
             owner_refund_lamports: 0,
             owner_neutral_credit_lamports: 0,
         };
@@ -166,16 +261,24 @@ impl FeeRetirementAccumulatorV1 {
         recipient_allocation: Id,
         recipient_allocation_data_id: Id,
         treasury_ledger: Id,
+        settlement_cash_pot: Id,
+        treasury_position: Id,
         owner_fee_book_data_id: Id,
         owner_order_set_digest: Id,
         expected_owner_row_fold: Id,
         observed_owner_row_fold: Id,
         owner_closure_fold: Id,
+        value_disposition_fold: Id,
         prior_owner: Id,
         expected_owner_count: u8,
         processed_owner_count: u8,
+        expected_maker_count: u8,
+        processed_maker_count: u8,
+        treasury_distributed: bool,
         expected_fee_atoms: u128,
         processed_fee_atoms: u128,
+        distributed_maker_atoms: u64,
+        distributed_treasury_atoms: u64,
         owner_refund_lamports: u64,
         owner_neutral_credit_lamports: u64,
     ) -> Result<Self> {
@@ -189,16 +292,24 @@ impl FeeRetirementAccumulatorV1 {
             recipient_allocation,
             recipient_allocation_data_id,
             treasury_ledger,
+            settlement_cash_pot,
+            treasury_position,
             owner_fee_book_data_id,
             owner_order_set_digest,
             expected_owner_row_fold,
             observed_owner_row_fold,
             owner_closure_fold,
+            value_disposition_fold,
             prior_owner,
             expected_owner_count,
             processed_owner_count,
+            expected_maker_count,
+            processed_maker_count,
+            treasury_distributed,
             expected_fee_atoms,
             processed_fee_atoms,
+            distributed_maker_atoms,
+            distributed_treasury_atoms,
             owner_refund_lamports,
             owner_neutral_credit_lamports,
         };
@@ -265,24 +376,143 @@ impl FeeRetirementAccumulatorV1 {
         Ok(self)
     }
 
+    /// Fold one exact maker credit in certified recipient order. The adapter
+    /// must first authenticate the Position, Replay, and cash-pot successors.
+    pub fn fold_maker_distribution<H: FeeRetirementHashV1>(
+        mut self,
+        certified: &CertifiedRecipientAllocationV2,
+        transition: FeePositionCreditTransitionV1,
+        hash: &H,
+    ) -> Result<Self> {
+        self.validate_open()?;
+        transition.validate()?;
+        let allocation = certified.allocation();
+        let ordinal = usize::from(self.processed_maker_count);
+        if self.processed_owner_count != self.expected_owner_count
+            || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
+            || certified.owner_order_set_digest() != self.owner_order_set_digest
+            || certified.owner_count() != u16::from(self.expected_owner_count)
+            || allocation.fee_record() != self.fee_record
+            || allocation.maker_len() != self.expected_maker_count
+            || ordinal >= usize::from(self.expected_maker_count)
+            || transition.position_account != allocation.maker_positions()[ordinal]
+            || transition.cash_pot_account != self.settlement_cash_pot
+            || transition.credited_atoms != allocation.maker_rebate_atoms()[ordinal]
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        self.value_disposition_fold = fold_value_transition(
+            self.value_disposition_fold,
+            self.processed_maker_count,
+            1,
+            transition,
+            hash,
+        )?;
+        self.distributed_maker_atoms = add(
+            self.distributed_maker_atoms,
+            transition.credited_atoms,
+        )?;
+        self.processed_maker_count = self
+            .processed_maker_count
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        self.validate_open()?;
+        Ok(self)
+    }
+
+    /// Fold the sole treasury Position credit after every maker row. Executor
+    /// allocation is explicitly absent in the current selected-record schema.
+    pub fn fold_treasury_distribution<H: FeeRetirementHashV1>(
+        mut self,
+        certified: &CertifiedRecipientAllocationV2,
+        transition: FeePositionCreditTransitionV1,
+        hash: &H,
+        selected: &SelectedCompositeFeeV1,
+        recipient_intent: &RecipientAllocationIntentV1,
+    ) -> Result<(Self, TreasuryDistributionAuthorizationV1)> {
+        self.validate_open()?;
+        transition.validate()?;
+        let allocation = certified.allocation();
+        if self.processed_owner_count != self.expected_owner_count
+            || self.processed_maker_count != self.expected_maker_count
+            || self.treasury_distributed
+            || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
+            || certified.owner_order_set_digest() != self.owner_order_set_digest
+            || allocation.fee_record() != self.fee_record
+            || allocation.executor_atoms() != 0
+            || transition.position_account != self.treasury_position
+            || transition.cash_pot_account != self.settlement_cash_pot
+            || transition.credited_atoms != allocation.treasury_atoms()
+            || selected.fee_record() != self.fee_record
+            || selected.selected_candidate() != self.settlement_candidate
+            || selected.treasury_position() != self.treasury_position
+            || recipient_intent.fee_record().identity() != self.fee_record
+            || recipient_intent.recipient_allocation().identity()
+                != self.recipient_allocation
+            || recipient_intent.treasury_ledger().identity() != self.treasury_ledger
+            || recipient_intent.settlement_candidate() != self.settlement_candidate
+            || recipient_intent.revenue_policy() != selected.revenue_policy()
+            || recipient_intent.treasury_position() != self.treasury_position
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        self.value_disposition_fold = fold_value_transition(
+            self.value_disposition_fold,
+            self.processed_maker_count,
+            2,
+            transition,
+            hash,
+        )?;
+        self.distributed_treasury_atoms = transition.credited_atoms;
+        self.treasury_distributed = true;
+        self.validate_open()?;
+        let authority = TreasuryDistributionAuthorizationV1 {
+            fee_record: self.fee_record,
+            treasury_owner: selected.treasury_owner(),
+            treasury_position: self.treasury_position,
+            settlement_candidate: self.settlement_candidate,
+            revenue_policy: selected.revenue_policy(),
+            credited_atoms: transition.credited_atoms,
+            value_disposition_receipt: self.value_disposition_fold,
+        };
+        Ok((self, authority))
+    }
+
     /// Seal the exact global closure set after every owner row has matched the
     /// complete-book commitment.
     pub fn complete<H: FeeRetirementHashV1>(
         self,
-        accumulator_account: Id,
+        accumulator_closure: ExternalFeeAccountClosureV1,
         global: CandidateFeeAccountClosuresV1,
+        certified: &CertifiedRecipientAllocationV2,
         hash: &H,
     ) -> Result<CompletedFeeRetirementV1> {
         self.validate_open()?;
         if self.processed_owner_count != self.expected_owner_count
             || self.processed_fee_atoms != self.expected_fee_atoms
             || self.observed_owner_row_fold != self.expected_owner_row_fold
+            || self.processed_maker_count != self.expected_maker_count
+            || !self.treasury_distributed
+            || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
+            || certified.owner_order_set_digest() != self.owner_order_set_digest
+            || certified.owner_count() != u16::from(self.expected_owner_count)
+            || self.distributed_maker_atoms
+                != certified.allocation().maker_rebate_total()
+            || self.distributed_treasury_atoms != certified.allocation().treasury_atoms()
+            || certified.allocation().executor_atoms() != 0
         {
             return Err(Error::MissingParticipant);
         }
         validate_global_closures(&self, &global)?;
-        live(accumulator_account)?;
+        validate_accumulator_closure(&self, &accumulator_closure)?;
+        let accumulator_account = accumulator_closure.account();
         let global_fold = fold_global_closures(self.owner_closure_fold, &global, hash)?;
+        let global_fold = fold_closure(
+            global_fold,
+            u8::try_from(MAX_FEE_ROWS_V1 + 3).map_err(|_| Error::InvalidWidth)?,
+            &accumulator_closure,
+            hash,
+        )?;
         let closure_set_data_id = Id(hash.sha256(&[
             FEE_CLOSURE_SET_DATA_ID_DOMAIN_V1,
             &self.fee_record.0,
@@ -296,6 +526,7 @@ impl FeeRetirementAccumulatorV1 {
             &self.settlement_root.0,
             &self.selected_feed_data_id.0,
             &closure_set_data_id.0,
+            &self.value_disposition_fold.0,
         ]));
         live(closure_set_data_id)?;
         live(terminal_authority_receipt)?;
@@ -313,15 +544,20 @@ impl FeeRetirementAccumulatorV1 {
             )?,
             global.treasury_ledger.neutral_credit_lamports(),
         )?;
+        let total_refund = add(
+            add(self.owner_refund_lamports, global_refund)?,
+            accumulator_closure.rent_refund_lamports(),
+        )?;
+        let total_neutral = add(
+            add(self.owner_neutral_credit_lamports, global_neutral)?,
+            accumulator_closure.neutral_credit_lamports(),
+        )?;
         Ok(CompletedFeeRetirementV1 {
             accumulator: self,
             closure_set_data_id,
             terminal_authority_receipt,
-            payer_refund_lamports: add(self.owner_refund_lamports, global_refund)?,
-            neutral_credit_lamports: add(
-                self.owner_neutral_credit_lamports,
-                global_neutral,
-            )?,
+            payer_refund_lamports: total_refund,
+            neutral_credit_lamports: total_neutral,
         })
     }
 
@@ -336,19 +572,24 @@ impl FeeRetirementAccumulatorV1 {
             self.recipient_allocation,
             self.recipient_allocation_data_id,
             self.treasury_ledger,
+            self.settlement_cash_pot,
+            self.treasury_position,
             self.owner_fee_book_data_id,
             self.owner_order_set_digest,
             self.expected_owner_row_fold,
             self.observed_owner_row_fold,
             self.owner_closure_fold,
+            self.value_disposition_fold,
         ] {
             live(identity)?;
         }
         if self.expected_owner_count == 0
             || usize::from(self.expected_owner_count) > MAX_FEE_ROWS_V1
             || self.processed_owner_count > self.expected_owner_count
+            || self.processed_maker_count > self.expected_maker_count
             || self.processed_fee_atoms > self.expected_fee_atoms
             || (self.processed_owner_count == 0) != self.prior_owner.is_zero()
+            || (!self.treasury_distributed && self.distributed_treasury_atoms != 0)
         {
             return Err(Error::InvalidAccountData);
         }
@@ -364,16 +605,24 @@ impl FeeRetirementAccumulatorV1 {
     pub const fn recipient_allocation(&self) -> Id { self.recipient_allocation }
     pub const fn recipient_allocation_data_id(&self) -> Id { self.recipient_allocation_data_id }
     pub const fn treasury_ledger(&self) -> Id { self.treasury_ledger }
+    pub const fn settlement_cash_pot(&self) -> Id { self.settlement_cash_pot }
+    pub const fn treasury_position(&self) -> Id { self.treasury_position }
     pub const fn owner_fee_book_data_id(&self) -> Id { self.owner_fee_book_data_id }
     pub const fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
     pub const fn expected_owner_row_fold(&self) -> Id { self.expected_owner_row_fold }
     pub const fn observed_owner_row_fold(&self) -> Id { self.observed_owner_row_fold }
     pub const fn owner_closure_fold(&self) -> Id { self.owner_closure_fold }
+    pub const fn value_disposition_receipt(&self) -> Id { self.value_disposition_fold }
     pub const fn prior_owner(&self) -> Id { self.prior_owner }
     pub const fn expected_owner_count(&self) -> u8 { self.expected_owner_count }
     pub const fn processed_owner_count(&self) -> u8 { self.processed_owner_count }
+    pub const fn expected_maker_count(&self) -> u8 { self.expected_maker_count }
+    pub const fn processed_maker_count(&self) -> u8 { self.processed_maker_count }
+    pub const fn treasury_distributed(&self) -> bool { self.treasury_distributed }
     pub const fn expected_fee_atoms(&self) -> u128 { self.expected_fee_atoms }
     pub const fn processed_fee_atoms(&self) -> u128 { self.processed_fee_atoms }
+    pub const fn distributed_maker_atoms(&self) -> u64 { self.distributed_maker_atoms }
+    pub const fn distributed_treasury_atoms(&self) -> u64 { self.distributed_treasury_atoms }
     pub const fn owner_refund_lamports(&self) -> u64 { self.owner_refund_lamports }
     pub const fn owner_neutral_credit_lamports(&self) -> u64 {
         self.owner_neutral_credit_lamports
@@ -393,9 +642,15 @@ impl FeeRetirementAccumulatorV1 {
         put(
             &mut output,
             &mut at,
-            &[self.expected_owner_count, self.processed_owner_count],
+            &[
+                self.expected_owner_count,
+                self.processed_owner_count,
+                self.expected_maker_count,
+                self.processed_maker_count,
+                u8::from(self.treasury_distributed),
+            ],
         )?;
-        put(&mut output, &mut at, &[0; 4])?;
+        put(&mut output, &mut at, &[0])?;
         for identity in [
             self.runtime_program,
             self.runtime_release,
@@ -406,17 +661,22 @@ impl FeeRetirementAccumulatorV1 {
             self.recipient_allocation,
             self.recipient_allocation_data_id,
             self.treasury_ledger,
+            self.settlement_cash_pot,
+            self.treasury_position,
             self.owner_fee_book_data_id,
             self.owner_order_set_digest,
             self.expected_owner_row_fold,
             self.observed_owner_row_fold,
             self.owner_closure_fold,
+            self.value_disposition_fold,
             self.prior_owner,
         ] {
             put(&mut output, &mut at, &identity.0)?;
         }
         put(&mut output, &mut at, &self.expected_fee_atoms.to_le_bytes())?;
         put(&mut output, &mut at, &self.processed_fee_atoms.to_le_bytes())?;
+        put(&mut output, &mut at, &self.distributed_maker_atoms.to_le_bytes())?;
+        put(&mut output, &mut at, &self.distributed_treasury_atoms.to_le_bytes())?;
         put(&mut output, &mut at, &self.owner_refund_lamports.to_le_bytes())?;
         put(
             &mut output,
@@ -435,12 +695,16 @@ impl FeeRetirementAccumulatorV1 {
             || input[..8] != FEE_RETIREMENT_ACCUMULATOR_MAGIC_V1
             || u16::from_le_bytes([input[8], input[9]])
                 != FEE_RETIREMENT_ACCUMULATOR_VERSION_V1
-            || input[12..16] != [0; 4]
+            || input[14] > 1
+            || input[15] != 0
         {
             return Err(Error::InvalidAccountData);
         }
         let expected_owner_count = input[10];
         let processed_owner_count = input[11];
+        let expected_maker_count = input[12];
+        let processed_maker_count = input[13];
+        let treasury_distributed = input[14] == 1;
         let mut at = 16usize;
         let runtime_program = take_id(input, &mut at)?;
         let runtime_release = take_id(input, &mut at)?;
@@ -451,14 +715,19 @@ impl FeeRetirementAccumulatorV1 {
         let recipient_allocation = take_id(input, &mut at)?;
         let recipient_allocation_data_id = take_id(input, &mut at)?;
         let treasury_ledger = take_id(input, &mut at)?;
+        let settlement_cash_pot = take_id(input, &mut at)?;
+        let treasury_position = take_id(input, &mut at)?;
         let owner_fee_book_data_id = take_id(input, &mut at)?;
         let owner_order_set_digest = take_id(input, &mut at)?;
         let expected_owner_row_fold = take_id(input, &mut at)?;
         let observed_owner_row_fold = take_id(input, &mut at)?;
         let owner_closure_fold = take_id(input, &mut at)?;
+        let value_disposition_fold = take_id(input, &mut at)?;
         let prior_owner = take_id(input, &mut at)?;
         let expected_fee_atoms = take_u128(input, &mut at)?;
         let processed_fee_atoms = take_u128(input, &mut at)?;
+        let distributed_maker_atoms = take_u64(input, &mut at)?;
+        let distributed_treasury_atoms = take_u64(input, &mut at)?;
         let owner_refund_lamports = take_u64(input, &mut at)?;
         let owner_neutral_credit_lamports = take_u64(input, &mut at)?;
         if at != input.len() {
@@ -474,16 +743,24 @@ impl FeeRetirementAccumulatorV1 {
             recipient_allocation,
             recipient_allocation_data_id,
             treasury_ledger,
+            settlement_cash_pot,
+            treasury_position,
             owner_fee_book_data_id,
             owner_order_set_digest,
             expected_owner_row_fold,
             observed_owner_row_fold,
             owner_closure_fold,
+            value_disposition_fold,
             prior_owner,
             expected_owner_count,
             processed_owner_count,
+            expected_maker_count,
+            processed_maker_count,
+            treasury_distributed,
             expected_fee_atoms,
             processed_fee_atoms,
+            distributed_maker_atoms,
+            distributed_treasury_atoms,
             owner_refund_lamports,
             owner_neutral_credit_lamports,
         )
@@ -491,7 +768,7 @@ impl FeeRetirementAccumulatorV1 {
 }
 
 impl CompletedFeeRetirementV1 {
-    pub const fn accumulator(&self) -> FeeRetirementAccumulatorV1 { self.accumulator }
+    pub const fn accumulator(&self) -> &FeeRetirementAccumulatorV1 { &self.accumulator }
     pub const fn closure_set_data_id(&self) -> Id { self.closure_set_data_id }
     pub const fn terminal_authority_receipt(&self) -> Id { self.terminal_authority_receipt }
     pub const fn payer_refund_lamports(&self) -> u64 { self.payer_refund_lamports }
@@ -530,8 +807,12 @@ fn fold_row<H: FeeRetirementHashV1>(
     Ok(value)
 }
 
-fn fold_book<H: FeeRetirementHashV1>(book: &SelectedOwnerFeeBookV1, hash: &H) -> Result<Id> {
-    let mut fold = fold_start(book.owner_fee_book_data_id(hash)?, hash)?;
+fn fold_book<H: FeeRetirementHashV1>(
+    book: &SelectedOwnerFeeBookV1,
+    book_data_id: Id,
+    hash: &H,
+) -> Result<Id> {
+    let mut fold = fold_start(book_data_id, hash)?;
     let mut ordinal = 0u8;
     while ordinal < book.owner_count() {
         let row = book.rows()[usize::from(ordinal)];
@@ -539,6 +820,48 @@ fn fold_book<H: FeeRetirementHashV1>(book: &SelectedOwnerFeeBookV1, hash: &H) ->
         ordinal = ordinal.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
     }
     Ok(fold)
+}
+
+fn value_fold_start<H: FeeRetirementHashV1>(
+    fee_record: Id,
+    recipient_allocation_data_id: Id,
+    cash_pot: Id,
+    hash: &H,
+) -> Result<Id> {
+    let value = Id(hash.sha256(&[
+        FEE_VALUE_DISPOSITION_FOLD_DOMAIN_V1,
+        &fee_record.0,
+        &recipient_allocation_data_id.0,
+        &cash_pot.0,
+    ]));
+    live(value)?;
+    Ok(value)
+}
+
+fn fold_value_transition<H: FeeRetirementHashV1>(
+    prior: Id,
+    ordinal: u8,
+    recipient_kind: u8,
+    transition: FeePositionCreditTransitionV1,
+    hash: &H,
+) -> Result<Id> {
+    let value = Id(hash.sha256(&[
+        FEE_VALUE_DISPOSITION_FOLD_DOMAIN_V1,
+        &prior.0,
+        &[recipient_kind, ordinal],
+        &transition.position_account.0,
+        &transition.replay_account.0,
+        &transition.position_prestate.0,
+        &transition.position_poststate.0,
+        &transition.replay_prestate.0,
+        &transition.replay_poststate.0,
+        &transition.cash_pot_account.0,
+        &transition.cash_pot_prestate.0,
+        &transition.cash_pot_poststate.0,
+        &transition.credited_atoms.to_le_bytes(),
+    ]));
+    live(value)?;
+    Ok(value)
 }
 
 fn fold_closure<H: FeeRetirementHashV1>(
@@ -628,6 +951,22 @@ fn validate_global_closures(
         || global.recipient_allocation.close_receipt() == global.treasury_ledger.close_receipt()
     {
         return Err(Error::DuplicateIdentity);
+    }
+    Ok(())
+}
+
+fn validate_accumulator_closure(
+    accumulator: &FeeRetirementAccumulatorV1,
+    closure: &ExternalFeeAccountClosureV1,
+) -> Result<()> {
+    if closure.role() != CandidateFeeAccountRoleV1::RetirementAccumulator
+        || closure.outcome() != FeeTerminalOutcomeV1::Settled
+        || closure.runtime_program() != accumulator.runtime_program
+        || closure.runtime_release() != accumulator.runtime_release
+        || closure.fee_record() != accumulator.fee_record
+        || !closure.semantic_owner().is_zero()
+    {
+        return Err(Error::MissingClosure);
     }
     Ok(())
 }

@@ -1202,6 +1202,8 @@ impl SettlementRootV1AccountV1 {
         self.validate()?;
         if self.phase != SettlementRootPhaseV1::Retiring
             || self.cash_pot_state != SettlementRootChildStateV1::Live
+            || (!self.fee_record.is_zero()
+                && self.fee_record_state != SettlementRootChildStateV1::Retired)
         {
             return Err(CodecError::InvalidState);
         }
@@ -1235,6 +1237,7 @@ impl SettlementRootV1AccountV1 {
         if self.phase != SettlementRootPhaseV1::Retiring
             || self.fee_record_state != SettlementRootChildStateV1::Live
             || self.counts.live_fee_finalizations != 0
+            || self.cash_pot_state != SettlementRootChildStateV1::Live
         {
             return Err(CodecError::InvalidState);
         }
@@ -2623,9 +2626,10 @@ pub(crate) mod tests {
             root.retire_one_fee_finalization(),
             Err(CodecError::InvalidState)
         );
-        let root = root.retire_cash_pot().unwrap();
+        assert_eq!(root.retire_cash_pot(), Err(CodecError::InvalidState));
         assert!(!root.at_retained_feed_retirement_frontier());
         let root = root.retire_fee_record().unwrap();
+        let root = root.retire_cash_pot().unwrap();
         assert!(root.at_retained_feed_retirement_frontier());
     }
 

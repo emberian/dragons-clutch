@@ -1938,9 +1938,10 @@ mod tests {
         assert_suffix_preserved(&next, &fee);
         let next = fee.begin_retiring().unwrap();
         assert_suffix_preserved(&fee, &next);
-        let fee = next.retire_cash_pot().unwrap();
+        assert_eq!(next.retire_cash_pot(), Err(CodecError::InvalidState));
+        let fee = next.retire_fee_record().unwrap();
         assert_suffix_preserved(&next, &fee);
-        let next = fee.retire_fee_record().unwrap();
+        let next = fee.retire_cash_pot().unwrap();
         assert_suffix_preserved(&fee, &next);
         assert!(next.base().at_retained_feed_retirement_frontier());
 

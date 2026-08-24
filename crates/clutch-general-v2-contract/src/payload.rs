@@ -51,8 +51,12 @@ pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
 /// Exact counted-root lifecycle selector width.
 pub const COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES: usize = 64;
-/// Exact action-27/28/30/48/49/50 child-retirement selector width.
+/// Exact action-27/28/30/48/49 child-retirement selector width.
 pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
+/// Exact action-50 maker-distribution selector width.
+pub const FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1: usize = 200;
+/// Exact action-50 final treasury/global retirement selector width.
+pub const FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1: usize = 296;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -980,6 +984,155 @@ impl SettlementChildRetirementPayloadV1 {
         Ok(value)
     }
 }
+
+const FEE_RETIREMENT_PAYLOAD_VERSION_V1: u8 = 1;
+const FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1: u8 = 1;
+const FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1: u8 = 2;
+
+/// Immutable selector for one ordered maker credit under action 50.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeMakerDistributionPayloadV1 {
+    pub epoch: Id32,
+    pub settlement_root: Id32,
+    pub fee_record: Id32,
+    pub accumulator: Id32,
+    pub recipient_allocation: Id32,
+    pub maker_position: Id32,
+    pub maker_ordinal: u8,
+}
+
+impl FeeMakerDistributionPayloadV1 {
+    fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1)?;
+        if reader.u8()? != FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1
+            || reader.u8()? != FEE_RETIREMENT_PAYLOAD_VERSION_V1
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            fee_record: live_id(&mut reader)?,
+            accumulator: live_id(&mut reader)?,
+            recipient_allocation: live_id(&mut reader)?,
+            maker_position: live_id(&mut reader)?,
+            maker_ordinal: reader.u8()?,
+        };
+        let reserved: [u8; 5] = reader.array()?;
+        reader.finish()?;
+        require_distinct_ids(&[
+            value.epoch,
+            value.settlement_root,
+            value.fee_record,
+            value.accumulator,
+            value.recipient_allocation,
+            value.maker_position,
+        ])?;
+        if reserved != [0; 5] {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
+
+/// Immutable selector for the final treasury credit, durable receipts, and
+/// closure of all temporary global fee accounts under action 50.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeFinalizeGlobalsPayloadV1 {
+    pub epoch: Id32,
+    pub settlement_root: Id32,
+    pub fee_record: Id32,
+    pub accumulator: Id32,
+    pub recipient_allocation: Id32,
+    pub treasury_ledger: Id32,
+    pub settlement_cash_pot: Id32,
+    pub terminal_receipt: Id32,
+    pub closure_manifest: Id32,
+}
+
+impl FeeFinalizeGlobalsPayloadV1 {
+    fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1)?;
+        if reader.u8()? != FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1
+            || reader.u8()? != FEE_RETIREMENT_PAYLOAD_VERSION_V1
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            fee_record: live_id(&mut reader)?,
+            accumulator: live_id(&mut reader)?,
+            recipient_allocation: live_id(&mut reader)?,
+            treasury_ledger: live_id(&mut reader)?,
+            settlement_cash_pot: live_id(&mut reader)?,
+            terminal_receipt: live_id(&mut reader)?,
+            closure_manifest: live_id(&mut reader)?,
+        };
+        let reserved: [u8; 6] = reader.array()?;
+        reader.finish()?;
+        require_distinct_ids(&[
+            value.epoch,
+            value.settlement_root,
+            value.fee_record,
+            value.accumulator,
+            value.recipient_allocation,
+            value.treasury_ledger,
+            value.settlement_cash_pot,
+            value.terminal_receipt,
+            value.closure_manifest,
+        ])?;
+        if reserved != [0; 6] {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
+
+/// Strict fresh action-50 payload partition; its widths and discriminants are
+/// disjoint from every legacy child-retirement selector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeeRetirementPayloadV1 {
+    MakerDistribution(FeeMakerDistributionPayloadV1),
+    FinalizeTreasuryAndGlobals(FeeFinalizeGlobalsPayloadV1),
+}
+
+pub fn decode_fee_retirement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<FeeRetirementPayloadV1, CodecError> {
+    if local_action != 50 {
+        return Err(CodecError::InvalidState);
+    }
+    match payload.len() {
+        FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1 => Ok(
+            FeeRetirementPayloadV1::MakerDistribution(
+                FeeMakerDistributionPayloadV1::decode(payload)?,
+            ),
+        ),
+        FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1 => Ok(
+            FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(
+                FeeFinalizeGlobalsPayloadV1::decode(payload)?,
+            ),
+        ),
+        _ => Err(CodecError::WrongLength),
+    }
+}
+
+fn require_distinct_ids(values: &[Id32]) -> Result<(), CodecError> {
+    let mut left = 0usize;
+    while left < values.len() {
+        let mut right = left + 1;
+        while right < values.len() {
+            if values[left] == values[right] {
+                return Err(CodecError::MismatchedBinding);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -1063,8 +1216,6 @@ pub enum SettlementRetirementPayloadKindV1 {
     CloseOwnerRow(SettlementChildRetirementPayloadV1),
     /// Close one rent-owned owner fee-finalization account.
     CloseFeeFinalization(SettlementChildRetirementPayloadV1),
-    /// Consume the candidate-wide selected-fee terminal receipt.
-    RetireFeeRecord(SettlementChildRetirementPayloadV1),
     /// Advance the fully discharged base root from Settling to Retiring.
     BeginRetiring(CountedSettlementRootSelectorV1),
 }
@@ -1170,9 +1321,6 @@ pub fn decode_settlement_retirement_payload_v1(
             SettlementChildRetirementPayloadV1::decode(payload)?,
         )),
         49 => Ok(SettlementRetirementPayloadKindV1::CloseFeeFinalization(
-            SettlementChildRetirementPayloadV1::decode(payload)?,
-        )),
-        50 => Ok(SettlementRetirementPayloadKindV1::RetireFeeRecord(
             SettlementChildRetirementPayloadV1::decode(payload)?,
         )),
         51 => Ok(SettlementRetirementPayloadKindV1::BeginRetiring(
@@ -1527,9 +1675,13 @@ mod tests {
         child[..ID_BYTES].copy_from_slice(&live(1));
         child[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
         child[2 * ID_BYTES..].copy_from_slice(&live(3));
-        for action in [27, 28, 30, 48, 49, 50] {
+        for action in [27, 28, 30, 48, 49] {
             assert!(decode_settlement_retirement_payload_v1(action, &child).is_ok());
         }
+        assert_eq!(
+            decode_settlement_retirement_payload_v1(50, &child),
+            Err(CodecError::InvalidState)
+        );
         assert_eq!(
             decode_settlement_retirement_payload_v1(51, &child),
             Err(CodecError::WrongLength)
@@ -1554,6 +1706,61 @@ mod tests {
         assert_eq!(
             decode_settlement_retirement_payload_v1(48, &root),
             Err(CodecError::WrongLength)
+        );
+    }
+
+    #[test]
+    fn fee_retirement_payload_arms_are_width_discriminant_and_padding_disjoint() {
+        let mut maker = [0u8; FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1];
+        maker[0] = FEE_RETIREMENT_MAKER_DISTRIBUTION_KIND_V1;
+        maker[1] = FEE_RETIREMENT_PAYLOAD_VERSION_V1;
+        for index in 0..6 {
+            let start = 2 + index * ID_BYTES;
+            maker[start..start + ID_BYTES].copy_from_slice(&live((index + 1) as u8));
+        }
+        maker[2 + 6 * ID_BYTES] = 3;
+        assert!(matches!(
+            decode_fee_retirement_payload_v1(50, &maker),
+            Ok(FeeRetirementPayloadV1::MakerDistribution(value)) if value.maker_ordinal == 3
+        ));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(49, &maker),
+            Err(CodecError::InvalidState)
+        );
+        let mut wrong_kind = maker;
+        wrong_kind[0] = FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &wrong_kind),
+            Err(CodecError::InvalidState)
+        );
+        let mut bad_padding = maker;
+        bad_padding[FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1 - 1] = 1;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &bad_padding),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        let mut terminal = [0u8; FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1];
+        terminal[0] = FEE_RETIREMENT_FINALIZE_GLOBALS_KIND_V1;
+        terminal[1] = FEE_RETIREMENT_PAYLOAD_VERSION_V1;
+        for index in 0..9 {
+            let start = 2 + index * ID_BYTES;
+            terminal[start..start + ID_BYTES]
+                .copy_from_slice(&live((index + 1) as u8));
+        }
+        assert!(matches!(
+            decode_fee_retirement_payload_v1(50, &terminal),
+            Ok(FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(_))
+        ));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &terminal[..terminal.len() - 1]),
+            Err(CodecError::WrongLength)
+        );
+        terminal[2 + 8 * ID_BYTES..2 + 9 * ID_BYTES]
+            .copy_from_slice(&live(1));
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &terminal),
+            Err(CodecError::MismatchedBinding)
         );
     }
 

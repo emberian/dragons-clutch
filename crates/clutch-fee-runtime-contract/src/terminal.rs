@@ -740,6 +740,8 @@ pub enum CandidateFeeAccountRoleV1 {
     RecipientAllocation = 2,
     TreasuryLedger = 3,
     OwnerFinalization = 4,
+    /// Streaming authority retired only after all value and closure folds.
+    RetirementAccumulator = 5,
 }
 
 /// Exact adapter-authenticated account closure. Only native-lamport rent and
@@ -1544,13 +1546,12 @@ pub fn build_aborted_fee_terminal_receipt_v1(
 pub fn build_settled_fee_terminal_from_accumulator_v1(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
-    value_disposition_receipt: Id,
     selected: &SelectedCompositeFeeV1,
     certified: &crate::projection::CertifiedRecipientAllocationV2,
     settlement: &CandidateFeeSettlementV1,
     recipient_intent: &RecipientAllocationIntentV1,
     treasury: &TreasuryLedgerV1,
-    completed: &CompletedFeeRetirementV1,
+    completed: CompletedFeeRetirementV1,
 ) -> Result<FeeTerminalReceiptBundleV1> {
     let accumulator = completed.accumulator();
     let recipients = certified.allocation();
@@ -1594,7 +1595,7 @@ pub fn build_settled_fee_terminal_from_accumulator_v1(
         completed.closure_set_data_id(),
         accumulator.runtime_program(),
         accumulator.runtime_release(),
-        value_disposition_receipt,
+        accumulator.value_disposition_receipt(),
         completed.terminal_authority_receipt(),
         selected,
         FeeTerminalOutcomeV1::Settled,

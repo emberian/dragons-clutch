@@ -4,6 +4,7 @@ use crate::allocation::RecipientAllocationV1;
 use crate::integration::CandidateFeeSettlementV1;
 use crate::intent::TreasuryCreditIntentV1;
 use crate::projection::SelectedOwnerFeeBookV1;
+use crate::retirement::TreasuryDistributionAuthorizationV1;
 use crate::selected::SelectedCompositeFeeV1;
 use crate::{add, live, Error, Id, Result};
 
@@ -154,6 +155,35 @@ impl TreasuryLedgerV1 {
             .outstanding_epochs
             .checked_sub(1)
             .ok_or(Error::OutstandingService)?;
+        Ok(self)
+    }
+
+    /// Consume the one-shot terminal distribution authority after the exact
+    /// treasury Position and cash-pot successors have joined the retirement
+    /// accumulator. This is the callable large-book path and does not recreate
+    /// the deleted owner book from caller summaries.
+    pub fn credit_and_settle_retirement(
+        mut self,
+        authority: TreasuryDistributionAuthorizationV1,
+    ) -> Result<Self> {
+        self.open()?;
+        if authority.fee_record != self.fee_record
+            || authority.treasury_owner != self.treasury_owner
+            || authority.treasury_position != self.treasury_position
+            || authority.settlement_candidate.is_zero()
+            || authority.revenue_policy.is_zero()
+            || authority.value_disposition_receipt.is_zero()
+            || self.outstanding_epochs != 1
+            || self.credited_atoms != 0
+            || self.withdrawn_atoms != 0
+            || self.available_atoms != 0
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        self.credited_atoms = authority.credited_atoms;
+        self.available_atoms = authority.credited_atoms;
+        self.outstanding_epochs = 0;
+        self.validate()?;
         Ok(self)
     }
 
