@@ -526,48 +526,6 @@ impl AuthenticatedPreRootSourceOccurrenceV1 {
         ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
     }
 
-    /// Consume the sole FundingV4 reservation into Product's completion owner
-    /// while retaining a non-Copy Source postwrite with the full published
-    /// graph and live 0xbd custody authority. No ID-only projection can make
-    /// this split or reconstruct either half.
-    pub(crate) fn into_product_founder_parts(
-        self,
-    ) -> (
-        AuthenticatedProductSeriesFundingReservationV4,
-        AuthenticatedPreRootSourceOccurrencePostwriteV3,
-    ) {
-        let Self {
-            id,
-            product_preauthorization_id,
-            source_route,
-            product_publication,
-            capitalization,
-            lifecycle,
-            occurrence_publication,
-            semantic_publication,
-            result_lineage,
-            generation_request,
-            occurrence,
-        } = self;
-        let (funding_reservation, capitalization) =
-            capitalization.into_product_founder_parts();
-        (
-            funding_reservation,
-            AuthenticatedPreRootSourceOccurrencePostwriteV3 {
-                id,
-                product_preauthorization_id,
-                source_route,
-                product_publication,
-                capitalization,
-                lifecycle,
-                occurrence_publication,
-                semantic_publication,
-                result_lineage,
-                generation_request,
-                occurrence,
-            },
-        )
-    }
 }
 
 /// Final non-Copy Source founder postwrite retained after Product consumes the
@@ -1474,6 +1432,49 @@ impl AuthenticatedPreRootSourceOccurrenceV3 {
     pub(crate) const fn generation_request_data_id(&self) -> ContentId {
         ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
     }
+
+    /// Consume the sole FundingV4 reservation into Product's completion owner
+    /// while retaining a non-Copy Source postwrite with the full published
+    /// graph and live 0xbd custody authority. No ID-only projection can make
+    /// this split or reconstruct either half.
+    pub(crate) fn into_product_founder_parts(
+        self,
+    ) -> (
+        AuthenticatedProductSeriesFundingReservationV4,
+        AuthenticatedPreRootSourceOccurrencePostwriteV3,
+    ) {
+        let Self {
+            id,
+            product_preauthorization_id,
+            source_route,
+            product_publication,
+            capitalization,
+            lifecycle,
+            occurrence_publication,
+            semantic_publication,
+            result_lineage,
+            generation_request,
+            occurrence,
+        } = self;
+        let (funding_reservation, capitalization) =
+            capitalization.into_product_founder_parts();
+        (
+            funding_reservation,
+            AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+                id,
+                product_preauthorization_id,
+                source_route,
+                product_publication,
+                capitalization,
+                lifecycle,
+                occurrence_publication,
+                semantic_publication,
+                result_lineage,
+                generation_request,
+                occurrence,
+            },
+        )
+    }
 }
 
 /// Publish the current pre-root Source graph from the exact capitalized V4
@@ -1736,7 +1737,7 @@ mod current_adversarial_tests {
             .split("pub(crate) fn into_product_founder_parts(")
             .nth(1)
             .expect("sole consuming Source founder split")
-            .split("/// Final non-Copy Source founder postwrite")
+            .split("/// Publish the current pre-root Source graph")
             .next()
             .expect("bounded split");
         assert!(split.contains("capitalization.into_product_founder_parts()"));
