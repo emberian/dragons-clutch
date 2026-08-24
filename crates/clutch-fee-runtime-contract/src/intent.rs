@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use crate::selected::SelectedCompositeFeeV1;
+use crate::selected::SelectedCompositeFeeAccess;
 use crate::{independent, live, Error, Id, Result};
 
 /// A live account identity whose semantic kind cannot be interchanged in safe
@@ -66,8 +66,8 @@ pub struct SelectFeeRecordIntentV1 {
 }
 
 impl SelectFeeRecordIntentV1 {
-    pub fn bind(
-        selected: &SelectedCompositeFeeV1,
+    pub fn bind<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         fee_record: FeeRecordAccountIdV1,
     ) -> Result<Self> {
         if fee_record.identity() != selected.fee_record() {
@@ -141,8 +141,8 @@ pub struct OwnerFeeTransitionIntentV1 {
 
 impl OwnerFeeTransitionIntentV1 {
     #[allow(clippy::too_many_arguments)]
-    pub fn bind(
-        selected: &SelectedCompositeFeeV1,
+    pub fn bind<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         owner: Id,
         fee_record: FeeRecordAccountIdV1,
         carry: OwnerFeeCarryAccountIdV1,
@@ -213,8 +213,8 @@ pub struct RecipientAllocationIntentV1 {
 }
 
 impl RecipientAllocationIntentV1 {
-    pub fn bind(
-        selected: &SelectedCompositeFeeV1,
+    pub fn bind<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         fee_record: FeeRecordAccountIdV1,
         recipient_allocation: RecipientAllocationAccountIdV1,
         treasury_ledger: TreasuryLedgerAccountIdV1,
@@ -278,8 +278,8 @@ pub struct TreasuryCreditIntentV1 {
 
 impl TreasuryCreditIntentV1 {
     #[allow(clippy::too_many_arguments)]
-    pub fn bind(
-        selected: &SelectedCompositeFeeV1,
+    pub fn bind<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         fee_record: FeeRecordAccountIdV1,
         recipient_allocation: RecipientAllocationAccountIdV1,
         treasury_ledger: TreasuryLedgerAccountIdV1,
