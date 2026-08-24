@@ -68,7 +68,7 @@ const TERMINAL_LIVENESS_SEAL_DOMAIN_V2: &[u8] =
 /// Default-deny current action-1 authority.
 pub trait AuthenticatedDirectFoundationV3 {
     /// Authenticate the absent b1/v3 and b3 accounts, exact current Product
-    /// family admission, General V4/Revenue authority, 0xba/v2 allocation,
+    /// family admission, General V5/Revenue authority, 0xba/v2 allocation,
     /// rent funding, schedule policy, and observed Clock slot.
     fn authenticate_foundation_v3(
         &self,
@@ -221,7 +221,7 @@ pub fn prepare_direct_foundation_into_v3<
         &binding.product.activated_product_market_binding_id,
         &binding.product.direct_work_quote_id,
         &binding.candidate_liveness.allocation_receipt_id,
-        &binding.general.general_market_binding_v4_data_id,
+        &binding.general.general_market_binding_v5_data_id,
         &binding.general.general_market_runtime_data_id,
         &binding.general.revenue_policy_record_v2_id,
         &binding.general.treasury_position_derivation_policy_v2_id,

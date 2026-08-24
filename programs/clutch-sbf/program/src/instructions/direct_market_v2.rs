@@ -49,7 +49,7 @@ use clutch_direct_market_runtime::lifecycle_v2::{
     DirectRootReplayTransitionV2,
 };
 use clutch_direct_market_runtime::current_v3::{
-    DirectCurrentGeneralAuthorityV2, DirectMarketBindingV3,
+    DirectCurrentGeneralAuthorityV3, DirectMarketBindingV3,
 };
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
 use clutch_direct_market_runtime::liveness_v1::DirectCandidateWorkBatchV1;
@@ -118,7 +118,7 @@ use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-use super::collateral_position_v3::authenticate_general_market_v4_with_data_ids;
+use super::collateral_position_v3::authenticate_general_market_v5_with_data_ids;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_market_family_admission_v3_current::{
@@ -700,7 +700,7 @@ fn process_direct_family_retirement_v3(
     Ok(())
 }
 
-/// Execute action 2 across current b1/v3, fresh b4, and one General V4
+/// Execute action 2 across current b1/v3, fresh b4, and one General V5
 /// Position/Replay pair. The optional peer is derived only from the root's live
 /// Reservation count; the payload carries no peer selector or funding amount.
 #[inline(never)]
@@ -741,7 +741,7 @@ fn process_direct_admit_order_v2(
         &accounts[18],
         request.limit_price_units_per_egg,
     )?;
-    let bound = authenticate_direct_general_market_v4(
+    let bound = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[6],
@@ -951,7 +951,7 @@ fn process_direct_cancel_order_v2(
         ClutchError::MismatchedState,
     )?;
     let observed_slot = read_clock_slot(&accounts[15])?;
-    let bound = authenticate_direct_general_market_v4(
+    let bound = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[6],
@@ -1534,7 +1534,7 @@ fn process_direct_settle_pair_v2(
     require_direct_endpoint_alias_contract_v2(accounts, FIXED, endpoint_count)?;
     require_direct_fee_suffix_alias_contract_v2(accounts, endpoint_count, endpoint_end)?;
     let observed_slot = read_clock_slot(&accounts[11])?;
-    let bound = authenticate_direct_general_market_v4(
+    let bound = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[3],
@@ -2039,7 +2039,7 @@ fn process_direct_missed_freeze_lapse_v2(
         donation_floor_lamports,
     };
     selection_rent.validate().map_err(map_direct_error_v2)?;
-    let bound = authenticate_direct_general_market_v4(
+    let bound = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[12],
@@ -2304,7 +2304,7 @@ impl AuthenticatedDirectEconomicTerminalV2 for DirectMissedFreezeTerminalAuthori
     }
 }
 
-/// The no-candidate branch is implemented below with the exact General V4
+/// The no-candidate branch is implemented below with the exact General V5
 /// endpoint graph. Keeping this named seam prevents account-count probing from
 /// selecting any historical economic-terminal handler.
 #[inline(never)]
@@ -2375,7 +2375,7 @@ fn process_direct_fee_free_selection_terminal_v2(
     )?;
     require_direct_endpoint_alias_contract_v2(accounts, 12, endpoint_count)?;
     let observed_slot = read_clock_slot(&accounts[11])?;
-    let bound = authenticate_direct_general_market_v4(
+    let bound = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[3],
@@ -2864,14 +2864,14 @@ fn authenticate_direct_order_limit_v2(
     )
 }
 
-/// Authenticate the exact current General V4/Runtime and collateral graph
+/// Authenticate the exact current General V5/Runtime and collateral graph
 /// retained by b1/v3. The complete V4 account-data ID makes all Product and
 /// Revenue coordinates transitively immutable; a domain-separated current
 /// General authority ID then proves they are the same coordinates persisted by
 /// this Direct root.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn authenticate_direct_general_market_v4(
+fn authenticate_direct_general_market_v5(
     program_id: &Pubkey,
     root: &AuthenticatedDirectMarketRootV3,
     realm_account: &AccountInfo<'_>,
@@ -2890,7 +2890,7 @@ fn authenticate_direct_general_market_v4(
         collateral_policy_account,
         token_program,
     )?;
-    let authenticated_market = authenticate_general_market_v4_with_data_ids(
+    let authenticated_market = authenticate_general_market_v5_with_data_ids(
         program_id,
         market_binding_account,
         market_runtime_account,
@@ -2915,9 +2915,9 @@ fn authenticate_direct_general_market_v4(
         PositionPurposeV3::General,
         &market_runtime_account.key.to_bytes(),
     );
-    let direct_general = DirectCurrentGeneralAuthorityV2 {
+    let direct_general = DirectCurrentGeneralAuthorityV3 {
         general_market_binding_account: market_binding_account.key.to_bytes(),
-        general_market_binding_v4_data_id: authenticated_market.binding_data_id().bytes(),
+        general_market_binding_v5_data_id: authenticated_market.binding_data_id().bytes(),
         general_market_runtime_account: market_runtime_account.key.to_bytes(),
         general_market_runtime_data_id: authenticated_market.runtime_data_id().bytes(),
         revenue_policy_record_account: current.revenue_policy_record_account().bytes(),

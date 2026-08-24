@@ -5,7 +5,7 @@
 //! root array on its stack.
 
 use crate::current_v3::{
-    DirectCurrentGeneralAuthorityV2, DirectCurrentProductAuthorityV4,
+    DirectCurrentGeneralAuthorityV3, DirectCurrentProductAuthorityV4,
     DirectMarketBindingV3, DirectMarketRootV3,
 };
 use crate::liveness_v1::{DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1};
@@ -31,7 +31,7 @@ pub const DIRECT_MARKET_BINDING_BODY_BYTES_V3: usize = 2_277;
 pub struct AuthenticatedDirectRootTransitionV3 {
     projected_root: DirectMarketRootV1,
     fee_policy: crate::fee_v2::DirectFeePolicyV2,
-    current_general: DirectCurrentGeneralAuthorityV2,
+    current_general: DirectCurrentGeneralAuthorityV3,
     product_global_liveness_account: [u8; 32],
     series_plan_v5_id: [u8; 32],
     terminal_product_ids: [[u8; 32]; 7],
@@ -128,7 +128,7 @@ impl AuthenticatedDirectRootTransitionV3 {
     pub const fn direct_work_quote_id(&self) -> [u8; 32] {
         self.terminal_product_ids[6]
     }
-    /// Complete current General V4/Revenue authority identity retained by b1/v3.
+    /// Complete current General V5/Revenue authority identity retained by b1/v3.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_plan_id
     }
@@ -175,10 +175,10 @@ impl AuthenticatedDirectRootTransitionV3 {
     pub const fn fee_policy(&self) -> crate::fee_v2::DirectFeePolicyV2 {
         self.fee_policy
     }
-    /// Complete current General V4/Revenue coordinates hostile-decoded from
+    /// Complete current General V5/Revenue coordinates hostile-decoded from
     /// b1/v3. This is a borrowed projection of the authenticated root body,
     /// not a second persisted authority or a caller-shaped facts DTO.
-    pub const fn current_general(&self) -> &DirectCurrentGeneralAuthorityV2 {
+    pub const fn current_general(&self) -> &DirectCurrentGeneralAuthorityV3 {
         &self.current_general
     }
     pub(crate) const fn terminal_product_id(&self, index: usize) -> [u8; 32] {
@@ -1079,7 +1079,7 @@ fn read_product(
 
 fn write_general(
     writer: &mut BodyWriter<'_>,
-    value: &DirectCurrentGeneralAuthorityV2,
+    value: &DirectCurrentGeneralAuthorityV3,
 ) -> Result<(), DirectMarketErrorV1> {
     for id in value.ids() {
         writer.id(id)?;
@@ -1089,10 +1089,10 @@ fn write_general(
 
 fn read_general(
     reader: &mut BodyReader<'_>,
-) -> Result<DirectCurrentGeneralAuthorityV2, DirectMarketErrorV1> {
-    Ok(DirectCurrentGeneralAuthorityV2 {
+) -> Result<DirectCurrentGeneralAuthorityV3, DirectMarketErrorV1> {
+    Ok(DirectCurrentGeneralAuthorityV3 {
         general_market_binding_account: reader.id()?,
-        general_market_binding_v4_data_id: reader.id()?,
+        general_market_binding_v5_data_id: reader.id()?,
         general_market_runtime_account: reader.id()?,
         general_market_runtime_data_id: reader.id()?,
         revenue_policy_record_account: reader.id()?,

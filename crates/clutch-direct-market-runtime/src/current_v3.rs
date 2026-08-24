@@ -1,4 +1,4 @@
-//! Current Direct root authority over General V4 and Product V3 state.
+//! Current Direct root authority over General V5 and Product V3 state.
 //!
 //! `DirectMarketRootV1` is a historical BundleV5/General-V3 owner.  This
 //! module deliberately does not persist or expose that DTO. The V3 root
@@ -21,6 +21,8 @@ const PRODUCT_AUTHORITY_DOMAIN_V4: &[u8] =
     b"dragons-clutch/direct/current-product-authority/v4\0";
 const GENERAL_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/current-general-authority/v2\0";
+const GENERAL_AUTHORITY_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/direct/current-general-authority/v3\0";
 pub(crate) const BINDING_DOMAIN_V3: &[u8] = b"dragons-clutch/direct/market-binding/v3\0";
 pub(crate) const ROOT_STATE_DOMAIN_V3: &[u8] = b"dragons-clutch/direct/root-state/v3\0";
 const DIRECT_EPOCH_SEMANTICS_DOMAIN_V3: &[u8] =
@@ -152,7 +154,8 @@ impl DirectCurrentProductAuthorityV4 {
     }
 }
 
-/// Exact current General and Revenue authority retained by Direct b1/v3.
+/// Historical General V4 projection retained only for decoding withdrawn
+/// operator material. Current Direct b1/v3 never stores this type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectCurrentGeneralAuthorityV2 {
     pub general_market_binding_account: [u8; 32],
@@ -170,6 +173,53 @@ pub struct DirectCurrentGeneralAuthorityV2 {
 }
 
 impl DirectCurrentGeneralAuthorityV2 {
+    pub fn semantic_id<B: DirectHashBackendV1>(
+        &self,
+        backend: &B,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        let ids = [
+            self.general_market_binding_account,
+            self.general_market_binding_v4_data_id,
+            self.general_market_runtime_account,
+            self.general_market_runtime_data_id,
+            self.revenue_policy_record_account,
+            self.revenue_policy_record_v2_id,
+            self.revenue_policy_v2_digest,
+            self.treasury_owner,
+            self.treasury_position_derivation_policy_v2_id,
+            self.treasury_position_account,
+            self.treasury_replay_account,
+            self.treasury_service_ledger_account,
+        ];
+        for id in ids { require_live_v2(id)?; }
+        let id = backend.sha256_parts(&[
+            GENERAL_AUTHORITY_DOMAIN_V2,
+            &ids[0], &ids[1], &ids[2], &ids[3], &ids[4], &ids[5],
+            &ids[6], &ids[7], &ids[8], &ids[9], &ids[10], &ids[11],
+        ]);
+        require_live_v2(id)?;
+        Ok(id)
+    }
+}
+
+/// Exact current General V5 and Revenue authority retained by Direct b1/v3.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCurrentGeneralAuthorityV3 {
+    pub general_market_binding_account: [u8; 32],
+    pub general_market_binding_v5_data_id: [u8; 32],
+    pub general_market_runtime_account: [u8; 32],
+    pub general_market_runtime_data_id: [u8; 32],
+    pub revenue_policy_record_account: [u8; 32],
+    pub revenue_policy_record_v2_id: [u8; 32],
+    pub revenue_policy_v2_digest: [u8; 32],
+    pub treasury_owner: [u8; 32],
+    pub treasury_position_derivation_policy_v2_id: [u8; 32],
+    pub treasury_position_account: [u8; 32],
+    pub treasury_replay_account: [u8; 32],
+    pub treasury_service_ledger_account: [u8; 32],
+}
+
+impl DirectCurrentGeneralAuthorityV3 {
     /// Refuse zero identities and physical-account aliases.
     pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
         for id in self.ids() {
@@ -194,7 +244,7 @@ impl DirectCurrentGeneralAuthorityV2 {
         self.validate()?;
         let ids = self.ids();
         let id = backend.sha256_parts(&[
-            GENERAL_AUTHORITY_DOMAIN_V2,
+            GENERAL_AUTHORITY_DOMAIN_V3,
             &ids[0], &ids[1], &ids[2], &ids[3], &ids[4], &ids[5],
             &ids[6], &ids[7], &ids[8], &ids[9], &ids[10], &ids[11],
         ]);
@@ -205,7 +255,7 @@ impl DirectCurrentGeneralAuthorityV2 {
     pub(crate) const fn ids(&self) -> [[u8; 32]; 12] {
         [
             self.general_market_binding_account,
-            self.general_market_binding_v4_data_id,
+            self.general_market_binding_v5_data_id,
             self.general_market_runtime_account,
             self.general_market_runtime_data_id,
             self.revenue_policy_record_account,
@@ -246,7 +296,7 @@ pub struct DirectMarketBindingV3 {
     pub candidate_liveness: DirectCandidateLivenessBindingV1,
     pub direct_schedule_policy_id: [u8; 32],
     pub product: DirectCurrentProductAuthorityV4,
-    pub general: DirectCurrentGeneralAuthorityV2,
+    pub general: DirectCurrentGeneralAuthorityV3,
     pub direct_root_account: [u8; 32],
     pub action_replay_account: [u8; 32],
     pub neutral_lamport_sink: [u8; 32],

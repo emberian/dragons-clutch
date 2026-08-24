@@ -277,7 +277,13 @@ pub(crate) struct AuthenticatedProductDirectCandidateAllocationV3 {
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     direct_root_account: Pubkey,
+    direct_action_replay_account: Pubkey,
     product_preauthorization_id: ContentId,
+    realm_id: ContentId,
+    neutral_lamport_sink: Pubkey,
+    candidate_lifecycle_policy_id: ContentId,
+    candidate_liveness_policy_id: ContentId,
+    direct_work_quote_id: ContentId,
     manifest_account: Pubkey,
     manifest_state_before_id: ContentId,
     manifest_state_after_id: ContentId,
@@ -309,8 +315,24 @@ impl AuthenticatedProductDirectCandidateAllocationV3 {
     }
     pub(crate) const fn generation(&self) -> u64 { self.generation }
     pub(crate) const fn direct_root_account(&self) -> Pubkey { self.direct_root_account }
+    pub(crate) const fn direct_action_replay_account(&self) -> Pubkey {
+        self.direct_action_replay_account
+    }
     pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
         self.product_preauthorization_id
+    }
+    pub(crate) const fn realm_id(&self) -> ContentId { self.realm_id }
+    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey {
+        self.neutral_lamport_sink
+    }
+    pub(crate) const fn candidate_lifecycle_policy_id(&self) -> ContentId {
+        self.candidate_lifecycle_policy_id
+    }
+    pub(crate) const fn candidate_liveness_policy_id(&self) -> ContentId {
+        self.candidate_liveness_policy_id
+    }
+    pub(crate) const fn direct_work_quote_id(&self) -> ContentId {
+        self.direct_work_quote_id
     }
     pub(crate) const fn manifest_account(&self) -> Pubkey { self.manifest_account }
     pub(crate) const fn manifest_state_after_id(&self) -> ContentId {
@@ -752,7 +774,15 @@ pub(crate) fn allocate_product_direct_candidate_v3(
         market_instance_id: family_plan.market_instance_id(),
         generation: family_plan.generation(),
         direct_root_account,
+        direct_action_replay_account,
         product_preauthorization_id: family_plan.owner_prewrite_id(),
+        realm_id: state.realm_id(),
+        neutral_lamport_sink: Pubkey::new_from_array(state.neutral_lamport_sink().bytes()),
+        candidate_lifecycle_policy_id: work_quote.candidate_lifecycle_policy_id,
+        candidate_liveness_policy_id: work_quote.candidate_liveness_policy_id,
+        direct_work_quote_id: work_quote
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         manifest_account: *manifest_account.key,
         manifest_state_before_id: state_before_id,
         manifest_state_after_id: state_after_id,
