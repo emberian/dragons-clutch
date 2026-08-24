@@ -468,6 +468,7 @@ use clutch_solana_layout::{
     stream, CandidateRecord, CodecError, EpochAccount, Hash32, Intent, OrderSlot, PositionAccount,
     PriceGridAccount, SettlementReceiptAccount, EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
 };
+#[cfg(test)]
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -1110,6 +1111,7 @@ fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outco
 /* ------------------------------------------------------------------------ */
 
 /// Validate hostile accounts and apply exactly one batch-plane transition.
+#[cfg(test)]
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     /* Match through the borrowed envelope.  `Intent::PlaceOrder` carries a
      * full fixed-width portfolio slot; copying the whole Action into this

@@ -47,7 +47,7 @@ use crate::instructions::dealer_policy;
 use crate::instructions::product_series;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
+    fractional_redemption, genesis, observe_resolve, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_market_v1, resolution_work, source_ingest};
@@ -73,7 +73,6 @@ enum Route {
     ExternalExit,
     CashExit,
     Artifact,
-    OrdersBatch,
     Genesis,
     FractionalRedemption,
     #[cfg(feature = "profile-full")]
@@ -100,10 +99,8 @@ const INTENT_MERGE_HINT: u8 = 3;
 const INTENT_MATERIALIZE_HINT: u8 = 4;
 const INTENT_DEMATERIALIZE_HINT: u8 = 5;
 const INTENT_FEED_ADVANCE_HINT: u8 = 6;
-const INTENT_PLACE_ORDER_HINT: u8 = 7;
 const INTENT_INIT_REALM_HINT: u8 = 10;
 const INTENT_INIT_PROFILE_HINT: u8 = 11;
-const INTENT_INIT_ORDER_PAGE_HINT: u8 = 14;
 const INTENT_ENDOW_HINT: u8 = 15;
 const INTENT_REDEEM_EXTERNAL_HINT: u8 = 16;
 const INTENT_WITHDRAW_CASH_HINT: u8 = 17;
@@ -185,11 +182,9 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SEAL_ARTIFACT_HINT
                 | INTENT_ABORT_ARTIFACT_HINT,
             ) => Route::Artifact,
-            Some(INTENT_PLACE_ORDER_HINT) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
                 | INTENT_INIT_PROFILE_HINT
-                | INTENT_INIT_ORDER_PAGE_HINT
                 | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
@@ -275,7 +270,6 @@ pub fn process(
         Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
         Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
-        Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::FractionalRedemption => {
             process_fractional_redemption(program_id, accounts, instruction_data)
@@ -698,21 +692,6 @@ fn process_artifact(
 }
 
 #[inline(never)]
-fn process_orders_batch(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::PlaceOrder { .. }) => {
-            orders_batch::process(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
 fn process_genesis(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -722,7 +701,6 @@ fn process_genesis(
     match request.action {
         Action::Layout(Intent::InitRealm { .. })
         | Action::Layout(Intent::InitProfileV2 { .. })
-        | Action::Layout(Intent::InitOrderPage { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
         }
@@ -930,7 +908,7 @@ mod tests {
                     max_fee_atoms: 3,
                     slot: OrderSlot::Single(order),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CancelOrder {
@@ -940,7 +918,7 @@ mod tests {
                     order_id: canonical_order_id(1),
                     generation: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SettlePage {
@@ -948,7 +926,7 @@ mod tests {
                     epoch: hash(2),
                     page_index: 0,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitRealm {
@@ -989,7 +967,7 @@ mod tests {
                     page_index: 0,
                     page_count: 1,
                 },
-                Route::Genesis,
+                Route::DecodeOnly,
             ),
             (
                 Intent::Endow {
@@ -1071,7 +1049,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::GrowClearWork {
@@ -1079,7 +1057,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitEpoch {
@@ -1088,14 +1066,14 @@ mod tests {
                     policy: hash(2),
                     freeze_deadline_slot: 900,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FreezeEpoch {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::AdvanceClearWork {
@@ -1104,7 +1082,7 @@ mod tests {
                     candidate: hash(3),
                     max_orders: 16,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::AdvanceClearSlices {
@@ -1113,7 +1091,7 @@ mod tests {
                     candidate: hash(3),
                     max_slices: 16,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CompleteClearWork {
@@ -1121,7 +1099,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SubmitCandidate {
@@ -1141,7 +1119,7 @@ mod tests {
                     limit_surplus_price_units: 0,
                     distinct_owners: 2,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::WriteCandidateFeed {
@@ -1157,7 +1135,7 @@ mod tests {
                         },
                     },
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SealCandidate {
@@ -1165,14 +1143,14 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FinalizeSelection {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FreezeEntitlement {
@@ -1180,7 +1158,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::EntitleSlice {
@@ -1189,14 +1167,14 @@ mod tests {
                     candidate: hash(3),
                     slice_index: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::ReleaseTerminalReservation {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralReceipt {
@@ -1205,14 +1183,14 @@ mod tests {
                     candidate: hash(3),
                     slice_index: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralReservation {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralPage {
@@ -1220,14 +1198,14 @@ mod tests {
                     epoch: hash(2),
                     page_index: 0,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralPot {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralCandidate {
@@ -1235,7 +1213,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralClearWork {
@@ -1243,14 +1221,14 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralEpoch {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitSourceSpec {
