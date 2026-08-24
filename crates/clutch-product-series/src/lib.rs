@@ -166,10 +166,13 @@ pub use funding_state_v3::{
 pub use funding_state_v4::{
     AuthenticatedSeriesFundingAuthorityV4, SeriesComponentCapitalV4,
     SeriesFundingAbortBindingV4, SeriesFundingAbortDispositionV4,
-    SeriesFundingCompletionBindingV4, SeriesFundingPhaseV4,
+    SeriesFundingCompletionAuthorizationV4, SeriesFundingCompletionBindingV4,
+    SeriesFundingPhaseV4,
     SeriesFundingReservationBindingV4, SeriesFundingStateV4,
     SeriesFundingTerminalProjectionV4, SERIES_COMPONENT_CAPITAL_BYTES_V4,
-    SERIES_FUNDING_ABORT_BINDING_V4_DOMAIN, SERIES_FUNDING_COMPLETION_BINDING_V4_DOMAIN,
+    SERIES_FUNDING_ABORT_BINDING_V4_DOMAIN,
+    SERIES_FUNDING_COMPLETION_AUTHORIZATION_V4_DOMAIN,
+    SERIES_FUNDING_COMPLETION_BINDING_V4_DOMAIN,
     SERIES_FUNDING_RESERVATION_BINDING_V4_DOMAIN, SERIES_FUNDING_STATE_BYTES_V4,
     SERIES_FUNDING_STATE_V4_DOMAIN, SERIES_FUNDING_TERMINAL_PROJECTION_V4_DOMAIN,
 };
@@ -449,6 +452,10 @@ typed_id!(
 typed_id!(
     SeriesFundingReservationBindingV4Id,
     "Typed identity of one acyclic current pre-Source funding reservation."
+);
+typed_id!(
+    SeriesFundingCompletionAuthorizationV4Id,
+    "Typed identity of one acyclic current pre-Replay funding completion authorization."
 );
 typed_id!(
     SeriesFundingCompletionBindingV4Id,

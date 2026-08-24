@@ -22,7 +22,8 @@ use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
-    AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionBindingV4,
+    AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionAuthorizationV4,
+    SeriesFundingCompletionAuthorizationV4Id, SeriesFundingCompletionBindingV4,
     SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
     SeriesFundingReservationBindingV4Id, SeriesFundingStateV3, SeriesFundingStateV4,
     SeriesFundingStateV4Id,
@@ -62,8 +63,6 @@ const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
 const SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-completion-postwrite/v4\0";
-const SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/sbf/series-funding-completion-authorization/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -314,6 +313,22 @@ pub(crate) struct AuthenticatedProductSeriesFundingReservationV4 {
     pending: AuthenticatedSeriesFundingAccountV4,
 }
 
+/// Move-only pre-Replay authority. It owns the sole Pending reservation and
+/// the deterministic Funding poststate preview; only the final replay-bound
+/// writer below may consume it.
+#[derive(Debug)]
+struct AuthenticatedSeriesFundingCompletionAuthorizationV4 {
+    id: SeriesFundingCompletionAuthorizationV4Id,
+    facts: Box<SeriesFundingCompletionAuthorizationV4>,
+    projected_state_after: SeriesFundingStateV4,
+    reservation: AuthenticatedProductSeriesFundingReservationV4,
+}
+
+impl AuthenticatedSeriesFundingCompletionAuthorizationV4 {
+    const fn id(&self) -> SeriesFundingCompletionAuthorizationV4Id { self.id }
+    fn facts(&self) -> &SeriesFundingCompletionAuthorizationV4 { &self.facts }
+}
+
 impl AuthenticatedProductSeriesFundingReservationV4 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
     pub(crate) fn binding(&self) -> &SeriesFundingReservationBindingV4 { &self.binding }
@@ -352,6 +367,8 @@ impl AuthenticatedProductSeriesFundingReservationV4 {
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductSeriesFundingCompletionV4 {
     id: ContentId,
+    completion_authorization_id: SeriesFundingCompletionAuthorizationV4Id,
+    projected_state_after_id: SeriesFundingStateV4Id,
     completion_binding_id: SeriesFundingCompletionBindingV4Id,
     reservation_postwrite_id: ContentId,
     funding_account: Pubkey,
@@ -367,6 +384,14 @@ pub(crate) struct AuthenticatedProductSeriesFundingCompletionV4 {
 
 impl AuthenticatedProductSeriesFundingCompletionV4 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn completion_authorization_id(
+        &self,
+    ) -> SeriesFundingCompletionAuthorizationV4Id {
+        self.completion_authorization_id
+    }
+    pub(crate) const fn projected_state_after_id(&self) -> SeriesFundingStateV4Id {
+        self.projected_state_after_id
+    }
     pub(crate) const fn completion_binding_id(&self) -> SeriesFundingCompletionBindingV4Id {
         self.completion_binding_id
     }
@@ -3106,19 +3131,60 @@ fn reserve_series_funding_v4_with_binding(
     })
 }
 
+/// Consume the sole Pending reservation after Source, RootV2, and LinkV2 are
+/// persisted, and mint the acyclic authority Replay may borrow. The predicted
+/// Funding poststate is semantic evidence only; no account write occurs here.
+#[inline(never)]
+fn authorize_series_funding_completion_v4(
+    reservation: AuthenticatedProductSeriesFundingReservationV4,
+    series: &SeriesPlanV5,
+    quote: &SeriesFundingQuoteV5,
+    attachment: &SeriesAttachmentPlanV5,
+    facts: SeriesFundingCompletionAuthorizationV4,
+) -> Outcome<AuthenticatedSeriesFundingCompletionAuthorizationV4> {
+    let reservation_binding_id = reservation.binding().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let pending_state_id = reservation.funding_state_pending_id()?;
+    let projected_state_after = reservation.pending().state()
+        .project_pending_completion_poststate(series, quote, attachment)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projected_state_after_id = projected_state_after.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        facts.reservation_binding_id == reservation_binding_id
+            && facts.funding_account_id.bytes() == reservation.funding_account().to_bytes()
+            && facts.funding_account_authentication_pending_id
+                == reservation.funding_authentication_pending_id()
+            && facts.funding_pending_state_id == pending_state_id
+            && facts.funding_projected_state_after_id == projected_state_after_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = facts.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedSeriesFundingCompletionAuthorizationV4 {
+        id,
+        facts: Box::new(facts),
+        projected_state_after,
+        reservation,
+    })
+}
+
 /// Private final FundingV4 completion half. Its caller must have already
-/// persisted the exact Source, RootV2, LinkV2, and replay poststates named by
-/// `binding`; Funding clears Pending last and returns one hostile postwrite.
+/// persisted the exact Replay poststate named by `binding`; Funding clears
+/// Pending last and returns one hostile postwrite joining both authorities.
 #[inline(never)]
 fn complete_series_funding_v4_with_binding(
     program_id: &Pubkey,
     funding_account: &AccountInfo<'_>,
-    reservation: AuthenticatedProductSeriesFundingReservationV4,
+    authorization: AuthenticatedSeriesFundingCompletionAuthorizationV4,
     series: &SeriesPlanV5,
     quote: &SeriesFundingQuoteV5,
     attachment: &SeriesAttachmentPlanV5,
     binding: SeriesFundingCompletionBindingV4,
 ) -> Outcome<AuthenticatedProductSeriesFundingCompletionV4> {
+    let authorization_id = authorization.id();
+    let projected_state_after_id = authorization.facts().funding_projected_state_after_id;
+    let reservation = authorization.reservation;
     let reservation_binding_id = reservation
         .binding()
         .id()
@@ -3133,24 +3199,10 @@ fn complete_series_funding_v4_with_binding(
             && reservation.pending().account() == *funding_account.key
             && reservation.pending().state().phase
                 == clutch_product_series::SeriesFundingPhaseV4::Pending
-            && binding.reservation_binding_id == reservation_binding_id
-            && binding.funding_account_id.bytes() == funding_account.key.to_bytes()
-            && binding.funding_account_authentication_pending_id
-                == reservation.funding_authentication_pending_id()
-            && binding.funding_pending_state_id == before_state_id,
+            && binding.completion_authorization_id == authorization_id,
         ClutchError::MismatchedState,
     )?;
-    let completion_receipt_id = hashv(&[
-        SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4,
-        program_id.as_ref(),
-        funding_account.key.as_ref(),
-        &reservation.id().bytes(),
-        &reservation_binding_id.bytes(),
-        &binding_id.bytes(),
-        &before_state_id.bytes(),
-        &reservation.funding_data_pending_id().bytes(),
-        &reservation.funding_authentication_pending_id().bytes(),
-    ]);
+    let completion_receipt_id = authorization_id.content_id();
     require_live(completion_receipt_id)?;
     let authority = ExactSeriesFundingCompletionAuthorityV4 {
         state_before_id: before_state_id,
@@ -3186,7 +3238,9 @@ fn complete_series_funding_v4_with_binding(
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        rebound.state().phase != clutch_product_series::SeriesFundingPhaseV4::Pending
+        after_state_id == projected_state_after_id
+            && rebound.state() == &authorization.projected_state_after
+            && rebound.state().phase != clutch_product_series::SeriesFundingPhaseV4::Pending
             && rebound.state().pending_pre_source_reservation_binding_id.is_zero()
             && rebound.state().pending_reservation_receipt_id.is_zero()
             && rebound.state().pending_clock_receipt_id.is_zero()
@@ -3199,6 +3253,8 @@ fn complete_series_funding_v4_with_binding(
         funding_account.key.as_ref(),
         &reservation_postwrite_id.bytes(),
         &reservation_binding_id.bytes(),
+        &authorization_id.bytes(),
+        &projected_state_after_id.bytes(),
         &binding_id.bytes(),
         &completion_receipt_id.bytes(),
         &before_state_id.bytes(),
@@ -3212,6 +3268,8 @@ fn complete_series_funding_v4_with_binding(
     require_live(id)?;
     Ok(AuthenticatedProductSeriesFundingCompletionV4 {
         id,
+        completion_authorization_id: authorization_id,
+        projected_state_after_id,
         completion_binding_id: binding_id,
         reservation_postwrite_id,
         funding_account: *funding_account.key,
@@ -5168,10 +5226,14 @@ mod source_contract_tests {
         assert!(!source.contains(
             "pub(crate) fn complete_series_funding_v4_with_binding("
         ));
-        assert!(source.contains("SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4"));
         assert!(source.contains(
-            "binding.funding_account_authentication_pending_id\n                == reservation.funding_authentication_pending_id()"
+            "struct AuthenticatedSeriesFundingCompletionAuthorizationV4"
         ));
+        assert!(source.contains(
+            "facts.funding_account_authentication_pending_id\n                == reservation.funding_authentication_pending_id()"
+        ));
+        assert!(source.contains("binding.completion_authorization_id == authorization_id"));
+        assert!(source.contains("after_state_id == projected_state_after_id"));
         assert!(source.contains(
             "rebound.state().pending_pre_source_reservation_binding_id.is_zero()"
         ));
