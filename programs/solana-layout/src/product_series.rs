@@ -22,7 +22,8 @@ use clutch_product_series::{
     SeriesFundingComponentV1, SeriesFundingStateV1, SeriesFundingStateV2,
     SeriesFundingStateV3, SeriesFundingStateV4, SeriesFundingStateV5,
     SeriesFundingTermsV2Id, SeriesLifecycleReplayV1,
-    SeriesLifecycleReplayV2, SeriesMarketLinkV1, SeriesMarketLinkV2, SeriesMarketLinkV3,
+    SeriesLifecycleReplayV2, SeriesLifecycleReplayV3, SeriesMarketLinkV1,
+    SeriesMarketLinkV2, SeriesMarketLinkV3,
     SeriesPlanV5Id,
     SourceOccurrenceV1Id, DIRECT_GLOBAL_LIVENESS_BYTES_V2,
     MARKET_LIFECYCLE_REPLAY_BYTES_V2, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
@@ -32,6 +33,7 @@ use clutch_product_series::{
     SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_BYTES_V3,
     SERIES_FUNDING_STATE_BYTES_V4, SERIES_FUNDING_STATE_BYTES_V5,
     SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_LIFECYCLE_REPLAY_BYTES_V2,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V3,
     SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_BYTES_V2, SERIES_MARKET_LINK_BYTES_V3,
 };
 
@@ -90,6 +92,9 @@ pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
 /// Exact permanent counted Series lifecycle replay V2 account width.
 pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_LIFECYCLE_REPLAY_BYTES_V2;
+/// Exact current BundleV7/FundingV5 permanent counted lifecycle replay width.
+pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V3: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_LIFECYCLE_REPLAY_BYTES_V3;
 /// Exact framed shared MarketLifecycleRoot account width.
 pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
@@ -2019,6 +2024,63 @@ impl SeriesLifecycleReplayAccountV2 {
         require_reserved(&input[3..8])?;
         let value = Self {
             state: SeriesLifecycleReplayV2::decode(
+                &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            )
+            .map_err(map_product_error)?,
+            permanent_rent_principal_lamports: u64::from_le_bytes(
+                input[8..16]
+                    .try_into()
+                    .map_err(|_| CodecError::Truncated)?,
+            ),
+            stored_bump: input[2],
+        };
+        if value.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(value)
+    }
+}
+
+/// Current BundleV7/FundingV5 frame for the permanent counted Series replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesLifecycleReplayAccountV3 {
+    /// Sole field-level semantic owner.
+    pub state: SeriesLifecycleReplayV3,
+    /// Exact permanently retained payer-supplied rent principal.
+    pub permanent_rent_principal_lamports: u64,
+    /// Canonical per-Series replay PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesLifecycleReplayAccountV3 {
+    /// Encode the exact frame and fresh V3 semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V3)?;
+        if self.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode only the exact current version and canonical padding.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V3)?;
+        if input[0] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: SeriesLifecycleReplayV3::decode(
                 &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
             )
             .map_err(map_product_error)?,

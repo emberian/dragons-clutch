@@ -53,6 +53,7 @@ mod registry;
 mod source_series;
 mod series_lifecycle_replay;
 mod series_lifecycle_replay_v2;
+mod series_lifecycle_replay_v3;
 mod successor;
 
 pub use artifacts::{
@@ -349,6 +350,15 @@ pub use series_lifecycle_replay_v2::{
     SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V2, SERIES_LIFECYCLE_REPLAY_BINDING_DOMAIN_V2,
     SERIES_LIFECYCLE_REPLAY_BYTES_V2, SERIES_LIFECYCLE_REPLAY_DOMAIN_V2,
     SERIES_LIFECYCLE_TERMINAL_PROJECTION_DOMAIN_V2,
+};
+pub use series_lifecycle_replay_v3::{
+    SeriesLifecycleAdmissionProjectionV3, SeriesLifecycleLapseProjectionV3,
+    SeriesLifecycleLinkRetirementProjectionV3, SeriesLifecycleReplayBindingV3,
+    SeriesLifecycleReplayPhaseV3, SeriesLifecycleReplayV3,
+    SeriesLifecycleTerminalEvidenceV3, SeriesLifecycleTerminalProjectionV3,
+    SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V3, SERIES_LIFECYCLE_REPLAY_BINDING_DOMAIN_V3,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V3, SERIES_LIFECYCLE_REPLAY_DOMAIN_V3,
+    SERIES_LIFECYCLE_TERMINAL_PROJECTION_DOMAIN_V3,
 };
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
@@ -651,6 +661,18 @@ typed_id!(
 );
 typed_id!(
     SeriesLifecycleTerminalProjectionV2Id,
+    "Typed identity of the historical BundleV6 per-Series lifecycle terminal projection."
+);
+typed_id!(
+    SeriesLifecycleReplayBindingV3Id,
+    "Typed identity of the current BundleV7 per-Series lifecycle replay binding."
+);
+typed_id!(
+    SeriesLifecycleReplayV3Id,
+    "Typed semantic identity of the current FundingV5 per-Series lifecycle replay."
+);
+typed_id!(
+    SeriesLifecycleTerminalProjectionV3Id,
     "Typed identity of the current exhaustive per-Series lifecycle terminal projection."
 );
 typed_id!(

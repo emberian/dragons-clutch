@@ -662,10 +662,12 @@ pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb8;
 /// Historical permanent counted Product Series-lifecycle replay version.
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1: u8 = 1;
-/// Current permanent counted Product Series-lifecycle replay version.
+/// Historical BundleV6-bound Product Series-lifecycle replay version.
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Current BundleV7/FundingV5 Product Series-lifecycle replay version.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3: u8 = 3;
 /// Historical compatibility alias for decode-only clients.
-#[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2")]
+#[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3")]
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 =
     PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
 /// Product-owned Direct global-liveness manifest and allocation lifecycle discriminator.
@@ -2218,8 +2220,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
             version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-product-series-lifecycle-replay-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-series-lifecycle-replay-v2-account",
+        name: "product-series-lifecycle-replay-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -4317,7 +4328,7 @@ mod tests {
                 entry.coordinates,
                 WireNamespace::MainAccount,
                 PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
-                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V3,
             )
         });
         assert_eq!(
