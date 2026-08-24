@@ -1519,6 +1519,123 @@ pub(crate) fn authenticate_market_resolution_activation_postwrite_v5(
     })
 }
 
+/// Hostile-reopen the exact current V5 General liability postimages after the
+/// private Failure/Product resolution writer has applied one activation plan.
+///
+/// This is intentionally a separate entry point from the historical
+/// BindingV2 variant above. It consumes the complete BindingV5 authority and
+/// never projects that body through an older General layout.
+pub(crate) fn authenticate_current_market_resolution_activation_postwrite_v5(
+    program_id: &Pubkey,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
+    plan: MarketResolutionActivationPlanV5,
+    resolution_account: &AccountInfo<'_>,
+    hoard_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedMarketResolutionActivationPostwriteV5> {
+    require_program_account(program_id, resolution_account, true, RESOLUTION_V5_BYTES)?;
+    require_program_account(program_id, hoard_account, true, HOARD_V2_BYTES)?;
+    require_program_account(
+        program_id,
+        claim_ledger_account,
+        true,
+        CLAIM_LEDGER_V3_BYTES,
+    )?;
+    let relation_market = liabilities.market_binding.base().base();
+    let market_bytes = relation_market.market_instance_v2_id.bytes();
+    let expected_resolution_account = CollateralId::from_bytes(resolution_account.key.to_bytes());
+    require(
+        plan.resolution_account() == expected_resolution_account
+            && plan.hoard_before_id() == liabilities.hoard_semantic_id
+            && plan.claim_ledger_before_id() == liabilities.claim_ledger_semantic_id,
+        ClutchError::MismatchedState,
+    )?;
+    let resolution = ResolutionV5::decode(&resolution_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        resolution_account.key,
+        seeds::resolution_v5_pda(program_id, &market_bytes),
+        Some(resolution.stored_bump),
+    )?;
+    expect_pda(
+        hoard_account.key,
+        seeds::hoard_v2_pda(program_id, &market_bytes),
+        Some(plan.hoard_after().stored_bump),
+    )?;
+    expect_pda(
+        claim_ledger_account.key,
+        seeds::claim_ledger_v3_pda(program_id, &market_bytes),
+        Some(plan.claim_ledger_after().stored_bump),
+    )?;
+    let hoard = HoardV2::decode(&hoard_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_semantic_id = resolution
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_data_id = resolution
+        .data_id(expected_resolution_account)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let hoard_semantic_id = hoard
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_semantic_id = claim_ledger
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_lamports = resolution_account.lamports();
+    let hoard_lamports = hoard_account.lamports();
+    let claim_ledger_lamports = claim_ledger_account.lamports();
+    require_deletable_rent_coverage_v1(resolution.rent, resolution_lamports, true)?;
+    require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, false)?;
+    require_deletable_rent_coverage_v1(claim_ledger.rent, claim_ledger_lamports, false)?;
+    require(
+        resolution.state == ResolutionStateV5::Finalized
+            && resolution.facts.market_instance_id == CollateralId::from_bytes(market_bytes)
+            && resolution.facts.native_claim_basis_id
+                == CollateralId::from_bytes(relation_market.native_claim_basis_id.bytes())
+            && resolution.facts.outcome_count == relation_market.outcome_count
+            && resolution_semantic_id == plan.resolution_id()
+            && resolution_data_id == plan.resolution_data_id()
+            && hoard == plan.hoard_after()
+            && hoard_semantic_id == plan.hoard_after_id()
+            && claim_ledger == plan.claim_ledger_after()
+            && claim_ledger_semantic_id == plan.claim_ledger_after_id()
+            && hoard_lamports == liabilities.hoard_lamports
+            && claim_ledger_lamports == liabilities.claim_ledger_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V5,
+            &liabilities.receipt_id.bytes(),
+            &plan.receipt_id().bytes(),
+            resolution_account.key.as_ref(),
+            &resolution_semantic_id.bytes(),
+            &resolution_data_id.bytes(),
+            &resolution_lamports.to_le_bytes(),
+            hoard_account.key.as_ref(),
+            &hoard_semantic_id.bytes(),
+            &hoard_lamports.to_le_bytes(),
+            claim_ledger_account.key.as_ref(),
+            &claim_ledger_semantic_id.bytes(),
+            &claim_ledger_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedMarketResolutionActivationPostwriteV5 {
+        plan,
+        liability_authority_receipt_id: liabilities.receipt_id,
+        resolution_lamports,
+        hoard_lamports,
+        claim_ledger_lamports,
+        receipt_id,
+    })
+}
+
 /// Authenticate the sole V5 payout owner. No legacy Resolution, Market, or
 /// Terms body participates in this join.
 pub(crate) fn authenticate_resolution_v5<A: ResolutionLiabilityAuthorityV5>(
