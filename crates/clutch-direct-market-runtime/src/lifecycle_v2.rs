@@ -628,6 +628,18 @@ pub struct DirectSelectionPlanV2 {
     pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
+/// Compact effects returned by in-place current b2 transitions.
+///
+/// The 1,625-byte Selection is owned by caller storage and never crosses the
+/// SBF return boundary together with the compact root/replay transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectSelectionTransitionEffectsV2 {
+    /// Exact retained-candidate principal movement for action 5.
+    pub candidate_bond_movement: Option<DirectCandidateBondMovementV1>,
+    /// Complete candidate principal refund vector for action 8.
+    pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
+}
+
 /// Prepare current action 4 and freeze the complete live Reservation prefix.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_direct_selection_freeze_v2<
@@ -728,81 +740,96 @@ impl AuthenticatedDirectSelectionFreezeV1 for ProjectedFreezeAuthorityV2 {
 /// Prepare current action 5 and retain only the canonical best-three prefix.
 pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
     state: &mut DirectRootReplayTransitionV2,
-    selection: DirectSelectionV1,
+    selection: &mut DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     candidate: DirectEconomicCandidateV1,
     submitter: [u8; 32],
     backend: &B,
-) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
+) -> Result<DirectSelectionTransitionEffectsV2, DirectMarketErrorV1> {
     let projection = state.transition_projection()?;
     let plan = submit_direct_candidate_v1(
         projection,
-        selection,
+        *selection,
         consumed_sequence,
         observed_slot,
         candidate,
         submitter,
         backend,
     )?;
-    convert_selection_plan_v2(state, projection, plan, backend)
+    convert_selection_plan_in_place_v2(state, selection, projection, plan, backend)
 }
 
 /// Prepare current action 6's exhaustive verification traversal.
 pub fn begin_direct_candidate_verification_v2<B: DirectHashBackendV1>(
     state: &mut DirectRootReplayTransitionV2,
-    selection: DirectSelectionV1,
+    selection: &mut DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
-) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
+) -> Result<DirectSelectionTransitionEffectsV2, DirectMarketErrorV1> {
     let projection = state.transition_projection()?;
     let plan = begin_direct_candidate_verification_v1(
         projection,
-        selection,
+        *selection,
         consumed_sequence,
         observed_slot,
         backend,
     )?;
-    convert_selection_plan_v2(state, projection, plan, backend)
+    convert_selection_plan_in_place_v2(state, selection, projection, plan, backend)
 }
 
 /// Prepare current action 7 for exactly the next retained candidate.
 pub fn verify_next_direct_candidate_v2<B: DirectHashBackendV1>(
     state: &mut DirectRootReplayTransitionV2,
-    selection: DirectSelectionV1,
+    selection: &mut DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
-) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
+) -> Result<DirectSelectionTransitionEffectsV2, DirectMarketErrorV1> {
     let projection = state.transition_projection()?;
     let plan = verify_next_direct_candidate_v1(
         projection,
-        selection,
+        *selection,
         consumed_sequence,
         observed_slot,
         backend,
     )?;
-    convert_selection_plan_v2(state, projection, plan, backend)
+    convert_selection_plan_in_place_v2(state, selection, projection, plan, backend)
 }
 
 /// Prepare current action 8 and select the best valid submitted candidate.
 pub fn finalize_direct_selection_v2<B: DirectHashBackendV1>(
     state: &mut DirectRootReplayTransitionV2,
-    selection: DirectSelectionV1,
+    selection: &mut DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
-) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
+) -> Result<DirectSelectionTransitionEffectsV2, DirectMarketErrorV1> {
     let projection = state.transition_projection()?;
     let plan = finalize_direct_selection_v1(
         projection,
-        selection,
+        *selection,
         consumed_sequence,
         observed_slot,
         backend,
     )?;
-    convert_selection_plan_v2(state, projection, plan, backend)
+    convert_selection_plan_in_place_v2(state, selection, projection, plan, backend)
+}
+
+fn convert_selection_plan_in_place_v2<B: DirectHashBackendV1>(
+    state: &mut DirectRootReplayTransitionV2,
+    selection: &mut DirectSelectionV1,
+    projection: DirectRootReplayPostV1,
+    plan: crate::selection_v1::DirectSelectionFreezePlanV1,
+    backend: &B,
+) -> Result<DirectSelectionTransitionEffectsV2, DirectMarketErrorV1> {
+    state.accept_transition_projection_in_place(projection, plan.state, backend)?;
+    *selection = plan.selection;
+    Ok(DirectSelectionTransitionEffectsV2 {
+        candidate_bond_movement: plan.candidate_bond_movement,
+        candidate_bond_refunds: plan.candidate_bond_refunds,
+    })
 }
 
 fn convert_selection_plan_v2<B: DirectHashBackendV1>(
@@ -1400,5 +1427,6 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
 
 const _: () = assert!(core::mem::size_of::<DirectFoundationReceiptV2>() <= 224);
 const _: () = assert!(core::mem::size_of::<DirectRootReplayTransitionV2>() <= 2_816);
+const _: () = assert!(core::mem::size_of::<DirectSelectionTransitionEffectsV2>() <= 512);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPreparationV2>() <= 768);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPlanV2>() <= 1_024);

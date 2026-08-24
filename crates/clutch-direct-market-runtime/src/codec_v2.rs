@@ -143,6 +143,42 @@ impl AuthenticatedDirectRootTransitionV2 {
         self.projected_root.reservation_semantic_id(index)
     }
 
+    /// Recompute the permanent b3 identity only under this current root.
+    pub fn action_replay_semantic_id<B: DirectHashBackendV1>(
+        &self,
+        replay: DirectActionReplayV1,
+        backend: &B,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        replay.semantic_id(self.projected_root, backend)
+    }
+
+    /// Recompute the unchanged b2 identity only under this current root.
+    pub fn selection_semantic_id<B: DirectHashBackendV1>(
+        &self,
+        selection: DirectSelectionV1,
+        backend: &B,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        selection.semantic_id(self.projected_root, backend)
+    }
+
+    /// Recompute one unchanged b4 identity after current-root authentication.
+    pub fn child_reservation_semantic_id<B: DirectHashBackendV1>(
+        &self,
+        reservation: DirectReservationV1,
+        backend: &B,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        reservation.validate_against_root(self.projected_root)?;
+        reservation.semantic_id(backend)
+    }
+
+    /// Exact retained candidate-bond principal owned by one current b2 state.
+    pub fn outstanding_candidate_bond_lamports(
+        &self,
+        selection: DirectSelectionV1,
+    ) -> Result<u64, DirectMarketErrorV1> {
+        selection.outstanding_candidate_bond_lamports(self.projected_root)
+    }
+
     pub(crate) const fn projected_root(&self) -> DirectMarketRootV1 {
         self.projected_root
     }

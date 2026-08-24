@@ -1,10 +1,9 @@
-//! Disabled current Direct `80/1` account authentication and writeback plane.
+//! Historical Direct b1/v1 account authentication and writeback plane.
 //!
-//! The dispatcher recognizes this module only behind the exact central
-//! capability check, and every `80/1/1..=13` capability remains false. It owns
-//! the hostile Solana boundary for the fresh `0xb1..=0xb4/v1` family while
-//! economic state and transition identities stay exclusively in
-//! `clutch-direct-market-runtime`.
+//! This module is not selected by shared dispatch. It remains compiled only so
+//! historical bytes can be reviewed; current `80/1` routing is owned by
+//! `direct_market_v2` and refuses every action that lacks a complete current
+//! account tuple.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,

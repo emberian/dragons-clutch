@@ -52,7 +52,7 @@ use crate::instructions::{
     fractional_redemption, genesis, observe_resolve, revenue_policy_v2, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
-use crate::instructions::{direct_market_v1, resolution_work, source_ingest};
+use crate::instructions::{direct_market_v2, resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
@@ -444,7 +444,7 @@ fn process_direct_market(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::DirectMarket(action) => direct_market_v1::process(
+        ExtensionAction::DirectMarket(action) => direct_market_v2::process(
             program_id,
             accounts,
             request.sequence,
