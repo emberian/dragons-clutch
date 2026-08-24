@@ -1687,7 +1687,7 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
     replay_account: &AccountInfo<'_>,
     rent_refund_owner: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
