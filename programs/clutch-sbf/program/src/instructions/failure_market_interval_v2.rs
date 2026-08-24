@@ -742,8 +742,51 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v2(
     liveness_policy_account: &AccountInfo<'_>,
     body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
+    authenticate_failure_market_recovery_quote_with_root_access_v2(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        false,
+    )
+}
+
+/// Resolution-only quote authentication against the exact writable unresolved
+/// RootV2 that the same instruction will activate. This narrow entrypoint does
+/// not relax ordinary Begin/Advance authority to accept unexpected writability.
+pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v2(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
+    authenticate_failure_market_recovery_quote_with_root_access_v2(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_failure_market_recovery_quote_with_root_access_v2(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+    expected_root_writable: bool,
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
     require(
-        !root.is_writable()
+        root.is_writable() == expected_root_writable
             && liveness_policy_account.owner == program_id
             && !liveness_policy_account.is_writable
             && !liveness_policy_account.is_signer
@@ -2661,6 +2704,77 @@ const fn failure_release_disposition_byte_v2(
     }
 }
 
+/// Persist a resolved current interval append/reset and release its exact
+/// Product LinkV2 pin, without yet advancing the shared Failure runtime.
+///
+/// The successful Source-to-Product release bridge can exist only after this
+/// release. The Resolution outer must mint that bridge next and then persist
+/// the runtime transcript with the bridge identity; no crate-visible caller
+/// may detach this narrow intermediate from that sole outer.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn archive_resolved_failure_market_interval_link_v3<'a, 'link, 'next>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    release_link: &AuthenticatedWritableFailureSessionReleaseLinkV3,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    link_rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV3,
+    AuthenticatedSeriesMarketLinkV2<'next>,
+    AuthenticatedSeriesFailureSessionReleaseV3,
+)> {
+    require_distinct(&[
+        cell_account.clone(),
+        history_account.clone(),
+        series_link_account.clone(),
+    ])?;
+    require(
+        release_link.disposition() == FailureSessionReleaseDispositionV3::Resolved,
+        ClutchError::MismatchedState,
+    )?;
+    let archive = write_failure_market_interval_archive_v3(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+        link_before.state().binding().source_occurrence_id,
+        None,
+        None,
+        release_link.id(),
+        FailureSessionReleaseDispositionV3::Resolved,
+    )?;
+    let (released, release) = release_series_market_link_failure_v3(
+        program_id,
+        series_link_account,
+        link_before,
+        release_link,
+        &archive,
+        link_rebound_output,
+    )?;
+    require(
+        release.disposition() == FailureSessionReleaseDispositionV3::Resolved
+            && release.archive_postwrite_id() == archive.id()
+            && release.append_receipt_id().bytes() == archive.append().id().bytes()
+            && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
+            && release.release_link_preauthorization_id() == release_link.id()
+            && release.session_terminal_receipt_id()
+                == archive.append().session_terminal_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((archive, released, release))
+}
+
 /// Atomically archive one exact terminal Failure session and release its
 /// initiating Product link pin.
 ///
@@ -2819,12 +2933,12 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     Ok((archive, release, runtime_postwrite))
 }
 
-/// Atomically archive one current LinkV2 resolved/exhausted session, release
+/// Atomically archive one current LinkV2 exhausted session, release
 /// its exact Product pin, and persist the shared runtime transcript last.
 ///
-/// SourceAbsent/SourceRefused use their stronger Source-terminal compositor;
-/// this owner accepts only the two Product-work dispositions and never lowers
-/// their current LinkV2 pre/poststates into the historical release contract.
+/// Resolved and Source failure sessions use stronger Source terminal/release
+/// compositors; this owner accepts only deterministic exhaustion and never
+/// lowers its current LinkV2 pre/poststates into the historical contract.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
     program_id: &Pubkey,
@@ -2857,11 +2971,8 @@ pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
         series_link_account.clone(),
     ])?;
     require(
-        matches!(
-            disposition,
-            FailureSessionReleaseDispositionV3::Resolved
-                | FailureSessionReleaseDispositionV3::Exhausted
-        ) && disposition == release_link.disposition(),
+        disposition == FailureSessionReleaseDispositionV3::Exhausted
+            && disposition == release_link.disposition(),
         ClutchError::MismatchedState,
     )?;
     let link_after = link_before
@@ -2886,6 +2997,7 @@ pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
         history_before: append.history_before(),
         history_after: append.history_after(),
         completed_session_count: append.completed_session_count(),
+        source_product_release_binding_id: ProductContentId::ZERO,
         transition_receipt_id:
             clutch_failure_policy_runtime::market_runtime_v1::FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]),
     };
@@ -2898,6 +3010,7 @@ pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
         admission.state(),
         *link_before.state(),
         append,
+        ProductContentId::ZERO,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let archive = write_failure_market_interval_archive_v3(
