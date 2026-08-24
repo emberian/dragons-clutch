@@ -50,6 +50,14 @@ pub const DIRECT_MARKET_FAMILY_TAG: u8 = 80;
 /// Current Direct-market successor intent-family version.
 pub const DIRECT_MARKET_FAMILY_VERSION: u8 = 1;
 
+/// Realm-owned immutable RevenuePolicyRecord V2 discriminator.  V1 at the
+/// same tag remains historical and is never reinterpreted.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG: u8 = 27;
+/// Realm-owned immutable RevenuePolicyRecord V2 version.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION: u8 = 2;
+/// Exact immutable RevenuePolicyRecord V2 width.
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES: usize = 160;
+
 /// Existing Source Archive V2 **account** discriminator: hexadecimal `0x74`,
 /// decimal 116.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
@@ -725,6 +733,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG,
+            version: REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "realm-revenue-policy-record-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
