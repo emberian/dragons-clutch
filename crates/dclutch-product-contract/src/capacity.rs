@@ -6,8 +6,8 @@ use crate::{
 
 /// Exact byte width of [`CapacityProfileV1`].
 pub const CAPACITY_PROFILE_BYTES: usize = 96;
-/// Canonical capacity-profile magic.
-pub const CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTCAP1";
+/// Canonical Product capacity-profile magic, distinct from capability manifests.
+pub const CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTPCP1";
 /// Implemented capacity-profile schema version.
 pub const CAPACITY_PROFILE_SCHEMA_VERSION: u16 = 1;
 
@@ -285,6 +285,7 @@ mod tests {
         let value = profile();
         let bytes = value.to_bytes();
         assert_eq!(CAPACITY_PROFILE_BYTES, 96);
+        assert_eq!(CAPACITY_PROFILE_MAGIC, *b"DCLTPCP1");
         assert_eq!(bytes.get(0..8), Some(CAPACITY_PROFILE_MAGIC.as_slice()));
         assert_eq!(bytes.get(10), Some(&2));
         assert_eq!(bytes.get(80..84), Some(320u32.to_le_bytes().as_slice()));
