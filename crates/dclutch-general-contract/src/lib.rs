@@ -10,12 +10,16 @@
 //! authenticate the content identities and transcript steps supplied here,
 //! then persist returned state atomically.
 
+#[cfg(test)]
+extern crate std;
+
 use core::convert::{TryFrom, TryInto};
 
 use dclutch_capability_contract::{
-    CapabilityEntryV1, CapabilityManifestV1, FundingCompartment as CapabilityFundingCompartment,
-    FundingStateV1,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    FundingCompartment as CapabilityFundingCompartment, FundingStateV1,
 };
+use dclutch_core_contract::{MarketIdentity, MarketRoot, Phase as MarketPhase};
 
 /// Exact width of an opaque content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
@@ -33,7 +37,7 @@ pub const MAX_EXECUTIONS_PER_PAGE_V1: usize = 4;
 /// Exact canonical byte width of [`GeneralConfigV1`].
 pub const GENERAL_CONFIG_BYTES: usize = 200;
 /// Exact canonical byte width of [`GeneralRootV1`].
-pub const GENERAL_ROOT_BYTES: usize = 72;
+pub const GENERAL_ROOT_BYTES: usize = 104;
 /// Exact canonical byte width of [`GeneralFundingV1`].
 pub const GENERAL_FUNDING_BYTES: usize = 144;
 /// Exact canonical byte width of [`BatchRootV1`].
@@ -46,6 +50,14 @@ pub const GENERAL_ORDER_CUSTODY_BASE_BYTES: usize = 192;
 pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
 /// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
 pub const SETTLEMENT_RECEIPT_BASE_BYTES: usize = 176;
+/// Fixed byte prefix of [`CandidateSubmissionV1`] before its exact `N` prices.
+pub const CANDIDATE_SUBMISSION_BASE_BYTES: usize = 192;
+/// Fixed byte prefix of [`CandidateStateV1`] before its exact-N price and cursor vectors.
+pub const CANDIDATE_STATE_BASE_BYTES: usize = 376;
+/// Fixed byte prefix of [`SettlementCursorV1`] before its exact `N` net coefficients.
+pub const SETTLEMENT_CURSOR_BASE_BYTES: usize = 168;
+/// Fixed byte prefix of [`VerificationPageV1`] before its exact leading executions.
+pub const VERIFICATION_PAGE_BASE_BYTES: usize = 88;
 
 const CONFIG_MAGIC: [u8; 8] = *b"DCLTGEN1";
 const GENERAL_ROOT_MAGIC: [u8; 8] = *b"DCLTGRR1";
@@ -55,6 +67,11 @@ const ORDER_STATE_MAGIC: [u8; 8] = *b"DCLTGOS1";
 const ORDER_CUSTODY_MAGIC: [u8; 8] = *b"DCLTGOC1";
 const ORDER_MAGIC: [u8; 8] = *b"DCLTGOR1";
 const RECEIPT_MAGIC: [u8; 8] = *b"DCLTGSR1";
+const CANDIDATE_SUBMISSION_MAGIC: [u8; 8] = *b"DCLTGCS1";
+const CANDIDATE_STATE_MAGIC: [u8; 8] = *b"DCLTGCA1";
+const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = *b"DCLTGSC1";
+const VERIFICATION_PAGE_MAGIC: [u8; 8] = *b"DCLTGVP1";
+const SETTLEMENT_CURSOR_NET_OFFSET: usize = 136;
 const SCHEMA_V1: u16 = 1;
 const ARTIFACT_PROFILE_V1: u16 = 1;
 
@@ -82,6 +99,10 @@ pub const GENERAL_ORDER_STATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-order-sta
 pub const GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-order-custody/v1";
 /// PDA seed domain for one token-program-owned order quote escrow.
 pub const GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-quote-escrow/v1";
+/// PDA seed domain for one submitted candidate and verification cursor.
+pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-candidate/v1";
+/// PDA seed domain for one selected-candidate settlement cursor.
+pub const GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-settle/v1";
 
 /// Refusal returned by the General venue contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,6 +197,14 @@ pub enum Error {
     CustodyNotReleasable,
     /// Retirement was attempted before all owned state was quiescent.
     NotQuiescent,
+    /// One SDK-free account projection carried the wrong physical privileges.
+    InvalidAccountPrivilege,
+    /// Two exact frame roles aliased without an explicit V1 alias rule.
+    AccountAlias,
+    /// An instruction action tag is not recognized by General V1.
+    UnknownAction,
+    /// An instruction payload was not canonical for its selected action.
+    InvalidInstruction,
 }
 
 /// Result alias for General contract operations.
@@ -252,6 +281,1451 @@ pub const GENERAL_CHILD_DERIVATION_ID_V1: ContentId = ContentId([
     0x56, 0xd5, 0xff, 0xe7, 0xce, 0x62, 0x82, 0x2c, 0x62, 0x32, 0x11, 0xea, 0x3e, 0x4a, 0x53, 0x3c,
     0xfb, 0x5c, 0xd9, 0xa5, 0x84, 0x60, 0xf7, 0x85, 0xea, 0x52, 0x01, 0x69, 0x97, 0x18, 0x8b, 0xb0,
 ]);
+
+/// Exact PDA seed projection for one immutable General config.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralConfigPdaSeedsV1 {
+    config_id: [u8; 32],
+}
+
+impl GeneralConfigPdaSeedsV1 {
+    /// Construct from the SHA-256 identity of the canonical config bytes.
+    pub const fn new(config_id: ContentId) -> Self {
+        Self {
+            config_id: config_id.to_bytes(),
+        }
+    }
+
+    /// Return `[domain, config_id]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 2] {
+        [GENERAL_CONFIG_PDA_DOMAIN_V1, self.config_id.as_slice()]
+    }
+
+    /// Return the immutable config content-identity seed.
+    pub const fn config_id(self) -> [u8; 32] {
+        self.config_id
+    }
+}
+
+/// Exact PDA seed projection for one active General root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralRootPdaSeedsV1 {
+    market: [u8; 32],
+    generation_le: [u8; 8],
+    config_id: [u8; 32],
+}
+
+impl GeneralRootPdaSeedsV1 {
+    /// Construct the canonical Market/generation/config root derivation.
+    pub fn new(market: [u8; 32], generation: u64, config_id: ContentId) -> Result<Self> {
+        require_nonzero_key(&market)?;
+        Ok(Self {
+            market,
+            generation_le: generation.to_le_bytes(),
+            config_id: config_id.to_bytes(),
+        })
+    }
+
+    /// Return `[domain, market, generation_le, config_id]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 4] {
+        [
+            GENERAL_ROOT_PDA_DOMAIN_V1,
+            self.market.as_slice(),
+            self.generation_le.as_slice(),
+            self.config_id.as_slice(),
+        ]
+    }
+
+    /// Return the authenticated Market key seed.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Return the Market-generation seed.
+    pub const fn generation(self) -> u64 {
+        u64::from_le_bytes(self.generation_le)
+    }
+
+    /// Return the config content-identity seed.
+    pub const fn config_id(self) -> [u8; 32] {
+        self.config_id
+    }
+}
+
+/// Exact PDA seed projection for one segregated General funding ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingPdaSeedsV1 {
+    market: [u8; 32],
+    generation_le: [u8; 8],
+    config_id: [u8; 32],
+    release_id: [u8; 32],
+}
+
+impl GeneralFundingPdaSeedsV1 {
+    /// Construct the canonical Market/generation/config/release derivation.
+    pub fn new(
+        market: [u8; 32],
+        generation: u64,
+        config_id: ContentId,
+        release_id: ContentId,
+    ) -> Result<Self> {
+        require_nonzero_key(&market)?;
+        if release_id != GENERAL_CAPABILITY_RELEASE_ID_V1 {
+            return Err(Error::UnrecognizedCapability);
+        }
+        Ok(Self {
+            market,
+            generation_le: generation.to_le_bytes(),
+            config_id: config_id.to_bytes(),
+            release_id: release_id.to_bytes(),
+        })
+    }
+
+    /// Return `[domain, market, generation_le, config_id, release_id]`.
+    pub fn seed_components(&self) -> [&[u8]; 5] {
+        [
+            GENERAL_FUNDING_PDA_DOMAIN_V1,
+            self.market.as_slice(),
+            self.generation_le.as_slice(),
+            self.config_id.as_slice(),
+            self.release_id.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for one General batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralBatchPdaSeedsV1 {
+    root: [u8; 32],
+    sequence_le: [u8; 8],
+}
+
+impl GeneralBatchPdaSeedsV1 {
+    /// Construct from the authenticated root key and reserved sequence.
+    pub fn new(root: [u8; 32], sequence: u64) -> Result<Self> {
+        require_nonzero_key(&root)?;
+        Ok(Self {
+            root,
+            sequence_le: sequence.to_le_bytes(),
+        })
+    }
+
+    /// Return `[domain, root, sequence_le]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            GENERAL_BATCH_PDA_DOMAIN_V1,
+            self.root.as_slice(),
+            self.sequence_le.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for one signed-order replay record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderStatePdaSeedsV1 {
+    market: [u8; 32],
+    generation_le: [u8; 8],
+    owner: [u8; 32],
+    nonce_le: [u8; 8],
+    order_id: [u8; 32],
+}
+
+impl GeneralOrderStatePdaSeedsV1 {
+    /// Construct the unique replay derivation from one authenticated order.
+    pub fn new<const N: usize>(market: [u8; 32], order: PortfolioOrderV1<N>) -> Result<Self> {
+        require_nonzero_key(&market)?;
+        Ok(Self {
+            market,
+            generation_le: order.generation().to_le_bytes(),
+            owner: order.owner().to_bytes(),
+            nonce_le: order.nonce().to_le_bytes(),
+            order_id: order.order_id().to_bytes(),
+        })
+    }
+
+    /// Return `[domain, market, generation_le, owner, nonce_le, order_id]`.
+    pub fn seed_components(&self) -> [&[u8]; 6] {
+        [
+            GENERAL_ORDER_STATE_PDA_DOMAIN_V1,
+            self.market.as_slice(),
+            self.generation_le.as_slice(),
+            self.owner.as_slice(),
+            self.nonce_le.as_slice(),
+            self.order_id.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for one order custody account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderCustodyPdaSeedsV1 {
+    order_state: [u8; 32],
+}
+
+impl GeneralOrderCustodyPdaSeedsV1 {
+    /// Construct from the already-derived replay account key.
+    pub fn new(order_state: [u8; 32]) -> Result<Self> {
+        require_nonzero_key(&order_state)?;
+        Ok(Self { order_state })
+    }
+
+    /// Return `[domain, order_state]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 2] {
+        [
+            GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1,
+            self.order_state.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for one token-program-owned quote escrow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralQuoteEscrowPdaSeedsV1 {
+    custody: [u8; 32],
+}
+
+impl GeneralQuoteEscrowPdaSeedsV1 {
+    /// Construct from the already-derived semantic custody account key.
+    pub fn new(custody: [u8; 32]) -> Result<Self> {
+        require_nonzero_key(&custody)?;
+        Ok(Self { custody })
+    }
+
+    /// Return `[domain, custody]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 2] {
+        [GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1, self.custody.as_slice()]
+    }
+}
+
+/// Exact PDA seed projection for one submitted candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCandidatePdaSeedsV1 {
+    batch: [u8; 32],
+    candidate_id: [u8; 32],
+}
+
+impl GeneralCandidatePdaSeedsV1 {
+    /// Construct from the authenticated batch key and submission identity.
+    pub fn new(batch: [u8; 32], candidate_id: ContentId) -> Result<Self> {
+        require_nonzero_key(&batch)?;
+        Ok(Self {
+            batch,
+            candidate_id: candidate_id.to_bytes(),
+        })
+    }
+
+    /// Return `[domain, batch, candidate_id]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+            self.batch.as_slice(),
+            self.candidate_id.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for one selected-candidate settlement cursor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralSettlementCursorPdaSeedsV1 {
+    candidate: [u8; 32],
+}
+
+impl GeneralSettlementCursorPdaSeedsV1 {
+    /// Construct from the selected candidate account key.
+    pub fn new(candidate: [u8; 32]) -> Result<Self> {
+        require_nonzero_key(&candidate)?;
+        Ok(Self { candidate })
+    }
+
+    /// Return `[domain, candidate]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 2] {
+        [
+            GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1,
+            self.candidate.as_slice(),
+        ]
+    }
+}
+
+/// Shared header width of every General V1 instruction.
+pub const GENERAL_INSTRUCTION_HEADER_BYTES: usize = 16;
+/// Canonical General instruction-family magic.
+pub const GENERAL_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTGIN1";
+/// Implemented General instruction schema.
+pub const GENERAL_INSTRUCTION_SCHEMA_V1: u16 = 1;
+
+/// Closed General V1 instruction action set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum GeneralInstructionTagV1 {
+    /// Activate the manifest-selected capability and create config/root/funding.
+    Activate = 1,
+    /// Reserve and create the next collecting batch.
+    OpenBatch = 2,
+    /// Close collection and enter candidate selection.
+    LockBatch = 3,
+    /// Admit one signed order with replay and exact custody.
+    AdmitOrder = 4,
+    /// Cancel one signed order before collection closes.
+    CancelOrder = 5,
+    /// Close one unavailable order and release residual custody/rent.
+    CloseOrder = 6,
+    /// Create one permissionless candidate from its canonical submission.
+    SubmitCandidate = 7,
+    /// Verify one canonical bounded candidate page.
+    VerifyCandidatePage = 8,
+    /// Finish candidate verification from its persisted cursor.
+    FinishCandidate = 9,
+    /// Consider one valid candidate for deterministic best-submitted selection.
+    ConsiderCandidate = 10,
+    /// Freeze the best valid submitted candidate after selection closes.
+    LockSelection = 11,
+    /// Capitalize and begin the selected candidate's non-expiring settlement.
+    BeginSettlement = 12,
+    /// Apply one canonical selected-candidate settlement page.
+    SettlePage = 13,
+    /// Finish settlement after exact cursor convergence.
+    FinishSettlement = 14,
+    /// Retire one quiescent batch and its direct child count.
+    CloseBatch = 15,
+    /// Stop admitting new batches.
+    Quiesce = 16,
+    /// Discharge terminal funding and close the General account cluster.
+    CloseGeneral = 17,
+    /// Close one unavailable candidate into its submitter's RentCredit.
+    CloseCandidate = 18,
+    /// Close one finished settlement cursor into its submitter's RentCredit.
+    CloseSettlement = 19,
+}
+
+impl GeneralInstructionTagV1 {
+    fn decode(tag: u8) -> Result<Self> {
+        match tag {
+            1 => Ok(Self::Activate),
+            2 => Ok(Self::OpenBatch),
+            3 => Ok(Self::LockBatch),
+            4 => Ok(Self::AdmitOrder),
+            5 => Ok(Self::CancelOrder),
+            6 => Ok(Self::CloseOrder),
+            7 => Ok(Self::SubmitCandidate),
+            8 => Ok(Self::VerifyCandidatePage),
+            9 => Ok(Self::FinishCandidate),
+            10 => Ok(Self::ConsiderCandidate),
+            11 => Ok(Self::LockSelection),
+            12 => Ok(Self::BeginSettlement),
+            13 => Ok(Self::SettlePage),
+            14 => Ok(Self::FinishSettlement),
+            15 => Ok(Self::CloseBatch),
+            16 => Ok(Self::Quiesce),
+            17 => Ok(Self::CloseGeneral),
+            18 => Ok(Self::CloseCandidate),
+            19 => Ok(Self::CloseSettlement),
+            _ => Err(Error::UnknownAction),
+        }
+    }
+}
+
+/// Activation replay plus the sole canonical config payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivateGeneralV1 {
+    /// Direct Market child count required before activation.
+    pub expected_market_child_count: u64,
+    /// Immutable General config whose exact bytes are content-addressed.
+    pub config: GeneralConfigV1,
+}
+
+/// Batch/generation replay facts shared by batch lifecycle actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralBatchReplayV1 {
+    /// Immutable Market generation.
+    pub generation: u64,
+    /// Exact General batch sequence.
+    pub batch_sequence: u64,
+}
+
+/// Candidate content identity plus its sole canonical submission payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmitGeneralCandidateV1<const N: usize> {
+    /// SHA-256 identity of the canonical submission bytes.
+    pub candidate_id: ContentId,
+    /// Exact candidate submission.
+    pub submission: CandidateSubmissionV1<N>,
+}
+
+/// Candidate identity plus one canonical exact leading-execution page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCandidatePageV1<const N: usize> {
+    /// Persisted candidate content identity.
+    pub candidate_id: ContentId,
+    /// Exact verification or settlement page.
+    pub page: VerificationPageV1<N>,
+}
+
+/// One hostile-decoded General instruction at exact ClaimBasis width `N`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralInstructionV1<const N: usize> {
+    /// Activate config/root/funding from generic capability funding.
+    Activate(ActivateGeneralV1),
+    /// Open the next batch.
+    OpenBatch(GeneralBatchReplayV1),
+    /// Lock collection.
+    LockBatch(GeneralBatchReplayV1),
+    /// Admit one canonical signed order.
+    AdmitOrder(PortfolioOrderV1<N>),
+    /// Cancel one canonical signed order.
+    CancelOrder(PortfolioOrderV1<N>),
+    /// Close one canonical signed order's replay and custody.
+    CloseOrder(PortfolioOrderV1<N>),
+    /// Submit one candidate.
+    SubmitCandidate(SubmitGeneralCandidateV1<N>),
+    /// Verify one candidate page.
+    VerifyCandidatePage(GeneralCandidatePageV1<N>),
+    /// Finish candidate verification.
+    FinishCandidate(ContentId),
+    /// Consider one valid candidate.
+    ConsiderCandidate(ContentId),
+    /// Lock candidate selection.
+    LockSelection(GeneralBatchReplayV1),
+    /// Begin selected-candidate settlement.
+    BeginSettlement(ContentId),
+    /// Apply one settlement page.
+    SettlePage(GeneralCandidatePageV1<N>),
+    /// Finish selected-candidate settlement.
+    FinishSettlement(ContentId),
+    /// Close one quiescent batch.
+    CloseBatch(GeneralBatchReplayV1),
+    /// Enter General quiescence for one generation.
+    Quiesce(u64),
+    /// Close one terminal General cluster for one generation.
+    CloseGeneral(u64),
+    /// Close one unavailable candidate.
+    CloseCandidate(ContentId),
+    /// Close one finished settlement cursor.
+    CloseSettlement(ContentId),
+}
+
+impl<const N: usize> GeneralInstructionV1<N> {
+    /// Decode exactly one action, refusing width substitution and trailing bytes.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        validate_instruction_header::<N>(bytes)?;
+        let tag = GeneralInstructionTagV1::decode(read_u8(bytes, 10)?)?;
+        match tag {
+            GeneralInstructionTagV1::Activate => {
+                exact_len(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + 8 + GENERAL_CONFIG_BYTES,
+                )?;
+                let config = GeneralConfigV1::decode(subslice(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + 8,
+                    GENERAL_CONFIG_BYTES,
+                )?)?;
+                if usize::from(config.outcome_count()) != N {
+                    return Err(Error::InvalidOutcomeCount);
+                }
+                Ok(Self::Activate(ActivateGeneralV1 {
+                    expected_market_child_count: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    config,
+                }))
+            }
+            GeneralInstructionTagV1::OpenBatch
+            | GeneralInstructionTagV1::LockBatch
+            | GeneralInstructionTagV1::LockSelection
+            | GeneralInstructionTagV1::CloseBatch => {
+                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 16)?;
+                let replay = GeneralBatchReplayV1 {
+                    generation: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    batch_sequence: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?,
+                };
+                Ok(match tag {
+                    GeneralInstructionTagV1::OpenBatch => Self::OpenBatch(replay),
+                    GeneralInstructionTagV1::LockBatch => Self::LockBatch(replay),
+                    GeneralInstructionTagV1::LockSelection => Self::LockSelection(replay),
+                    GeneralInstructionTagV1::CloseBatch => Self::CloseBatch(replay),
+                    _ => return Err(Error::UnknownAction),
+                })
+            }
+            GeneralInstructionTagV1::AdmitOrder
+            | GeneralInstructionTagV1::CancelOrder
+            | GeneralInstructionTagV1::CloseOrder => {
+                let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
+                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + order_bytes)?;
+                let order = PortfolioOrderV1::decode(subslice(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    order_bytes,
+                )?)?;
+                Ok(match tag {
+                    GeneralInstructionTagV1::AdmitOrder => Self::AdmitOrder(order),
+                    GeneralInstructionTagV1::CancelOrder => Self::CancelOrder(order),
+                    GeneralInstructionTagV1::CloseOrder => Self::CloseOrder(order),
+                    _ => return Err(Error::UnknownAction),
+                })
+            }
+            GeneralInstructionTagV1::SubmitCandidate => {
+                let submission_bytes = CandidateSubmissionV1::<N>::encoded_len()?;
+                exact_len(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES + submission_bytes,
+                )?;
+                Ok(Self::SubmitCandidate(SubmitGeneralCandidateV1 {
+                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    submission: CandidateSubmissionV1::decode(subslice(
+                        bytes,
+                        GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES,
+                        submission_bytes,
+                    )?)?,
+                }))
+            }
+            GeneralInstructionTagV1::VerifyCandidatePage | GeneralInstructionTagV1::SettlePage => {
+                let prefix = GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES;
+                if bytes.len() < prefix + VERIFICATION_PAGE_BASE_BYTES {
+                    return Err(Error::InvalidLength);
+                }
+                let page =
+                    VerificationPageV1::decode(bytes.get(prefix..).ok_or(Error::InvalidLength)?)?;
+                let page = GeneralCandidatePageV1 {
+                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    page,
+                };
+                Ok(match tag {
+                    GeneralInstructionTagV1::VerifyCandidatePage => Self::VerifyCandidatePage(page),
+                    GeneralInstructionTagV1::SettlePage => Self::SettlePage(page),
+                    _ => return Err(Error::UnknownAction),
+                })
+            }
+            GeneralInstructionTagV1::FinishCandidate
+            | GeneralInstructionTagV1::ConsiderCandidate
+            | GeneralInstructionTagV1::BeginSettlement
+            | GeneralInstructionTagV1::FinishSettlement
+            | GeneralInstructionTagV1::CloseCandidate
+            | GeneralInstructionTagV1::CloseSettlement => {
+                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?;
+                let candidate_id = read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?;
+                Ok(match tag {
+                    GeneralInstructionTagV1::FinishCandidate => Self::FinishCandidate(candidate_id),
+                    GeneralInstructionTagV1::ConsiderCandidate => {
+                        Self::ConsiderCandidate(candidate_id)
+                    }
+                    GeneralInstructionTagV1::BeginSettlement => Self::BeginSettlement(candidate_id),
+                    GeneralInstructionTagV1::FinishSettlement => {
+                        Self::FinishSettlement(candidate_id)
+                    }
+                    GeneralInstructionTagV1::CloseCandidate => Self::CloseCandidate(candidate_id),
+                    GeneralInstructionTagV1::CloseSettlement => Self::CloseSettlement(candidate_id),
+                    _ => return Err(Error::UnknownAction),
+                })
+            }
+            GeneralInstructionTagV1::Quiesce | GeneralInstructionTagV1::CloseGeneral => {
+                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
+                let generation = read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?;
+                Ok(match tag {
+                    GeneralInstructionTagV1::Quiesce => Self::Quiesce(generation),
+                    GeneralInstructionTagV1::CloseGeneral => Self::CloseGeneral(generation),
+                    _ => return Err(Error::UnknownAction),
+                })
+            }
+        }
+    }
+
+    /// Return the exact wire width for this action.
+    pub fn encoded_len(&self) -> Result<usize> {
+        match self {
+            Self::Activate(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 8 + GENERAL_CONFIG_BYTES),
+            Self::OpenBatch(_)
+            | Self::LockBatch(_)
+            | Self::LockSelection(_)
+            | Self::CloseBatch(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 16),
+            Self::AdmitOrder(_) | Self::CancelOrder(_) | Self::CloseOrder(_) => {
+                GENERAL_INSTRUCTION_HEADER_BYTES
+                    .checked_add(PortfolioOrderV1::<N>::encoded_len()?)
+                    .ok_or(Error::ArithmeticOverflow)
+            }
+            Self::SubmitCandidate(_) => GENERAL_INSTRUCTION_HEADER_BYTES
+                .checked_add(CONTENT_ID_BYTES)
+                .and_then(|value| {
+                    CandidateSubmissionV1::<N>::encoded_len()
+                        .ok()
+                        .and_then(|length| value.checked_add(length))
+                })
+                .ok_or(Error::ArithmeticOverflow),
+            Self::VerifyCandidatePage(page) | Self::SettlePage(page) => {
+                GENERAL_INSTRUCTION_HEADER_BYTES
+                    .checked_add(CONTENT_ID_BYTES)
+                    .and_then(|value| {
+                        VerificationPageV1::<N>::encoded_len(page.page.execution_count)
+                            .ok()
+                            .and_then(|length| value.checked_add(length))
+                    })
+                    .ok_or(Error::ArithmeticOverflow)
+            }
+            Self::FinishCandidate(_)
+            | Self::ConsiderCandidate(_)
+            | Self::BeginSettlement(_)
+            | Self::FinishSettlement(_)
+            | Self::CloseCandidate(_)
+            | Self::CloseSettlement(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES),
+            Self::Quiesce(_) | Self::CloseGeneral(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 8),
+        }
+    }
+
+    /// Encode exactly one action without maximum-width or page padding.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, self.encoded_len()?)?;
+        out.fill(0);
+        put(out, 0, &GENERAL_INSTRUCTION_MAGIC_V1);
+        put(out, 8, &GENERAL_INSTRUCTION_SCHEMA_V1.to_le_bytes());
+        put(out, 10, &[self.tag() as u8]);
+        put(
+            out,
+            11,
+            &[u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?],
+        );
+        match self {
+            Self::Activate(instruction) => {
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    &instruction.expected_market_child_count.to_le_bytes(),
+                );
+                let mut config_bytes = instruction.config.to_bytes();
+                put(out, GENERAL_INSTRUCTION_HEADER_BYTES + 8, &config_bytes);
+                config_bytes.fill(0);
+            }
+            Self::OpenBatch(replay)
+            | Self::LockBatch(replay)
+            | Self::LockSelection(replay)
+            | Self::CloseBatch(replay) => encode_batch_replay(out, *replay),
+            Self::AdmitOrder(order) | Self::CancelOrder(order) | Self::CloseOrder(order) => {
+                order.encode(
+                    out.get_mut(GENERAL_INSTRUCTION_HEADER_BYTES..)
+                        .ok_or(Error::InvalidLength)?,
+                )?;
+            }
+            Self::SubmitCandidate(instruction) => {
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    instruction.candidate_id.as_bytes(),
+                );
+                instruction.submission.encode(
+                    out.get_mut(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES..)
+                        .ok_or(Error::InvalidLength)?,
+                )?;
+            }
+            Self::VerifyCandidatePage(instruction) | Self::SettlePage(instruction) => {
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    instruction.candidate_id.as_bytes(),
+                );
+                instruction.page.encode(
+                    out.get_mut(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES..)
+                        .ok_or(Error::InvalidLength)?,
+                )?;
+            }
+            Self::FinishCandidate(candidate_id)
+            | Self::ConsiderCandidate(candidate_id)
+            | Self::BeginSettlement(candidate_id)
+            | Self::FinishSettlement(candidate_id)
+            | Self::CloseCandidate(candidate_id)
+            | Self::CloseSettlement(candidate_id) => {
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    candidate_id.as_bytes(),
+                );
+            }
+            Self::Quiesce(generation) | Self::CloseGeneral(generation) => put(
+                out,
+                GENERAL_INSTRUCTION_HEADER_BYTES,
+                &generation.to_le_bytes(),
+            ),
+        }
+        Ok(())
+    }
+
+    /// Return the closed action discriminator.
+    pub const fn tag(&self) -> GeneralInstructionTagV1 {
+        match self {
+            Self::Activate(_) => GeneralInstructionTagV1::Activate,
+            Self::OpenBatch(_) => GeneralInstructionTagV1::OpenBatch,
+            Self::LockBatch(_) => GeneralInstructionTagV1::LockBatch,
+            Self::AdmitOrder(_) => GeneralInstructionTagV1::AdmitOrder,
+            Self::CancelOrder(_) => GeneralInstructionTagV1::CancelOrder,
+            Self::CloseOrder(_) => GeneralInstructionTagV1::CloseOrder,
+            Self::SubmitCandidate(_) => GeneralInstructionTagV1::SubmitCandidate,
+            Self::VerifyCandidatePage(_) => GeneralInstructionTagV1::VerifyCandidatePage,
+            Self::FinishCandidate(_) => GeneralInstructionTagV1::FinishCandidate,
+            Self::ConsiderCandidate(_) => GeneralInstructionTagV1::ConsiderCandidate,
+            Self::LockSelection(_) => GeneralInstructionTagV1::LockSelection,
+            Self::BeginSettlement(_) => GeneralInstructionTagV1::BeginSettlement,
+            Self::SettlePage(_) => GeneralInstructionTagV1::SettlePage,
+            Self::FinishSettlement(_) => GeneralInstructionTagV1::FinishSettlement,
+            Self::CloseBatch(_) => GeneralInstructionTagV1::CloseBatch,
+            Self::Quiesce(_) => GeneralInstructionTagV1::Quiesce,
+            Self::CloseGeneral(_) => GeneralInstructionTagV1::CloseGeneral,
+            Self::CloseCandidate(_) => GeneralInstructionTagV1::CloseCandidate,
+            Self::CloseSettlement(_) => GeneralInstructionTagV1::CloseSettlement,
+        }
+    }
+}
+
+/// Exact width of one SVM account key projection.
+pub const GENERAL_ACCOUNT_KEY_BYTES: usize = 32;
+/// Canonical System Program key bytes.
+pub const GENERAL_SYSTEM_PROGRAM_ID: [u8; 32] = [0; 32];
+/// Canonical Rent sysvar key bytes.
+pub const GENERAL_RENT_SYSVAR_ID: [u8; 32] = [
+    6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127, 88, 218, 238, 8, 155, 161,
+    253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
+];
+/// Canonical Clock sysvar key bytes.
+pub const GENERAL_CLOCK_SYSVAR_ID: [u8; 32] = [
+    6, 167, 213, 23, 24, 199, 116, 201, 40, 86, 99, 152, 105, 29, 94, 182, 139, 94, 184, 163, 155,
+    75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0,
+];
+
+/// One runtime account projection used by General physical frames.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralAccountMetaV1 {
+    /// Exact account key bytes.
+    pub key: [u8; GENERAL_ACCOUNT_KEY_BYTES],
+    /// Whether the runtime exposed signer privilege.
+    pub is_signer: bool,
+    /// Whether the runtime exposed writable privilege.
+    pub is_writable: bool,
+    /// Whether the runtime exposed executable privilege.
+    pub is_executable: bool,
+}
+
+/// Closed ordered role vocabulary for every General V1 physical frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralAccountRoleV1 {
+    /// Permissionless activation signer and physical-creation recipient.
+    Activator,
+    /// Mutable provider-neutral Market state.
+    WritableMarket,
+    /// Readonly provider-neutral Market state.
+    ReadonlyMarket,
+    /// Immutable Realm content account.
+    Realm,
+    /// Realm-selected settlement mint.
+    Mint,
+    /// Realm-selected executable token program.
+    TokenProgram,
+    /// Immutable categorical ClaimBasis content account.
+    ClaimBasis,
+    /// Immutable capability manifest content account.
+    Manifest,
+    /// Mutable generic capability FundingState source.
+    CapabilityFunding,
+    /// Vacant or immutable General config PDA.
+    WritableConfig,
+    /// Readonly General config PDA.
+    ReadonlyConfig,
+    /// Vacant or mutable General root PDA.
+    WritableRoot,
+    /// Readonly General root PDA.
+    ReadonlyRoot,
+    /// Vacant or mutable segregated General funding PDA.
+    WritableGeneralFunding,
+    /// Vacant or mutable General batch PDA.
+    WritableBatch,
+    /// Readonly General batch PDA.
+    ReadonlyBatch,
+    /// Permissionless work actor and current transaction recipient.
+    WorkActor,
+    /// Signed order owner and admission rent payer.
+    OrderOwnerPayer,
+    /// Readonly signed order owner authorizing cancellation.
+    OrderOwner,
+    /// Immutable content-addressed signed-order bytes.
+    SignedOrder,
+    /// Vacant or mutable order replay PDA.
+    WritableOrderState,
+    /// Readonly order replay PDA.
+    ReadonlyOrderState,
+    /// Vacant or mutable exact-N order custody PDA.
+    WritableOrderCustody,
+    /// Owner's mutable native Position.
+    OwnerPosition,
+    /// Owner-controlled settlement-token source.
+    QuoteSource,
+    /// Token-program-owned quote escrow PDA.
+    QuoteEscrow,
+    /// Owner's settlement-token release destination.
+    QuoteDestination,
+    /// Readonly permanent RentCredit.
+    ReadonlyRentCredit,
+    /// Writable permanent RentCredit receiving exact closed-account rent.
+    WritableRentCredit,
+    /// Permissionless candidate submitter and rent payer.
+    CandidateSubmitter,
+    /// Vacant or mutable candidate state PDA.
+    WritableCandidate,
+    /// Readonly candidate state PDA.
+    ReadonlyCandidate,
+    /// Vacant or mutable settlement cursor PDA.
+    WritableSettlementCursor,
+    /// Readonly settlement cursor PDA.
+    ReadonlySettlementCursor,
+    /// Provider-neutral collateral Vault/Hoard token account.
+    CollateralVault,
+    /// Canonical executable System Program.
+    SystemProgram,
+    /// Canonical readonly Rent sysvar.
+    RentSysvar,
+    /// Canonical readonly Clock sysvar.
+    ClockSysvar,
+}
+
+/// Validated exact ordered frame geometry for one General action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralAccountFrameV1<'a> {
+    tag: GeneralInstructionTagV1,
+    execution_count: u8,
+    accounts: &'a [GeneralAccountMetaV1],
+}
+
+impl<'a> GeneralAccountFrameV1<'a> {
+    /// Validate exact length, ordered privileges, fixed identities, and aliases.
+    pub fn new(
+        tag: GeneralInstructionTagV1,
+        execution_count: u8,
+        accounts: &'a [GeneralAccountMetaV1],
+    ) -> Result<Self> {
+        let expected = general_frame_account_count(tag, execution_count)?;
+        if accounts.len() != expected {
+            return Err(Error::InvalidLength);
+        }
+        for (index, account) in accounts.iter().enumerate() {
+            let role = general_frame_role(tag, execution_count, index)?;
+            validate_general_account_role(role, *account)?;
+        }
+        require_distinct_general_accounts(accounts)?;
+        Ok(Self {
+            tag,
+            execution_count,
+            accounts,
+        })
+    }
+
+    /// Return the selected action.
+    pub const fn tag(self) -> GeneralInstructionTagV1 {
+        self.tag
+    }
+
+    /// Return the exact leading execution count for page frames, otherwise zero.
+    pub const fn execution_count(self) -> u8 {
+        self.execution_count
+    }
+
+    /// Return the exact ordered account count.
+    pub const fn account_count(self) -> usize {
+        self.accounts.len()
+    }
+
+    /// Borrow the exact validated ordered account projections.
+    pub const fn accounts(self) -> &'a [GeneralAccountMetaV1] {
+        self.accounts
+    }
+
+    /// Return one canonical ordered role.
+    pub fn role(self, index: usize) -> Result<GeneralAccountRoleV1> {
+        if index >= self.accounts.len() {
+            return Err(Error::InvalidLength);
+        }
+        general_frame_role(self.tag, self.execution_count, index)
+    }
+}
+
+fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Result<usize> {
+    let page_count = usize::from(count);
+    let fixed = match tag {
+        GeneralInstructionTagV1::Activate => 15,
+        GeneralInstructionTagV1::OpenBatch => 10,
+        GeneralInstructionTagV1::LockBatch => 4,
+        GeneralInstructionTagV1::AdmitOrder => 17,
+        GeneralInstructionTagV1::CancelOrder => 14,
+        GeneralInstructionTagV1::CloseOrder => 12,
+        GeneralInstructionTagV1::SubmitCandidate => 9,
+        GeneralInstructionTagV1::FinishCandidate => 2,
+        GeneralInstructionTagV1::ConsiderCandidate => 4,
+        GeneralInstructionTagV1::LockSelection => 2,
+        GeneralInstructionTagV1::BeginSettlement => 14,
+        GeneralInstructionTagV1::FinishSettlement => 5,
+        GeneralInstructionTagV1::CloseBatch => 3,
+        GeneralInstructionTagV1::Quiesce => 1,
+        GeneralInstructionTagV1::CloseGeneral => 5,
+        GeneralInstructionTagV1::CloseCandidate => 3,
+        GeneralInstructionTagV1::CloseSettlement => 4,
+        GeneralInstructionTagV1::VerifyCandidatePage => {
+            require_page_count(count)?;
+            return 4usize
+                .checked_add(page_count.checked_mul(2).ok_or(Error::ArithmeticOverflow)?)
+                .ok_or(Error::ArithmeticOverflow);
+        }
+        GeneralInstructionTagV1::SettlePage => {
+            require_page_count(count)?;
+            return 8usize
+                .checked_add(page_count.checked_mul(6).ok_or(Error::ArithmeticOverflow)?)
+                .ok_or(Error::ArithmeticOverflow);
+        }
+    };
+    if count != 0 {
+        return Err(Error::InvalidPageCount);
+    }
+    Ok(fixed)
+}
+
+fn general_frame_role(
+    tag: GeneralInstructionTagV1,
+    count: u8,
+    index: usize,
+) -> Result<GeneralAccountRoleV1> {
+    use GeneralAccountRoleV1 as Role;
+    let role = match tag {
+        GeneralInstructionTagV1::Activate => *[
+            Role::Activator,
+            Role::WritableMarket,
+            Role::Realm,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::ClaimBasis,
+            Role::Manifest,
+            Role::CapabilityFunding,
+            Role::WritableConfig,
+            Role::WritableRoot,
+            Role::WritableGeneralFunding,
+            Role::ReadonlyRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::OpenBatch => *[
+            Role::WorkActor,
+            Role::ReadonlyMarket,
+            Role::ReadonlyConfig,
+            Role::WritableRoot,
+            Role::WritableGeneralFunding,
+            Role::WritableBatch,
+            Role::ReadonlyRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::LockBatch => *[
+            Role::ReadonlyConfig,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::AdmitOrder => *[
+            Role::OrderOwnerPayer,
+            Role::ReadonlyMarket,
+            Role::Realm,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::ReadonlyConfig,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::WritableOrderState,
+            Role::WritableOrderCustody,
+            Role::OwnerPosition,
+            Role::QuoteSource,
+            Role::QuoteEscrow,
+            Role::ReadonlyRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CancelOrder => *[
+            Role::OrderOwner,
+            Role::ReadonlyMarket,
+            Role::ReadonlyConfig,
+            Role::ReadonlyBatch,
+            Role::SignedOrder,
+            Role::WritableOrderState,
+            Role::WritableOrderCustody,
+            Role::OwnerPosition,
+            Role::QuoteEscrow,
+            Role::QuoteDestination,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::WritableRentCredit,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseOrder => *[
+            Role::ReadonlyMarket,
+            Role::ReadonlyConfig,
+            Role::ReadonlyBatch,
+            Role::SignedOrder,
+            Role::WritableOrderState,
+            Role::WritableOrderCustody,
+            Role::OwnerPosition,
+            Role::QuoteEscrow,
+            Role::QuoteDestination,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::WritableRentCredit,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::SubmitCandidate => *[
+            Role::CandidateSubmitter,
+            Role::ReadonlyConfig,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::WritableCandidate,
+            Role::ReadonlyRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::VerifyCandidatePage => {
+            require_page_count(count)?;
+            if index < 4 {
+                *[
+                    Role::ReadonlyConfig,
+                    Role::ReadonlyBatch,
+                    Role::WritableCandidate,
+                    Role::ClockSysvar,
+                ]
+                .get(index)
+                .ok_or(Error::InvalidLength)?
+            } else if (index - 4).is_multiple_of(2) {
+                Role::SignedOrder
+            } else {
+                Role::ReadonlyOrderState
+            }
+        }
+        GeneralInstructionTagV1::FinishCandidate => {
+            *[Role::ReadonlyConfig, Role::WritableCandidate]
+                .get(index)
+                .ok_or(Error::InvalidLength)?
+        }
+        GeneralInstructionTagV1::ConsiderCandidate => *[
+            Role::ReadonlyConfig,
+            Role::WritableBatch,
+            Role::WritableCandidate,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::LockSelection => *[Role::WritableBatch, Role::ClockSysvar]
+            .get(index)
+            .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::BeginSettlement => *[
+            Role::WritableMarket,
+            Role::Realm,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::CollateralVault,
+            Role::ReadonlyConfig,
+            Role::WritableBatch,
+            Role::ReadonlyCandidate,
+            Role::WritableSettlementCursor,
+            Role::WritableGeneralFunding,
+            Role::ReadonlyRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::SettlePage => {
+            require_page_count(count)?;
+            if index < 8 {
+                *[
+                    Role::ReadonlyMarket,
+                    Role::ReadonlyConfig,
+                    Role::ReadonlyBatch,
+                    Role::ReadonlyCandidate,
+                    Role::WritableSettlementCursor,
+                    Role::WritableGeneralFunding,
+                    Role::Mint,
+                    Role::TokenProgram,
+                ]
+                .get(index)
+                .ok_or(Error::InvalidLength)?
+            } else {
+                *[
+                    Role::SignedOrder,
+                    Role::WritableOrderState,
+                    Role::WritableOrderCustody,
+                    Role::OwnerPosition,
+                    Role::QuoteEscrow,
+                    Role::QuoteDestination,
+                ]
+                .get((index - 8) % 6)
+                .ok_or(Error::InvalidLength)?
+            }
+        }
+        GeneralInstructionTagV1::FinishSettlement => *[
+            Role::ReadonlyConfig,
+            Role::WritableBatch,
+            Role::ReadonlyCandidate,
+            Role::ReadonlySettlementCursor,
+            Role::WritableGeneralFunding,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseBatch => *[
+            Role::WritableRoot,
+            Role::WritableBatch,
+            Role::WritableRentCredit,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::Quiesce => *[Role::WritableRoot]
+            .get(index)
+            .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseGeneral => *[
+            Role::WritableMarket,
+            Role::WritableConfig,
+            Role::WritableRoot,
+            Role::WritableGeneralFunding,
+            Role::WritableRentCredit,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseCandidate => *[
+            Role::ReadonlyBatch,
+            Role::WritableCandidate,
+            Role::WritableRentCredit,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseSettlement => *[
+            Role::ReadonlyBatch,
+            Role::ReadonlyCandidate,
+            Role::WritableSettlementCursor,
+            Role::WritableRentCredit,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+    };
+    Ok(role)
+}
+
+fn validate_general_account_role(
+    role: GeneralAccountRoleV1,
+    account: GeneralAccountMetaV1,
+) -> Result<()> {
+    use GeneralAccountRoleV1 as Role;
+    let (signer, writable, executable) = match role {
+        Role::Activator | Role::WorkActor | Role::OrderOwnerPayer | Role::CandidateSubmitter => {
+            (true, true, false)
+        }
+        Role::OrderOwner => (true, false, false),
+        Role::TokenProgram | Role::SystemProgram => (false, false, true),
+        Role::WritableMarket
+        | Role::CapabilityFunding
+        | Role::WritableConfig
+        | Role::WritableRoot
+        | Role::WritableGeneralFunding
+        | Role::WritableBatch
+        | Role::WritableOrderState
+        | Role::WritableOrderCustody
+        | Role::OwnerPosition
+        | Role::QuoteSource
+        | Role::QuoteEscrow
+        | Role::QuoteDestination
+        | Role::WritableRentCredit
+        | Role::WritableCandidate
+        | Role::WritableSettlementCursor
+        | Role::CollateralVault => (false, true, false),
+        _ => (false, false, false),
+    };
+    if account.is_signer != signer
+        || account.is_writable != writable
+        || account.is_executable != executable
+    {
+        return Err(Error::InvalidAccountPrivilege);
+    }
+    match role {
+        Role::SystemProgram if account.key != GENERAL_SYSTEM_PROGRAM_ID => {
+            Err(Error::InvalidAccountPrivilege)
+        }
+        Role::RentSysvar if account.key != GENERAL_RENT_SYSVAR_ID => {
+            Err(Error::InvalidAccountPrivilege)
+        }
+        Role::ClockSysvar if account.key != GENERAL_CLOCK_SYSVAR_ID => {
+            Err(Error::InvalidAccountPrivilege)
+        }
+        Role::SystemProgram => Ok(()),
+        _ => {
+            require_nonzero_key(&account.key)?;
+            Ok(())
+        }
+    }
+}
+
+fn require_page_count(count: u8) -> Result<()> {
+    if count == 0 || usize::from(count) > MAX_EXECUTIONS_PER_PAGE_V1 {
+        Err(Error::InvalidPageCount)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_distinct_general_accounts(accounts: &[GeneralAccountMetaV1]) -> Result<()> {
+    for (index, account) in accounts.iter().enumerate() {
+        if accounts
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|other| other.key == account.key)
+        {
+            return Err(Error::AccountAlias);
+        }
+    }
+    Ok(())
+}
+
+/// Adapter-observed current Rent minima for the activated General account cluster.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralActivationCapitalizationV1 {
+    config_rent: u64,
+    root_rent: u64,
+    funding_rent: u64,
+}
+
+impl GeneralActivationCapitalizationV1 {
+    /// Construct from the trusted current Rent calculation for each exact width.
+    pub const fn new(config_rent: u64, root_rent: u64, funding_rent: u64) -> Self {
+        Self {
+            config_rent,
+            root_rent,
+            funding_rent,
+        }
+    }
+
+    /// Return the exact config-account Rent minimum.
+    pub const fn config_rent(self) -> u64 {
+        self.config_rent
+    }
+
+    /// Return the exact root-account Rent minimum.
+    pub const fn root_rent(self) -> u64 {
+        self.root_rent
+    }
+
+    /// Return the exact funding-account Rent minimum.
+    pub const fn funding_rent(self) -> u64 {
+        self.funding_rent
+    }
+
+    fn total(self) -> Result<u64> {
+        self.config_rent
+            .checked_add(self.root_rent)
+            .and_then(|value| value.checked_add(self.funding_rent))
+            .ok_or(Error::ArithmeticOverflow)
+    }
+}
+
+/// Exact content preimages and immutable identities an activation adapter hashes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralActivationCommitmentsV1<'a> {
+    config_id: ContentId,
+    config: GeneralConfigV1,
+    market_identity_id: ContentId,
+    market_identity: MarketIdentity,
+    manifest_id: ContentId,
+    manifest: CapabilityManifestV1<'a>,
+}
+
+impl<'a> GeneralActivationCommitmentsV1<'a> {
+    /// Return the expected config content identity.
+    pub const fn config_id(self) -> ContentId {
+        self.config_id
+    }
+
+    /// Return the exact canonical config preimage.
+    pub const fn config(self) -> GeneralConfigV1 {
+        self.config
+    }
+
+    /// Return the expected Market-identity content identity.
+    pub const fn market_identity_id(self) -> ContentId {
+        self.market_identity_id
+    }
+
+    /// Return the exact canonical Market-identity preimage owner.
+    pub const fn market_identity(self) -> MarketIdentity {
+        self.market_identity
+    }
+
+    /// Return the expected capability-manifest content identity.
+    pub const fn manifest_id(self) -> ContentId {
+        self.manifest_id
+    }
+
+    /// Return the exact canonical manifest preimage.
+    pub const fn manifest(self) -> CapabilityManifestV1<'a> {
+        self.manifest
+    }
+}
+
+/// Complete pure plan for one atomic General activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralActivationPlanV1<'a> {
+    market_root_after: MarketRoot,
+    root: GeneralRootV1,
+    funding: GeneralFundingActivationV1,
+    capitalization: GeneralActivationCapitalizationV1,
+    config_seeds: GeneralConfigPdaSeedsV1,
+    root_seeds: GeneralRootPdaSeedsV1,
+    funding_seeds: GeneralFundingPdaSeedsV1,
+    commitments: GeneralActivationCommitmentsV1<'a>,
+    creation_recipient: [u8; 32],
+}
+
+impl<'a> GeneralActivationPlanV1<'a> {
+    /// Return the Market root after registering one direct General child.
+    pub const fn market_root_after(self) -> MarketRoot {
+        self.market_root_after
+    }
+
+    /// Return the newly founded General root with immutable RentCredit beneficiary.
+    pub const fn root(self) -> GeneralRootV1 {
+        self.root
+    }
+
+    /// Return the generic-to-General funding transition and physical source derivation.
+    pub const fn funding(self) -> GeneralFundingActivationV1 {
+        self.funding
+    }
+
+    /// Return current exact account Rent minima used by the plan.
+    pub const fn capitalization(self) -> GeneralActivationCapitalizationV1 {
+        self.capitalization
+    }
+
+    /// Return the immutable config PDA seeds.
+    pub const fn config_seeds(self) -> GeneralConfigPdaSeedsV1 {
+        self.config_seeds
+    }
+
+    /// Return the active General-root PDA seeds.
+    pub const fn root_seeds(self) -> GeneralRootPdaSeedsV1 {
+        self.root_seeds
+    }
+
+    /// Return the segregated General-funding PDA seeds.
+    pub const fn funding_seeds(self) -> GeneralFundingPdaSeedsV1 {
+        self.funding_seeds
+    }
+
+    /// Return every content hash obligation.
+    pub const fn commitments(self) -> GeneralActivationCommitmentsV1<'a> {
+        self.commitments
+    }
+
+    /// Return the frame-authenticated recipient of physical-creation principal.
+    pub const fn creation_recipient(self) -> [u8; 32] {
+        self.creation_recipient
+    }
+
+    /// Return the exact initial lamports required by the General funding account.
+    pub fn general_funding_account_balance(self) -> Result<u64> {
+        self.capitalization
+            .funding_rent
+            .checked_add(self.funding.general_principal())
+            .ok_or(Error::ArithmeticOverflow)
+    }
+}
+
+/// Plan one exact activation without accepting allocation, status, or beneficiary bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn activate_general_v1<'a>(
+    frame: GeneralAccountFrameV1<'_>,
+    instruction: ActivateGeneralV1,
+    mut market_root: MarketRoot,
+    config_id: ContentId,
+    manifest_id: ContentId,
+    manifest: CapabilityManifestV1<'a>,
+    capability_funding: FundingStateV1,
+    observed_present_principal: u64,
+    capitalization: GeneralActivationCapitalizationV1,
+    current_slot: u64,
+) -> Result<GeneralActivationPlanV1<'a>> {
+    if frame.tag != GeneralInstructionTagV1::Activate || frame.execution_count != 0 {
+        return Err(Error::InvalidInstruction);
+    }
+    let accounts = frame.accounts();
+    let activator = accounts.first().ok_or(Error::InvalidLength)?.key;
+    let market = accounts.get(1).ok_or(Error::InvalidLength)?.key;
+    let identity = market_root.identity();
+    if market_root.phase() != MarketPhase::Open
+        || identity.generation() != instruction.config.generation
+        || identity.claim_basis_id().to_bytes() != instruction.config.claim_basis_id.to_bytes()
+        || identity.capability_manifest_id().to_bytes() != manifest_id.to_bytes()
+    {
+        return Err(Error::AuthorityMismatch);
+    }
+    market_root
+        .register_child(
+            instruction.config.generation,
+            instruction.expected_market_child_count,
+        )
+        .map_err(|_| Error::AuthorityMismatch)?;
+    let funding = GeneralFundingV1::activate_from_capability(
+        market,
+        config_id,
+        instruction.config,
+        manifest_id,
+        manifest,
+        capability_funding,
+        observed_present_principal,
+        current_slot,
+    )?;
+    if funding.rent_principal() != capitalization.total()? {
+        return Err(Error::CapabilityFundingMismatch);
+    }
+    let rent_beneficiary = market_root.rent_refund();
+    if accounts.get(11).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
+        return Err(Error::AuthorityMismatch);
+    }
+    let root = GeneralRootV1::founding(config_id, instruction.config.generation, rent_beneficiary)?;
+    let config_seeds = GeneralConfigPdaSeedsV1::new(config_id);
+    let root_seeds = GeneralRootPdaSeedsV1::new(market, instruction.config.generation, config_id)?;
+    let funding_seeds = GeneralFundingPdaSeedsV1::new(
+        market,
+        instruction.config.generation,
+        config_id,
+        instruction.config.capability_release_id,
+    )?;
+    Ok(GeneralActivationPlanV1 {
+        market_root_after: market_root,
+        root,
+        funding,
+        capitalization,
+        config_seeds,
+        root_seeds,
+        funding_seeds,
+        commitments: GeneralActivationCommitmentsV1 {
+            config_id,
+            config: instruction.config,
+            market_identity_id: instruction.config.market_identity_id,
+            market_identity: identity,
+            manifest_id,
+            manifest,
+        },
+        creation_recipient: activator,
+    })
+}
 
 /// Immutable capacity and authority contract for one General venue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -457,6 +1931,7 @@ pub enum GeneralPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralRootV1 {
     config_id: ContentId,
+    rent_beneficiary: [u8; 32],
     generation: u64,
     next_batch_sequence: u64,
     open_batches: u32,
@@ -472,13 +1947,14 @@ impl GeneralRootV1 {
         }
         validate_record_header(bytes)?;
         require_zero(bytes, 13, 3)?;
-        require_zero(bytes, 68, 4)?;
+        require_zero(bytes, 100, 4)?;
         let root = Self {
             phase: decode_general_phase(read_u8(bytes, 12)?)?,
             config_id: read_id(bytes, 16)?,
-            generation: read_u64(bytes, 48)?,
-            next_batch_sequence: read_u64(bytes, 56)?,
-            open_batches: read_u32(bytes, 64)?,
+            rent_beneficiary: array::<32>(bytes, 48)?,
+            generation: read_u64(bytes, 80)?,
+            next_batch_sequence: read_u64(bytes, 88)?,
+            open_batches: read_u32(bytes, 96)?,
         };
         root.validate()?;
         Ok(root)
@@ -494,13 +1970,15 @@ impl GeneralRootV1 {
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(out, 12, &[general_phase_tag(self.phase)]);
         put(out, 16, self.config_id.as_bytes());
-        put(out, 48, &self.generation.to_le_bytes());
-        put(out, 56, &self.next_batch_sequence.to_le_bytes());
-        put(out, 64, &self.open_batches.to_le_bytes());
+        put(out, 48, &self.rent_beneficiary);
+        put(out, 80, &self.generation.to_le_bytes());
+        put(out, 88, &self.next_batch_sequence.to_le_bytes());
+        put(out, 96, &self.open_batches.to_le_bytes());
         Ok(())
     }
 
     fn validate(self) -> Result<()> {
+        require_nonzero_key(&self.rent_beneficiary)?;
         if u64::from(self.open_batches) > self.next_batch_sequence
             || matches!(self.phase, GeneralPhase::Terminal | GeneralPhase::Retired)
                 && self.open_batches != 0
@@ -511,14 +1989,20 @@ impl GeneralRootV1 {
     }
 
     /// Found one active General root bound to an authenticated config.
-    pub const fn founding(config_id: ContentId, generation: u64) -> Self {
-        Self {
+    pub fn founding(
+        config_id: ContentId,
+        generation: u64,
+        rent_beneficiary: [u8; 32],
+    ) -> Result<Self> {
+        require_nonzero_key(&rent_beneficiary)?;
+        Ok(Self {
             config_id,
+            rent_beneficiary,
             generation,
             next_batch_sequence: 0,
             open_batches: 0,
             phase: GeneralPhase::Active,
-        }
+        })
     }
 
     /// Reserve the next unique batch sequence.
@@ -587,6 +2071,11 @@ impl GeneralRootV1 {
     /// Return the immutable Market generation.
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    /// Return the permanent RentCredit beneficiary for all General-owned rent.
+    pub const fn rent_beneficiary(self) -> [u8; 32] {
+        self.rent_beneficiary
     }
 
     /// Return the exact direct batch-child count.
@@ -1409,8 +2898,8 @@ pub struct CandidateSubmissionV1<const N: usize> {
     pub market_identity_id: ContentId,
     /// Exact ClaimBasis identity.
     pub claim_basis_id: ContentId,
-    /// Candidate author; no allowlist semantics attach to this identity.
-    pub submitter: ContentId,
+    /// Exact signer and permanent rent beneficiary creating this candidate.
+    pub submitter: OwnerKeyV1,
     /// First adapter-authenticated transcript commitment.
     pub initial_transcript_id: ContentId,
     /// Immutable Market generation.
@@ -1427,6 +2916,79 @@ pub struct CandidateSubmissionV1<const N: usize> {
     pub prices: [u64; N],
     /// Exact ClaimBasis width, which must equal the selected const width.
     pub outcome_count: u16,
+}
+
+impl<const N: usize> CandidateSubmissionV1<N> {
+    /// Return the exact checked encoded length, with no maximum-width padding.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        CANDIDATE_SUBMISSION_BASE_BYTES
+            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Decode one canonical candidate-submission preimage.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, Self::encoded_len()?)?;
+        if array::<8>(bytes, 0)? != CANDIDATE_SUBMISSION_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 14, 2)?;
+        require_zero(bytes, 172, 4)?;
+        let outcome_count = read_u16(bytes, 12)?;
+        if usize::from(outcome_count) != N {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        let mut prices = [0u64; N];
+        for (index, target) in prices.iter_mut().enumerate() {
+            let offset = vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, index, 8)?;
+            *target = read_u64(bytes, offset)?;
+        }
+        Ok(Self {
+            market_identity_id: read_id(bytes, 16)?,
+            claim_basis_id: read_id(bytes, 48)?,
+            submitter: read_owner_key(bytes, 80)?,
+            initial_transcript_id: read_id(bytes, 112)?,
+            generation: read_u64(bytes, 144)?,
+            batch_sequence: read_u64(bytes, 152)?,
+            valid_until_slot: read_u64(bytes, 160)?,
+            claimed_execution_count: read_u32(bytes, 168)?,
+            claimed_score: read_u128(bytes, 176)?,
+            prices,
+            outcome_count,
+        })
+    }
+
+    /// Encode one canonical candidate-submission preimage.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        if usize::from(self.outcome_count) != N || self.claimed_execution_count == 0 {
+            return Err(Error::CandidateClaimMismatch);
+        }
+        out.fill(0);
+        put(out, 0, &CANDIDATE_SUBMISSION_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 12, &self.outcome_count.to_le_bytes());
+        put(out, 16, self.market_identity_id.as_bytes());
+        put(out, 48, self.claim_basis_id.as_bytes());
+        put(out, 80, self.submitter.as_bytes());
+        put(out, 112, self.initial_transcript_id.as_bytes());
+        put(out, 144, &self.generation.to_le_bytes());
+        put(out, 152, &self.batch_sequence.to_le_bytes());
+        put(out, 160, &self.valid_until_slot.to_le_bytes());
+        put(out, 168, &self.claimed_execution_count.to_le_bytes());
+        put(out, 176, &self.claimed_score.to_le_bytes());
+        for (index, price) in self.prices.iter().enumerate() {
+            put(
+                out,
+                vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, index, 8)?,
+                &price.to_le_bytes(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Verification lifecycle of a candidate.
@@ -1476,7 +3038,266 @@ pub struct VerificationPageV1<const N: usize> {
     pub executions: [Option<ExecutionV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
 }
 
+impl<const N: usize> VerificationPageV1<N> {
+    /// Return the exact wire width for this page's leading execution count.
+    pub fn encoded_len(execution_count: u8) -> Result<usize> {
+        validate_width(N)?;
+        let count = usize::from(execution_count);
+        if count == 0 || count > MAX_EXECUTIONS_PER_PAGE_V1 {
+            return Err(Error::InvalidPageCount);
+        }
+        let execution_bytes = PortfolioOrderV1::<N>::encoded_len()?
+            .checked_add(ORDER_STATE_BYTES)
+            .and_then(|value| value.checked_add(8))
+            .ok_or(Error::ArithmeticOverflow)?;
+        VERIFICATION_PAGE_BASE_BYTES
+            .checked_add(
+                count
+                    .checked_mul(execution_bytes)
+                    .ok_or(Error::ArithmeticOverflow)?,
+            )
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Decode one exact leading-execution page with no unused wire padding.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < VERIFICATION_PAGE_BASE_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        if array::<8>(bytes, 0)? != VERIFICATION_PAGE_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        if usize::from(read_u16(bytes, 12)?) != N {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        require_zero(bytes, 15, 1)?;
+        require_zero(bytes, 20, 4)?;
+        let execution_count = read_u8(bytes, 14)?;
+        exact_len(bytes, Self::encoded_len(execution_count)?)?;
+        let mut executions = [None; MAX_EXECUTIONS_PER_PAGE_V1];
+        let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
+        let execution_bytes = order_bytes
+            .checked_add(ORDER_STATE_BYTES)
+            .and_then(|value| value.checked_add(8))
+            .ok_or(Error::ArithmeticOverflow)?;
+        for index in 0..usize::from(execution_count) {
+            let offset = vector_offset(VERIFICATION_PAGE_BASE_BYTES, index, execution_bytes)?;
+            let order_end = offset
+                .checked_add(order_bytes)
+                .ok_or(Error::ArithmeticOverflow)?;
+            let state_end = order_end
+                .checked_add(ORDER_STATE_BYTES)
+                .ok_or(Error::ArithmeticOverflow)?;
+            let execution = ExecutionV1 {
+                order: PortfolioOrderV1::decode(subslice(bytes, offset, order_bytes)?)?,
+                order_state: OrderStateV1::decode(subslice(bytes, order_end, ORDER_STATE_BYTES)?)?,
+                fill_lots: read_u64(bytes, state_end)?,
+            };
+            *executions.get_mut(index).ok_or(Error::InvalidPageCount)? = Some(execution);
+        }
+        Ok(Self {
+            page_index: read_u32(bytes, 16)?,
+            prior_transcript_id: read_id(bytes, 24)?,
+            next_transcript_id: read_id(bytes, 56)?,
+            execution_count,
+            executions,
+        })
+    }
+
+    /// Encode one exact leading-execution page with no unused wire padding.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len(self.execution_count)?)?;
+        let count = usize::from(self.execution_count);
+        if self.executions.iter().take(count).any(Option::is_none)
+            || self.executions.iter().skip(count).any(Option::is_some)
+        {
+            return Err(Error::NonCanonicalReservedBytes);
+        }
+        out.fill(0);
+        put(out, 0, &VERIFICATION_PAGE_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(
+            out,
+            12,
+            &u16::try_from(N)
+                .map_err(|_| Error::InvalidOutcomeCount)?
+                .to_le_bytes(),
+        );
+        put(out, 14, &[self.execution_count]);
+        put(out, 16, &self.page_index.to_le_bytes());
+        put(out, 24, self.prior_transcript_id.as_bytes());
+        put(out, 56, self.next_transcript_id.as_bytes());
+        let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
+        let execution_bytes = order_bytes
+            .checked_add(ORDER_STATE_BYTES)
+            .and_then(|value| value.checked_add(8))
+            .ok_or(Error::ArithmeticOverflow)?;
+        for (index, execution) in self.executions.iter().take(count).flatten().enumerate() {
+            let offset = vector_offset(VERIFICATION_PAGE_BASE_BYTES, index, execution_bytes)?;
+            let order_end = offset
+                .checked_add(order_bytes)
+                .ok_or(Error::ArithmeticOverflow)?;
+            let state_end = order_end
+                .checked_add(ORDER_STATE_BYTES)
+                .ok_or(Error::ArithmeticOverflow)?;
+            execution
+                .order
+                .encode(subslice_mut(out, offset, order_bytes)?)?;
+            execution
+                .order_state
+                .encode(subslice_mut(out, order_end, ORDER_STATE_BYTES)?)?;
+            put(out, state_end, &execution.fill_lots.to_le_bytes());
+        }
+        Ok(())
+    }
+}
+
 impl<const N: usize> CandidateStateV1<N> {
+    /// Return the exact persisted width for this ClaimBasis width.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        CANDIDATE_STATE_BASE_BYTES
+            .checked_add(N.checked_mul(24).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Decode one canonical candidate and resumable verification cursor.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, Self::encoded_len()?)?;
+        if array::<8>(bytes, 0)? != CANDIDATE_STATE_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 12, 4)?;
+        let submission_bytes = CandidateSubmissionV1::<N>::encoded_len()?;
+        let submission = CandidateSubmissionV1::decode(subslice(bytes, 48, submission_bytes)?)?;
+        let cursor = 48usize
+            .checked_add(submission_bytes)
+            .ok_or(Error::ArithmeticOverflow)?;
+        require_zero(bytes, cursor + 1, 7)?;
+        require_zero(bytes, cursor + 17, 7)?;
+        let last_bytes = array::<32>(bytes, cursor + 24)?;
+        let last_order_id = match read_u8(bytes, cursor + 16)? {
+            0 => {
+                if last_bytes.iter().any(|byte| *byte != 0) {
+                    return Err(Error::NonCanonicalReservedBytes);
+                }
+                None
+            }
+            1 => Some(ContentId::new(last_bytes)?),
+            _ => return Err(Error::NonCanonicalState),
+        };
+        let net_offset = cursor.checked_add(88).ok_or(Error::ArithmeticOverflow)?;
+        let mut net_coefficients = [0i128; N];
+        for (index, target) in net_coefficients.iter_mut().enumerate() {
+            *target = read_i128(bytes, vector_offset(net_offset, index, 16)?)?;
+        }
+        let totals = net_offset
+            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let state = Self {
+            candidate_id: read_id(bytes, 16)?,
+            submission,
+            phase: decode_candidate_phase(read_u8(bytes, cursor)?)?,
+            verified_pages: read_u32(bytes, cursor + 8)?,
+            verified_executions: read_u32(bytes, cursor + 12)?,
+            last_order_id,
+            transcript_id: read_id(bytes, cursor + 56)?,
+            net_coefficients,
+            total_quote_debit_numerator: read_i128(bytes, totals)?,
+            score: read_u128(bytes, totals + 16)?,
+            complete_set_delta: read_i128(bytes, totals + 32)?,
+        };
+        state.validate_persisted_shape()?;
+        Ok(state)
+    }
+
+    /// Encode one canonical candidate and resumable verification cursor.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        self.validate_persisted_shape()?;
+        out.fill(0);
+        put(out, 0, &CANDIDATE_STATE_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 16, self.candidate_id.as_bytes());
+        let submission_bytes = CandidateSubmissionV1::<N>::encoded_len()?;
+        self.submission
+            .encode(subslice_mut(out, 48, submission_bytes)?)?;
+        let cursor = 48usize
+            .checked_add(submission_bytes)
+            .ok_or(Error::ArithmeticOverflow)?;
+        put(out, cursor, &[candidate_phase_tag(self.phase)]);
+        put(out, cursor + 8, &self.verified_pages.to_le_bytes());
+        put(out, cursor + 12, &self.verified_executions.to_le_bytes());
+        if let Some(last_order_id) = self.last_order_id {
+            put(out, cursor + 16, &[1]);
+            put(out, cursor + 24, last_order_id.as_bytes());
+        }
+        put(out, cursor + 56, self.transcript_id.as_bytes());
+        let net_offset = cursor.checked_add(88).ok_or(Error::ArithmeticOverflow)?;
+        for (index, coefficient) in self.net_coefficients.iter().enumerate() {
+            put(
+                out,
+                vector_offset(net_offset, index, 16)?,
+                &coefficient.to_le_bytes(),
+            );
+        }
+        let totals = net_offset
+            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        put(out, totals, &self.total_quote_debit_numerator.to_le_bytes());
+        put(out, totals + 16, &self.score.to_le_bytes());
+        put(out, totals + 32, &self.complete_set_delta.to_le_bytes());
+        Ok(())
+    }
+
+    fn validate_persisted_shape(&self) -> Result<()> {
+        if usize::from(self.submission.outcome_count) != N
+            || self.submission.claimed_execution_count == 0
+        {
+            return Err(Error::NonCanonicalState);
+        }
+        let pristine = self.verified_pages == 0
+            && self.verified_executions == 0
+            && self.last_order_id.is_none()
+            && self.transcript_id == self.submission.initial_transcript_id
+            && self.net_coefficients.iter().all(|value| *value == 0)
+            && self.total_quote_debit_numerator == 0
+            && self.score == 0
+            && self.complete_set_delta == 0;
+        match self.phase {
+            CandidatePhase::Submitted if !pristine => Err(Error::NonCanonicalState),
+            CandidatePhase::Verifying
+                if self.verified_pages == 0
+                    || self.verified_executions == 0
+                    || self.last_order_id.is_none()
+                    || self.complete_set_delta != 0 =>
+            {
+                Err(Error::NonCanonicalState)
+            }
+            CandidatePhase::Valid | CandidatePhase::Considered
+                if self.verified_pages == 0
+                    || self.verified_executions != self.submission.claimed_execution_count
+                    || self.last_order_id.is_none()
+                    || self.score != self.submission.claimed_score =>
+            {
+                Err(Error::NonCanonicalState)
+            }
+            CandidatePhase::Rejected
+                if self.complete_set_delta != 0
+                    || self.verified_pages == 0 && !pristine
+                    || self.verified_pages > 0
+                        && (self.verified_executions == 0 || self.last_order_id.is_none()) =>
+            {
+                Err(Error::NonCanonicalState)
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Create a permissionless submitted candidate after exact authority and
     /// simplex validation. Signature and digest authentication are adapter
     /// responsibilities.
@@ -1714,8 +3535,8 @@ impl<const N: usize> CandidateStateV1<N> {
         self.transcript_id
     }
 
-    /// Return the permissionless candidate submitter identity.
-    pub const fn submitter(self) -> ContentId {
+    /// Return the permissionless candidate submitter and rent beneficiary key.
+    pub const fn submitter(self) -> OwnerKeyV1 {
         self.submission.submitter
     }
 
@@ -2204,6 +4025,108 @@ pub struct SettlementPageResultV1<const N: usize> {
 }
 
 impl<const N: usize> SettlementCursorV1<N> {
+    /// Return the exact persisted width for this ClaimBasis width.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        SETTLEMENT_CURSOR_BASE_BYTES
+            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Decode one canonical selected-candidate settlement cursor.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, Self::encoded_len()?)?;
+        if array::<8>(bytes, 0)? != SETTLEMENT_CURSOR_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 12, 4)?;
+        require_zero(bytes, 89, 7)?;
+        let last_bytes = array::<32>(bytes, 96)?;
+        let last_order_id = match read_u8(bytes, 88)? {
+            0 => {
+                if last_bytes.iter().any(|byte| *byte != 0) {
+                    return Err(Error::NonCanonicalReservedBytes);
+                }
+                None
+            }
+            1 => Some(ContentId::new(last_bytes)?),
+            _ => return Err(Error::NonCanonicalState),
+        };
+        let mut net_coefficients = [0i128; N];
+        for (index, target) in net_coefficients.iter_mut().enumerate() {
+            *target = read_i128(
+                bytes,
+                vector_offset(SETTLEMENT_CURSOR_NET_OFFSET, index, 16)?,
+            )?;
+        }
+        let totals = SETTLEMENT_CURSOR_NET_OFFSET
+            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let cursor = Self {
+            candidate_id: read_id(bytes, 16)?,
+            transcript_id: read_id(bytes, 48)?,
+            settled_pages: read_u32(bytes, 80)?,
+            settled_executions: read_u32(bytes, 84)?,
+            last_order_id,
+            rounding_carry: read_u64(bytes, 128)?,
+            net_coefficients,
+            total_quote_debit_numerator: read_i128(bytes, totals)?,
+            score: read_u128(bytes, totals + 16)?,
+        };
+        cursor.validate_persisted_shape()?;
+        Ok(cursor)
+    }
+
+    /// Encode one canonical selected-candidate settlement cursor.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        self.validate_persisted_shape()?;
+        out.fill(0);
+        put(out, 0, &SETTLEMENT_CURSOR_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 16, self.candidate_id.as_bytes());
+        put(out, 48, self.transcript_id.as_bytes());
+        put(out, 80, &self.settled_pages.to_le_bytes());
+        put(out, 84, &self.settled_executions.to_le_bytes());
+        if let Some(last_order_id) = self.last_order_id {
+            put(out, 88, &[1]);
+            put(out, 96, last_order_id.as_bytes());
+        }
+        put(out, 128, &self.rounding_carry.to_le_bytes());
+        for (index, coefficient) in self.net_coefficients.iter().enumerate() {
+            put(
+                out,
+                vector_offset(SETTLEMENT_CURSOR_NET_OFFSET, index, 16)?,
+                &coefficient.to_le_bytes(),
+            );
+        }
+        let totals = SETTLEMENT_CURSOR_NET_OFFSET
+            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        put(out, totals, &self.total_quote_debit_numerator.to_le_bytes());
+        put(out, totals + 16, &self.score.to_le_bytes());
+        Ok(())
+    }
+
+    fn validate_persisted_shape(&self) -> Result<()> {
+        if self.settled_pages == 0 {
+            if self.settled_executions != 0
+                || self.last_order_id.is_some()
+                || self.rounding_carry != 0
+                || self.net_coefficients.iter().any(|value| *value != 0)
+                || self.total_quote_debit_numerator != 0
+                || self.score != 0
+            {
+                return Err(Error::NonCanonicalState);
+            }
+        } else if self.settled_executions == 0 || self.last_order_id.is_none() {
+            return Err(Error::NonCanonicalState);
+        }
+        Ok(())
+    }
+
     /// Begin replay of exactly the selected verified candidate.
     ///
     /// The adapter proves referenced order custody remains locked, then moves
@@ -2462,6 +4385,7 @@ pub struct FundingDebitV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralFundingActivationV1 {
     capability_funding_after: FundingStateV1,
+    capability_funding_derivation: CapabilityFundingDerivationV1,
     general_funding: GeneralFundingV1,
     rent_principal: u64,
     creation_principal: u64,
@@ -2472,6 +4396,11 @@ impl GeneralFundingActivationV1 {
     /// Return the capability ledger after every quoted compartment was released.
     pub const fn capability_funding_after(self) -> FundingStateV1 {
         self.capability_funding_after
+    }
+
+    /// Return the reusable capability-owned physical source derivation.
+    pub const fn capability_funding_derivation(self) -> CapabilityFundingDerivationV1 {
+        self.capability_funding_derivation
     }
 
     /// Return newly founded General-owned liveness/work/bounty funding.
@@ -2524,6 +4453,7 @@ impl GeneralFundingV1 {
     /// is accepted from the caller.
     #[allow(clippy::too_many_arguments)]
     pub fn activate_from_capability(
+        market: [u8; 32],
         config_id: ContentId,
         config: GeneralConfigV1,
         manifest_id: ContentId,
@@ -2535,6 +4465,14 @@ impl GeneralFundingV1 {
         let capability_manifest_id =
             dclutch_capability_contract::ContentId::new(manifest_id.to_bytes())
                 .map_err(|_| Error::CapabilityFundingMismatch)?;
+        let capability_funding_derivation = CapabilityFundingDerivationV1::new(
+            market,
+            config.generation,
+            capability_manifest_id,
+            manifest,
+            capability_funding,
+        )
+        .map_err(|_| Error::CapabilityFundingMismatch)?;
         capability_funding
             .validate_against(capability_manifest_id, manifest, observed_present_principal)
             .map_err(|_| Error::CapabilityFundingMismatch)?;
@@ -2599,6 +4537,7 @@ impl GeneralFundingV1 {
             .ok_or(Error::ArithmeticOverflow)?;
         Ok(GeneralFundingActivationV1 {
             capability_funding_after: capability_funding,
+            capability_funding_derivation,
             general_funding: Self::founding(
                 GENERAL_CAPABILITY_RELEASE_ID_V1,
                 quote.service_principal(),
@@ -2992,6 +4931,27 @@ fn decode_order_phase(tag: u8) -> Result<OrderPhase> {
     }
 }
 
+const fn candidate_phase_tag(phase: CandidatePhase) -> u8 {
+    match phase {
+        CandidatePhase::Submitted => 0,
+        CandidatePhase::Verifying => 1,
+        CandidatePhase::Valid => 2,
+        CandidatePhase::Considered => 3,
+        CandidatePhase::Rejected => 4,
+    }
+}
+
+fn decode_candidate_phase(tag: u8) -> Result<CandidatePhase> {
+    match tag {
+        0 => Ok(CandidatePhase::Submitted),
+        1 => Ok(CandidatePhase::Verifying),
+        2 => Ok(CandidatePhase::Valid),
+        3 => Ok(CandidatePhase::Considered),
+        4 => Ok(CandidatePhase::Rejected),
+        _ => Err(Error::InvalidPhase),
+    }
+}
+
 const fn batch_phase_tag(phase: BatchPhase) -> u8 {
     match phase {
         BatchPhase::Collecting => 0,
@@ -3023,6 +4983,36 @@ const fn funding_index(compartment: FundingCompartment) -> usize {
     }
 }
 
+fn validate_instruction_header<const N: usize>(bytes: &[u8]) -> Result<()> {
+    if bytes.len() < GENERAL_INSTRUCTION_HEADER_BYTES {
+        return Err(Error::InvalidLength);
+    }
+    validate_width(N)?;
+    if array::<8>(bytes, 0)? != GENERAL_INSTRUCTION_MAGIC_V1 {
+        return Err(Error::InvalidMagic);
+    }
+    if read_u16(bytes, 8)? != GENERAL_INSTRUCTION_SCHEMA_V1 {
+        return Err(Error::UnsupportedSchema);
+    }
+    if usize::from(read_u8(bytes, 11)?) != N {
+        return Err(Error::InvalidOutcomeCount);
+    }
+    require_zero(bytes, 12, 4)
+}
+
+fn encode_batch_replay(out: &mut [u8], replay: GeneralBatchReplayV1) {
+    put(
+        out,
+        GENERAL_INSTRUCTION_HEADER_BYTES,
+        &replay.generation.to_le_bytes(),
+    );
+    put(
+        out,
+        GENERAL_INSTRUCTION_HEADER_BYTES + 8,
+        &replay.batch_sequence.to_le_bytes(),
+    );
+}
+
 fn exact_len(bytes: &[u8], expected: usize) -> Result<()> {
     if bytes.len() != expected {
         return Err(Error::InvalidLength);
@@ -3037,6 +5027,23 @@ fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
         .ok_or(Error::InvalidLength)?
         .try_into()
         .map_err(|_| Error::InvalidLength)
+}
+
+fn subslice(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
+    let end = offset.checked_add(len).ok_or(Error::InvalidLength)?;
+    bytes.get(offset..end).ok_or(Error::InvalidLength)
+}
+
+fn subslice_mut(bytes: &mut [u8], offset: usize, len: usize) -> Result<&mut [u8]> {
+    let end = offset.checked_add(len).ok_or(Error::InvalidLength)?;
+    bytes.get_mut(offset..end).ok_or(Error::InvalidLength)
+}
+
+fn vector_offset(base: usize, index: usize, element_bytes: usize) -> Result<usize> {
+    index
+        .checked_mul(element_bytes)
+        .and_then(|part| base.checked_add(part))
+        .ok_or(Error::ArithmeticOverflow)
 }
 
 fn read_id(bytes: &[u8], offset: usize) -> Result<ContentId> {

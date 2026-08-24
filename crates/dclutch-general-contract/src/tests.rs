@@ -1,9 +1,14 @@
 use super::*;
 use dclutch_capability_contract::{
-    ActivationPolicy, CapabilityEntryV1, CapabilityManifestV1, FundingAmountsV1, FundingStateV1,
-    FundingStatus, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+    FundingAmountsV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
+};
+use dclutch_core_contract::{
+    ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase as MarketPhase,
 };
 use sha2::{Digest, Sha256};
+use std::{vec, vec::Vec};
 
 fn id(fill: u8) -> ContentId {
     ContentId::new([fill; CONTENT_ID_BYTES]).expect("nonzero test id")
@@ -19,6 +24,10 @@ fn capability_id(fill: u8) -> dclutch_capability_contract::ContentId {
 
 fn capability_id_from(id: ContentId) -> dclutch_capability_contract::ContentId {
     dclutch_capability_contract::ContentId::new(id.to_bytes()).expect("capability ID")
+}
+
+fn core_id_from(id: ContentId) -> CoreContentId {
+    CoreContentId::new(id.to_bytes()).expect("core ID")
 }
 
 fn capability_entry(config_id: ContentId, quote: FundingAmountsV1) -> CapabilityEntryV1 {
@@ -114,7 +123,7 @@ fn valid_candidate(batch: BatchRootV1, candidate_fill: u8) -> CandidateStateV1<2
     let submission = CandidateSubmissionV1 {
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        submitter: id(30),
+        submitter: owner(30),
         initial_transcript_id: id(50),
         generation: 7,
         batch_sequence: 0,
@@ -173,6 +182,74 @@ fn round_trip_funding(funding: GeneralFundingV1) {
     funding.encode(&mut bytes).expect("funding encodes");
     assert_eq!(&bytes[..8], b"DCLTGFN1");
     assert_eq!(GeneralFundingV1::decode(&bytes), Ok(funding));
+}
+
+fn round_trip_candidate(candidate: CandidateStateV1<2>) {
+    let mut bytes = vec![0; CandidateStateV1::<2>::encoded_len().expect("candidate width")];
+    candidate.encode(&mut bytes).expect("candidate encodes");
+    assert_eq!(bytes.get(..8), Some(b"DCLTGCA1".as_slice()));
+    assert_eq!(CandidateStateV1::<2>::decode(&bytes), Ok(candidate));
+}
+
+fn round_trip_settlement_cursor(cursor: SettlementCursorV1<2>) {
+    let mut bytes =
+        vec![0; SettlementCursorV1::<2>::encoded_len().expect("settlement cursor width")];
+    cursor.encode(&mut bytes).expect("cursor encodes");
+    assert_eq!(bytes.get(..8), Some(b"DCLTGSC1".as_slice()));
+    assert_eq!(SettlementCursorV1::<2>::decode(&bytes), Ok(cursor));
+}
+
+fn valid_frame_meta(role: GeneralAccountRoleV1, fill: u8) -> GeneralAccountMetaV1 {
+    use GeneralAccountRoleV1 as Role;
+    let (is_signer, is_writable, is_executable) = match role {
+        Role::Activator | Role::WorkActor | Role::OrderOwnerPayer | Role::CandidateSubmitter => {
+            (true, true, false)
+        }
+        Role::OrderOwner => (true, false, false),
+        Role::TokenProgram | Role::SystemProgram => (false, false, true),
+        Role::WritableMarket
+        | Role::CapabilityFunding
+        | Role::WritableConfig
+        | Role::WritableRoot
+        | Role::WritableGeneralFunding
+        | Role::WritableBatch
+        | Role::WritableOrderState
+        | Role::WritableOrderCustody
+        | Role::OwnerPosition
+        | Role::QuoteSource
+        | Role::QuoteEscrow
+        | Role::QuoteDestination
+        | Role::WritableRentCredit
+        | Role::WritableCandidate
+        | Role::WritableSettlementCursor
+        | Role::CollateralVault => (false, true, false),
+        _ => (false, false, false),
+    };
+    let key = match role {
+        Role::SystemProgram => GENERAL_SYSTEM_PROGRAM_ID,
+        Role::RentSysvar => GENERAL_RENT_SYSVAR_ID,
+        Role::ClockSysvar => GENERAL_CLOCK_SYSVAR_ID,
+        _ => [fill; 32],
+    };
+    GeneralAccountMetaV1 {
+        key,
+        is_signer,
+        is_writable,
+        is_executable,
+    }
+}
+
+fn valid_frame_accounts(tag: GeneralInstructionTagV1, count: u8) -> Vec<GeneralAccountMetaV1> {
+    let length = general_frame_account_count(tag, count).expect("frame width");
+    let mut accounts = Vec::with_capacity(length);
+    for index in 0..length {
+        let role = general_frame_role(tag, count, index).expect("ordered role");
+        accounts.push(valid_frame_meta(
+            role,
+            u8::try_from(index + 1).expect("small frame"),
+        ));
+    }
+    accounts
 }
 
 #[test]
@@ -298,7 +375,7 @@ fn simplex_is_exact_and_has_one_canonical_width() {
     let submission = CandidateSubmissionV1 {
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        submitter: id(30),
+        submitter: owner(30),
         initial_transcript_id: id(50),
         generation: 7,
         batch_sequence: 0,
@@ -314,17 +391,19 @@ fn simplex_is_exact_and_has_one_canonical_width() {
     );
 
     prices[1] = 60;
-    assert!(CandidateStateV1::submit(
-        id(40),
-        CandidateSubmissionV1 {
-            prices,
-            ..submission
-        },
-        config(),
-        batch,
-        10
-    )
-    .is_ok());
+    assert!(
+        CandidateStateV1::submit(
+            id(40),
+            CandidateSubmissionV1 {
+                prices,
+                ..submission
+            },
+            config(),
+            batch,
+            10
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -336,7 +415,7 @@ fn paginated_failure_does_not_advance_cursor() {
         CandidateSubmissionV1 {
             market_identity_id: id(2),
             claim_basis_id: id(3),
-            submitter: id(30),
+            submitter: owner(30),
             initial_transcript_id: id(50),
             generation: 7,
             batch_sequence: 0,
@@ -385,7 +464,7 @@ fn imbalance_cannot_reach_valid_candidate() {
         CandidateSubmissionV1 {
             market_identity_id: id(2),
             claim_basis_id: id(3),
-            submitter: id(30),
+            submitter: owner(30),
             initial_transcript_id: id(50),
             generation: 7,
             batch_sequence: 0,
@@ -599,7 +678,7 @@ fn funding_is_prepaid_segregated_and_conserved() {
 
 #[test]
 fn root_requires_real_quiescence_before_retirement() {
-    let mut root = GeneralRootV1::founding(id(9), 7);
+    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
     assert_eq!(root.open_batch(), Ok(0));
     root.request_quiescence().expect("quiescing");
     assert_eq!(root.enter_terminal(), Err(Error::NotQuiescent));
@@ -612,7 +691,7 @@ fn root_requires_real_quiescence_before_retirement() {
 
 #[test]
 fn general_root_codec_round_trips_every_phase_and_counter_transition() {
-    let mut root = GeneralRootV1::founding(id(9), 7);
+    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
     round_trip_general_root(root);
     assert_eq!(root.open_batch(), Ok(0));
     assert_eq!(root.open_batch(), Ok(1));
@@ -735,7 +814,7 @@ fn general_funding_codec_round_trips_debits_and_atomic_terminal_refund() {
 
 #[test]
 fn mutable_state_codecs_reject_wrong_width_type_headers_and_reserved_bytes() {
-    let root = GeneralRootV1::founding(id(9), 7);
+    let root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
     let mut root_bytes = [0; GENERAL_ROOT_BYTES];
     root.encode(&mut root_bytes).expect("root encodes");
     assert_eq!(
@@ -816,20 +895,23 @@ fn mutable_state_codecs_reject_wrong_width_type_headers_and_reserved_bytes() {
 
 #[test]
 fn general_root_decoder_rejects_unreachable_counts_terminal_children_and_tags() {
-    let mut root = GeneralRootV1::founding(id(9), 7);
+    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
     root.open_batch().expect("batch reserves");
     let mut bytes = [0; GENERAL_ROOT_BYTES];
     root.encode(&mut bytes).expect("root encodes");
 
-    bytes[64..68].copy_from_slice(&2_u32.to_le_bytes());
+    bytes[96..100].copy_from_slice(&2_u32.to_le_bytes());
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
-    bytes[64..68].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[96..100].copy_from_slice(&1_u32.to_le_bytes());
     bytes[12] = general_phase_tag(GeneralPhase::Terminal);
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
     bytes[12] = u8::MAX;
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::InvalidPhase));
     bytes[12] = general_phase_tag(GeneralPhase::Active);
     bytes[16..48].fill(0);
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
+    bytes[16..48].copy_from_slice(id(9).as_bytes());
+    bytes[48..80].fill(0);
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
 }
 
@@ -953,6 +1035,8 @@ fn recognized_general_release_ids_are_derived_and_pda_domains_are_distinct() {
         GENERAL_ORDER_STATE_PDA_DOMAIN_V1,
         GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1,
         GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1,
+        GENERAL_CANDIDATE_PDA_DOMAIN_V1,
+        GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1,
     ];
     for (index, domain) in domains.iter().enumerate() {
         assert!(!domain.is_empty());
@@ -980,6 +1064,7 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
     .expect("prepaid generic funding");
 
     let activation = GeneralFundingV1::activate_from_capability(
+        [72; 32],
         config_id,
         config(),
         manifest_id,
@@ -992,6 +1077,15 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
     assert_eq!(activation.rent_principal(), 11);
     assert_eq!(activation.creation_principal(), 13);
     assert_eq!(activation.general_principal(), 59);
+    let derivation = activation.capability_funding_derivation();
+    assert_eq!(derivation.market(), [72; 32]);
+    assert_eq!(derivation.generation(), 7);
+    assert_eq!(derivation.entry_index(), 0);
+    assert_eq!(derivation.config_id(), config_id.to_bytes());
+    assert_eq!(
+        derivation.release_id(),
+        GENERAL_CAPABILITY_RELEASE_ID_V1.to_bytes()
+    );
     assert_eq!(
         activation.capability_funding_after().status(),
         FundingStatus::Active
@@ -1021,6 +1115,157 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
 }
 
 #[test]
+fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
+    let config = config();
+    let config_id = id(70);
+    let manifest_id = id(71);
+    let quote = FundingAmountsV1::new(11, 13, 17, 0, 19, 0, 23).expect("quote");
+    let entry = capability_entry(config_id, quote);
+    let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes)
+        .expect("canonical manifest");
+    let funding = FundingStateV1::new(
+        capability_id_from(manifest_id),
+        manifest,
+        0,
+        quote.total_principal(),
+    )
+    .expect("prepaid generic funding");
+    let identity = MarketIdentity::new(
+        core_id_from(id(80)),
+        core_id_from(id(81)),
+        core_id_from(config.claim_basis_id()),
+        core_id_from(id(82)),
+        core_id_from(manifest_id),
+        config.generation(),
+    );
+    let mut market_root = MarketRoot::founding(identity, [90; 32]).expect("Market root");
+    market_root
+        .transition_phase(config.generation(), MarketPhase::Open)
+        .expect("Market opens");
+    let mut accounts = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
+    accounts.get_mut(11).expect("RentCredit role").key = [90; 32];
+    let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &accounts)
+        .expect("activation frame");
+    let instruction = ActivateGeneralV1 {
+        expected_market_child_count: 0,
+        config,
+    };
+
+    let plan = activate_general_v1(
+        frame,
+        instruction,
+        market_root,
+        config_id,
+        manifest_id,
+        manifest,
+        funding,
+        quote.total_principal(),
+        GeneralActivationCapitalizationV1::new(3, 4, 4),
+        10,
+    )
+    .expect("complete activation plan");
+    assert_eq!(plan.market_root_after().outstanding_children(), 1);
+    assert_eq!(plan.root().rent_beneficiary(), [90; 32]);
+    assert_eq!(plan.creation_recipient(), [1; 32]);
+    assert_eq!(plan.general_funding_account_balance(), Ok(63));
+    assert_eq!(plan.config_seeds().config_id(), config_id.to_bytes());
+    assert_eq!(plan.root_seeds().market(), [2; 32]);
+    assert_eq!(plan.funding_seeds().seed_components()[1], [2; 32]);
+    assert_eq!(
+        plan.funding().capability_funding_derivation().market(),
+        [2; 32]
+    );
+    let commitments = plan.commitments();
+    assert_eq!(commitments.config(), config);
+    assert_eq!(commitments.config_id(), config_id);
+    assert_eq!(commitments.market_identity(), identity);
+    assert_eq!(
+        commitments.market_identity_id(),
+        config.market_identity_id()
+    );
+    assert_eq!(commitments.manifest(), manifest);
+    assert_eq!(commitments.manifest_id(), manifest_id);
+
+    assert_eq!(
+        activate_general_v1(
+            frame,
+            instruction,
+            market_root,
+            config_id,
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            GeneralActivationCapitalizationV1::new(3, 4, 5),
+            10,
+        ),
+        Err(Error::CapabilityFundingMismatch)
+    );
+
+    let mut substituted_accounts = accounts.clone();
+    substituted_accounts
+        .get_mut(11)
+        .expect("RentCredit role")
+        .key = [91; 32];
+    let substituted_frame =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &substituted_accounts)
+            .expect("structurally valid substituted frame");
+    assert_eq!(
+        activate_general_v1(
+            substituted_frame,
+            instruction,
+            market_root,
+            config_id,
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            10,
+        ),
+        Err(Error::AuthorityMismatch)
+    );
+
+    let founding_market = MarketRoot::founding(identity, [90; 32]).expect("founding Market");
+    assert_eq!(
+        activate_general_v1(
+            frame,
+            instruction,
+            founding_market,
+            config_id,
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            10,
+        ),
+        Err(Error::AuthorityMismatch)
+    );
+
+    let other_accounts = valid_frame_accounts(GeneralInstructionTagV1::OpenBatch, 0);
+    let wrong_action =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &other_accounts)
+            .expect("other valid frame");
+    assert_eq!(
+        activate_general_v1(
+            wrong_action,
+            instruction,
+            market_root,
+            config_id,
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            10,
+        ),
+        Err(Error::InvalidInstruction)
+    );
+}
+
+#[test]
 fn capability_activation_rejects_extra_compartments_release_substitution_and_deadline() {
     let config_id = id(70);
     let manifest_id = id(71);
@@ -1038,6 +1283,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
     .expect("funding");
     assert_eq!(
         GeneralFundingV1::activate_from_capability(
+            [72; 32],
             config_id,
             config(),
             manifest_id,
@@ -1082,6 +1328,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
     .expect("funding");
     assert_eq!(
         GeneralFundingV1::activate_from_capability(
+            [72; 32],
             config_id,
             config(),
             manifest_id,
@@ -1094,6 +1341,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
     );
     assert_eq!(
         GeneralFundingV1::activate_from_capability(
+            [72; 32],
             id(72),
             config(),
             manifest_id,
@@ -1495,4 +1743,387 @@ fn hostile_receipt_and_underfunded_custody_leave_replay_and_reserves_unchanged()
     );
     assert_eq!(state, admission.order_state);
     assert_eq!(custody, admission.custody);
+}
+
+#[test]
+fn derivation_seed_tuples_are_ordered_closed_and_substitution_resistant() {
+    let config_id = id(70);
+    let config_seeds = GeneralConfigPdaSeedsV1::new(config_id);
+    assert_eq!(
+        config_seeds.seed_components(),
+        [GENERAL_CONFIG_PDA_DOMAIN_V1, config_id.as_bytes()]
+    );
+
+    let root = GeneralRootPdaSeedsV1::new([8; 32], 7, config_id).expect("root seeds");
+    let generation = 7_u64.to_le_bytes();
+    assert_eq!(
+        root.seed_components(),
+        [
+            GENERAL_ROOT_PDA_DOMAIN_V1,
+            &[8; 32],
+            generation.as_slice(),
+            config_id.as_bytes(),
+        ]
+    );
+    assert_eq!(
+        GeneralRootPdaSeedsV1::new([0; 32], 7, config_id),
+        Err(Error::ZeroIdentifier)
+    );
+
+    let funding =
+        GeneralFundingPdaSeedsV1::new([8; 32], 7, config_id, GENERAL_CAPABILITY_RELEASE_ID_V1)
+            .expect("funding seeds");
+    assert_eq!(funding.seed_components()[0], GENERAL_FUNDING_PDA_DOMAIN_V1);
+    assert_eq!(funding.seed_components()[2], generation.as_slice());
+    assert_eq!(
+        GeneralFundingPdaSeedsV1::new([8; 32], 7, config_id, id(99)),
+        Err(Error::UnrecognizedCapability)
+    );
+
+    let sequence = 3_u64.to_le_bytes();
+    let batch = GeneralBatchPdaSeedsV1::new([9; 32], 3).expect("batch seeds");
+    assert_eq!(
+        batch.seed_components(),
+        [GENERAL_BATCH_PDA_DOMAIN_V1, &[9; 32], sequence.as_slice(),]
+    );
+    let signed = order(10, 20, 9, [-1, 1], 10);
+    let replay = GeneralOrderStatePdaSeedsV1::new([8; 32], signed).expect("replay seeds");
+    assert_eq!(
+        replay.seed_components()[0],
+        GENERAL_ORDER_STATE_PDA_DOMAIN_V1
+    );
+    assert_eq!(replay.seed_components()[3], signed.owner().as_bytes());
+    assert_eq!(replay.seed_components()[5], signed.order_id().as_bytes());
+    assert_ne!(
+        replay,
+        GeneralOrderStatePdaSeedsV1::new([8; 32], order(11, 20, 9, [-1, 1], 10))
+            .expect("substituted replay")
+    );
+
+    let custody = GeneralOrderCustodyPdaSeedsV1::new([11; 32]).expect("custody seeds");
+    let escrow = GeneralQuoteEscrowPdaSeedsV1::new([12; 32]).expect("escrow seeds");
+    let candidate = GeneralCandidatePdaSeedsV1::new([13; 32], id(14)).expect("candidate seeds");
+    let settlement = GeneralSettlementCursorPdaSeedsV1::new([15; 32]).expect("settlement seeds");
+    assert_eq!(
+        custody.seed_components()[0],
+        GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        escrow.seed_components()[0],
+        GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        candidate.seed_components()[0],
+        GENERAL_CANDIDATE_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        settlement.seed_components()[0],
+        GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1
+    );
+}
+
+#[test]
+fn candidate_and_page_codecs_are_exact_n_and_hostile() {
+    let submission = CandidateSubmissionV1 {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        submitter: owner(30),
+        initial_transcript_id: id(50),
+        generation: 7,
+        batch_sequence: 0,
+        valid_until_slot: 20,
+        claimed_execution_count: 2,
+        claimed_score: 20,
+        prices: [40, 60],
+        outcome_count: 2,
+    };
+    assert_eq!(CandidateSubmissionV1::<2>::encoded_len(), Ok(208));
+    assert_eq!(CandidateSubmissionV1::<16>::encoded_len(), Ok(320));
+    let mut submission_bytes = [0; 208];
+    submission
+        .encode(&mut submission_bytes)
+        .expect("submission encodes");
+    assert_eq!(
+        CandidateSubmissionV1::<2>::decode(&submission_bytes),
+        Ok(submission)
+    );
+    assert_eq!(
+        CandidateSubmissionV1::<16>::decode(&submission_bytes),
+        Err(Error::InvalidLength)
+    );
+    let mut dirty = submission_bytes;
+    dirty[172] = 1;
+    assert_eq!(
+        CandidateSubmissionV1::<2>::decode(&dirty),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+    let mut zero_submitter = submission_bytes;
+    zero_submitter[80..112].fill(0);
+    assert_eq!(
+        CandidateSubmissionV1::<2>::decode(&zero_submitter),
+        Err(Error::ZeroIdentifier)
+    );
+
+    let page = VerificationPageV1 {
+        page_index: 0,
+        prior_transcript_id: id(50),
+        next_transcript_id: id(51),
+        execution_count: 2,
+        executions: executions(),
+    };
+    assert_eq!(VerificationPageV1::<2>::encoded_len(2), Ok(728));
+    assert_eq!(VerificationPageV1::<16>::encoded_len(2), Ok(952));
+    let mut page_bytes = vec![0; VerificationPageV1::<2>::encoded_len(2).expect("page width")];
+    page.encode(&mut page_bytes).expect("page encodes");
+    assert_eq!(VerificationPageV1::<2>::decode(&page_bytes), Ok(page));
+    assert_eq!(
+        VerificationPageV1::<16>::decode(&page_bytes),
+        Err(Error::InvalidOutcomeCount)
+    );
+    let mut trailing = page_bytes.clone();
+    trailing.push(0);
+    assert_eq!(
+        VerificationPageV1::<2>::decode(&trailing),
+        Err(Error::InvalidLength)
+    );
+    let mut dirty = page_bytes;
+    *dirty.get_mut(15).expect("reserved byte") = 1;
+    assert_eq!(
+        VerificationPageV1::<2>::decode(&dirty),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+}
+
+#[test]
+fn candidate_and_settlement_state_round_trip_every_reachable_phase() {
+    assert_eq!(CandidateStateV1::<2>::encoded_len(), Ok(424));
+    assert_eq!(CandidateStateV1::<16>::encoded_len(), Ok(760));
+    assert_eq!(SettlementCursorV1::<2>::encoded_len(), Ok(200));
+    assert_eq!(SettlementCursorV1::<16>::encoded_len(), Ok(424));
+    let batch = selecting_batch();
+    let submission = CandidateSubmissionV1 {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        submitter: owner(30),
+        initial_transcript_id: id(50),
+        generation: 7,
+        batch_sequence: 0,
+        valid_until_slot: 20,
+        claimed_execution_count: 2,
+        claimed_score: 20,
+        prices: [40, 60],
+        outcome_count: 2,
+    };
+    let mut candidate =
+        CandidateStateV1::submit(id(40), submission, config(), batch, 10).expect("submission");
+    round_trip_candidate(candidate);
+    let mut rejected = candidate;
+    rejected.reject().expect("pristine reject");
+    round_trip_candidate(rejected);
+    let page = VerificationPageV1 {
+        page_index: 0,
+        prior_transcript_id: id(50),
+        next_transcript_id: id(51),
+        execution_count: 2,
+        executions: executions(),
+    };
+    candidate
+        .verify_page(page, config(), batch, 11)
+        .expect("verification page");
+    round_trip_candidate(candidate);
+    let mut rejected = candidate;
+    rejected.reject().expect("partial reject");
+    round_trip_candidate(rejected);
+    candidate.finish_verification(config()).expect("valid");
+    round_trip_candidate(candidate);
+
+    let mut selected_batch = batch;
+    selected_batch
+        .consider_candidate(&mut candidate, 12)
+        .expect("considered");
+    round_trip_candidate(candidate);
+    selected_batch
+        .close_selection(20)
+        .expect("selection locked");
+    let mut hoard = HoardLedgerV1::new(id(2), 0, 0).expect("hoard");
+    let mut cursor =
+        SettlementCursorV1::begin(candidate, &mut selected_batch, &mut hoard, config(), 20)
+            .expect("settlement");
+    round_trip_settlement_cursor(cursor);
+    cursor
+        .settle_page(page, candidate, config(), selected_batch)
+        .expect("settled page");
+    round_trip_settlement_cursor(cursor);
+
+    let mut candidate_bytes =
+        vec![0; CandidateStateV1::<2>::encoded_len().expect("candidate width")];
+    candidate
+        .encode(&mut candidate_bytes)
+        .expect("candidate bytes");
+    let submission_bytes = CandidateSubmissionV1::<2>::encoded_len().expect("submission width");
+    *candidate_bytes
+        .get_mut(48 + submission_bytes)
+        .expect("candidate phase") = u8::MAX;
+    assert_eq!(
+        CandidateStateV1::<2>::decode(&candidate_bytes),
+        Err(Error::InvalidPhase)
+    );
+    let mut cursor_bytes = vec![0; SettlementCursorV1::<2>::encoded_len().expect("cursor width")];
+    cursor.encode(&mut cursor_bytes).expect("cursor bytes");
+    *cursor_bytes.get_mut(88).expect("last-order tag") = 0;
+    assert_eq!(
+        SettlementCursorV1::<2>::decode(&cursor_bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+}
+
+#[test]
+fn general_instruction_family_round_trips_and_refuses_width_or_tag_substitution() {
+    let replay = GeneralBatchReplayV1 {
+        generation: 7,
+        batch_sequence: 0,
+    };
+    let signed = order(10, 20, 9, [-1, 1], 10);
+    let submission = CandidateSubmissionV1 {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        submitter: owner(30),
+        initial_transcript_id: id(50),
+        generation: 7,
+        batch_sequence: 0,
+        valid_until_slot: 20,
+        claimed_execution_count: 2,
+        claimed_score: 20,
+        prices: [40, 60],
+        outcome_count: 2,
+    };
+    let page = VerificationPageV1 {
+        page_index: 0,
+        prior_transcript_id: id(50),
+        next_transcript_id: id(51),
+        execution_count: 2,
+        executions: executions(),
+    };
+    let candidate_page = GeneralCandidatePageV1 {
+        candidate_id: id(40),
+        page,
+    };
+    let instructions = [
+        GeneralInstructionV1::Activate(ActivateGeneralV1 {
+            expected_market_child_count: 1,
+            config: config(),
+        }),
+        GeneralInstructionV1::OpenBatch(replay),
+        GeneralInstructionV1::LockBatch(replay),
+        GeneralInstructionV1::AdmitOrder(signed),
+        GeneralInstructionV1::CancelOrder(signed),
+        GeneralInstructionV1::CloseOrder(signed),
+        GeneralInstructionV1::SubmitCandidate(SubmitGeneralCandidateV1 {
+            candidate_id: id(40),
+            submission,
+        }),
+        GeneralInstructionV1::VerifyCandidatePage(candidate_page),
+        GeneralInstructionV1::FinishCandidate(id(40)),
+        GeneralInstructionV1::ConsiderCandidate(id(40)),
+        GeneralInstructionV1::LockSelection(replay),
+        GeneralInstructionV1::BeginSettlement(id(40)),
+        GeneralInstructionV1::SettlePage(candidate_page),
+        GeneralInstructionV1::FinishSettlement(id(40)),
+        GeneralInstructionV1::CloseBatch(replay),
+        GeneralInstructionV1::Quiesce(7),
+        GeneralInstructionV1::CloseGeneral(7),
+        GeneralInstructionV1::CloseCandidate(id(40)),
+        GeneralInstructionV1::CloseSettlement(id(40)),
+    ];
+    for instruction in instructions {
+        let mut bytes = vec![0; instruction.encoded_len().expect("instruction width")];
+        instruction.encode(&mut bytes).expect("instruction encodes");
+        assert_eq!(GeneralInstructionV1::<2>::decode(&bytes), Ok(instruction));
+    }
+
+    let instruction = GeneralInstructionV1::AdmitOrder(signed);
+    let mut bytes = vec![0; instruction.encoded_len().expect("instruction width")];
+    instruction.encode(&mut bytes).expect("instruction encodes");
+    assert_eq!(
+        GeneralInstructionV1::<16>::decode(&bytes),
+        Err(Error::InvalidOutcomeCount)
+    );
+    *bytes.get_mut(10).expect("instruction tag") = u8::MAX;
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode(&bytes),
+        Err(Error::UnknownAction)
+    );
+    *bytes.get_mut(10).expect("instruction tag") = GeneralInstructionTagV1::AdmitOrder as u8;
+    *bytes.get_mut(12).expect("reserved byte") = 1;
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode(&bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+    *bytes.get_mut(12).expect("reserved byte") = 0;
+    bytes.push(0);
+    assert_eq!(
+        GeneralInstructionV1::<2>::decode(&bytes),
+        Err(Error::InvalidLength)
+    );
+}
+
+#[test]
+fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
+    let tags = [
+        (GeneralInstructionTagV1::Activate, 0),
+        (GeneralInstructionTagV1::OpenBatch, 0),
+        (GeneralInstructionTagV1::LockBatch, 0),
+        (GeneralInstructionTagV1::AdmitOrder, 0),
+        (GeneralInstructionTagV1::CancelOrder, 0),
+        (GeneralInstructionTagV1::CloseOrder, 0),
+        (GeneralInstructionTagV1::SubmitCandidate, 0),
+        (GeneralInstructionTagV1::VerifyCandidatePage, 4),
+        (GeneralInstructionTagV1::FinishCandidate, 0),
+        (GeneralInstructionTagV1::ConsiderCandidate, 0),
+        (GeneralInstructionTagV1::LockSelection, 0),
+        (GeneralInstructionTagV1::BeginSettlement, 0),
+        (GeneralInstructionTagV1::SettlePage, 4),
+        (GeneralInstructionTagV1::FinishSettlement, 0),
+        (GeneralInstructionTagV1::CloseBatch, 0),
+        (GeneralInstructionTagV1::Quiesce, 0),
+        (GeneralInstructionTagV1::CloseGeneral, 0),
+        (GeneralInstructionTagV1::CloseCandidate, 0),
+        (GeneralInstructionTagV1::CloseSettlement, 0),
+    ];
+    for (tag, count) in tags {
+        let accounts = valid_frame_accounts(tag, count);
+        let frame = GeneralAccountFrameV1::new(tag, count, &accounts).expect("valid frame");
+        assert_eq!(frame.account_count(), accounts.len());
+        assert_eq!(frame.role(0), general_frame_role(tag, count, 0));
+    }
+    let settlement = valid_frame_accounts(GeneralInstructionTagV1::SettlePage, 4);
+    assert_eq!(settlement.len(), 32);
+
+    let mut wrong_privilege = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
+    wrong_privilege.get_mut(0).expect("activator").is_signer = false;
+    assert_eq!(
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &wrong_privilege),
+        Err(Error::InvalidAccountPrivilege)
+    );
+    let mut alias = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
+    let realm_key = alias.get(2).expect("realm").key;
+    alias.get_mut(3).expect("mint").key = realm_key;
+    assert_eq!(
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &alias),
+        Err(Error::AccountAlias)
+    );
+    let mut short = valid_frame_accounts(GeneralInstructionTagV1::AdmitOrder, 0);
+    short.pop();
+    assert_eq!(
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::AdmitOrder, 0, &short),
+        Err(Error::InvalidLength)
+    );
+    assert_eq!(
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::VerifyCandidatePage, 0, &[],),
+        Err(Error::InvalidPageCount)
+    );
+    assert_eq!(
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::SettlePage, 5, &settlement,),
+        Err(Error::InvalidPageCount)
+    );
 }

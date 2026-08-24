@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 
 [dev-dependencies]
 sha2 = "=0.10.9"

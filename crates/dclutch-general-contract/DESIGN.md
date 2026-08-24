@@ -31,30 +31,71 @@ and their exported content identities:
 
 `validate_general_capability_entry_v1` requires those exact kind, release,
 schema, and derivation identities plus the exact config and capacity-profile
-identities. The contract also exports distinct, at-most-32-byte PDA domains for
-config, funding, root, batch, order replay, order custody, and quote escrow.
-Their hashes and domain separation have derivation tests; an adapter verifies
-the resulting account addresses without inventing release constants.
+identities. Every General address now has a contract-owned ordered seed tuple:
+
+- config: `[general-config-domain, config-content-id]`;
+- General root: `[general-root-domain, Market, generation-le, config-id]`;
+- General funding: `[general-funding-domain, Market, generation-le, config-id,
+  release-id]`;
+- batch: `[general-batch-domain, General-root, sequence-le]`;
+- order replay: `[general-order-state-domain, Market, generation-le, owner,
+  nonce-le, order-id]`;
+- order custody: `[general-order-custody-domain, order-replay-account]`;
+- quote escrow: `[general-quote-escrow-domain, order-custody-account]`;
+- candidate: `[general-candidate-domain, batch-account, candidate-id]`; and
+- settlement cursor: `[general-settle-domain, candidate-account]`.
+
+All domains are distinct and at most 32 bytes. Generic capability funding is
+not redefined here. Activation returns the capability contract's reusable
+`CapabilityFundingDerivationV1`, whose tuple is `[capability-funding-domain,
+Market, generation-le, entry-index-le, config-id, release-id]`. The adapter
+must first authenticate the Market's manifest content hash, then derive the
+source account from that exact tuple. Derivation tests cover order, domain, and
+identity substitution.
+
+## Exact instruction and account authority
+
+`GeneralInstructionV1<N>` owns the hostile wire grammar. Every instruction has
+one magic, schema, closed action tag, exact `N`, and zero reserved bytes.
+Variable payloads embed the existing canonical config, signed order, candidate
+submission, or verification-page codec directly; they are not parallel DTOs.
+The remaining payload fields are only generation, child-count, batch-sequence,
+candidate-ID, or transcript replay guards. There are no caller allocation,
+status, winner, liveness, or custody assertions. Decoders reject short,
+trailing, unknown-action, reserved, and width-substituted bytes.
+
+`GeneralAccountFrameV1` owns exact ordered SVM role geometry and privilege
+bits for every action from activation through close. All V1 roles are distinct;
+there is no implicit alias exception. System, Rent, and Clock roles bind their
+canonical keys. Verification frames contain exactly `4 + 2M` accounts and
+settlement frames exactly `8 + 6M` accounts for the instruction's leading
+execution count `M = 1..4`, so unused execution accounts are not padded into a
+transaction. The maximum V1 settlement frame is therefore 32 accounts.
 
 ## Canonical mutable-state records
 
 The contract is the sole codec and invariant owner for its persisted records.
-`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 72 bytes,
+`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 104 bytes,
 `GeneralFundingV1` is exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and
 `OrderStateV1` is exactly 96 bytes. Exact-N `GeneralOrderCustodyV1<N>` is
-`192 + 8N` bytes. Each state record has a distinct eight-byte type magic plus
-the V1 schema and artifact-profile tags, and decoders reject short, trailing,
-reserved, unknown-tag, zero-identity, arithmetically invalid, and unreachable
-state encodings.
+`192 + 8N` bytes, `CandidateStateV1<N>` is `376 + 24N` bytes, and
+`SettlementCursorV1<N>` is `168 + 16N` bytes. Each state record has a distinct
+eight-byte type magic plus the V1 schema and artifact-profile tags, and
+decoders reject short, trailing, reserved, unknown-tag, zero-identity,
+arithmetically invalid, and unreachable state encodings.
 
 The records encode every field read or changed by a transition. Optional
 candidate identities use one canonical discriminator and require an all-zero
 payload when absent. Batch deadlines are strictly increasing, batch winner
 shape agrees with candidate count and phase, root child counts cannot exceed
 reserved sequences or survive terminalization, and order replay phase agrees
-with remaining lots. Replay authentication additionally binds the persisted
-order identity, exact nonzero signing key, nonce, and remaining lots to the
-immutable signed order and its original lot ceiling. Custody binds that order,
+with remaining lots. The root persists the nonzero permanent RentCredit
+beneficiary for config/root/funding and batch rent; this is never supplied by a
+close caller. Candidate submission uses an exact signing key which is also that
+candidate's permanent rent beneficiary. Replay authentication additionally
+binds the persisted order identity, exact nonzero signing key, nonce, and
+remaining lots to the immutable signed order and its original lot ceiling.
+Custody binds that order,
 Market, generation, signing key, rent beneficiary, and quote escrow, and owns
 only remaining quote and native-claim principal; replay availability remains
 solely in `OrderStateV1`. Funding persists committed, remaining, spent, and
@@ -211,7 +252,13 @@ immutable quote exactly: service -> General liveness, work -> work, and bounty
 -> bounty. Provider and liquidity must both be zero. Rent and creation remain
 the capability activation outputs. No caller supplies compartment amounts, and
 the returned plan releases all quote principal from the generic ledger so one
-principal cannot remain owned twice.
+principal cannot remain owned twice. The same plan exposes the capability-owned
+source PDA derivation. The exact activation plan registers the direct child in
+the open Market root, takes the Market's immutable `rent_refund` key as the
+General root's permanent RentCredit beneficiary, and fixes the frame's activator
+only as the physical-creation recipient. Current Rent minima and actual account
+balances remain adapter-observed facts, never wire amounts; their exact sum must
+equal the manifest's immutable activation-rent quote.
 
 A General debit consumes present principal from exactly one compartment.
 Remaining plus spent plus refunded must always equal the founding quote for
@@ -243,8 +290,9 @@ operator implement and test all of the following:
 
 1. Authenticate config, Market identity, ClaimBasis, capability release, and
    transcript hashes from canonical bytes.
-2. Verify `OwnerKeyV1` signatures and exact config/funding/root/batch/replay/
-   custody/escrow PDA derivations.
+2. Verify `OwnerKeyV1` signatures and every returned exact config, generic
+   capability-funding, General-funding/root/batch/replay/custody/escrow/
+   candidate/settlement PDA derivation.
 3. Atomically execute the contract-returned admission reserve against the
    owner's Position and quote escrow, then couple every receipt or release to
    the corresponding token/Position movement.
@@ -253,10 +301,9 @@ operator implement and test all of the following:
    receipts, token movements, cursor, and funded work debit.
 5. Make applying pages permissionless and non-expiring, with liveness payments
    drawn only from the segregated compartment.
-6. Add canonical contract-owned account encodings for candidate and settlement
-   cursors. Config, roots, funding, batch roots, order replay state, exact-N
-   custody, signed orders, and settlement receipts already expose hostile
-   exact-width codecs here.
+6. Use `GeneralInstructionV1<N>` and `GeneralAccountFrameV1` directly; do not
+   add router-local tags, client status booleans, padded page DTOs, or alias
+   conventions.
 7. Measure account rent, transaction account counts, SBF stack, and compute units
    before replacing any provisional bound.
 
@@ -267,19 +314,23 @@ an untrusted projection of the onchain records above.
 
 Every persisted outcome-bearing semantic record is const-generic over its
 selected ClaimBasis width `N`: `PortfolioOrderV1<N>`,
-`GeneralOrderCustodyV1<N>`, candidate state and cursor, settlement cursor,
+`GeneralOrderCustodyV1<N>`, candidate submission/state, settlement cursor,
 `SettlementReceiptV1<N>`, and the page result that carries receipts. Their
 constructors require the recorded outcome count to equal `N`. Orders, custody,
-and receipts expose checked exact `encoded_len`, decode only that length, and
-encode only into that length. Consequently an N=2 order is 216 bytes rather
-than the former 328-byte max-width record (112 bytes saved); an N=2 receipt is
-192 bytes rather than 312 bytes (120 bytes saved); and N=2 custody is 208
-bytes. At N=16, orders are 328 bytes, receipts are 304 bytes, and custody is
-320 bytes. The receipt geometry also removes the former unused eight-byte
-tail.
+candidate submission/state, settlement cursor, pages, and receipts expose
+checked exact lengths. Consequently an N=2 order is 216 bytes rather than the
+former 328-byte max-width record (112 bytes saved); an N=2 receipt is 192 bytes
+rather than 312 bytes (120 bytes saved); and N=2 custody is 208 bytes. At N=16,
+orders are 328 bytes, receipts are 304 bytes, and custody is 320 bytes. Candidate
+submission is `192 + 8N` bytes (208/320), candidate state is `376 + 24N` bytes
+(424/760), and settlement cursor is `168 + 16N` bytes (200/424). The receipt
+geometry also removes the former unused eight-byte tail.
 
-`VerificationPageV1<N>` and `SettlementPageResultV1<N>` retain only the
-separate `MAX_EXECUTIONS_PER_PAGE_V1` fixed execution envelope. That bound is
-an ephemeral stack/page-work bound, not an outcome vector and not an account
-or rent geometry. The `N`-dependent orders, prices, cursors, and receipts
-inside the envelope remain exact-width.
+The canonical verification-page wire is `88 + M * (304 + 8N)` bytes for exactly
+`M = 1..4` leading executions. Thus a full page is 1,368 bytes at N=2 and 1,816
+bytes at N=16. The corresponding page instruction adds its 16-byte family
+header and 32-byte candidate ID, for 1,416/1,864 bytes. There is no unused
+execution padding on the wire or in the account frame. In-memory
+`VerificationPageV1<N>` and `SettlementPageResultV1<N>` retain only the separate
+four-execution stack envelope; that provisional bound must still be measured
+under SBF before release.
