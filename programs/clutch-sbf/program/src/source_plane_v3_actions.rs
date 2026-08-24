@@ -407,10 +407,38 @@ pub(crate) struct AuthenticatedSourceLifecycleAdmissionV1 {
 /// family choice. Unused principal remains in the authenticated custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceLifecycleCapitalizationQuoteV1 {
-    pub(crate) liveness_work_lamports: u64,
-    pub(crate) permanent_and_child_rent_lamports: u64,
-    pub(crate) total_lamports: u64,
-    pub(crate) id: ContentId,
+    liveness_work_lamports: u64,
+    permanent_and_child_rent_lamports: u64,
+    total_lamports: u64,
+    failure_terminal_account_bytes: u64,
+    failure_terminal_rent_principal_lamports: u64,
+    id: ContentId,
+}
+
+impl SourceLifecycleCapitalizationQuoteV1 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn liveness_work_lamports(&self) -> u64 {
+        self.liveness_work_lamports
+    }
+
+    pub(crate) const fn permanent_and_child_rent_lamports(&self) -> u64 {
+        self.permanent_and_child_rent_lamports
+    }
+
+    pub(crate) const fn total_lamports(&self) -> u64 {
+        self.total_lamports
+    }
+
+    pub(crate) const fn failure_terminal_account_bytes(&self) -> u64 {
+        self.failure_terminal_account_bytes
+    }
+
+    pub(crate) const fn failure_terminal_rent_principal_lamports(&self) -> u64 {
+        self.failure_terminal_rent_principal_lamports
+    }
 }
 
 /// Derive the exact fully-prepaid SourceWork quote from the immutable schedule
@@ -462,6 +490,10 @@ pub(crate) fn quote_source_lifecycle_capitalization_v1(
     let terminal_policy_space = SOURCE_NO_REOPEN_TERMINAL_BYTES
         .max(SOURCE_REOPEN_GENERATION_REQUEST_BYTES)
         .max(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES);
+    let failure_terminal_account_bytes = u64::try_from(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let failure_terminal_rent_principal_lamports =
+        rent.minimum_balance(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES)?;
     rent_total = add_total(rent_total, rent.minimum_balance(terminal_policy_space)?)?;
     rent_total = add_total(
         rent_total,
@@ -476,6 +508,8 @@ pub(crate) fn quote_source_lifecycle_capitalization_v1(
             &schedule.work_capital_lamports().to_le_bytes(),
             &rent_total.to_le_bytes(),
             &total_lamports.to_le_bytes(),
+            &failure_terminal_account_bytes.to_le_bytes(),
+            &failure_terminal_rent_principal_lamports.to_le_bytes(),
             &rent.lamports_per_byte_year.to_le_bytes(),
             &rent.exemption_threshold.to_bits().to_le_bytes(),
         ])
@@ -486,6 +520,8 @@ pub(crate) fn quote_source_lifecycle_capitalization_v1(
         liveness_work_lamports: schedule.work_capital_lamports(),
         permanent_and_child_rent_lamports: rent_total,
         total_lamports,
+        failure_terminal_account_bytes,
+        failure_terminal_rent_principal_lamports,
         id,
     })
 }
@@ -4721,13 +4757,22 @@ mod tests {
             exemption_threshold: 2.0,
         };
         let value = quote_source_lifecycle_capitalization_v1(schedule(), &rent).unwrap();
-        assert_eq!(value.liveness_work_lamports, 80);
-        assert!(value.permanent_and_child_rent_lamports > 0);
+        assert_eq!(value.liveness_work_lamports(), 80);
+        assert!(value.permanent_and_child_rent_lamports() > 0);
         assert_eq!(
-            value.total_lamports,
-            value.liveness_work_lamports + value.permanent_and_child_rent_lamports
+            value.total_lamports(),
+            value.liveness_work_lamports() + value.permanent_and_child_rent_lamports()
         );
-        assert!(!value.id.is_zero());
+        assert_eq!(
+            value.failure_terminal_account_bytes(),
+            u64::try_from(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES).unwrap()
+        );
+        assert_eq!(
+            value.failure_terminal_rent_principal_lamports(),
+            rent.minimum_balance(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES)
+                .unwrap()
+        );
+        assert!(!value.id().is_zero());
 
         let hostile_rent = RentParameters {
             lamports_per_byte_year: 3_481,
@@ -4736,8 +4781,36 @@ mod tests {
         assert_ne!(
             quote_source_lifecycle_capitalization_v1(schedule(), &hostile_rent)
                 .unwrap()
-                .id,
-            value.id
+                .id(),
+            value.id()
         );
+    }
+
+    #[test]
+    fn lifecycle_quote_fields_are_private_and_v3_terminal_rent_is_identity_bound() {
+        let source = include_str!("source_plane_v3_actions.rs");
+        let quote = source
+            .split("pub(crate) struct SourceLifecycleCapitalizationQuoteV1")
+            .nth(1)
+            .and_then(|value| value.split("/// Derive the exact fully-prepaid").next())
+            .expect("bounded lifecycle quote");
+        for field in [
+            "liveness_work_lamports: u64",
+            "permanent_and_child_rent_lamports: u64",
+            "total_lamports: u64",
+            "failure_terminal_account_bytes: u64",
+            "failure_terminal_rent_principal_lamports: u64",
+            "id: ContentId",
+        ] {
+            assert!(quote.contains(field));
+            assert!(!quote.contains(&format!("pub(crate) {field}")));
+        }
+        let derivation = source
+            .split("pub(crate) fn quote_source_lifecycle_capitalization_v1")
+            .nth(1)
+            .expect("Source-owned quote derivation");
+        assert!(derivation.contains("SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES"));
+        assert!(derivation.contains("failure_terminal_account_bytes.to_le_bytes()"));
+        assert!(derivation.contains("failure_terminal_rent_principal_lamports.to_le_bytes()"));
     }
 }
