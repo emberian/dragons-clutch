@@ -240,6 +240,12 @@ pub const CREATE_REALM_FRAME: [AccountRole; 6] = [
 ];
 
 /// Exact atomic Market and resolution-Fund founding frame.
+///
+/// `CapabilityManifest` is the sole funding authority. The adapter selects the
+/// unique founding-required entry whose config is the authenticated
+/// `ResolutionPolicy`, validates its specialized Fund quote against `Rent`,
+/// and derives all Fund amounts from that entry. No founding instruction field
+/// or sponsor argument may override the immutable quote.
 pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
     sponsor(),
     state(Role::Market, true),

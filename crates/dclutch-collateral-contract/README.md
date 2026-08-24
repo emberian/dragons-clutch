@@ -14,6 +14,14 @@ Market identity commits an occurrence-specific Product Instance which links
 reusable Terms, Occurrence, ClaimBasis, and CapacityProfile content without
 making each record universal mutable runtime state.
 
+`FoundMarketAndFundV1` carries only the immutable Market identity and exact
+outcome count. It carries no funding amounts. The authenticated capability
+manifest must uniquely select the `RequiredAtFounding` entry whose `config_id`
+equals the Market's `resolution_policy_id`. The current Pyth adapter derives
+exact Fund rent, provider reimbursement, and positive success bounty from that
+entry after validating the specialized one-shot Fund profile. Manifest funding
+is the sole authority; sponsor-authored instruction values cannot override it.
+
 The categorical width `2..=16` is a **provisional measured-profile bound**
 shared with the current Realm and Market contracts. Its lifting path is a new
 adapter release using paged or dynamically selected fixed-layout kernels; it

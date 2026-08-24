@@ -41,3 +41,22 @@ contract does not claim to observe account balances itself.
 `PrepaidLazy` entries may remain pending through opening, but their exact
 creation and rent principal is present from founding and activation must occur
 no later than the committed slot deadline.
+
+Market founding selects resolution funding by immutable meaning, not by a
+caller-supplied amount or a conventional manifest position. The authenticated
+manifest must contain exactly one `RequiredAtFounding` entry whose `config_id`
+equals the Market identity's `resolution_policy_id`. The total no-allocation
+selector returns that entry together with its canonical index and refuses both
+missing and ambiguous matches; manifest order is never a tie breaker.
+
+The current one-shot Pyth resolution Fund is a specialized adapter profile. At
+its adapter boundary, the selected entry's quote must contain exactly:
+
+- Fund-account rent equal to the authenticated Rent calculation;
+- provider reimbursement committed by the manifest; and
+- a positive resolution-success bounty.
+
+Creation, work, liquidity, and service principal must all be zero because the
+specialized Fund does not physically hold those compartments. The provider and
+bounty values are derived from this immutable quote. They do not appear in the
+founding instruction, and neither collateral nor future fees may replace them.

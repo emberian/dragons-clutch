@@ -64,10 +64,6 @@ pub enum Error {
     ZeroQuantity,
     /// A required Market, authority, or refund identity was all zero.
     ZeroIdentifier,
-    /// Founding did not prepay a positive resolution success bounty.
-    ZeroResolutionBounty,
-    /// Two prepaid resolution amounts overflowed the exact integer domain.
-    ArithmeticOverflow,
     /// The embedded immutable Realm record was invalid.
     InvalidRealm {
         /// The exact Realm-contract refusal.

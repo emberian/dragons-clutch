@@ -28,8 +28,6 @@ const FOUND_IDENTITY_OFFSET: usize = HEADER_BYTES;
 const FOUND_OUTCOME_COUNT_OFFSET: usize = FOUND_IDENTITY_OFFSET + MARKET_IDENTITY_BYTES;
 const FOUND_RESERVED_OFFSET: usize = FOUND_OUTCOME_COUNT_OFFSET + 1;
 const FOUND_RESERVED_BYTES: usize = 7;
-const FOUND_PROVIDER_FEE_OFFSET: usize = FOUND_RESERVED_OFFSET + FOUND_RESERVED_BYTES;
-const FOUND_BOUNTY_OFFSET: usize = FOUND_PROVIDER_FEE_OFFSET + 8;
 
 const REDEEM_OUTCOME_OFFSET: usize = HEADER_BYTES + 16;
 const REDEEM_RESERVED_OFFSET: usize = REDEEM_OUTCOME_OFFSET + 1;
@@ -38,7 +36,7 @@ const REDEEM_RESERVED_BYTES: usize = 7;
 /// Exact immutable-Realm creation instruction width.
 pub const CREATE_REALM_BYTES: usize = HEADER_BYTES + REALM_BYTES;
 /// Exact atomic Market and resolution-Fund founding instruction width.
-pub const FOUND_MARKET_AND_FUND_BYTES: usize = HEADER_BYTES + MARKET_IDENTITY_BYTES + 24;
+pub const FOUND_MARKET_AND_FUND_BYTES: usize = HEADER_BYTES + MARKET_IDENTITY_BYTES + 8;
 /// Exact collateral-Vault initialization and Market-open instruction width.
 pub const OPEN_COLLATERAL_VAULT_BYTES: usize = HEADER_BYTES + 16;
 /// Exact Position creation and first complete-set split instruction width.
@@ -236,41 +234,26 @@ impl CreateRealmV1 {
 pub struct FoundMarketAndFundV1 {
     identity: MarketIdentity,
     outcome_count: u8,
-    provider_fee_reimbursement: u64,
-    resolution_success_bounty: u64,
 }
 
 impl FoundMarketAndFundV1 {
     /// Validate founding facts.
     ///
     /// The sponsor account is persisted by the Fund implementation as its
-    /// refund recipient. The provider fee is prepaid reimbursement, never
-    /// protocol revenue, and the positive bounty is separately prepaid.
-    /// Before creating accounts, the adapter must hash and match the Realm,
-    /// resolution-policy, and capability-manifest records supplied by the
-    /// exact account frame. It must decode and authenticate the explicit
-    /// Product Instance, categorical ClaimBasis, and CapacityProfile records,
-    /// validate their links and `outcome_count`, and match both Product IDs in
-    /// `identity`. These records remain content commitments rather than
-    /// universal mutable runtime state.
-    pub fn new(
-        identity: MarketIdentity,
-        outcome_count: u8,
-        provider_fee_reimbursement: u64,
-        resolution_success_bounty: u64,
-    ) -> Result<Self> {
+    /// refund recipient. Before creating accounts, the adapter must hash and
+    /// match the Realm, resolution-policy, and capability-manifest records
+    /// supplied by the exact account frame. The manifest must uniquely select
+    /// the `RequiredAtFounding` entry whose config equals the Market's
+    /// resolution-policy identity. That immutable entry, never instruction
+    /// data, owns exact Fund rent, provider reimbursement, and positive bounty.
+    /// The adapter must also authenticate the explicit Product Instance,
+    /// categorical ClaimBasis, and CapacityProfile records, validate their
+    /// links and `outcome_count`, and match both Product IDs in `identity`.
+    pub fn new(identity: MarketIdentity, outcome_count: u8) -> Result<Self> {
         validate_outcome_count(outcome_count)?;
-        if resolution_success_bounty == 0 {
-            return Err(Error::ZeroResolutionBounty);
-        }
-        provider_fee_reimbursement
-            .checked_add(resolution_success_bounty)
-            .ok_or(Error::ArithmeticOverflow)?;
         Ok(Self {
             identity,
             outcome_count,
-            provider_fee_reimbursement,
-            resolution_success_bounty,
         })
     }
 
@@ -291,12 +274,7 @@ impl FoundMarketAndFundV1 {
                 .ok_or(Error::InvalidLength)?,
         )
         .map_err(|error| Error::InvalidMarketIdentity { error })?;
-        Self::new(
-            identity,
-            read_byte(bytes, FOUND_OUTCOME_COUNT_OFFSET)?,
-            read_u64(bytes, FOUND_PROVIDER_FEE_OFFSET)?,
-            read_u64(bytes, FOUND_BOUNTY_OFFSET)?,
-        )
+        Self::new(identity, read_byte(bytes, FOUND_OUTCOME_COUNT_OFFSET)?)
     }
 
     /// Encode into the exact caller-owned output without partial mutation.
@@ -313,16 +291,6 @@ impl FoundMarketAndFundV1 {
             FOUND_OUTCOME_COUNT_OFFSET,
             &[self.outcome_count],
         )?;
-        put(
-            &mut encoded,
-            FOUND_PROVIDER_FEE_OFFSET,
-            &self.provider_fee_reimbursement.to_le_bytes(),
-        )?;
-        put(
-            &mut encoded,
-            FOUND_BOUNTY_OFFSET,
-            &self.resolution_success_bounty.to_le_bytes(),
-        )?;
         commit(output, &encoded)
     }
 
@@ -334,16 +302,6 @@ impl FoundMarketAndFundV1 {
     /// Return the exhaustive ordered categorical outcome count.
     pub const fn outcome_count(self) -> u8 {
         self.outcome_count
-    }
-
-    /// Return the prepaid provider-fee reimbursement.
-    pub const fn provider_fee_reimbursement(self) -> u64 {
-        self.provider_fee_reimbursement
-    }
-
-    /// Return the prepaid positive resolver bounty.
-    pub const fn resolution_success_bounty(self) -> u64 {
-        self.resolution_success_bounty
     }
 }
 
@@ -945,7 +903,7 @@ mod tests {
         );
 
         let mut found = [0; FOUND_MARKET_AND_FUND_BYTES];
-        FoundMarketAndFundV1::new(identity(), 3, 7, 11)
+        FoundMarketAndFundV1::new(identity(), 3)
             .expect("valid founding")
             .encode(&mut found)
             .expect("founding encoding");
@@ -1117,17 +1075,35 @@ mod tests {
     #[test]
     fn family_reserved_bytes_and_invalid_values_refuse() {
         let mut found = [0; FOUND_MARKET_AND_FUND_BYTES];
-        FoundMarketAndFundV1::new(identity(), 3, 7, 11)
-            .expect("valid founding")
-            .encode(&mut found)
-            .expect("found encoding");
-        if let Some(byte) = found.get_mut(FOUND_RESERVED_OFFSET) {
-            *byte = 1;
+        let founding = FoundMarketAndFundV1::new(identity(), 3).expect("valid founding");
+        founding.encode(&mut found).expect("found encoding");
+        assert_eq!(FOUND_MARKET_AND_FUND_BYTES, 192);
+        assert_eq!(founding.identity(), identity());
+        assert_eq!(founding.outcome_count(), 3);
+        for reserved_offset in FOUND_RESERVED_OFFSET..FOUND_RESERVED_OFFSET + FOUND_RESERVED_BYTES {
+            let mut hostile = found;
+            if let Some(byte) = hostile.get_mut(reserved_offset) {
+                *byte = 1;
+            }
+            assert_eq!(
+                FoundMarketAndFundV1::decode(&hostile),
+                Err(Error::NonCanonicalReservedBytes)
+            );
         }
+
+        let mut obsolete_width = [0u8; 208];
+        obsolete_width
+            .get_mut(..FOUND_MARKET_AND_FUND_BYTES)
+            .expect("founding prefix")
+            .copy_from_slice(&found);
         assert_eq!(
-            FoundMarketAndFundV1::decode(&found),
-            Err(Error::NonCanonicalReservedBytes)
+            FoundMarketAndFundV1::decode(&obsolete_width),
+            Err(Error::InvalidLength)
         );
+        let before = [0x5a; FOUND_MARKET_AND_FUND_BYTES + 1];
+        let mut wrong_output = before;
+        assert_eq!(founding.encode(&mut wrong_output), Err(Error::OutputLength));
+        assert_eq!(wrong_output, before);
 
         let mut redeem = [0; REDEEM_RESOLVED_OUTCOME_BYTES];
         RedeemResolvedOutcomeV1::new(9, 2, 1)
@@ -1143,16 +1119,8 @@ mod tests {
         );
 
         assert_eq!(
-            FoundMarketAndFundV1::new(identity(), 1, 0, 1),
+            FoundMarketAndFundV1::new(identity(), 1),
             Err(Error::InvalidOutcomeCount)
-        );
-        assert_eq!(
-            FoundMarketAndFundV1::new(identity(), 2, 0, 0),
-            Err(Error::ZeroResolutionBounty)
-        );
-        assert_eq!(
-            FoundMarketAndFundV1::new(identity(), 2, u64::MAX, 1),
-            Err(Error::ArithmeticOverflow)
         );
         assert_eq!(SplitCompleteSetV1::new(1, 0), Err(Error::ZeroQuantity));
         assert_eq!(MergeCompleteSetV1::new(1, 0), Err(Error::ZeroQuantity));

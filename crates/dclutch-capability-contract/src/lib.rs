@@ -155,6 +155,16 @@ pub enum Error {
     ActivationDeadlineElapsed,
     /// A founding-required capability remained inactive at Market opening.
     FoundingCapabilityInactive,
+    /// No founding-required entry matched the requested immutable config.
+    RequiredFoundingConfigMissing,
+    /// More than one founding-required entry matched the requested config.
+    RequiredFoundingConfigAmbiguous,
+    /// Resolution-Fund rent did not equal the adapter's exact rent calculation.
+    ResolutionFundRentMismatch,
+    /// A one-shot resolution Fund omitted its positive success bounty.
+    MissingResolutionFundBounty,
+    /// A one-shot resolution Fund named principal it does not physically hold.
+    ExtraneousResolutionFundPrincipal,
 }
 
 /// Result alias for this contract crate.
@@ -543,6 +553,56 @@ impl CapabilityEntryV1 {
     }
 }
 
+/// Unique founding-required manifest entry selected by immutable config.
+///
+/// The index and decoded entry are returned together so a composing adapter
+/// cannot select funding from one entry while deriving a child from another.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RequiredFoundingEntryV1 {
+    index: u16,
+    entry: CapabilityEntryV1,
+}
+
+impl RequiredFoundingEntryV1 {
+    /// Return the exact canonical manifest index.
+    pub const fn index(self) -> u16 {
+        self.index
+    }
+
+    /// Return the uniquely selected immutable entry.
+    pub const fn entry(self) -> CapabilityEntryV1 {
+        self.entry
+    }
+
+    /// Validate the current one-shot resolution-Fund funding profile.
+    ///
+    /// `exact_fund_rent` is calculated from the authenticated Fund account
+    /// width and Rent sysvar by the adapter. The immutable entry must quote
+    /// exactly that rent, provider reimbursement, and a positive bounty. It
+    /// may not quote creation, work, liquidity, or service principal because
+    /// the specialized Fund account does not hold those compartments.
+    pub fn validate_one_shot_resolution_fund_quote(
+        self,
+        exact_fund_rent: u64,
+    ) -> Result<FundingQuoteV1> {
+        let quote = self.entry.funding_quote;
+        if quote.rent_principal != exact_fund_rent {
+            return Err(Error::ResolutionFundRentMismatch);
+        }
+        if quote.bounty_principal == 0 {
+            return Err(Error::MissingResolutionFundBounty);
+        }
+        if quote.creation_principal != 0
+            || quote.work_principal != 0
+            || quote.liquidity_principal != 0
+            || quote.service_principal != 0
+        {
+            return Err(Error::ExtraneousResolutionFundPrincipal);
+        }
+        Ok(quote)
+    }
+}
+
 /// Borrowed, validated canonical manifest preimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityManifestV1<'a> {
@@ -625,6 +685,34 @@ impl<'a> CapabilityManifestV1<'a> {
         }
         let offset = entry_offset(usize::from(index))?;
         CapabilityEntryV1::decode(subslice(self.bytes, offset, CAPABILITY_ENTRY_BYTES)?)
+    }
+
+    /// Select the unique founding-required entry for one immutable config.
+    ///
+    /// The current resolution adapter passes the authenticated Market
+    /// identity's `resolution_policy_id`. Lazy entries and founding-required
+    /// entries for other configs are ignored. Missing and ambiguous matches
+    /// are explicit refusals; manifest order never becomes an implicit
+    /// funding-authority tie breaker.
+    pub fn required_founding_entry_for_config(
+        self,
+        config_id: ContentId,
+    ) -> Result<RequiredFoundingEntryV1> {
+        let mut selected: Option<RequiredFoundingEntryV1> = None;
+        let mut index = 0u16;
+        while index < self.entry_count {
+            let entry = self.entry(index)?;
+            if entry.activation_policy == ActivationPolicy::RequiredAtFounding
+                && entry.config_id == config_id
+            {
+                if selected.is_some() {
+                    return Err(Error::RequiredFoundingConfigAmbiguous);
+                }
+                selected = Some(RequiredFoundingEntryV1 { index, entry });
+            }
+            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        selected.ok_or(Error::RequiredFoundingConfigMissing)
     }
 }
 
@@ -1315,6 +1403,16 @@ mod tests {
     }
 
     fn entry(kind: u8, policy: ActivationPolicy, dependency: Option<u8>) -> CapabilityEntryV1 {
+        entry_with_config(kind, 22, policy, dependency, quote())
+    }
+
+    fn entry_with_config(
+        kind: u8,
+        config: u8,
+        policy: ActivationPolicy,
+        dependency: Option<u8>,
+        funding_quote: FundingQuoteV1,
+    ) -> CapabilityEntryV1 {
         let mut dependencies = [0u8; MAX_DEPENDENCIES_PER_CAPABILITY];
         let dependency_count = if let Some(value) = dependency {
             if let Some(slot) = dependencies.get_mut(0) {
@@ -1332,7 +1430,7 @@ mod tests {
         match CapabilityEntryV1::new(
             id(kind),
             id(21),
-            id(22),
+            id(config),
             id(23),
             id(24),
             id(25),
@@ -1340,7 +1438,7 @@ mod tests {
             deadline,
             dependency_count,
             dependencies,
-            quote(),
+            funding_quote,
         ) {
             Ok(value) => value,
             Err(_) => unreachable_total(),
@@ -1398,6 +1496,115 @@ mod tests {
         assert_eq!(value.entry(0), Ok(entry_at(&entries, 0)));
         assert_eq!(value.entry(1), Ok(entry_at(&entries, 1)));
         assert_eq!(value.as_bytes().len(), storage.len());
+    }
+
+    #[test]
+    fn founding_config_selection_is_unique_and_never_order_fallback() {
+        let entries = [
+            entry_with_config(1, 30, ActivationPolicy::RequiredAtFounding, None, quote()),
+            entry_with_config(2, 31, ActivationPolicy::PrepaidLazy, Some(0), quote()),
+            entry_with_config(
+                3,
+                31,
+                ActivationPolicy::RequiredAtFounding,
+                Some(0),
+                quote(),
+            ),
+        ];
+        let mut storage = [0u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let value = manifest(&entries, &mut storage);
+        let selected = value.required_founding_entry_for_config(id(31));
+        assert!(selected.is_ok());
+        if let Ok(value) = selected {
+            assert_eq!(value.index(), 2);
+            assert_eq!(value.entry(), entry_at(&entries, 2));
+        }
+        assert_eq!(
+            value.required_founding_entry_for_config(id(32)),
+            Err(Error::RequiredFoundingConfigMissing)
+        );
+
+        let ambiguous = [
+            entry_with_config(1, 40, ActivationPolicy::RequiredAtFounding, None, quote()),
+            entry_with_config(2, 40, ActivationPolicy::RequiredAtFounding, None, quote()),
+        ];
+        let mut ambiguous_storage = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+        let manifest = manifest(&ambiguous, &mut ambiguous_storage);
+        assert_eq!(
+            manifest.required_founding_entry_for_config(id(40)),
+            Err(Error::RequiredFoundingConfigAmbiguous)
+        );
+    }
+
+    #[test]
+    fn one_shot_resolution_fund_quote_has_only_held_compartments() {
+        let fund_quote = match FundingQuoteV1::new(100, 0, 0, 40, 50, 0, 0) {
+            Ok(value) => value,
+            Err(_) => unreachable_total(),
+        };
+        let entries = [entry_with_config(
+            1,
+            44,
+            ActivationPolicy::RequiredAtFounding,
+            None,
+            fund_quote,
+        )];
+        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let selected =
+            match manifest(&entries, &mut storage).required_founding_entry_for_config(id(44)) {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+        assert_eq!(
+            selected.validate_one_shot_resolution_fund_quote(100),
+            Ok(fund_quote)
+        );
+        assert_eq!(
+            selected.validate_one_shot_resolution_fund_quote(99),
+            Err(Error::ResolutionFundRentMismatch)
+        );
+
+        let invalid_quotes = [
+            (
+                FundingQuoteV1::new(100, 0, 0, 40, 0, 0, 0),
+                Error::MissingResolutionFundBounty,
+            ),
+            (
+                FundingQuoteV1::new(100, 1, 0, 40, 50, 0, 0),
+                Error::ExtraneousResolutionFundPrincipal,
+            ),
+            (
+                FundingQuoteV1::new(100, 0, 1, 40, 50, 0, 0),
+                Error::ExtraneousResolutionFundPrincipal,
+            ),
+            (
+                FundingQuoteV1::new(100, 0, 0, 40, 50, 1, 0),
+                Error::ExtraneousResolutionFundPrincipal,
+            ),
+            (
+                FundingQuoteV1::new(100, 0, 0, 40, 50, 0, 1),
+                Error::ExtraneousResolutionFundPrincipal,
+            ),
+        ];
+        for (candidate, expected) in invalid_quotes {
+            let candidate = match candidate {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+            let entry =
+                entry_with_config(1, 44, ActivationPolicy::RequiredAtFounding, None, candidate);
+            let mut candidate_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+            let selected = match manifest(&[entry], &mut candidate_storage)
+                .required_founding_entry_for_config(id(44))
+            {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+            assert_eq!(
+                selected.validate_one_shot_resolution_fund_quote(100),
+                Err(expected)
+            );
+        }
     }
 
     #[test]
