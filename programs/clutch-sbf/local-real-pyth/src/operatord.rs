@@ -8,16 +8,21 @@
 use crate::account_index::{
     CanonicalAccountIndex, CanonicalAccountKind, DecodeState, IndexedAccountVersion, IndexedBranch,
 };
+use crate::action_material::{
+    source_action_from_selection, source_role_label_v2, source_selection_action,
+    CanonicalActionMaterialV1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
 };
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
+use crate::transaction_builder::{IntegerUnit, ProtocolFlow, RuntimeAdmission};
 use clutch_solana_layout::registry::{
     GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
-use clutch_solana_layout::source_series::{account_contract_v2, SourceAccountRoleV2};
+use clutch_solana_layout::source_series::account_contract_v2;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -375,6 +380,7 @@ pub struct OperatorJsonResponse {
 pub struct OperatorJsonApi<'index> {
     index: &'index CanonicalAccountIndex,
     selector: ResumableKeeperSelector,
+    action_materials: &'index [CanonicalActionMaterialV1],
 }
 
 impl<'index> OperatorJsonApi<'index> {
@@ -383,7 +389,26 @@ impl<'index> OperatorJsonApi<'index> {
         index: &'index CanonicalAccountIndex,
         selector: ResumableKeeperSelector,
     ) -> Self {
-        Self { index, selector }
+        Self {
+            index,
+            selector,
+            action_materials: &[],
+        }
+    }
+
+    /// Bind opaque server-constructed action material to this read-only
+    /// projection. The API still has no signing or submission method.
+    #[must_use]
+    pub const fn with_action_materials(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+    ) -> Self {
+        Self {
+            index,
+            selector,
+            action_materials,
+        }
     }
 
     /// Handle one already-bounded HTTP request target. No endpoint mutates
@@ -534,7 +559,12 @@ impl<'index> OperatorJsonApi<'index> {
                     "releaseManifestSha256": hex32(release.release_manifest_sha256),
                     "capabilityProfileId": hex32(release.capability_profile_id),
                     "sourceCommit": release.source_commit,
-                    "decoderSet": crate::account_index::CANONICAL_ACCOUNT_DECODER_SET
+                    "decoderSet": crate::account_index::CANONICAL_ACCOUNT_DECODER_SET,
+                    "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
+                        "familyTag": intent.family_tag.to_string(),
+                        "familyVersion": intent.family_version.to_string(),
+                        "localAction": intent.local_action.to_string()
+                    })).collect::<Vec<_>>()
                 },
                 "canonicalAccounts": accounts.iter().map(|version| session_account_json(version)).collect::<Vec<_>>(),
                 "restart": {
@@ -594,7 +624,9 @@ impl<'index> OperatorJsonApi<'index> {
         let verdicts = release
             .enabled_intents
             .iter()
-            .map(|coordinate| action_verdict_json(release, *coordinate, &cursors))
+            .map(|coordinate| {
+                action_verdict_json(release, *coordinate, &cursors, self.action_materials)
+            })
             .collect::<Vec<_>>();
         response(
             200,
@@ -713,12 +745,13 @@ fn action_verdict_json(
     release: &IndexedProgramRelease,
     coordinate: CanonicalIntentCoordinate,
     cursors: &[KeeperActionSelection],
+    action_materials: &[CanonicalActionMaterialV1],
 ) -> Value {
     let cursor = cursors
         .iter()
         .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
     let (family, action, semantic_builder) = coordinate_description(coordinate);
-    let roles = source_action(coordinate)
+    let unresolved_roles = source_action(coordinate)
         .map(|action| {
             let contract = account_contract_v2(action);
             (0..contract.len())
@@ -726,7 +759,7 @@ fn action_verdict_json(
                 .map(|(index, role)| {
                     json!({
                         "index": index.to_string(),
-                        "role": source_role_name(role.role),
+                        "role": source_role_label_v2(role.role),
                         "writable": role.writable,
                         "signer": role.signer,
                         "address": null,
@@ -736,7 +769,32 @@ fn action_verdict_json(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let state_reason = if semantic_builder.is_none() {
+    let matching_materials = cursor
+        .map(|selection| {
+            action_materials
+                .iter()
+                .filter(|material| material.matches(release, coordinate, selection))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let material = match matching_materials.as_slice() {
+        [material] => Some(*material),
+        _ => None,
+    };
+    if let (Some(selection), Some(material)) = (cursor, material) {
+        return callable_action_verdict_json(
+            release,
+            coordinate,
+            selection,
+            material,
+            family,
+            action,
+            semantic_builder,
+        );
+    }
+    let state_reason = if matching_materials.len() > 1 {
+        "multiple canonical materials claim the same release/cursor coordinate"
+    } else if semantic_builder.is_none() {
         "no reviewed semantic-owner transaction constructor is registered for this release-enabled coordinate"
     } else if cursor.is_none() {
         "no finalized canonical account body presently selects this action"
@@ -758,7 +816,7 @@ fn action_verdict_json(
         },
         "stateSelection": cursor.map(selection_json),
         "semanticOwnerConstructor": semantic_builder,
-        "accountRoles": roles,
+        "accountRoles": unresolved_roles,
         "callable": false,
         "verdict": "unavailable",
         "reason": state_reason,
@@ -768,23 +826,132 @@ fn action_verdict_json(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn callable_action_verdict_json(
+    release: &IndexedProgramRelease,
+    coordinate: CanonicalIntentCoordinate,
+    selection: &KeeperActionSelection,
+    material: &CanonicalActionMaterialV1,
+    family: &'static str,
+    action: &'static str,
+    semantic_builder: Option<&'static str>,
+) -> Value {
+    let transaction = material.unsigned_transaction();
+    let roles = material
+        .account_roles()
+        .iter()
+        .enumerate()
+        .map(|(index, role)| {
+            json!({
+                "index": index.to_string(),
+                "role": role.label(),
+                "writable": role.writable(),
+                "signer": role.signer(),
+                "address": role.address().to_string(),
+                "identityDisposition": "semantic-owner-derived-and-bound-to-draft"
+            })
+        })
+        .collect::<Vec<_>>();
+    let signer_requirements = transaction
+        .required_signers
+        .iter()
+        .map(|signer| {
+            let mut semantic_roles = material
+                .account_roles()
+                .iter()
+                .filter(|role| role.signer() && role.address() == *signer)
+                .map(|role| role.label())
+                .collect::<Vec<_>>();
+            if *signer == material.fee_payer() {
+                semantic_roles.push("transaction-fee-payer");
+            }
+            json!({
+                "address": signer.to_string(),
+                "semanticRoles": semantic_roles,
+                "signaturePresent": false,
+                "keyAccess": false
+            })
+        })
+        .collect::<Vec<_>>();
+    let freshness = material.freshness();
+    json!({
+        "coordinate": {
+            "familyTag": coordinate.family_tag.to_string(),
+            "familyVersion": coordinate.family_version.to_string(),
+            "localAction": coordinate.local_action.to_string(),
+            "family": family,
+            "action": action
+        },
+        "releaseAdmission": {
+            "enabled": true,
+            "releaseKey": release.key(),
+            "capabilityProfileId": hex32(release.capability_profile_id)
+        },
+        "stateSelection": selection_json(selection),
+        "semanticOwnerConstructor": semantic_builder,
+        "accountRoles": roles,
+        "callable": true,
+        "verdict": "callable-unsigned-draft",
+        "reason": "checked release, finalized semantic state, exact account roles, and one canonical blockhash-free transaction draft agree",
+        "transactionDraft": {
+            "schema": crate::action_material::CANONICAL_ACTION_MATERIAL_SCHEMA_V1,
+            "draftId": hex32(material.draft_id()),
+            "constructionSchema": transaction.schema,
+            "driverAccount": material.driver_account().to_string(),
+            "releaseManifestSha256": hex32(material.release_manifest_sha256()),
+            "capabilityProfileId": hex32(material.capability_profile_id()),
+            "feePayer": material.fee_payer().to_string(),
+            "recentBlockhash": null,
+            "hasRecentBlockhash": transaction.has_recent_blockhash,
+            "signed": transaction.signed,
+            "submitted": transaction.submitted,
+            "serializedTransactionHex": hex_bytes(&transaction.serialized_transaction),
+            "serializedBytes": transaction.serialized_transaction.len().to_string(),
+            "actions": transaction.actions.iter().cloned().collect::<Vec<_>>(),
+            "flows": transaction.flows.iter().map(|flow| protocol_flow_name(*flow)).collect::<Vec<_>>(),
+            "semanticOwners": transaction.semantic_owners.iter().map(|owner| json!({
+                "package": owner.package.as_str(),
+                "schema": owner.schema.as_str(),
+                "releaseSha256": hex32(owner.release_sha256)
+            })).collect::<Vec<_>>(),
+            "registryBindings": transaction.registry_bindings.iter().map(|binding| binding.map(|binding| json!({
+                "familyTag": binding.family.tag().to_string(),
+                "familyVersion": binding.family.version().to_string(),
+                "localAction": binding.local_action.to_string(),
+                "allocationStatus": allocation_status_name(binding.family_status),
+                "centralAction": binding.central_action.map(|action| action.local_tag().to_string())
+            }))).collect::<Vec<_>>(),
+            "runtimeAdmissions": transaction.runtime_admissions.iter().map(|admission| runtime_admission_name(*admission)).collect::<Vec<_>>(),
+            "exactEquations": transaction.exact_equations.iter().map(|equation| json!({
+                "name": equation.name.as_str(),
+                "unit": integer_unit_json(equation.unit),
+                "left": equation.left.to_string(),
+                "right": equation.right.to_string()
+            })).collect::<Vec<_>>(),
+            "reloadAuthoritativeAccounts": material.reload_authoritative_accounts()
+        },
+        "signerRequirements": signer_requirements,
+        "freshnessDisposition": {
+            "observedSlot": freshness.observed_slot.to_string(),
+            "validBeforeSlot": freshness.valid_before_slot.to_string(),
+            "maximumValiditySlots": freshness.maximum_validity_slots.to_string(),
+            "recentBlockhash": "absent; a launcher must reacquire state before adding one",
+            "feePayer": "fixed by the semantic payer role; no key was read",
+            "beforeSigning": "reacquire the complete named prestate and current slot; discard on any identity, balance, owner, executable-bit, data-digest, cursor, session, or release change",
+            "afterSubmission": "discard this draft regardless of outcome; reacquire /v1/session and /v1/actions and decode the authoritative poststate"
+        }
+    })
+}
+
 fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
+    if let Some(action) = source_action_from_selection(action) {
+        return Some(CanonicalIntentCoordinate {
+            family_tag: SOURCE_SERIES_FAMILY_TAG,
+            family_version: SOURCE_SERIES_FAMILY_VERSION,
+            local_action: action.tag(),
+        });
+    }
     let (family_tag, family_version, local_action) = match action {
-        "open-raw-page" => (
-            SOURCE_SERIES_FAMILY_TAG,
-            SOURCE_SERIES_FAMILY_VERSION,
-            SourceSeriesAction::OpenRawPage.tag(),
-        ),
-        "ingest-boundary" => (
-            SOURCE_SERIES_FAMILY_TAG,
-            SOURCE_SERIES_FAMILY_VERSION,
-            SourceSeriesAction::IngestBoundaryBatch.tag(),
-        ),
-        "seal-raw-page" => (
-            SOURCE_SERIES_FAMILY_TAG,
-            SOURCE_SERIES_FAMILY_VERSION,
-            SourceSeriesAction::SealRawPage.tag(),
-        ),
         "advance-series-occurrence" => (
             SOURCE_SERIES_FAMILY_TAG,
             SOURCE_SERIES_FAMILY_VERSION,
@@ -833,20 +1000,7 @@ fn coordinate_description(
     coordinate: CanonicalIntentCoordinate,
 ) -> (&'static str, &'static str, Option<&'static str>) {
     if let Some(action) = source_action(coordinate) {
-        let name = match action {
-            SourceSeriesAction::RegisterRelease => "register-source-release",
-            SourceSeriesAction::InitializeHead => "initialize-source-head",
-            SourceSeriesAction::OpenRawPage => "open-raw-page",
-            SourceSeriesAction::IngestBoundaryBatch => "ingest-boundary",
-            SourceSeriesAction::SealRawPage => "seal-raw-page",
-            SourceSeriesAction::InitializeWindowWork => "initialize-window-work",
-            SourceSeriesAction::FoldWindowPages => "fold-window-pages",
-            SourceSeriesAction::SealWindow => "seal-window",
-            SourceSeriesAction::EvaluateStatistic => "evaluate-statistic",
-            SourceSeriesAction::EmitFailureHandoff => "emit-failure-handoff",
-            SourceSeriesAction::ReopenGeneration => "reopen-source-generation",
-            SourceSeriesAction::CloseGeneration => "close-source-generation",
-        };
+        let name = source_selection_action(action);
         let builder = matches!(
             action,
             SourceSeriesAction::InitializeHead
@@ -883,53 +1037,65 @@ fn coordinate_description(
     ("unknown", "unknown-action", None)
 }
 
-const fn source_role_name(role: SourceAccountRoleV2) -> &'static str {
-    match role {
-        SourceAccountRoleV2::SourceReleaseArtifact => "source-release-artifact",
-        SourceAccountRoleV2::SourceRelease => "source-release",
-        SourceAccountRoleV2::AdapterProgram => "adapter-program",
-        SourceAccountRoleV2::AdapterProgramData => "adapter-program-data",
-        SourceAccountRoleV2::ParserProgram => "parser-program",
-        SourceAccountRoleV2::ParserProgramData => "parser-program-data",
-        SourceAccountRoleV2::ParserConfig => "parser-config",
-        SourceAccountRoleV2::SourceSpec => "source-spec",
-        SourceAccountRoleV2::SourceWorkSchedule => "source-work-schedule",
-        SourceAccountRoleV2::GenerationRequest => "generation-request",
-        SourceAccountRoleV2::ClockSysvar => "clock-sysvar",
-        SourceAccountRoleV2::Feed => "feed",
-        SourceAccountRoleV2::ReceiverProgram => "receiver-program",
-        SourceAccountRoleV2::ReceiverProgramData => "receiver-program-data",
-        SourceAccountRoleV2::ReceiverConfig => "receiver-config",
-        SourceAccountRoleV2::SourceHead => "source-head",
-        SourceAccountRoleV2::HeadLineage => "head-lineage",
-        SourceAccountRoleV2::OpenRawPage => "open-raw-page",
-        SourceAccountRoleV2::OpenPageLineage => "open-page-lineage",
-        SourceAccountRoleV2::RawPage => "raw-page",
-        SourceAccountRoleV2::SourceOccurrence => "source-occurrence",
-        SourceAccountRoleV2::WindowSpec => "window-spec",
-        SourceAccountRoleV2::WindowWork => "window-work",
-        SourceAccountRoleV2::WorkLineage => "work-lineage",
-        SourceAccountRoleV2::WindowSeal => "window-seal",
-        SourceAccountRoleV2::StatisticKey => "statistic-key",
-        SourceAccountRoleV2::SummaryProgram => "summary-program",
-        SourceAccountRoleV2::EvaluatorProgram => "evaluator-program",
-        SourceAccountRoleV2::EvaluatorProgramData => "evaluator-program-data",
-        SourceAccountRoleV2::StatisticResult => "statistic-result",
-        SourceAccountRoleV2::ResultLineage => "result-lineage",
-        SourceAccountRoleV2::SourceWorkReceipt => "source-work-receipt",
-        SourceAccountRoleV2::LivenessPolicy => "liveness-policy",
-        SourceAccountRoleV2::SourceCompartment => "source-compartment",
-        SourceAccountRoleV2::Keeper => "keeper",
-        SourceAccountRoleV2::Payer => "payer",
-        SourceAccountRoleV2::PrincipalRefund => "principal-refund",
-        SourceAccountRoleV2::NeutralSink => "neutral-sink",
-        SourceAccountRoleV2::FailurePolicy => "failure-policy",
-        SourceAccountRoleV2::HandoffReceipt => "handoff-receipt",
-        SourceAccountRoleV2::GenerationAuthority => "generation-authority",
-        SourceAccountRoleV2::GenerationTarget => "generation-target",
-        SourceAccountRoleV2::GenerationLineage => "generation-lineage",
-        SourceAccountRoleV2::SystemProgram => "system-program",
-        SourceAccountRoleV2::RentSysvar => "rent-sysvar",
+const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
+    match flow {
+        ProtocolFlow::CollateralCustodyV3 => "collateral-custody-v3",
+        ProtocolFlow::MarketEpochCreation => "market-epoch-creation",
+        ProtocolFlow::SourcePlaneV3 => "source-plane-v3",
+        ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
+        ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
+        ProtocolFlow::GeneralV2Fees => "general-v2-fees",
+        ProtocolFlow::DirectEggSettlement => "direct-egg-settlement",
+        ProtocolFlow::Liveness => "liveness",
+        ProtocolFlow::ProductSeries => "product-series",
+        ProtocolFlow::StructuredClaim => "structured-claim",
+        ProtocolFlow::KeeperSettlement => "keeper-settlement",
+        ProtocolFlow::RecoveryRetirement => "recovery-retirement",
+    }
+}
+
+const fn runtime_admission_name(admission: RuntimeAdmission) -> &'static str {
+    match admission {
+        RuntimeAdmission::ReservedDisabled => "reserved-disabled",
+        RuntimeAdmission::ReleaseBoundEnabled => "release-bound-enabled",
+    }
+}
+
+const fn allocation_status_name(
+    status: clutch_solana_layout::registry::AllocationStatus,
+) -> &'static str {
+    match status {
+        clutch_solana_layout::registry::AllocationStatus::Frozen => "frozen",
+        clutch_solana_layout::registry::AllocationStatus::ReservedDisabled => {
+            "reserved-disabled"
+        }
+        clutch_solana_layout::registry::AllocationStatus::NonProductionLab => {
+            "non-production-lab"
+        }
+        clutch_solana_layout::registry::AllocationStatus::Withdrawn => "withdrawn",
+    }
+}
+
+fn integer_unit_json(unit: IntegerUnit) -> Value {
+    match unit {
+        IntegerUnit::Lamports => json!({"kind": "lamports"}),
+        IntegerUnit::CollateralAtoms { mint } => {
+            json!({"kind": "collateral-atoms", "mint": mint.to_string()})
+        }
+        IntegerUnit::PriceUnits { scale } => {
+            json!({"kind": "price-units", "scale": scale.to_string()})
+        }
+        IntegerUnit::EggAtoms { market, outcome } => json!({
+            "kind": "egg-atoms",
+            "market": hex32(market),
+            "outcome": outcome.to_string()
+        }),
+        IntegerUnit::FeeAtoms { mint } => {
+            json!({"kind": "fee-atoms", "mint": mint.to_string()})
+        }
+        IntegerUnit::WrapperAtoms { mint } => {
+            json!({"kind": "wrapper-atoms", "mint": mint.to_string()})
+        }
     }
 }
 
@@ -961,6 +1127,18 @@ fn read_only_session_id(
     hash.update(release.release_manifest_sha256);
     hash.update(release.capability_profile_id);
     hash_text(&mut hash, &release.source_commit);
+    hash.update(
+        u64::try_from(release.enabled_intents.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for coordinate in &release.enabled_intents {
+        hash.update([
+            coordinate.family_tag,
+            coordinate.family_version,
+            coordinate.local_action,
+        ]);
+    }
     hash.update(workflow_id);
     hash.update(u64::try_from(accounts.len()).unwrap_or(u64::MAX).to_le_bytes());
     for version in accounts {
@@ -1176,6 +1354,15 @@ fn hex32(bytes: [u8; 32]) -> String {
     output
 }
 
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        use core::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
 fn response(status: u16, body: Value) -> OperatorJsonResponse {
     OperatorJsonResponse { status, body }
 }
@@ -1226,17 +1413,17 @@ mod read_only_session_contract_tests {
         let contract = account_contract_v2(SourceSeriesAction::OpenRawPage);
         assert_eq!(contract.len(), 19);
         assert_eq!(
-            source_role_name(contract.meta(0).unwrap().role),
+            source_role_label_v2(contract.meta(0).unwrap().role),
             "source-release"
         );
         assert_eq!(
-            source_role_name(contract.meta(15).unwrap().role),
+            source_role_label_v2(contract.meta(15).unwrap().role),
             "keeper"
         );
         assert!(contract.meta(15).unwrap().signer);
         assert!(contract.meta(16).unwrap().signer);
         assert_eq!(
-            source_role_name(contract.meta(18).unwrap().role),
+            source_role_label_v2(contract.meta(18).unwrap().role),
             "rent-sysvar"
         );
     }

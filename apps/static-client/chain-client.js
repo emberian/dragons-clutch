@@ -11,6 +11,7 @@
 
   const UINT = /^(0|[1-9][0-9]*)$/;
   const HASH32 = /^[0-9a-f]{64}$/;
+  const HEX_BYTES = /^(?:[0-9a-f]{2})+$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
   const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -572,6 +573,12 @@
         || hash32(release.capabilityProfileId, "session.release.capabilityProfileId") !== configuration.release.capabilityProfileId
         || text(release.sourceCommit, "session.release.sourceCommit", 64) !== configuration.release.sourceCommit
         || text(release.decoderSet, "session.release.decoderSet", 128) !== configuration.decoderSet) throw new Error("session checked release/profile identity differs from acquisition.");
+    if (!Array.isArray(release.enabledIntents) || release.enabledIntents.length !== configuration.release.enabledIntents.length) throw new Error("session checked release enabled-intent set differs from acquisition.");
+    release.enabledIntents.forEach((intent, index) => {
+      requirePlain(intent, `session.release.enabledIntents[${index}]`);
+      const expected = configuration.release.enabledIntents[index];
+      if (positiveDecimal(intent.familyTag, "session enabled family tag", 255n).toString() !== expected.familyTag || positiveDecimal(intent.familyVersion, "session enabled family version", 255n).toString() !== expected.familyVersion || positiveDecimal(intent.localAction, "session enabled local action", 255n).toString() !== expected.localAction) throw new Error("session checked release enabled-intent coordinate differs from acquisition.");
+    });
     if (!Array.isArray(raw.canonicalAccounts) || BigInt(raw.canonicalAccounts.length) > BigInt(configuration.bounds.maximumAccounts)) throw new Error("session canonical account identities exceed the explicit browser bound.");
     const canonicalAccounts = Object.freeze(raw.canonicalAccounts.map((accountValue, index) => validateSessionAccount(accountValue, index, configuration)));
     if (new Set(canonicalAccounts.map((accountValue) => accountValue.address)).size !== canonicalAccounts.length) throw new Error("session canonical account identities contain duplicate addresses.");
@@ -781,11 +788,77 @@
       }));
       const callable = bool(row.callable, `actions[${index}].callable`);
       if (!callable && (row.verdict !== "unavailable" || row.transactionDraft !== null || row.signerRequirements.length !== 0)) throw new Error("unavailable action carries executable-looking transaction or signer material.");
-      if (callable) throw new Error("this browser revision refuses callable material until its exact transaction-draft validator is installed");
-      return Object.freeze({ coordinate, accountRoles, callable, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: row.stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]) });
+      if (!callable) return Object.freeze({ coordinate, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: row.stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]) });
+      if (row.verdict !== "callable-unsigned-draft" || row.stateSelection === null) throw new Error("callable action lacks an exact finalized state selection.");
+      const stateSelection = validateCallableStateSelection(row.stateSelection, session, index);
+      if (accountRoles.length === 0 || accountRoles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable action has unresolved account-role identity.");
+      const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
+        requirePlain(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
+        if (!Array.isArray(requirement.semanticRoles) || requirement.semanticRoles.length === 0 || requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("callable signer requirement implies signature or key access.");
+        return Object.freeze({
+          address: nonzeroAddress(requirement.address, `actions[${index}].signerRequirements[${signerIndex}].address`),
+          semanticRoles: Object.freeze(requirement.semanticRoles.map((role, roleIndex) => text(role, `actions[${index}].signerRequirements[${signerIndex}].semanticRoles[${roleIndex}]`, 64))),
+          signaturePresent: false,
+          keyAccess: false
+        });
+      }));
+      if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("callable signer requirements repeat an identity.");
+      const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
+      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles.");
+      const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, coordinate, stateSelection, accountRoles, signerRequirements, index);
+      requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
+      const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
+      const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
+      const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
+      if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
+      return Object.freeze({ coordinate, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
     });
     if (seen.size !== enabled.size) throw new Error("operatord omitted a checked release-enabled coordinate from its action verdict set.");
     return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
+  };
+
+  const validateCallableStateSelection = (raw, session, index) => {
+    requirePlain(raw, `actions[${index}].stateSelection`);
+    requirePlain(raw.cursor, `actions[${index}].stateSelection.cursor`);
+    if (!Array.isArray(raw.dependencies) || raw.dependencies.length > 128 || raw.releaseKey !== session.release.releaseKey || raw.observedCommitment !== "finalized" || raw.effectiveCommitment !== "finalized") throw new Error("callable state selection is not finalized and release-bound.");
+    const value = Object.freeze({
+      account: nonzeroAddress(raw.account, `actions[${index}].stateSelection.account`),
+      releaseKey: raw.releaseKey,
+      action: text(raw.action, `actions[${index}].stateSelection.action`, 80),
+      accountSlot: decimal(raw.accountSlot, `actions[${index}].stateSelection.accountSlot`).toString(),
+      observedCommitment: "finalized",
+      effectiveCommitment: "finalized",
+      branch: validateBranch(raw.branch, `actions[${index}].stateSelection.branch`),
+      dependencies: Object.freeze(raw.dependencies.map((dependency, dependencyIndex) => nonzeroAddress(dependency, `actions[${index}].stateSelection.dependencies[${dependencyIndex}]`))),
+      cursor: Object.freeze({
+        workflowId: hash32(raw.cursor.workflowId, `actions[${index}].stateSelection.cursor.workflowId`),
+        lane: text(raw.cursor.lane, `actions[${index}].stateSelection.cursor.lane`, 48),
+        generation: positiveDecimal(raw.cursor.generation, `actions[${index}].stateSelection.cursor.generation`).toString(),
+        phase: decimal(raw.cursor.phase, `actions[${index}].stateSelection.cursor.phase`, 65535n).toString(),
+        item: decimal(raw.cursor.item, `actions[${index}].stateSelection.cursor.item`).toString(),
+        observedStateSha256: hash32(raw.cursor.observedStateSha256, `actions[${index}].stateSelection.cursor.observedStateSha256`)
+      })
+    });
+    if (value.branch.kind !== "finalized-scan" || new Set(value.dependencies).size !== value.dependencies.length) throw new Error("callable state selection is forked or repeats a dependency.");
+    const restart = session.restart.cursors.find((candidate) => candidate.account === value.account && candidate.action === value.action && candidate.cursor.workflowId === value.cursor.workflowId && candidate.cursor.lane === value.cursor.lane && candidate.cursor.generation === value.cursor.generation && candidate.cursor.phase === value.cursor.phase && candidate.cursor.item === value.cursor.item && candidate.cursor.observedStateSha256 === value.cursor.observedStateSha256);
+    if (!restart || restart.dependencies.length !== value.dependencies.length || restart.dependencies.some((dependency, dependencyIndex) => dependency !== value.dependencies[dependencyIndex])) throw new Error("callable state selection differs from the attached onchain-derived restart cursor.");
+    return value;
+  };
+
+  const validateCanonicalTransactionDraft = (raw, configuration, coordinate, selection, roles, signers, index) => {
+    requirePlain(raw, `actions[${index}].transactionDraft`);
+    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== configuration.release.releaseManifestSha256 || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its release/construction boundary.");
+    const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
+    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || !roles.some((role) => role.address === feePayer && role.signer)) throw new Error("draft fee payer is not the exact signer role.");
+    const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
+    if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
+    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || !Array.isArray(raw.flows) || raw.flows.length !== 1 || raw.flows[0] !== "source-plane-v3" || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0) throw new Error("callable draft is not one exact admitted Source action.");
+    const binding = raw.registryBindings[0];
+    requirePlain(binding, "draft registry binding");
+    if (positiveDecimal(binding.familyTag, "draft binding family tag", 255n).toString() !== coordinate.familyTag || positiveDecimal(binding.familyVersion, "draft binding family version", 255n).toString() !== coordinate.familyVersion || positiveDecimal(binding.localAction, "draft binding local action", 255n).toString() !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("draft registry binding differs from the checked coordinate.");
+    raw.semanticOwners.forEach((owner, ownerIndex) => { requirePlain(owner, `draft.semanticOwners[${ownerIndex}]`); text(owner.package, "semantic owner package", 160); text(owner.schema, "semantic owner schema", 160); hash32(owner.releaseSha256, "semantic owner release"); });
+    raw.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `draft.exactEquations[${equationIndex}]`); requirePlain(equation.unit, `draft.exactEquations[${equationIndex}].unit`); text(equation.name, "exact equation name", 200); const left = decimal(equation.left, "exact equation left"); const right = decimal(equation.right, "exact equation right"); if (left !== right) throw new Error("draft exact-integer equation is unbalanced."); });
+    return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, serializedTransactionHex: transactionHex });
   };
 
   const maximumSlot = (values) => values.reduce((maximum, value) => value > maximum ? value : maximum, 0n);
