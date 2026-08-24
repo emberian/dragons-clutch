@@ -15,14 +15,15 @@ use crate::instructions::product_series::{
     publish_source_semantic_inputs_v1, AuthenticatedSeriesFundingAccountV2,
     AuthenticatedSourceSemanticPublicationV1,
 };
-use crate::instructions::product_series_current::AuthenticatedSeriesFundingAccountV3;
+use crate::instructions::product_series_current::AuthenticatedProductSeriesFundingReservationV4;
 use crate::instructions::product_source_current::{
     publish_source_semantic_inputs_v2, AuthenticatedSourceSemanticPublicationV2,
 };
 use crate::seeds;
 use crate::source_plane_v3::{authenticate_occurrence, runtime_key};
 use crate::source_plane_v3_actions::{
-    admit_source_lifecycle_v1, initialize_source_funding_custody_v1,
+    admit_source_lifecycle_v1, bind_source_funding_custody_capitalization_v1,
+    initialize_source_funding_custody_bootstrap_v1,
     persist_source_generation_request_v1, preallocate_statistic_result_lineage_v1,
     publish_source_occurrence_v1, quote_source_lifecycle_capitalization_v1,
     AuthenticatedSourceFundingCustodyV1, AuthenticatedSourceLifecycleAdmissionV1,
@@ -33,11 +34,11 @@ use crate::source_plane_v3_actions::{
 use clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1;
 use clutch_product_series::{
     ComponentDebitV1, ContentId, SeriesFundingComponentV2, SeriesFundingPhaseV2,
-    SeriesFundingPhaseV3, SeriesMarketDispositionV1,
+    SeriesFundingPhaseV4, SeriesMarketDispositionV1,
 };
 use clutch_solana_layout::product_series::{
-    SeriesFundingAccountV2, SeriesFundingAccountV3, SERIES_FUNDING_ACCOUNT_BYTES_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V3,
+    SeriesFundingAccountV2, SeriesFundingAccountV4, SERIES_FUNDING_ACCOUNT_BYTES_V2,
+    SERIES_FUNDING_ACCOUNT_BYTES_V4,
 };
 use clutch_source_plane_v3::FixedCodec;
 use clutch_source_plane_v3_runtime::{
@@ -158,6 +159,18 @@ impl AuthenticatedSourceWorkCapitalizationV1 {
 
     pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
+    }
+
+    /// Exact pending FundingV2 debit and physical custody movement retained by
+    /// Product's founder and later Source-custody retirement owners.
+    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV1 {
+        self.facts
+    }
+
+    /// Rent-derived complete lifecycle allocation. Product persists its ID and
+    /// exact total so retirement cannot relabel spent principal or donations.
+    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+        self.quote
     }
 }
 
@@ -358,7 +371,7 @@ pub(crate) fn capitalize_source_work_v1<
             && custody_account.lamports() == pending.lamports,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let custody = initialize_source_funding_custody_v1(
+    let bootstrap = initialize_source_funding_custody_bootstrap_v1(
         program_id,
         source_route,
         schedule,
@@ -379,9 +392,13 @@ pub(crate) fn capitalize_source_work_v1<
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
             &quote.id.bytes(),
-            &custody.id().bytes(),
-            &custody.account_data_id().bytes(),
-            &custody.ledger().id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes(),
+            &bootstrap.id().bytes(),
+            &bootstrap.account_data_id().bytes(),
+            &bootstrap
+                .ledger()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
             &source_principal_refund.bytes(),
             source_work_vault.key.as_ref(),
             custody_account.key.as_ref(),
@@ -392,6 +409,14 @@ pub(crate) fn capitalize_source_work_v1<
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
+    let custody = bind_source_funding_custody_capitalization_v1(
+        program_id,
+        source_route,
+        schedule,
+        bootstrap,
+        id,
+        custody_account,
+    )?;
     Ok(AuthenticatedSourceWorkCapitalizationV1 {
         id,
         product_preauthorization_id,
@@ -704,20 +729,18 @@ pub(crate) fn publish_pre_root_source_occurrence_v1(
     })
 }
 
-const SOURCE_WORK_CAPITALIZATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/product-source-work-capitalization/v2";
-const PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/product-pre-root-source-occurrence/v2";
-const SOURCE_GENERATION_POLICY_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/product-source-generation-policy/v2";
-const SOURCE_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/product-source-funding-account-authentication/v2";
+const SOURCE_WORK_CAPITALIZATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/product-source-work-capitalization/v3";
+const PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/product-pre-root-source-occurrence/v3";
+const SOURCE_GENERATION_POLICY_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/product-source-generation-policy/v3";
 
-/// Exact current FundingStateV3/BundleV6 capitalization facts offered to the
+/// Exact current FundingStateV4/BundleV6 capitalization facts offered to the
 /// Product founder preauthorization. Every semantic ID is derived from the
 /// hostile-decoded current accounts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SourceWorkCapitalizationFactsV2 {
+pub(crate) struct SourceWorkCapitalizationFactsV3 {
     pub(crate) series_plan_id: ContentId,
     pub(crate) funding_terms_id: ContentId,
     pub(crate) funding_quote_id: ContentId,
@@ -733,7 +756,11 @@ pub(crate) struct SourceWorkCapitalizationFactsV2 {
     pub(crate) funding_account_data_id: ContentId,
     pub(crate) funding_account_authentication_id: ContentId,
     pub(crate) funding_transition_sequence: u64,
+    pub(crate) funding_reservation_postwrite_id: ContentId,
+    pub(crate) pending_pre_source_reservation_binding_id: ContentId,
     pub(crate) pending_reservation_receipt_id: ContentId,
+    pub(crate) pending_clock_receipt_id: ContentId,
+    pub(crate) pending_clock_bucket: u64,
     pub(crate) pending_source_work: ComponentDebitV1,
     pub(crate) source_route_id: ContentId,
     pub(crate) source_release_manifest_id: ContentId,
@@ -752,10 +779,10 @@ pub(crate) struct SourceWorkCapitalizationFactsV2 {
 }
 
 /// Default-refusing current Product founder authority.
-pub(crate) trait AuthenticatedSourceOccurrenceFoundationAuthorityV2 {
-    fn authenticate_source_occurrence_foundation_v2(
+pub(crate) trait AuthenticatedSourceOccurrenceFoundationAuthorityV3 {
+    fn authenticate_source_occurrence_foundation_v3(
         &self,
-        _facts: &SourceWorkCapitalizationFactsV2,
+        _facts: &SourceWorkCapitalizationFactsV3,
     ) -> Outcome<ContentId> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
@@ -763,78 +790,63 @@ pub(crate) trait AuthenticatedSourceOccurrenceFoundationAuthorityV2 {
 
 /// Exact current transfer from the Series SourceWork vault into the
 /// program-owned Source lifecycle ledger.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedSourceWorkCapitalizationV2 {
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSourceWorkCapitalizationV3 {
     id: ContentId,
     product_preauthorization_id: ContentId,
-    facts: SourceWorkCapitalizationFactsV2,
+    facts: SourceWorkCapitalizationFactsV3,
     quote: SourceLifecycleCapitalizationQuoteV1,
     custody: AuthenticatedSourceFundingCustodyV1,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
 }
 
-impl AuthenticatedSourceWorkCapitalizationV2 {
-    pub(crate) const fn id(self) -> ContentId {
+impl AuthenticatedSourceWorkCapitalizationV3 {
+    pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn product_preauthorization_id(self) -> ContentId {
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
         self.product_preauthorization_id
     }
 
-    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV2 {
+    pub(crate) const fn facts(&self) -> SourceWorkCapitalizationFactsV3 {
         self.facts
     }
 
-    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+    pub(crate) const fn quote(&self) -> SourceLifecycleCapitalizationQuoteV1 {
         self.quote
     }
 
-    pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
+    pub(crate) const fn custody(&self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
+    }
+
+    pub(crate) const fn funding_reservation(
+        &self,
+    ) -> &AuthenticatedProductSeriesFundingReservationV4 {
+        &self.funding_reservation
     }
 }
 
-pub(crate) fn source_funding_account_authentication_id_v2(
-    program_id: &Pubkey,
-    funding_account: &Pubkey,
-    funding_state_id: ContentId,
-    funding_account_data_id: ContentId,
-    funding_transition_sequence: u64,
-    pending_reservation_receipt_id: ContentId,
-) -> ContentId {
-    ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            SOURCE_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V2,
-            program_id.as_ref(),
-            funding_account.as_ref(),
-            &funding_state_id.bytes(),
-            &funding_account_data_id.bytes(),
-            &funding_transition_sequence.to_le_bytes(),
-            &pending_reservation_receipt_id.bytes(),
-        ])
-        .to_bytes(),
-    )
-}
-
-/// Fully capitalize one current Source lifecycle from FundingStateV3's exact
+/// Fully capitalize one current Source lifecycle from FundingStateV4's exact
 /// pending SourceWork debit.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn capitalize_source_work_v2<
-    A: AuthenticatedSourceOccurrenceFoundationAuthorityV2 + ?Sized,
+pub(crate) fn capitalize_source_work_v3<
+    A: AuthenticatedSourceOccurrenceFoundationAuthorityV3 + ?Sized,
 >(
     program_id: &Pubkey,
     authority: &A,
     source_route: AuthenticatedSourceRouteV1,
     publication: AuthenticatedSourceSemanticPublicationV2,
     schedule: SourceWorkScheduleBindingV1,
-    funding: AuthenticatedSeriesFundingAccountV3,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
     funding_account: &AccountInfo<'_>,
     source_work_vault: &AccountInfo<'_>,
     custody_account: &AccountInfo<'_>,
     source_principal_refund: clutch_source_plane_v3_runtime::RuntimeKey,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedSourceWorkCapitalizationV2> {
+) -> Outcome<AuthenticatedSourceWorkCapitalizationV3> {
     require_system_program(system_program)?;
     schedule
         .validate_against(source_route)
@@ -847,11 +859,18 @@ pub(crate) fn capitalize_source_work_v2<
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
+    let funding = funding_reservation.pending();
     let state = funding.state();
     let state_id = state
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
+    let reservation_binding = funding_reservation.binding();
+    let reservation_binding_id = reservation_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let funding_reservation_postwrite_id = funding_reservation.id();
     require(
         product_route.source_route_id().bytes() == source_route.route_id().bytes()
             && product_route.source_release_manifest_id().bytes()
@@ -866,8 +885,8 @@ pub(crate) fn capitalize_source_work_v2<
             && funding_account.is_writable
             && !funding_account.is_signer
             && !funding_account.executable
-            && funding_account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V3
-            && state.phase == SeriesFundingPhaseV3::Pending
+            && funding_account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V4
+            && state.phase == SeriesFundingPhaseV4::Pending
             && state.pending_disposition == Some(SeriesMarketDispositionV1::Founder)
             && state.pending_ordinal == occurrence.ordinal
             && state.pending_source_occurrence_id == occurrence_id
@@ -876,6 +895,37 @@ pub(crate) fn capitalize_source_work_v2<
             && state.attachment_plan_id.content_id()
                 == occurrence.attachment_plan_id.content_id()
             && state.compiler_bundle_id == product_route.compiler_bundle_id()
+            && !state.pending_pre_source_reservation_binding_id.is_zero()
+            && !state.pending_reservation_receipt_id.is_zero()
+            && !state.pending_clock_receipt_id.is_zero()
+            && state.pending_pre_source_reservation_binding_id == reservation_binding_id
+            && state.pending_reservation_receipt_id
+                == funding_reservation.reservation_receipt_id()
+            && state.pending_clock_receipt_id == reservation_binding.clock_receipt_id
+            && state.pending_clock_bucket == reservation_binding.clock_bucket
+            && reservation_binding.funding_account_id.bytes()
+                == funding_account.key.to_bytes()
+            && reservation_binding.series_plan_id == state.series_plan_id
+            && reservation_binding.funding_terms_id == state.funding_terms_id
+            && reservation_binding.funding_quote_id == state.funding_quote_id
+            && reservation_binding.attachment_plan_id == state.attachment_plan_id
+            && reservation_binding.compiler_bundle_id == state.compiler_bundle_id
+            && reservation_binding.ordinal == state.pending_ordinal
+            && reservation_binding.market_instance_id.content_id()
+                == state.pending_market_instance_id
+            && reservation_binding.source_occurrence_id.content_id()
+                == state.pending_source_occurrence_id
+            && reservation_binding.disposition == SeriesMarketDispositionV1::Founder
+            && reservation_binding.debits == state.pending_debits
+            && reservation_binding.source_publication_id == publication.id()
+            && reservation_binding.clock_policy_id == product_route.clock_policy_id()
+            && reservation_binding.clock_receipt_id == state.pending_clock_receipt_id
+            && reservation_binding.clock_bucket == state.pending_clock_bucket
+            && reservation_binding
+                .funding_transition_sequence_before
+                .checked_add(1)
+                .ok_or(ClutchError::Arithmetic)?
+                == state.transition_sequence
             && state.pending_debits[SeriesFundingComponentV2::SourceWork.index()]
                 == publication.source_work_funding()
             && publication.source_work_funding().collateral_atoms == 0
@@ -891,12 +941,12 @@ pub(crate) fn capitalize_source_work_v2<
     let funding_data = funding_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let observed = SeriesFundingAccountV3::decode(&funding_data)?;
+    let observed = SeriesFundingAccountV4::decode(&funding_data)?;
     let funding_account_data_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[&funding_data[..]]).to_bytes(),
     );
     drop(funding_data);
-    require(observed == funding.value(), ClutchError::MismatchedState)?;
+    require(&observed == funding.value(), ClutchError::MismatchedState)?;
     expect_pda(
         funding_account.key,
         seeds::series_funding_pda(program_id, &state.series_plan_id.bytes()),
@@ -937,15 +987,20 @@ pub(crate) fn capitalize_source_work_v2<
                     .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let funding_account_authentication_id = source_funding_account_authentication_id_v2(
-        program_id,
-        funding_account.key,
-        state_id,
-        funding_account_data_id,
-        state.transition_sequence,
-        state.pending_reservation_receipt_id,
-    );
-    let facts = SourceWorkCapitalizationFactsV2 {
+    require(
+        funding.data_id() == funding_account_data_id
+            && funding_reservation.funding_account() == *funding_account.key
+            && funding_reservation
+                .funding_state_pending_id()?
+                .content_id()
+                == state_id
+            && funding_reservation.funding_data_pending_id() == funding_account_data_id
+            && funding_reservation.funding_authentication_pending_id()
+                == funding.authentication_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let funding_account_authentication_id = funding.authentication_id();
+    let facts = SourceWorkCapitalizationFactsV3 {
         series_plan_id: state.series_plan_id.content_id(),
         funding_terms_id: state.funding_terms_id.content_id(),
         funding_quote_id: state.funding_quote_id.content_id(),
@@ -961,7 +1016,12 @@ pub(crate) fn capitalize_source_work_v2<
         funding_account_data_id,
         funding_account_authentication_id,
         funding_transition_sequence: state.transition_sequence,
+        funding_reservation_postwrite_id,
+        pending_pre_source_reservation_binding_id: state
+            .pending_pre_source_reservation_binding_id,
         pending_reservation_receipt_id: state.pending_reservation_receipt_id,
+        pending_clock_receipt_id: state.pending_clock_receipt_id,
+        pending_clock_bucket: state.pending_clock_bucket,
         pending_source_work: pending,
         source_route_id: product_route.source_route_id(),
         source_release_manifest_id: product_route.source_release_manifest_id(),
@@ -981,9 +1041,11 @@ pub(crate) fn capitalize_source_work_v2<
         capitalization_quote_id: ContentId::from_bytes(quote.id.bytes()),
     };
     let product_preauthorization_id =
-        authority.authenticate_source_occurrence_foundation_v2(&facts)?;
+        authority.authenticate_source_occurrence_foundation_v3(&facts)?;
     require(
-        !product_preauthorization_id.is_zero(),
+        !product_preauthorization_id.is_zero()
+            && product_preauthorization_id
+                == reservation_binding.product_founder_preauthorization_id,
         ClutchError::AuthorizationUnavailable,
     )?;
     let series = state.series_plan_id.bytes();
@@ -1017,7 +1079,7 @@ pub(crate) fn capitalize_source_work_v2<
             && custody_account.lamports() == pending.lamports,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let custody = initialize_source_funding_custody_v1(
+    let bootstrap = initialize_source_funding_custody_bootstrap_v1(
         program_id,
         source_route,
         schedule,
@@ -1030,17 +1092,21 @@ pub(crate) fn capitalize_source_work_v2<
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            SOURCE_WORK_CAPITALIZATION_DOMAIN_V2,
+            SOURCE_WORK_CAPITALIZATION_DOMAIN_V3,
             &product_preauthorization_id.bytes(),
+            &funding_reservation_postwrite_id.bytes(),
             &funding_account_authentication_id.bytes(),
+            &state.pending_pre_source_reservation_binding_id.bytes(),
             &state.pending_reservation_receipt_id.bytes(),
+            &state.pending_clock_receipt_id.bytes(),
+            &state.pending_clock_bucket.to_le_bytes(),
             &occurrence_id.bytes(),
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
             &quote.id.bytes(),
-            &custody.id().bytes(),
-            &custody.account_data_id().bytes(),
-            &custody
+            &bootstrap.id().bytes(),
+            &bootstrap.account_data_id().bytes(),
+            &bootstrap
                 .ledger()
                 .id()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
@@ -1055,23 +1121,32 @@ pub(crate) fn capitalize_source_work_v2<
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedSourceWorkCapitalizationV2 {
+    let custody = bind_source_funding_custody_capitalization_v1(
+        program_id,
+        source_route,
+        schedule,
+        bootstrap,
+        id,
+        custody_account,
+    )?;
+    Ok(AuthenticatedSourceWorkCapitalizationV3 {
         id,
         product_preauthorization_id,
         facts,
         quote,
         custody,
+        funding_reservation,
     })
 }
 
-/// Non-copy current Source pre-root receipt consumed by Product's V3 founder.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedPreRootSourceOccurrenceV2 {
+/// Non-copy current Source pre-root receipt consumed by Product's V4 founder.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedPreRootSourceOccurrenceV3 {
     id: ContentId,
     product_preauthorization_id: ContentId,
     source_route: AuthenticatedSourceRouteV1,
     product_publication: AuthenticatedSourceSemanticPublicationV2,
-    capitalization: AuthenticatedSourceWorkCapitalizationV2,
+    capitalization: AuthenticatedSourceWorkCapitalizationV3,
     lifecycle: AuthenticatedSourceLifecycleAdmissionV1,
     occurrence_publication: PublishedSourceOccurrenceV1,
     semantic_publication: PublishedSourceSemanticInputsV1,
@@ -1080,7 +1155,7 @@ pub(crate) struct AuthenticatedPreRootSourceOccurrenceV2 {
     occurrence: OccurrenceSourceReceiptV1,
 }
 
-impl AuthenticatedPreRootSourceOccurrenceV2 {
+impl AuthenticatedPreRootSourceOccurrenceV3 {
     pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
@@ -1089,8 +1164,8 @@ impl AuthenticatedPreRootSourceOccurrenceV2 {
         self.occurrence
     }
 
-    pub(crate) const fn capitalization(&self) -> AuthenticatedSourceWorkCapitalizationV2 {
-        self.capitalization
+    pub(crate) const fn capitalization(&self) -> &AuthenticatedSourceWorkCapitalizationV3 {
+        &self.capitalization
     }
 
     pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
@@ -1185,16 +1260,16 @@ impl AuthenticatedPreRootSourceOccurrenceV2 {
     }
 }
 
-/// Publish the current pre-root Source graph from the exact capitalized V3
+/// Publish the current pre-root Source graph from the exact capitalized V4
 /// Funding pending row. No instruction payload supplies GenerationRequest.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn publish_pre_root_source_occurrence_v2(
+pub(crate) fn publish_pre_root_source_occurrence_v3(
     program_id: &Pubkey,
     source_route: AuthenticatedSourceRouteV1,
     publication: AuthenticatedSourceSemanticPublicationV2,
     schedule: SourceWorkScheduleBindingV1,
     liveness_policy: RuntimeLivenessPolicyV1,
-    capitalization: AuthenticatedSourceWorkCapitalizationV2,
+    capitalization: AuthenticatedSourceWorkCapitalizationV3,
     custody_account: &AccountInfo<'_>,
     liveness_policy_account: &AccountInfo<'_>,
     source_compartment_account: &AccountInfo<'_>,
@@ -1206,7 +1281,7 @@ pub(crate) fn publish_pre_root_source_occurrence_v2(
     generation_request_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedPreRootSourceOccurrenceV2> {
+) -> Outcome<AuthenticatedPreRootSourceOccurrenceV3> {
     let custody = capitalization.custody();
     let occurrence_body = publication.occurrence();
     let window = publication.window();
@@ -1276,7 +1351,7 @@ pub(crate) fn publish_pre_root_source_occurrence_v2(
     )?;
     let generation_policy_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            SOURCE_GENERATION_POLICY_DOMAIN_V2,
+            SOURCE_GENERATION_POLICY_DOMAIN_V3,
             &capitalization.product_preauthorization_id().bytes(),
             &capitalization.id().bytes(),
             &lifecycle.id().bytes(),
@@ -1330,7 +1405,7 @@ pub(crate) fn publish_pre_root_source_occurrence_v2(
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V2,
+            PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V3,
             &capitalization.product_preauthorization_id().bytes(),
             &capitalization.id().bytes(),
             &lifecycle.id().bytes(),
@@ -1363,7 +1438,7 @@ pub(crate) fn publish_pre_root_source_occurrence_v2(
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedPreRootSourceOccurrenceV2 {
+    Ok(AuthenticatedPreRootSourceOccurrenceV3 {
         id,
         product_preauthorization_id: capitalization.product_preauthorization_id(),
         source_route,
@@ -1383,7 +1458,7 @@ mod current_adversarial_tests {
     use super::*;
 
     struct RefusingCurrentFounder;
-    impl AuthenticatedSourceOccurrenceFoundationAuthorityV2 for RefusingCurrentFounder {}
+    impl AuthenticatedSourceOccurrenceFoundationAuthorityV3 for RefusingCurrentFounder {}
 
     #[test]
     fn current_founder_authority_defaults_to_refusal() {
@@ -1391,18 +1466,44 @@ mod current_adversarial_tests {
     }
 
     #[test]
-    fn current_capitalization_is_v3_v5_v6_only() {
+    fn current_capitalization_is_funding_v4_quote_v5_bundle_v6_only() {
         let source = include_str!("source_occurrence_foundation_v1.rs");
         let current = source
-            .split("pub(crate) fn capitalize_source_work_v2")
+            .split("pub(crate) fn capitalize_source_work_v3")
             .nth(1)
             .expect("current capitalization")
-            .split("pub(crate) struct AuthenticatedPreRootSourceOccurrenceV2")
+            .split("pub(crate) struct AuthenticatedPreRootSourceOccurrenceV3")
             .next()
             .expect("bounded current capitalization");
-        assert!(current.contains("AuthenticatedSeriesFundingAccountV3"));
-        assert!(current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V3"));
-        assert!(current.contains("SeriesFundingPhaseV3::Pending"));
+        assert!(current.contains("AuthenticatedProductSeriesFundingReservationV4"));
+        assert!(current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V4"));
+        assert!(current.contains("SeriesFundingPhaseV4::Pending"));
+        assert!(current.contains("funding_reservation.binding()"));
+        assert!(current.contains("funding_reservation.funding_state_pending_id()?"));
+        assert!(current.contains("funding_reservation.funding_data_pending_id()"));
+        assert!(current.contains("funding_reservation.funding_authentication_pending_id()"));
+        assert!(current.contains("reservation_binding.product_founder_preauthorization_id"));
+        assert!(current.contains("pending_pre_source_reservation_binding_id"));
+        assert!(current.contains("pending_clock_receipt_id"));
+        assert!(current.contains("pending_clock_bucket"));
+        assert!(current.contains("funding.authentication_id()"));
+        assert!(!current.contains("source_funding_account_authentication_id_v2"));
+        assert!(!current.contains("AuthenticatedSeriesFundingAccountV3"));
+        assert!(!current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V3"));
+        assert!(!current.contains("SeriesFundingPhaseV3::Pending"));
         assert!(!current.contains("SeriesFundingPhaseV2::Pending"));
+        let bootstrap = current
+            .find("initialize_source_funding_custody_bootstrap_v1")
+            .expect("private bootstrap");
+        let receipt = current
+            .find("SOURCE_WORK_CAPITALIZATION_DOMAIN_V3")
+            .expect("capitalization receipt");
+        let bind = current
+            .find("bind_source_funding_custody_capitalization_v1")
+            .expect("one-way live binding");
+        assert!(bootstrap < receipt && receipt < bind);
+        assert!(current.contains("bootstrap.id()"));
+        assert!(current.contains("bootstrap.account_data_id()"));
+        assert!(current.contains("bootstrap\n                .ledger()"));
     }
 }
