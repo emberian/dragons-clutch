@@ -285,10 +285,12 @@ const _: () = assert!(
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///
-/// The six current Structured actions, Failure actions 10 through 13, and the
-/// complete Fractional and Direct families have current handlers joined to
-/// their persisted semantic owners. Other target tuples remain absent until
-/// their current authority tranche is integrated.
+/// The current Dealer policy/facility actions through Claim, the six current
+/// Structured actions, Failure actions 10 through 13, and the complete
+/// Fractional and Direct families have handlers joined to their persisted
+/// semantic owners. Dealer action 25 remains payload-scoped below so the two
+/// complete Product-composite terminal cuts cannot enable its historical
+/// standalone targets through a coarse tuple.
 /// In particular, Source actions 1 through 12 stay gated until Product
 /// consumes the private whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
@@ -299,6 +301,30 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (75, 1, 6),
     (75, 1, 7),
     (75, 1, 8),
+    (76, 1, 1),
+    (76, 1, 2),
+    (76, 1, 3),
+    (76, 1, 4),
+    (76, 1, 5),
+    (76, 1, 6),
+    (76, 1, 7),
+    (76, 1, 8),
+    (76, 1, 9),
+    (76, 1, 10),
+    (76, 1, 11),
+    (76, 1, 12),
+    (76, 1, 13),
+    (76, 1, 14),
+    (76, 1, 15),
+    (76, 1, 16),
+    (76, 1, 17),
+    (76, 1, 18),
+    (76, 1, 19),
+    (76, 1, 20),
+    (76, 1, 21),
+    (76, 1, 22),
+    (76, 1, 23),
+    (76, 1, 24),
     (78, 1, 10),
     (78, 1, 11),
     (78, 1, 12),

@@ -37,14 +37,20 @@
 use crate::accounts::Outcome;
 use crate::capabilities;
 use crate::error::ClutchError;
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 use crate::error::Refusal;
 #[cfg(any(
     feature = "profile-non-production-dealer-policy-catalog-lab",
     feature = "profile-successor-chain-attached-dev"
 ))]
 use crate::instructions::dealer_facility;
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 use crate::instructions::dealer_policy;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
@@ -93,7 +99,10 @@ enum Route {
     SourceIngestV2,
     #[cfg(feature = "profile-full")]
     ResolutionWork,
-    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    #[cfg(any(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-successor-chain-attached-dev"
+    ))]
     DealerPolicy,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
@@ -138,7 +147,10 @@ const INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT: u8 = 72;
 const INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT: u8 = 73;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
-    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    #[cfg(any(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-successor-chain-attached-dev"
+    ))]
     if instruction_data.get(10).copied() == Some(ACTION_LAYOUT_HINT)
         && instruction_data.get(13).copied()
             == Some(clutch_solana_layout::registry::DEALER_FAMILY_TAG)
@@ -353,7 +365,10 @@ pub fn process(
             feature = "profile-successor-chain-attached-dev"
         ))]
         Route::ResolutionWork => decode_only(instruction_data),
-        #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+        #[cfg(any(
+            feature = "profile-non-production-dealer-policy-catalog-lab",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
@@ -463,7 +478,10 @@ fn process_recovery_v2(
     }
 }
 
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 #[inline(never)]
 fn process_dealer_policy(
     program_id: &Pubkey,
