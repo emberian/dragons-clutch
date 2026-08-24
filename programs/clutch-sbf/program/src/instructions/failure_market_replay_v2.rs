@@ -14,7 +14,7 @@ use crate::instructions::failure_market_admission::{
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
-use crate::instructions::product_market::AuthenticatedMarketFoundationPreallocationV2;
+use crate::instructions::product_series_current::AuthenticatedMarketFoundationPreallocationV3;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_replay_v2::{
     admit_failure_market_replay_v2, decode_and_reopen_failure_market_replay_v2,
@@ -23,7 +23,7 @@ use clutch_failure_policy_runtime::market_replay_v2::{
     FailureMarketReplayStateIdV2, FailureMarketReplayTerminalReceiptV2, FailureMarketReplayV2,
     FAILURE_MARKET_REPLAY_BYTES_V2,
 };
-use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV2};
+use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV3};
 use clutch_solana_layout::failure_market_replay_v2::{
     FailureMarketReplayAccountV2, FAILURE_MARKET_REPLAY_BODY_BYTES_V2,
 };
@@ -193,7 +193,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
-    product_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+    product_preallocation: AuthenticatedMarketFoundationPreallocationV3,
 ) -> Outcome<FailureMarketReplayPostimageV2> {
     require_system_program(system_program)?;
     require_distinct(&[
@@ -209,7 +209,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
     require(
-        product_preallocation.slot() == MarketFoundationSlotV2::FailureReplay
+        product_preallocation.slot() == MarketFoundationSlotV3::FailureReplay
             && product_preallocation.market_instance_id() == policy.market_instance_id
             && product_preallocation.generation() == policy.generation
             && product_preallocation.account() == *replay_account.key
@@ -680,5 +680,17 @@ mod adversarial_reopen_tests {
         assert!(reopen.contains("decode_and_reopen_failure_market_replay_v2"));
         assert!(reopen.contains("replay_account.lamports() >= observed_balance_lamports"));
         assert!(!reopen.contains("AuthenticatedMarketFoundationPreallocationV2"));
+    }
+
+    #[test]
+    fn replay_initialization_accepts_only_current_product_slot_seven_authority() {
+        let source = include_str!("failure_market_replay_v2.rs");
+        let initialize = source
+            .split("fn initialize_failure_market_replay_v2")
+            .nth(1)
+            .expect("replay initialization");
+        assert!(initialize.contains("AuthenticatedMarketFoundationPreallocationV3"));
+        assert!(initialize.contains("MarketFoundationSlotV3::FailureReplay"));
+        assert!(!initialize.contains("MarketFoundationSlotV2::FailureReplay"));
     }
 }

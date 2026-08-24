@@ -31,6 +31,7 @@ use crate::instructions::product_market::{
     AuthenticatedSeriesFailureSessionReleaseV2, AuthenticatedSeriesMarketLinkV1,
     AuthenticatedWritableFailureSessionReleaseLinkV2, FailureSessionReleaseDispositionV2,
 };
+use crate::instructions::product_series_current::AuthenticatedMarketFoundationPreallocationV3;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     initialize_failure_market_interval_cell_v2, plan_exhaust_failure_market_interval_cell_v2,
@@ -74,7 +75,8 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketSessionCloseFactsV1,
 };
 use clutch_product_series::{
-    ContentId as ProductContentId, MarketFoundationSlotV2, SourceOccurrenceV1Id,
+    ContentId as ProductContentId, MarketFoundationSlotV2, MarketFoundationSlotV3,
+    SourceOccurrenceV1Id,
 };
 use clutch_source_plane_v3::ContentId as SourceContentId;
 use clutch_source_plane_v3_runtime::{
@@ -1149,8 +1151,8 @@ pub(crate) fn initialize_failure_market_interval_accounts_v2<'a>(
     system_program: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
-    work_preallocation: AuthenticatedMarketFoundationPreallocationV2,
-    history_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+    work_preallocation: AuthenticatedMarketFoundationPreallocationV3,
+    history_preallocation: AuthenticatedMarketFoundationPreallocationV3,
 ) -> Outcome<FailureMarketIntervalPostimageV2> {
     require_system_program(system_program)?;
     require_distinct(&[
@@ -1167,8 +1169,8 @@ pub(crate) fn initialize_failure_market_interval_accounts_v2<'a>(
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
     require(
-        work_preallocation.slot() == MarketFoundationSlotV2::FailureIntervalWork
-            && history_preallocation.slot() == MarketFoundationSlotV2::FailureIntervalHistory
+        work_preallocation.slot() == MarketFoundationSlotV3::FailureIntervalWork
+            && history_preallocation.slot() == MarketFoundationSlotV3::FailureIntervalHistory
             && work_preallocation.id() != history_preallocation.id()
             && work_preallocation.root_account() == history_preallocation.root_account()
             && work_preallocation.root_authentication_id()
@@ -2924,6 +2926,25 @@ mod adversarial_account_tests {
         assert!(FailureMarketIntervalFundingPreimageV2::decode(&input[..175]).is_err());
         input[..32].fill(0);
         assert!(FailureMarketIntervalFundingPreimageV2::decode(&input).is_err());
+    }
+
+    #[test]
+    fn interval_initialization_accepts_only_current_product_slots_eight_and_nine() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let initialize = source
+            .split("fn initialize_failure_market_interval_accounts_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Authenticate exact existing `0xab/v2`")
+                    .next()
+            })
+            .expect("paired interval initialization");
+        assert!(initialize.contains("AuthenticatedMarketFoundationPreallocationV3"));
+        assert!(initialize.contains("MarketFoundationSlotV3::FailureIntervalWork"));
+        assert!(initialize.contains("MarketFoundationSlotV3::FailureIntervalHistory"));
+        assert!(!initialize.contains("MarketFoundationSlotV2::FailureIntervalWork"));
+        assert!(!initialize.contains("MarketFoundationSlotV2::FailureIntervalHistory"));
     }
 
     #[test]
