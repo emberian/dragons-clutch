@@ -87,6 +87,10 @@ impl AuthenticatedDirectRootTransitionV2 {
     pub const fn current_product_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.compiler_bundle_v5_id
     }
+    /// Exact current Product BundleV6 identity retained by b1/v2.
+    pub const fn compiler_bundle_v6_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[2]
+    }
     /// Complete current General V4/Revenue authority identity retained by b1/v2.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_plan_id
@@ -107,6 +111,11 @@ impl AuthenticatedDirectRootTransitionV2 {
         self.projected_root.binding.price_policy_id
     }
     pub const fn price_scale(&self) -> u64 { self.projected_root.binding.price_scale }
+    /// One-based Direct occurrence coordinate authenticated by the current
+    /// Product family admission sequence.
+    pub fn direct_window_index(&self) -> Result<u64, DirectMarketErrorV1> {
+        self.projected_root.binding.direct_window_index()
+    }
     pub const fn phase(&self) -> DirectRootPhaseV1 { self.projected_root.phase }
     pub const fn terminal_reason(&self) -> Option<DirectTerminalReasonV1> {
         self.projected_root.terminal_reason
