@@ -361,6 +361,19 @@ impl OwnedInstructionDraft {
         action: ExtensionAction,
         payload: &[u8],
     ) -> Result<Self> {
+        if matches!(
+            action,
+            ExtensionAction::SourceV3(
+                clutch_solana_layout::registry::SourceSeriesAction::CloseGeneration
+            )
+        ) {
+            // Action 12 is sequence-zero and derives its terminal policy,
+            // target, lineage, receipt, custody, postimages, and account frame
+            // only through `source_action12_material`. The generic envelope
+            // constructor must never recreate the superseded caller-shaped
+            // route.
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
         let family = action.family();
         let binding = registry_binding(family, action.local_tag(), Some(action))?;
         let envelope = ExtensionEnvelope {

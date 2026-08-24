@@ -396,7 +396,6 @@ pub(crate) fn source_action_from_selection(
         "evaluate-statistic" => Some(Action::EvaluateStatistic),
         "emit-failure-handoff" => Some(Action::EmitFailureHandoff),
         "reopen-source-generation" => Some(Action::ReopenGeneration),
-        "close-source-generation" => Some(Action::CloseGeneration),
         _ => None,
     }
 }

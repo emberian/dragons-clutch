@@ -935,7 +935,6 @@ pub struct PlannedWorkflowNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
-    SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
         transition: TransitionActionV3,
@@ -2101,7 +2100,6 @@ pub enum RecoveryObservation<'a> {
         funding_terms: &'a SeriesFundingTermsV2,
         quote: &'a SeriesFundingQuoteV1,
     },
-    CloseSourceGeneration(&'a ReopenLineageV1),
     RetireStructuredClaim {
         descriptor: &'a StructuredClaimDescriptorV1,
         vault_generation: u64,
@@ -2255,23 +2253,6 @@ impl RecoveryObservation<'_> {
                     ProtocolFlow::ProductSeries,
                 ))
             }
-            Self::CloseSourceGeneration(lineage) => {
-                lineage
-                    .validate()
-                    .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
-                if !lineage.is_open || lineage.latest_generation == 0 {
-                    return Err(WorkflowGraphError::NotReady);
-                }
-                Ok((
-                    lineage.latest_generation,
-                    WorkflowPosition {
-                        phase: 9,
-                        item: lineage.latest_generation,
-                    },
-                    CanonicalActionCoordinate::SourceRegistry(SourceSeriesAction::CloseGeneration),
-                    ProtocolFlow::SourcePlaneV3,
-                ))
-            }
             Self::RetireStructuredClaim {
                 descriptor,
                 vault_generation,
@@ -2354,11 +2335,6 @@ pub fn plan_recovery_or_retirement(
                 return Err(WorkflowGraphError::ActionStateMismatch);
             }
         }
-        RecoveryObservation::CloseSourceGeneration(lineage) => {
-            if lineage.adapter_program.bytes() != manifest.clutch.program_id.to_bytes() {
-                return Err(WorkflowGraphError::WrongProgramRelease);
-            }
-        }
         RecoveryObservation::RetireStructuredClaim {
             vault_generation, ..
         } => {
@@ -2424,19 +2400,6 @@ fn construct(
                 material.required_signers,
                 material.exact_equations,
                 ExtensionAction::RecurringSeries(action),
-                &material.payload,
-            )
-        }
-        CanonicalActionCoordinate::SourceRegistry(action) => {
-            OwnedInstructionDraft::allocated_successor(
-                flow,
-                material.action_name,
-                material.semantic_owner,
-                manifest.clutch.program_id,
-                material.accounts,
-                material.required_signers,
-                material.exact_equations,
-                ExtensionAction::SourceV3(action),
                 &material.payload,
             )
         }

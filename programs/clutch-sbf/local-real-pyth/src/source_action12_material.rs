@@ -6,6 +6,11 @@
 //! split, and custody postimage. The resulting material remains unsigned and
 //! blockhash-free, and it remains unavailable until the checked release
 //! explicitly admits `(77, 2, 12)`.
+//!
+//! The later whole-lifecycle custody retirement is a distinct Product-owned
+//! transition. It authenticates the Retiring SeriesMarketLinkV2 and exact
+//! Source occurrence before returning final principal; those accounts are not
+//! silently appended to this frozen 14-account generation close.
 
 use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
@@ -1019,6 +1024,35 @@ mod adversarial_tests {
         assert_eq!(
             mutable_family(LineageFamilyV1::EvaluationWork),
             Err(SourceAction12MaterialError::ChainAuthority)
+        );
+    }
+
+    #[test]
+    fn generic_successor_constructor_cannot_recreate_action12() {
+        assert_eq!(
+            OwnedInstructionDraft::allocated_successor(
+                crate::transaction_builder::ProtocolFlow::SourcePlaneV3,
+                "caller-shaped-close",
+                SemanticOwner {
+                    package: "caller".into(),
+                    schema: "caller/v1".into(),
+                    release_sha256: [1; 32],
+                },
+                address(1),
+                Vec::new(),
+                Vec::new(),
+                vec![ExactEquation {
+                    name: "caller assertion".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 0,
+                    right: 0,
+                }],
+                clutch_solana_layout::registry::ExtensionAction::SourceV3(
+                    SourceSeriesAction::CloseGeneration,
+                ),
+                &[0; CLOSE_GENERATION_PAYLOAD_BYTES_V2],
+            ),
+            Err(ConstructionError::UnallocatedRegistryCoordinate)
         );
     }
 }
