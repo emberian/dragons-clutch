@@ -222,9 +222,14 @@ use super::genesis::{
 };
 use super::fractional_redemption::{
     accept_dealer_facility_credit_funding_v1,
+    apply_dealer_facility_credit_terminal_v1,
     apply_dealer_facility_vector_transition_v1,
     AcceptedDealerFacilityCreditFundingV1, AcceptedDealerFacilityVectorTransitionV1,
-    AuthenticatedDealerFacilityVectorAuthorityV1, DealerFacilityVectorAccountsV1,
+    AcceptedDealerFacilityCreditTerminalV1,
+    AuthenticatedDealerFacilityCreditTerminalAuthorityV1,
+    AuthenticatedDealerFacilityVectorAuthorityV1, DealerFacilityCreditTerminalAccountsV1,
+    DealerFacilityCreditTerminalObservationV1, DealerFacilityCreditTerminalPrestateV1,
+    DealerFacilityVectorAccountsV1,
 };
 
 const DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT: usize = 10;
@@ -248,6 +253,8 @@ const QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT: usize = 22;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 58;
 const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 43;
 const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
+const RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT: usize = 48;
+const RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT: usize = 45;
 const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
 const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
@@ -335,6 +342,24 @@ struct AuthenticatedDealerFacilityVectorAuthoritySbfV1<'a, 'info> {
     current_generation: u64,
     live_credit_rent_lamports: u64,
     tombstone_rent_lamports: u64,
+}
+
+/// Dealer-owned half of the active-credit action25 terminal cut.
+///
+/// This non-Copy value is constructible only after the same outer has prepared
+/// the terminal Dealer Replay and accepted Product's exact LinkV2 terminal
+/// postwrite. Fractional consumes it by value before touching a5,
+/// ClaimLedgerV3, or a6/v2.
+struct AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1 {
+    prestate: DealerFacilityCreditTerminalPrestateV1,
+    fractional_ledger_account: Id,
+    fractional_ledger_before_id: Id,
+    product_root_account: Id,
+    product_root_authentication_id: Id,
+    resolution_semantic_id: Id,
+    resolution_data_id: Id,
+    stored_payer: Id,
+    neutral_sink: Id,
 }
 
 /// Non-detachable physical receipt proving the unused `0xbc/v1` owner was
@@ -1869,6 +1894,47 @@ impl AuthenticatedDealerFacilityVectorAuthorityV1
             retirement_id(consumption.funding_receipt_id)?,
             terminal_postwrite_id,
             retirement_id(self.funding.neutral_sink)?,
+        )
+    }
+}
+
+impl AuthenticatedDealerFacilityCreditTerminalAuthorityV1
+    for AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1
+{
+    fn fractional_credit_terminal_prestate_v1(&self) -> DealerFacilityCreditTerminalPrestateV1 {
+        self.prestate
+    }
+
+    fn consume_dealer_facility_credit_terminal_authority_v1(
+        self,
+        observed: DealerFacilityCreditTerminalObservationV1,
+    ) -> Outcome<()> {
+        require(
+            observed.authorization_id == self.prestate.authorization_id()
+                && observed.facility_id == self.prestate.facility_id()
+                && observed.market_instance == self.prestate.market_instance()
+                && observed.domain_generation == self.prestate.domain_generation()
+                && observed.facility_credit_account
+                    == self.prestate.facility_credit_account()
+                && Id::from_bytes(observed.fractional_ledger_account.bytes())
+                    == self.fractional_ledger_account
+                && Id::from_bytes(observed.fractional_ledger_before_id.bytes())
+                    == self.fractional_ledger_before_id
+                && Id::from_bytes(observed.market_root_account.bytes())
+                    == self.product_root_account
+                && Id::from_bytes(observed.market_root_authentication_id.bytes())
+                    == self.product_root_authentication_id
+                && Id::from_bytes(observed.resolution_semantic_id.bytes())
+                    == self.resolution_semantic_id
+                && Id::from_bytes(observed.resolution_data_id.bytes())
+                    == self.resolution_data_id
+                && Id::from_bytes(observed.stored_payer.bytes()) == self.stored_payer
+                && Id::from_bytes(observed.neutral_sink.bytes()) == self.neutral_sink
+                && observed.dealer_terminal_state_receipt_id
+                    == self.prestate.dealer_terminal_state_receipt_id()
+                && observed.product_terminal_receipt_id
+                    == self.prestate.product_terminal_receipt_id(),
+            ClutchError::MismatchedState,
         )
     }
 }
@@ -10984,6 +11050,106 @@ mod timed_close_adversarial_tests {
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::TimedClose.tag(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod current_terminal_cut_adversarial_tests {
+    use super::{
+        DealerRuntimePayloadV1, RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT,
+        RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT,
+    };
+    use crate::instructions::dealer_runtime::{
+        meta_contract_v1, DealerMetaOwnerV1, DealerMetaRoleV1,
+        DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+        DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+    };
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+
+    fn payload(target: u8) -> [u8; 24] {
+        let mut payload = [0u8; 24];
+        payload[0..8].copy_from_slice(&11u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&17u64.to_le_bytes());
+        payload[16] = target;
+        payload
+    }
+
+    #[test]
+    fn active_and_unused_credit_terminal_cuts_are_disjoint_exact_contracts() {
+        let active = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Retire,
+            &payload(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1),
+        )
+        .unwrap();
+        let active = meta_contract_v1(DealerFacilityAction::Retire, active).unwrap();
+        assert_eq!(active.len(), RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT);
+        assert_eq!(active[24].role, DealerMetaRoleV1::SeriesObligation);
+        assert!(active[24].writable);
+        assert_eq!(active[25].role, DealerMetaRoleV1::ProductMarketRoot);
+        assert!(!active[25].writable);
+        assert_eq!(active[31].role, DealerMetaRoleV1::SeriesMarketLink);
+        assert!(active[31].writable);
+        assert_eq!(active[38].role, DealerMetaRoleV1::CollateralTokenProgramData);
+        assert!(!active[38].writable);
+        assert_eq!(active[43].role, DealerMetaRoleV1::ClaimLedger);
+        assert!(active[43].writable);
+        assert_eq!(active[46].role, DealerMetaRoleV1::FractionalLedger);
+        assert!(active[46].writable);
+        assert_eq!(active[47].role, DealerMetaRoleV1::FacilityCredit);
+        assert_eq!(active[47].owner, DealerMetaOwnerV1::SelfProgram);
+        assert!(active[47].writable);
+        assert!(!active
+            .iter()
+            .any(|meta| meta.role == DealerMetaRoleV1::FutureCreditFunding));
+
+        let unused = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Retire,
+            &payload(DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1),
+        )
+        .unwrap();
+        let unused = meta_contract_v1(DealerFacilityAction::Retire, unused).unwrap();
+        assert_eq!(unused.len(), RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT);
+        assert_eq!(unused[43].role, DealerMetaRoleV1::ClaimLedger);
+        assert!(!unused[43].writable);
+        assert_eq!(unused[44].role, DealerMetaRoleV1::FutureCreditFunding);
+        assert_eq!(unused[44].owner, DealerMetaOwnerV1::SelfProgram);
+        assert!(unused[44].writable);
+        assert!(!unused
+            .iter()
+            .any(|meta| meta.role == DealerMetaRoleV1::FacilityCredit));
+    }
+
+    #[test]
+    fn terminal_cut_payload_refuses_unknown_target_page_fields_and_padding() {
+        let mut unknown = payload(DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1);
+        unknown[16] = DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1 + 1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, &unknown).is_err());
+
+        let mut last_page = payload(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
+        last_page[17] = 1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, &last_page).is_err());
+
+        let mut padding = payload(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
+        padding[18] = 1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, &padding).is_err());
+    }
+
+    #[test]
+    fn terminal_cut_remains_unavailable_until_product_and_fractional_join() {
+        assert!(!crate::capabilities::extension_intent_action_enabled(
+            DEALER_FAMILY_TAG,
+            DEALER_FAMILY_VERSION,
+            DealerFacilityAction::Retire.tag(),
+        ));
+        let source = include_str!("dealer_facility.rs");
+        let dispatcher = source
+            .split("let implemented = matches!(")
+            .nth(1)
+            .and_then(|value| value.split(");").next())
+            .expect("Dealer implementation mask");
+        assert!(!dispatcher.contains("DealerFacilityAction::Retire"));
     }
 }
 
