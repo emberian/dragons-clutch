@@ -61,9 +61,6 @@ use clutch_liveness::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_ACCOUNT_MAGIC_V1,
     RUNTIME_LIVENESS_POLICY_BYTES_V1, RUNTIME_LIVENESS_POLICY_MAGIC_V1,
 };
-use clutch_product_series::{
-    SeriesLinkObligationStatusV2, SeriesLinkObligationV2, SeriesMarketLinkPhaseV2,
-};
 use clutch_retirement::{
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
     ReplayV3HashBackend, ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
@@ -901,18 +898,11 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(binding.generation);
         projection.primary_binding = Some(binding.series_plan_id.bytes());
         projection.secondary_binding = Some(binding.compiler_bundle_id.bytes());
-        if value.state.phase() == SeriesMarketLinkPhaseV2::Active
-            && value
-                .state
-                .obligation_status(SeriesLinkObligationV2::Wrapper)
-                == SeriesLinkObligationStatusV2::EnabledNeverFounded
-        {
-            projection.keeper_hint = Some(KeeperHint {
-                lane: Some(WorkflowLane::Creation),
-                position: WorkflowPosition { phase: 5, item: 0 },
-                action: "create-structured-descriptor",
-            });
-        }
+        // A Link body alone cannot select a recipe from the published set or
+        // prove the corresponding descriptor/mint/Position/Replay absences.
+        // Structured scheduling therefore lives only in the closed hostile-
+        // state constructor, never in this generic/browser-facing hint.
+        projection.keeper_hint = None;
         Ok(Some(projection))
     } else if tag_version(
         data,
@@ -2043,9 +2033,26 @@ pub struct IndexedAccountVersion {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinalizedAccountAbsence {
-    pub release_key: String,
-    pub slot: u64,
-    pub receive_sequence: u64,
+    release_key: String,
+    slot: u64,
+    receive_sequence: u64,
+}
+
+impl FinalizedAccountAbsence {
+    /// Checked release scan which established the absence.
+    pub fn release_key(&self) -> &str {
+        &self.release_key
+    }
+
+    /// Finalized scan slot at which the account was absent.
+    pub const fn slot(&self) -> u64 {
+        self.slot
+    }
+
+    /// Monotone local receive sequence of that finalized scan.
+    pub const fn receive_sequence(&self) -> u64 {
+        self.receive_sequence
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

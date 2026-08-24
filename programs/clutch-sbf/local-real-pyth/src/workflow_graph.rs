@@ -456,6 +456,9 @@ pub enum WorkflowLane {
     Candidate,
     KeeperReceipts,
     RecoveryRetirement,
+    /// Exact current Structured lifecycle actions derived from one finalized
+    /// semantic-owner account frame rather than a generic keeper hint.
+    StructuredLifecycle,
 }
 
 /// Deterministic cursor position derived from canonical account progress.

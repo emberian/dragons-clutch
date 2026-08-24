@@ -76,10 +76,17 @@ The builder feature now also exposes two reusable boundaries:
   finalized Product/current-state bodies, content-addressed release artifacts,
   exact Program/ProgramData/ELF observations, and a stable finalized address
   lookup table have been hostile-decoded. Action 1 obtains its recipe and
-  membership witness from the on-chain kind-64 `WrapperRecipeSetV1`; no browser
-  recipe or account-meta DTO is accepted. Legacy messages refuse these frames;
-  the unsigned plan is a blockhash-free v0 message. Checked release intents and
-  the central profile tuple still fail closed independently. Source transitions
+  membership witness from the on-chain kind-64 `WrapperRecipeSetV1`; every leaf
+  is considered and the unique leaf whose derived descriptor/mint/Position/
+  Replay absence frame matches is selected. The remaining action is detected
+  disjointly from hostile Position direction or the exact compaction/terminal
+  geometry, never from a generic keeper hint. Realm, Profile V2, collateral
+  policy/release, ProgramData/ELF, MarketBinding V2/Runtime V3, Basis/Market,
+  Hoard V2, and ClaimLedger V3 roles are reconstructed as one canonical chain.
+  No browser recipe, action-selection, or account-meta DTO is accepted. Legacy
+  messages refuse these frames; the unsigned plan is a blockhash-free v0
+  message. Checked release intents and the central profile tuple still fail
+  closed independently. Source transitions
   consume the guarded V3 transition
   contract and target the embedded Clutch facility; there is no second Source
   adapter deployment. Every route stays production-inert until the dispatcher
