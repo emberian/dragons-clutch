@@ -1,4 +1,4 @@
-//! Staged-disabled SBF composition for General V2 action 26 direct Egg delivery.
+//! SBF composition for General V2 action 26 direct Egg delivery.
 //!
 //! The positional frame starts with the single shared settlement traversal:
 //! read-only SettlementRoot, retained Feed, Market/Domain/Grid/Realm/Product

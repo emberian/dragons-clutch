@@ -1,4 +1,4 @@
-//! Staged-disabled SBF composition for General V2 action 40 merge payment.
+//! SBF composition for General V2 action 40 merge payment.
 //!
 //! The exact account order is:
 //! 0 writable SettlementRoot, 1 retained Feed, 2 writable ReceiptV5,
@@ -13,8 +13,8 @@
 //! This action moves no cash and performs no CPI or close. It authenticates
 //! every prestate, prepares one indivisible pure plan, pre-borrows all four
 //! writable accounts, then writes the root/receipt/reservation/replay bundle.
-//! The module is intentionally absent from dispatch while action 40 remains
-//! centrally `ReservedDisabled`.
+//! The central successor dispatcher supplies the independently admitted
+//! action coordinate; this module owns the complete account and write contract.
 
 use core::cell::{Ref, RefMut};
 use std::boxed::Box;
@@ -48,8 +48,9 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::read_rent;
 use crate::seeds;
 
-use super::collateral_position_v3::GeneralPositionReplayAuthorityV4;
-use super::general_v2_direct_v5::authenticate_market_collateral_v2;
+use super::collateral_position_v3::{
+    authenticate_general_market_collateral_v4, GeneralPositionReplayAuthorityV4,
+};
 use super::general_v2_position_replay::authenticate_current_general_position_replay_readonly_v4;
 use super::general_v2_receipt_v5::{
     authenticate_general_receipt_v5_writable_root, AuthenticatedGeneralReceiptV5,
@@ -402,11 +403,7 @@ fn write_atomic_bundle(
     Ok(())
 }
 
-/// Decode and compose one staged-disabled action-40 request.
-///
-/// The central capability gate remains false and dispatch owns no action-40
-/// arm. This function is complete so enabling the producer chain later does
-/// not require inventing a second account or write contract.
+/// Decode and compose one action-40 request.
 #[inline(never)]
 pub fn process(
     program_id: &Pubkey,
@@ -447,7 +444,29 @@ pub fn process(
         request.epoch == receipt.root().epoch() && request.receipt == receipt.receipt_account(),
         ClutchError::MismatchedState,
     )?;
-    let (bound, market_v2) = authenticate_market_collateral_v2(program_id, accounts, &receipt)?;
+    let current_market = authenticate_general_market_collateral_v4(
+        program_id,
+        &accounts[IX_MARKET_BINDING],
+        &accounts[IX_MARKET_RUNTIME],
+        &accounts[IX_REALM],
+        &accounts[IX_PROFILE],
+        &accounts[IX_COLLATERAL_POLICY],
+        &accounts[IX_TOKEN_PROGRAM],
+        &accounts[IX_MARKET_INSTANCE],
+        &accounts[IX_MARKET_GENESIS],
+    )?;
+    let bound = current_market.collateral();
+    let current_binding = current_market.market_binding();
+    let current_runtime = current_market.market_runtime();
+    let root = receipt.root();
+    require(
+        root.market_binding() == id(accounts[IX_MARKET_BINDING].key)
+            && root.market() == id(accounts[IX_MARKET_RUNTIME].key)
+            && root.market_instance_v2_id() == current_binding.base().base().market_instance_v2_id
+            && current_runtime.market_instance_v2_id
+                == current_binding.base().base().market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
     let rent = read_rent(&accounts[IX_RENT_SYSVAR])?;
     let owner_row_rent_minimum = rent.minimum_balance(OWNER_SETTLEMENT_ACCOUNT_BYTES_V5)?;
     let cash_pot = authenticate_cash_pot_v1(program_id, accounts, &receipt)?;
@@ -483,7 +502,7 @@ pub fn process(
         None => None,
     };
     let feed_data = borrow_data(&accounts[IX_FEED])?;
-    let relation_market = market_v2.relation_projection();
+    let relation_market = current_binding.relation_projection();
     let plan = prepare_plan_boxed(FinalizeMergeReceiptPaymentInputV5 {
         payload: request,
         settlement_root_account: receipt.settlement_root_account(),

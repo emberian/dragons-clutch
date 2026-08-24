@@ -25,10 +25,7 @@ use clutch_batch::portfolio_execution_v2::{
 use clutch_batch::relation_v1::MAX_OUTCOMES;
 use clutch_batch::relation_v2::{EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2};
 use clutch_batch::Side;
-use clutch_collateral_adapter_v2::{
-    refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
-    MarketCollateralBindingV2,
-};
+use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     CandidateFeedHeaderV2, Id32, MarketBindingV4, Sha256BackendV1,
@@ -41,7 +38,6 @@ use clutch_general_v2_runtime::{
     SettlementOrderBookBindingV5, SettlementTraversalAccessV5,
     SettlementTraversalProjectionV5, StreamedOwnerBlindOrderV5,
 };
-use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{
     Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
     PositionV3Sha256Backend, POSITION_V3_BYTES,
@@ -56,16 +52,14 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{expect_pda, require, Outcome};
-use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
-use super::collateral_position_v3::authenticate_general_market_v4;
+use super::collateral_position_v3::authenticate_general_market_collateral_v4;
 use super::general_v2_settlement_root::{
     authenticate_readonly_general_settlement_root_v1,
     authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
 };
-use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Named immutable account frame shared by settlement-root creation and every
 /// later action that must reproduce the candidate-wide V5 traversal.
@@ -402,73 +396,29 @@ pub fn authenticate_settlement_traversal_v5<'a, 'info>(
         Some(grid.stored_bump),
     )?;
 
-    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
+    let current_market = authenticate_general_market_collateral_v4(
         program_id,
+        frame.market_binding,
+        frame.market_runtime,
         frame.realm,
         frame.profile,
         frame.collateral_policy,
         frame.token_program,
-    )?;
-    let (market, runtime) =
-        authenticate_general_market_v4(program_id, frame.market_binding, frame.market_runtime)?;
-    let base = market.base().base();
-    let instance = *authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
         frame.market_instance,
-        ContentId::from_bytes(base.market_instance_v2_id.bytes()),
-    )?
-    .value();
-    let genesis = *authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
         frame.market_genesis,
-        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
-    )?
-    .value();
+    )?;
+    let market = current_market.market_binding();
+    let genesis = current_market.market_genesis();
+    let collateral = current_market.collateral();
+    let base = market.base().base();
     require(
-        instance
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .bytes()
-            == base.market_instance_v2_id.bytes()
-            && runtime.market_instance_v2_id == base.market_instance_v2_id
-            && instance.market_genesis_profile_id.content_id().bytes()
-                == base.market_genesis_profile_v2_id.bytes()
-            && genesis.realm_id.bytes() == realm.realm().realm.bytes()
-            && genesis.profile_id.bytes() == realm.realm().profile.bytes()
-            && genesis.price_grid_id.bytes() == grid.grid.bytes()
-            && genesis.price_measure_policy_id.content_id().bytes()
-                == base.price_measure_policy_v1_id.bytes()
-            && genesis.relation_policy_id.bytes() == base.relation_policy_id.bytes()
-            && genesis.score_policy_id.bytes() == base.score_policy_id.bytes()
-            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
+        genesis.price_grid_id.bytes() == grid.grid.bytes()
             && grid.realm.bytes() == genesis.realm_id.bytes()
             && grid.price_scale == base.price_scale
             && feed.market == base.market
             && feed.epoch == domain.epoch,
         ClutchError::MismatchedState,
     )?;
-
-    let market_bytes = base.market_instance_v2_id.bytes();
-    let collateral = refine_market_collateral_v2(
-        realm,
-        MarketCollateralBindingV2 {
-            market: CollateralId::from_bytes(market_bytes),
-            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
-            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
-            collateral_cap_atoms: instance.collateral_cap,
-            hoard_authority: CollateralId::from_bytes(
-                seeds::hoard_authority_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-            hoard_token_account: CollateralId::from_bytes(
-                seeds::hoard_token_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
 
     let mut page_refs: [Option<Ref<'_, [u8]>>; MAX_ORDER_PAGES] = [None, None, None, None];
     let mut page_semantic_ids = [Id32::ZERO; MAX_ORDER_PAGES];

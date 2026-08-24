@@ -20,7 +20,7 @@ use clutch_general_v2_contract::{
     MARKET_BINDING_ACCOUNT_BYTES_V4, MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
-use clutch_product_series::MarketInstancePreimageV2;
+use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
     DeletableRentOwnerV1, GeneralPositionProjectionV3, Identity32V1, PositionAccountV3,
@@ -34,6 +34,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{expect_pda, require, Outcome};
+use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
@@ -141,6 +142,25 @@ impl AuthenticatedGeneralMarketV4 {
     pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 { self.runtime }
     pub(crate) const fn binding_data_id(self) -> CollateralId { self.binding_data_id }
     pub(crate) const fn runtime_data_id(self) -> CollateralId { self.runtime_data_id }
+}
+
+/// Canonical current General/Realm/Product collateral join shared by every
+/// V4 settlement action. Product artifact authentication and collateral
+/// refinement have one SBF owner; action-specific adapters add only the
+/// physical accounts (for example PriceGrid or retained Feed) they consume.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AuthenticatedGeneralMarketCollateralV4 {
+    collateral: BoundCollateralProfileV2,
+    market_binding: MarketBindingV4,
+    market_runtime: MarketRuntimeV3AccountV1,
+    market_genesis: MarketGenesisProfileV2,
+}
+
+impl AuthenticatedGeneralMarketCollateralV4 {
+    pub(crate) const fn collateral(self) -> BoundCollateralProfileV2 { self.collateral }
+    pub(crate) const fn market_binding(self) -> MarketBindingV4 { self.market_binding }
+    pub(crate) const fn market_runtime(self) -> MarketRuntimeV3AccountV1 { self.market_runtime }
+    pub(crate) const fn market_genesis(self) -> MarketGenesisProfileV2 { self.market_genesis }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -615,6 +635,96 @@ pub(crate) fn authenticate_general_market_v4(
         ClutchError::MismatchedState,
     )?;
     Ok((binding, runtime))
+}
+
+/// Authenticate the sole current V4 General market, Realm-selected
+/// collateral, and immutable Product MarketInstance/Genesis artifacts.
+///
+/// PriceGrid, EconomicDomain, Feed, and page equality remain with the
+/// traversal because this helper does not receive those physical accounts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_market_collateral_v4(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    realm_account: &AccountInfo<'_>,
+    profile_account: &AccountInfo<'_>,
+    collateral_policy_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    market_instance_account: &AccountInfo<'_>,
+    market_genesis_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralMarketCollateralV4> {
+    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
+        program_id,
+        realm_account,
+        profile_account,
+        collateral_policy_account,
+        token_program,
+    )?;
+    let (market_binding, market_runtime) = authenticate_general_market_v4(
+        program_id,
+        market_binding_account,
+        market_runtime_account,
+    )?;
+    let base = market_binding.base().base();
+    let market_instance = *authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        ContentId::from_bytes(base.market_instance_v2_id.bytes()),
+    )?
+    .value();
+    let market_genesis = *authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        market_genesis_account,
+        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
+    )?
+    .value();
+    require(
+        market_instance
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes()
+            == base.market_instance_v2_id.bytes()
+            && market_runtime.market_instance_v2_id == base.market_instance_v2_id
+            && market_instance.market_genesis_profile_id.content_id().bytes()
+                == base.market_genesis_profile_v2_id.bytes()
+            && market_genesis.realm_id.bytes() == realm.realm().realm.bytes()
+            && market_genesis.profile_id.bytes() == realm.realm().profile.bytes()
+            && market_genesis.price_measure_policy_id.content_id().bytes()
+                == base.price_measure_policy_v1_id.bytes()
+            && market_genesis.relation_policy_id.bytes() == base.relation_policy_id.bytes()
+            && market_genesis.score_policy_id.bytes() == base.score_policy_id.bytes()
+            && market_genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
+        ClutchError::MismatchedState,
+    )?;
+
+    let market_bytes = base.market_instance_v2_id.bytes();
+    let collateral = refine_market_collateral_v2(
+        realm,
+        MarketCollateralBindingV2 {
+            market: CollateralId::from_bytes(market_bytes),
+            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
+            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
+            collateral_cap_atoms: market_instance.collateral_cap,
+            hoard_authority: CollateralId::from_bytes(
+                seeds::hoard_authority_v2_pda(program_id, &market_bytes)
+                    .0
+                    .to_bytes(),
+            ),
+            hoard_token_account: CollateralId::from_bytes(
+                seeds::hoard_token_v2_pda(program_id, &market_bytes)
+                    .0
+                    .to_bytes(),
+            ),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedGeneralMarketCollateralV4 {
+        collateral,
+        market_binding,
+        market_runtime,
+        market_genesis,
+    })
 }
 
 /// Authenticate current V4/Runtime bodies and derive their sole canonical
