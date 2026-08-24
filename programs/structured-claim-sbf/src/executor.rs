@@ -1563,7 +1563,7 @@ fn validate_retirement_accounts(
     Ok(())
 }
 
-const fn retirement_account_writable(index: usize, family_terminal: bool) -> bool {
+const fn retirement_account_writable(index: usize, _family_terminal: bool) -> bool {
     matches!(
         index,
         R_POSITION
@@ -1573,7 +1573,7 @@ const fn retirement_account_writable(index: usize, family_terminal: bool) -> boo
             | R_ROOT
             | R_REFUND_OWNER
             | R_NEUTRAL_SINK
-    ) || (index == R_LINK && family_terminal)
+    )
 }
 
 fn validate_privileges<const N: usize>(
@@ -2417,74 +2417,11 @@ fn reconcile_retirement(
     let link_data_after = accounts[R_LINK]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    if family_terminal {
-        let mut link_after = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-        SeriesMarketLinkAccountV2::decode_into(&link_data_after, &mut link_after)
-            .map_err(|_| WrapperError::Identity)?;
-        if link_after.stored_bump != link_before.stored_bump
-            || link_after.state.binding() != link_before.state.binding()
-            || link_after.state.phase() != link_before.state.phase()
-            || link_after.state.active_failure_sessions()
-                != link_before.state.active_failure_sessions()
-            || link_after.state.failure_sessions_started()
-                != link_before.state.failure_sessions_started()
-            || link_after.state.failure_session_transcript_id()
-                != link_before.state.failure_session_transcript_id()
-            || link_after.state.market_admission_sequence()
-                != link_before.state.market_admission_sequence()
-            || link_after.state.market_admission_receipt_id()
-                != link_before.state.market_admission_receipt_id()
-            || link_after.state.rent_principal_lamports()
-                != link_before.state.rent_principal_lamports()
-            || link_after.state.donation_floor_lamports()
-                != link_before.state.donation_floor_lamports()
-            || link_after.state.current_donation_lamports()
-                != link_before.state.current_donation_lamports()
-            || link_after.state.transition_sequence()
-                != link_before
-                    .state
-                    .transition_sequence()
-                    .checked_add(1)
-                    .ok_or(WrapperError::Arithmetic)?
-            || link_after
-                .state
-                .obligation_status(SeriesLinkObligationV2::Wrapper)
-                != SeriesLinkObligationStatusV2::Terminal
-            || link_after
-                .state
-                .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
-                != link_before
-                    .state
-                    .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
-            || link_after
-                .state
-                .obligation_terminal_receipt_id(SeriesLinkObligationV2::Wrapper)
-                .is_zero()
-        {
-            return Err(WrapperError::BaseCustody);
-        }
-        for obligation in [
-            SeriesLinkObligationV2::Dealer,
-            SeriesLinkObligationV2::Structured,
-            SeriesLinkObligationV2::Liquidity,
-        ] {
-            if link_after.state.obligation_status(obligation)
-                != link_before.state.obligation_status(obligation)
-                || link_after.state.obligation_admission_receipt_id(obligation)
-                    != link_before.state.obligation_admission_receipt_id(obligation)
-                || link_after.state.obligation_terminal_receipt_id(obligation)
-                    != link_before.state.obligation_terminal_receipt_id(obligation)
-            {
-                return Err(WrapperError::BaseCustody);
-            }
-        }
-    } else {
-        let mut link_after = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-        SeriesMarketLinkAccountV2::decode_into(&link_data_after, &mut link_after)
-            .map_err(|_| WrapperError::Identity)?;
-        if *link_after != *link_before {
-            return Err(WrapperError::BaseCustody);
-        }
+    let mut link_after = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    SeriesMarketLinkAccountV2::decode_into(&link_data_after, &mut link_after)
+        .map_err(|_| WrapperError::Identity)?;
+    if *link_after != *link_before {
+        return Err(WrapperError::BaseCustody);
     }
     drop(link_data_after);
     if accounts[R_LINK].lamports() != link_balance_before {
@@ -3343,10 +3280,10 @@ mod tests {
     }
 
     #[test]
-    fn retirement_link_is_writable_only_for_the_last_descriptor() {
+    fn retirement_owner_never_borrows_product_link_write_privilege() {
         assert_eq!(RETIREMENT_ACCOUNT_COUNT, 33);
         assert!(!retirement_account_writable(R_LINK, false));
-        assert!(retirement_account_writable(R_LINK, true));
+        assert!(!retirement_account_writable(R_LINK, true));
         for index in [R_DESCRIPTOR, R_MINT, R_POSITION, R_REPLAY, R_ROOT] {
             assert!(retirement_account_writable(index, false));
             assert!(retirement_account_writable(index, true));
