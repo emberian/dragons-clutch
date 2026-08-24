@@ -261,6 +261,7 @@ use super::product_series_current::{
     AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
     AuthenticatedSeriesMarketLinkV2,
 };
+use super::product_series_current::retirement_v5::consume_dealer_family_terminal_v5;
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
@@ -300,6 +301,8 @@ const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 43;
 const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 pub(crate) const DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1: usize = 39;
 pub(crate) const DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1: usize = 36;
+const DEALER_PRODUCT_TERMINAL_ACTIVE_ACCOUNT_COUNT_V3: usize = 41;
+const DEALER_PRODUCT_TERMINAL_UNUSED_ACCOUNT_COUNT_V3: usize = 38;
 const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
 const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
@@ -7836,6 +7839,61 @@ pub(crate) fn terminalize_dealer_family_for_product_v3(
     )
 }
 
+/// Execute the sole callable Dealer terminal outer: physical Dealer deletion
+/// first, followed by Product RootV3/LinkV3 consumption of the move-only receipt.
+/// The final two accounts are the exact writable Product root and link; the
+/// preceding 39/36 accounts remain Dealer's frozen physical terminal contract.
+#[inline(never)]
+fn terminalize_dealer_family_and_product_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, payload_bytes)
+        .map_err(dealer_fault)?;
+    let active_credit = payload.retire_target
+        == super::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1;
+    let (dealer_count, total_count) = if active_credit {
+        (
+            DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1,
+            DEALER_PRODUCT_TERMINAL_ACTIVE_ACCOUNT_COUNT_V3,
+        )
+    } else {
+        (
+            DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1,
+            DEALER_PRODUCT_TERMINAL_UNUSED_ACCOUNT_COUNT_V3,
+        )
+    };
+    require_count(accounts, total_count)?;
+    authenticate_dealer_meta_contract_v1(
+        program_id,
+        &accounts[..dealer_count],
+        DealerFacilityAction::Retire,
+        payload,
+    )?;
+    let terminal = terminalize_dealer_family_for_product_v3(
+        program_id,
+        &accounts[..dealer_count],
+        sequence,
+        payload_bytes,
+    )?;
+    let accepted = consume_dealer_family_terminal_v5(
+        program_id,
+        &accounts[dealer_count],
+        &accounts[dealer_count + 1],
+        terminal,
+    )?;
+    require(
+        accepted.id() != ContentId::ZERO
+            && accepted.root_account() == *accounts[dealer_count].key
+            && accepted.link_account() == *accounts[dealer_count + 1].key
+            && accepted.root_authentication_after_id() != ContentId::ZERO
+            && accepted.link_authentication_after_id() != ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )
+}
+
 /// Deliver one sealed terminal LP allocation through the canonical facility
 /// and General Position/Replay owners. Claim moves only internal cash
 /// liability: Hoard custody and both aggregate market-liability accounts are
@@ -12380,6 +12438,22 @@ pub fn process(
     action: DealerFacilityAction,
     payload: &[u8],
 ) -> Outcome<()> {
+    if action == DealerFacilityAction::Retire {
+        let terminal_payload = DealerRuntimePayloadV1::decode(action, payload).map_err(dealer_fault)?;
+        if matches!(
+            terminal_payload.retire_target,
+            super::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
+                | super::dealer_runtime::DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1
+        ) {
+            return terminalize_dealer_family_and_product_v5(
+                program_id,
+                accounts,
+                sequence,
+                payload,
+            );
+        }
+        return super::dealer_runtime::process_reserved_disabled(action);
+    }
     let implemented = matches!(
         action,
         DealerFacilityAction::Initialize
@@ -13225,18 +13299,19 @@ mod current_terminal_cut_adversarial_tests {
     }
 
     #[test]
-    fn terminal_cut_has_no_direct_dealer_dispatch() {
+    fn terminal_cut_has_only_the_product_composite_dispatch() {
         assert!(!crate::capabilities::extension_intent_action_enabled(
             DEALER_FAMILY_TAG,
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::Retire.tag(),
         ));
-        assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
+        let composite_enabled = cfg!(feature = "profile-successor-chain-attached-dev");
+        assert_eq!(crate::capabilities::dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
-        ));
-        assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
+        ), composite_enabled);
+        assert_eq!(crate::capabilities::dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
-        ));
+        ), composite_enabled);
         assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
             crate::instructions::dealer_runtime::DEALER_RETIRE_STATE_ROOT_V1,
         ));
@@ -13246,7 +13321,7 @@ mod current_terminal_cut_adversarial_tests {
             .nth(1)
             .and_then(|value| value.split("#[cfg(test)]").next())
             .expect("Dealer implementation mask");
-        assert!(!dispatcher.contains("terminalize_dealer_family_for_product_v3"));
+        assert!(dispatcher.contains("terminalize_dealer_family_and_product_v5"));
     }
 
     #[test]

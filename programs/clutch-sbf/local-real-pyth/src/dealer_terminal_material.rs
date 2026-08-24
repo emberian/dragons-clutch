@@ -22,7 +22,7 @@ use clutch_dealer_runtime_contract::{
     DealerActionReceiptV1, DealerFacilityReplayV1,
     DealerFundedDependenciesV2, DealerLivenessCompartmentV1, DealerLivenessScheduleV1,
     DealerPhaseV2, DealerPolicyV1, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
-    DealerSeriesObligationBindingV2, DealerStateV3, DeletableRentOwnerV1,
+    DealerSeriesObligationBindingV3, DealerStateV3, DeletableRentOwnerV1,
     FixedCodec as DealerFixedCodec, Id as DealerId, DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1,
     DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2, DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1,
     DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1, DEALER_POLICY_PDA_DOMAIN_V1,
@@ -34,12 +34,10 @@ use clutch_general_v2_contract::{
     MARKET_BINDING_SEED_DOMAIN_V1, MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
 use clutch_liveness::runtime_v1::{RuntimeCompartmentV1, RuntimeLivenessPolicyV1};
-use clutch_product_series::{FixedCodec, MarketLifecyclePhaseV2, RegistryProgramReleaseV2};
+use clutch_product_series::{FixedCodec, MarketLifecyclePhaseV3, RegistryProgramReleaseV2};
 use clutch_retirement::PositionAccountV3;
 use clutch_solana_layout::artifact::ArtifactKind;
-use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesRegistryAccountV3, SERIES_REGISTRY_PDA_PREFIX_V1,
-};
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV3;
 use clutch_solana_layout::registry::{
     DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES, DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
     DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION, DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES,
@@ -47,8 +45,8 @@ use clutch_solana_layout::registry::{
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION, DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
     DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG, DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
     DEALER_POLICY_ACCOUNT_HEADER_BYTES, DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2, DEALER_STATE_V3_ACCOUNT_BYTES,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3, DEALER_STATE_V3_ACCOUNT_BYTES,
     DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use clutch_collateral_adapter_v2::{
@@ -392,7 +390,7 @@ fn derive_role_addresses(
     let call_ordinal = retirement.completed_calls.checked_add(1).ok_or_else(invalid)?;
     let payment = schedule.reward_lamports[DealerLivenessScheduleV1::action_index(DealerRuntimeActionV1::Retire)];
     let obligation_address = id_address(state.series_obligation_binding_account_id);
-    let obligation = decode_framed::<DealerSeriesObligationBindingV2>(program, find(accounts, obligation_address)?, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2, DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2)?;
+    let obligation = decode_framed::<DealerSeriesObligationBindingV3>(program, find(accounts, obligation_address)?, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3)?;
     let placeholder_receipt = DealerId::from_bytes(program.to_bytes());
     let receipt = DealerActionReceiptV1 {
         policy_id: state.base.policy_id,
@@ -420,17 +418,11 @@ fn derive_role_addresses(
     let receipt_slot = receipt.receipt_slot_id().map_err(|_| invalid())?;
     let receipt_address = Address::find_program_address(&[DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1, &receipt_slot.bytes()], &program).0;
     if owner_scan.accounts().iter().any(|account| account.address == receipt_address) { return Err(invalid()); }
-    let registry_address = Address::find_program_address(&[SERIES_REGISTRY_PDA_PREFIX_V1, &obligation.key.series_plan_v5_id.bytes()], &program).0;
-    let registry = SeriesRegistryAccountV3::decode(&find(accounts, registry_address)?.data).map_err(|_| invalid())?;
     let root_address = id_address(obligation.key.product_market_root_account_id);
-    let root = MarketLifecycleRootAccountV2::decode(&find(accounts, root_address)?.data).map_err(|_| invalid())?;
-    if root.state.phase() != MarketLifecyclePhaseV2::Active { return Err(invalid()); }
+    let root = MarketLifecycleRootAccountV3::decode(&find(accounts, root_address)?.data).map_err(|_| invalid())?;
+    if root.state.phase() != MarketLifecyclePhaseV3::Active { return Err(invalid()); }
     let root_binding = root.state.binding();
     let link_address = id_address(obligation.key.series_market_link_account_id);
-    let current_release_artifact = artifact_address(program, ArtifactKind::RegistryProgramReleaseV2, registry.registry_release_id.bytes());
-    let profile_artifact = artifact_address(program, ArtifactKind::RegistryCapabilityProfileV4, registry.capability_profile_id.bytes());
-    let bundle_artifact = artifact_address(program, ArtifactKind::CompiledProductSeriesBundleV6, obligation.key.compiler_bundle_v6_id.bytes());
-    let attachment_artifact = artifact_address(program, ArtifactKind::SeriesAttachmentPlanV5, obligation.key.attachment_plan_v5_id.bytes());
     let realm_address = Address::find_program_address(&[REALM_PDA_SEED_V1, &policy.realm_id.bytes()], &program).0;
     let profile_address = Address::find_program_address(&[PROFILE_PDA_SEED_V1, &policy.realm_id.bytes(), &policy.profile_id.bytes()], &program).0;
     let collateral_policy_address = Address::find_program_address(&[COLLATERAL_POLICY_PDA_SEED_V1, &policy.profile_id.bytes(), &position.collateral_policy_id().bytes()], &program).0;
@@ -454,9 +446,7 @@ fn derive_role_addresses(
         solana_sdk_ids::sysvar::clock::ID,
         solana_sdk_ids::sysvar::rent::ID,
         solana_sdk_ids::system_program::ID,
-        obligation_address, root_address, registry_address, release.program_id,
-        release.program_data, current_release_artifact, profile_artifact, link_address,
-        bundle_artifact, attachment_artifact, realm_address, profile_address,
+        obligation_address, realm_address, profile_address,
         collateral_policy_address,
     ]);
     roles.extend([collateral_program, collateral_programdata, market_binding, market_runtime, market_artifact, hoard, claim]);
@@ -465,10 +455,10 @@ fn derive_role_addresses(
         let fractional_policy = Address::new_from_array(claim_body.fractional_policy_id.bytes());
         let fractional_ledger = Address::new_from_array(claim_body.fractional_ledger_account.bytes());
         let credit = Address::find_program_address(&[FRACTIONAL_CREDIT_PDA_PREFIX, &fractional_policy.to_bytes(), &state.base.facility_id.bytes()], &program).0;
-        roles.extend([Address::new_from_array(root_binding.resolution_account_id.bytes()), fractional_policy, fractional_ledger, credit]);
+        roles.extend([Address::new_from_array(root_binding.resolution_account_id.bytes()), fractional_policy, fractional_ledger, credit, root_address, link_address]);
     } else {
         let funding = Address::find_program_address(&[DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1, &state.base.facility_id.bytes()], &program).0;
-        roles.push(funding);
+        roles.extend([funding, root_address, link_address]);
     }
     Ok(roles)
 }
@@ -579,8 +569,8 @@ mod tests {
 
     #[test]
     fn target_account_widths_remain_exact_and_disjoint() {
-        assert_eq!(crate::transaction_builder::dealer_terminal_account_count_v1(crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit), 48);
-        assert_eq!(crate::transaction_builder::dealer_terminal_account_count_v1(crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit), 45);
+        assert_eq!(crate::transaction_builder::dealer_terminal_account_count_v1(crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit), 41);
+        assert_eq!(crate::transaction_builder::dealer_terminal_account_count_v1(crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit), 38);
     }
 
     #[test]

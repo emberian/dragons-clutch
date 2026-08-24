@@ -314,7 +314,7 @@ const fn dealer_terminal_spec(
     }
 }
 
-const DEALER_TERMINAL_COMMON_V1: [DealerTerminalAccountSpecV1; 43] = [
+const DEALER_TERMINAL_COMMON_V3: [DealerTerminalAccountSpecV1; 34] = [
     dealer_terminal_spec("actor", true, true),
     dealer_terminal_spec("policy", false, false),
     dealer_terminal_spec("state-v3", false, true),
@@ -339,16 +339,7 @@ const DEALER_TERMINAL_COMMON_V1: [DealerTerminalAccountSpecV1; 43] = [
     dealer_terminal_spec("clock-sysvar", false, false),
     dealer_terminal_spec("rent-sysvar", false, false),
     dealer_terminal_spec("system-program", false, false),
-    dealer_terminal_spec("dealer-series-obligation-v2", false, true),
-    dealer_terminal_spec("product-market-root-v2", false, false),
-    dealer_terminal_spec("series-registry-v3", false, false),
-    dealer_terminal_spec("current-program", false, false),
-    dealer_terminal_spec("current-programdata", false, false),
-    dealer_terminal_spec("registry-release-v2", false, false),
-    dealer_terminal_spec("capability-profile-v4", false, false),
-    dealer_terminal_spec("series-market-link-v2", false, true),
-    dealer_terminal_spec("compiler-bundle-v6", false, false),
-    dealer_terminal_spec("attachment-v5", false, false),
+    dealer_terminal_spec("dealer-series-obligation-v3", false, true),
     dealer_terminal_spec("realm", false, false),
     dealer_terminal_spec("collateral-profile-v2", false, false),
     dealer_terminal_spec("collateral-policy-v2", false, false),
@@ -360,33 +351,37 @@ const DEALER_TERMINAL_COMMON_V1: [DealerTerminalAccountSpecV1; 43] = [
     dealer_terminal_spec("hoard-v2", false, false),
 ];
 
-const DEALER_TERMINAL_ACTIVE_TAIL_V1: [DealerTerminalAccountSpecV1; 5] = [
+const DEALER_TERMINAL_ACTIVE_TAIL_V3: [DealerTerminalAccountSpecV1; 7] = [
     dealer_terminal_spec("claim-ledger-v3", false, true),
     dealer_terminal_spec("resolution-v5", false, false),
     dealer_terminal_spec("fractional-policy-v3", false, false),
     dealer_terminal_spec("fractional-ledger-v1", false, true),
     dealer_terminal_spec("facility-credit-v2", false, true),
+    dealer_terminal_spec("product-market-root-v3", false, true),
+    dealer_terminal_spec("series-market-link-v3", false, true),
 ];
 
-const DEALER_TERMINAL_UNUSED_TAIL_V1: [DealerTerminalAccountSpecV1; 2] = [
+const DEALER_TERMINAL_UNUSED_TAIL_V3: [DealerTerminalAccountSpecV1; 4] = [
     dealer_terminal_spec("claim-ledger-v3", false, false),
     dealer_terminal_spec("dealer-future-credit-funding-v1", false, true),
+    dealer_terminal_spec("product-market-root-v3", false, true),
+    dealer_terminal_spec("series-market-link-v3", false, true),
 ];
 
 pub(crate) fn dealer_terminal_account_spec_v1(
     variant: crate::rpc_index::CanonicalIntentVariantV1,
     index: usize,
 ) -> Option<DealerTerminalAccountSpecV1> {
-    if index < DEALER_TERMINAL_COMMON_V1.len() {
-        return Some(DEALER_TERMINAL_COMMON_V1[index]);
+    if index < DEALER_TERMINAL_COMMON_V3.len() {
+        return Some(DEALER_TERMINAL_COMMON_V3[index]);
     }
-    let tail = index.checked_sub(DEALER_TERMINAL_COMMON_V1.len())?;
+    let tail = index.checked_sub(DEALER_TERMINAL_COMMON_V3.len())?;
     match variant {
         crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => {
-            DEALER_TERMINAL_ACTIVE_TAIL_V1.get(tail).copied()
+            DEALER_TERMINAL_ACTIVE_TAIL_V3.get(tail).copied()
         }
         crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => {
-            DEALER_TERMINAL_UNUSED_TAIL_V1.get(tail).copied()
+            DEALER_TERMINAL_UNUSED_TAIL_V3.get(tail).copied()
         }
     }
 }
@@ -395,8 +390,8 @@ pub(crate) const fn dealer_terminal_account_count_v1(
     variant: crate::rpc_index::CanonicalIntentVariantV1,
 ) -> usize {
     match variant {
-        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => 48,
-        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => 45,
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => 41,
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => 38,
     }
 }
 
