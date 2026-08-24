@@ -1196,6 +1196,14 @@ pub fn plan_archive_failure_market_source_failure_v2<
         .checked_add(1)
         .ok_or(Error::BindingMismatch)?;
     let attempt_count = u64::from(quote.schedule().attempt_count);
+    let expected_disposition = match source_facts.source_kind {
+        clutch_source_plane_v3_runtime::SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
+            FailureMarketIntervalTerminalDispositionV2::SourceAbsent
+        }
+        clutch_source_plane_v3_runtime::SourceFailureKindV1::SourceEvaluationRefused => {
+            FailureMarketIntervalTerminalDispositionV2::SourceRefused
+        }
+    };
     if expected_next_count > attempt_count
         || session.source_occurrence_id != source_occurrence_id
         || session.schedule_id.bytes() != source_facts.session_schedule_id.bytes()
@@ -1210,7 +1218,7 @@ pub fn plan_archive_failure_market_source_failure_v2<
         || history_append.previous_root() != runtime.session_history_commitment()
         || history_append.session_terminal_receipt_id() != source_terminal_receipt_id
         || history_append.terminal_state_commitment().bytes() != terminal_cell_state_id.bytes()
-        || history_append.disposition() != FailureMarketIntervalTerminalDispositionV2::Refused
+        || history_append.disposition() != expected_disposition
         || history_append.completed_session_count() != expected_next_count
     {
         return Err(Error::BindingMismatch);

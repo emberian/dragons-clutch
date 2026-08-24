@@ -160,8 +160,10 @@ pub enum FailureMarketIntervalTerminalDispositionV2 {
     Resolved = 1,
     /// Finite authenticated source/recovery attempts were exhausted.
     Exhausted = 2,
-    /// Authenticated source/relation evaluation refused this session.
-    Refused = 3,
+    /// Mature Source absence consumed this attempt without Product work.
+    SourceAbsent = 3,
+    /// Stable evaluator refusal consumed this attempt without Product work.
+    SourceRefused = 4,
 }
 
 impl FailureMarketIntervalTerminalDispositionV2 {
@@ -169,7 +171,8 @@ impl FailureMarketIntervalTerminalDispositionV2 {
         match self {
             Self::Resolved => 1,
             Self::Exhausted => 2,
-            Self::Refused => 3,
+            Self::SourceAbsent => 3,
+            Self::SourceRefused => 4,
         }
     }
 }

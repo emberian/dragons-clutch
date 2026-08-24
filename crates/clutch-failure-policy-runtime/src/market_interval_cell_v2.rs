@@ -152,8 +152,10 @@ pub enum FailureMarketIntervalCellDispositionV2 {
     Resolved = 1,
     /// The finite authenticated progress budget was exhausted.
     Exhausted = 2,
-    /// Authenticated Source absence or refusal consumed this attempt without Product work.
-    Refused = 3,
+    /// Mature Source absence consumed this attempt without Product work.
+    SourceAbsent = 3,
+    /// Stable evaluator refusal consumed this attempt without Product work.
+    SourceRefused = 4,
 }
 
 impl FailureMarketIntervalCellDispositionV2 {
@@ -162,7 +164,8 @@ impl FailureMarketIntervalCellDispositionV2 {
             Self::None => 0,
             Self::Resolved => 1,
             Self::Exhausted => 2,
-            Self::Refused => 3,
+            Self::SourceAbsent => 3,
+            Self::SourceRefused => 4,
         }
     }
 
@@ -171,7 +174,8 @@ impl FailureMarketIntervalCellDispositionV2 {
             0 => Ok(Self::None),
             1 => Ok(Self::Resolved),
             2 => Ok(Self::Exhausted),
-            3 => Ok(Self::Refused),
+            3 => Ok(Self::SourceAbsent),
+            4 => Ok(Self::SourceRefused),
             _ => Err(Error::InvalidEnum),
         }
     }
@@ -261,7 +265,11 @@ impl FailureMarketIntervalCellV2 {
     /// zero-payout Source-failure terminal.
     pub fn product_work(self) -> Result<Option<QuantizedIntervalConsensusWorkV1>> {
         if self.phase == FailureMarketIntervalCellPhaseV2::Idle
-            || self.disposition == FailureMarketIntervalCellDispositionV2::Refused
+            || matches!(
+                self.disposition,
+                FailureMarketIntervalCellDispositionV2::SourceAbsent
+                    | FailureMarketIntervalCellDispositionV2::SourceRefused
+            )
         {
             Ok(None)
         } else {
@@ -487,7 +495,11 @@ impl FailureMarketIntervalCellV2 {
                     return Err(Error::BindingMismatch);
                 }
                 let direct_source_failure = self.phase == FailureMarketIntervalCellPhaseV2::Resolved
-                    && self.disposition == FailureMarketIntervalCellDispositionV2::Refused;
+                    && matches!(
+                        self.disposition,
+                        FailureMarketIntervalCellDispositionV2::SourceAbsent
+                            | FailureMarketIntervalCellDispositionV2::SourceRefused
+                    );
                 if direct_source_failure {
                     if !no_work
                         || self.transition_nonce != 0
@@ -1271,7 +1283,7 @@ impl FailureMarketIntervalCellSourceFailureReceiptV2 {
         self.facts
     }
 
-    /// Exact Refused cell poststate.
+    /// Exact SourceAbsent or SourceRefused cell poststate.
     pub const fn cell_after(self) -> FailureMarketIntervalCellStateIdV2 {
         self.cell_after
     }
@@ -1412,7 +1424,14 @@ pub fn plan_refuse_failure_market_interval_cell_v2<
     require_live(id.bytes())?;
     let mut after = cell;
     after.phase = FailureMarketIntervalCellPhaseV2::Resolved;
-    after.disposition = FailureMarketIntervalCellDispositionV2::Refused;
+    after.disposition = match source_failure.kind() {
+        SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
+            FailureMarketIntervalCellDispositionV2::SourceAbsent
+        }
+        SourceFailureKindV1::SourceEvaluationRefused => {
+            FailureMarketIntervalCellDispositionV2::SourceRefused
+        }
+    };
     after.attempt_index = attempt_index;
     after.session_binding_id = session_binding_id;
     after.source_handoff_id = source_failure.id();
@@ -1770,8 +1789,11 @@ pub fn project_failure_market_interval_terminal_history_facts_v2(
         FailureMarketIntervalCellDispositionV2::Exhausted => {
             FailureMarketIntervalTerminalDispositionV2::Exhausted
         }
-        FailureMarketIntervalCellDispositionV2::Refused => {
-            FailureMarketIntervalTerminalDispositionV2::Refused
+        FailureMarketIntervalCellDispositionV2::SourceAbsent => {
+            FailureMarketIntervalTerminalDispositionV2::SourceAbsent
+        }
+        FailureMarketIntervalCellDispositionV2::SourceRefused => {
+            FailureMarketIntervalTerminalDispositionV2::SourceRefused
         }
         FailureMarketIntervalCellDispositionV2::None => return Err(Error::WrongPhase),
     };
@@ -2054,7 +2076,7 @@ mod tests {
     fn direct_source_failure_is_zero_work_and_canonically_distinct() {
         let mut refused = idle_cell();
         refused.phase = FailureMarketIntervalCellPhaseV2::Resolved;
-        refused.disposition = FailureMarketIntervalCellDispositionV2::Refused;
+        refused.disposition = FailureMarketIntervalCellDispositionV2::SourceRefused;
         refused.session_binding_id = SourceContentId::from_bytes([8; 32]);
         refused.source_handoff_id = SourceContentId::from_bytes([9; 32]);
         refused.session_schedule_id = SourceContentId::from_bytes([10; 32]);
@@ -2076,8 +2098,12 @@ mod tests {
         collapsed_disposition.disposition = FailureMarketIntervalCellDispositionV2::Exhausted;
         assert_eq!(collapsed_disposition.validate(), Err(Error::WrongPhase));
         assert_ne!(
-            FailureMarketIntervalCellDispositionV2::Refused.byte(),
+            FailureMarketIntervalCellDispositionV2::SourceRefused.byte(),
             FailureMarketIntervalCellDispositionV2::Exhausted.byte()
         );
+        let mut absent = refused;
+        absent.disposition = FailureMarketIntervalCellDispositionV2::SourceAbsent;
+        assert_eq!(absent.validate(), Ok(()));
+        assert_ne!(absent.id().unwrap(), refused.id().unwrap());
     }
 }
