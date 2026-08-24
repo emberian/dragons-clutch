@@ -663,6 +663,38 @@ pub(crate) struct AuthenticatedTreasuryServiceLedgerV1 {
     body: TreasuryServiceLedgerV1,
 }
 
+/// Construct the sole zero-count service-ledger body from an authenticated
+/// Product-funded Position/Replay postimage and its exact persisted rent.
+/// This is the semantic owner shared by signer-funded historical creation and
+/// current ScheduleV4 slot 49; neither caller may provide ledger fields.
+pub(crate) fn prepare_product_funded_treasury_service_ledger_v1(
+    foundation: AuthenticatedTreasuryPositionReplayFoundationV1,
+    rent: DeletableRentOwnerV1,
+) -> Outcome<TreasuryServiceLedgerV1> {
+    let derivation = foundation.derivation;
+    let authority = derivation.authority;
+    let body = TreasuryServiceLedgerV1 {
+        realm: authority.realm(),
+        revenue_policy_record_account: Hash32::from_bytes(authority.record_account.to_bytes()),
+        revenue_policy_record_v2_id: authority.record_semantic_id,
+        market_instance_v2_id: derivation.market_instance_v2_id,
+        treasury_owner: authority.treasury_owner(),
+        treasury_position_account: Hash32::from_bytes(
+            derivation.treasury_position_account.to_bytes(),
+        ),
+        treasury_position_founding_generation: foundation.position_generation,
+        admitted_epoch_count: 0,
+        settled_epoch_count: 0,
+        rent_payer: Hash32::from_bytes(rent.payer().bytes()),
+        refundable_rent_principal: rent.refundable_principal(),
+        donation_floor: rent.donation_floor(),
+        stored_bump: derivation.treasury_service_ledger_bump,
+        flags: 0,
+    };
+    body.validate()?;
+    Ok(body)
+}
+
 impl AuthenticatedTreasuryServiceLedgerV1 {
     /// Exact physical ledger account.
     pub(crate) const fn account(self) -> Pubkey {
@@ -703,26 +735,14 @@ pub(crate) fn found_treasury_service_ledger_v1(
         TREASURY_SERVICE_LEDGER_V1_BYTES,
         DIRECT_NEUTRAL_SINK_V3,
     )?;
-    let authority = foundation.derivation.authority;
-    let body = TreasuryServiceLedgerV1 {
-        realm: authority.realm(),
-        revenue_policy_record_account: Hash32::from_bytes(authority.record_account.to_bytes()),
-        revenue_policy_record_v2_id: authority.record_semantic_id,
-        market_instance_v2_id: foundation.derivation.market_instance_v2_id,
-        treasury_owner: authority.treasury_owner(),
-        treasury_position_account: Hash32::from_bytes(
-            foundation.derivation.treasury_position_account.to_bytes(),
-        ),
-        treasury_position_founding_generation: foundation.position_generation,
-        admitted_epoch_count: 0,
-        settled_epoch_count: 0,
-        rent_payer: funding.payer,
-        refundable_rent_principal: funding.payer_principal_lamports,
-        donation_floor: funding.prior_donation_lamports,
-        stored_bump: foundation.derivation.treasury_service_ledger_bump,
-        flags: 0,
-    };
-    body.validate()?;
+    let ledger_rent = DeletableRentOwnerV1::from_persisted(
+        Identity32V1::new(funding.payer.bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        funding.payer_principal_lamports,
+        funding.prior_donation_lamports,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let body = prepare_product_funded_treasury_service_ledger_v1(foundation, ledger_rent)?;
     let market_bytes = foundation.derivation.market_instance_v2_id.bytes();
     let position_bytes = foundation.derivation.treasury_position_account.to_bytes();
     create_pda_account_full_principal(

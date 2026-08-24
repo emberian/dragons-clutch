@@ -16,20 +16,32 @@ use crate::instructions::genesis::{
 };
 use crate::seeds;
 use clutch_general_v2_contract::{
-    CurrentMarketAuthorityV4, DeletableRentOwnerV1, GeneralFoundingPolicyV1, Id32,
-    MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
-    GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V4,
-    MARKET_RUNTIME_ACCOUNT_BYTES,
+    found_general_position_v1, found_general_replay_v1, CurrentMarketAuthorityV4,
+    DeletableRentOwnerV1, GeneralFoundingPolicyV1, Id32, MarketBindingV2,
+    MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
+    GENERAL_POSITION_FOUNDING_GENERATION_V1, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    MARKET_BINDING_ACCOUNT_BYTES_V4, MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_product_series::{ContentId, MarketFoundationSlotV4};
+use clutch_retirement::{
+    Identity32V1, PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend,
+    RentSplitV2, ReplayV3Envelope, ReplayV3HashBackend, POSITION_TOMBSTONE_V3_BYTES,
+    POSITION_V3_BYTES,
+};
+use clutch_solana_layout::revenue::{
+    TreasuryServiceLedgerV1, TREASURY_SERVICE_LEDGER_V1_BYTES,
+};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::revenue_policy_v2::{
-    derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
-    AuthenticatedTreasuryMarketFactsV1, RevenueMarketTreasuryDerivationV1,
+    authenticate_treasury_position_replay_foundation_v1,
+    authenticate_treasury_service_ledger_v1, derive_revenue_market_treasury_v1,
+    prepare_product_funded_treasury_service_ledger_v1,
+    AuthenticatedRevenuePolicyRecordV2, AuthenticatedTreasuryMarketFactsV1,
+    RevenueMarketTreasuryDerivationV1,
 };
 use super::product_market_foundation_current::{
     AuthenticatedProductMarketFoundationDebitV4,
@@ -44,6 +56,18 @@ struct RuntimeSha256;
 
 impl Sha256BackendV1 for RuntimeSha256 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+impl PositionV3Sha256Backend for RuntimeSha256 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(&[domain, body]).to_bytes()
+    }
+}
+
+impl ReplayV3HashBackend for RuntimeSha256 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
         solana_sha256_hasher::hashv(parts).to_bytes()
     }
 }
@@ -125,6 +149,38 @@ impl AuthenticatedGeneralMarketFoundingPlanV4 {
     pub(crate) const fn collateral_policy_id(&self) -> Id32 { self.collateral_policy_id }
     pub(crate) const fn collateral_release_id(&self) -> Id32 { self.collateral_release_id }
     pub(crate) const fn id(&self) -> ContentId { self.join_id }
+}
+
+impl AuthenticatedTreasuryMarketFactsV1 for AuthenticatedGeneralMarketFoundingPlanV4 {
+    fn market_instance_v2_id(&self) -> Option<clutch_solana_layout::Hash32> {
+        Some(clutch_solana_layout::Hash32::from_bytes(
+            self.base.base().market_instance_v2_id.bytes(),
+        ))
+    }
+
+    fn realm(&self) -> Option<clutch_solana_layout::Hash32> {
+        Some(clutch_solana_layout::Hash32::from_bytes(self.realm_id.bytes()))
+    }
+
+    fn collateral_policy_id(&self) -> Option<clutch_solana_layout::Hash32> {
+        Some(clutch_solana_layout::Hash32::from_bytes(
+            self.collateral_policy_id.bytes(),
+        ))
+    }
+
+    fn collateral_release_id(&self) -> Option<clutch_solana_layout::Hash32> {
+        Some(clutch_solana_layout::Hash32::from_bytes(
+            self.collateral_release_id.bytes(),
+        ))
+    }
+
+    fn general_market_runtime_account(&self) -> Option<Pubkey> {
+        Some(self.market_runtime_account)
+    }
+
+    fn outcome_count(&self) -> Option<u8> {
+        Some(self.base.base().outcome_count)
+    }
 }
 
 /// Private move-only postwrite for one Product-funded General core slot.
@@ -656,4 +712,402 @@ pub(crate) fn write_product_funded_market_runtime_v3(
     drop(data);
     core_slot_postwrite_v4(program_id, plan, debit, account,
         MarketFoundationSlotV4::MarketRuntime, data_id)
+}
+
+fn identity32(value: [u8; 32]) -> Outcome<Identity32V1> {
+    Identity32V1::new(value)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+fn product_funded_account_data_id_v4(
+    domain: &[u8],
+    account: &AccountInfo<'_>,
+) -> Outcome<ContentId> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[domain, account.key.as_ref(), &data]).to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(id)
+}
+
+/// Product-funded ScheduleV4 slot 47 writer. The persisted rent split records
+/// Product's immutable refund owner; the predictable-PDA prefund remains the
+/// donation floor and never discounts the slot principal.
+#[inline(never)]
+pub(crate) fn write_product_funded_treasury_position_v3(
+    program_id: &Pubkey,
+    plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    let derivation = plan.treasury;
+    authenticate_core_debit_v4(
+        plan,
+        &debit,
+        account,
+        system_program,
+        MarketFoundationSlotV4::GeneralTreasuryPosition,
+        derivation.treasury_position_account(),
+        POSITION_V3_BYTES,
+        rent,
+    )?;
+    require(
+        account.key != &derivation.treasury_replay_account()
+            && account.key != &derivation.treasury_service_ledger_account()
+            && account.key != &plan.market_binding_account
+            && account.key != &plan.market_runtime_account,
+        ClutchError::AccountAlias,
+    )?;
+    let tombstone_principal = rent.minimum_balance(POSITION_TOMBSTONE_V3_BYTES)?;
+    let refundable_principal = debit
+        .principal_lamports()
+        .checked_sub(tombstone_principal)
+        .ok_or(ClutchError::WrongRentSysvar)?;
+    let position_rent = RentSplitV2 {
+        payer: identity32(debit.rent_refund_owner().to_bytes())?,
+        refundable_live_principal: refundable_principal,
+        permanent_tombstone_principal: tombstone_principal,
+        donation_floor: debit.destination_donation_floor_lamports(),
+    };
+    position_rent
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let owner = plan.revenue.treasury_owner().bytes();
+    let position = found_general_position_v1(
+        identity32(account.key.to_bytes())?,
+        identity32(derivation.treasury_replay_account().to_bytes())?,
+        identity32(plan.base.base().market_instance_v2_id.bytes())?,
+        identity32(plan.realm_id.bytes())?,
+        identity32(plan.collateral_policy_id.bytes())?,
+        identity32(plan.collateral_release_id.bytes())?,
+        identity32(owner)?,
+        identity32(plan.market_runtime_account.to_bytes())?,
+        plan.base.base().outcome_count,
+        derivation.treasury_position_bump(),
+        position_rent,
+        &RuntimeSha256,
+    )?;
+    let market = plan.base.base().market_instance_v2_id.bytes();
+    let runtime = plan.market_runtime_account.to_bytes();
+    let purpose = [u8::from(PositionPurposeV3::General)];
+    let bump = [derivation.treasury_position_bump()];
+    allocate_assign_product_funded_pda(
+        program_id,
+        account,
+        system_program,
+        POSITION_V3_BYTES,
+        &[
+            clutch_retirement::POSITION_V3_PDA_PREFIX,
+            &market,
+            &owner,
+            &purpose,
+            &runtime,
+            &bump,
+        ],
+    )?;
+    {
+        let mut data = account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        data.copy_from_slice(position.position_body());
+        require(
+            PositionAccountV3::decode(&data)? == position.position(),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let data_id = product_funded_account_data_id_v4(
+        b"dragons-clutch/sbf/general-treasury-position/data/v3\0",
+        account,
+    )?;
+    core_slot_postwrite_v4(
+        program_id,
+        plan,
+        debit,
+        account,
+        MarketFoundationSlotV4::GeneralTreasuryPosition,
+        data_id,
+    )
+}
+
+/// Product-funded ScheduleV4 slot 48 writer. The already-persisted slot-47
+/// Position is hostile-decoded and reconstructed from current General facts;
+/// its semantic identity is the only Position input to the Replay constructor.
+#[inline(never)]
+pub(crate) fn write_product_funded_treasury_replay_v3(
+    program_id: &Pubkey,
+    plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    let derivation = plan.treasury;
+    authenticate_core_debit_v4(
+        plan,
+        &debit,
+        replay_account,
+        system_program,
+        MarketFoundationSlotV4::GeneralTreasuryReplay,
+        derivation.treasury_replay_account(),
+        GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+        rent,
+    )?;
+    require(
+        *position_account.key == derivation.treasury_position_account()
+            && position_account.owner == program_id
+            && position_account.is_writable
+            && !position_account.is_signer
+            && !position_account.executable
+            && position_account.data_len() == POSITION_V3_BYTES
+            && position_account.key != replay_account.key
+            && position_account.key != &derivation.treasury_service_ledger_account()
+            && replay_account.key != &derivation.treasury_service_ledger_account(),
+        ClutchError::MismatchedState,
+    )?;
+    let position_data = position_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let decoded_position = PositionAccountV3::decode(&position_data)?;
+    let position_rent = decoded_position.rent();
+    let expected_position = found_general_position_v1(
+        identity32(position_account.key.to_bytes())?,
+        identity32(replay_account.key.to_bytes())?,
+        identity32(plan.base.base().market_instance_v2_id.bytes())?,
+        identity32(plan.realm_id.bytes())?,
+        identity32(plan.collateral_policy_id.bytes())?,
+        identity32(plan.collateral_release_id.bytes())?,
+        identity32(plan.revenue.treasury_owner().bytes())?,
+        identity32(plan.market_runtime_account.to_bytes())?,
+        plan.base.base().outcome_count,
+        derivation.treasury_position_bump(),
+        position_rent,
+        &RuntimeSha256,
+    )?;
+    require(
+        position_data.as_ref() == expected_position.position_body()
+            && position_account.lamports()
+                >= position_rent
+                    .refundable_live_principal
+                    .checked_add(position_rent.permanent_tombstone_principal)
+                    .and_then(|value| value.checked_add(position_rent.donation_floor))
+                    .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    drop(position_data);
+    let replay_rent = DeletableRentOwnerV1::from_persisted(
+        identity32(debit.rent_refund_owner().to_bytes())?,
+        debit.principal_lamports(),
+        debit.destination_donation_floor_lamports(),
+    )?;
+    let replay = found_general_replay_v1(
+        identity32(position_account.key.to_bytes())?,
+        identity32(replay_account.key.to_bytes())?,
+        identity32(plan.revenue.treasury_owner().bytes())?,
+        identity32(plan.market_runtime_account.to_bytes())?,
+        derivation.treasury_replay_bump(),
+        replay_rent,
+        expected_position.position_semantic_id(),
+        &RuntimeSha256,
+    )?;
+    let position = position_account.key.to_bytes();
+    let runtime = plan.market_runtime_account.to_bytes();
+    let purpose = [u8::from(PositionPurposeV3::General)];
+    let bump = [derivation.treasury_replay_bump()];
+    allocate_assign_product_funded_pda(
+        program_id,
+        replay_account,
+        system_program,
+        GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+        &[
+            clutch_retirement::PURPOSE_REPLAY_V3_PDA_PREFIX,
+            &position,
+            &purpose,
+            &runtime,
+            &bump,
+        ],
+    )?;
+    {
+        let mut data = replay_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        data.copy_from_slice(replay.replay_body());
+        let persisted = ReplayV3Envelope::decode(&data, &RuntimeSha256)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            persisted.header().next_sequence() == 0
+                && persisted.header().position_account().bytes()
+                    == position_account.key.to_bytes()
+                && persisted.header().replay_account().bytes()
+                    == replay_account.key.to_bytes()
+                && persisted.header().purpose_binding_id().bytes()
+                    == plan.market_runtime_account.to_bytes(),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let data_id = product_funded_account_data_id_v4(
+        b"dragons-clutch/sbf/general-treasury-replay/data/v3\0",
+        replay_account,
+    )?;
+    core_slot_postwrite_v4(
+        program_id,
+        plan,
+        debit,
+        replay_account,
+        MarketFoundationSlotV4::GeneralTreasuryReplay,
+        data_id,
+    )
+}
+
+/// Product-funded ScheduleV4 slot 49 writer. Both prior treasury accounts are
+/// hostile-authenticated as one exact zero-liability pair before the counted
+/// service-ledger body is constructed by the RevenuePolicyV2 semantic owner.
+#[inline(never)]
+pub(crate) fn write_product_funded_treasury_service_ledger_v1(
+    program_id: &Pubkey,
+    plan: &AuthenticatedGeneralMarketFoundingPlanV4,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    ledger_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedGeneralCoreFoundationPostwriteV4> {
+    let derivation = plan.treasury;
+    authenticate_core_debit_v4(
+        plan,
+        &debit,
+        ledger_account,
+        system_program,
+        MarketFoundationSlotV4::TreasuryServiceLedger,
+        derivation.treasury_service_ledger_account(),
+        TREASURY_SERVICE_LEDGER_V1_BYTES,
+        rent,
+    )?;
+    require(
+        position_account.key != replay_account.key
+            && position_account.key != ledger_account.key
+            && replay_account.key != ledger_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    let position_replay = authenticate_treasury_position_replay_foundation_v1(
+        program_id,
+        derivation,
+        plan,
+        position_account,
+        replay_account,
+    )?;
+    let ledger_rent = DeletableRentOwnerV1::from_persisted(
+        identity32(debit.rent_refund_owner().to_bytes())?,
+        debit.principal_lamports(),
+        debit.destination_donation_floor_lamports(),
+    )?;
+    let body = prepare_product_funded_treasury_service_ledger_v1(
+        position_replay,
+        ledger_rent,
+    )?;
+    let market = plan.base.base().market_instance_v2_id.bytes();
+    let position = position_account.key.to_bytes();
+    let bump = [derivation.treasury_service_ledger_bump()];
+    allocate_assign_product_funded_pda(
+        program_id,
+        ledger_account,
+        system_program,
+        TREASURY_SERVICE_LEDGER_V1_BYTES,
+        &[
+            seeds::SEED_TREASURY_SERVICE_LEDGER_V1,
+            &market,
+            &position,
+            &bump,
+        ],
+    )?;
+    {
+        let mut data = ledger_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        body.encode(&mut data)?;
+        require(
+            TreasuryServiceLedgerV1::decode(&data)? == body,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let persisted = authenticate_treasury_service_ledger_v1(
+        program_id,
+        ledger_account,
+        derivation,
+        true,
+    )?;
+    require(persisted.body() == body, ClutchError::MismatchedState)?;
+    let data_id = product_funded_account_data_id_v4(
+        b"dragons-clutch/sbf/treasury-service-ledger/data/v1\0",
+        ledger_account,
+    )?;
+    core_slot_postwrite_v4(
+        program_id,
+        plan,
+        debit,
+        ledger_account,
+        MarketFoundationSlotV4::TreasuryServiceLedger,
+        data_id,
+    )
+}
+
+#[cfg(test)]
+mod adversarial_source_tests {
+    #[test]
+    fn treasury_slots_are_split_and_product_funded_only() {
+        let source = include_str!("general_market_foundation_v4.rs");
+        for (writer, slot) in [
+            (
+                "write_product_funded_treasury_position_v3",
+                "MarketFoundationSlotV4::GeneralTreasuryPosition",
+            ),
+            (
+                "write_product_funded_treasury_replay_v3",
+                "MarketFoundationSlotV4::GeneralTreasuryReplay",
+            ),
+            (
+                "write_product_funded_treasury_service_ledger_v1",
+                "MarketFoundationSlotV4::TreasuryServiceLedger",
+            ),
+        ] {
+            let body = source
+                .split(&format!("pub(crate) fn {writer}"))
+                .nth(1)
+                .and_then(|value| value.split("\n}\n").next())
+                .expect("bounded Product-funded writer");
+            assert!(body.contains("AuthenticatedProductMarketFoundationDebitV4"));
+            assert!(body.contains(slot));
+            assert!(!body.contains("rent_payer"));
+            assert!(!body.contains("require_signer"));
+        }
+    }
+
+    #[test]
+    fn replay_and_ledger_require_actual_predecessor_postimages() {
+        let source = include_str!("general_market_foundation_v4.rs");
+        let replay = source
+            .split("pub(crate) fn write_product_funded_treasury_replay_v3")
+            .nth(1)
+            .and_then(|value| {
+                value.split("pub(crate) fn write_product_funded_treasury_service_ledger_v1")
+                    .next()
+            })
+            .expect("replay writer");
+        assert!(replay.contains("PositionAccountV3::decode"));
+        assert!(replay.contains("found_general_position_v1"));
+        assert!(replay.contains("found_general_replay_v1"));
+        let ledger = source
+            .split("pub(crate) fn write_product_funded_treasury_service_ledger_v1")
+            .nth(1)
+            .expect("ledger writer");
+        assert!(ledger.contains("authenticate_treasury_position_replay_foundation_v1"));
+        assert!(ledger.contains("prepare_product_funded_treasury_service_ledger_v1"));
+        assert!(ledger.contains("authenticate_treasury_service_ledger_v1"));
+    }
 }
