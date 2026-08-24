@@ -85,7 +85,7 @@ use clutch_solana_layout::failure_recovery::{
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
-    ProductDirectGlobalLivenessAccountV1, SeriesFundingAccountV1, SeriesRegistryAccountV1,
+    ProductDirectGlobalLivenessAccountV2, SeriesFundingAccountV1, SeriesRegistryAccountV1,
 };
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
@@ -186,7 +186,7 @@ pub enum CanonicalAccountKind {
     GeneralFinalPot,
     SeriesRegistry,
     SeriesFunding,
-    ProductDirectGlobalLivenessV1,
+    ProductDirectGlobalLivenessV2,
     SourceRelease,
     SourceWorkSchedule,
     SourceHead,
@@ -266,7 +266,7 @@ impl CanonicalAccountKind {
             Self::GeneralFinalPot => "general-final-pot",
             Self::SeriesRegistry => "series-registry",
             Self::SeriesFunding => "series-funding",
-            Self::ProductDirectGlobalLivenessV1 => "product-direct-global-liveness-v1",
+            Self::ProductDirectGlobalLivenessV2 => "product-direct-global-liveness-v2",
             Self::SourceRelease => "source-release",
             Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
@@ -949,11 +949,11 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
         registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
     ) {
-        let value = ProductDirectGlobalLivenessAccountV1::decode(data)
+        let value = ProductDirectGlobalLivenessAccountV2::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Series,
-            CanonicalAccountKind::ProductDirectGlobalLivenessV1,
+            CanonicalAccountKind::ProductDirectGlobalLivenessV2,
         );
         projection.generation = Some(value.state.generation());
         projection.primary_binding = Some(value.state.market_instance_id().bytes());

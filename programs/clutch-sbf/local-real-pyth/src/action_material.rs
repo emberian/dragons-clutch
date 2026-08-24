@@ -1300,7 +1300,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
     use DirectAccountRoleV1 as Role;
     match role {
         Role::ProductRoot => "product-root",
-        Role::ProductDirectGlobalLiveness => "product-direct-global-liveness-v1",
+        Role::ProductDirectGlobalLiveness => "product-direct-global-liveness-v2",
         Role::FounderSeriesLink => "founder-series-link",
         Role::CompilerBundle => "compiler-bundle",
         Role::DirectRoot => "direct-root",
