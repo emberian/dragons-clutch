@@ -13,7 +13,13 @@ use core::convert::TryFrom;
 
 use dclutch_core_contract::{ContentId, MARKET_IDENTITY_BYTES, MarketIdentity};
 
-/// Provisional artifact-profile bound on native claims held by one Dealer.
+/// Provisional artifact-profile minimum on native claims held by one Dealer.
+///
+/// A canonical state partition has at least two claims. This guard is not a
+/// physical-width choice: every account encodes exactly its selected `N`.
+pub const MIN_NATIVE_CLAIMS: usize = 2;
+
+/// Provisional artifact-profile maximum on native claims held by one Dealer.
 ///
 /// This is not a mathematical or protocol ontology bound. The lifting path is
 /// a paginated inventory child contract with committed aggregate reservations;
@@ -28,18 +34,10 @@ pub const NO_EPOCH: u64 = u64::MAX;
 
 /// Exact canonical byte width of [`DealerBinding`].
 pub const DEALER_BINDING_BYTES: usize = 264;
-/// Exact canonical byte width of [`CapitalSnapshot`].
-pub const CAPITAL_SNAPSHOT_BYTES: usize = 160;
-/// Exact canonical byte width of [`DealerState`].
-pub const DEALER_STATE_BYTES: usize = 736;
-/// Exact canonical byte width of [`CapitalEpoch`].
-pub const CAPITAL_EPOCH_BYTES: usize = 832;
 /// Exact canonical byte width of [`QuoteReservation`].
 pub const QUOTE_RESERVATION_BYTES: usize = 344;
 /// Exact canonical byte width of [`ExecutionReceipt`].
 pub const EXECUTION_RECEIPT_BYTES: usize = 456;
-/// Exact canonical byte width of [`CapitalTransitionReceipt`].
-pub const CAPITAL_TRANSITION_RECEIPT_BYTES: usize = 952;
 
 const HEADER_BYTES: usize = 16;
 const SCHEMA_VERSION: u16 = 1;
@@ -61,9 +59,8 @@ const STATE_BINDING_OFFSET: usize = HEADER_BYTES;
 const STATE_EPOCH_OFFSET: usize = STATE_BINDING_OFFSET + DEALER_BINDING_BYTES;
 const STATE_SEQUENCE_OFFSET: usize = STATE_EPOCH_OFFSET + 8;
 const STATE_STATUS_OFFSET: usize = STATE_SEQUENCE_OFFSET + 8;
-const STATE_CLAIM_COUNT_OFFSET: usize = STATE_STATUS_OFFSET + 1;
-const STATE_BODY_RESERVED_OFFSET: usize = STATE_CLAIM_COUNT_OFFSET + 1;
-const STATE_BODY_RESERVED_BYTES: usize = 6;
+const STATE_BODY_RESERVED_OFFSET: usize = STATE_STATUS_OFFSET + 1;
+const STATE_BODY_RESERVED_BYTES: usize = 7;
 const STATE_OUTSTANDING_OFFSET: usize = STATE_BODY_RESERVED_OFFSET + STATE_BODY_RESERVED_BYTES;
 const STATE_CASH_OFFSET: usize = STATE_OUTSTANDING_OFFSET + 8;
 const STATE_LOSS_OFFSET: usize = STATE_CASH_OFFSET + 8;
@@ -71,22 +68,16 @@ const STATE_FEES_OFFSET: usize = STATE_LOSS_OFFSET + 8;
 const STATE_SERVICE_OFFSET: usize = STATE_FEES_OFFSET + 8;
 const STATE_RESERVED_CASH_OFFSET: usize = STATE_SERVICE_OFFSET + 8;
 const STATE_INVENTORY_OFFSET: usize = STATE_RESERVED_CASH_OFFSET + 8;
-const STATE_RESERVED_OUT_OFFSET: usize = STATE_INVENTORY_OFFSET + MAX_NATIVE_CLAIMS * 8;
-const STATE_RESERVED_IN_OFFSET: usize = STATE_RESERVED_OUT_OFFSET + MAX_NATIVE_CLAIMS * 8;
 
 const EPOCH_BINDING_OFFSET: usize = HEADER_BYTES;
 const EPOCH_NUMBER_OFFSET: usize = EPOCH_BINDING_OFFSET + DEALER_BINDING_BYTES;
-const EPOCH_CLAIM_COUNT_OFFSET: usize = EPOCH_NUMBER_OFFSET + 8;
-const EPOCH_FEE_BPS_OFFSET: usize = EPOCH_CLAIM_COUNT_OFFSET + 1;
+const EPOCH_FEE_BPS_OFFSET: usize = EPOCH_NUMBER_OFFSET + 8;
 const EPOCH_RESERVED_OFFSET: usize = EPOCH_FEE_BPS_OFFSET + 2;
-const EPOCH_RESERVED_BYTES: usize = 5;
+const EPOCH_RESERVED_BYTES: usize = 6;
 const EPOCH_PRICE_SCALE_OFFSET: usize = EPOCH_RESERVED_OFFSET + EPOCH_RESERVED_BYTES;
 const EPOCH_MAX_LIFETIME_OFFSET: usize = EPOCH_PRICE_SCALE_OFFSET + 8;
 const EPOCH_MAX_QUANTITY_OFFSET: usize = EPOCH_MAX_LIFETIME_OFFSET + 8;
 const EPOCH_CAPS_OFFSET: usize = EPOCH_MAX_QUANTITY_OFFSET + 8;
-const EPOCH_RISK_OFFSET: usize = EPOCH_CAPS_OFFSET + MAX_NATIVE_CLAIMS * 8;
-const EPOCH_BID_OFFSET: usize = EPOCH_RISK_OFFSET + MAX_NATIVE_CLAIMS * 8;
-const EPOCH_ASK_OFFSET: usize = EPOCH_BID_OFFSET + MAX_NATIVE_CLAIMS * 8;
 
 const QUOTE_BINDING_OFFSET: usize = HEADER_BYTES;
 const QUOTE_EPOCH_OFFSET: usize = QUOTE_BINDING_OFFSET + DEALER_BINDING_BYTES;
@@ -124,9 +115,6 @@ const CAPITAL_RESERVED_BYTES: usize = 7;
 const CAPITAL_OLD_EPOCH_OFFSET: usize = CAPITAL_RESERVED_OFFSET + CAPITAL_RESERVED_BYTES;
 const CAPITAL_NEW_EPOCH_OFFSET: usize = CAPITAL_OLD_EPOCH_OFFSET + 8;
 const CAPITAL_OLD_OFFSET: usize = CAPITAL_NEW_EPOCH_OFFSET + 8;
-const CAPITAL_DEPOSITS_OFFSET: usize = CAPITAL_OLD_OFFSET + CAPITAL_SNAPSHOT_BYTES;
-const CAPITAL_WITHDRAWALS_OFFSET: usize = CAPITAL_DEPOSITS_OFFSET + CAPITAL_SNAPSHOT_BYTES;
-const CAPITAL_NEW_OFFSET: usize = CAPITAL_WITHDRAWALS_OFFSET + CAPITAL_SNAPSHOT_BYTES;
 
 /// Refusal from canonical decoding or a Dealer state transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,10 +137,8 @@ pub enum Error {
     CapabilityReleaseMismatch,
     /// The Dealer or sponsor identity did not match.
     DealerBindingMismatch,
-    /// A claim count was outside the provisional artifact profile.
-    InvalidClaimCount,
-    /// An inactive claim array entry was nonzero.
-    NonCanonicalInactiveClaim,
+    /// The selected exact claim width was outside the provisional profile.
+    UnsupportedClaimProfile,
     /// A discriminant was unknown.
     UnknownDiscriminant,
     /// A price scale was zero.
@@ -327,60 +313,67 @@ impl DealerBinding {
 /// only `cash` covers bid execution; loss capital, fees, and service funding
 /// cannot leak into quote settlement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CapitalSnapshot {
+pub struct CapitalSnapshot<const N: usize> {
     cash: u64,
     sponsor_loss_capital: u64,
     realized_fees: u64,
     prepaid_service_funding: u64,
-    inventory: [u64; MAX_NATIVE_CLAIMS],
+    inventory: [u64; N],
 }
 
-impl CapitalSnapshot {
+impl<const N: usize> CapitalSnapshot<N> {
+    /// Return the exact selected-width encoding length.
+    pub const fn encoded_len() -> Result<usize> {
+        profile_len(N, 32, 8)
+    }
+
     /// Construct one exact compartment snapshot.
-    pub const fn new(
+    pub fn new(
         cash: u64,
         sponsor_loss_capital: u64,
         realized_fees: u64,
         prepaid_service_funding: u64,
-        inventory: [u64; MAX_NATIVE_CLAIMS],
-    ) -> Self {
-        Self {
+        inventory: [u64; N],
+    ) -> Result<Self> {
+        validate_profile::<N>()?;
+        Ok(Self {
             cash,
             sponsor_loss_capital,
             realized_fees,
             prepaid_service_funding,
             inventory,
-        }
+        })
     }
 
     /// Return the all-zero snapshot.
-    pub const fn zero() -> Self {
-        Self::new(0, 0, 0, 0, [0; MAX_NATIVE_CLAIMS])
+    pub fn zero() -> Result<Self> {
+        Self::new(0, 0, 0, 0, [0; N])
     }
 
     /// Decode one exact canonical snapshot.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != CAPITAL_SNAPSHOT_BYTES {
+        if bytes.len() != Self::encoded_len()? {
             return Err(Error::InvalidLength);
         }
-        Ok(Self {
-            cash: read_u64(bytes, 0)?,
-            sponsor_loss_capital: read_u64(bytes, 8)?,
-            realized_fees: read_u64(bytes, 16)?,
-            prepaid_service_funding: read_u64(bytes, 24)?,
-            inventory: read_u64_array(bytes, 32)?,
-        })
+        Self::new(
+            read_u64(bytes, 0)?,
+            read_u64(bytes, 8)?,
+            read_u64(bytes, 16)?,
+            read_u64(bytes, 24)?,
+            read_u64_array(bytes, 32)?,
+        )
     }
 
-    /// Encode one exact canonical snapshot.
-    pub fn to_bytes(self) -> [u8; CAPITAL_SNAPSHOT_BYTES] {
-        let mut out = [0u8; CAPITAL_SNAPSHOT_BYTES];
-        put_u64(&mut out, 0, self.cash);
-        put_u64(&mut out, 8, self.sponsor_loss_capital);
-        put_u64(&mut out, 16, self.realized_fees);
-        put_u64(&mut out, 24, self.prepaid_service_funding);
-        put_u64_array(&mut out, 32, &self.inventory);
-        out
+    /// Encode into one exact caller-provided selected-width buffer.
+    pub fn encode(self, out: &mut [u8]) -> Result<()> {
+        require_output_len(out, Self::encoded_len()?)?;
+        out.fill(0);
+        write_u64(out, 0, self.cash)?;
+        write_u64(out, 8, self.sponsor_loss_capital)?;
+        write_u64(out, 16, self.realized_fees)?;
+        write_u64(out, 24, self.prepaid_service_funding)?;
+        write_u64_array(out, 32, &self.inventory)?;
+        Ok(())
     }
 
     /// Return segregated quote-settlement cash.
@@ -404,7 +397,7 @@ impl CapitalSnapshot {
     }
 
     /// Return the complete fixed-profile native inventory.
-    pub const fn inventory(self) -> [u64; MAX_NATIVE_CLAIMS] {
+    pub const fn inventory(self) -> [u64; N] {
         self.inventory
     }
 
@@ -414,10 +407,6 @@ impl CapitalSnapshot {
             && self.realized_fees == 0
             && self.prepaid_service_funding == 0
             && array_all_zero(&self.inventory)
-    }
-
-    fn require_inactive_zero(self, claim_count: u8) -> Result<()> {
-        require_inactive_zero(&self.inventory, claim_count)
     }
 }
 
@@ -450,38 +439,40 @@ impl DealerStatus {
 
 /// Canonical mutable Dealer capital and aggregate reservation state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerState {
+pub struct DealerState<const N: usize> {
     binding: DealerBinding,
     epoch: u64,
     next_sequence: u64,
     status: DealerStatus,
-    claim_count: u8,
     outstanding_quotes: u64,
     cash: u64,
     sponsor_loss_capital: u64,
     realized_fees: u64,
     prepaid_service_funding: u64,
     reserved_cash: u64,
-    inventory: [u64; MAX_NATIVE_CLAIMS],
-    reserved_outgoing: [u64; MAX_NATIVE_CLAIMS],
-    reserved_incoming: [u64; MAX_NATIVE_CLAIMS],
+    inventory: [u64; N],
+    reserved_outgoing: [u64; N],
+    reserved_incoming: [u64; N],
 }
 
-impl DealerState {
+impl<const N: usize> DealerState<N> {
+    /// Return the exact selected-width encoding length.
+    pub const fn encoded_len() -> Result<usize> {
+        profile_len(N, STATE_INVENTORY_OFFSET, 24)
+    }
+
     /// Enter the first immutable capital epoch from exact external deposits.
     pub fn enter(
-        epoch: &CapitalEpoch,
-        initial: CapitalSnapshot,
-    ) -> Result<(Self, CapitalTransitionReceipt)> {
+        epoch: &CapitalEpoch<N>,
+        initial: CapitalSnapshot<N>,
+    ) -> Result<(Self, CapitalTransitionReceipt<N>)> {
         epoch.validate()?;
-        initial.require_inactive_zero(epoch.claim_count)?;
         epoch.validate_snapshot(initial)?;
         let state = Self {
             binding: epoch.binding,
             epoch: epoch.number,
             next_sequence: 1,
             status: DealerStatus::Active,
-            claim_count: epoch.claim_count,
             outstanding_quotes: 0,
             cash: initial.cash,
             sponsor_loss_capital: initial.sponsor_loss_capital,
@@ -489,8 +480,8 @@ impl DealerState {
             prepaid_service_funding: initial.prepaid_service_funding,
             reserved_cash: 0,
             inventory: initial.inventory,
-            reserved_outgoing: [0; MAX_NATIVE_CLAIMS],
-            reserved_incoming: [0; MAX_NATIVE_CLAIMS],
+            reserved_outgoing: [0; N],
+            reserved_incoming: [0; N],
         };
         state.validate()?;
         let receipt = CapitalTransitionReceipt::new(
@@ -499,9 +490,9 @@ impl DealerState {
             CapitalTransitionKind::Enter,
             NO_EPOCH,
             epoch.number,
-            CapitalSnapshot::zero(),
+            CapitalSnapshot::zero()?,
             initial,
-            CapitalSnapshot::zero(),
+            CapitalSnapshot::zero()?,
             initial,
         )?;
         Ok((state, receipt))
@@ -509,8 +500,11 @@ impl DealerState {
 
     /// Decode one exact canonical Dealer state.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        check_header(bytes, DEALER_STATE_BYTES, STATE_MAGIC)?;
+        let exact_len = Self::encoded_len()?;
+        check_header(bytes, exact_len, STATE_MAGIC)?;
         require_zero(bytes, STATE_BODY_RESERVED_OFFSET, STATE_BODY_RESERVED_BYTES)?;
+        let reserved_out_offset = state_reserved_out_offset::<N>()?;
+        let reserved_in_offset = state_reserved_in_offset::<N>()?;
         let state = Self {
             binding: DealerBinding::decode(subslice(
                 bytes,
@@ -520,7 +514,6 @@ impl DealerState {
             epoch: read_u64(bytes, STATE_EPOCH_OFFSET)?,
             next_sequence: read_u64(bytes, STATE_SEQUENCE_OFFSET)?,
             status: DealerStatus::decode(read_byte(bytes, STATE_STATUS_OFFSET)?)?,
-            claim_count: read_byte(bytes, STATE_CLAIM_COUNT_OFFSET)?,
             outstanding_quotes: read_u64(bytes, STATE_OUTSTANDING_OFFSET)?,
             cash: read_u64(bytes, STATE_CASH_OFFSET)?,
             sponsor_loss_capital: read_u64(bytes, STATE_LOSS_OFFSET)?,
@@ -528,46 +521,51 @@ impl DealerState {
             prepaid_service_funding: read_u64(bytes, STATE_SERVICE_OFFSET)?,
             reserved_cash: read_u64(bytes, STATE_RESERVED_CASH_OFFSET)?,
             inventory: read_u64_array(bytes, STATE_INVENTORY_OFFSET)?,
-            reserved_outgoing: read_u64_array(bytes, STATE_RESERVED_OUT_OFFSET)?,
-            reserved_incoming: read_u64_array(bytes, STATE_RESERVED_IN_OFFSET)?,
+            reserved_outgoing: read_u64_array(bytes, reserved_out_offset)?,
+            reserved_incoming: read_u64_array(bytes, reserved_in_offset)?,
         };
         state.validate()?;
         Ok(state)
     }
 
-    /// Encode one exact canonical Dealer state.
-    pub fn to_bytes(self) -> [u8; DEALER_STATE_BYTES] {
-        let mut out = [0u8; DEALER_STATE_BYTES];
-        put_header(&mut out, STATE_MAGIC);
-        put(&mut out, STATE_BINDING_OFFSET, &self.binding.to_bytes());
-        put_u64(&mut out, STATE_EPOCH_OFFSET, self.epoch);
-        put_u64(&mut out, STATE_SEQUENCE_OFFSET, self.next_sequence);
-        put(&mut out, STATE_STATUS_OFFSET, &[self.status.byte()]);
-        put(&mut out, STATE_CLAIM_COUNT_OFFSET, &[self.claim_count]);
-        put_u64(&mut out, STATE_OUTSTANDING_OFFSET, self.outstanding_quotes);
-        put_u64(&mut out, STATE_CASH_OFFSET, self.cash);
-        put_u64(&mut out, STATE_LOSS_OFFSET, self.sponsor_loss_capital);
-        put_u64(&mut out, STATE_FEES_OFFSET, self.realized_fees);
-        put_u64(&mut out, STATE_SERVICE_OFFSET, self.prepaid_service_funding);
-        put_u64(&mut out, STATE_RESERVED_CASH_OFFSET, self.reserved_cash);
-        put_u64_array(&mut out, STATE_INVENTORY_OFFSET, &self.inventory);
-        put_u64_array(&mut out, STATE_RESERVED_OUT_OFFSET, &self.reserved_outgoing);
-        put_u64_array(&mut out, STATE_RESERVED_IN_OFFSET, &self.reserved_incoming);
-        out
+    /// Encode into one exact caller-provided selected-width buffer.
+    pub fn encode(self, out: &mut [u8]) -> Result<()> {
+        require_output_len(out, Self::encoded_len()?)?;
+        out.fill(0);
+        write_header(out, STATE_MAGIC)?;
+        write_at(out, STATE_BINDING_OFFSET, &self.binding.to_bytes())?;
+        write_u64(out, STATE_EPOCH_OFFSET, self.epoch)?;
+        write_u64(out, STATE_SEQUENCE_OFFSET, self.next_sequence)?;
+        write_at(out, STATE_STATUS_OFFSET, &[self.status.byte()])?;
+        write_u64(out, STATE_OUTSTANDING_OFFSET, self.outstanding_quotes)?;
+        write_u64(out, STATE_CASH_OFFSET, self.cash)?;
+        write_u64(out, STATE_LOSS_OFFSET, self.sponsor_loss_capital)?;
+        write_u64(out, STATE_FEES_OFFSET, self.realized_fees)?;
+        write_u64(out, STATE_SERVICE_OFFSET, self.prepaid_service_funding)?;
+        write_u64(out, STATE_RESERVED_CASH_OFFSET, self.reserved_cash)?;
+        write_u64_array(out, STATE_INVENTORY_OFFSET, &self.inventory)?;
+        write_u64_array(
+            out,
+            state_reserved_out_offset::<N>()?,
+            &self.reserved_outgoing,
+        )?;
+        write_u64_array(
+            out,
+            state_reserved_in_offset::<N>()?,
+            &self.reserved_incoming,
+        )?;
+        Ok(())
     }
 
     /// Validate structural invariants independent of an epoch's risk policy.
     pub fn validate(&self) -> Result<()> {
-        validate_claim_count(self.claim_count)?;
-        require_inactive_zero(&self.inventory, self.claim_count)?;
-        require_inactive_zero(&self.reserved_outgoing, self.claim_count)?;
-        require_inactive_zero(&self.reserved_incoming, self.claim_count)?;
+        validate_profile::<N>()?;
         if self.epoch == NO_EPOCH {
             return Err(Error::InvalidEpoch);
         }
         let mut any_reservation = self.reserved_cash != 0;
         let mut index = 0usize;
-        while index < MAX_NATIVE_CLAIMS {
+        while index < N {
             let inventory = value_at(&self.inventory, index)?;
             let outgoing = value_at(&self.reserved_outgoing, index)?;
             if outgoing > inventory {
@@ -597,7 +595,7 @@ impl DealerState {
     /// Admit and reserve one covered quote under the current immutable epoch.
     pub fn admit_quote(
         &mut self,
-        epoch: &CapitalEpoch,
+        epoch: &CapitalEpoch<N>,
         request: QuoteRequest,
         current_slot: u64,
     ) -> Result<QuoteReservation> {
@@ -619,7 +617,7 @@ impl DealerState {
             return Err(Error::InvalidQuantity);
         }
         let claim_index = usize::from(request.claim_index);
-        require_active_index(claim_index, self.claim_count)?;
+        require_active_index::<N>(claim_index)?;
         if request.expiry_slot <= current_slot {
             return Err(Error::InvalidExpiry);
         }
@@ -724,7 +722,7 @@ impl DealerState {
     /// Execute one still-covered quote and produce its exact transfer receipt.
     pub fn execute_quote(
         &mut self,
-        epoch: &CapitalEpoch,
+        epoch: &CapitalEpoch<N>,
         quote: &mut QuoteReservation,
         expected_generation: u64,
         current_slot: u64,
@@ -747,7 +745,7 @@ impl DealerState {
         }
         epoch.validate_quote_terms(quote, current_slot)?;
         let index = usize::from(quote.claim_index);
-        require_active_index(index, self.claim_count)?;
+        require_active_index::<N>(index)?;
         let prior = ReceiptValues::read(self, index)?;
         let mut next = *self;
         match quote.side {
@@ -823,7 +821,7 @@ impl DealerState {
             return Err(Error::QuoteNotActive);
         }
         let index = usize::from(quote.claim_index);
-        require_active_index(index, self.claim_count)?;
+        require_active_index::<N>(index)?;
         let mut next = *self;
         match quote.side {
             QuoteSide::CustomerBuys => {
@@ -852,13 +850,13 @@ impl DealerState {
     /// Reconfigure to the exact successor epoch with explicit external flows.
     pub fn reconfigure(
         &mut self,
-        current_epoch: &CapitalEpoch,
-        next_epoch: &CapitalEpoch,
+        current_epoch: &CapitalEpoch<N>,
+        next_epoch: &CapitalEpoch<N>,
         expected_generation: u64,
         expected_sequence: u64,
-        deposits: CapitalSnapshot,
-        withdrawals: CapitalSnapshot,
-    ) -> Result<CapitalTransitionReceipt> {
+        deposits: CapitalSnapshot<N>,
+        withdrawals: CapitalSnapshot<N>,
+    ) -> Result<CapitalTransitionReceipt<N>> {
         self.validate()?;
         current_epoch.validate()?;
         next_epoch.validate()?;
@@ -873,11 +871,9 @@ impl DealerState {
             return Err(Error::SequenceMismatch);
         }
         let expected_next = self.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
-        if next_epoch.number != expected_next || next_epoch.claim_count != self.claim_count {
+        if next_epoch.number != expected_next {
             return Err(Error::InvalidEpoch);
         }
-        deposits.require_inactive_zero(self.claim_count)?;
-        withdrawals.require_inactive_zero(self.claim_count)?;
         let old = self.snapshot();
         let new = apply_capital_flow(old, deposits, withdrawals)?;
         next_epoch.validate_snapshot(new)?;
@@ -912,10 +908,10 @@ impl DealerState {
     /// Exit a quiescent Dealer and return every compartment exactly.
     pub fn exit(
         &mut self,
-        epoch: &CapitalEpoch,
+        epoch: &CapitalEpoch<N>,
         expected_generation: u64,
         expected_sequence: u64,
-    ) -> Result<CapitalTransitionReceipt> {
+    ) -> Result<CapitalTransitionReceipt<N>> {
         self.validate()?;
         epoch.validate()?;
         self.require_active()?;
@@ -935,9 +931,9 @@ impl DealerState {
             self.epoch,
             NO_EPOCH,
             old,
-            CapitalSnapshot::zero(),
+            CapitalSnapshot::zero()?,
             old,
-            CapitalSnapshot::zero(),
+            CapitalSnapshot::zero()?,
         )?;
         let next_sequence = self
             .next_sequence
@@ -948,7 +944,7 @@ impl DealerState {
         next_state.sponsor_loss_capital = 0;
         next_state.realized_fees = 0;
         next_state.prepaid_service_funding = 0;
-        next_state.inventory = [0; MAX_NATIVE_CLAIMS];
+        next_state.inventory = [0; N];
         next_state.status = DealerStatus::Exited;
         next_state.next_sequence = next_sequence;
         next_state.validate()?;
@@ -982,14 +978,14 @@ impl DealerState {
     }
 
     /// Return the exact current capital snapshot, excluding reservations.
-    pub const fn snapshot(self) -> CapitalSnapshot {
-        CapitalSnapshot::new(
-            self.cash,
-            self.sponsor_loss_capital,
-            self.realized_fees,
-            self.prepaid_service_funding,
-            self.inventory,
-        )
+    pub const fn snapshot(self) -> CapitalSnapshot<N> {
+        CapitalSnapshot {
+            cash: self.cash,
+            sponsor_loss_capital: self.sponsor_loss_capital,
+            realized_fees: self.realized_fees,
+            prepaid_service_funding: self.prepaid_service_funding,
+            inventory: self.inventory,
+        }
     }
 
     /// Return whether no quote reservation is live.
@@ -1024,40 +1020,42 @@ impl DealerState {
 
 /// Immutable quote pricing and inventory-risk policy for one capital epoch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CapitalEpoch {
+pub struct CapitalEpoch<const N: usize> {
     binding: DealerBinding,
     number: u64,
-    claim_count: u8,
     fee_bps: u16,
     price_scale: u64,
     max_quote_lifetime_slots: u64,
     max_quantity_per_quote: u64,
-    inventory_caps: [u64; MAX_NATIVE_CLAIMS],
-    risk_weight: [u64; MAX_NATIVE_CLAIMS],
-    bid_price: [u64; MAX_NATIVE_CLAIMS],
-    ask_price: [u64; MAX_NATIVE_CLAIMS],
+    inventory_caps: [u64; N],
+    risk_weight: [u64; N],
+    bid_price: [u64; N],
+    ask_price: [u64; N],
 }
 
-impl CapitalEpoch {
+impl<const N: usize> CapitalEpoch<N> {
+    /// Return the exact selected-width encoding length.
+    pub const fn encoded_len() -> Result<usize> {
+        profile_len(N, EPOCH_CAPS_OFFSET, 32)
+    }
+
     /// Construct and validate immutable pricing and risk parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         binding: DealerBinding,
         number: u64,
-        claim_count: u8,
         fee_bps: u16,
         price_scale: u64,
         max_quote_lifetime_slots: u64,
         max_quantity_per_quote: u64,
-        inventory_caps: [u64; MAX_NATIVE_CLAIMS],
-        risk_weight: [u64; MAX_NATIVE_CLAIMS],
-        bid_price: [u64; MAX_NATIVE_CLAIMS],
-        ask_price: [u64; MAX_NATIVE_CLAIMS],
+        inventory_caps: [u64; N],
+        risk_weight: [u64; N],
+        bid_price: [u64; N],
+        ask_price: [u64; N],
     ) -> Result<Self> {
         let epoch = Self {
             binding,
             number,
-            claim_count,
             fee_bps,
             price_scale,
             max_quote_lifetime_slots,
@@ -1073,52 +1071,51 @@ impl CapitalEpoch {
 
     /// Decode one exact canonical epoch.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        check_header(bytes, CAPITAL_EPOCH_BYTES, EPOCH_MAGIC)?;
+        let exact_len = Self::encoded_len()?;
+        check_header(bytes, exact_len, EPOCH_MAGIC)?;
         require_zero(bytes, EPOCH_RESERVED_OFFSET, EPOCH_RESERVED_BYTES)?;
+        let risk_offset = epoch_risk_offset::<N>()?;
+        let bid_offset = epoch_bid_offset::<N>()?;
+        let ask_offset = epoch_ask_offset::<N>()?;
         Self::new(
             DealerBinding::decode(subslice(bytes, EPOCH_BINDING_OFFSET, DEALER_BINDING_BYTES)?)?,
             read_u64(bytes, EPOCH_NUMBER_OFFSET)?,
-            read_byte(bytes, EPOCH_CLAIM_COUNT_OFFSET)?,
             read_u16(bytes, EPOCH_FEE_BPS_OFFSET)?,
             read_u64(bytes, EPOCH_PRICE_SCALE_OFFSET)?,
             read_u64(bytes, EPOCH_MAX_LIFETIME_OFFSET)?,
             read_u64(bytes, EPOCH_MAX_QUANTITY_OFFSET)?,
             read_u64_array(bytes, EPOCH_CAPS_OFFSET)?,
-            read_u64_array(bytes, EPOCH_RISK_OFFSET)?,
-            read_u64_array(bytes, EPOCH_BID_OFFSET)?,
-            read_u64_array(bytes, EPOCH_ASK_OFFSET)?,
+            read_u64_array(bytes, risk_offset)?,
+            read_u64_array(bytes, bid_offset)?,
+            read_u64_array(bytes, ask_offset)?,
         )
     }
 
-    /// Encode one exact canonical epoch.
-    pub fn to_bytes(self) -> [u8; CAPITAL_EPOCH_BYTES] {
-        let mut out = [0u8; CAPITAL_EPOCH_BYTES];
-        put_header(&mut out, EPOCH_MAGIC);
-        put(&mut out, EPOCH_BINDING_OFFSET, &self.binding.to_bytes());
-        put_u64(&mut out, EPOCH_NUMBER_OFFSET, self.number);
-        put(&mut out, EPOCH_CLAIM_COUNT_OFFSET, &[self.claim_count]);
-        put(&mut out, EPOCH_FEE_BPS_OFFSET, &self.fee_bps.to_le_bytes());
-        put_u64(&mut out, EPOCH_PRICE_SCALE_OFFSET, self.price_scale);
-        put_u64(
-            &mut out,
+    /// Encode into one exact caller-provided selected-width buffer.
+    pub fn encode(self, out: &mut [u8]) -> Result<()> {
+        require_output_len(out, Self::encoded_len()?)?;
+        out.fill(0);
+        write_header(out, EPOCH_MAGIC)?;
+        write_at(out, EPOCH_BINDING_OFFSET, &self.binding.to_bytes())?;
+        write_u64(out, EPOCH_NUMBER_OFFSET, self.number)?;
+        write_at(out, EPOCH_FEE_BPS_OFFSET, &self.fee_bps.to_le_bytes())?;
+        write_u64(out, EPOCH_PRICE_SCALE_OFFSET, self.price_scale)?;
+        write_u64(
+            out,
             EPOCH_MAX_LIFETIME_OFFSET,
             self.max_quote_lifetime_slots,
-        );
-        put_u64(
-            &mut out,
-            EPOCH_MAX_QUANTITY_OFFSET,
-            self.max_quantity_per_quote,
-        );
-        put_u64_array(&mut out, EPOCH_CAPS_OFFSET, &self.inventory_caps);
-        put_u64_array(&mut out, EPOCH_RISK_OFFSET, &self.risk_weight);
-        put_u64_array(&mut out, EPOCH_BID_OFFSET, &self.bid_price);
-        put_u64_array(&mut out, EPOCH_ASK_OFFSET, &self.ask_price);
-        out
+        )?;
+        write_u64(out, EPOCH_MAX_QUANTITY_OFFSET, self.max_quantity_per_quote)?;
+        write_u64_array(out, EPOCH_CAPS_OFFSET, &self.inventory_caps)?;
+        write_u64_array(out, epoch_risk_offset::<N>()?, &self.risk_weight)?;
+        write_u64_array(out, epoch_bid_offset::<N>()?, &self.bid_price)?;
+        write_u64_array(out, epoch_ask_offset::<N>()?, &self.ask_price)?;
+        Ok(())
     }
 
     /// Validate canonical policy constraints.
     pub fn validate(&self) -> Result<()> {
-        validate_claim_count(self.claim_count)?;
+        validate_profile::<N>()?;
         if self.number == NO_EPOCH {
             return Err(Error::InvalidEpoch);
         }
@@ -1131,12 +1128,8 @@ impl CapitalEpoch {
         if self.max_quote_lifetime_slots == 0 || self.max_quantity_per_quote == 0 {
             return Err(Error::EmptyQuotePolicy);
         }
-        require_inactive_zero(&self.inventory_caps, self.claim_count)?;
-        require_inactive_zero(&self.risk_weight, self.claim_count)?;
-        require_inactive_zero(&self.bid_price, self.claim_count)?;
-        require_inactive_zero(&self.ask_price, self.claim_count)?;
         let mut index = 0usize;
-        while index < usize::from(self.claim_count) {
+        while index < N {
             if value_at(&self.bid_price, index)? > value_at(&self.ask_price, index)? {
                 return Err(Error::CrossedPrices);
             }
@@ -1169,11 +1162,10 @@ impl CapitalEpoch {
     ///
     /// The named rounding boundary is
     /// `ceil(sum(inventory[i] * risk_weight[i]) / price_scale)`.
-    pub fn required_loss_capital(&self, inventory: &[u64; MAX_NATIVE_CLAIMS]) -> Result<u64> {
-        require_inactive_zero(inventory, self.claim_count)?;
+    pub fn required_loss_capital(&self, inventory: &[u64; N]) -> Result<u64> {
         let mut numerator = 0u128;
         let mut index = 0usize;
-        while index < usize::from(self.claim_count) {
+        while index < N {
             let term = u128::from(value_at(inventory, index)?)
                 .checked_mul(u128::from(value_at(&self.risk_weight, index)?))
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -1185,10 +1177,9 @@ impl CapitalEpoch {
         ceil_u128(numerator, u128::from(self.price_scale))
     }
 
-    fn validate_snapshot(&self, snapshot: CapitalSnapshot) -> Result<()> {
-        snapshot.require_inactive_zero(self.claim_count)?;
+    fn validate_snapshot(&self, snapshot: CapitalSnapshot<N>) -> Result<()> {
         let mut index = 0usize;
-        while index < usize::from(self.claim_count) {
+        while index < N {
             if value_at(&snapshot.inventory, index)? > value_at(&self.inventory_caps, index)? {
                 return Err(Error::InventoryCapExceeded);
             }
@@ -1200,10 +1191,10 @@ impl CapitalEpoch {
         Ok(())
     }
 
-    fn validate_projected_incoming(&self, state: &DealerState) -> Result<()> {
+    fn validate_projected_incoming(&self, state: &DealerState<N>) -> Result<()> {
         let mut projected = state.inventory;
         let mut index = 0usize;
-        while index < usize::from(self.claim_count) {
+        while index < N {
             let value = value_at(&state.inventory, index)?
                 .checked_add(value_at(&state.reserved_incoming, index)?)
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -1224,7 +1215,7 @@ impl CapitalEpoch {
             return Err(Error::InvalidQuantity);
         }
         let index = usize::from(quote.claim_index);
-        require_active_index(index, self.claim_count)?;
+        require_active_index::<N>(index)?;
         let remaining_lifetime = quote
             .expiry_slot
             .checked_sub(current_slot)
@@ -1456,7 +1447,7 @@ struct ReceiptValues {
 }
 
 impl ReceiptValues {
-    fn read(state: &DealerState, index: usize) -> Result<Self> {
+    fn read<const N: usize>(state: &DealerState<N>, index: usize) -> Result<Self> {
         Ok(Self {
             cash: state.cash,
             fees: state.realized_fees,
@@ -1641,19 +1632,24 @@ impl CapitalTransitionKind {
 
 /// Exact old/external/new value-transfer receipt for capital entry or change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CapitalTransitionReceipt {
+pub struct CapitalTransitionReceipt<const N: usize> {
     binding: DealerBinding,
     sequence: u64,
     kind: CapitalTransitionKind,
     old_epoch: u64,
     new_epoch: u64,
-    old: CapitalSnapshot,
-    deposits: CapitalSnapshot,
-    withdrawals: CapitalSnapshot,
-    new: CapitalSnapshot,
+    old: CapitalSnapshot<N>,
+    deposits: CapitalSnapshot<N>,
+    withdrawals: CapitalSnapshot<N>,
+    new: CapitalSnapshot<N>,
 }
 
-impl CapitalTransitionReceipt {
+impl<const N: usize> CapitalTransitionReceipt<N> {
+    /// Return the exact selected-width encoding length.
+    pub const fn encoded_len() -> Result<usize> {
+        profile_len(N, 440, 32)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         binding: DealerBinding,
@@ -1661,10 +1657,10 @@ impl CapitalTransitionReceipt {
         kind: CapitalTransitionKind,
         old_epoch: u64,
         new_epoch: u64,
-        old: CapitalSnapshot,
-        deposits: CapitalSnapshot,
-        withdrawals: CapitalSnapshot,
-        new: CapitalSnapshot,
+        old: CapitalSnapshot<N>,
+        deposits: CapitalSnapshot<N>,
+        withdrawals: CapitalSnapshot<N>,
+        new: CapitalSnapshot<N>,
     ) -> Result<Self> {
         let receipt = Self {
             binding,
@@ -1683,8 +1679,13 @@ impl CapitalTransitionReceipt {
 
     /// Decode and validate one exact capital transition receipt.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        check_header(bytes, CAPITAL_TRANSITION_RECEIPT_BYTES, CAPITAL_MAGIC)?;
+        let exact_len = Self::encoded_len()?;
+        check_header(bytes, exact_len, CAPITAL_MAGIC)?;
         require_zero(bytes, CAPITAL_RESERVED_OFFSET, CAPITAL_RESERVED_BYTES)?;
+        let snapshot_len = CapitalSnapshot::<N>::encoded_len()?;
+        let deposits_offset = capital_deposits_offset::<N>()?;
+        let withdrawals_offset = capital_withdrawals_offset::<N>()?;
+        let new_offset = capital_new_offset::<N>()?;
         Self::new(
             DealerBinding::decode(subslice(
                 bytes,
@@ -1695,39 +1696,39 @@ impl CapitalTransitionReceipt {
             CapitalTransitionKind::decode(read_byte(bytes, CAPITAL_KIND_OFFSET)?)?,
             read_u64(bytes, CAPITAL_OLD_EPOCH_OFFSET)?,
             read_u64(bytes, CAPITAL_NEW_EPOCH_OFFSET)?,
-            CapitalSnapshot::decode(subslice(bytes, CAPITAL_OLD_OFFSET, CAPITAL_SNAPSHOT_BYTES)?)?,
-            CapitalSnapshot::decode(subslice(
-                bytes,
-                CAPITAL_DEPOSITS_OFFSET,
-                CAPITAL_SNAPSHOT_BYTES,
-            )?)?,
-            CapitalSnapshot::decode(subslice(
-                bytes,
-                CAPITAL_WITHDRAWALS_OFFSET,
-                CAPITAL_SNAPSHOT_BYTES,
-            )?)?,
-            CapitalSnapshot::decode(subslice(bytes, CAPITAL_NEW_OFFSET, CAPITAL_SNAPSHOT_BYTES)?)?,
+            CapitalSnapshot::decode(subslice(bytes, CAPITAL_OLD_OFFSET, snapshot_len)?)?,
+            CapitalSnapshot::decode(subslice(bytes, deposits_offset, snapshot_len)?)?,
+            CapitalSnapshot::decode(subslice(bytes, withdrawals_offset, snapshot_len)?)?,
+            CapitalSnapshot::decode(subslice(bytes, new_offset, snapshot_len)?)?,
         )
     }
 
-    /// Encode one exact canonical capital transition receipt.
-    pub fn to_bytes(self) -> [u8; CAPITAL_TRANSITION_RECEIPT_BYTES] {
-        let mut out = [0u8; CAPITAL_TRANSITION_RECEIPT_BYTES];
-        put_header(&mut out, CAPITAL_MAGIC);
-        put(&mut out, CAPITAL_BINDING_OFFSET, &self.binding.to_bytes());
-        put_u64(&mut out, CAPITAL_SEQUENCE_OFFSET, self.sequence);
-        put(&mut out, CAPITAL_KIND_OFFSET, &[self.kind.byte()]);
-        put_u64(&mut out, CAPITAL_OLD_EPOCH_OFFSET, self.old_epoch);
-        put_u64(&mut out, CAPITAL_NEW_EPOCH_OFFSET, self.new_epoch);
-        put(&mut out, CAPITAL_OLD_OFFSET, &self.old.to_bytes());
-        put(&mut out, CAPITAL_DEPOSITS_OFFSET, &self.deposits.to_bytes());
-        put(
-            &mut out,
-            CAPITAL_WITHDRAWALS_OFFSET,
-            &self.withdrawals.to_bytes(),
-        );
-        put(&mut out, CAPITAL_NEW_OFFSET, &self.new.to_bytes());
-        out
+    /// Encode into one exact caller-provided selected-width buffer.
+    pub fn encode(self, out: &mut [u8]) -> Result<()> {
+        require_output_len(out, Self::encoded_len()?)?;
+        out.fill(0);
+        write_header(out, CAPITAL_MAGIC)?;
+        write_at(out, CAPITAL_BINDING_OFFSET, &self.binding.to_bytes())?;
+        write_u64(out, CAPITAL_SEQUENCE_OFFSET, self.sequence)?;
+        write_at(out, CAPITAL_KIND_OFFSET, &[self.kind.byte()])?;
+        write_u64(out, CAPITAL_OLD_EPOCH_OFFSET, self.old_epoch)?;
+        write_u64(out, CAPITAL_NEW_EPOCH_OFFSET, self.new_epoch)?;
+        let snapshot_len = CapitalSnapshot::<N>::encoded_len()?;
+        self.old
+            .encode(subslice_mut(out, CAPITAL_OLD_OFFSET, snapshot_len)?)?;
+        self.deposits.encode(subslice_mut(
+            out,
+            capital_deposits_offset::<N>()?,
+            snapshot_len,
+        )?)?;
+        self.withdrawals.encode(subslice_mut(
+            out,
+            capital_withdrawals_offset::<N>()?,
+            snapshot_len,
+        )?)?;
+        self.new
+            .encode(subslice_mut(out, capital_new_offset::<N>()?, snapshot_len)?)?;
+        Ok(())
     }
 
     /// Validate epoch shape and exact component-wise conservation.
@@ -1776,26 +1777,26 @@ impl CapitalTransitionReceipt {
     }
 
     /// Return exact external deposits.
-    pub const fn deposits(self) -> CapitalSnapshot {
+    pub const fn deposits(self) -> CapitalSnapshot<N> {
         self.deposits
     }
 
     /// Return exact external withdrawals.
-    pub const fn withdrawals(self) -> CapitalSnapshot {
+    pub const fn withdrawals(self) -> CapitalSnapshot<N> {
         self.withdrawals
     }
 
     /// Return the exact post-transition capital snapshot.
-    pub const fn new_snapshot(self) -> CapitalSnapshot {
+    pub const fn new_snapshot(self) -> CapitalSnapshot<N> {
         self.new
     }
 }
 
-fn apply_capital_flow(
-    old: CapitalSnapshot,
-    deposits: CapitalSnapshot,
-    withdrawals: CapitalSnapshot,
-) -> Result<CapitalSnapshot> {
+fn apply_capital_flow<const N: usize>(
+    old: CapitalSnapshot<N>,
+    deposits: CapitalSnapshot<N>,
+    withdrawals: CapitalSnapshot<N>,
+) -> Result<CapitalSnapshot<N>> {
     let cash = apply_component(old.cash, deposits.cash, withdrawals.cash)?;
     let loss = apply_component(
         old.sponsor_loss_capital,
@@ -1812,9 +1813,9 @@ fn apply_capital_flow(
         deposits.prepaid_service_funding,
         withdrawals.prepaid_service_funding,
     )?;
-    let mut inventory = [0u64; MAX_NATIVE_CLAIMS];
+    let mut inventory = [0u64; N];
     let mut index = 0usize;
-    while index < MAX_NATIVE_CLAIMS {
+    while index < N {
         let value = apply_component(
             value_at(&old.inventory, index)?,
             value_at(&deposits.inventory, index)?,
@@ -1823,7 +1824,7 @@ fn apply_capital_flow(
         set_value(&mut inventory, index, value)?;
         index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
     }
-    Ok(CapitalSnapshot::new(cash, loss, fees, service, inventory))
+    CapitalSnapshot::new(cash, loss, fees, service, inventory)
 }
 
 fn apply_component(old: u64, deposit: u64, withdrawal: u64) -> Result<u64> {
@@ -1871,33 +1872,79 @@ fn ceil_u128(numerator: u128, denominator: u128) -> Result<u64> {
     u64::try_from(rounded).map_err(|_| Error::ArithmeticOverflow)
 }
 
-fn validate_claim_count(claim_count: u8) -> Result<()> {
-    if claim_count == 0 || usize::from(claim_count) > MAX_NATIVE_CLAIMS {
-        return Err(Error::InvalidClaimCount);
+const fn profile_len(claims: usize, base: usize, bytes_per_claim: usize) -> Result<usize> {
+    if claims < MIN_NATIVE_CLAIMS || claims > MAX_NATIVE_CLAIMS {
+        return Err(Error::UnsupportedClaimProfile);
     }
-    Ok(())
+    let vector_bytes = match claims.checked_mul(bytes_per_claim) {
+        Some(value) => value,
+        None => return Err(Error::ArithmeticOverflow),
+    };
+    match base.checked_add(vector_bytes) {
+        Some(value) => Ok(value),
+        None => Err(Error::ArithmeticOverflow),
+    }
 }
 
-fn require_active_index(index: usize, claim_count: u8) -> Result<()> {
-    if index >= usize::from(claim_count) {
+fn validate_profile<const N: usize>() -> Result<()> {
+    profile_len(N, 0, 0).map(|_| ())
+}
+
+fn require_active_index<const N: usize>(index: usize) -> Result<()> {
+    validate_profile::<N>()?;
+    if index >= N {
         return Err(Error::ClaimIndexOutOfRange);
     }
     Ok(())
 }
 
-fn require_inactive_zero(values: &[u64; MAX_NATIVE_CLAIMS], claim_count: u8) -> Result<()> {
-    validate_claim_count(claim_count)?;
-    let mut index = usize::from(claim_count);
-    while index < MAX_NATIVE_CLAIMS {
-        if value_at(values, index)? != 0 {
-            return Err(Error::NonCanonicalInactiveClaim);
-        }
-        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-    }
-    Ok(())
+fn state_reserved_out_offset<const N: usize>() -> Result<usize> {
+    profile_len(N, STATE_INVENTORY_OFFSET, 8)
 }
 
-fn array_all_zero(values: &[u64; MAX_NATIVE_CLAIMS]) -> bool {
+fn state_reserved_in_offset<const N: usize>() -> Result<usize> {
+    profile_len(N, STATE_INVENTORY_OFFSET, 16)
+}
+
+fn epoch_risk_offset<const N: usize>() -> Result<usize> {
+    profile_len(N, EPOCH_CAPS_OFFSET, 8)
+}
+
+fn epoch_bid_offset<const N: usize>() -> Result<usize> {
+    profile_len(N, EPOCH_CAPS_OFFSET, 16)
+}
+
+fn epoch_ask_offset<const N: usize>() -> Result<usize> {
+    profile_len(N, EPOCH_CAPS_OFFSET, 24)
+}
+
+fn capital_deposits_offset<const N: usize>() -> Result<usize> {
+    CAPITAL_OLD_OFFSET
+        .checked_add(CapitalSnapshot::<N>::encoded_len()?)
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn capital_withdrawals_offset<const N: usize>() -> Result<usize> {
+    CAPITAL_OLD_OFFSET
+        .checked_add(
+            CapitalSnapshot::<N>::encoded_len()?
+                .checked_mul(2)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn capital_new_offset<const N: usize>() -> Result<usize> {
+    CAPITAL_OLD_OFFSET
+        .checked_add(
+            CapitalSnapshot::<N>::encoded_len()?
+                .checked_mul(3)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn array_all_zero<const N: usize>(values: &[u64; N]) -> bool {
     values.iter().all(|value| *value == 0)
 }
 
@@ -1905,20 +1952,20 @@ fn all_zero<const N: usize>(bytes: &[u8; N]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
 
-fn value_at(values: &[u64; MAX_NATIVE_CLAIMS], index: usize) -> Result<u64> {
+fn value_at<const N: usize>(values: &[u64; N], index: usize) -> Result<u64> {
     values
         .get(index)
         .copied()
         .ok_or(Error::ClaimIndexOutOfRange)
 }
 
-fn set_value(values: &mut [u64; MAX_NATIVE_CLAIMS], index: usize, value: u64) -> Result<()> {
+fn set_value<const N: usize>(values: &mut [u64; N], index: usize, value: u64) -> Result<()> {
     let target = values.get_mut(index).ok_or(Error::ClaimIndexOutOfRange)?;
     *target = value;
     Ok(())
 }
 
-fn add_at(values: &mut [u64; MAX_NATIVE_CLAIMS], index: usize, amount: u64) -> Result<()> {
+fn add_at<const N: usize>(values: &mut [u64; N], index: usize, amount: u64) -> Result<()> {
     let prior = value_at(values, index)?;
     set_value(
         values,
@@ -1927,7 +1974,7 @@ fn add_at(values: &mut [u64; MAX_NATIVE_CLAIMS], index: usize, amount: u64) -> R
     )
 }
 
-fn subtract_at(values: &mut [u64; MAX_NATIVE_CLAIMS], index: usize, amount: u64) -> Result<()> {
+fn subtract_at<const N: usize>(values: &mut [u64; N], index: usize, amount: u64) -> Result<()> {
     let prior = value_at(values, index)?;
     set_value(
         values,
@@ -2003,10 +2050,11 @@ fn put_receipt_values<const N: usize>(out: &mut [u8; N], offset: usize, values: 
     put_u64(out, offset + 48, values.outstanding_quotes);
 }
 
-fn read_u64_array(bytes: &[u8], offset: usize) -> Result<[u64; MAX_NATIVE_CLAIMS]> {
-    let mut values = [0u64; MAX_NATIVE_CLAIMS];
+fn read_u64_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u64; N]> {
+    validate_profile::<N>()?;
+    let mut values = [0u64; N];
     let mut index = 0usize;
-    while index < MAX_NATIVE_CLAIMS {
+    while index < N {
         let byte_offset = offset
             .checked_add(index.checked_mul(8).ok_or(Error::InvalidLength)?)
             .ok_or(Error::InvalidLength)?;
@@ -2016,16 +2064,16 @@ fn read_u64_array(bytes: &[u8], offset: usize) -> Result<[u64; MAX_NATIVE_CLAIMS
     Ok(values)
 }
 
-fn put_u64_array<const N: usize>(
-    out: &mut [u8; N],
-    offset: usize,
-    values: &[u64; MAX_NATIVE_CLAIMS],
-) {
+fn write_u64_array<const N: usize>(out: &mut [u8], offset: usize, values: &[u64; N]) -> Result<()> {
+    validate_profile::<N>()?;
     for (index, value) in values.iter().enumerate() {
-        if let Some(byte_offset) = index.checked_mul(8).and_then(|i| offset.checked_add(i)) {
-            put_u64(out, byte_offset, *value);
-        }
+        let byte_offset = index
+            .checked_mul(8)
+            .and_then(|i| offset.checked_add(i))
+            .ok_or(Error::ArithmeticOverflow)?;
+        write_u64(out, byte_offset, *value)?;
     }
+    Ok(())
 }
 
 fn read_byte(bytes: &[u8], offset: usize) -> Result<u8> {
@@ -2051,11 +2099,41 @@ fn subslice(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
     bytes.get(offset..end).ok_or(Error::InvalidLength)
 }
 
+fn subslice_mut(bytes: &mut [u8], offset: usize, len: usize) -> Result<&mut [u8]> {
+    let end = offset.checked_add(len).ok_or(Error::InvalidLength)?;
+    bytes.get_mut(offset..end).ok_or(Error::InvalidLength)
+}
+
 fn require_zero(bytes: &[u8], offset: usize, len: usize) -> Result<()> {
     if subslice(bytes, offset, len)?.iter().any(|byte| *byte != 0) {
         return Err(Error::NonCanonicalReservedBytes);
     }
     Ok(())
+}
+
+fn require_output_len(out: &[u8], exact_len: usize) -> Result<()> {
+    if out.len() != exact_len {
+        return Err(Error::InvalidLength);
+    }
+    Ok(())
+}
+
+fn write_header(out: &mut [u8], magic: [u8; 8]) -> Result<()> {
+    write_at(out, 0, &magic)?;
+    write_at(out, 8, &SCHEMA_VERSION.to_le_bytes())
+}
+
+fn write_at(out: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(Error::InvalidLength)?;
+    let target = out.get_mut(offset..end).ok_or(Error::InvalidLength)?;
+    target.copy_from_slice(value);
+    Ok(())
+}
+
+fn write_u64(out: &mut [u8], offset: usize, value: u64) -> Result<()> {
+    write_at(out, offset, &value.to_le_bytes())
 }
 
 fn put<const N: usize>(out: &mut [u8; N], offset: usize, value: &[u8]) {
@@ -2076,6 +2154,12 @@ extern crate std;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_CLAIMS: usize = 2;
+    type Snapshot = CapitalSnapshot<TEST_CLAIMS>;
+    type State = DealerState<TEST_CLAIMS>;
+    type Epoch = CapitalEpoch<TEST_CLAIMS>;
+    type CapitalReceipt = CapitalTransitionReceipt<TEST_CLAIMS>;
 
     fn content(byte: u8) -> ContentId {
         ContentId::new([byte; 32]).expect("nonzero content ID")
@@ -2098,11 +2182,48 @@ mod tests {
         .expect("binding")
     }
 
-    fn array(first: u64, second: u64) -> [u64; MAX_NATIVE_CLAIMS] {
-        let mut values = [0u64; MAX_NATIVE_CLAIMS];
+    fn array<const N: usize>(first: u64, second: u64) -> [u64; N] {
+        let mut values = [0u64; N];
         *values.first_mut().expect("first") = first;
         *values.get_mut(1).expect("second") = second;
         values
+    }
+
+    fn filled<const N: usize>(value: u64) -> [u64; N] {
+        [value; N]
+    }
+
+    fn snapshot(
+        cash: u64,
+        loss: u64,
+        fees: u64,
+        service: u64,
+        inventory: [u64; TEST_CLAIMS],
+    ) -> Snapshot {
+        Snapshot::new(cash, loss, fees, service, inventory).expect("valid test profile")
+    }
+
+    fn zero() -> Snapshot {
+        Snapshot::zero().expect("valid test profile")
+    }
+
+    fn encoded_state<const N: usize>(state: DealerState<N>) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0u8; DealerState::<N>::encoded_len().expect("state length")];
+        state.encode(&mut bytes).expect("state encoding");
+        bytes
+    }
+
+    fn encoded_epoch<const N: usize>(epoch: CapitalEpoch<N>) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0u8; CapitalEpoch::<N>::encoded_len().expect("epoch length")];
+        epoch.encode(&mut bytes).expect("epoch encoding");
+        bytes
+    }
+
+    fn encoded_capital<const N: usize>(receipt: CapitalTransitionReceipt<N>) -> std::vec::Vec<u8> {
+        let mut bytes =
+            std::vec![0u8; CapitalTransitionReceipt::<N>::encoded_len().expect("receipt length")];
+        receipt.encode(&mut bytes).expect("receipt encoding");
+        bytes
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2111,18 +2232,18 @@ mod tests {
         binding: DealerBinding,
         fee_bps: u16,
         scale: u64,
-        cap: [u64; MAX_NATIVE_CLAIMS],
-        risk: [u64; MAX_NATIVE_CLAIMS],
-        bid: [u64; MAX_NATIVE_CLAIMS],
-        ask: [u64; MAX_NATIVE_CLAIMS],
-    ) -> CapitalEpoch {
+        cap: [u64; TEST_CLAIMS],
+        risk: [u64; TEST_CLAIMS],
+        bid: [u64; TEST_CLAIMS],
+        ask: [u64; TEST_CLAIMS],
+    ) -> Epoch {
         CapitalEpoch::new(
-            binding, number, 2, fee_bps, scale, 20, 1_000, cap, risk, bid, ask,
+            binding, number, fee_bps, scale, 20, 1_000, cap, risk, bid, ask,
         )
         .expect("epoch")
     }
 
-    fn standard() -> (CapitalEpoch, DealerState) {
+    fn standard() -> (Epoch, State) {
         let epoch = epoch_with(
             4,
             binding(9, 6),
@@ -2133,20 +2254,13 @@ mod tests {
             array(40, 60),
             array(50, 70),
         );
-        let (state, _) = DealerState::enter(
-            &epoch,
-            CapitalSnapshot::new(10_000, 1_000, 11, 12, array(100, 100)),
-        )
-        .expect("entry");
+        let (state, _) =
+            DealerState::enter(&epoch, snapshot(10_000, 1_000, 11, 12, array(100, 100)))
+                .expect("entry");
         (epoch, state)
     }
 
-    fn request(
-        state: DealerState,
-        side: QuoteSide,
-        claim_index: u8,
-        quantity: u64,
-    ) -> QuoteRequest {
+    fn request(state: State, side: QuoteSide, claim_index: u8, quantity: u64) -> QuoteRequest {
         QuoteRequest {
             expected_generation: state.binding().market().generation(),
             expected_epoch: state.epoch(),
@@ -2167,33 +2281,153 @@ mod tests {
         let quote = state
             .admit_quote(&epoch, request(state, QuoteSide::CustomerBuys, 0, 10), 100)
             .expect("quote");
+        let state_bytes = encoded_state(state);
+        let epoch_bytes = encoded_epoch(epoch);
+        let capital_bytes = encoded_capital(entry);
         assert_eq!(
             DealerBinding::decode(&state.binding().to_bytes()),
             Ok(state.binding())
         );
-        assert_eq!(CapitalEpoch::decode(&epoch.to_bytes()), Ok(epoch));
-        assert_eq!(DealerState::decode(&state.to_bytes()), Ok(state));
+        assert_eq!(Epoch::decode(&epoch_bytes), Ok(epoch));
+        assert_eq!(State::decode(&state_bytes), Ok(state));
         assert_eq!(QuoteReservation::decode(&quote.to_bytes()), Ok(quote));
-        assert_eq!(
-            CapitalTransitionReceipt::decode(&entry.to_bytes()),
-            Ok(entry)
-        );
-        assert_eq!(state.to_bytes().len(), DEALER_STATE_BYTES);
-        assert_eq!(epoch.to_bytes().len(), CAPITAL_EPOCH_BYTES);
+        assert_eq!(CapitalReceipt::decode(&capital_bytes), Ok(entry));
+        assert_eq!(state_bytes.len(), 400);
+        assert_eq!(epoch_bytes.len(), 384);
         assert_eq!(quote.to_bytes().len(), QUOTE_RESERVATION_BYTES);
-        assert_eq!(entry.to_bytes().len(), CAPITAL_TRANSITION_RECEIPT_BYTES);
+        assert_eq!(capital_bytes.len(), 504);
 
-        let mut hostile = state.to_bytes();
+        let mut hostile = state_bytes.clone();
         *hostile
             .get_mut(HEADER_RESERVED_OFFSET)
             .expect("reserved byte") = 1;
         assert_eq!(
-            DealerState::decode(&hostile),
+            State::decode(&hostile),
             Err(Error::NonCanonicalReservedBytes)
         );
-        let mut trailing = std::vec::Vec::from(state.to_bytes());
+        let mut trailing = state_bytes;
         trailing.push(0);
-        assert_eq!(DealerState::decode(&trailing), Err(Error::InvalidLength));
+        assert_eq!(State::decode(&trailing), Err(Error::InvalidLength));
+    }
+
+    #[test]
+    fn selected_width_geometry_is_exact_at_binary_and_max_profiles() {
+        assert_eq!(Snapshot::encoded_len(), Ok(48));
+        assert_eq!(State::encoded_len(), Ok(400));
+        assert_eq!(Epoch::encoded_len(), Ok(384));
+        assert_eq!(CapitalReceipt::encoded_len(), Ok(504));
+        assert_eq!(CapitalSnapshot::<16>::encoded_len(), Ok(160));
+        assert_eq!(DealerState::<16>::encoded_len(), Ok(736));
+        assert_eq!(CapitalEpoch::<16>::encoded_len(), Ok(832));
+        assert_eq!(CapitalTransitionReceipt::<16>::encoded_len(), Ok(952));
+        assert_eq!(
+            DealerState::<1>::encoded_len(),
+            Err(Error::UnsupportedClaimProfile)
+        );
+        assert_eq!(
+            DealerState::<17>::encoded_len(),
+            Err(Error::UnsupportedClaimProfile)
+        );
+
+        let max_epoch = CapitalEpoch::<16>::new(
+            binding(12, 13),
+            7,
+            25,
+            1_000,
+            30,
+            10_000,
+            filled::<16>(10_000),
+            filled::<16>(10),
+            filled::<16>(400),
+            filled::<16>(450),
+        )
+        .expect("max epoch");
+        let max_snapshot = CapitalSnapshot::<16>::new(50_000, 1_000, 0, 100, filled::<16>(100))
+            .expect("max snapshot");
+        let (mut max_state, max_receipt) =
+            DealerState::<16>::enter(&max_epoch, max_snapshot).expect("max entry");
+        let max_state_bytes = encoded_state(max_state);
+        let max_epoch_bytes = encoded_epoch(max_epoch);
+        let max_receipt_bytes = encoded_capital(max_receipt);
+        let mut max_snapshot_bytes =
+            std::vec![0u8; CapitalSnapshot::<16>::encoded_len().expect("snapshot length")];
+        max_snapshot
+            .encode(&mut max_snapshot_bytes)
+            .expect("snapshot encoding");
+        assert_eq!(DealerState::<16>::decode(&max_state_bytes), Ok(max_state));
+        assert_eq!(CapitalEpoch::<16>::decode(&max_epoch_bytes), Ok(max_epoch));
+        assert_eq!(
+            CapitalSnapshot::<16>::decode(&max_snapshot_bytes),
+            Ok(max_snapshot)
+        );
+        assert_eq!(
+            CapitalTransitionReceipt::<16>::decode(&max_receipt_bytes),
+            Ok(max_receipt)
+        );
+        assert_eq!(State::decode(&max_state_bytes), Err(Error::InvalidLength));
+        assert_eq!(Epoch::decode(&max_epoch_bytes), Err(Error::InvalidLength));
+        assert_eq!(
+            Snapshot::decode(&max_snapshot_bytes),
+            Err(Error::InvalidLength)
+        );
+        assert_eq!(
+            CapitalReceipt::decode(&max_receipt_bytes),
+            Err(Error::InvalidLength)
+        );
+
+        let mut hostile_epoch = max_epoch_bytes.clone();
+        *hostile_epoch
+            .get_mut(EPOCH_RESERVED_OFFSET)
+            .expect("epoch reserved byte") = 1;
+        assert_eq!(
+            CapitalEpoch::<16>::decode(&hostile_epoch),
+            Err(Error::NonCanonicalReservedBytes)
+        );
+
+        let mut short_state = max_state_bytes;
+        let _ = short_state.pop();
+        assert_eq!(
+            DealerState::<16>::decode(&short_state),
+            Err(Error::InvalidLength)
+        );
+        let mut wrong_output = std::vec![0u8; 399];
+        assert_eq!(
+            standard().1.encode(&mut wrong_output),
+            Err(Error::InvalidLength)
+        );
+
+        let mut max_quote = max_state
+            .admit_quote(
+                &max_epoch,
+                QuoteRequest {
+                    expected_generation: 12,
+                    expected_epoch: 7,
+                    expected_sequence: max_state.next_sequence(),
+                    side: QuoteSide::CustomerBuys,
+                    claim_index: 15,
+                    quantity: 10,
+                    expiry_slot: 110,
+                },
+                100,
+            )
+            .expect("max-width covered quote");
+        let execution = max_state
+            .execute_quote(&max_epoch, &mut max_quote, 12, 105)
+            .expect("max-width execution");
+        assert_eq!(
+            ExecutionReceipt::decode(&execution.to_bytes()),
+            Ok(execution)
+        );
+        assert_eq!(max_quote.status(), QuoteStatus::Executed);
+        assert_eq!(
+            max_state
+                .snapshot()
+                .inventory()
+                .get(15)
+                .copied()
+                .expect("last inventory"),
+            90
+        );
     }
 
     #[test]
@@ -2210,7 +2444,7 @@ mod tests {
             array(1, 1),
         );
         let (mut cash_state, _) =
-            DealerState::enter(&cash_epoch, CapitalSnapshot::new(50, 0, 0, 0, array(0, 0)))
+            DealerState::enter(&cash_epoch, snapshot(50, 0, 0, 0, array(0, 0)))
                 .expect("cash entry");
         let excessive_sell = request(cash_state, QuoteSide::CustomerSells, 1, 51);
         assert_eq!(
@@ -2237,11 +2471,9 @@ mod tests {
             array(10, 10),
             array(10, 10),
         );
-        let (mut state, _) = DealerState::enter(
-            &epoch,
-            CapitalSnapshot::new(0, 1_000, 1_000, 1_000, array(0, 0)),
-        )
-        .expect("entry");
+        let (mut state, _) =
+            DealerState::enter(&epoch, snapshot(0, 1_000, 1_000, 1_000, array(0, 0)))
+                .expect("entry");
         let quote = request(state, QuoteSide::CustomerSells, 0, 1);
         assert_eq!(
             state.admit_quote(&epoch, quote, 100),
@@ -2265,8 +2497,7 @@ mod tests {
             array(1, 1),
         );
         let (mut state, _) =
-            DealerState::enter(&epoch, CapitalSnapshot::new(100, 20, 0, 0, array(1, 1)))
-                .expect("entry");
+            DealerState::enter(&epoch, snapshot(100, 20, 0, 0, array(1, 1))).expect("entry");
         let quote = request(state, QuoteSide::CustomerSells, 0, 2);
         assert_eq!(
             state.admit_quote(&epoch, quote, 100),
@@ -2438,14 +2669,7 @@ mod tests {
             array(50, 70),
         );
         assert_eq!(
-            state.reconfigure(
-                &epoch,
-                &next,
-                9,
-                state.next_sequence(),
-                CapitalSnapshot::zero(),
-                CapitalSnapshot::zero(),
-            ),
+            state.reconfigure(&epoch, &next, 9, state.next_sequence(), zero(), zero(),),
             Err(Error::DealerNotQuiescent)
         );
         assert_eq!(
@@ -2453,16 +2677,9 @@ mod tests {
             Err(Error::DealerNotQuiescent)
         );
         state.cancel_quote(&mut quote).expect("cancel");
-        let withdrawal = CapitalSnapshot::new(100, 0, 11, 0, array(0, 0));
+        let withdrawal = snapshot(100, 0, 11, 0, array(0, 0));
         let receipt = state
-            .reconfigure(
-                &epoch,
-                &next,
-                9,
-                state.next_sequence(),
-                CapitalSnapshot::zero(),
-                withdrawal,
-            )
+            .reconfigure(&epoch, &next, 9, state.next_sequence(), zero(), withdrawal)
             .expect("reconfigure");
         assert_eq!(receipt.withdrawals(), withdrawal);
         assert_eq!(state.snapshot().cash(), 9_900);
@@ -2470,7 +2687,7 @@ mod tests {
         let exit = state.exit(&next, 9, state.next_sequence()).expect("exit");
         assert_eq!(exit.withdrawals().cash(), 9_900);
         assert_eq!(state.status(), DealerStatus::Exited);
-        assert_eq!(state.snapshot(), CapitalSnapshot::zero());
+        assert_eq!(state.snapshot(), zero());
     }
 
     #[test]
@@ -2486,8 +2703,7 @@ mod tests {
             array(1, 1),
         );
         let (mut state, _) =
-            DealerState::enter(&epoch, CapitalSnapshot::new(u64::MAX, 0, 0, 0, array(1, 0)))
-                .expect("entry");
+            DealerState::enter(&epoch, snapshot(u64::MAX, 0, 0, 0, array(1, 0))).expect("entry");
         let mut quote = state
             .admit_quote(&epoch, request(state, QuoteSide::CustomerBuys, 0, 1), 100)
             .expect("ceil quote");
@@ -2502,8 +2718,7 @@ mod tests {
         assert_eq!(quote, quote_before);
 
         let (mut sell_state, _) =
-            DealerState::enter(&epoch, CapitalSnapshot::new(10, 0, 0, 0, array(0, 0)))
-                .expect("entry");
+            DealerState::enter(&epoch, snapshot(10, 0, 0, 0, array(0, 0))).expect("entry");
         assert_eq!(
             sell_state.admit_quote(
                 &epoch,
@@ -2529,14 +2744,7 @@ mod tests {
         );
         let prior = state;
         assert_eq!(
-            state.reconfigure(
-                &epoch,
-                &next,
-                9,
-                state.next_sequence(),
-                CapitalSnapshot::zero(),
-                CapitalSnapshot::zero(),
-            ),
+            state.reconfigure(&epoch, &next, 9, state.next_sequence(), zero(), zero(),),
             Err(Error::InsufficientLossCapital)
         );
         assert_eq!(state, prior);
@@ -2558,19 +2766,19 @@ mod tests {
     fn capital_receipt_rejects_nonconservation_and_overlapping_flows() {
         assert_eq!(
             apply_capital_flow(
-                CapitalSnapshot::new(10, 0, 0, 0, array(0, 0)),
-                CapitalSnapshot::new(1, 0, 0, 0, array(0, 0)),
-                CapitalSnapshot::new(1, 0, 0, 0, array(0, 0)),
+                snapshot(10, 0, 0, 0, array(0, 0)),
+                snapshot(1, 0, 0, 0, array(0, 0)),
+                snapshot(1, 0, 0, 0, array(0, 0)),
             ),
             Err(Error::OverlappingCapitalFlow)
         );
         let (epoch, state) = standard();
         let (_, receipt) = DealerState::enter(&epoch, state.snapshot()).expect("entry");
-        let mut bytes = receipt.to_bytes();
-        let new_cash_offset = CAPITAL_NEW_OFFSET;
+        let mut bytes = encoded_capital(receipt);
+        let new_cash_offset = capital_new_offset::<TEST_CLAIMS>().expect("new offset");
         *bytes.get_mut(new_cash_offset).expect("new cash byte") ^= 1;
         assert_eq!(
-            CapitalTransitionReceipt::decode(&bytes),
+            CapitalReceipt::decode(&bytes),
             Err(Error::CapitalConservationMismatch)
         );
     }

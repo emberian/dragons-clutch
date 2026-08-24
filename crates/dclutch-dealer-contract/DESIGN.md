@@ -91,12 +91,34 @@ cap.
 
 ## Fixed bounds and lifting
 
-`MAX_NATIVE_CLAIMS = 16` is a **provisional artifact-profile bound**, not a
-mathematical limit, chain-derived maximum, or permanent protocol ontology. It
-keeps the first state and receipts fixed-layout and permits bounded total loops.
-Its lifting path is a paginated inventory child contract whose pages commit to
-one aggregate reservation and risk accumulator; quote claim indices and exact
-receipts remain unchanged. No business rule depends on the number 16.
+Every vector-bearing contract is parameterized by the Market's exact selected
+native-claim width `N`. `N` is not persisted a second time: the authenticated
+ClaimBasis/capability configuration selects the decoder profile, and that
+profile accepts one exact byte length. Encoders take exact caller-provided
+buffers, so the kernel remains `no_alloc`; checked `encoded_len()` functions
+reject unsupported profiles and arithmetic overflow.
+
+Current geometry is:
+
+| Contract | Formula | `N = 2` | `N = 16` |
+| --- | ---: | ---: | ---: |
+| Capital snapshot | `32 + 8N` | 48 | 160 |
+| Dealer state | `352 + 24N` | 400 | 736 |
+| Capital epoch | `320 + 32N` | 384 | 832 |
+| Capital transition receipt | `440 + 32N` | 504 | 952 |
+
+Thus a binary Market does not allocate fourteen unused inventory, cap, risk,
+price, or reservation entries. Binding, quote, and execution records contain no
+vectors and retain their fixed 264, 344, and 456 byte widths.
+
+`2 <= N <= MAX_NATIVE_CLAIMS`, where `MAX_NATIVE_CLAIMS = 16`, is the current
+**provisional artifact-profile guard**, not a mathematical limit,
+chain-derived maximum, permanent protocol ontology, or instruction to allocate
+at the maximum. It permits bounded total loops after paying only for the
+selected width. Its lifting path is a paginated inventory child contract whose
+pages commit to one aggregate reservation and risk accumulator; quote claim
+indices and exact receipts remain unchanged. No business rule depends on the
+number 16.
 
 The `u64` quantities, slots, sequence numbers, and compartment atoms are a
 **chain-derived representation choice** aligned with Solana token amounts and
@@ -109,9 +131,10 @@ The 10,000 basis-point denominator is a **mathematical unit definition**. It is
 not a cap on richer pricing because an epoch's bid, ask, risk weights, and
 `price_scale` are independent exact integers.
 
-The exact byte widths in this release are schema facts, not optimization
-evidence. Account rent and compute costs remain to be measured in the Solana
-adapter before selecting its physical account split.
+The exact selected widths in this release are schema facts, not optimization
+evidence. The binary-width reduction removes avoidable account bytes, but its
+lamport savings and compute effects still require Solana-adapter measurement
+before selecting the final physical account split.
 
 ## Deliberate adapter seams
 
@@ -121,7 +144,8 @@ sponsor. A later adapter must:
 
 1. authenticate the Market root and immutable capability manifest entry;
 2. derive and own the Dealer and quote child addresses;
-3. prove the capability release/configuration content identities;
+3. prove the capability release/configuration content identities and select
+   the exact `N` decoder matching the authenticated native ClaimBasis;
 4. compose every receipt with exact token/cash transfers atomically;
 5. maintain the Dealer as one Market direct child and quotes as Dealer
    descendants; and
