@@ -10,7 +10,7 @@ use crate::{
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
     DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, FixedCodec, Id,
     LpPageV2, PreparedDealerReplayTransitionV1, Result,
-    DealerAssetEndpointKindV1, PreparedDealerPositionPairTransferV1,
+    DealerAssetEndpointKindV1, PreparedDealerGeneralPositionTransferV3,
     SponsorCapitalDispositionV1,
 };
 
@@ -49,7 +49,7 @@ pub struct PreparedDealerSponsorRefundV3 {
     /// Authoritative State after exact sponsor principal left PositionV3.
     pub state_after: DealerStateV2,
     /// Canonical facility-to-refund Position transfer.
-    pub transfer: PreparedDealerPositionPairTransferV1,
+    pub transfer: PreparedDealerGeneralPositionTransferV3,
     /// Replay advance binding transfer, State, and funded receipt.
     pub replay: PreparedDealerReplayTransitionV1,
 }
@@ -328,7 +328,7 @@ pub fn prepare_refund_cancelled_sponsor_v3(
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
     position: &DealerPositionObservationV3,
-    transfer: PreparedDealerPositionPairTransferV1,
+    transfer: PreparedDealerGeneralPositionTransferV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
 ) -> Result<PreparedDealerSponsorRefundV3> {
@@ -344,9 +344,10 @@ pub fn prepare_refund_cancelled_sponsor_v3(
         replay,
     )?;
     authorization.validate_against(schedule, runtime)?;
-    let bundle = transfer.bundle();
+    let position_transfer = transfer.transfer();
+    let bundle = position_transfer.bundle();
     bundle.validate()?;
-    let position_after = transfer.source_post();
+    let position_after = position_transfer.source_post();
     if state.phase != DealerPhaseV2::Cancelled
         || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
         || state.total_shares != 0
@@ -382,7 +383,7 @@ pub fn prepare_refund_cancelled_sponsor_v3(
         DealerRuntimeActionV1::RefundCancelledSponsor,
         authorization.receipt_semantic_id,
         DealerTransitionLivenessModeV1::ExternalReceipt,
-        bundle.bundle_id()?,
+        transfer.commitment_id(),
         bundle.source_pre_semantic_id,
         bundle.source_post_semantic_id,
     )?;

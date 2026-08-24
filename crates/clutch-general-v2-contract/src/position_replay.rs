@@ -54,6 +54,8 @@ const PORTFOLIO_ARCHIVE_BUYER_ROLE: u8 = 12;
 const PORTFOLIO_ARCHIVE_SELLER_ROLE: u8 = 13;
 const DEALER_BUYER_ROLE: u8 = 12;
 const DEALER_SELLER_ROLE: u8 = 13;
+const DEALER_CAPITAL_OWNER_ROLE: u8 = 1;
+const DEALER_LP_OWNER_ROLE: u8 = 2;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -105,6 +107,14 @@ pub enum GeneralReplayTransitionKindV1 {
     FractionalTransferCreditPayout,
     /// FractionalRedemption action 7 internal credit-payout endpoint.
     FractionalMergeCreditPayout,
+    /// Dealer action 5 debits the founding sponsor's ordinary Position.
+    DealerSponsorFunding,
+    /// Dealer action 7 debits the contributing LP's ordinary Position.
+    DealerLpContribute,
+    /// Dealer action 8 credits the withdrawing LP's ordinary Position.
+    DealerLpWithdraw,
+    /// Dealer action 11 credits the immutable sponsor-refund Position.
+    DealerSponsorRefund,
     /// Dealer action 15 buyer collection releases reserved cash into custody.
     DealerCollectBuyer,
     /// Dealer action 15 seller collection moves Reservation-owned Eggs and
@@ -116,6 +126,8 @@ pub enum GeneralReplayTransitionKindV1 {
     /// Dealer action 16 seller delivery credits cash and closes the
     /// Position's Reservation liability.
     DealerDeliverSeller,
+    /// Dealer action 24 credits one terminal LP claim to its ordinary Position.
+    DealerLpClaim,
 }
 
 impl GeneralReplayTransitionKindV1 {
@@ -259,6 +271,30 @@ impl GeneralReplayTransitionKindV1 {
                 7,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ),
+            Self::DealerSponsorFunding => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                5,
+                DEALER_CAPITAL_OWNER_ROLE,
+            ),
+            Self::DealerLpContribute => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                7,
+                DEALER_LP_OWNER_ROLE,
+            ),
+            Self::DealerLpWithdraw => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                8,
+                DEALER_LP_OWNER_ROLE,
+            ),
+            Self::DealerSponsorRefund => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                11,
+                DEALER_CAPITAL_OWNER_ROLE,
+            ),
             Self::DealerCollectBuyer => (
                 DEALER_FAMILY,
                 TRANSITION_VERSION_V1,
@@ -282,6 +318,12 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 16,
                 DEALER_SELLER_ROLE,
+            ),
+            Self::DealerLpClaim => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                24,
+                DEALER_LP_OWNER_ROLE,
             ),
         }
     }
@@ -405,6 +447,18 @@ impl GeneralReplayTransitionKindV1 {
                 7,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ) => Ok(Self::FractionalMergeCreditPayout),
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 5, DEALER_CAPITAL_OWNER_ROLE) => {
+                Ok(Self::DealerSponsorFunding)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 7, DEALER_LP_OWNER_ROLE) => {
+                Ok(Self::DealerLpContribute)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 8, DEALER_LP_OWNER_ROLE) => {
+                Ok(Self::DealerLpWithdraw)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 11, DEALER_CAPITAL_OWNER_ROLE) => {
+                Ok(Self::DealerSponsorRefund)
+            }
             (DEALER_FAMILY, TRANSITION_VERSION_V1, 15, DEALER_BUYER_ROLE) => {
                 Ok(Self::DealerCollectBuyer)
             }
@@ -416,6 +470,9 @@ impl GeneralReplayTransitionKindV1 {
             }
             (DEALER_FAMILY, TRANSITION_VERSION_V1, 16, DEALER_SELLER_ROLE) => {
                 Ok(Self::DealerDeliverSeller)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 24, DEALER_LP_OWNER_ROLE) => {
+                Ok(Self::DealerLpClaim)
             }
             _ => Err(CodecError::InvalidState),
         }
@@ -1077,6 +1134,10 @@ where
             | GeneralReplayTransitionKindV1::StructuredGeneral
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
+            | GeneralReplayTransitionKindV1::DealerSponsorFunding
+            | GeneralReplayTransitionKindV1::DealerLpContribute
+            | GeneralReplayTransitionKindV1::DealerLpWithdraw
+            | GeneralReplayTransitionKindV1::DealerSponsorRefund
             | GeneralReplayTransitionKindV1::DealerCollectBuyer
             | GeneralReplayTransitionKindV1::DealerDeliverBuyer
             | GeneralReplayTransitionKindV1::DealerDeliverSeller
@@ -1296,6 +1357,32 @@ mod tests {
                 .unwrap()
                 .last_kind(),
             Some(GeneralReplayTransitionKindV1::DealerDeliverBuyer)
+        );
+    }
+
+    #[test]
+    fn dealer_capital_lp_and_claim_tuples_are_exact() {
+        for (action, role, expected) in [
+            (5, DEALER_CAPITAL_OWNER_ROLE, GeneralReplayTransitionKindV1::DealerSponsorFunding),
+            (7, DEALER_LP_OWNER_ROLE, GeneralReplayTransitionKindV1::DealerLpContribute),
+            (8, DEALER_LP_OWNER_ROLE, GeneralReplayTransitionKindV1::DealerLpWithdraw),
+            (11, DEALER_CAPITAL_OWNER_ROLE, GeneralReplayTransitionKindV1::DealerSponsorRefund),
+            (24, DEALER_LP_OWNER_ROLE, GeneralReplayTransitionKindV1::DealerLpClaim),
+        ] {
+            let mut encoded = advanced_extension(action, role);
+            encoded[130] = DEALER_FAMILY;
+            assert_eq!(
+                GeneralReplayExtensionV1::decode(&encoded)
+                    .unwrap()
+                    .last_kind(),
+                Some(expected)
+            );
+        }
+        let mut wrong_role = advanced_extension(7, DEALER_CAPITAL_OWNER_ROLE);
+        wrong_role[130] = DEALER_FAMILY;
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&wrong_role),
+            Err(CodecError::InvalidState)
         );
     }
 }

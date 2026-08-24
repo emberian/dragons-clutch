@@ -12,26 +12,29 @@ use crate::accounts::{expect_pda, require, require_count, require_signer, Outcom
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_dealer_runtime_contract::{
-    advance_collect_v2, advance_deliver_v2, bind_dealer_fee_terminal_v1,
+    accept_dealer_asset_transfer_v2, advance_collect_v2, advance_deliver_v2,
+    bind_dealer_general_position_transfer_v3,
+    bind_dealer_fee_terminal_v1,
     prepare_abort_lease_pot_v3, prepare_covered_dealer_row_progress_v1,
     dealer_runtime_liveness_policy_id_v1,
     prepare_finalize_lease_pot_v3,
     prepare_begin_covered_lease_pot_v4, prepare_bind_epoch_v3,
-    prepare_dealer_sponsor_funding_transfer_v1,
+    prepare_dealer_sponsor_funding_transfer_v2,
     prepare_activate_dealer_v3, prepare_cancel_stale_funding_v3,
-    prepare_dealer_lp_share_transfer_v1, prepare_dealer_sponsor_refund_transfer_v1,
+    prepare_dealer_lp_share_transfer_v2, prepare_dealer_sponsor_refund_transfer_v2,
     prepare_facility_initialization_v3, prepare_first_lp_page_v2,
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     prepare_refund_cancelled_sponsor_v3, CoveredDealerSelectionContextV1,
-    CoveredDealerRowAssetTransitionV1, CoveredDealerSelectionV1, CoveredDealerTerminalV2,
-    DealerActionReceiptV1,
+    CoveredDealerRowAssetTransitionV2, CoveredDealerSelectionV1, CoveredDealerTerminalV2,
+    DealerActionReceiptV1, DealerAssetEndpointKindV1, DealerAssetTransferBundleV2,
+    DealerAssetTransferPostObservationV2,
     DealerChildCountsV2,
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
-    DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
+    DealerPositionMarketJoinV2, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerSeriesObligationBindingV1, DealerSeriesObligationPhaseV1, DealerStateV2, DealerStateV3,
     DealerTransferPositionV3, DealerLeasePotCloseRentV3, DealerLeaseV2,
@@ -43,7 +46,8 @@ use clutch_general_v2_contract::{
     fee_runtime_semantic_release_id_v1,
     project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
     CandidateWindowV4AccountV1, EconomicDomainV2AccountV1, GeneralEpochV6AccountV1,
-    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1, MarketBindingV2,
+    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
+    GeneralReplayTransitionPlanV1, MarketBindingV2,
     SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1,
     ECONOMIC_DOMAIN_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
@@ -140,7 +144,10 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::artifact::read_clock_slot;
-use super::collateral_position_v3::RuntimeSha256;
+use super::collateral_position_v3::{
+    authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v2,
+    GeneralMarketValueAuthorityV2, GeneralPositionReplayAuthorityV2, RuntimeSha256,
+};
 use super::dealer_policy::{
     authenticate_catalog_policy, create_exact_payer_debit_pda, create_full_principal_pda,
     dealer_fault,
@@ -150,25 +157,207 @@ use super::product_artifact::{
 };
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
-    authenticate_dealer_series_obligation_v1, authenticate_dealer_state_v3,
+    authenticate_dealer_meta_contract_v1, authenticate_dealer_series_obligation_v1,
+    authenticate_dealer_state_v3,
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
 use super::genesis::{
     read_rent, require_creatable, require_system_program, SYSTEM_PROGRAM_ID,
 };
 
-const INITIALIZE_ACCOUNT_COUNT: usize = 22;
+const DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT: usize = 10;
+const INITIALIZE_ACCOUNT_COUNT: usize = 23 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
 const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
-const LP_TRANSFER_ACCOUNT_COUNT: usize = 7;
+const LP_TRANSFER_ACCOUNT_COUNT: usize = 8 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 const ACTIVATE_ACCOUNT_COUNT: usize = 21;
 const CANCEL_FUNDING_ACCOUNT_COUNT: usize = 20;
-const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
+const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize =
+    21 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
-const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 40;
-const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 34;
-const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30;
+const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 48;
+const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 43;
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
+const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
+
+/// Exact ordered current collateral deployment accounts for one Dealer
+/// liability movement. Hoard and ClaimLedger are always read-only here:
+/// Dealer reclassifies internal Position/Pot liabilities and never sources a
+/// token CPI, fee, rent, or liveness payment from Hoard principal.
+struct DealerCollateralAuthorityAccountsV2<'a, 'info> {
+    realm: &'a AccountInfo<'info>,
+    profile: &'a AccountInfo<'info>,
+    policy: &'a AccountInfo<'info>,
+    token_program: &'a AccountInfo<'info>,
+    token_programdata: &'a AccountInfo<'info>,
+    market_binding: &'a AccountInfo<'info>,
+    market_runtime: &'a AccountInfo<'info>,
+    market_instance: &'a AccountInfo<'info>,
+    hoard: &'a AccountInfo<'info>,
+    claim_ledger: &'a AccountInfo<'info>,
+}
+
+#[inline(never)]
+fn authenticate_dealer_collateral_value_v2(
+    program_id: &Pubkey,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+    position_binding: Option<&FacilityPositionBindingV2>,
+    accounts: DealerCollateralAuthorityAccountsV2<'_, '_>,
+) -> Outcome<(GeneralMarketValueAuthorityV2, DealerPositionMarketJoinV2)> {
+    let value = authenticate_general_market_value_authority_v2(
+        program_id,
+        accounts.realm,
+        accounts.profile,
+        accounts.policy,
+        accounts.token_program,
+        accounts.token_programdata,
+        accounts.market_binding,
+        accounts.market_runtime,
+        accounts.market_instance,
+        accounts.hoard,
+        accounts.claim_ledger,
+        false,
+        false,
+    )?;
+    let liabilities = value.liabilities;
+    let bound = liabilities.bound;
+    let realm = bound.realm_bound().realm();
+    let collateral_policy = bound.policy();
+    let release = bound.release();
+    let release_id = release
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let market = liabilities.market_binding.base();
+    require(
+        policy.market_instance_v2_id.bytes() == market.market_instance_v2_id.bytes()
+            && policy.realm_id == Id::from_bytes(realm.realm.bytes())
+            && policy.profile_id == Id::from_bytes(realm.profile.bytes())
+            && policy.claim_basis_id.bytes() == market.native_claim_basis_id.bytes()
+            && policy.collateral_mint == Id::from_bytes(collateral_policy.mint.bytes())
+            && policy.token_program == Id::from_bytes(release.token_program.bytes())
+            && policy.outcome_count == market.outcome_count
+            && liabilities.hoard.outcome_count == policy.outcome_count
+            && liabilities.claim_ledger.outcome_count == policy.outcome_count
+            && liabilities.hoard_semantic_id
+                == liabilities
+                    .hoard
+                    .semantic_id(&RuntimeSha256)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && liabilities.claim_ledger_semantic_id
+                == liabilities
+                    .claim_ledger
+                    .semantic_id(&RuntimeSha256)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    if let Some(binding) = position_binding {
+        require(
+            binding.market_instance_v2_id == policy.market_instance_v2_id
+                && binding.collateral_policy_id == Id::from_bytes(bound.policy_id().bytes())
+                && binding.collateral_release_id == Id::from_bytes(release_id.bytes()),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let join = DealerPositionMarketJoinV2 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: Id::from_bytes(bound.policy_id().bytes()),
+        collateral_release_id: Id::from_bytes(release_id.bytes()),
+        collateral_value_receipt_id: Id::from_bytes(value.receipt_id.bytes()),
+        outcome_count: policy.outcome_count,
+    };
+    Ok((value, join))
+}
+
+fn dealer_general_replay_value_evidence_id_v2(
+    collateral_value_receipt_id: Id,
+    liveness_receipt_id: Id,
+) -> Outcome<clutch_general_v2_contract::Id32> {
+    collateral_value_receipt_id
+        .validate_live()
+        .map_err(dealer_fault)?;
+    liveness_receipt_id.validate_live().map_err(dealer_fault)?;
+    Ok(clutch_general_v2_contract::Id32::new(
+        solana_sha256_hasher::hashv(&[
+            DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2,
+            &collateral_value_receipt_id.bytes(),
+            &liveness_receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    )?)
+}
+
+fn current_general_replay_sequence_v1(account: &AccountInfo<'_>) -> Outcome<u64> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let replay = ReplayV3Envelope::decode(&data, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    Ok(replay.header().next_sequence())
+}
+
+fn prepare_dealer_general_replay_v2(
+    authority: GeneralPositionReplayAuthorityV2,
+    position_post: PositionAccountV3,
+    kind: GeneralReplayTransitionKindV1,
+    transfer_bundle_id: Id,
+    collateral_value_receipt_id: Id,
+    action_evidence_id: Id,
+) -> Outcome<GeneralReplayTransitionPlanV1> {
+    let position_poststate = PositionSettlementPoststateV3 {
+        account: authority.position.account,
+        general_market_runtime: authority.position.general_market_runtime,
+        prestate_semantic_id: authority.position.semantic_id,
+        semantic: position_post,
+    };
+    project_general_replay_transition_v1(
+        authority.replay,
+        position_poststate,
+        kind,
+        clutch_general_v2_contract::Id32::new(transfer_bundle_id.bytes())?,
+        dealer_general_replay_value_evidence_id_v2(
+            collateral_value_receipt_id,
+            action_evidence_id,
+        )?,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::Replay))
+}
+
+fn write_and_accept_general_replay_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    plan: &GeneralReplayTransitionPlanV1,
+) -> Outcome<Id> {
+    require(
+        account.owner == program_id
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && account.key.to_bytes() == plan.replay_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(plan.replay_poststate_body());
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observed = ReplayV3Envelope::decode(&data, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    let observed_id = observed
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    require(
+        data.as_ref() == plan.replay_poststate_body()
+            && observed_id.bytes() == plan.replay_poststate_semantic_id().bytes(),
+        ClutchError::Replay,
+    )?;
+    Ok(Id::from_bytes(observed_id.bytes()))
+}
 
 /// Static source for the adapter's heap-resident complete RelationV2 book.
 ///
@@ -333,6 +522,80 @@ fn dealer_body<T: FixedCodec>(
     let (envelope, body) =
         decode_dealer_account_body_v1::<T>(&data, tag, version).map_err(dealer_fault)?;
     Ok((envelope.bump, body))
+}
+
+fn dealer_transfer_endpoint_semantic_id_v2(
+    program_id: &Pubkey,
+    kind: DealerAssetEndpointKindV1,
+    account: &AccountInfo<'_>,
+) -> Outcome<Id> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(
+        account.is_writable && !account.is_signer && !account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    match kind {
+        DealerAssetEndpointKindV1::GeneralPosition
+        | DealerAssetEndpointKindV1::FacilityPosition => {
+            require(
+                account.data_len() == POSITION_V3_BYTES,
+                ClutchError::WrongDataLength,
+            )?;
+            let position = PositionAccountV3::decode(&account.data.borrow())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            position
+                .semantic_id(&RuntimeSha256)
+                .map(|value| Id::from_bytes(value.bytes()))
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+        }
+        DealerAssetEndpointKindV1::SettlementPot => {
+            let (_, pot) = dealer_body::<SettlementPotV2>(
+                program_id,
+                account,
+                true,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
+            )?;
+            pot.pot_content_id().map_err(dealer_fault)
+        }
+    }
+}
+
+/// Hostile-reload both semantic owners after an internal Dealer movement.
+/// The returned identity is the exact V2 transfer bundle committed by Replay.
+fn accept_dealer_asset_transfer_postwrite_v2(
+    program_id: &Pubkey,
+    bundle: DealerAssetTransferBundleV2,
+    first: &AccountInfo<'_>,
+    second: &AccountInfo<'_>,
+) -> Outcome<Id> {
+    require(first.key != second.key, ClutchError::AccountAlias)?;
+    let first_id = id(first.key);
+    let second_id = id(second.key);
+    let (source, destination) = if first_id == bundle.source_account_id
+        && second_id == bundle.destination_account_id
+    {
+        (first, second)
+    } else if second_id == bundle.source_account_id && first_id == bundle.destination_account_id {
+        (second, first)
+    } else {
+        return Err(ClutchError::MismatchedState.into());
+    };
+    let source_post_semantic_id =
+        dealer_transfer_endpoint_semantic_id_v2(program_id, bundle.source_kind, source)?;
+    let destination_post_semantic_id =
+        dealer_transfer_endpoint_semantic_id_v2(program_id, bundle.destination_kind, destination)?;
+    accept_dealer_asset_transfer_v2(
+        bundle,
+        DealerAssetTransferPostObservationV2 {
+            source_account_id: id(source.key),
+            destination_account_id: id(destination.key),
+            source_post_semantic_id,
+            destination_post_semantic_id,
+        },
+    )
+    .map_err(dealer_fault)
 }
 
 fn authenticate_state_with_access(
@@ -1797,70 +2060,10 @@ fn require_lapse_aliases(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
-#[inline(never)]
-fn authenticate_general_position(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
-) -> Outcome<(
-    PositionAccountV3,
-    clutch_retirement::GeneralPositionProjectionV3,
-)> {
-    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(account.is_writable, ClutchError::NotWritable)?;
-    require(
-        !account.executable && !account.is_signer,
-        ClutchError::MismatchedState,
-    )?;
-    require(
-        account.data_len() == POSITION_V3_BYTES,
-        ClutchError::WrongDataLength,
-    )?;
-    let position = PositionAccountV3::decode(&account.data.borrow())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let pda = position.pda_seeds();
-    expect_pda(
-        account.key,
-        seeds::position_v3_pda(
-            program_id,
-            &pda.market_instance_id().bytes(),
-            &pda.owner().bytes(),
-            pda.purpose(),
-            &pda.purpose_binding_id().bytes(),
-        ),
-        Some(pda.stored_bump()),
-    )?;
-    require(
-        position.purpose() == PositionPurposeV3::General
-            && position.lifecycle() == PositionLifecycleV3::Open
-            && position.market_instance_id().bytes() == policy.market_instance_v2_id.bytes()
-            && position.realm_id().bytes() == policy.realm_id.bytes()
-            && position.outcome_count() == policy.outcome_count,
-        ClutchError::MismatchedState,
-    )?;
-    let projection = project_general_position_v3(
-        position,
-        AdapterPositionMarketBindingV3 {
-            market_instance_id: position.market_instance_id(),
-            outcome_count: position.outcome_count(),
-            realm_id: position.realm_id(),
-            collateral_policy_id: position.collateral_policy_id(),
-            collateral_release_id: position.collateral_release_id(),
-        },
-        AdapterPositionPurposeBindingV3 {
-            owner: position.owner(),
-            controller: position.controller(),
-            purpose_binding_id: position.purpose_binding_id(),
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok((position, projection))
-}
-
 fn authenticate_general_position_replay_for_dealer(
     program_id: &Pubkey,
     root: &SettlementRootV1AccountV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     owner: Id,
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
@@ -2092,23 +2295,6 @@ fn prepare_dealer_row_deliver_post(
     ))
 }
 
-fn authenticate_controlled_general_position(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    actor: Id,
-    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
-) -> Outcome<(
-    PositionAccountV3,
-    clutch_retirement::GeneralPositionProjectionV3,
-)> {
-    let (position, projection) = authenticate_general_position(program_id, account, policy)?;
-    require(
-        position.controller().bytes() == actor.bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    Ok((position, projection))
-}
-
 fn write_dealer_body<T: FixedCodec>(
     account: &AccountInfo<'_>,
     tag: u8,
@@ -2188,6 +2374,54 @@ fn release_dealer_account(account: &AccountInfo<'_>) -> Outcome<()> {
         .resize(0)
         .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
     account.assign(&SYSTEM_PROGRAM_ID);
+    Ok(())
+}
+
+fn require_released_dealer_account(account: &AccountInfo<'_>) -> Outcome<()> {
+    require(
+        account.owner == &SYSTEM_PROGRAM_ID
+            && account.lamports() == 0
+            && account.data_len() == 0
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn credit_exact_dealer_terminal_lamports(
+    destinations: [(&AccountInfo<'_>, u64); 4],
+) -> Outcome<()> {
+    let before = [
+        destinations[0].0.lamports(),
+        destinations[1].0.lamports(),
+        destinations[2].0.lamports(),
+        destinations[3].0.lamports(),
+    ];
+    let mut credit = 0usize;
+    while credit < destinations.len() {
+        credit_lamports(destinations[credit].0, destinations[credit].1)?;
+        credit += 1;
+    }
+    let mut observed = 0usize;
+    while observed < destinations.len() {
+        let mut expected_delta = 0u64;
+        let mut contribution = 0usize;
+        while contribution < destinations.len() {
+            if destinations[contribution].0.key == destinations[observed].0.key {
+                expected_delta = expected_delta
+                    .checked_add(destinations[contribution].1)
+                    .ok_or(ClutchError::Arithmetic)?;
+            }
+            contribution += 1;
+        }
+        require(
+            before[observed].checked_add(expected_delta)
+                == Some(destinations[observed].0.lamports()),
+            ClutchError::MismatchedState,
+        )?;
+        observed += 1;
+    }
     Ok(())
 }
 
@@ -2465,12 +2699,36 @@ fn initialize_facility(
     require_initialize_aliases(accounts)?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[2])?;
-    let (sponsor_position, sponsor_projection) = authenticate_controlled_general_position(
+    let (collateral_value, market) = authenticate_dealer_collateral_value_v2(
         program_id,
-        &accounts[3],
-        id(accounts[0].key),
         &policy,
+        None,
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[22],
+            profile: &accounts[23],
+            policy: &accounts[24],
+            token_program: &accounts[25],
+            token_programdata: &accounts[26],
+            market_binding: &accounts[27],
+            market_runtime: &accounts[28],
+            market_instance: &accounts[29],
+            hoard: &accounts[30],
+            claim_ledger: &accounts[31],
+        },
     )?;
+    let sponsor_replay_sequence = current_general_replay_sequence_v1(&accounts[32])?;
+    let sponsor_authority = authenticate_general_position_replay_v2(
+        program_id,
+        collateral_value.liabilities.bound,
+        &accounts[27],
+        &accounts[28],
+        &accounts[3],
+        &accounts[32],
+        accounts[0].key.to_bytes(),
+        sponsor_replay_sequence,
+    )?;
+    let sponsor_position = sponsor_authority.position.semantic;
+    let sponsor_projection = sponsor_authority.projection;
     let sponsor = Id::from_bytes(sponsor_position.owner().bytes());
     let genesis = DealerFacilityGenesisV1 {
         policy_id: Id::from_bytes(policy_id),
@@ -2488,8 +2746,8 @@ fn initialize_facility(
         facility_id,
         policy_id: Id::from_bytes(policy_id),
         market_instance_v2_id: policy.market_instance_v2_id,
-        collateral_policy_id: Id::from_bytes(sponsor_position.collateral_policy_id().bytes()),
-        collateral_release_id: Id::from_bytes(sponsor_position.collateral_release_id().bytes()),
+        collateral_policy_id: market.collateral_policy_id,
+        collateral_release_id: market.collateral_release_id,
         dealer_state_account_id: id(accounts[4].key),
         initial_position_generation: 1,
     };
@@ -2710,14 +2968,7 @@ fn initialize_facility(
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: binding.collateral_policy_id,
-        collateral_release_id: binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
-    let transfer = prepare_dealer_sponsor_funding_transfer_v1(
+    let transfer = prepare_dealer_sponsor_funding_transfer_v2(
         market,
         sponsor,
         payload.sponsor_capital_atoms,
@@ -2938,6 +3189,16 @@ fn initialize_facility(
         replay_account_id: id(accounts[6].key),
         position_replay_account_id: Id::from_bytes(facility_position_post.replay_account().bytes()),
     };
+    let sponsor_general_replay = prepare_dealer_general_replay_v2(
+        sponsor_authority,
+        transfer.source_post(),
+        GeneralReplayTransitionKindV1::DealerSponsorFunding,
+        transfer.bundle().bundle_id().map_err(dealer_fault)?,
+        market.collateral_value_receipt_id,
+        authorization.receipt_semantic_id,
+    )?;
+    let transfer = bind_dealer_general_position_transfer_v3(transfer, &sponsor_general_replay)
+        .map_err(dealer_fault)?;
     let prepared = prepare_facility_initialization_v3(
         &genesis,
         &binding,
@@ -3078,6 +3339,7 @@ fn initialize_facility(
         .copy_from_slice(
             &prepared
                 .transfer
+                .transfer()
                 .source_post()
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
@@ -3088,10 +3350,23 @@ fn initialize_facility(
         .copy_from_slice(
             &prepared
                 .transfer
+                .transfer()
                 .destination_post()
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         );
+    let _accepted_transfer = accept_dealer_asset_transfer_postwrite_v2(
+        program_id,
+        prepared.transfer.transfer().bundle(),
+        &accounts[3],
+        &accounts[5],
+    )?;
+    let observed_general_replay =
+        write_and_accept_general_replay_v1(program_id, &accounts[32], &sponsor_general_replay)?;
+    require(
+        observed_general_replay == prepared.transfer.general_replay_post_semantic_id(),
+        ClutchError::Replay,
+    )?;
     prepared
         .replay
         .replay_post()
@@ -3788,13 +4063,23 @@ fn select_lease_and_begin(
         None,
     )?;
 
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: position_binding.collateral_policy_id,
-        collateral_release_id: position_binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
+    let (_collateral_value, market) = authenticate_dealer_collateral_value_v2(
+        program_id,
+        &policy,
+        Some(&position_binding),
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[40],
+            profile: &accounts[41],
+            policy: &accounts[42],
+            token_program: &accounts[43],
+            token_programdata: &accounts[44],
+            market_binding: &accounts[21],
+            market_runtime: &accounts[45],
+            market_instance: &accounts[25],
+            hoard: &accounts[46],
+            claim_ledger: &accounts[47],
+        },
+    )?;
     let facility_endpoint = DealerTransferPositionV3::Facility {
         account_id: id(accounts[3].key),
         position: facility_position.projection,
@@ -4111,6 +4396,12 @@ fn select_lease_and_begin(
                         .encode()
                         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
                 );
+            let _accepted_transfer = accept_dealer_asset_transfer_postwrite_v2(
+                program_id,
+                prepared.dealer.transfer.bundle(),
+                &accounts[3],
+                &accounts[36],
+            )?;
             let state_bump = accounts[2].data.borrow()[2];
             write_dealer_body(
                 &accounts[2],
@@ -4451,26 +4742,43 @@ fn transfer_lp_funding(
         replay.next_transition_ordinal() == payload.expected_replay_ordinal,
         ClutchError::Replay,
     )?;
-    let (lp_position, lp_projection) = authenticate_controlled_general_position(
-        program_id,
-        &accounts[5],
-        id(accounts[0].key),
-        &policy,
-    )?;
     let page = authenticate_lp_page(program_id, &accounts[6])?;
     require(
         page.page_ordinal == payload.page_ordinal,
         ClutchError::MismatchedState,
     )?;
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: binding.collateral_policy_id,
-        collateral_release_id: binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
+    let (collateral_value, market) = authenticate_dealer_collateral_value_v2(
+        program_id,
+        &policy,
+        Some(&binding),
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[7],
+            profile: &accounts[8],
+            policy: &accounts[9],
+            token_program: &accounts[10],
+            token_programdata: &accounts[11],
+            market_binding: &accounts[12],
+            market_runtime: &accounts[13],
+            market_instance: &accounts[14],
+            hoard: &accounts[15],
+            claim_ledger: &accounts[16],
+        },
+    )?;
+    let lp_replay_sequence = current_general_replay_sequence_v1(&accounts[17])?;
+    let lp_authority = authenticate_general_position_replay_v2(
+        program_id,
+        collateral_value.liabilities.bound,
+        &accounts[12],
+        &accounts[13],
+        &accounts[5],
+        &accounts[17],
+        accounts[0].key.to_bytes(),
+        lp_replay_sequence,
+    )?;
+    let lp_position = lp_authority.position.semantic;
+    let lp_projection = lp_authority.projection;
     let lp_owner = Id::from_bytes(lp_position.owner().bytes());
-    let transfer = prepare_dealer_lp_share_transfer_v1(
+    let transfer = prepare_dealer_lp_share_transfer_v2(
         runtime_action,
         &policy,
         market,
@@ -4486,6 +4794,30 @@ fn transfer_lp_funding(
         },
     )
     .map_err(dealer_fault)?;
+    let transfer_bundle = transfer.bundle();
+    let general_kind = match runtime_action {
+        DealerRuntimeActionV1::Contribute => GeneralReplayTransitionKindV1::DealerLpContribute,
+        DealerRuntimeActionV1::WithdrawFunding => {
+            GeneralReplayTransitionKindV1::DealerLpWithdraw
+        }
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let lp_general_post = match runtime_action {
+        DealerRuntimeActionV1::Contribute => transfer.source_post(),
+        DealerRuntimeActionV1::WithdrawFunding => transfer.destination_post(),
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let transfer_bundle_id = transfer_bundle.bundle_id().map_err(dealer_fault)?;
+    let lp_general_replay = prepare_dealer_general_replay_v2(
+        lp_authority,
+        lp_general_post,
+        general_kind,
+        transfer_bundle_id,
+        market.collateral_value_receipt_id,
+        transfer_bundle_id,
+    )?;
+    let transfer = bind_dealer_general_position_transfer_v3(transfer, &lp_general_replay)
+        .map_err(dealer_fault)?;
     let (page_after, state_after, replay_after, facility_post, lp_post) = match action {
         DealerFacilityAction::Contribute => {
             let prepared = prepare_lp_contribution_v2(
@@ -4504,8 +4836,8 @@ fn transfer_lp_funding(
                 prepared.page_after,
                 prepared.state_after,
                 prepared.replay.replay_post(),
-                prepared.transfer.destination_post(),
-                prepared.transfer.source_post(),
+                prepared.transfer.transfer().destination_post(),
+                prepared.transfer.transfer().source_post(),
             )
         }
         DealerFacilityAction::WithdrawFunding => {
@@ -4525,8 +4857,8 @@ fn transfer_lp_funding(
                 prepared.page_after,
                 prepared.state_after,
                 prepared.replay.replay_post(),
-                prepared.transfer.source_post(),
-                prepared.transfer.destination_post(),
+                prepared.transfer.transfer().source_post(),
+                prepared.transfer.transfer().destination_post(),
             )
         }
         _ => return Err(ClutchError::UnsupportedInstruction.into()),
@@ -4548,6 +4880,18 @@ fn transfer_lp_funding(
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         );
+    let _accepted_transfer = accept_dealer_asset_transfer_postwrite_v2(
+        program_id,
+        transfer_bundle,
+        &accounts[3],
+        &accounts[5],
+    )?;
+    let observed_general_replay =
+        write_and_accept_general_replay_v1(program_id, &accounts[17], &lp_general_replay)?;
+    require(
+        observed_general_replay == transfer.general_replay_post_semantic_id(),
+        ClutchError::Replay,
+    )?;
     let page_bump = accounts[6].data.borrow()[2];
     write_dealer_body(
         &accounts[6],
@@ -4976,8 +5320,6 @@ fn refund_cancelled_sponsor(
         replay.next_transition_ordinal() == payload.expected_replay_ordinal,
         ClutchError::Replay,
     )?;
-    let (refund_position, refund_projection) =
-        authenticate_general_position(program_id, &accounts[4], &policy)?;
     let dependency = authenticate_dependency(program_id, &accounts[6], state.facility_id)?;
     let schedule = authenticate_schedule(program_id, &accounts[7])?;
     let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
@@ -5061,14 +5403,37 @@ fn refund_cancelled_sponsor(
             .runtime_receipt_observation()
             .map_err(dealer_fault)?,
     )?;
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: binding.collateral_policy_id,
-        collateral_release_id: binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
-    let transfer = prepare_dealer_sponsor_refund_transfer_v1(
+    let (collateral_value, market) = authenticate_dealer_collateral_value_v2(
+        program_id,
+        &policy,
+        Some(&binding),
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[20],
+            profile: &accounts[21],
+            policy: &accounts[22],
+            token_program: &accounts[23],
+            token_programdata: &accounts[24],
+            market_binding: &accounts[25],
+            market_runtime: &accounts[26],
+            market_instance: &accounts[27],
+            hoard: &accounts[28],
+            claim_ledger: &accounts[29],
+        },
+    )?;
+    let refund_replay_sequence = current_general_replay_sequence_v1(&accounts[30])?;
+    let refund_authority = authenticate_general_position_replay_v2(
+        program_id,
+        collateral_value.liabilities.bound,
+        &accounts[25],
+        &accounts[26],
+        &accounts[4],
+        &accounts[30],
+        state.sponsor_refund_recipient.bytes(),
+        refund_replay_sequence,
+    )?;
+    let refund_position = refund_authority.position.semantic;
+    let refund_projection = refund_authority.projection;
+    let transfer = prepare_dealer_sponsor_refund_transfer_v2(
         market,
         state.sponsor_refund_recipient,
         state.sponsor_capital_atoms,
@@ -5086,6 +5451,17 @@ fn refund_cancelled_sponsor(
         Id::from_bytes(refund_position.owner().bytes()) == state.sponsor_refund_recipient,
         ClutchError::MismatchedState,
     )?;
+    let transfer_bundle_id = transfer.bundle().bundle_id().map_err(dealer_fault)?;
+    let refund_general_replay = prepare_dealer_general_replay_v2(
+        refund_authority,
+        transfer.destination_post(),
+        GeneralReplayTransitionKindV1::DealerSponsorRefund,
+        transfer_bundle_id,
+        market.collateral_value_receipt_id,
+        authorization.receipt_semantic_id,
+    )?;
+    let transfer = bind_dealer_general_position_transfer_v3(transfer, &refund_general_replay)
+        .map_err(dealer_fault)?;
     let prepared = prepare_refund_cancelled_sponsor_v3(
         &policy,
         &binding,
@@ -5127,6 +5503,7 @@ fn refund_cancelled_sponsor(
         .copy_from_slice(
             &prepared
                 .transfer
+                .transfer()
                 .source_post()
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
@@ -5137,10 +5514,23 @@ fn refund_cancelled_sponsor(
         .copy_from_slice(
             &prepared
                 .transfer
+                .transfer()
                 .destination_post()
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         );
+    let _accepted_transfer = accept_dealer_asset_transfer_postwrite_v2(
+        program_id,
+        prepared.transfer.transfer().bundle(),
+        &accounts[3],
+        &accounts[4],
+    )?;
+    let observed_general_replay =
+        write_and_accept_general_replay_v1(program_id, &accounts[30], &refund_general_replay)?;
+    require(
+        observed_general_replay == prepared.transfer.general_replay_post_semantic_id(),
+        ClutchError::Replay,
+    )?;
     write_dealer_body(
         &accounts[16],
         DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
@@ -5391,13 +5781,23 @@ fn collect_or_deliver_row(
         Some(reservation_body.stored_bump),
     )?;
     let owner = Id::from_bytes(reservation_body.owner.bytes());
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: position_binding.collateral_policy_id,
-        collateral_release_id: position_binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
+    let (_collateral_value, market) = authenticate_dealer_collateral_value_v2(
+        program_id,
+        &policy,
+        Some(&position_binding),
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[34],
+            profile: &accounts[35],
+            policy: &accounts[36],
+            token_program: &accounts[37],
+            token_programdata: &accounts[38],
+            market_binding: &accounts[30],
+            market_runtime: &accounts[39],
+            market_instance: &accounts[40],
+            hoard: &accounts[41],
+            claim_ledger: &accounts[42],
+        },
+    )?;
     let (user_position, user_replay) = authenticate_general_position_replay_for_dealer(
         program_id,
         root,
@@ -5674,8 +6074,9 @@ fn collect_or_deliver_row(
                 position_post,
                 replay_kind,
                 clutch_general_v2_contract::Id32::new(reservation_post_id.bytes())?,
-                clutch_general_v2_contract::Id32::new(
-                    authorization.receipt_semantic_id.bytes(),
+                dealer_general_replay_value_evidence_id_v2(
+                    market.collateral_value_receipt_id,
+                    authorization.receipt_semantic_id,
                 )?,
                 &RuntimeSha256,
             )?;
@@ -5705,7 +6106,7 @@ fn collect_or_deliver_row(
                 .semantic
                 .semantic_id(&RuntimeSha256)
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-            let row_transition = CoveredDealerRowAssetTransitionV1::new(
+            let row_transition = CoveredDealerRowAssetTransitionV2::new(
                 runtime_action,
                 row,
                 id(accounts[24].key),
@@ -5717,6 +6118,7 @@ fn collect_or_deliver_row(
                 Id::from_bytes(general_replay_post.replay_poststate_semantic_id().bytes()),
                 pot.pot_content_id().map_err(dealer_fault)?,
                 pot_after.pot_content_id().map_err(dealer_fault)?,
+                market.collateral_value_receipt_id,
             )
             .map_err(dealer_fault)?;
             let prepared = prepare_covered_dealer_row_progress_v1(
@@ -5794,6 +6196,53 @@ fn collect_or_deliver_row(
                 pot_bump,
                 &prepared.pot_after,
             )?;
+            let observed_reservation = ReservationAccountV9::decode(&accounts[24].data.borrow())?;
+            let observed_position = PositionAccountV3::decode(&accounts[25].data.borrow())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let observed_replay_data = accounts[26]
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            let observed_replay = ReplayV3Envelope::decode(&observed_replay_data, &RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+            let observed_replay_id = observed_replay
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+            let (_, observed_pot) = dealer_body::<SettlementPotV2>(
+                program_id,
+                &accounts[20],
+                true,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
+            )?;
+            let observed_position_id = observed_position
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let observed_transition = CoveredDealerRowAssetTransitionV2::new(
+                runtime_action,
+                row,
+                id(accounts[24].key),
+                Id::from_bytes(reservation_pre_id.bytes()),
+                Id::from_bytes(observed_reservation.data_id()?.bytes()),
+                Id::from_bytes(user_position.semantic_id),
+                Id::from_bytes(observed_position_id.bytes()),
+                Id::from_bytes(user_replay.replay_semantic_id().bytes()),
+                Id::from_bytes(observed_replay_id.bytes()),
+                pot.pot_content_id().map_err(dealer_fault)?,
+                observed_pot.pot_content_id().map_err(dealer_fault)?,
+                market.collateral_value_receipt_id,
+            )
+            .map_err(dealer_fault)?;
+            require(
+                observed_reservation == reservation_post
+                    && observed_position == position_post.semantic
+                    && observed_replay_data.as_ref()
+                        == general_replay_post.replay_poststate_body()
+                    && observed_pot == prepared.pot_after
+                    && observed_transition.bundle_id() == row_transition.bundle_id(),
+                ClutchError::MismatchedState,
+            )?;
+            drop(observed_replay_data);
             prepared
                 .facility_replay
                 .replay_post()
@@ -6038,13 +6487,23 @@ fn finalize_or_abort_lease_pot(
         receipt.runtime_transition_intent().map_err(dealer_fault)?,
         receipt.runtime_receipt_observation().map_err(dealer_fault)?,
     )?;
-    let market = DealerPositionMarketJoinV1 {
-        market_instance_v2_id: policy.market_instance_v2_id,
-        realm_id: policy.realm_id,
-        collateral_policy_id: position_binding.collateral_policy_id,
-        collateral_release_id: position_binding.collateral_release_id,
-        outcome_count: policy.outcome_count,
-    };
+    let (_collateral_value, market) = authenticate_dealer_collateral_value_v2(
+        program_id,
+        &policy,
+        Some(&position_binding),
+        DealerCollateralAuthorityAccountsV2 {
+            realm: &accounts[30],
+            profile: &accounts[31],
+            policy: &accounts[32],
+            token_program: &accounts[33],
+            token_programdata: &accounts[34],
+            market_binding: &accounts[35],
+            market_runtime: &accounts[36],
+            market_instance: &accounts[37],
+            hoard: &accounts[38],
+            claim_ledger: &accounts[39],
+        },
+    )?;
     let close_rent = DealerLeasePotCloseRentV3 {
         lease_lamports_before: accounts[19].lamports(),
         pot_lamports_before: accounts[20].lamports(),
@@ -6193,15 +6652,36 @@ fn finalize_or_abort_lease_pot(
     release_dealer_account(&accounts[16])?;
     release_dealer_account(&accounts[19])?;
     release_dealer_account(&accounts[20])?;
+    require_released_dealer_account(&accounts[16])?;
+    require_released_dealer_account(&accounts[19])?;
+    require_released_dealer_account(&accounts[20])?;
+    let transfer_bundle = prepared.transfer().bundle();
+    let observed_position_post = dealer_transfer_endpoint_semantic_id_v2(
+        program_id,
+        DealerAssetEndpointKindV1::FacilityPosition,
+        &accounts[3],
+    )?;
+    let _accepted_transfer = accept_dealer_asset_transfer_v2(
+        transfer_bundle,
+        DealerAssetTransferPostObservationV2 {
+            source_account_id: id(accounts[20].key),
+            destination_account_id: id(accounts[3].key),
+            source_post_semantic_id: close.transition_id(),
+            destination_post_semantic_id: observed_position_post,
+        },
+    )
+    .map_err(dealer_fault)?;
     let refunds = close.refund_lamports();
-    credit_lamports(&accounts[17], receipt_rent.refundable_principal)?;
-    credit_lamports(&accounts[23], refunds[0])?;
-    credit_lamports(&accounts[24], refunds[1])?;
     let neutral_credit = close
         .neutral_sink_lamports()
         .checked_add(receipt_rent.donation_floor)
         .ok_or(ClutchError::Arithmetic)?;
-    credit_lamports(&accounts[25], neutral_credit)
+    credit_exact_dealer_terminal_lamports([
+        (&accounts[17], receipt_rent.refundable_principal),
+        (&accounts[23], refunds[0]),
+        (&accounts[24], refunds[1]),
+        (&accounts[25], neutral_credit),
+    ])
 }
 
 /// Execute one facility action admitted by the non-production profile.
@@ -6212,6 +6692,34 @@ pub fn process(
     action: DealerFacilityAction,
     payload: &[u8],
 ) -> Outcome<()> {
+    let implemented = matches!(
+        action,
+        DealerFacilityAction::Initialize
+            | DealerFacilityAction::CreateLpPage
+            | DealerFacilityAction::Contribute
+            | DealerFacilityAction::WithdrawFunding
+            | DealerFacilityAction::Activate
+            | DealerFacilityAction::CancelFunding
+            | DealerFacilityAction::RefundCancelledSponsor
+            | DealerFacilityAction::BindEpoch
+            | DealerFacilityAction::LapseEpoch
+            | DealerFacilityAction::SelectLeaseAndBegin
+            | DealerFacilityAction::Collect
+            | DealerFacilityAction::Deliver
+            | DealerFacilityAction::FinalizeSettlement
+            | DealerFacilityAction::AbortBeforeCollection
+    );
+    if !implemented {
+        return super::dealer_runtime::process_reserved_disabled(action);
+    }
+    let account_contract_payload =
+        DealerRuntimePayloadV1::decode(action, payload).map_err(dealer_fault)?;
+    authenticate_dealer_meta_contract_v1(
+        program_id,
+        accounts,
+        action,
+        account_contract_payload,
+    )?;
     match action {
         DealerFacilityAction::Initialize => {
             initialize_facility(program_id, accounts, sequence, payload)
@@ -6243,7 +6751,7 @@ pub fn process(
         | DealerFacilityAction::AbortBeforeCollection => {
             finalize_or_abort_lease_pot(program_id, accounts, sequence, action, payload)
         }
-        _ => super::dealer_runtime::process_reserved_disabled(action),
+        _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
@@ -6343,10 +6851,15 @@ mod collect_deliver_adversarial_tests {
         )
         .unwrap();
         let metas = meta_contract_v1(DealerFacilityAction::Collect, decoded).unwrap();
-        assert_eq!(metas.len(), 38);
+        assert_eq!(metas.len(), 47);
         assert_eq!(metas[33].role, DealerMetaRoleV1::SeriesObligation);
         assert!(!metas[33].writable);
-        assert!(metas[34..]
+        assert_eq!(metas[37].role, DealerMetaRoleV1::CollateralTokenProgram);
+        assert_eq!(metas[38].role, DealerMetaRoleV1::CollateralTokenProgramData);
+        assert_eq!(metas[41].role, DealerMetaRoleV1::Hoard);
+        assert_eq!(metas[42].role, DealerMetaRoleV1::ClaimLedger);
+        assert!(metas[34..43].iter().all(|meta| !meta.writable && !meta.signer));
+        assert!(metas[43..]
             .iter()
             .all(|meta| meta.role == DealerMetaRoleV1::OrderPage));
     }
@@ -6400,8 +6913,8 @@ mod finalize_abort_adversarial_tests {
         .unwrap();
         let finalize = meta_contract_v1(DealerFacilityAction::FinalizeSettlement, decoded).unwrap();
         let abort = meta_contract_v1(DealerFacilityAction::AbortBeforeCollection, decoded).unwrap();
-        assert_eq!(finalize.len(), 30);
-        assert_eq!(abort.len(), 30);
+        assert_eq!(finalize.len(), 40);
+        assert_eq!(abort.len(), 40);
         assert_eq!(
             finalize[29].role,
             DealerMetaRoleV1::SeriesObligation
@@ -6409,6 +6922,10 @@ mod finalize_abort_adversarial_tests {
         assert_eq!(abort[29].role, DealerMetaRoleV1::SeriesObligation);
         assert!(!finalize[29].writable);
         assert!(!abort[29].writable);
+        assert_eq!(finalize[33].role, DealerMetaRoleV1::CollateralTokenProgram);
+        assert_eq!(finalize[34].role, DealerMetaRoleV1::CollateralTokenProgramData);
+        assert!(finalize[30..].iter().all(|meta| !meta.writable && !meta.signer));
+        assert!(abort[30..].iter().all(|meta| !meta.writable && !meta.signer));
         let finalize_settlement = finalize
             .iter()
             .find(|meta| meta.role == DealerMetaRoleV1::LivenessSettlement)

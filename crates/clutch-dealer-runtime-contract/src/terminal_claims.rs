@@ -9,14 +9,17 @@
 //! LPs in one transaction.
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
+use clutch_general_v2_contract::GeneralReplayTransitionPlanV1;
 use crate::{
-    prepare_dealer_position_pair_transfer_v1, DealerActionLivenessAuthorizationV1,
-    DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1, DealerChildKindV2,
+    bind_dealer_general_position_transfer_v3, prepare_dealer_position_pair_transfer_v2,
+    DealerActionLivenessAuthorizationV1,
+    DealerAssetTransferAmountsV1, DealerAssetTransferBundleV2, DealerChildKindV2,
     DealerFacilityReplayV1, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
-    DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
+    DealerPositionMarketJoinV2, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransferPositionV3,
     DealerTransitionIntentV1, DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error,
-    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, PreparedDealerPositionPairTransferV1,
+    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2,
+    PreparedDealerGeneralPositionTransferV3, PreparedDealerPositionPairTransferV2,
     PreparedDealerReplayTransitionV1, Result, DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1,
     DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1, DELETABLE_RENT_OWNER_BYTES, LP_ENTRIES_PER_PAGE,
     MAX_ATOMS, MAX_LP_PAGES,
@@ -783,7 +786,7 @@ fn validate_terminal_page_binding_v1(
 /// account identities; the Claim replay intent binds [`Self::transfer_bundle`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedDealerTerminalClaimV2 {
-    transfer: PreparedDealerPositionPairTransferV1,
+    transfer: PreparedDealerPositionPairTransferV2,
     state_after: DealerStateV2,
     allocation_after: DealerTerminalAllocationV1,
     lp_owner: Id,
@@ -794,7 +797,7 @@ pub struct PreparedDealerTerminalClaimV2 {
 
 impl PreparedDealerTerminalClaimV2 {
     /// Exact Claim asset bundle whose ID enters the canonical Replay intent.
-    pub const fn transfer_bundle(self) -> DealerAssetTransferBundleV1 {
+    pub const fn transfer_bundle(self) -> DealerAssetTransferBundleV2 {
         self.transfer.bundle()
     }
 
@@ -856,7 +859,7 @@ pub fn prepare_dealer_terminal_claim_v2(
     page: &LpPageV2,
     allocation: &DealerTerminalAllocationV1,
     entry_index: u8,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     facility_position: DealerTransferPositionV3,
     lp_position: DealerTransferPositionV3,
 ) -> Result<PreparedDealerTerminalClaimV2> {
@@ -913,7 +916,7 @@ pub fn prepare_dealer_terminal_claim_v2(
         _ => return Err(Error::MismatchedBinding),
     };
     let claim_atoms = allocation.claim_atoms[index];
-    let transfer = prepare_dealer_position_pair_transfer_v1(
+    let transfer = prepare_dealer_position_pair_transfer_v2(
         DealerRuntimeActionV1::Claim,
         market,
         facility_position,
@@ -964,6 +967,7 @@ pub fn prepare_dealer_terminal_claim_v2(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedDealerTerminalClaimReplayV2 {
     claim: PreparedDealerTerminalClaimV2,
+    general_transfer: PreparedDealerGeneralPositionTransferV3,
     replay: PreparedDealerReplayTransitionV1,
 }
 
@@ -971,6 +975,11 @@ impl PreparedDealerTerminalClaimReplayV2 {
     /// Exact facility-to-LP transfer and State/allocation postimages.
     pub const fn claim(self) -> PreparedDealerTerminalClaimV2 {
         self.claim
+    }
+
+    /// General Replay-bound Position transfer committed by facility Replay.
+    pub const fn general_transfer(self) -> PreparedDealerGeneralPositionTransferV3 {
+        self.general_transfer
     }
 
     /// Same-generation canonical Replay advance binding the Claim bundle.
@@ -993,9 +1002,10 @@ pub fn prepare_dealer_terminal_claim_replay_v2(
     schedule: &DealerLivenessScheduleV1,
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     facility_position: DealerTransferPositionV3,
     lp_position: DealerTransferPositionV3,
+    general_replay: &GeneralReplayTransitionPlanV1,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
 ) -> Result<PreparedDealerTerminalClaimReplayV2> {
@@ -1026,6 +1036,8 @@ pub fn prepare_dealer_terminal_claim_replay_v2(
         lp_position,
     )?;
     let bundle = prepared_claim.transfer_bundle();
+    let general_transfer =
+        bind_dealer_general_position_transfer_v3(prepared_claim.transfer, general_replay)?;
     let state_after = prepared_claim.state_after();
     let prepared_replay = replay.prepare_transition(
         replay_binding,
@@ -1038,7 +1050,7 @@ pub fn prepare_dealer_terminal_claim_replay_v2(
             position_post_semantic_id: bundle.source_post_semantic_id,
             liveness_receipt_semantic_id: authorization.receipt_semantic_id,
             fee_evidence_id: Id::ZERO,
-            asset_transfer_bundle_id: bundle.bundle_id()?,
+            asset_transfer_bundle_id: general_transfer.commitment_id(),
             position_generation_before: state.generation,
             position_generation_after: state.generation,
             expected_ordinal: replay.next_transition_ordinal(),
@@ -1048,6 +1060,7 @@ pub fn prepare_dealer_terminal_claim_replay_v2(
     )?;
     Ok(PreparedDealerTerminalClaimReplayV2 {
         claim: prepared_claim,
+        general_transfer,
         replay: prepared_replay,
     })
 }
