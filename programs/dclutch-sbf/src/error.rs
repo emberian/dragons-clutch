@@ -85,6 +85,12 @@ pub enum AdapterError {
     PositionPostcondition = 37,
     /// An empty Position could not be retired wholly into its immutable RentCredit.
     PositionClose = 38,
+    /// Readiness Market, manifest, funding, RentCredit, replay, or account facts failed.
+    ReadinessAuthentication = 39,
+    /// The System Program refused exact readiness-child PDA creation.
+    ReadinessCreateCpi = 40,
+    /// Readiness creation or canonical advancement did not persist its exact state.
+    ReadinessPostcondition = 41,
 }
 
 impl From<AdapterError> for ProgramError {

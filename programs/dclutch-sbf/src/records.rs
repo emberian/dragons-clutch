@@ -8,29 +8,29 @@
 //! writes, and exact close/refund execution.
 
 use dclutch_capability_contract::{
-    CapabilityManifestV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
+    CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
 };
 use dclutch_product_contract::{
-    capacity::{CapacityProfileV1, CAPACITY_PROFILE_BYTES},
-    claim::{CategoricalUnitV1, CATEGORICAL_UNIT_BYTES},
-    product::{InstanceV1, INSTANCE_BYTES},
+    capacity::{CAPACITY_PROFILE_BYTES, CapacityProfileV1},
+    claim::{CATEGORICAL_UNIT_BYTES, CategoricalUnitV1},
+    product::{INSTANCE_BYTES, InstanceV1},
 };
 use dclutch_pyth_contract::resolution_material::{
     CategoricalPythResolutionMaterialV1, RESOLUTION_MATERIAL_BYTES,
 };
-use dclutch_realm_contract::{RealmV1, REALM_BYTES};
+use dclutch_realm_contract::{REALM_BYTES, RealmV1};
 use dclutch_record_contract::{
-    authenticate_finalized_raw_record_v1, prepare_abort_v1, prepare_append_page_v1,
-    prepare_begin_v1, prepare_finalize_v1, AbortObservationV1, AbortRecordV1, AbortTransitionV1,
-    AccountCloseV1, AccountId, AddressDerivationObligationV1, AppendPageV1, BeginRecordV1,
-    ContentDigest, FinalizeRecordV1, PageEnvelopeKindV1, PageEnvelopeV1, RawRecordValidationModeV1,
-    RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, SchemaReleaseId,
-    StagingCursorV1, StagingLamportCloseV1, StagingLivenessPolicyV1, RAW_RECORD_PDA_SEED_V1,
-    STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
+    AbortObservationV1, AbortRecordV1, AbortTransitionV1, AccountCloseV1, AccountId,
+    AddressDerivationObligationV1, AppendPageV1, BeginRecordV1, ContentDigest, FinalizeRecordV1,
+    PageEnvelopeKindV1, PageEnvelopeV1, RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1,
+    RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1,
+    STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId, StagingCursorV1, StagingLamportCloseV1,
+    StagingLivenessPolicyV1, authenticate_finalized_raw_record_v1, prepare_abort_v1,
+    prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
 };
 use dclutch_rent_contract::{
-    RefundAuthority, RentCreditV1, SourceCloseCreditPlanV1, RENT_CREDIT_BYTES_V1,
-    RENT_CREDIT_PDA_DOMAIN_V1,
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
+    SourceCloseCreditPlanV1,
 };
 use solana_program::{
     account_info::AccountInfo, clock::Clock, hash::hash, program::invoke_signed,
@@ -2040,9 +2040,11 @@ mod tests {
         )
         .expect("sponsor append");
         assert_eq!(&raw.try_borrow_data().expect("raw data")[..], &content);
-        assert!(decode_cursor(&cursor_shell)
-            .expect("advanced cursor")
-            .is_complete());
+        assert!(
+            decode_cursor(&cursor_shell)
+                .expect("advanced cursor")
+                .is_complete()
+        );
     }
 
     #[test]
@@ -2092,14 +2094,16 @@ mod tests {
             Pubkey::new_unique(),
             false,
         );
-        assert!(AbortFrame::parse(&[
-            sponsor,
-            raw.clone(),
-            cursor.clone(),
-            rent_credit.clone(),
-            clock.clone(),
-        ])
-        .is_ok());
+        assert!(
+            AbortFrame::parse(&[
+                sponsor,
+                raw.clone(),
+                cursor.clone(),
+                rent_credit.clone(),
+                clock.clone(),
+            ])
+            .is_ok()
+        );
 
         let cleaner = test_account(
             Pubkey::new_unique(),
@@ -2110,14 +2114,16 @@ mod tests {
             system_program::ID,
             false,
         );
-        assert!(AbortFrame::parse(&[
-            cleaner.clone(),
-            raw.clone(),
-            cursor.clone(),
-            rent_credit.clone(),
-            clock.clone(),
-        ])
-        .is_ok());
+        assert!(
+            AbortFrame::parse(&[
+                cleaner.clone(),
+                raw.clone(),
+                cursor.clone(),
+                rent_credit.clone(),
+                clock.clone(),
+            ])
+            .is_ok()
+        );
         assert!(AbortFrame::parse(&[cleaner, raw.clone(), cursor, raw, clock]).is_err());
     }
 }

@@ -17,10 +17,12 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+use dclutch_capability_contract::readiness_instruction::READINESS_INSTRUCTION_MAGIC;
 use dclutch_collateral_contract::{
     INSTRUCTION_MAGIC as COLLATERAL_INSTRUCTION_MAGIC, InstructionV1 as CollateralInstructionV1,
 };
 use dclutch_pyth_contract::instruction::ResolveCategoricalInstructionV1;
+use dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1;
 use dclutch_rent_contract::RENT_CREDIT_INSTRUCTION_MAGIC_V1;
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
@@ -34,7 +36,9 @@ mod found_market;
 mod open_vault;
 mod position;
 mod provider;
+mod readiness;
 mod realm;
+mod records;
 mod rent_credit;
 mod resolution;
 #[cfg(feature = "non-production-real-pyth-lab")]
@@ -56,6 +60,16 @@ pub fn process_instruction(
         == Some(&RENT_CREDIT_INSTRUCTION_MAGIC_V1)
     {
         return rent_credit::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..READINESS_INSTRUCTION_MAGIC.len())
+        == Some(&READINESS_INSTRUCTION_MAGIC)
+    {
+        return readiness::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..RECORD_INSTRUCTION_MAGIC_V1.len())
+        == Some(&RECORD_INSTRUCTION_MAGIC_V1)
+    {
+        return records::dispatch(program_id, accounts, instruction_data);
     }
     match decode_instruction(instruction_data)? {
         RoutedInstruction::Resolve(instruction) => {
@@ -230,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn rent_credit_family_has_a_distinct_top_level_domain() {
+    fn routed_instruction_families_have_distinct_top_level_domains() {
         let authority = RefundAuthority::new([9; 32]).expect("nonzero authority");
         let create = CreateRentCreditV1::new(authority, 7).to_bytes();
         assert_eq!(
@@ -241,6 +255,17 @@ mod tests {
             RENT_CREDIT_INSTRUCTION_MAGIC_V1.as_slice(),
             COLLATERAL_INSTRUCTION_MAGIC
         );
+        assert_ne!(
+            RENT_CREDIT_INSTRUCTION_MAGIC_V1,
+            READINESS_INSTRUCTION_MAGIC
+        );
+        assert_ne!(
+            RENT_CREDIT_INSTRUCTION_MAGIC_V1,
+            RECORD_INSTRUCTION_MAGIC_V1
+        );
+        assert_ne!(READINESS_INSTRUCTION_MAGIC, RECORD_INSTRUCTION_MAGIC_V1);
+        assert_ne!(READINESS_INSTRUCTION_MAGIC, COLLATERAL_INSTRUCTION_MAGIC);
+        assert_ne!(RECORD_INSTRUCTION_MAGIC_V1, COLLATERAL_INSTRUCTION_MAGIC);
         assert!(matches!(
             RentCreditInstructionV1::decode(&create),
             Ok(RentCreditInstructionV1::Create(_))

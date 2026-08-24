@@ -26,6 +26,7 @@ dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-pyth-contract = { path = "../../crates/dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../../crates/dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
