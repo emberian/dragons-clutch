@@ -93,90 +93,6 @@
     recovery: "Recovery",
     other: "Other release state"
   });
-  const KIND_GROUPS = Object.freeze({
-    "collateral-hoard-v2": "collateral",
-    "collateral-claim-ledger-v3": "collateral",
-    "collateral-resolution-v5": "collateral",
-    "fractional-policy-v3": "collateral",
-    "fractional-ledger-v1": "collateral",
-    "fractional-credit-v2": "collateral",
-    "fractional-credit-tombstone-v2": "collateral",
-    "general-market-runtime": "market",
-    "general-epoch": "market",
-    "general-economic-domain": "market",
-    "general-current-market-authority-v5": "market",
-    "general-order-page-v5": "market",
-    "general-reservation-v9": "settlement",
-    "general-candidate-window": "market",
-    "series-registry-v4": "product",
-    "series-funding-v5": "series",
-    "product-funding-quote-v6-schedule-v4": "product",
-    "product-attachment-v6": "product",
-    "compiled-product-series-bundle-v7": "product",
-    "product-market-replay-v2-graph-v4": "product",
-    "product-market-root-v3-graph-v4": "product",
-    "series-market-link-v3": "series",
-    "structured-claim-descriptor": "product",
-    "product-capability-registry": "product",
-    "product-capability-registry-v2": "product",
-    "compiled-product-series-bundle": "product",
-    "product-compiler-output": "product",
-    "product-artifact": "product",
-    "series-funding": "series",
-    "source-release": "source",
-    "source-head": "source",
-    "source-open-raw-page": "source",
-    "source-raw-page": "source",
-    "source-window-work": "source",
-    "source-window-seal": "source",
-    "source-statistic-result": "source",
-    "source-lineage": "source",
-    "source-work-receipt": "source",
-    "general-admission-node": "candidate",
-    "general-candidate-feed-stage": "candidate",
-    "general-candidate-feed": "candidate",
-    "general-clear-work": "candidate",
-    "general-epoch-budget": "candidate",
-    "general-owner-settlement": "settlement",
-    "general-owner-settlement-v5": "settlement",
-    "general-settlement-receipt-v5": "settlement",
-    "general-settlement-root-v1": "settlement",
-    "general-owner-settlement-v3": "settlement",
-    "owner-settlement-v3": "settlement",
-    "general-settlement-cash-pot": "settlement",
-    "general-final-pot": "settlement",
-    "fee-selected-record": "settlement",
-    "fee-owner-carry": "settlement",
-    "fee-owner-finalization": "settlement",
-    "fee-payer-allocation": "settlement",
-    "fee-recipient-allocation": "settlement",
-    "fee-treasury-ledger": "settlement",
-    "liveness-policy": "settlement",
-    "liveness-compartment": "settlement",
-    "position-v3": "settlement",
-    "replay-v3": "settlement",
-    "dealer-policy-v1": "liquidity",
-    "dealer-liveness-schedule-v1": "liquidity",
-    "dealer-state-v2": "liquidity",
-    "dealer-funded-dependencies-v2": "liquidity",
-    "dealer-lp-page-v2": "liquidity",
-    "dealer-lease-v2": "liquidity",
-    "dealer-settlement-pot-v2": "liquidity",
-    "dealer-epoch-binding-v2": "liquidity",
-    "dealer-terminal-allocation-v1": "liquidity",
-    "dealer-claim-work-v1": "liquidity",
-    "dealer-root-tombstone-v2": "liquidity",
-    "dealer-exit-ticket-v1": "liquidity",
-    "dealer-action-receipt-v1": "liquidity",
-    "dealer-replay": "liquidity",
-    "failure-external-root": "recovery",
-    "failure-market-root-v2": "recovery",
-    "failure-liveness-policy": "recovery",
-    "failure-recovery-compartment": "recovery",
-    "failure-replay-tombstone": "recovery",
-    "failure-interval-consensus-work-v1": "recovery",
-    "failure-interval-consensus-replay-v1": "recovery"
-  });
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
   const requirePlain = (value, name) => {
     if (!plain(value)) throw new Error(`${name} must be an object.`);
@@ -620,6 +536,7 @@
       accountVersion: decimal(raw.accountVersion, `session.canonicalAccounts[${index}].accountVersion`, 255n).toString(),
       family: text(raw.family, `session.canonicalAccounts[${index}].family`, 40),
       kind: text(raw.kind, `session.canonicalAccounts[${index}].kind`, 80),
+      displayGroup: text(raw.displayGroup, `session.canonicalAccounts[${index}].displayGroup`, 32),
       decode: Object.freeze({
         status: raw.decode.status,
         requirement: raw.decode.status === "requires-context" ? text(raw.decode.requirement, `session.canonicalAccounts[${index}].decode.requirement`, 240) : null
@@ -631,6 +548,7 @@
       secondaryBindingRole: text(raw.secondaryBindingRole, `session.canonicalAccounts[${index}].secondaryBindingRole`, 96),
       bindingAuthority: text(raw.bindingAuthority, `session.canonicalAccounts[${index}].bindingAuthority`, 96)
     });
+    if (!GROUP_ORDER.includes(value.displayGroup)) throw new Error(`session.canonicalAccounts[${index}] has an unknown canonical display group.`);
     bindingProjection(value.primaryBinding, value.secondaryBinding, value.primaryBindingRole, value.secondaryBindingRole, value.bindingAuthority);
     if (value.owner !== configuration.release.programId || value.releaseKey !== configuration.release.releaseKey) throw new Error(`session.canonicalAccounts[${index}] is not owned by the checked release.`);
     return value;
@@ -759,6 +677,7 @@
       accountVersion: decimal(raw.accountVersion, `accounts[${index}].accountVersion`, 255n).toString(),
       family: text(raw.family, `accounts[${index}].family`, 40),
       kind: text(raw.kind, `accounts[${index}].kind`, 80),
+      displayGroup: text(raw.displayGroup, `accounts[${index}].displayGroup`, 32),
       decode: Object.freeze({ status: raw.decode.status, requirement }),
       generation: raw.generation === null ? null : decimal(raw.generation, `accounts[${index}].generation`).toString(),
       primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `accounts[${index}].primaryBinding`),
@@ -768,6 +687,7 @@
       bindingAuthority: text(raw.bindingAuthority, `accounts[${index}].bindingAuthority`, 96),
       branch: validateBranch(raw.branch, `accounts[${index}].branch`)
     };
+    if (!GROUP_ORDER.includes(value.displayGroup)) throw new Error(`accounts[${index}] has an unknown canonical display group.`);
     return Object.freeze({ ...value, bindingProjection: bindingProjection(value.primaryBinding, value.secondaryBinding, value.primaryBindingRole, value.secondaryBindingRole, value.bindingAuthority) });
   };
 
@@ -788,7 +708,7 @@
     for (const identity of session.canonicalAccounts) {
       const accountValue = finalized.get(identity.address);
       if (!accountValue || accountValue.branch.kind !== "finalized-scan") throw new Error("session identity is absent from the finalized canonical account endpoint.");
-      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding", "primaryBindingRole", "secondaryBindingRole", "bindingAuthority"]) {
+      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "displayGroup", "generation", "primaryBinding", "secondaryBinding", "primaryBindingRole", "secondaryBindingRole", "bindingAuthority"]) {
         if (accountValue[field] !== identity[field]) throw new Error(`session identity ${identity.address} differs from finalized canonical account field ${field}.`);
       }
       if (accountValue.decode.status !== identity.decode.status || accountValue.decode.requirement !== identity.decode.requirement) throw new Error(`session identity ${identity.address} differs from its finalized canonical decode disposition.`);
@@ -1634,14 +1554,6 @@
   };
 
   const maximumSlot = (values) => values.reduce((maximum, value) => value > maximum ? value : maximum, 0n);
-  const accountGroup = (kind) => {
-    if (KIND_GROUPS[kind]) return KIND_GROUPS[kind];
-    if (kind.startsWith("source-")) return "source";
-    if (kind.startsWith("dealer-")) return "liquidity";
-    if (kind.startsWith("failure-")) return "recovery";
-    return "other";
-  };
-
   const actionInspectionDisposition = (action, accountByAddress, tipSlot, requestedCommitment, maximumSlotLag) => {
     if (requestedCommitment !== "finalized") {
       return Object.freeze({
@@ -1785,7 +1697,7 @@
         const matching = forks.nodes.find((node) => node.slot === accountValue.slot && node.blockhash === accountValue.branch.blockhash);
         forkState = dead.has(accountValue.slot) ? "dead-fork" : !matching ? "unidentified-fork" : frozen.has(accountValue.slot) ? "processed-frozen" : "processed-unfrozen";
       }
-      return Object.freeze({ ...accountValue, slotLag: lag.toString(), stale: lag > maximumLag, forkState, group: accountGroup(accountValue.kind) });
+      return Object.freeze({ ...accountValue, slotLag: lag.toString(), stale: lag > maximumLag, forkState, group: accountValue.displayGroup });
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
     const accountByAddress = new Map(annotated.map((accountValue) => [accountValue.address, accountValue]));

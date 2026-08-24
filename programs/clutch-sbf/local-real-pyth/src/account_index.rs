@@ -405,6 +405,97 @@ impl CanonicalAccountKind {
                 | Self::SeriesMarketLinkV3
         )
     }
+
+    /// Stable operator display partition for this exact canonical codec. This
+    /// is presentation metadata only, but keeping it beside the decoder avoids
+    /// a browser list of obsolete account tags and versions.
+    #[must_use]
+    pub const fn operator_group_name(self) -> &'static str {
+        match self {
+            Self::CollateralHoardV2
+            | Self::CollateralClaimLedgerV3
+            | Self::CollateralResolutionV5
+            | Self::FractionalPolicyV3
+            | Self::FractionalLedgerV1
+            | Self::FractionalCreditV2
+            | Self::FractionalCreditTombstoneV2 => "collateral",
+            Self::GeneralMarketRuntime
+            | Self::GeneralEpoch
+            | Self::GeneralEconomicDomain
+            | Self::GeneralMarketBindingV5
+            | Self::GeneralOrderPage
+            | Self::GeneralCandidateWindow
+            | Self::DirectMarketRootV1
+            | Self::DirectMarketRootV3
+            | Self::DirectSelectionV1 => "market",
+            Self::GeneralAdmissionNode
+            | Self::GeneralCandidateFeedStage
+            | Self::GeneralCandidateFeed
+            | Self::GeneralClearWork
+            | Self::GeneralEpochBudget => "candidate",
+            Self::GeneralReservation
+            | Self::GeneralOwnerSettlement
+            | Self::GeneralSettlementReceipt
+            | Self::GeneralSettlementRoot
+            | Self::GeneralSettlementCashPot
+            | Self::GeneralFinalPot
+            | Self::FeeSelectedRecord
+            | Self::FeeOwnerCarry
+            | Self::FeeOwnerFinalization
+            | Self::FeePayerAllocation
+            | Self::FeeRecipientAllocation
+            | Self::FeeTreasuryLedger
+            | Self::LivenessPolicy
+            | Self::LivenessCompartment
+            | Self::PositionV3
+            | Self::ReplayV3
+            | Self::DirectActionReplayV1
+            | Self::DirectReservationV1 => "settlement",
+            Self::SeriesRegistryV4
+            | Self::ProductFundingQuoteV6
+            | Self::ProductAttachmentV6
+            | Self::CompiledProductSeriesBundleV7
+            | Self::ProductMarketReplayV2
+            | Self::ProductMarketRootV3
+            | Self::StructuredClaimDescriptor => "product",
+            Self::SeriesFundingV5 | Self::SeriesMarketLinkV3 => "series",
+            Self::SourceRelease
+            | Self::SourceWorkSchedule
+            | Self::SourceHead
+            | Self::SourceOpenRawPage
+            | Self::SourceRawPage
+            | Self::SourceWindowWork
+            | Self::SourceWindowSeal
+            | Self::SourceStatisticResult
+            | Self::SourceLineage
+            | Self::SourceWorkReceipt => "source",
+            Self::DealerPolicy
+            | Self::DealerLivenessSchedule
+            | Self::DealerStateV2
+            | Self::DealerStateV3
+            | Self::DealerSeriesObligationV3
+            | Self::DealerFutureCreditFundingV1
+            | Self::DealerFundedDependenciesV2
+            | Self::DealerLpPageV2
+            | Self::DealerLeaseV2
+            | Self::DealerSettlementPotV2
+            | Self::DealerEpochBindingV2
+            | Self::DealerTerminalAllocation
+            | Self::DealerClaimWork
+            | Self::DealerRootTombstoneV2
+            | Self::DealerExitTicket
+            | Self::DealerActionReceipt
+            | Self::DealerReplay => "liquidity",
+            Self::FailureExternalRoot
+            | Self::FailureMarketRootV3
+            | Self::FailureMarketRuntimeV1
+            | Self::FailureLivenessPolicy
+            | Self::FailureRecoveryCompartment
+            | Self::FailureReplayTombstone
+            | Self::FailureIntervalConsensusWork
+            | Self::FailureIntervalConsensusReplay => "recovery",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
