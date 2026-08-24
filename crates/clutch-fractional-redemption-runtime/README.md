@@ -72,6 +72,13 @@ prefund under its immutable refund/neutral-sink partition before Fractional
 accepts the exact derived a6 PDA, version, bytes, bump, and funded zero prewrite.
 The private SBF seam remains capability-refusing until Dealer implements that
 authority and its retirement path closes or terminalizes the facility credit.
+Dealer retirement likewise has no detachable Fractional action. Its private,
+by-value terminal authority must bind the exact Dealer State/Replay and Product
+obligation terminal prestates before Fractional action ownership advances a5
+and ClaimLedger once, converts the facility-owned zero `0xa6/v2` into its
+permanent tombstone, refunds only the stored live-rent principal, and routes
+every donation or surplus lamport to the authenticated Product neutral sink.
+A nonzero facility credit refuses retirement; it is never floored or swept.
 
 Every redemption and credit transfer checks both its prospective prestate and
 poststate against

@@ -1369,6 +1369,13 @@ fn zero_credit_close_conserves_tombstone_refund_and_neutral_lamports() {
         160
     );
     assert_eq!(plan.tombstone.closed_next_sequence, 2);
+    assert_eq!(plan.credit_before_id, credit.state_id().unwrap());
+    assert_eq!(plan.tombstone_after_id, plan.tombstone.state_id().unwrap());
+    assert_ne!(plan.credit_before_id, plan.tombstone_after_id);
+
+    let donated = close_zero_credit_v1(context, 1, credit, 1, 161, rid(60)).unwrap();
+    assert_eq!(donated.funding.neutral_lamports, 21);
+    assert_ne!(plan.transition_id, donated.transition_id);
 }
 
 #[test]
