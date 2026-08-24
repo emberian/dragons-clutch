@@ -81,7 +81,11 @@ amount, quote, released compartment, and activation fact.
 
 After an advance and before Open, the SBF adapter must seal capability
 operations: while the Market is Founding, no capability operation may release
-principal. At Open, SBF must require Ready for the exact Market/generation/
-manifest, atomically consume and rent-refund readiness while creating custody,
-and keep the direct-child count coherent. This is an adapter transition
+principal. At Open, SBF must include the immutable `CapabilityManifest` account,
+authenticate its content identity from the Market root, decode its exact
+canonical bytes, and pass that actual manifest to `require_ready_for_open` for
+the exact Market/generation/manifest. It then atomically consumes and
+rent-refunds readiness while creating custody, keeping the direct-child count
+coherent. Malformed, noncanonical, wrong-identity, or wrong-count manifest
+bytes must refuse before custody creation. This is an adapter transition
 contract only; this crate does not implement SBF or duplicate custody facts.

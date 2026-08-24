@@ -264,14 +264,17 @@ pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
 
 /// Exact collateral-Vault initialization and Market-open frame.
 ///
-/// The adapter must prove `CapabilityReadiness` is Ready for this exact Market,
-/// generation, and manifest, then atomically consume it while creating custody
-/// and refund its rent. It is a direct Market child, so this replacement keeps
-/// the Market child count coherent.
-pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 10] = [
+/// The adapter must authenticate `CapabilityManifest` against the Market root,
+/// decode its canonical bytes, and prove `CapabilityReadiness` is Ready for
+/// this exact Market, generation, and manifest. It then atomically consumes
+/// readiness while creating custody and refunding its rent. Readiness is a
+/// direct Market child, so this replacement keeps the Market child count
+/// coherent.
+pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 11] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::CapabilityReadiness, true),
+    immutable(Role::CapabilityManifest),
     immutable(Role::Realm),
     state(Role::CollateralCustody, true),
     token_account(Role::CollateralVault),
@@ -478,7 +481,15 @@ mod tests {
             OPEN_COLLATERAL_VAULT_FRAME.get(2).map(|role| role.role()),
             Some(Role::CapabilityReadiness)
         );
-        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 10);
+        assert_eq!(
+            OPEN_COLLATERAL_VAULT_FRAME.get(3).map(|role| role.role()),
+            Some(Role::CapabilityManifest)
+        );
+        assert_eq!(
+            OPEN_COLLATERAL_VAULT_FRAME.get(3).map(|role| role.class()),
+            Some(AccountClass::ImmutableProtocolRecord)
+        );
+        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 11);
     }
 
     #[test]

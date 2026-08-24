@@ -2304,6 +2304,10 @@ mod tests {
             readiness.require_ready_for_open([6; 32], 3, manifest_id, manifest),
             Err(Error::ReadinessBindingMismatch)
         );
+        assert_eq!(
+            readiness.require_ready_for_open([7; 32], 3, id(98), manifest),
+            Err(Error::ReadinessBindingMismatch)
+        );
         let one_entry = [entry(1, ActivationPolicy::RequiredAtFounding, None)];
         let mut shorter_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
         let shorter_manifest =
@@ -2314,6 +2318,13 @@ mod tests {
         assert_eq!(
             readiness.require_ready_for_open([7; 32], 3, manifest_id, shorter_manifest),
             Err(Error::ReadinessBindingMismatch)
+        );
+        let mut malformed_manifest = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+        malformed_manifest.copy_from_slice(manifest.as_bytes());
+        mutate(&mut malformed_manifest, MANIFEST_RESERVED_OFFSET, 1);
+        assert_eq!(
+            CapabilityManifestV1::decode(&malformed_manifest),
+            Err(Error::NonCanonicalReservedBytes)
         );
         assert_eq!(
             MarketOpeningReadinessV1::decode(&readiness.to_bytes()),
