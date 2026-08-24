@@ -18,6 +18,8 @@ use crate::instructions::product_series_current::{
 };
 use crate::instructions::product_series_current::retirement_v5::
     AuthenticatedProductSeriesLifecycleTerminalV5;
+use crate::instructions::product_series::replay_v3::
+    AuthenticatedProductSeriesReplayTerminalV5;
 use crate::source_plane_v3_actions::SourceLifecycleCapitalizationQuoteV1;
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV5, CompiledProductSeriesBundleV7Id,
@@ -988,6 +990,10 @@ pub(super) struct AuthenticatedSeriesPhysicalRetirementPreflightV5 {
 pub(crate) struct AuthenticatedSeriesPhysicalRetirementV5 {
     id: ContentId,
     lifecycle_terminal_id: ContentId,
+    replay_terminal_id: ContentId,
+    replay_account: Pubkey,
+    replay_authentication_id: ContentId,
+    replay_terminal_projection_id: ContentId,
     terminal_projection: SeriesFundingTerminalProjectionV5,
     terminal_projection_id: ContentId,
     registry_account: Pubkey,
@@ -1018,6 +1024,20 @@ impl AuthenticatedSeriesPhysicalRetirementV5 {
 
     pub(crate) const fn lifecycle_terminal_id(&self) -> ContentId {
         self.lifecycle_terminal_id
+    }
+
+    pub(crate) const fn replay_terminal_id(&self) -> ContentId {
+        self.replay_terminal_id
+    }
+
+    pub(crate) const fn replay_account(&self) -> Pubkey { self.replay_account }
+
+    pub(crate) const fn replay_authentication_id(&self) -> ContentId {
+        self.replay_authentication_id
+    }
+
+    pub(crate) const fn replay_terminal_projection_id(&self) -> ContentId {
+        self.replay_terminal_projection_id
     }
 
     pub(crate) const fn terminal_projection(&self) -> SeriesFundingTerminalProjectionV5 {
@@ -3220,34 +3240,39 @@ fn close_series_funding_program_account_v5(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retire_current_series_physical_v5<'a>(
     program_id: &Pubkey,
-    terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    terminal: AuthenticatedProductSeriesReplayTerminalV5,
     registry_account: &AccountInfo<'a>,
     funding_account: &AccountInfo<'a>,
     accounts: &[AccountInfo<'a>],
 ) -> Outcome<AuthenticatedSeriesPhysicalRetirementV5> {
+    let replay_terminal_id = terminal.id();
+    let replay_account = terminal.replay().replay().account();
+    let replay_authentication_id = terminal.replay().replay().authentication_id();
+    let replay_terminal_projection_id = terminal.replay().projection_id();
     let preflight = authenticate_series_physical_retirement_preflight_v5(
         program_id,
-        &terminal,
+        terminal.lifecycle(),
         registry_account,
         funding_account,
         accounts,
     )?;
-    let projection = terminal.terminal_projection();
-    let projection_id = terminal.terminal_projection_id();
+    let projection = terminal.lifecycle().terminal_projection();
+    let projection_id = terminal.lifecycle().terminal_projection_id();
     require(
         preflight.funding.account() == *funding_account.key
             && preflight.registry_account == *registry_account.key
-            && preflight.registry_capability_id == terminal.registry().id()
-            && preflight.compiler_bundle_id == terminal.bundle().bundle_id().content_id()
+            && preflight.registry_capability_id == terminal.lifecycle().registry().id()
+            && preflight.compiler_bundle_id
+                == terminal.lifecycle().bundle().bundle_id().content_id()
             && preflight.funding_quote_id
-                == terminal
+                == terminal.lifecycle()
                     .artifacts()
                     .quote()
                     .id()
                     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                     .content_id()
             && preflight.attachment_plan_id
-                == terminal
+                == terminal.lifecycle()
                     .artifacts()
                     .attachment()
                     .id()
@@ -3293,7 +3318,7 @@ pub(crate) fn retire_current_series_physical_v5<'a>(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let funding_data_before_id = preflight.funding.data_id();
     let funding_authentication_before_id = preflight.funding.authentication_id();
-    let lifecycle_terminal_id = terminal.id();
+    let lifecycle_terminal_id = terminal.lifecycle().id();
     let mut collateral_principal_receipt_ids =
         [ContentId::ZERO; SERIES_COLLATERAL_VAULT_COUNT_V2];
     let mut collateral_donation_receipt_ids =
@@ -3422,7 +3447,10 @@ pub(crate) fn retire_current_series_physical_v5<'a>(
             && registry_after.authentication_id() == preflight.registry_authentication_id
             && registry_after.observed_lamports() == preflight.registry_observed_lamports
             && registry_after.authentication_id()
-                == terminal.registry().series_registry_authentication_id(),
+                == terminal
+                    .lifecycle()
+                    .registry()
+                    .series_registry_authentication_id(),
         ClutchError::Replay,
     )?;
     let mint_data = mint
@@ -3486,6 +3514,10 @@ pub(crate) fn retire_current_series_physical_v5<'a>(
             program_id.as_ref(),
             &preflight.id.bytes(),
             &lifecycle_terminal_id.bytes(),
+            &replay_terminal_id.bytes(),
+            replay_account.as_ref(),
+            &replay_authentication_id.bytes(),
+            &replay_terminal_projection_id.bytes(),
             &projection_id.bytes(),
             &funding_commitment_id.bytes(),
             &preflight.deployment.receipt_id().bytes(),
@@ -3511,6 +3543,10 @@ pub(crate) fn retire_current_series_physical_v5<'a>(
     Ok(AuthenticatedSeriesPhysicalRetirementV5 {
         id,
         lifecycle_terminal_id,
+        replay_terminal_id,
+        replay_account,
+        replay_authentication_id,
+        replay_terminal_projection_id,
         terminal_projection: projection,
         terminal_projection_id: projection_id,
         registry_account: registry_after.account(),

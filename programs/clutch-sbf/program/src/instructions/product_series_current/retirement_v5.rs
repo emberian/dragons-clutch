@@ -33,6 +33,12 @@ use super::super::product_source_current::{
 use super::super::product_series::physical_v5::{
     retire_current_series_physical_v5, AuthenticatedSeriesPhysicalRetirementV5,
 };
+use super::super::product_series::replay_v3::{
+    record_current_series_link_retirement_v3,
+    terminalize_current_series_lifecycle_replay_v3,
+    AuthenticatedProductSeriesReplayTerminalV5,
+    AuthenticatedSeriesLifecycleLinkRetirementV3,
+};
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
 use super::super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2;
 use super::super::source_funding_custody_retirement_v1::{
@@ -1853,6 +1859,7 @@ pub(crate) struct AuthenticatedProductSourceSeriesRetirementV5 {
     source_market_terminal_facts: SourceMarketSharedCoreTerminalFactsV3,
     source_projection: Option<SourceFamilyTerminalProjectionV3>,
     source_shared_core_projection_id: ContentId,
+    replay_link_retirement: Option<AuthenticatedSeriesLifecycleLinkRetirementV3>,
     root_account: Pubkey,
     root_data_before_id: ContentId,
     root_data_after_id: ContentId,
@@ -1924,6 +1931,7 @@ fn retire_source_and_count_series_link_v5<A>(
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
     funding_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
     failure: ProductFailureCoreTerminalFactsV5,
     source_authority: A,
     route: AuthenticatedSourceRouteV1,
@@ -1941,7 +1949,11 @@ where
             && failure.link_account == *link_account.key
             && root_account.key != link_account.key
             && root_account.key != funding_account.key
-            && link_account.key != funding_account.key,
+            && link_account.key != funding_account.key
+            && replay_account.key != root_account.key
+            && replay_account.key != link_account.key
+            && replay_account.key != funding_account.key
+            && replay_account.key != custody_account.key,
         ClutchError::AccountAlias,
     )?;
     let market_instance_id = failure.failure.market_instance_id;
@@ -2110,11 +2122,20 @@ where
     )?;
     let source_market_terminal_id = source_market_terminal.id();
     let source_market_terminal_facts = source_market_terminal.facts();
+    let replay_link_retirement = record_current_series_link_retirement_v3(
+        program_id,
+        replay_account,
+        &source_market_terminal,
+        &final_root,
+        &final_link,
+    )?;
     let id = hashv(&[
         b"dragons-clutch/sbf/product-source-series-retirement/v5\0",
         program_id.as_ref(),
         &failure.id.bytes(),
         &source_market_terminal_id.bytes(),
+        &replay_link_retirement.id().bytes(),
+        &replay_link_retirement.projection_id().bytes(),
         root_account.key.as_ref(),
         &root_data_before_id.bytes(),
         &final_root.data_id().bytes(),
@@ -2143,6 +2164,7 @@ where
         source_market_terminal_facts,
         source_projection: None,
         source_shared_core_projection_id: ContentId::ZERO,
+        replay_link_retirement: Some(replay_link_retirement),
         root_account: *root_account.key,
         root_data_before_id,
         root_data_after_id: final_root.data_id(),
@@ -2172,6 +2194,7 @@ pub(crate) fn retire_successful_source_and_count_series_link_v5(
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
     funding_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
     failure: AuthenticatedProductFailureCoreTerminalV5,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
@@ -2186,6 +2209,7 @@ pub(crate) fn retire_successful_source_and_count_series_link_v5(
         root_account,
         link_account,
         funding_account,
+        replay_account,
         failure,
         owner,
         route,
@@ -2206,6 +2230,7 @@ pub(crate) fn retire_failed_source_and_count_series_link_v5(
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
     funding_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
     failure: AuthenticatedProductFailureCoreTerminalV5,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
@@ -2227,6 +2252,7 @@ pub(crate) fn retire_failed_source_and_count_series_link_v5(
         root_account,
         link_account,
         funding_account,
+        replay_account,
         failure,
         source_authority,
         route,
@@ -2314,6 +2340,7 @@ pub(crate) fn begin_current_product_market_retirement_v5(
         source.source_market_terminal.is_some()
             && source.source_projection.is_none()
             && source.source_shared_core_projection_id.is_zero()
+            && source.replay_link_retirement.is_some()
             && source.root_account == *root_account.key
             && facts.root_account.bytes() == root_account.key.to_bytes(),
         ClutchError::MismatchedState,
@@ -2457,6 +2484,7 @@ pub(crate) fn consume_source_market_shared_core_v5(
     require(
         source.source_projection.is_none()
             && source.source_shared_core_projection_id.is_zero()
+            && source.replay_link_retirement.is_some()
             && !retiring_id.is_zero()
             && retiring_root_account == *root_account.key
             && terminal.id() == source.source_market_terminal_id
@@ -2726,6 +2754,7 @@ pub(crate) struct AuthenticatedProductSeriesLifecycleTerminalV5 {
     artifacts: AuthenticatedSeriesSourceArtifactsV6,
     terminal_projection: SeriesFundingTerminalProjectionV5,
     terminal_projection_id: ContentId,
+    replay_link_retirement: Option<AuthenticatedSeriesLifecycleLinkRetirementV3>,
 }
 
 impl AuthenticatedProductSeriesLifecycleTerminalV5 {
@@ -2753,6 +2782,16 @@ impl AuthenticatedProductSeriesLifecycleTerminalV5 {
     }
     pub(crate) const fn terminal_projection_id(&self) -> ContentId {
         self.terminal_projection_id
+    }
+
+    pub(crate) fn into_replay_terminal_parts(
+        mut self,
+    ) -> Outcome<(Self, AuthenticatedSeriesLifecycleLinkRetirementV3)> {
+        let link_retirement = self
+            .replay_link_retirement
+            .take()
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        Ok((self, link_retirement))
     }
 
     pub(crate) fn authenticate_physical_preflight_v5(
@@ -2792,12 +2831,16 @@ impl AuthenticatedProductSeriesLifecycleTerminalV5 {
 /// same instruction.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn terminalize_product_series_funding_v5(
-    source: AuthenticatedProductSourceSeriesRetirementV5,
+    mut source: AuthenticatedProductSourceSeriesRetirementV5,
     registry: AuthenticatedRegistryCapabilityV5,
     funding: AuthenticatedSeriesFundingAccountV5,
     bundle: AuthenticatedCompiledProductSeriesBundleV7,
     artifacts: AuthenticatedSeriesSourceArtifactsV6,
 ) -> Outcome<AuthenticatedProductSeriesLifecycleTerminalV5> {
+    let replay_link_retirement = source
+        .replay_link_retirement
+        .take()
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     artifacts.validate_registry_projection(&registry.projection())?;
     let series_plan_id = artifacts
         .series()
@@ -2906,6 +2949,7 @@ pub(crate) fn terminalize_product_series_funding_v5(
         artifacts,
         terminal_projection: projection,
         terminal_projection_id: projection_id,
+        replay_link_retirement: Some(replay_link_retirement),
     })
 }
 
@@ -2966,7 +3010,7 @@ fn physical_retirement_receipt_transcript_v5(
 #[inline(never)]
 fn physically_retire_current_product_series_v5<'a>(
     program_id: &Pubkey,
-    terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    terminal: AuthenticatedProductSeriesReplayTerminalV5,
     root_account: &AccountInfo<'a>,
     link_account: &AccountInfo<'a>,
     registry_account: &AccountInfo<'a>,
@@ -2987,12 +3031,13 @@ fn physically_retire_current_product_series_v5<'a>(
             ClutchError::AccountAlias,
         )?;
     }
-    let source = terminal.source();
+    let source = terminal.lifecycle().source();
     let source_facts = source.source_market_terminal_facts();
     let source_projection = source.source_projection()?;
-    let lifecycle_terminal_id = terminal.id();
-    let terminal_projection = terminal.terminal_projection();
-    let terminal_projection_id = terminal.terminal_projection_id();
+    let lifecycle_terminal_id = terminal.lifecycle().id();
+    let replay_terminal_id = terminal.id();
+    let terminal_projection = terminal.lifecycle().terminal_projection();
+    let terminal_projection_id = terminal.lifecycle().terminal_projection_id();
     let market_instance_id =
         MarketInstanceV2Id::from_bytes(source_facts.market_instance_id.bytes());
     let (series_plan_id, ordinal) = observe_link_coordinate_v3(link_account)?;
@@ -3059,6 +3104,7 @@ fn physically_retire_current_product_series_v5<'a>(
     )?;
     require(
         physical.lifecycle_terminal_id() == lifecycle_terminal_id
+            && physical.replay_terminal_id() == replay_terminal_id
             && physical.terminal_projection() == terminal_projection
             && physical.terminal_projection_id() == terminal_projection_id
             && physical.registry_account() == *registry_account.key
@@ -3103,6 +3149,8 @@ fn physically_retire_current_product_series_v5<'a>(
         PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
         &lifecycle_terminal_id.bytes(),
+        &replay_terminal_id.bytes(),
+        &physical.replay_terminal_projection_id().bytes(),
         &terminal_projection_id.bytes(),
         &physical.id().bytes(),
         &physical_receipt_transcript_id.bytes(),
@@ -3224,8 +3272,14 @@ fn retire_current_product_series_v5<'a, 'failure>(
     link_account: &AccountInfo<'a>,
     registry_account: &AccountInfo<'a>,
     funding_account: &AccountInfo<'a>,
+    replay_account: &AccountInfo<'a>,
     physical_accounts: &[AccountInfo<'a>],
 ) -> Outcome<AuthenticatedProductSeriesRetirementV5> {
+    let terminal = terminalize_current_series_lifecycle_replay_v3(
+        program_id,
+        replay_account,
+        terminal,
+    )?;
     let physical = physically_retire_current_product_series_v5(
         program_id,
         terminal,
