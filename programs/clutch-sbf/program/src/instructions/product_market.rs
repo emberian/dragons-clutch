@@ -73,12 +73,12 @@ const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-failure-release-authentication/v2";
 const SERIES_FAILURE_RESOLUTION_LINK_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-failure-resolution-link-preauthorization/v1";
+const SERIES_FAILURE_EXHAUSTED_LINK_PREAUTHORIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-failure-exhausted-link-preauthorization/v2";
 const SERIES_MARKET_LINK_RETIREMENT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-retirement-authentication/v1";
 const SERIES_MARKET_LINK_CLOSE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-close-authentication/v1";
-const SERIES_FAILURE_EXHAUSTED_LINK_PREAUTHORIZATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/series-failure-exhausted-link-preauthorization/v2";
 const MARKET_RECOVERY_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-recovery-schedule-authentication/v1";
 const MARKET_FOUNDATION_DEBIT_AUTHENTICATION_DOMAIN_V1: &[u8] =
@@ -7262,6 +7262,46 @@ mod adversarial_resolution_repin_tests {
             assert!(release.contains(guard), "missing release guard {guard}");
         }
     }
+    #[test]
+    fn exhausted_release_is_disjoint_and_requires_unresolved_root_and_exact_link() {
+        assert_eq!(FailureSessionReleaseDispositionV2::Resolved.wire_byte(), 1);
+        assert_eq!(FailureSessionReleaseDispositionV2::Exhausted.wire_byte(), 2);
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Resolved,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Exhausted,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_err());
+
+        let source = include_str!("product_market.rs");
+        let exhausted = source
+            .split("pub(crate) fn authenticate_writable_failure_exhausted_link_v2")
+            .nth(1)
+            .and_then(|value| value.split("/// Release one exact subordinate").next())
+            .expect("typed exhausted preauthorization");
+        for guard in [
+            "!root.is_writable()",
+            "!live_root.is_writable()",
+            "require_unresolved_market_resolution_v1",
+            "live_root.authentication_id() == root.authentication_id()",
+            "SeriesMarketLinkAccountV1::decode_into(&data, link_output)?",
+            "state.active_failure_sessions() == 1",
+            "binding.market_binding_id == root_binding_id",
+            "FailureSessionReleaseDispositionV2::Exhausted.wire_byte()",
+        ] {
+            assert!(exhausted.contains(guard), "missing exhausted guard {guard}");
+        }
+    }
+
     #[test]
     fn founder_activation_has_one_non_detachable_current_outer() {
         let source = include_str!("product_market.rs");

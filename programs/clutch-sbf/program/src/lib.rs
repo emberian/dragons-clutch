@@ -163,16 +163,24 @@ pub mod instructions_sysvar;
 pub mod loader_state;
 #[cfg(feature = "observed-positive-collateral-release-manifest")]
 mod observed_collateral_release_manifest_v2;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod native_window;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod pyth_receiver;
 pub mod seeds;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_archive;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_archive_v2;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_generation;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_identity;
 pub mod source_plane_v3;
 pub mod source_plane_v3_actions;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_v2;
 pub mod token;
 

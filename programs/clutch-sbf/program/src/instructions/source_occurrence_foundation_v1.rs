@@ -52,6 +52,36 @@ const PRE_ROOT_SOURCE_OCCURRENCE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-pre-root-source-occurrence/v1";
 const SOURCE_GENERATION_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-source-generation-policy/v1";
+const SOURCE_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-source-funding-account-authentication/v1";
+
+/// Recompute Source's exact view of the unchanged pending FundingV2 account.
+///
+/// Product uses this same function while minting its compact pre-root
+/// authority, so the later Source capitalization cannot substitute a stale
+/// Funding body or a different pending reservation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn source_funding_account_authentication_id_v1(
+    program_id: &Pubkey,
+    funding_account: &Pubkey,
+    funding_state_id: ContentId,
+    funding_account_data_id: ContentId,
+    funding_transition_sequence: u64,
+    pending_reservation_receipt_id: ContentId,
+) -> ContentId {
+    ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            funding_account.as_ref(),
+            &funding_state_id.bytes(),
+            &funding_account_data_id.bytes(),
+            &funding_transition_sequence.to_le_bytes(),
+            &pending_reservation_receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    )
+}
 
 /// Exact immutable facts offered to Product's private founder preauthorization.
 /// A caller cannot implement the authority trait or turn these projections
@@ -122,6 +152,18 @@ impl AuthenticatedSourceWorkCapitalizationV1 {
 
     pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
+    }
+
+    /// Exact pending FundingV2 debit and physical custody movement retained by
+    /// Product's founder and later Source-custody retirement owners.
+    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV1 {
+        self.facts
+    }
+
+    /// Rent-derived complete lifecycle allocation. Product persists its ID and
+    /// exact total so retirement cannot relabel spent principal or donations.
+    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+        self.quote
     }
 }
 
@@ -245,17 +287,13 @@ pub(crate) fn capitalize_source_work_v1<
                     .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let funding_account_authentication_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            b"dragons-clutch/product-source-funding-account-authentication/v1",
-            program_id.as_ref(),
-            funding_account.key.as_ref(),
-            &state_id.bytes(),
-            &funding_account_data_id.bytes(),
-            &state.transition_sequence.to_le_bytes(),
-            &state.pending_reservation_receipt_id.bytes(),
-        ])
-        .to_bytes(),
+    let funding_account_authentication_id = source_funding_account_authentication_id_v1(
+        program_id,
+        funding_account.key,
+        state_id,
+        funding_account_data_id,
+        state.transition_sequence,
+        state.pending_reservation_receipt_id,
     );
     let facts = SourceWorkCapitalizationFactsV1 {
         series_plan_id: state.series_plan_id.content_id(),

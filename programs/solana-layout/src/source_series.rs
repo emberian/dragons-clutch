@@ -1044,7 +1044,7 @@ mod tests {
             ),
             registry::SourceSeriesAction::EmitFailureHandoff => {
                 SourceSeriesPayloadV2::EmitFailureHandoff(EmitFailureHandoffIntentV2 {
-                    kind: SourceHandoffKindV2::FailureResult,
+                    kind: SourceHandoffKindV2::SuccessfulEvaluation,
                     handoff_id: [0x22; 32],
                     source_work_receipt_id: [0x33; 32],
                     valid_before_slot: 901,
@@ -1130,7 +1130,7 @@ mod tests {
     fn lifecycle_payloads_refuse_zero_unknown_and_noncanonical_reserved_bytes() {
         let mut handoff = [0_u8; EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2];
         EmitFailureHandoffIntentV2 {
-            kind: SourceHandoffKindV2::FailureAbsence,
+            kind: SourceHandoffKindV2::SuccessfulEvaluation,
             handoff_id: [1; 32],
             source_work_receipt_id: [2; 32],
             valid_before_slot: 3,

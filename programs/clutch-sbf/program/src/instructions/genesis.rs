@@ -129,6 +129,7 @@ use crate::collateral_release::{
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
 use clutch_batch_policy_identity::revenue_policy_v1::{
@@ -545,6 +546,7 @@ const ENDOW_COMMON_STATE_ROLES: [StateRole; 4] = [
 ];
 
 /// The SourceSpec account lengths `Endow` admits, one per spec generation.
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 const ENDOW_SOURCE_SPEC_LENGTHS: [usize; 2] = [
     SOURCE_SPEC_ACCOUNT_V1_BYTES,
     crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES,
@@ -694,6 +696,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::InitOrderPage { .. }) => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Action::Layout(Intent::Endow {
             market,
             owner,
@@ -1096,6 +1099,7 @@ fn write_empty_page(target: &mut [u8], intent: &PageInit, bump: u8) -> Outcome<(
 
 /// One already-matched `Endow` intent plus its replay sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub struct EndowRequest {
     /// Exact replay sequence the request claims.
     pub sequence: u64,
@@ -1110,6 +1114,7 @@ pub struct EndowRequest {
 /// Create a missing generation-zero Position/Replay pair, or authenticate an
 /// existing pair. Mixed prestate is always a refusal.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn ensure_endow_owner_plane(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1180,6 +1185,7 @@ fn ensure_endow_owner_plane(
     Ok(())
 }
 
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) -> Outcome<()> {
     require_count(accounts, ENDOW_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_PAYER])?;
@@ -1368,6 +1374,7 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
 /// transition in this program uses: identity bindings, then phase, then
 /// replay, then arithmetic, then the cap, then the writes.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub fn apply_endow(
     market_bytes: &[u8],
     position_bytes: &mut [u8],
@@ -1391,6 +1398,7 @@ pub fn apply_endow(
 /// refuse before value moves.  The returned values are encoded only after the
 /// exact token deltas have been observed.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn validated_endow(
     market_bytes: &[u8],
     position_bytes: &[u8],
@@ -1766,6 +1774,7 @@ mod tests {
 
     /// The ledger half of Endow, checked against the layout codecs.  The SVM
     /// test drives the surrounding real Token-2022 transfer.
+    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     #[test]
     fn an_endowment_ledger_credits_cash_and_advances_replay() {
         let mut case = EndowCase::new();
@@ -1836,6 +1845,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     #[test]
     fn an_endowment_refuses_every_hostile_caller_and_state() {
         let base = EndowCase::new();
@@ -2021,6 +2031,7 @@ mod tests {
     }
 
     /// One coherent `(market, hoard, position, replay)` plane for `Endow`.
+    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     struct EndowCase {
         market_id: MarketId,
         owner: Hash32,
@@ -2033,6 +2044,7 @@ mod tests {
         replay: [u8; REPLAY_ACCOUNT_LEN],
     }
 
+    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     impl EndowCase {
         fn new() -> Self {
             let realm = h(1);
