@@ -213,8 +213,8 @@ pub const OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1: usize = HASH_BYTES + 1 + 1 +
 /// Exact `CloseFunding` payload width.
 pub const CLOSE_SERIES_FUNDING_PAYLOAD_BYTES_V1: usize = HASH_BYTES;
 
-/// Exact current physical FundingV2 activation account count.
-pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 44;
+/// Exact current physical FundingV5 activation account count.
+pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 45;
 /// First of six ordered System-owned lamport vaults.
 pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 4;
 /// Exclusive end of the six ordered System-owned lamport vaults.
@@ -243,14 +243,14 @@ pub const CLOSE_SERIES_ARTIFACT_START_V2: usize = 33;
 /// Exclusive end of nine immutable Series artifacts at retirement.
 pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 42;
 
-/// Semantic role of one ordered current FundingV2 activation account.
+/// Semantic role of one ordered current FundingV5 activation account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivateSeriesFundingAccountRoleV2 {
     /// Writable persistent Series registry owner.
     Registry,
-    /// Writable absent FundingV2 PDA.
+    /// Writable absent FundingV5 PDA.
     Funding,
-    /// Writable absent permanent `0xb8/v1` lifecycle replay PDA.
+    /// Writable absent permanent `0xb8/v3` lifecycle replay PDA.
     SeriesLifecycleReplay,
     /// FundingTerms-bound lamport payer and refund identity.
     Payer,
@@ -314,7 +314,7 @@ pub enum ActivateSeriesFundingAccountRoleV2 {
     CapabilityProfile,
     /// Exact Source release account.
     SourceRelease,
-    /// Exact compiled BundleV5 artifact.
+    /// Exact compiled BundleV7 artifact.
     CompilerBundle,
     /// SeriesPlanV5 artifact.
     SeriesPlan,
@@ -330,10 +330,12 @@ pub enum ActivateSeriesFundingAccountRoleV2 {
     PricePolicy,
     /// MarketGenesisProfileV2 artifact.
     MarketGenesis,
-    /// SeriesFundingQuoteV4 artifact.
+    /// SeriesFundingQuoteV6 artifact.
     FundingQuote,
-    /// SeriesAttachmentPlanV4 artifact.
+    /// SeriesAttachmentPlanV6 artifact.
     AttachmentPlan,
+    /// SourceRelease-selected sealed work-schedule artifact.
+    SourceWorkSchedule,
 }
 
 /// Semantic role of one ordered current FundingV2 retirement account.
@@ -476,7 +478,7 @@ impl CloseSeriesFundingAccountRoleV2 {
 }
 
 impl ActivateSeriesFundingAccountRoleV2 {
-    /// Exact index in the current FundingV2 activation account list.
+    /// Exact index in the current FundingV5 activation account list.
     pub const fn index(self) -> usize {
         match self {
             Self::Registry => 0,
@@ -523,6 +525,7 @@ impl ActivateSeriesFundingAccountRoleV2 {
             Self::MarketGenesis => 41,
             Self::FundingQuote => 42,
             Self::AttachmentPlan => 43,
+            Self::SourceWorkSchedule => 44,
         }
     }
 }
@@ -568,7 +571,7 @@ const fn activation_meta(
     }
 }
 
-/// Frozen full account order for current FundingV2 physical activation.
+/// Frozen full account order for current FundingV5 physical activation.
 pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     [ActivateSeriesFundingAccountMetaV2; ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
     activation_meta(ActivateSeriesFundingAccountRoleV2::Registry, false, true, false),
@@ -620,6 +623,7 @@ pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     activation_meta(ActivateSeriesFundingAccountRoleV2::MarketGenesis, false, false, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::FundingQuote, false, false, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::AttachmentPlan, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::SourceWorkSchedule, false, false, false),
 ];
 
 fn activation_alias_allowed(
@@ -1300,7 +1304,7 @@ impl SeriesFundingAccountV2 {
 
 /// Program-owned frame for the permanent counted Series lifecycle replay.
 ///
-/// The 501-byte semantic body is owned solely by `clutch-product-series`; this
+/// The 629-byte semantic body is owned solely by `clutch-product-series`; this
 /// layout contributes only the exact tag/version/bump/rent frame. The rent
 /// principal is permanently retained and therefore names no close authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1982,7 +1986,7 @@ impl SeriesFundingAccountV4 {
 
 /// Program-owned frame for the permanent counted Series lifecycle replay.
 ///
-/// The 501-byte semantic body is owned solely by `clutch-product-series`; this
+/// The 629-byte semantic body is owned solely by `clutch-product-series`; this
 /// layout contributes only the exact tag/version/bump/rent frame. The rent
 /// principal is permanently retained and therefore names no close authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

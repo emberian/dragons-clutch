@@ -44,7 +44,8 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedEvaluationV1,
     AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2,
     AuthenticatedPersistedSourcePolicyHandoffV1, AuthenticatedReopenLineageV1,
-    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceRouteV1,
+    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
+    AuthenticatedSourceRouteV1,
     AuthenticatedSourceFailureTerminalAccountV3, AuthenticatedSourceNoReopenTerminalV1,
     AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
@@ -2283,6 +2284,49 @@ pub fn authenticate_source_work_schedule_artifact(
             && schedule.source_compartment_account() == route.source_compartment_account()
             && schedule.source_compartment_owner() == route.source_compartment_owner()
             && schedule.receipt_account_owner_program() == route.adapter_program(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(schedule)
+}
+
+/// Authenticate the sealed work schedule directly from the immutable Source
+/// release. Funding activation needs the exact prepaid quote before any
+/// occurrence route exists, so the release is the only acyclic semantic owner
+/// available at this boundary.
+pub(crate) fn authenticate_source_work_schedule_from_release_v1(
+    program_id: &Pubkey,
+    release: AuthenticatedSourceReleaseV1,
+    schedule_account: &AccountInfo<'_>,
+) -> Outcome<SourceWorkScheduleBindingV1> {
+    require(
+        schedule_account.owner == program_id
+            && !schedule_account.is_signer
+            && !schedule_account.is_writable
+            && !schedule_account.executable
+            && schedule_account.data_len()
+                == clutch_source_plane_v3_runtime::SOURCE_WORK_SCHEDULE_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        schedule_account.key,
+        seeds::product_artifact_pda(
+            program_id,
+            ArtifactKind::SourceWorkScheduleV1.byte(),
+            &release.source_work_schedule_id().bytes(),
+        ),
+        None,
+    )?;
+    let data = schedule_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let schedule = SourceWorkScheduleBindingV1::decode(&data).map_err(source_runtime)?;
+    let manifest = release.manifest();
+    require(
+        schedule.id().map_err(source_runtime)? == release.source_work_schedule_id()
+            && schedule.liveness_policy_id() == release.liveness_policy_id()
+            && schedule.source_compartment_account() == release.source_compartment_account()
+            && schedule.source_compartment_owner() == release.source_compartment_owner()
+            && schedule.receipt_account_owner_program() == manifest.base.adapter.program,
         ClutchError::MismatchedState,
     )?;
     Ok(schedule)

@@ -172,6 +172,10 @@ pub(crate) fn initialize_current_series_lifecycle_replay_v3<'a>(
         capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes(
             physical.capability_profile_id().bytes(),
         ),
+        foundation_schedule_id: physical.foundation_schedule_id(),
+        source_capitalization_quote_id: capitalization.source_capitalization_quote_id(),
+        physical_capitalization_id: physical.capitalization_id(),
+        physical_founder_id: physical.id(),
         registry_account_id: ContentId::from_bytes(capitalization.registry_account().to_bytes()),
         funding_account_id: ContentId::from_bytes(capitalization.funding_account().to_bytes()),
         lifecycle_replay_account_id: ContentId::from_bytes(replay_account.key.to_bytes()),

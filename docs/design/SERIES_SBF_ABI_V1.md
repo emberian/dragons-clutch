@@ -1,12 +1,13 @@
 # Recurring Series SBF ABI V1
 
-Status: **FROZEN NON-PRODUCTION BYTES / RUNTIME DISABLED** (2026-08-23)
+Status: **CURRENT ACTIONS 13–14 / ACTIONS 15–18 DISABLED** (2026-08-24)
 
 This document fixes the first account and instruction namespace for the V5
 recurring-Series core. It does not claim that decoding a claimed registry ID,
 SourcePlane record, collateral account, or funding body authenticates it. The
-executable extension capability set remains empty until every action's complete
-adapter join exists.
+the successor-chain profile admits only registration and physical activation.
+Occurrence, lapse, donation, and close remain disabled until their complete
+Product/Source/Failure joins exist.
 
 ## Wire allocation
 
@@ -30,7 +31,7 @@ Local actions `1..=12` in this shared family belong exclusively to SourcePlane
 V3. There are no compatibility aliases at the former Series coordinates.
 
 Amounts are deliberately absent. Activation principal comes only from the
-authenticated `SeriesFundingQuoteV1 × SeriesPlanV5.instance_count` join.
+authenticated `SeriesFundingQuoteV6 × SeriesPlanV5.instance_count` join.
 Occurrence debit comes only from authenticated exact-existing/absent component
 receipts. Donation is only actual custody surplus over the state-owned accounted
 balance. Terminal destinations and amounts come only from FundingTerms V2 and

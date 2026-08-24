@@ -18,6 +18,7 @@ use crate::{
     content_id, CompiledProductSeriesBundleV7Id, ContentId, Error, FixedCodec,
     MarketInstanceV2Id, RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id, Result,
     SeriesAttachmentPlanV6Id, SeriesFundingQuoteV6Id, SeriesFundingTermsV2Id,
+    MarketFoundationScheduleV4Id,
     SeriesLifecycleReplayBindingV3Id, SeriesLifecycleReplayV3Id,
     SeriesLifecycleTerminalProjectionV3Id, SeriesMarketDispositionV1, SeriesPlanV5Id,
     SourceOccurrenceV1Id,
@@ -36,9 +37,9 @@ const SERIES_LIFECYCLE_TRANSCRIPT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-lifecycle-transcript/v3";
 
 /// Exact immutable binding width.
-pub const SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V3: usize = 398;
+pub const SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V3: usize = 526;
 /// Exact counted semantic state width.
-pub const SERIES_LIFECYCLE_REPLAY_BYTES_V3: usize = 501;
+pub const SERIES_LIFECYCLE_REPLAY_BYTES_V3: usize = 629;
 /// Immutable binding identity domain.
 pub const SERIES_LIFECYCLE_REPLAY_BINDING_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-binding/v3";
@@ -66,6 +67,14 @@ pub struct SeriesLifecycleReplayBindingV3 {
     pub registry_release_id: RegistryProgramReleaseV2Id,
     /// Current capability profile.
     pub capability_profile_id: RegistryCapabilityProfileV4Id,
+    /// Exact current 50-slot foundation schedule retained at capitalization.
+    pub foundation_schedule_id: MarketFoundationScheduleV4Id,
+    /// Exact Source lifecycle capitalization quote derived from sealed schedule and Rent.
+    pub source_capitalization_quote_id: ContentId,
+    /// Exact same-instruction physical capitalization transcript.
+    pub physical_capitalization_id: ContentId,
+    /// Exact post-Registry-activation physical founder transcript.
+    pub physical_founder_id: ContentId,
     /// Permanent Series registry/replay account.
     pub registry_account_id: ContentId,
     /// Current FundingV5 account.
@@ -111,7 +120,7 @@ impl SeriesLifecycleReplayBindingV3 {
         ))
     }
 
-    fn ids(self) -> [ContentId; 12] {
+    fn ids(self) -> [ContentId; 16] {
         [
             self.series_plan_id.content_id(),
             self.funding_terms_id.content_id(),
@@ -120,6 +129,10 @@ impl SeriesLifecycleReplayBindingV3 {
             self.compiler_bundle_id.content_id(),
             self.registry_release_id.content_id(),
             self.capability_profile_id.content_id(),
+            self.foundation_schedule_id.content_id(),
+            self.source_capitalization_quote_id,
+            self.physical_capitalization_id,
+            self.physical_founder_id,
             self.registry_account_id,
             self.funding_account_id,
             self.lifecycle_replay_account_id,
@@ -153,6 +166,7 @@ impl FixedCodec for SeriesLifecycleReplayBindingV3 {
         let ids = [
             reader.id(), reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
             reader.id(), reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(),
         ];
         let value = Self {
             series_plan_id: SeriesPlanV5Id::from_bytes(ids[0].bytes()),
@@ -162,11 +176,15 @@ impl FixedCodec for SeriesLifecycleReplayBindingV3 {
             compiler_bundle_id: CompiledProductSeriesBundleV7Id::from_bytes(ids[4].bytes()),
             registry_release_id: RegistryProgramReleaseV2Id::from_bytes(ids[5].bytes()),
             capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes(ids[6].bytes()),
-            registry_account_id: ids[7],
-            funding_account_id: ids[8],
-            lifecycle_replay_account_id: ids[9],
-            permanent_rent_funder: ids[10],
-            neutral_lamport_sink: ids[11],
+            foundation_schedule_id: MarketFoundationScheduleV4Id::from_bytes(ids[7].bytes()),
+            source_capitalization_quote_id: ids[8],
+            physical_capitalization_id: ids[9],
+            physical_founder_id: ids[10],
+            registry_account_id: ids[11],
+            funding_account_id: ids[12],
+            lifecycle_replay_account_id: ids[13],
+            permanent_rent_funder: ids[14],
+            neutral_lamport_sink: ids[15],
             instance_count: reader.u32(),
         };
         reader.finish()?;
@@ -988,11 +1006,15 @@ mod tests {
             compiler_bundle_id: CompiledProductSeriesBundleV7Id::from_bytes([5; 32]),
             registry_release_id: RegistryProgramReleaseV2Id::from_bytes([6; 32]),
             capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([7; 32]),
-            registry_account_id: id(8),
-            funding_account_id: id(9),
-            lifecycle_replay_account_id: id(10),
-            permanent_rent_funder: id(11),
-            neutral_lamport_sink: id(12),
+            foundation_schedule_id: MarketFoundationScheduleV4Id::from_bytes([8; 32]),
+            source_capitalization_quote_id: id(9),
+            physical_capitalization_id: id(10),
+            physical_founder_id: id(11),
+            registry_account_id: id(12),
+            funding_account_id: id(13),
+            lifecycle_replay_account_id: id(14),
+            permanent_rent_funder: id(15),
+            neutral_lamport_sink: id(16),
             instance_count: 3,
         }
     }

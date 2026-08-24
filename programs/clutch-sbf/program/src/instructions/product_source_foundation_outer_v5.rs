@@ -10,6 +10,7 @@
 use crate::accounts::{expect_pda, require, require_count, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
+use crate::instructions::product_series::replay_v3::AuthenticatedCurrentSeriesBootstrapV5;
 use crate::instructions::product_series_funding_v5_current::
     AuthenticatedProductSeriesFundingReservationV5;
 use crate::instructions::product_source_current::{
@@ -205,6 +206,89 @@ pub(crate) struct AuthenticatedProductSourceFoundationPreflightV5 {
         AuthenticatedSourceSemanticPublicationV2,
     schedule: SourceWorkScheduleBindingV1,
     policy: AuthenticatedSourceRuntimeLivenessPolicyArtifactV1,
+}
+
+/// Exact action15 Source entry authority joined to the hostile-reopened
+/// action14 ReplayV3 checkpoint. No move-only action14 receipt crosses the
+/// transaction boundary and no caller supplies the ordinal.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentProductSourceBootstrapV5 {
+    id: ContentId,
+    series: AuthenticatedCurrentSeriesBootstrapV5,
+    preflight: AuthenticatedProductSourceFoundationPreflightV5,
+}
+
+impl AuthenticatedCurrentProductSourceBootstrapV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn series(&self) -> &AuthenticatedCurrentSeriesBootstrapV5 {
+        &self.series
+    }
+    pub(crate) const fn preflight(&self) -> &AuthenticatedProductSourceFoundationPreflightV5 {
+        &self.preflight
+    }
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedCurrentSeriesBootstrapV5,
+        AuthenticatedProductSourceFoundationPreflightV5,
+    ) {
+        (self.series, self.preflight)
+    }
+}
+
+/// Authenticate the complete deterministic Source graph from the persisted
+/// action14 checkpoint. The ordinal is selected solely by live FundingV5.
+pub(crate) fn authenticate_current_product_source_bootstrap_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    series: AuthenticatedCurrentSeriesBootstrapV5,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedCurrentProductSourceBootstrapV5> {
+    let ordinal = series.funding().state().next_ordinal;
+    let preflight = authenticate_product_source_foundation_preflight_v5(
+        program_id,
+        accounts,
+        series.registry(),
+        artifacts,
+        ordinal,
+    )?;
+    let replay_binding = series.replay().state().binding();
+    let occurrence = preflight.publication().occurrence();
+    require(
+        replay_binding.series_plan_id == series.registry().series_plan_id()
+            && replay_binding.funding_account_id.bytes()
+                == series.funding().account().to_bytes()
+            && replay_binding.compiler_bundle_id == preflight.product_route().compiler_bundle_id()
+            && replay_binding.registry_release_id.content_id()
+                == preflight.product_route().registry_release_id()
+            && replay_binding.capability_profile_id.content_id()
+                == preflight.product_route().capability_profile_id()
+            && occurrence.series_plan_id == replay_binding.series_plan_id
+            && occurrence.ordinal == ordinal
+            && preflight.schedule().source_work_schedule_id()
+                == preflight.route().source_work_schedule_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/current-product-source-bootstrap/v5\0",
+            program_id.as_ref(),
+            &series.id().bytes(),
+            &preflight.id().bytes(),
+            &occurrence
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
+            &ordinal.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedCurrentProductSourceBootstrapV5 {
+        id,
+        series,
+        preflight,
+    })
 }
 
 impl AuthenticatedProductSourceFoundationPreflightV5 {

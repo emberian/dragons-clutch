@@ -52,7 +52,10 @@ use crate::instructions::dealer_facility;
     feature = "profile-successor-chain-attached-dev"
 ))]
 use crate::instructions::dealer_policy;
-#[cfg(feature = "non-production-product-series-lab")]
+#[cfg(any(
+    feature = "non-production-product-series-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 use crate::instructions::product_series;
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 use crate::instructions::structured_custody;
@@ -104,7 +107,10 @@ enum Route {
         feature = "profile-successor-chain-attached-dev"
     ))]
     DealerPolicy,
-    #[cfg(feature = "non-production-product-series-lab")]
+    #[cfg(any(
+        feature = "non-production-product-series-lab",
+        feature = "profile-successor-chain-attached-dev"
+    ))]
     RecurringSeries,
     #[cfg(feature = "profile-successor-chain-attached-dev")]
     StructuredClaim,
@@ -197,7 +203,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::StructuredClaim
             }
-            #[cfg(feature = "non-production-product-series-lab")]
+            #[cfg(any(
+                feature = "non-production-product-series-lab",
+                feature = "profile-successor-chain-attached-dev"
+            ))]
             Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG)
                 if instruction_data.get(14).copied()
                     == Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION)
@@ -381,7 +390,10 @@ pub fn process(
             feature = "profile-successor-chain-attached-dev"
         ))]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
-        #[cfg(feature = "non-production-product-series-lab")]
+        #[cfg(any(
+            feature = "non-production-product-series-lab",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-successor-chain-attached-dev")]
         Route::StructuredClaim => {
@@ -565,7 +577,10 @@ fn process_dealer_policy(
 /// half of the shared SourceSeries family. The central capability check runs
 /// before this route and keeps all six actions unreachable in current builds.
 #[inline(never)]
-#[cfg(feature = "non-production-product-series-lab")]
+#[cfg(any(
+    feature = "non-production-product-series-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 fn process_recurring_series(
     program_id: &Pubkey,
     accounts: &[AccountInfo],

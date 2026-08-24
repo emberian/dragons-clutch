@@ -7,10 +7,9 @@
 //! vaults. It also supplies exact-delta System transfers into and out of those
 //! vaults.
 //!
-//! The dispatcher-local entry point is present, but all six capability tuples
-//! remain disabled. Typed mutation helpers are kept behind the missing
-//! registry, failure, liveness, and occurrence adapters instead of accepting
-//! caller-shaped authentication facts.
+//! The successor-chain profile exposes only current registration and physical
+//! activation. The four mutation/terminal tuples remain disabled behind their
+//! missing Product/Failure/Source joins.
 
 pub(crate) mod physical_v4;
 pub(crate) mod physical_v5;
@@ -270,14 +269,14 @@ fn process_register_series(
     request: RegisterSeriesIntentV1,
 ) -> Outcome<()> {
     require_count(accounts, REGISTER_SERIES_ACCOUNT_COUNT_V1)?;
-    let rent = read_rent(&accounts[IX_REGISTER_RENT])?;
-    let artifacts = authenticate_series_artifact_accounts_v4(
+    let artifacts = crate::instructions::product_source_current::
+        authenticate_series_source_artifacts_v6(
         program_id,
         &accounts[IX_REGISTER_ARTIFACTS..],
         request.series_plan_id,
         request.funding_terms_id,
     )?;
-    let registry = authenticate_registry_capability_for_registration_v3(
+    let release = authenticate_registry_capability_for_registration_v3(
         program_id,
         &accounts[IX_REGISTER_REGISTRY_RELEASE],
         &accounts[IX_REGISTER_CAPABILITY_PROFILE],
@@ -287,7 +286,7 @@ fn process_register_series(
         &accounts[IX_REGISTER_PROGRAMDATA],
     )?;
     require(
-        registry.projection().capability_profile_id == request.capability_profile_id,
+        release.projection().capability_profile_id == request.capability_profile_id,
         ClutchError::MismatchedState,
     )?;
     let source_release = crate::source_plane_v3::authenticate_release(
@@ -295,29 +294,26 @@ fn process_register_series(
         &accounts[IX_REGISTER_SOURCE_RELEASE],
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let compiler_bundle = authenticate_compiled_product_series_bundle_v5(
+    let registration = crate::instructions::product_source_current::
+        authenticate_product_series_registration_v5(
         program_id,
         &accounts[IX_REGISTER_COMPILER_OUTPUT],
-        registry,
+        release,
         source_release,
         &artifacts,
     )?;
-    let authority = AuthenticatedProductSourceAuthorityV1::new(registry, source_release)?;
-    let registration = authenticate_series_registration_v2(
-        &authority,
-        &artifacts,
-        &registry.projection(),
-        compiler_bundle,
-        request,
-    )?;
-    register_series_replay_anchor_v3(
+    let _ = physical_v5::register_current_series_physical_v5(
         program_id,
         registration,
         &accounts[IX_REGISTER_PAYER],
         &accounts[IX_REGISTER_TARGET],
         &accounts[IX_REGISTER_NEUTRAL_LAMPORT_SINK],
         &accounts[IX_REGISTER_SYSTEM],
-        &rent,
+        &accounts[IX_REGISTER_RENT],
+        &accounts[IX_REGISTER_PROGRAM],
+        &accounts[IX_REGISTER_PROGRAMDATA],
+        &accounts[IX_REGISTER_REGISTRY_RELEASE],
+        &accounts[IX_REGISTER_CAPABILITY_PROFILE],
     )?;
     Ok(())
 }
@@ -417,91 +413,117 @@ fn process_activate_funding(
     let account = |role: ActivateSeriesFundingAccountRoleV2| &accounts[role.index()];
     let registry_account = account(ActivateSeriesFundingAccountRoleV2::Registry);
     let funding_account = account(ActivateSeriesFundingAccountRoleV2::Funding);
-    let rent_account = account(ActivateSeriesFundingAccountRoleV2::RentSysvar);
-    let rent = read_rent(rent_account)?;
-    let registry = read_series_registry_account_v2_with_role(
+    let registry_account = account(ActivateSeriesFundingAccountRoleV2::Registry);
+    let registry_state = crate::instructions::product_series_current::
+        authenticate_series_registry_account_v4(
         program_id,
         registry_account,
         request.series_plan_id,
-        &rent,
         true,
     )?;
-    let artifacts = authenticate_series_artifact_accounts_v4(
+    let funding_terms_id = registry_state.value().funding_terms_id;
+    let registry = crate::instructions::product_series_current::
+        authenticate_registry_capability_v5(
+            program_id,
+            registry_state,
+            account(ActivateSeriesFundingAccountRoleV2::ExecutingProgram),
+            account(ActivateSeriesFundingAccountRoleV2::ExecutingProgramData),
+            account(ActivateSeriesFundingAccountRoleV2::RegistryRelease),
+            account(ActivateSeriesFundingAccountRoleV2::CapabilityProfile),
+        )?;
+    let artifacts = crate::instructions::product_source_current::
+        authenticate_series_source_artifacts_v6(
         program_id,
         &accounts[ACTIVATE_SERIES_ARTIFACT_START_V2..ACTIVATE_SERIES_ARTIFACT_END_V2],
         request.series_plan_id,
-        registry.value().funding_terms_id,
+        funding_terms_id,
     )?;
-    let registry_refs = authenticate_series_registry_capability_refs_v2_for_mutation(
-        program_id,
-        registry_account,
-        request.series_plan_id,
-    )?;
-    let registry_capability = authenticate_registry_capability_v3(
-        program_id,
-        registry_refs,
-        account(ActivateSeriesFundingAccountRoleV2::ExecutingProgram),
-        account(ActivateSeriesFundingAccountRoleV2::ExecutingProgramData),
-        account(ActivateSeriesFundingAccountRoleV2::RegistryRelease),
-        account(ActivateSeriesFundingAccountRoleV2::CapabilityProfile),
-    )?;
-    artifacts.validate_registry_projection(&registry_capability.projection())?;
     let source_release = crate::source_plane_v3::authenticate_release(
         program_id,
         account(ActivateSeriesFundingAccountRoleV2::SourceRelease),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let compiler_bundle = authenticate_compiled_product_series_bundle_v5(
+    let compiler_bundle = crate::instructions::product_source_current::
+        authenticate_compiled_product_series_bundle_v7(
         program_id,
         account(ActivateSeriesFundingAccountRoleV2::CompilerBundle),
-        registry_capability,
+        &registry,
         source_release,
         &artifacts,
     )?;
     require(
-        compiler_bundle.bundle_id() == registry.value().compiler_bundle_id,
+        compiler_bundle.bundle_id() == registry.compiler_bundle_id(),
         ClutchError::MismatchedState,
     )?;
-    let (activated_registry, activated_funding) = deploy_and_activate_series_funding_v2(
+    let schedule = crate::source_plane_v3_actions::
+        authenticate_source_work_schedule_from_release_v1(
+            program_id,
+            source_release,
+            account(ActivateSeriesFundingAccountRoleV2::SourceWorkSchedule),
+        )?;
+    let rent = read_rent(account(ActivateSeriesFundingAccountRoleV2::RentSysvar))?;
+    let source_quote = crate::source_plane_v3_actions::
+        quote_source_lifecycle_capitalization_v1(schedule, &rent)?;
+    let physical_accounts = [
+        account(ActivateSeriesFundingAccountRoleV2::Payer).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::PayerCollateralSource).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralAuthority).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::Realm).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::Profile).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralPolicy).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralMint).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgram).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgramData).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::SystemProgram).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::RentSysvar).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultMarketCore).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultRecoveryReserve).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultSourceWork).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultLiquidityFacility).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::LamportVaultWrapperSet).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralVaultMarketCore).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralVaultRecoveryReserve).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralVaultSourceWork).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralVaultLiquidityFacility).clone(),
+        account(ActivateSeriesFundingAccountRoleV2::CollateralVaultWrapperSet).clone(),
+    ];
+    let (_, physical) = physical_v5::capitalize_current_series_physical_v5(
         program_id,
+        &registry,
         registry_account,
         funding_account,
-        account(ActivateSeriesFundingAccountRoleV2::Payer),
-        &accounts
-            [ACTIVATE_SERIES_LAMPORT_VAULT_START_V2..ACTIVATE_SERIES_LAMPORT_VAULT_END_V2],
-        account(ActivateSeriesFundingAccountRoleV2::PayerCollateralSource),
-        account(ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund),
-        account(ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition),
-        account(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralAuthority),
-        account(ActivateSeriesFundingAccountRoleV2::Realm),
-        account(ActivateSeriesFundingAccountRoleV2::Profile),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralPolicy),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralMint),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgram),
-        account(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgramData),
-        &accounts[ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2
-            ..ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2],
-        account(ActivateSeriesFundingAccountRoleV2::SystemProgram),
-        rent_account,
-        registry,
-        &artifacts,
         compiler_bundle,
+        &artifacts,
+        &source_quote,
+        &physical_accounts,
     )?;
-    let _ = initialize_series_lifecycle_replay_v1(
+    let (activated_registry, activated_funding, physical_founder) =
+        physical_v5::activate_current_series_registry_from_physical_v5(
+            program_id,
+            &registry,
+            physical,
+            registry_account,
+            funding_account,
+            account(ActivateSeriesFundingAccountRoleV2::ExecutingProgram),
+            account(ActivateSeriesFundingAccountRoleV2::ExecutingProgramData),
+            account(ActivateSeriesFundingAccountRoleV2::RegistryRelease),
+            account(ActivateSeriesFundingAccountRoleV2::CapabilityProfile),
+        )?;
+    let _ = replay_v3_founder::initialize_current_series_lifecycle_replay_v3(
         program_id,
+        physical_founder,
+        activated_registry,
+        activated_funding,
         account(ActivateSeriesFundingAccountRoleV2::Payer),
         account(ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay),
         account(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink),
         account(ActivateSeriesFundingAccountRoleV2::SystemProgram),
-        registry_account,
-        funding_account,
-        activated_registry,
-        activated_funding,
-        &artifacts,
-        compiler_bundle,
-        &rent,
+        account(ActivateSeriesFundingAccountRoleV2::RentSysvar),
     )?;
     Ok(())
 }

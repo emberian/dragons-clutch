@@ -12,9 +12,23 @@ use crate::instructions::product_series_current::retirement_v5::
 use crate::instructions::product_market_lifecycle_v3_current::{
     AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
 };
+use crate::instructions::genesis::read_rent;
+use crate::instructions::product_series_current::{
+    authenticate_registry_capability_v5, authenticate_series_funding_account_v5,
+    authenticate_series_registry_account_v4, AuthenticatedRegistryCapabilityV5,
+    AuthenticatedSeriesFundingAccountV5,
+};
+use crate::instructions::product_source_current::{
+    authenticate_compiled_product_series_bundle_v7, authenticate_series_source_artifacts_v6,
+    AuthenticatedSeriesSourceArtifactsV6,
+};
 use crate::instructions::source_funding_custody_retirement_v1::
     AuthenticatedSourceMarketSharedCoreTerminalV3;
 use crate::seeds;
+use crate::source_plane_v3_actions::{
+    authenticate_source_work_schedule_from_release_v1,
+    quote_source_lifecycle_capitalization_v1,
+};
 use clutch_product_series::{
     ContentId, FixedCodec, RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id,
     MarketLifecyclePhaseV3, SeriesLifecycleLinkRetirementProjectionV3,
@@ -39,6 +53,8 @@ const SERIES_LIFECYCLE_LINK_RETIREMENT_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/series-lifecycle-link-retirement-postwrite/v3\0";
 const PRODUCT_SERIES_LINK_RETIREMENT_FACTS_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-link-retirement-facts/v5\0";
+const CURRENT_SERIES_BOOTSTRAP_AUTHENTICATION_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/current-series-bootstrap-authentication/v5\0";
 
 /// Exact hostile authentication of the current permanent `0xb8/v3` owner.
 ///
@@ -68,6 +84,198 @@ impl AuthenticatedSeriesLifecycleReplayV3 {
         self.binding_id
     }
     pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+}
+
+/// Hostile action15 reconstruction of the exact action14 physical checkpoint.
+///
+/// ReplayV3 owns the immutable transcript IDs. The current RegistryV4,
+/// FundingV5, BundleV7, artifact graph, Source schedule, and Rent are all
+/// reopened and compared before this new move-only authority exists.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentSeriesBootstrapV5 {
+    id: ContentId,
+    replay: AuthenticatedSeriesLifecycleReplayV3,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: AuthenticatedSeriesFundingAccountV5,
+}
+
+impl AuthenticatedCurrentSeriesBootstrapV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn replay(&self) -> &AuthenticatedSeriesLifecycleReplayV3 {
+        &self.replay
+    }
+    pub(crate) const fn registry(&self) -> &AuthenticatedRegistryCapabilityV5 {
+        &self.registry
+    }
+    pub(crate) const fn funding(&self) -> &AuthenticatedSeriesFundingAccountV5 {
+        &self.funding
+    }
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedSeriesLifecycleReplayV3,
+        AuthenticatedRegistryCapabilityV5,
+        AuthenticatedSeriesFundingAccountV5,
+    ) {
+        (self.replay, self.registry, self.funding)
+    }
+}
+
+/// Reopen the sole action14 checkpoint into an exact action15 authority.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn authenticate_current_series_bootstrap_v5<'a>(
+    program_id: &Pubkey,
+    expected_series_plan_id: SeriesPlanV5Id,
+    replay_account: &AccountInfo<'a>,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    program_account: &AccountInfo<'a>,
+    programdata_account: &AccountInfo<'a>,
+    registry_release_artifact: &AccountInfo<'a>,
+    capability_profile_artifact: &AccountInfo<'a>,
+    source_release_account: &AccountInfo<'a>,
+    compiler_bundle_account: &AccountInfo<'a>,
+    artifact_accounts: &[AccountInfo<'a>],
+    source_work_schedule_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+) -> Outcome<(
+    AuthenticatedCurrentSeriesBootstrapV5,
+    AuthenticatedSeriesSourceArtifactsV6,
+)> {
+    let replay = authenticate_series_lifecycle_replay_v3(
+        program_id,
+        replay_account,
+        expected_series_plan_id,
+        false,
+    )?;
+    let registry_state = authenticate_series_registry_account_v4(
+        program_id,
+        registry_account,
+        expected_series_plan_id,
+        false,
+    )?;
+    let registry = authenticate_registry_capability_v5(
+        program_id,
+        registry_state,
+        program_account,
+        programdata_account,
+        registry_release_artifact,
+        capability_profile_artifact,
+    )?;
+    let funding = authenticate_series_funding_account_v5(
+        program_id,
+        funding_account,
+        expected_series_plan_id,
+        true,
+    )?;
+    let artifacts = authenticate_series_source_artifacts_v6(
+        program_id,
+        artifact_accounts,
+        expected_series_plan_id,
+        registry.funding_terms_id(),
+    )?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        source_release_account,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bundle = authenticate_compiled_product_series_bundle_v7(
+        program_id,
+        compiler_bundle_account,
+        &registry,
+        source_release,
+        &artifacts,
+    )?;
+    let schedule = authenticate_source_work_schedule_from_release_v1(
+        program_id,
+        source_release,
+        source_work_schedule_account,
+    )?;
+    let source_quote = quote_source_lifecycle_capitalization_v1(
+        schedule,
+        &read_rent(rent_sysvar)?,
+    )?;
+    let binding = replay.state().binding();
+    let funding_state = funding.state();
+    let funding_state_id = funding_state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_plan_id = artifacts
+        .attachment()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let foundation_schedule_id = artifacts
+        .quote()
+        .foundation
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry.activation_consumed()
+            && registry.series_plan_id() == expected_series_plan_id
+            && registry.compiler_bundle_id() == bundle.bundle_id()
+            && binding.series_plan_id == expected_series_plan_id
+            && binding.funding_terms_id == registry.funding_terms_id()
+            && binding.funding_quote_id == funding_quote_id
+            && binding.attachment_plan_id == attachment_plan_id
+            && binding.compiler_bundle_id == bundle.bundle_id()
+            && binding.registry_release_id.content_id() == registry.registry_release_id()
+            && binding.capability_profile_id.content_id() == registry.capability_profile_id()
+            && binding.foundation_schedule_id == foundation_schedule_id
+            && binding.source_capitalization_quote_id == source_quote.id()
+            && !binding.physical_capitalization_id.is_zero()
+            && !binding.physical_founder_id.is_zero()
+            && binding.registry_account_id.bytes() == registry_account.key.to_bytes()
+            && binding.funding_account_id.bytes() == funding_account.key.to_bytes()
+            && binding.lifecycle_replay_account_id.bytes() == replay_account.key.to_bytes()
+            && binding.permanent_rent_funder.bytes()
+                == artifacts.funding_terms().lamport_principal_refund.bytes()
+            && binding.neutral_lamport_sink.bytes()
+                == artifacts.funding_terms().neutral_lamport_sink.bytes()
+            && funding.is_writable()
+            && funding_state.phase == clutch_product_series::SeriesFundingPhaseV5::Active
+            && funding_state.series_plan_id == expected_series_plan_id
+            && funding_state.funding_terms_id == binding.funding_terms_id
+            && funding_state.funding_quote_id == binding.funding_quote_id
+            && funding_state.attachment_plan_id == binding.attachment_plan_id
+            && funding_state.compiler_bundle_id == binding.compiler_bundle_id
+            && funding_state.next_ordinal == 0
+            && funding_state.lapsed_count == 0
+            && funding_state.transition_sequence == 0
+            && replay.state().phase() == SeriesLifecycleReplayPhaseV3::Open
+            && replay.state().transition_sequence() == 0
+            && replay.state().processed_ordinals() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        CURRENT_SERIES_BOOTSTRAP_AUTHENTICATION_DOMAIN_V5,
+        program_id.as_ref(),
+        replay_account.key.as_ref(),
+        &replay.data_id().bytes(),
+        &replay.authentication_id().bytes(),
+        registry_account.key.as_ref(),
+        &registry.id().bytes(),
+        funding_account.key.as_ref(),
+        &funding.data_id().bytes(),
+        &funding.authentication_id().bytes(),
+        &funding_state_id.bytes(),
+        &replay.binding_id().bytes(),
+        &source_quote.id().bytes(),
+    ]);
+    require_live(id)?;
+    Ok((
+        AuthenticatedCurrentSeriesBootstrapV5 {
+            id,
+            replay,
+            registry,
+            funding,
+        },
+        artifacts,
+    ))
 }
 
 /// Hostile-authenticate exactly one current permanent replay PDA.
