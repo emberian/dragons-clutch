@@ -21,7 +21,8 @@ use clutch_product_series::{
     MarketInstanceV2Id,
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
-    MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingStateV3,
+    MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
+    SeriesFundingStateV3,
     RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2Id,
     SeriesLifecycleReplayV2, SeriesLinkObligationAdmissionProjectionV2,
@@ -70,6 +71,8 @@ const PRODUCT_FRACTIONAL_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-fractional-admission/v2\0";
 const PRODUCT_FRACTIONAL_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-fractional-terminal/v2\0";
+const MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/market-resolution-activation-postwrite/v2\0";
 
 /// Exact current 0x7f/version3 registry authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1417,6 +1420,222 @@ impl AuthenticatedMarketFoundationPreallocationV3 {
     pub(crate) const fn neutral_lamport_sink(self) -> Pubkey { self.neutral_lamport_sink }
 }
 
+/// Default-refusing current authority for the once-only RootV2 Resolution write.
+///
+/// The Failure/Collateral owner may implement this only on its private final
+/// postwrite receipt, after the exact ResolutionV5 account and every collateral
+/// liability postimage have been hostile-reauthenticated. A pure
+/// [`MarketResolutionActivationV2`] or a caller-shaped collection of IDs is not
+/// sufficient authority.
+pub(crate) trait AuthenticatedMarketResolutionActivationWriteV2 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_market_resolution_activation_write_v2(
+        &self,
+        _root_account: Pubkey,
+        _root_authentication_before: ContentId,
+        _root_data_before: ContentId,
+        _root_semantic_before: ContentId,
+        _activation: MarketResolutionActivationV2,
+        _slot10: AuthenticatedMarketFoundationPreallocationV3,
+        _collateral_plan_receipt_id: ContentId,
+        _collateral_postwrite_receipt_id: ContentId,
+        _failure_resolution_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Exact RootV2 postwrite minted only by the narrow Resolution compositor.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedMarketResolutionActivationPostwriteV2 {
+    id: ContentId,
+    activation: MarketResolutionActivationV2,
+    slot10_preallocation_id: ContentId,
+    collateral_plan_receipt_id: ContentId,
+    collateral_postwrite_receipt_id: ContentId,
+    failure_resolution_receipt_id: ContentId,
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_authentication_before: ContentId,
+    root_authentication_after: ContentId,
+    root_data_before: ContentId,
+    root_data_after: ContentId,
+    root_semantic_before: ContentId,
+    root_semantic_after: ContentId,
+}
+
+impl AuthenticatedMarketResolutionActivationPostwriteV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn activation(&self) -> MarketResolutionActivationV2 { self.activation }
+    pub(crate) const fn slot10_preallocation_id(&self) -> ContentId {
+        self.slot10_preallocation_id
+    }
+    pub(crate) const fn collateral_plan_receipt_id(&self) -> ContentId {
+        self.collateral_plan_receipt_id
+    }
+    pub(crate) const fn collateral_postwrite_receipt_id(&self) -> ContentId {
+        self.collateral_postwrite_receipt_id
+    }
+    pub(crate) const fn failure_resolution_receipt_id(&self) -> ContentId {
+        self.failure_resolution_receipt_id
+    }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_binding_id(&self) -> ContentId { self.root_binding_id }
+    pub(crate) const fn root_authentication_before(&self) -> ContentId {
+        self.root_authentication_before
+    }
+    pub(crate) const fn root_authentication_after(&self) -> ContentId {
+        self.root_authentication_after
+    }
+    pub(crate) const fn root_data_before(&self) -> ContentId { self.root_data_before }
+    pub(crate) const fn root_data_after(&self) -> ContentId { self.root_data_after }
+    pub(crate) const fn root_semantic_before(&self) -> ContentId {
+        self.root_semantic_before
+    }
+    pub(crate) const fn root_semantic_after(&self) -> ContentId { self.root_semantic_after }
+}
+
+/// Record current ResolutionV5 exactly once in the live RootV2.
+///
+/// `slot10` is the retained prewrite authority for the same canonical
+/// Resolution account. The concrete authority must additionally prove that its
+/// private Failure and Collateral postwrites are the exact ones named here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_market_resolution_activation_v2<
+    'next,
+    A: AuthenticatedMarketResolutionActivationWriteV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    activation: MarketResolutionActivationV2,
+    slot10: AuthenticatedMarketFoundationPreallocationV3,
+    collateral_plan_receipt_id: ContentId,
+    collateral_postwrite_receipt_id: ContentId,
+    failure_resolution_receipt_id: ContentId,
+    authority: &A,
+    successor_output: &mut MarketLifecycleRootV2,
+    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV2<'next>,
+    AuthenticatedMarketResolutionActivationPostwriteV2,
+)> {
+    require_live(collateral_plan_receipt_id)?;
+    require_live(collateral_postwrite_receipt_id)?;
+    require_live(failure_resolution_receipt_id)?;
+    let root = authenticated.state();
+    let binding = root.binding();
+    let root_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_semantic_before = root
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        authenticated.is_writable()
+            && *account.key == authenticated.account()
+            && root.phase() == MarketLifecyclePhaseV2::Active
+            && root.resolution_semantic_id() == ContentId::ZERO
+            && root.resolution_data_id() == ContentId::ZERO
+            && root.resolution_activation_receipt_id() == ContentId::ZERO
+            && activation.market_binding_id() == root_binding_id
+            && activation.market_instance_id() == binding.market_instance_id
+            && activation.generation() == binding.generation
+            && activation.resolution_account_id() == binding.resolution_account_id
+            && activation.failure_resolution_receipt_id() == failure_resolution_receipt_id
+            && slot10.root_account() == authenticated.account()
+            && slot10.root_authentication_id() == authenticated.authentication_id()
+            && slot10.market_instance_id() == binding.market_instance_id
+            && slot10.generation() == binding.generation
+            && slot10.slot() == MarketFoundationSlotV3::ResolutionV5
+            && slot10.account().to_bytes() == binding.resolution_account_id.bytes()
+            && slot10.foundation_schedule_id() == binding.foundation_schedule_id.content_id()
+            && slot10.foundation_account_graph_id()
+                == binding.foundation_account_graph_id.content_id()
+            && slot10.foundation_transcript_id() == root.foundation().transcript_id
+            && slot10.principal_lamports() != 0
+            && slot10.observed_balance_lamports()
+                == slot10
+                    .principal_lamports()
+                    .checked_add(slot10.donation_lamports())
+                    .ok_or(ClutchError::Arithmetic)?
+            && slot10.rent_refund_owner().to_bytes() == root.capital().rent_refund_owner.bytes()
+            && slot10.neutral_lamport_sink().to_bytes()
+                == root.capital().neutral_lamport_sink.bytes()
+            && collateral_plan_receipt_id != collateral_postwrite_receipt_id
+            && collateral_plan_receipt_id != failure_resolution_receipt_id
+            && collateral_postwrite_receipt_id != failure_resolution_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    authority.authenticate_market_resolution_activation_write_v2(
+        authenticated.account(),
+        authenticated.authentication_id(),
+        authenticated.data_id(),
+        root_semantic_before,
+        activation,
+        slot10,
+        collateral_plan_receipt_id,
+        collateral_postwrite_receipt_id,
+        failure_resolution_receipt_id,
+    )?;
+    root.record_resolution_activation_into(activation, successor_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_market_lifecycle_root_v2(
+        program_id,
+        account,
+        authenticated,
+        successor_output,
+        rebound_output,
+    )?;
+    let root_semantic_after = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound.state().binding() == binding
+            && rebound.state().resolution_semantic_id() == activation.resolution_semantic_id()
+            && rebound.state().resolution_data_id() == activation.resolution_data_id()
+            && rebound.state().resolution_activation_receipt_id() == activation.id()
+            && rebound.state().transition_sequence()
+                == root.transition_sequence().checked_add(1).ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V2,
+        program_id.as_ref(),
+        account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &authenticated.authentication_id().bytes(),
+        &rebound.authentication_id().bytes(),
+        &authenticated.data_id().bytes(),
+        &rebound.data_id().bytes(),
+        &root_semantic_before.bytes(),
+        &root_semantic_after.bytes(),
+        &activation.id().bytes(),
+        &slot10.id().bytes(),
+        &collateral_plan_receipt_id.bytes(),
+        &collateral_postwrite_receipt_id.bytes(),
+        &failure_resolution_receipt_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedMarketResolutionActivationPostwriteV2 {
+        id,
+        activation,
+        slot10_preallocation_id: slot10.id(),
+        collateral_plan_receipt_id,
+        collateral_postwrite_receipt_id,
+        failure_resolution_receipt_id,
+        root_account: *account.key,
+        root_binding_id,
+        root_authentication_before: authenticated.authentication_id(),
+        root_authentication_after: rebound.authentication_id(),
+        root_data_before: authenticated.data_id(),
+        root_data_after: rebound.data_id(),
+        root_semantic_before,
+        root_semantic_after,
+    }))
+}
+
 pub(crate) fn authenticate_series_registry_account_v3(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -2669,5 +2888,21 @@ mod source_contract_tests {
             "terminalize_series_wrapper_obligation_",
             "v1("
         )));
+    }
+
+    #[test]
+    fn current_resolution_write_requires_exact_slot_and_private_postwrites() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("trait AuthenticatedMarketResolutionActivationWriteV2"));
+        assert!(source.contains("slot10.slot() == MarketFoundationSlotV3::ResolutionV5"));
+        assert!(source.contains(
+            "slot10.root_authentication_id() == authenticated.authentication_id()"
+        ));
+        assert!(source.contains(
+            "activation.failure_resolution_receipt_id() == failure_resolution_receipt_id"
+        ));
+        assert!(source.contains("root.record_resolution_activation_into("));
+        assert!(source.contains("AuthenticatedMarketResolutionActivationPostwriteV2"));
+        assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
     }
 }
