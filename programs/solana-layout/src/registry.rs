@@ -602,10 +602,10 @@ pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 =
     PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
 /// Product-owned Direct global-liveness manifest and allocation lifecycle discriminator.
 pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG: u8 = 0xba;
-/// First Product Direct global-liveness account version.
-pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION: u8 = 1;
+/// Current acyclic Product Direct global-liveness account version.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION: u8 = 2;
 /// Exact current Product Direct global-liveness account width.
-pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES: usize = 1_024;
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES: usize = 1_192;
 /// One-shot Dealer future Fractional-credit funding owner discriminator.
 pub const DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG: u8 = 0xbc;
 /// First Dealer future-credit funding owner version.
@@ -628,7 +628,7 @@ const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb8);
 const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG == 0xba);
-const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES == 1_024);
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES == 1_192);
 const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG == 0xbc);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
@@ -1956,7 +1956,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-direct-global-liveness-v1-account",
+        name: "product-direct-global-liveness-v2-account",
     },
 ];
 

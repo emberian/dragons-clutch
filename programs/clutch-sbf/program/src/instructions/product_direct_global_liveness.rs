@@ -28,30 +28,30 @@ use clutch_liveness::runtime_v1::{
 };
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    ContentId, DirectGlobalLivenessCapitalizationV1, DirectGlobalLivenessPhaseV1,
-    DirectGlobalLivenessV1, FixedCodec, MarketInstanceV2Id, MarketLifecyclePhaseV1,
-    ProductDirectGlobalLivenessAuthorityV1,
-    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
-    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
+    ContentId, DirectGlobalLivenessCapitalizationV2, DirectGlobalLivenessPhaseV2,
+    DirectGlobalLivenessV2, DirectWorkQuoteV1, FixedCodec,
+    MarketInstanceV2Id, MarketLifecyclePhaseV1, ProductDirectGlobalLivenessAuthorityV2,
+    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
+    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V2,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, ProductDirectGlobalLivenessAccountV1,
-    PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1,
+    MarketLifecycleRootAccountV1, ProductDirectGlobalLivenessAccountV2,
+    PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/product-direct-global-lifecycle/v1";
-const PRODUCT_DIRECT_ROW_CAPITALIZATION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/product-direct-global-row-capitalization/v1";
-const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/product-direct-global-account-authentication/v1";
-const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/product-direct-global-founder-activation/v1";
+const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-direct-global-lifecycle/v2";
+const PRODUCT_DIRECT_ROW_CAPITALIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-direct-global-row-capitalization/v2";
+const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-direct-global-account-authentication/v2";
+const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-direct-global-founder-activation/v2";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +70,7 @@ struct AuthenticatedRuntimeLivenessPolicyFactsV1 {
     realm_id: ContentId,
     neutral_sink: ContentId,
     data_id: ContentId,
+    candidate_quote_schedule_id: ContentId,
 }
 
 /// Private non-detachable postwrite minted by the raw capitalization half.
@@ -77,17 +78,20 @@ struct AuthenticatedRuntimeLivenessPolicyFactsV1 {
 /// The Product founder must hostile-reopen the account, compare this receipt,
 /// create the root/link, and activate `0xba` before the outer call returns.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductDirectGlobalLivenessCapitalizationV1 {
-    state: DirectGlobalLivenessV1,
+pub(crate) struct AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
+    state_semantic_id: ContentId,
+    global_bundle_binding_id: ContentId,
+    work_quote: DirectWorkQuoteV1,
     account_data_id: ContentId,
     account_authentication_id: ContentId,
+    expected_manifest_balance: u64,
     payer_balance_before: u64,
     payer_balance_after: u64,
     total_payer_debit_lamports: u64,
 }
 
-impl AuthenticatedProductDirectGlobalLivenessCapitalizationV1 {
-    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV1 { &self.state }
+impl AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
+    pub(crate) const fn state_semantic_id(&self) -> ContentId { self.state_semantic_id }
     pub(crate) const fn account_data_id(&self) -> ContentId { self.account_data_id }
     pub(crate) const fn account_authentication_id(&self) -> ContentId {
         self.account_authentication_id
@@ -97,23 +101,48 @@ impl AuthenticatedProductDirectGlobalLivenessCapitalizationV1 {
     pub(crate) const fn total_payer_debit_lamports(&self) -> u64 {
         self.total_payer_debit_lamports
     }
+    pub(crate) const fn global_bundle_binding_id(&self) -> ContentId {
+        self.global_bundle_binding_id
+    }
+    pub(crate) const fn work_quote(&self) -> DirectWorkQuoteV1 {
+        self.work_quote
+    }
+    pub(crate) const fn expected_manifest_balance(&self) -> u64 {
+        self.expected_manifest_balance
+    }
 }
 
-/// Hostile-reopened current `0xba/v1` account authentication.
+/// Hostile-reopened current `0xba/v2` account authentication.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductDirectGlobalLivenessAccountV1 {
-    state: DirectGlobalLivenessV1,
+pub(crate) struct AuthenticatedProductDirectGlobalLivenessAccountV2 {
+    state: DirectGlobalLivenessV2,
     data_id: ContentId,
     authentication_id: ContentId,
     observed_lamports: u64,
     stored_bump: u8,
 }
 
-impl AuthenticatedProductDirectGlobalLivenessAccountV1 {
-    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV1 { &self.state }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedProductDirectGlobalLivenessPostwriteV2 {
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedProductDirectGlobalLivenessAccountV2 {
+    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV2 { &self.state }
     pub(crate) const fn data_id(&self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
     pub(crate) const fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) const fn global_bundle_binding_id(&self) -> ContentId {
+        self.state.global_bundle_binding_id()
+    }
+    pub(crate) const fn activated_market_binding_id(&self) -> ContentId {
+        self.state.activated_market_binding_id()
+    }
+    pub(crate) const fn work_quote(&self) -> DirectWorkQuoteV1 {
+        self.state.work_quote()
+    }
+    pub(crate) fn into_state(self) -> DirectGlobalLivenessV2 { self.state }
 }
 
 /// Private postwrite proving that the exact newly-created Product root consumed
@@ -124,9 +153,9 @@ impl AuthenticatedProductDirectGlobalLivenessAccountV1 {
 /// capitalization receipt nor a caller-supplied Market binding can activate
 /// the account.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductDirectGlobalLivenessActivationV1 {
+pub(crate) struct AuthenticatedProductDirectGlobalLivenessActivationV2 {
     id: ContentId,
-    state: DirectGlobalLivenessV1,
+    state: DirectGlobalLivenessV2,
     account_data_id: ContentId,
     account_authentication_id: ContentId,
     founder_creation_receipt_id: ContentId,
@@ -134,9 +163,9 @@ pub(crate) struct AuthenticatedProductDirectGlobalLivenessActivationV1 {
     root_authentication_id: ContentId,
 }
 
-impl AuthenticatedProductDirectGlobalLivenessActivationV1 {
+impl AuthenticatedProductDirectGlobalLivenessActivationV2 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
-    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV1 { &self.state }
+    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV2 { &self.state }
     pub(crate) const fn account_data_id(&self) -> ContentId { self.account_data_id }
     pub(crate) const fn account_authentication_id(&self) -> ContentId {
         self.account_authentication_id
@@ -148,15 +177,33 @@ impl AuthenticatedProductDirectGlobalLivenessActivationV1 {
     pub(crate) const fn root_authentication_id(&self) -> ContentId {
         self.root_authentication_id
     }
+    pub(crate) const fn account_id(&self) -> ContentId { self.state.account_id() }
+    pub(crate) const fn global_bundle_binding_id(&self) -> ContentId {
+        self.state.global_bundle_binding_id()
+    }
+    pub(crate) const fn activated_market_binding_id(&self) -> ContentId {
+        self.state.activated_market_binding_id()
+    }
+    pub(crate) const fn work_quote(&self) -> DirectWorkQuoteV1 {
+        self.state.work_quote()
+    }
+    pub(crate) fn work_quote_id(&self) -> Outcome<ContentId> {
+        self.state
+            .work_quote_id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    pub(crate) const fn transition_sequence(&self) -> u64 {
+        self.state.transition_sequence()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ExactCapitalizationAuthorityV1;
+struct ExactCapitalizationAuthorityV2;
 
-impl ProductDirectGlobalLivenessAuthorityV1 for ExactCapitalizationAuthorityV1 {
+impl ProductDirectGlobalLivenessAuthorityV2 for ExactCapitalizationAuthorityV2 {
     fn authenticate_capitalization(
         &self,
-        _capitalization: &DirectGlobalLivenessCapitalizationV1,
+        _capitalization: &DirectGlobalLivenessCapitalizationV2,
     ) -> clutch_product_series::Result<()> {
         // Private construction is the authority: this module derives every
         // field from live account poststates immediately before initialization.
@@ -164,19 +211,22 @@ impl ProductDirectGlobalLivenessAuthorityV1 for ExactCapitalizationAuthorityV1 {
     }
 }
 
-struct ExactFounderActivationAuthorityV1<'state> {
-    expected_state: &'state DirectGlobalLivenessV1,
+struct ExactFounderActivationAuthorityV2 {
+    expected_state_semantic_id: ContentId,
     expected_founder_receipt_id: ContentId,
+    expected_market_binding_id: ContentId,
 }
 
-impl ProductDirectGlobalLivenessAuthorityV1 for ExactFounderActivationAuthorityV1<'_> {
+impl ProductDirectGlobalLivenessAuthorityV2 for ExactFounderActivationAuthorityV2 {
     fn authenticate_founder_activation(
         &self,
-        state: &DirectGlobalLivenessV1,
+        state: &DirectGlobalLivenessV2,
         founder_receipt_id: ContentId,
+        activated_market_binding_id: ContentId,
     ) -> clutch_product_series::Result<()> {
-        if state == self.expected_state
+        if state.semantic_id()? == self.expected_state_semantic_id
             && founder_receipt_id == self.expected_founder_receipt_id
+            && activated_market_binding_id == self.expected_market_binding_id
         {
             Ok(())
         } else {
@@ -185,15 +235,35 @@ impl ProductDirectGlobalLivenessAuthorityV1 for ExactFounderActivationAuthorityV
     }
 }
 
+fn require_direct_work_quote_authority_v1(
+    work_quote: DirectWorkQuoteV1,
+    candidate_lifecycle_policy_id: ContentId,
+    candidate_liveness_policy_id: ContentId,
+    failure_liveness_policy_id: ContentId,
+    runtime_policy_id: ContentId,
+    candidate_quote_schedule_id: ContentId,
+) -> Outcome<()> {
+    let quote_id = work_quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        work_quote.candidate_lifecycle_policy_id == candidate_lifecycle_policy_id
+            && work_quote.candidate_liveness_policy_id == candidate_liveness_policy_id
+            && runtime_policy_id == failure_liveness_policy_id
+            && quote_id == candidate_quote_schedule_id,
+        ClutchError::MismatchedState,
+    )
+}
+
 /// Capitalize all seven generic runtime accounts plus the separate Product
 /// manifest. This is a raw half: it is safe only because it is crate-private
 /// and no route calls it except the eventual atomic Product founder outer.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
+fn capitalize_product_direct_global_liveness_v2<'a>(
     program_id: &Pubkey,
     founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
-    market_binding_id: ContentId,
+    work_quote: DirectWorkQuoteV1,
     policy_account: &AccountInfo<'a>,
     manifest_account: &AccountInfo<'a>,
     payer: &AccountInfo<'a>,
@@ -201,7 +271,7 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
     compartments: &[AccountInfo<'a>],
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedProductDirectGlobalLivenessCapitalizationV1> {
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessCapitalizationV2> {
     require(
         compartments.len() == RUNTIME_COMPARTMENT_COUNT_V1,
         ClutchError::AccountCount,
@@ -220,13 +290,14 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
         rent_sysvar,
     )?;
     let policy = authenticate_policy_v1(program_id, founder, policy_account, &rent)?;
-    market_binding_id
+    work_quote
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let founder_preauthorization_id = founder.id();
 
     let market_instance_id = founder.market_instance_id();
     let generation = founder.generation();
-    let global_lifecycle_id = global_lifecycle_id_v1(
+    let global_lifecycle_id = global_lifecycle_id_v2(
         program_id,
         market_instance_id,
         generation,
@@ -278,13 +349,25 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
         }
         index += 1;
     }
+    require_direct_work_quote_authority_v1(
+        work_quote,
+        founder.candidate_lifecycle_policy_id(),
+        founder.candidate_liveness_policy_id(),
+        founder.failure_liveness_policy_id(),
+        policy.policy_id,
+        policy.candidate_quote_schedule_id,
+    )?;
     require(
-        candidate_maximum_calls != 0 && candidate_work_principal_lamports != 0,
+        candidate_maximum_calls >= DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2
+            && candidate_work_principal_lamports
+                >= work_quote
+                    .reserved_work_lamports()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         ClutchError::MismatchedState,
     )?;
 
     let manifest_rent_principal_lamports =
-        rent.minimum_balance(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1)?;
+        rent.minimum_balance(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2)?;
     require(
         manifest_rent_principal_lamports != 0,
         ClutchError::MismatchedState,
@@ -298,15 +381,18 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
     let realm_id = policy.realm_id;
     let principal_refund_owner = ContentId::from_bytes(payer.key.to_bytes());
     let neutral_sink_id = ContentId::from_bytes(neutral_lamport_sink.key.to_bytes());
-    let global_bundle_binding_id = global_bundle_binding_id_v1(
+    let global_bundle_binding_id = global_bundle_binding_id_v2(
         manifest_id,
         market_instance_id,
         lifecycle_root_account,
-        market_binding_id,
+        founder_preauthorization_id,
         realm_id,
         ContentId::from_bytes(policy_account.key.to_bytes()),
         policy_id,
         policy_data_id,
+        work_quote.candidate_lifecycle_policy_id,
+        work_quote.id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         global_lifecycle_id,
         principal_refund_owner,
         neutral_sink_id,
@@ -323,7 +409,7 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
     let payer_balance_after = payer_balance_before
         .checked_sub(total_payer_debit_lamports)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let global_capitalization_receipt_id = global_capitalization_receipt_id_v1(
+    let global_capitalization_receipt_id = global_capitalization_receipt_id_v2(
         global_bundle_binding_id,
         &compartment_receipts,
         total_work_principal_lamports,
@@ -334,11 +420,12 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
         payer_balance_before,
         payer_balance_after,
     );
-    let capitalization = DirectGlobalLivenessCapitalizationV1 {
+    let capitalization = DirectGlobalLivenessCapitalizationV2 {
         account_id: manifest_id,
         market_instance_id,
         lifecycle_root_account,
-        market_binding_id,
+        founder_preauthorization_id,
+        work_quote,
         realm_id,
         policy_account: ContentId::from_bytes(policy_account.key.to_bytes()),
         policy_id,
@@ -358,9 +445,9 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
         manifest_initial_donation_lamports,
         candidate_maximum_calls,
         candidate_work_principal_lamports,
-        allocation_call_width: DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
+        allocation_call_width: DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
     };
-    let state = DirectGlobalLivenessV1::initialize(&ExactCapitalizationAuthorityV1, capitalization)
+    let state = DirectGlobalLivenessV2::initialize(&ExactCapitalizationAuthorityV2, capitalization)
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     let (_, manifest_bump) = seeds::product_direct_global_liveness_pda(
@@ -375,7 +462,7 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
         manifest_account,
         system_program,
         manifest_rent_principal_lamports,
-        PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1,
+        PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2,
         &[
             seeds::SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
             &market_instance_id.bytes(),
@@ -383,7 +470,13 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
             &manifest_bump_seed,
         ],
     )?;
-    write_manifest_state_v1(
+    let state_semantic_id = state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_manifest_balance = manifest_initial_donation_lamports
+        .checked_add(manifest_rent_principal_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    write_manifest_state_v2(
         manifest_account,
         &state,
         manifest_rent_principal_lamports,
@@ -392,50 +485,48 @@ pub(crate) fn capitalize_product_direct_global_liveness_v1<'a>(
     require(
         payer.lamports() == payer_balance_after
             && manifest_account.lamports()
-                == manifest_initial_donation_lamports
-                    .checked_add(manifest_rent_principal_lamports)
-                    .ok_or(ClutchError::Arithmetic)?,
+                == expected_manifest_balance,
         ClutchError::AccountCreationFailed,
     )?;
-    let reopened = authenticate_product_direct_global_liveness_v1(
+    drop(state);
+    let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
         program_id,
         manifest_account,
-        true,
+        state_semantic_id,
+        expected_manifest_balance,
     )?;
-    require(
-        reopened.state() == &state
-            && reopened.observed_lamports() == manifest_account.lamports(),
-        ClutchError::MismatchedState,
-    )?;
-    Ok(AuthenticatedProductDirectGlobalLivenessCapitalizationV1 {
-        state,
-        account_data_id: reopened.data_id(),
-        account_authentication_id: reopened.authentication_id(),
+    Ok(AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
+        state_semantic_id,
+        global_bundle_binding_id,
+        work_quote,
+        account_data_id: reopened.data_id,
+        account_authentication_id: reopened.authentication_id,
+        expected_manifest_balance,
         payer_balance_before,
         payer_balance_after,
         total_payer_debit_lamports,
     })
 }
 
-/// Hostile-reopen the exact current `0xba/v1` account and its complete data.
+/// Hostile-reopen the exact current `0xba/v2` account and its complete data.
 #[inline(never)]
-pub(crate) fn authenticate_product_direct_global_liveness_v1(
+pub(crate) fn authenticate_product_direct_global_liveness_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     writable: bool,
-) -> Outcome<AuthenticatedProductDirectGlobalLivenessAccountV1> {
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessAccountV2> {
     require(
         account.owner == program_id
             && !account.is_signer
             && !account.executable
             && account.is_writable == writable
-            && account.data_len() == PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1,
+            && account.data_len() == PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2,
         ClutchError::MismatchedState,
     )?;
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let frame = ProductDirectGlobalLivenessAccountV1::decode(&data)
+    let frame = ProductDirectGlobalLivenessAccountV2::decode(&data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[&data[..]]).to_bytes());
     drop(data);
@@ -463,7 +554,7 @@ pub(crate) fn authenticate_product_direct_global_liveness_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let authentication_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1,
+            PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V2,
             account.key.as_ref(),
             program_id.as_ref(),
             &data_id.bytes(),
@@ -472,7 +563,7 @@ pub(crate) fn authenticate_product_direct_global_liveness_v1(
         ])
         .to_bytes(),
     );
-    Ok(AuthenticatedProductDirectGlobalLivenessAccountV1 {
+    Ok(AuthenticatedProductDirectGlobalLivenessAccountV2 {
         state: frame.state,
         data_id,
         authentication_id,
@@ -481,40 +572,60 @@ pub(crate) fn authenticate_product_direct_global_liveness_v1(
     })
 }
 
+#[inline(never)]
+fn authenticate_expected_product_direct_global_liveness_postwrite_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_semantic_id: ContentId,
+    expected_lamports: u64,
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessPostwriteV2> {
+    let reopened = authenticate_product_direct_global_liveness_v2(program_id, account, true)?;
+    let semantic_id = reopened
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        semantic_id == expected_semantic_id && reopened.observed_lamports() == expected_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedProductDirectGlobalLivenessPostwriteV2 {
+        data_id: reopened.data_id(),
+        authentication_id: reopened.authentication_id(),
+    })
+}
+
 /// Consume the capitalization postwrite only after hostile-reopening the exact
 /// Product founder root and its immutable binding. This is the sole raw
 /// Founding-to-Active writer and remains crate-private for composition into the
 /// one Product founder instruction.
 #[inline(never)]
-pub(crate) fn activate_product_direct_global_liveness_from_founder_v1<'state>(
+fn activate_product_direct_global_liveness_from_founder_v2<'state>(
     program_id: &Pubkey,
-    capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV1,
+    capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
     founder_creation: AuthenticatedProductMarketFounderCreationV1,
     manifest_account: &AccountInfo<'_>,
     root_account: &AccountInfo<'_>,
     root_output: &'state mut MarketLifecycleRootAccountV1,
-) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV1> {
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV2> {
     require(
         manifest_account.key != root_account.key,
         ClutchError::AccountAlias,
     )?;
-    let current = authenticate_product_direct_global_liveness_v1(
+    let current = authenticate_product_direct_global_liveness_v2(
         program_id,
         manifest_account,
         true,
     )?;
-    let expected_manifest_balance = capitalization
+    let expected_manifest_balance = capitalization.expected_manifest_balance();
+    let current_semantic_id = current
         .state()
-        .manifest_rent_principal_lamports()
-        .checked_add(
-            capitalization
-                .state()
-                .manifest_initial_donation_lamports(),
-        )
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        capitalization.state().phase() == DirectGlobalLivenessPhaseV1::Founding
-            && current.state() == capitalization.state()
+        current.state().phase() == DirectGlobalLivenessPhaseV2::Founding
+            && current_semantic_id == capitalization.state_semantic_id()
+            && current.global_bundle_binding_id() == capitalization.global_bundle_binding_id()
+            && current.work_quote() == capitalization.work_quote()
             && current.data_id() == capitalization.account_data_id()
             && current.authentication_id() == capitalization.account_authentication_id()
             && current.observed_lamports() == expected_manifest_balance,
@@ -524,15 +635,17 @@ pub(crate) fn activate_product_direct_global_liveness_from_founder_v1<'state>(
     let facts = founder_creation.facts();
     require(
         facts.root_account == *root_account.key
-            && capitalization.state().lifecycle_root_account().bytes()
+            && founder_creation.product_preauthorization_id()
+                == current.state().founder_preauthorization_id()
+            && current.state().lifecycle_root_account().bytes()
                 == root_account.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         root_account,
-        capitalization.state().market_instance_id(),
-        capitalization.state().generation(),
+        current.state().market_instance_id(),
+        current.state().generation(),
         true,
         root_output,
     )?;
@@ -549,25 +662,26 @@ pub(crate) fn activate_product_direct_global_liveness_from_founder_v1<'state>(
         root.state().phase() == MarketLifecyclePhaseV1::Founding
             && root_semantic_id == founder_creation.root_semantic_id()
             && root.authentication_id() == founder_creation.root_authentication_id()
-            && root_binding_id == capitalization.state().market_binding_id(),
+            && root_binding_id != current.state().founder_preauthorization_id(),
         ClutchError::MismatchedState,
     )?;
 
     let founder_creation_receipt_id = founder_creation.id();
-    let next = capitalization
-        .state()
-        .activate_founder(
-            &ExactFounderActivationAuthorityV1 {
-                expected_state: capitalization.state(),
-                expected_founder_receipt_id: founder_creation_receipt_id,
-            },
-            founder_creation_receipt_id,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let capitalization_authentication_id = capitalization.account_authentication_id();
     let stored_bump = current.stored_bump;
-    drop(current);
-    write_manifest_state_v1(
+    let state = current.into_state();
+    let next = state
+        .activate_founder(
+            &ExactFounderActivationAuthorityV2 {
+                expected_state_semantic_id: current_semantic_id,
+                expected_founder_receipt_id: founder_creation_receipt_id,
+                expected_market_binding_id: root_binding_id,
+            },
+            founder_creation_receipt_id,
+            root_binding_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_manifest_state_v2(
         manifest_account,
         &next,
         next.manifest_rent_principal_lamports(),
@@ -578,37 +692,36 @@ pub(crate) fn activate_product_direct_global_liveness_from_founder_v1<'state>(
         manifest_account.lamports() == expected_manifest_balance,
         ClutchError::MismatchedState,
     )?;
-    let reopened = authenticate_product_direct_global_liveness_v1(
+    let next_semantic_id = next
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
         program_id,
         manifest_account,
-        true,
-    )?;
-    require(
-        reopened.state() == &next
-            && reopened.observed_lamports() == expected_manifest_balance,
-        ClutchError::MismatchedState,
+        next_semantic_id,
+        expected_manifest_balance,
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V1,
+            PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2,
             program_id.as_ref(),
             manifest_account.key.as_ref(),
             &capitalization_authentication_id.bytes(),
             &founder_creation_receipt_id.bytes(),
             &root_semantic_id.bytes(),
             &root.authentication_id().bytes(),
-            &reopened.data_id().bytes(),
-            &reopened.authentication_id().bytes(),
+            &reopened.data_id.bytes(),
+            &reopened.authentication_id.bytes(),
         ])
         .to_bytes(),
     );
     id.validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedProductDirectGlobalLivenessActivationV1 {
+    Ok(AuthenticatedProductDirectGlobalLivenessActivationV2 {
         id,
         state: next,
-        account_data_id: reopened.data_id(),
-        account_authentication_id: reopened.authentication_id(),
+        account_data_id: reopened.data_id,
+        account_authentication_id: reopened.authentication_id,
         founder_creation_receipt_id,
         root_semantic_id,
         root_authentication_id: root.authentication_id(),
@@ -640,8 +753,14 @@ fn authenticate_policy_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     drop(data);
     require(
-        policy.realm_id.bytes() == founder.liveness_realm_id().bytes()
-            && policy.neutral_sink.bytes() == founder.neutral_lamport_sink().to_bytes(),
+        policy_account.key == &founder.failure_liveness_policy_account()
+            && policy.policy_id.bytes() == founder.failure_liveness_policy_id().bytes()
+            && policy.realm_id.bytes() == founder.liveness_realm_id().bytes()
+            && policy.neutral_sink.bytes() == founder.neutral_lamport_sink().to_bytes()
+            && policy.compartments[RuntimeCompartmentKindV1::Recovery.index()]
+                .quote_schedule_id
+                .bytes()
+                == founder.failure_recovery_quote_schedule_id().bytes(),
         ClutchError::MismatchedState,
     )?;
     let minimum = rent.minimum_balance(RUNTIME_LIVENESS_ACCOUNT_BYTES_V1)?;
@@ -660,6 +779,11 @@ fn authenticate_policy_v1(
         realm_id: ContentId::from_bytes(policy.realm_id.bytes()),
         neutral_sink: ContentId::from_bytes(policy.neutral_sink.bytes()),
         data_id,
+        candidate_quote_schedule_id: ContentId::from_bytes(
+            policy.compartments[RuntimeCompartmentKindV1::Candidate.index()]
+                .quote_schedule_id
+                .bytes(),
+        ),
     })
 }
 
@@ -774,7 +898,7 @@ fn capitalize_row_v1<'a>(
     )?;
     let capitalization_receipt_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_ROW_CAPITALIZATION_DOMAIN_V1,
+            PRODUCT_DIRECT_ROW_CAPITALIZATION_DOMAIN_V2,
             program_id.as_ref(),
             &market_instance_id.bytes(),
             &generation.to_le_bytes(),
@@ -946,14 +1070,14 @@ fn full_payer_fund_allocate_assign_v1<'a>(
 }
 
 #[inline(never)]
-fn write_manifest_state_v1(
+fn write_manifest_state_v2(
     account: &AccountInfo<'_>,
-    state: &DirectGlobalLivenessV1,
+    state: &DirectGlobalLivenessV2,
     rent_principal_lamports: u64,
     stored_bump: u8,
 ) -> Outcome<()> {
-    let mut postimage = [0u8; PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1];
-    ProductDirectGlobalLivenessAccountV1::encode_parts(
+    let mut postimage = [0u8; PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2];
+    ProductDirectGlobalLivenessAccountV2::encode_parts(
         state,
         rent_principal_lamports,
         stored_bump,
@@ -981,7 +1105,7 @@ fn account_data_id_v1(account: &AccountInfo<'_>) -> Outcome<ContentId> {
     ))
 }
 
-fn global_lifecycle_id_v1(
+fn global_lifecycle_id_v2(
     program_id: &Pubkey,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
@@ -990,7 +1114,7 @@ fn global_lifecycle_id_v1(
 ) -> ContentId {
     ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V1,
+            PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2,
             program_id.as_ref(),
             &market_instance_id.bytes(),
             &generation.to_le_bytes(),
@@ -1002,15 +1126,17 @@ fn global_lifecycle_id_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn global_bundle_binding_id_v1(
+fn global_bundle_binding_id_v2(
     account_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
     lifecycle_root_account: ContentId,
-    market_binding_id: ContentId,
+    founder_preauthorization_id: ContentId,
     realm_id: ContentId,
     policy_account: ContentId,
     policy_id: ContentId,
     policy_data_id: ContentId,
+    candidate_lifecycle_policy_id: ContentId,
+    work_quote_id: ContentId,
     global_lifecycle_id: ContentId,
     principal_refund_owner: ContentId,
     neutral_lamport_sink: ContentId,
@@ -1018,17 +1144,19 @@ fn global_bundle_binding_id_v1(
     compartment_accounts: &[ContentId; RUNTIME_COMPARTMENT_COUNT_V1],
     compartment_receipts: &[ContentId; RUNTIME_COMPARTMENT_COUNT_V1],
 ) -> ContentId {
-    let mut body = [0u8; 11 * 32 + 8 + 2 * RUNTIME_COMPARTMENT_COUNT_V1 * 32];
+    let mut body = [0u8; 13 * 32 + 8 + 2 * RUNTIME_COMPARTMENT_COUNT_V1 * 32];
     let mut at = 0usize;
     for id in [
         account_id,
         market_instance_id.content_id(),
         lifecycle_root_account,
-        market_binding_id,
+        founder_preauthorization_id,
         realm_id,
         policy_account,
         policy_id,
         policy_data_id,
+        candidate_lifecycle_policy_id,
+        work_quote_id,
         global_lifecycle_id,
         principal_refund_owner,
         neutral_lamport_sink,
@@ -1047,12 +1175,12 @@ fn global_bundle_binding_id_v1(
         at += 32;
     }
     ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1, &body]).to_bytes(),
+        solana_sha256_hasher::hashv(&[DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2, &body]).to_bytes(),
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn global_capitalization_receipt_id_v1(
+fn global_capitalization_receipt_id_v2(
     global_bundle_binding_id: ContentId,
     compartment_receipts: &[ContentId; RUNTIME_COMPARTMENT_COUNT_V1],
     total_work_principal_lamports: u64,
@@ -1085,9 +1213,56 @@ fn global_capitalization_receipt_id_v1(
     }
     ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
+            DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V2,
             &body,
         ])
         .to_bytes(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quote() -> DirectWorkQuoteV1 {
+        DirectWorkQuoteV1 {
+            candidate_lifecycle_policy_id: ContentId::from_bytes([1; 32]),
+            candidate_liveness_policy_id: ContentId::from_bytes([2; 32]),
+            freeze_book_lamports: 3,
+            begin_verification_lamports: 5,
+            verify_candidate_lamports: 7,
+            finalize_selection_lamports: 11,
+            economic_terminal_lamports: 13,
+            retire_terminal_lamports: 17,
+            retained_candidate_bond_lamports: 19,
+        }
+    }
+
+    #[test]
+    fn direct_work_quote_requires_candidate_anchor_and_both_genesis_owners() {
+        let value = quote();
+        let quote_id = value.id().expect("valid quote");
+        assert!(require_direct_work_quote_authority_v1(
+            value,
+            value.candidate_lifecycle_policy_id,
+            value.candidate_liveness_policy_id,
+            ContentId::from_bytes([3; 32]),
+            ContentId::from_bytes([3; 32]),
+            quote_id,
+        )
+        .is_ok());
+
+        for substitution in 0..5 {
+            let wrong = ContentId::from_bytes([u8::try_from(40 + substitution).unwrap(); 32]);
+            let result = require_direct_work_quote_authority_v1(
+                value,
+                if substitution == 0 { wrong } else { value.candidate_lifecycle_policy_id },
+                if substitution == 1 { wrong } else { value.candidate_liveness_policy_id },
+                if substitution == 2 { wrong } else { ContentId::from_bytes([3; 32]) },
+                if substitution == 3 { wrong } else { ContentId::from_bytes([3; 32]) },
+                if substitution == 4 { wrong } else { quote_id },
+            );
+            assert!(result.is_err());
+        }
+    }
 }

@@ -179,7 +179,7 @@ pub mod orders_batch;
 pub mod product_artifact;
 /// Disabled narrow Product authority for founding the current General Market owner.
 pub(crate) mod product_general_family;
-/// Private full-payer capitalization and authentication of Product `0xba/v1`.
+/// Private full-payer capitalization and authentication of Product `0xba/v2`.
 pub(crate) mod product_direct_global_liveness;
 /// Current RegistryV3/BundleV6/QuoteV5 Failure attempt compiler authority.
 pub(crate) mod product_failure_begin_current;
