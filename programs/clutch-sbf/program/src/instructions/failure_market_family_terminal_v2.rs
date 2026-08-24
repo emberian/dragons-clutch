@@ -409,7 +409,7 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
         self.runtime.state().source_product_release_binding_id()
     }
 
-    /// Exact current Product LinkV2 account recovered from terminal runtime.
+    /// Exact current Product link account recovered from terminal runtime.
     pub(crate) const fn source_product_link_account_id(&self) -> ContentId {
         self.runtime.state().source_product_link_account_id()
     }
