@@ -48,6 +48,8 @@ pub const ORDER_STATE_BYTES: usize = 96;
 pub const GENERAL_ORDER_CUSTODY_BASE_BYTES: usize = 192;
 /// Fixed byte prefix of a [`PortfolioOrderV1`] before its exact `N` coefficients.
 pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
+/// Fixed byte prefix of the noncircular signed-order commitment preimage.
+pub const PORTFOLIO_ORDER_SIGNING_BASE_BYTES: usize = 168;
 /// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
 pub const SETTLEMENT_RECEIPT_BASE_BYTES: usize = 176;
 /// Fixed byte prefix of [`CandidateSubmissionV1`] before its exact `N` prices.
@@ -66,6 +68,7 @@ const BATCH_ROOT_MAGIC: [u8; 8] = *b"DCLTGBR1";
 const ORDER_STATE_MAGIC: [u8; 8] = *b"DCLTGOS1";
 const ORDER_CUSTODY_MAGIC: [u8; 8] = *b"DCLTGOC1";
 const ORDER_MAGIC: [u8; 8] = *b"DCLTGOR1";
+const ORDER_SIGNING_MAGIC: [u8; 8] = *b"DCLTGOM1";
 const RECEIPT_MAGIC: [u8; 8] = *b"DCLTGSR1";
 const CANDIDATE_SUBMISSION_MAGIC: [u8; 8] = *b"DCLTGCS1";
 const CANDIDATE_STATE_MAGIC: [u8; 8] = *b"DCLTGCA1";
@@ -1017,6 +1020,8 @@ pub enum GeneralAccountRoleV1 {
     ClaimBasis,
     /// Immutable capability manifest content account.
     Manifest,
+    /// Canonical system-owned zero-lamport staging-cursor vacancy paired with a raw record.
+    StagingCursorVacancy,
     /// Mutable generic capability FundingState source.
     CapabilityFunding,
     /// Vacant or immutable General config PDA.
@@ -1039,8 +1044,6 @@ pub enum GeneralAccountRoleV1 {
     OrderOwnerPayer,
     /// Readonly signed order owner authorizing cancellation.
     OrderOwner,
-    /// Immutable content-addressed signed-order bytes.
-    SignedOrder,
     /// Vacant or mutable order replay PDA.
     WritableOrderState,
     /// Readonly order replay PDA.
@@ -1142,12 +1145,12 @@ impl<'a> GeneralAccountFrameV1<'a> {
 fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Result<usize> {
     let page_count = usize::from(count);
     let fixed = match tag {
-        GeneralInstructionTagV1::Activate => 15,
+        GeneralInstructionTagV1::Activate => 18,
         GeneralInstructionTagV1::OpenBatch => 10,
         GeneralInstructionTagV1::LockBatch => 4,
-        GeneralInstructionTagV1::AdmitOrder => 17,
-        GeneralInstructionTagV1::CancelOrder => 14,
-        GeneralInstructionTagV1::CloseOrder => 12,
+        GeneralInstructionTagV1::AdmitOrder => 18,
+        GeneralInstructionTagV1::CancelOrder => 13,
+        GeneralInstructionTagV1::CloseOrder => 11,
         GeneralInstructionTagV1::SubmitCandidate => 9,
         GeneralInstructionTagV1::FinishCandidate => 2,
         GeneralInstructionTagV1::ConsiderCandidate => 4,
@@ -1162,13 +1165,13 @@ fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Resul
         GeneralInstructionTagV1::VerifyCandidatePage => {
             require_page_count(count)?;
             return 4usize
-                .checked_add(page_count.checked_mul(2).ok_or(Error::ArithmeticOverflow)?)
+                .checked_add(page_count)
                 .ok_or(Error::ArithmeticOverflow);
         }
         GeneralInstructionTagV1::SettlePage => {
             require_page_count(count)?;
             return 8usize
-                .checked_add(page_count.checked_mul(6).ok_or(Error::ArithmeticOverflow)?)
+                .checked_add(page_count.checked_mul(5).ok_or(Error::ArithmeticOverflow)?)
                 .ok_or(Error::ArithmeticOverflow);
         }
     };
@@ -1189,10 +1192,13 @@ fn general_frame_role(
             Role::Activator,
             Role::WritableMarket,
             Role::Realm,
-            Role::Mint,
-            Role::TokenProgram,
             Role::ClaimBasis,
             Role::Manifest,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::Mint,
+            Role::TokenProgram,
             Role::CapabilityFunding,
             Role::WritableConfig,
             Role::WritableRoot,
@@ -1230,6 +1236,7 @@ fn general_frame_role(
             Role::OrderOwnerPayer,
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::StagingCursorVacancy,
             Role::Mint,
             Role::TokenProgram,
             Role::ReadonlyConfig,
@@ -1252,7 +1259,6 @@ fn general_frame_role(
             Role::ReadonlyMarket,
             Role::ReadonlyConfig,
             Role::ReadonlyBatch,
-            Role::SignedOrder,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
             Role::OwnerPosition,
@@ -1269,7 +1275,6 @@ fn general_frame_role(
             Role::ReadonlyMarket,
             Role::ReadonlyConfig,
             Role::ReadonlyBatch,
-            Role::SignedOrder,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
             Role::OwnerPosition,
@@ -1305,8 +1310,6 @@ fn general_frame_role(
                 ]
                 .get(index)
                 .ok_or(Error::InvalidLength)?
-            } else if (index - 4).is_multiple_of(2) {
-                Role::SignedOrder
             } else {
                 Role::ReadonlyOrderState
             }
@@ -1362,14 +1365,13 @@ fn general_frame_role(
                 .ok_or(Error::InvalidLength)?
             } else {
                 *[
-                    Role::SignedOrder,
                     Role::WritableOrderState,
                     Role::WritableOrderCustody,
                     Role::OwnerPosition,
                     Role::QuoteEscrow,
                     Role::QuoteDestination,
                 ]
-                .get((index - 8) % 6)
+                .get((index - 8) % 5)
                 .ok_or(Error::InvalidLength)?
             }
         }
@@ -1695,7 +1697,7 @@ pub fn activate_general_v1<'a>(
         return Err(Error::CapabilityFundingMismatch);
     }
     let rent_beneficiary = market_root.rent_refund();
-    if accounts.get(11).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
+    if accounts.get(14).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
         return Err(Error::AuthorityMismatch);
     }
     let root = GeneralRootV1::founding(config_id, instruction.config.generation, rent_beneficiary)?;
@@ -2161,6 +2163,15 @@ impl<const N: usize> PortfolioOrderV1<N> {
             .ok_or(Error::ArithmeticOverflow)
     }
 
+    /// Return the exact length of the message whose SHA-256 identity is
+    /// persisted as `order_id`. The message deliberately excludes its own ID.
+    pub fn signing_preimage_len() -> Result<usize> {
+        validate_width(N)?;
+        PORTFOLIO_ORDER_SIGNING_BASE_BYTES
+            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
     /// Decode one exact-width canonical signed-order preimage.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         exact_len(bytes, Self::encoded_len()?)?;
@@ -2227,6 +2238,43 @@ impl<const N: usize> PortfolioOrderV1<N> {
             {
                 put(&mut out, offset, &coefficient.to_le_bytes());
             }
+        }
+        Ok(())
+    }
+
+    /// Encode the sole noncircular signed message preimage.
+    ///
+    /// The adapter hashes these exact bytes and requires the digest to equal
+    /// [`Self::order_id`], then compares [`Self::owner`] directly with the SVM
+    /// signer. The full persisted/order instruction record may carry the
+    /// derived ID, but that ID never appears inside its own hash preimage.
+    #[allow(clippy::needless_borrow)]
+    pub fn encode_signing_preimage(&self, mut out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::signing_preimage_len()?)?;
+        out.fill(0);
+        put(&mut out, 0, &ORDER_SIGNING_MAGIC);
+        put(&mut out, 8, &SCHEMA_V1.to_le_bytes());
+        put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(&mut out, 12, &self.outcome_count.to_le_bytes());
+        put(&mut out, 16, self.market_identity_id.as_bytes());
+        put(&mut out, 48, self.claim_basis_id.as_bytes());
+        put(&mut out, 80, self.owner.as_bytes());
+        put(&mut out, 112, &self.generation.to_le_bytes());
+        put(&mut out, 120, &self.batch_sequence.to_le_bytes());
+        put(&mut out, 128, &self.nonce.to_le_bytes());
+        put(&mut out, 136, &self.valid_until_slot.to_le_bytes());
+        put(&mut out, 144, &self.max_lots.to_le_bytes());
+        put(
+            &mut out,
+            152,
+            &self.max_quote_debit_per_lot_numerator.to_le_bytes(),
+        );
+        for (index, coefficient) in self.coefficients.iter().enumerate() {
+            let offset = index
+                .checked_mul(8)
+                .and_then(|part| PORTFOLIO_ORDER_SIGNING_BASE_BYTES.checked_add(part))
+                .ok_or(Error::ArithmeticOverflow)?;
+            put(&mut out, offset, &coefficient.to_le_bytes());
         }
         Ok(())
     }

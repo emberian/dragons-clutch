@@ -67,10 +67,17 @@ trailing, unknown-action, reserved, and width-substituted bytes.
 `GeneralAccountFrameV1` owns exact ordered SVM role geometry and privilege
 bits for every action from activation through close. All V1 roles are distinct;
 there is no implicit alias exception. System, Rent, and Clock roles bind their
-canonical keys. Verification frames contain exactly `4 + 2M` accounts and
-settlement frames exactly `8 + 6M` accounts for the instruction's leading
+canonical keys. Every remaining raw Realm, ClaimBasis, or manifest consumer
+also supplies its canonical readonly staging-cursor vacancy; one shared Rent
+sysvar proves the raw record is currently rent-exempt and the exact cursor is a
+system-owned, empty, zero-lamport vacancy. The activation frame orders the three
+raw records first and then their three matching vacancies, so no record or Rent
+fact is duplicated. Signed-order raw records are absent: the canonical signed
+message is already embedded in the instruction or page and replay binds its
+derived identity. Verification frames contain exactly `4 + M` accounts and
+settlement frames exactly `8 + 5M` accounts for the instruction's leading
 execution count `M = 1..4`, so unused execution accounts are not padded into a
-transaction. The maximum V1 settlement frame is therefore 32 accounts.
+transaction. The maximum V1 settlement frame is therefore 28 accounts.
 
 ## Canonical mutable-state records
 
@@ -137,6 +144,13 @@ the exact nonzero Ed25519/SVM `OwnerKeyV1`, nonce, expiry, lot cap, and one exac
 upper quote-debit limit. `OwnerKeyV1` has the same physical width as a content
 identity but is not one: the adapter compares its bytes directly with the
 authenticated signer key.
+
+`order_id` is SHA-256 of the exact `168 + 8N` byte `DCLTGOM1` signing preimage.
+That preimage contains every immutable order fact except `order_id` itself, so
+the identity is noncircular. The full `DCLTGOR1` instruction/persistence record
+retains the derived ID for replay and PDA binding. The adapter must hash the
+contract-encoded signing preimage and require the digest to equal the retained
+ID before it treats the owner signer as order authorization.
 
 Admission atomically creates a unique `(owner, nonce, order_id)` replay record
 and exact-N custody. Worst-case quote reserve is

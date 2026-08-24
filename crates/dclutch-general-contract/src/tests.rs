@@ -272,6 +272,67 @@ fn golden_config_and_order_round_trip() {
 }
 
 #[test]
+fn signed_order_identity_uses_one_exact_noncircular_preimage() {
+    let provisional = order(10, 20, 9, [-2, 3], 77);
+    assert_eq!(PortfolioOrderV1::<2>::signing_preimage_len(), Ok(184));
+    assert_eq!(PortfolioOrderV1::<16>::signing_preimage_len(), Ok(296));
+    let mut preimage = vec![0; PortfolioOrderV1::<2>::signing_preimage_len().expect("length")];
+    provisional
+        .encode_signing_preimage(&mut preimage)
+        .expect("canonical signing message");
+    assert_eq!(preimage.get(..8), Some(b"DCLTGOM1".as_slice()));
+    let order_id = ContentId::new(digest(&preimage)).expect("nonzero order ID");
+    let committed = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id,
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 1,
+        max_quote_debit_per_lot_numerator: 77,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("committed order");
+    let mut committed_preimage = vec![0; preimage.len()];
+    committed
+        .encode_signing_preimage(&mut committed_preimage)
+        .expect("same message");
+    assert_eq!(committed_preimage, preimage);
+    assert_eq!(digest(&committed_preimage), committed.order_id().to_bytes());
+
+    let substituted_id = order(11, 20, 9, [-2, 3], 77);
+    let mut substituted_id_preimage = vec![0; preimage.len()];
+    substituted_id
+        .encode_signing_preimage(&mut substituted_id_preimage)
+        .expect("message excludes self ID");
+    assert_eq!(substituted_id_preimage, preimage);
+    assert_ne!(
+        digest(&substituted_id_preimage),
+        substituted_id.order_id().to_bytes()
+    );
+
+    let substituted_body = order(10, 20, 9, [-3, 3], 77);
+    let mut substituted_body_preimage = vec![0; preimage.len()];
+    substituted_body
+        .encode_signing_preimage(&mut substituted_body_preimage)
+        .expect("substituted message");
+    assert_ne!(digest(&substituted_body_preimage), order_id.to_bytes());
+    let short_length = committed_preimage.len() - 1;
+    assert_eq!(
+        committed.encode_signing_preimage(
+            committed_preimage
+                .get_mut(..short_length)
+                .expect("short output")
+        ),
+        Err(Error::InvalidLength)
+    );
+}
+
+#[test]
 fn hostile_decoders_reject_reserved_and_unused_words() {
     assert_eq!(GENERAL_CONFIG_BYTES, 200);
     let mut config_bytes = config().to_bytes();
@@ -1144,7 +1205,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
         .transition_phase(config.generation(), MarketPhase::Open)
         .expect("Market opens");
     let mut accounts = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
-    accounts.get_mut(11).expect("RentCredit role").key = [90; 32];
+    accounts.get_mut(14).expect("RentCredit role").key = [90; 32];
     let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &accounts)
         .expect("activation frame");
     let instruction = ActivateGeneralV1 {
@@ -1205,7 +1266,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
 
     let mut substituted_accounts = accounts.clone();
     substituted_accounts
-        .get_mut(11)
+        .get_mut(14)
         .expect("RentCredit role")
         .key = [91; 32];
     let substituted_frame =
@@ -2096,8 +2157,41 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
         assert_eq!(frame.account_count(), accounts.len());
         assert_eq!(frame.role(0), general_frame_role(tag, count, 0));
     }
+    let activation = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
+    let activation_frame =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &activation)
+            .expect("activation frame");
+    assert_eq!(activation.len(), 18);
+    assert_eq!(activation_frame.role(2), Ok(GeneralAccountRoleV1::Realm));
+    assert_eq!(
+        activation_frame.role(3),
+        Ok(GeneralAccountRoleV1::ClaimBasis)
+    );
+    assert_eq!(activation_frame.role(4), Ok(GeneralAccountRoleV1::Manifest));
+    for index in 5..=7 {
+        assert_eq!(
+            activation_frame.role(index),
+            Ok(GeneralAccountRoleV1::StagingCursorVacancy)
+        );
+    }
+    assert_eq!(
+        valid_frame_accounts(GeneralInstructionTagV1::AdmitOrder, 0).len(),
+        18
+    );
+    assert_eq!(
+        valid_frame_accounts(GeneralInstructionTagV1::CancelOrder, 0).len(),
+        13
+    );
+    assert_eq!(
+        valid_frame_accounts(GeneralInstructionTagV1::CloseOrder, 0).len(),
+        11
+    );
+    assert_eq!(
+        valid_frame_accounts(GeneralInstructionTagV1::VerifyCandidatePage, 4).len(),
+        8
+    );
     let settlement = valid_frame_accounts(GeneralInstructionTagV1::SettlePage, 4);
-    assert_eq!(settlement.len(), 32);
+    assert_eq!(settlement.len(), 28);
 
     let mut wrong_privilege = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
     wrong_privilege.get_mut(0).expect("activator").is_signer = false;
@@ -2107,7 +2201,7 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
     );
     let mut alias = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
     let realm_key = alias.get(2).expect("realm").key;
-    alias.get_mut(3).expect("mint").key = realm_key;
+    alias.get_mut(5).expect("realm staging vacancy").key = realm_key;
     assert_eq!(
         GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &alias),
         Err(Error::AccountAlias)
