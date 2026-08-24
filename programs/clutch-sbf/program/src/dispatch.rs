@@ -57,7 +57,7 @@ use crate::instructions::{
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
-use crate::instructions::direct_market_v1;
+use crate::instructions::direct_market_v2;
 #[cfg(all(
     feature = "profile-full",
     not(feature = "profile-successor-chain-attached-dev")
@@ -578,7 +578,7 @@ fn process_direct_market(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::DirectMarket(action) => direct_market_v1::process(
+        ExtensionAction::DirectMarket(action) => direct_market_v2::process(
             program_id,
             accounts,
             request.sequence,

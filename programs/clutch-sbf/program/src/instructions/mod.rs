@@ -54,12 +54,12 @@ pub mod dealer_facility;
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
-// Legacy Direct V2/V3 source remains in-tree for historical review, but is
-// deliberately absent from this executable module graph. Their allocated
-// wire coordinates are decode-only and refuse at the capability boundary.
-/// Capability-disabled current Direct `80/1` account/authentication plane.
+// The V1 adapter remains available only as historical source. Current Direct
+// requests enter the exact b1/v2 account/authentication plane below.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
+#[cfg(feature = "profile-full")]
+pub(crate) mod direct_market_v2;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.

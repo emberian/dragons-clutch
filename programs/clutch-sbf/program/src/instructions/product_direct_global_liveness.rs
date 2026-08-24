@@ -15,6 +15,7 @@ use crate::instructions::genesis::{
     transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
+use clutch_direct_market_runtime::lifecycle_v2::DirectFamilyTerminalPlanV2;
 use clutch_liveness::runtime_v1::{
     PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
     RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
@@ -53,6 +54,8 @@ const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-account-authentication/v2";
 const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-founder-activation/v2";
+const PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-direct-candidate-retirement/v2\0";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +151,169 @@ impl AuthenticatedProductDirectGlobalLivenessAccountV2 {
         self.state.work_quote()
     }
     pub(crate) fn into_state(self) -> DirectGlobalLivenessV2 { self.state }
+}
+
+/// Move-only proof that the sole live Direct allocation was retired by the
+/// sealed eighth Candidate call. Product RootV2 consumes this before it may
+/// mark the Direct family terminal.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductDirectCandidateRetirementV2 {
+    id: ContentId,
+    account: Pubkey,
+    data_before: ContentId,
+    data_after: ContentId,
+    authentication_before: ContentId,
+    authentication_after: ContentId,
+    state_before: ContentId,
+    state_after: ContentId,
+    direct_terminal_receipt_id: ContentId,
+    family_terminal_sequence: u32,
+    lifecycle_root_account: ContentId,
+    activated_market_binding_id: ContentId,
+}
+
+impl AuthenticatedProductDirectCandidateRetirementV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn account(&self) -> Pubkey { self.account }
+    pub(crate) const fn state_before(&self) -> ContentId { self.state_before }
+    pub(crate) const fn state_after(&self) -> ContentId { self.state_after }
+    pub(crate) const fn data_before(&self) -> ContentId { self.data_before }
+    pub(crate) const fn data_after(&self) -> ContentId { self.data_after }
+    pub(crate) const fn authentication_before(&self) -> ContentId {
+        self.authentication_before
+    }
+    pub(crate) const fn authentication_after(&self) -> ContentId {
+        self.authentication_after
+    }
+    pub(crate) const fn direct_terminal_receipt_id(&self) -> ContentId {
+        self.direct_terminal_receipt_id
+    }
+    pub(crate) const fn family_terminal_sequence(&self) -> u32 {
+        self.family_terminal_sequence
+    }
+    pub(crate) const fn lifecycle_root_account(&self) -> ContentId {
+        self.lifecycle_root_account
+    }
+    pub(crate) const fn activated_market_binding_id(&self) -> ContentId {
+        self.activated_market_binding_id
+    }
+}
+
+struct ExactDirectCandidateRetirementAuthorityV2 {
+    state_before: ContentId,
+    terminal_receipt_id: ContentId,
+    family_terminal_sequence: u32,
+}
+
+impl ProductDirectGlobalLivenessAuthorityV2
+    for ExactDirectCandidateRetirementAuthorityV2
+{
+    fn authenticate_candidate_retirement(
+        &self,
+        state: &DirectGlobalLivenessV2,
+        direct_terminal_receipt_id: ContentId,
+        family_terminal_sequence: u32,
+    ) -> clutch_product_series::Result<()> {
+        if state.semantic_id()? != self.state_before
+            || direct_terminal_receipt_id != self.terminal_receipt_id
+            || family_terminal_sequence != self.family_terminal_sequence
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Retire the exact live Candidate allocation only after Direct has sealed its
+/// final b3 transcript. Raw terminal IDs and caller-shaped Product states are
+/// not accepted at this boundary.
+#[inline(never)]
+pub(crate) fn retire_product_direct_candidate_allocation_v2(
+    program_id: &Pubkey,
+    manifest_account: &AccountInfo<'_>,
+    sealed: &DirectFamilyTerminalPlanV2,
+) -> Outcome<AuthenticatedProductDirectCandidateRetirementV2> {
+    let authenticated = authenticate_product_direct_global_liveness_v2(
+        program_id,
+        manifest_account,
+        true,
+    )?;
+    let state_before = authenticated
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_receipt_id = ContentId::from_bytes(sealed.terminal_receipt_id);
+    let family_terminal_sequence = sealed.family_terminal_sequence;
+    let lifecycle_root_account = authenticated.state().lifecycle_root_account();
+    let activated_market_binding_id = authenticated.state().activated_market_binding_id();
+    require(
+        authenticated.state().phase() == DirectGlobalLivenessPhaseV2::Active
+            && authenticated.state().live_allocations() == 1
+            && authenticated.state().retired_allocations() == family_terminal_sequence
+            && authenticated.state().account_id().bytes() == manifest_account.key.to_bytes()
+            && sealed.replay_post.candidate_liveness_completed_calls() == 8
+            && !sealed.replay_post.candidate_liveness_pending()
+            && sealed.replay_post.family_terminal_receipt_id()
+                == sealed.terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let data_before = authenticated.data_id();
+    let authentication_before = authenticated.authentication_id();
+    let observed_lamports = authenticated.observed_lamports();
+    let stored_bump = authenticated.stored_bump;
+    let next = authenticated.into_state().retire_candidate(
+        &ExactDirectCandidateRetirementAuthorityV2 {
+            state_before,
+            terminal_receipt_id,
+            family_terminal_sequence,
+        },
+        terminal_receipt_id,
+        family_terminal_sequence,
+    ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_manifest_state_v2(
+        manifest_account,
+        &next,
+        next.manifest_rent_principal_lamports(),
+        stored_bump,
+    )?;
+    let state_after = next.semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
+        program_id,
+        manifest_account,
+        state_after,
+        observed_lamports,
+    )?;
+    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V2,
+        program_id.as_ref(),
+        manifest_account.key.as_ref(),
+        &data_before.bytes(),
+        &reopened.data_id.bytes(),
+        &authentication_before.bytes(),
+        &reopened.authentication_id.bytes(),
+        &state_before.bytes(),
+        &state_after.bytes(),
+        &terminal_receipt_id.bytes(),
+        &family_terminal_sequence.to_le_bytes(),
+        &lifecycle_root_account.bytes(),
+        &activated_market_binding_id.bytes(),
+    ]).to_bytes());
+    require(!id.is_zero() && state_before != state_after, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedProductDirectCandidateRetirementV2 {
+        id,
+        account: *manifest_account.key,
+        data_before,
+        data_after: reopened.data_id,
+        authentication_before,
+        authentication_after: reopened.authentication_id,
+        state_before,
+        state_after,
+        direct_terminal_receipt_id: terminal_receipt_id,
+        family_terminal_sequence,
+        lifecycle_root_account,
+        activated_market_binding_id,
+    })
 }
 
 /// Private postwrite proving that the exact newly-created Product root consumed
