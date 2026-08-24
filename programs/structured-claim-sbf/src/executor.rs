@@ -19,7 +19,7 @@ use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v3, MarketLifecycleRootAccountV3,
     SeriesMarketLinkAccountV3, SeriesRegistryAccountV4,
     MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
-    SERIES_REGISTRY_ACCOUNT_BYTES_V4,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V4, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, StructuredClaimAction,
@@ -112,7 +112,9 @@ const CREATE_CAPABILITY_PROFILE_V4: usize = 32;
 const CREATE_WRAPPER_RELEASE_V2: usize = 33;
 const CREATE_TOKEN_RELEASE_V2: usize = 34;
 const CREATE_PRODUCT_ROOT_V3: usize = 35;
-const _: () = assert!(CREATE_PRODUCT_ROOT_V3 + 1 == CREATE_ACCOUNT_COUNT);
+const CREATE_PRODUCT_REPLAY_V2: usize = 36;
+const CREATE_FAMILY_CAPABILITY_POLICY_V1: usize = 37;
+const _: () = assert!(CREATE_FAMILY_CAPABILITY_POLICY_V1 + 1 == CREATE_ACCOUNT_COUNT);
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const COMPACTION_TOKEN_IDENTITY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/compaction-token-identity/v1\0";
@@ -425,6 +427,7 @@ fn create(
         .map_err(|_| WrapperError::Borrow)?
         .copy_from_slice(&descriptor_body);
     let root_before = structured_root_prestate(accounts, descriptor)?;
+    let product_before = structured_product_prestate(accounts)?;
     invoke_base_create(accounts, &payload)?;
     reconcile_create(
         accounts,
@@ -432,6 +435,7 @@ fn create(
         product_id,
         market,
         root_before,
+        product_before,
         deployments,
     )?;
     Ok(())
@@ -1328,6 +1332,11 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
         || accounts[CREATE_PRODUCT_ROOT_V3].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_PRODUCT_ROOT_V3].data_len()
             != MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3
+        || accounts[CREATE_PRODUCT_REPLAY_V2].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_PRODUCT_REPLAY_V2].data_len()
+            != MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2
+        || accounts[CREATE_FAMILY_CAPABILITY_POLICY_V1].owner
+            != accounts[CREATE_BASE_PROGRAM].key
     {
         return Err(WrapperError::Accounts);
     }
@@ -3014,6 +3023,45 @@ enum StructuredRootPrestateV1 {
     },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct StructuredProductPrestateV3 {
+    root: Box<MarketLifecycleRootAccountV3>,
+    link: Box<SeriesMarketLinkAccountV3>,
+    root_data_id: [u8; 32],
+    link_data_id: [u8; 32],
+    root_lamports: u64,
+    link_lamports: u64,
+}
+
+fn structured_product_prestate(
+    accounts: &[AccountInfo<'_>],
+) -> Result<StructuredProductPrestateV3> {
+    let root_data = accounts[CREATE_PRODUCT_ROOT_V3]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let root_data_id = hashv(&[&root_data[..]]).to_bytes();
+    let mut root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    MarketLifecycleRootAccountV3::decode_into(&root_data, &mut root)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(root_data);
+    let link_data = accounts[CREATE_SERIES_LINK]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let link_data_id = hashv(&[&link_data[..]]).to_bytes();
+    let mut link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(link_data);
+    Ok(StructuredProductPrestateV3 {
+        root,
+        link,
+        root_data_id,
+        link_data_id,
+        root_lamports: accounts[CREATE_PRODUCT_ROOT_V3].lamports(),
+        link_lamports: accounts[CREATE_SERIES_LINK].lamports(),
+    })
+}
+
 fn structured_root_prestate(
     accounts: &[AccountInfo<'_>],
     descriptor: StructuredClaimDescriptorV2,
@@ -3072,6 +3120,7 @@ fn reconcile_create(
     product: [u8; 32],
     market: MarketInstancePreimageV2,
     root_before: StructuredRootPrestateV1,
+    product_before: StructuredProductPrestateV3,
     deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<()> {
     let descriptor_data = accounts[CREATE_DESCRIPTOR]
@@ -3088,6 +3137,7 @@ fn reconcile_create(
         observed_descriptor,
         market,
         root_before,
+        product_before,
         deployments,
     )?;
     let position = decode_position(&accounts[CREATE_POSITION])?;
@@ -3152,6 +3202,7 @@ fn reconcile_structured_root(
     descriptor: StructuredClaimDescriptorV2,
     market: MarketInstancePreimageV2,
     before: StructuredRootPrestateV1,
+    product_before: StructuredProductPrestateV3,
     deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<()> {
     if accounts[CREATE_STRUCTURED_ROOT].owner != accounts[CREATE_BASE_PROGRAM].key
@@ -3226,7 +3277,12 @@ fn reconcile_structured_root(
         return Err(WrapperError::BaseCustody);
     }
     let link_should_be_writable = matches!(&before, StructuredRootPrestateV1::Empty { .. });
-    reconcile_product_series_link(accounts, &root, link_should_be_writable)?;
+    reconcile_product_series_link(
+        accounts,
+        &root,
+        link_should_be_writable,
+        &product_before,
+    )?;
     match before {
         StructuredRootPrestateV1::Empty {
             hostile_prefund_lamports,
@@ -3307,6 +3363,7 @@ fn reconcile_product_series_link(
     accounts: &[AccountInfo<'_>],
     root: &StructuredMarketRootV1,
     expected_writable: bool,
+    before: &StructuredProductPrestateV3,
 ) -> Result<()> {
     let account = &accounts[CREATE_SERIES_LINK];
     if account.owner != accounts[CREATE_BASE_PROGRAM].key
@@ -3330,6 +3387,7 @@ fn reconcile_product_series_link(
     let product_root_data = accounts[CREATE_PRODUCT_ROOT_V3]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
+    let product_root_data_id = hashv(&[&product_root_data[..]]).to_bytes();
     let mut product_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     MarketLifecycleRootAccountV3::decode_into(&product_root_data, &mut product_root)
         .map_err(|_| WrapperError::Identity)?;
@@ -3376,12 +3434,160 @@ fn reconcile_product_series_link(
         )
         .0,
     );
+    let before_root_families = before.root.state.product_families();
+    let after_root_families = product_root.state.product_families();
+    let before_structured = before_root_families.family(MarketFamilyV1::Structured);
+    let after_structured = after_root_families.family(MarketFamilyV1::Structured);
+    let exact_product_transition = if expected_writable {
+        let root_sequence_after = before
+            .root
+            .state
+            .transition_sequence()
+            .checked_add(1)
+            .ok_or(WrapperError::Arithmetic)?;
+        let link_sequence_after = before
+            .link
+            .state
+            .transition_sequence()
+            .checked_add(2)
+            .ok_or(WrapperError::Arithmetic)?;
+        product_root_data_id != before.root_data_id
+            && framed_data_id != before.link_data_id
+            && product_root.state.binding() == before.root.state.binding()
+            && product_root.state.phase() == before.root.state.phase()
+            && product_root.state.capital() == before.root.state.capital()
+            && product_root.state.foundation() == before.root.state.foundation()
+            && product_root.state.admitted_series_links()
+                == before.root.state.admitted_series_links()
+            && product_root.state.live_series_links()
+                == before.root.state.live_series_links()
+            && product_root.state.retired_series_links()
+                == before.root.state.retired_series_links()
+            && product_root.state.shared_core_terminal_receipts()
+                == before.root.state.shared_core_terminal_receipts()
+            && product_root.state.resolution_semantic_id()
+                == before.root.state.resolution_semantic_id()
+            && product_root.state.resolution_data_id()
+                == before.root.state.resolution_data_id()
+            && product_root.state.resolution_activation_receipt_id()
+                == before.root.state.resolution_activation_receipt_id()
+            && product_root.state.transition_sequence() == root_sequence_after
+            && before_root_families.binding() == after_root_families.binding()
+            && before_root_families.phase() == after_root_families.phase()
+            && after_root_families.transition_sequence()
+                == before_root_families
+                    .transition_sequence()
+                    .checked_add(1)
+                    .ok_or(WrapperError::Arithmetic)?
+            && before_root_families.family(MarketFamilyV1::General)
+                == after_root_families.family(MarketFamilyV1::General)
+            && before_root_families.family(MarketFamilyV1::Direct)
+                == after_root_families.family(MarketFamilyV1::Direct)
+            && before_root_families.family(MarketFamilyV1::Fractional)
+                == after_root_families.family(MarketFamilyV1::Fractional)
+            && before_root_families.family(MarketFamilyV1::Dealer)
+                == after_root_families.family(MarketFamilyV1::Dealer)
+            && before_structured.status() == MarketFamilyStatusV1::EnabledNeverFounded
+            && before_structured.counts().admitted == 0
+            && before_structured.counts().live == 0
+            && before_structured.counts().terminal == 0
+            && after_structured.status() == MarketFamilyStatusV1::Live
+            && after_structured.counts().admitted == 1
+            && after_structured.counts().live == 1
+            && after_structured.counts().terminal == 0
+            && before.link.state.binding() == link.state.binding()
+            && before.link.state.phase() == link.state.phase()
+            && before.link.state.market_admission_sequence()
+                == link.state.market_admission_sequence()
+            && before.link.state.market_admission_receipt_id()
+                == link.state.market_admission_receipt_id()
+            && before.link.state.rent_principal_lamports()
+                == link.state.rent_principal_lamports()
+            && before.link.state.current_donation_lamports()
+                == link.state.current_donation_lamports()
+            && before.link.state.active_failure_sessions()
+                == link.state.active_failure_sessions()
+            && before.link.state.failure_sessions_started()
+                == link.state.failure_sessions_started()
+            && before.link.state.failure_session_transcript_id()
+                == link.state.failure_session_transcript_id()
+            && link.state.transition_sequence() == link_sequence_after
+            && before
+                .link
+                .state
+                .obligation_status(SeriesLinkObligationV3::Structured)
+                == SeriesLinkObligationStatusV3::EnabledNeverFounded
+            && before
+                .link
+                .state
+                .obligation_status(SeriesLinkObligationV3::Wrapper)
+                == SeriesLinkObligationStatusV3::EnabledNeverFounded
+            && before
+                .link
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Structured)
+                .is_zero()
+            && before
+                .link
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
+                .is_zero()
+            && before
+                .link
+                .state
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Structured)
+                .is_zero()
+            && before
+                .link
+                .state
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Wrapper)
+                .is_zero()
+            && before.link.state.obligation_status(SeriesLinkObligationV3::Dealer)
+                == link.state.obligation_status(SeriesLinkObligationV3::Dealer)
+            && before
+                .link
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Dealer)
+                == link
+                    .state
+                    .obligation_admission_receipt_id(SeriesLinkObligationV3::Dealer)
+            && before
+                .link
+                .state
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Dealer)
+                == link
+                    .state
+                    .obligation_terminal_receipt_id(SeriesLinkObligationV3::Dealer)
+            && before.link.state.obligation_status(SeriesLinkObligationV3::Liquidity)
+                == link.state.obligation_status(SeriesLinkObligationV3::Liquidity)
+            && before
+                .link
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Liquidity)
+                == link
+                    .state
+                    .obligation_admission_receipt_id(SeriesLinkObligationV3::Liquidity)
+            && before
+                .link
+                .state
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Liquidity)
+                == link
+                    .state
+                    .obligation_terminal_receipt_id(SeriesLinkObligationV3::Liquidity)
+    } else {
+        product_root_data_id == before.root_data_id
+            && framed_data_id == before.link_data_id
+            && *product_root == *before.root
+            && *link == *before.link
+    };
     if *account.key != expected_pda.0
         || link.stored_bump != expected_pda.1
         || observed_lamports < accounted_lamports
         || *accounts[CREATE_PRODUCT_ROOT_V3].key != product_root_pda.0
         || product_root.stored_bump != product_root_pda.1
         || accounts[CREATE_PRODUCT_ROOT_V3].lamports() < product_root.rent_principal_lamports
+        || accounts[CREATE_PRODUCT_ROOT_V3].lamports() != before.root_lamports
+        || account.lamports() != before.link_lamports
         || accounts[CREATE_PRODUCT_ROOT_V3].is_signer
         || accounts[CREATE_PRODUCT_ROOT_V3].is_writable != expected_writable
         || accounts[CREATE_PRODUCT_ROOT_V3].executable
@@ -3423,6 +3629,18 @@ fn reconcile_product_series_link(
             != SeriesLinkObligationStatusV3::Live
         || link
             .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Structured)
+            .is_zero()
+        || !link
+            .state
+            .obligation_terminal_receipt_id(SeriesLinkObligationV3::Structured)
+            .is_zero()
+        || !link
+            .state
+            .obligation_terminal_receipt_id(SeriesLinkObligationV3::Wrapper)
+            .is_zero()
+        || link
+            .state
             .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             != root.product_lineage.product_admission_receipt_id
         || binding.id().map_err(|_| WrapperError::Identity)?
@@ -3434,6 +3652,7 @@ fn reconcile_product_series_link(
                 .product_lineage
                 .last_observed_link_transition_sequence
         || authentication_id.is_zero()
+        || !exact_product_transition
     {
         return Err(WrapperError::BaseCustody);
     }
@@ -3567,6 +3786,9 @@ mod tests {
             "SeriesRegistryAccountV4",
             "CompiledProductSeriesBundleV7",
             "SeriesAttachmentPlanV6",
+            "StructuredProductPrestateV3",
+            "product_root_data_id != before.root_data_id",
+            "framed_data_id != before.link_data_id",
         ] {
             assert!(production.contains(required));
         }
@@ -3579,6 +3801,15 @@ mod tests {
         ] {
             assert!(!production.contains(withdrawn));
         }
+    }
+
+    #[test]
+    fn create_frame_appends_read_only_product_replay_and_family_policy() {
+        assert_eq!(CREATE_ACCOUNT_COUNT, 38);
+        assert_eq!(CREATE_PRODUCT_REPLAY_V2, 36);
+        assert_eq!(CREATE_FAMILY_CAPABILITY_POLICY_V1, 37);
+        assert!(CREATE_PRODUCT_ROOT_V3 < CREATE_PRODUCT_REPLAY_V2);
+        assert!(CREATE_PRODUCT_REPLAY_V2 < CREATE_FAMILY_CAPABILITY_POLICY_V1);
     }
 
     #[test]

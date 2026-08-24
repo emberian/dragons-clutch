@@ -30,8 +30,9 @@ use clutch_solana_layout::registry::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV2, SeriesMarketLinkAccountV3,
-    SeriesRegistryAccountV3, SeriesRegistryAccountV4, SERIES_REGISTRY_PDA_PREFIX_V1,
+    MarketLifecycleReplayAccountV2, MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV2,
+    SeriesMarketLinkAccountV3, SeriesRegistryAccountV3, SeriesRegistryAccountV4,
+    SERIES_REGISTRY_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_solana_layout::{ProfileAccount, RealmAccount};
@@ -68,7 +69,8 @@ use clutch_general_v2_contract::{
 };
 use clutch_product_series::{
     CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV7, ContentId, FixedCodec,
-    MarketFamilyStatusV1, MarketFamilyV1, MarketFoundationAccountGraphV4,
+    MarketFamilyCapabilityPolicyV1, MarketFamilyStatusV1, MarketFamilyV1,
+    MarketFoundationAccountGraphV4,
     MarketFoundationSlotV4, MarketInstancePreimageV2, MarketLifecyclePhaseV2,
     MarketLifecyclePhaseV3, NativeClaimBasisV1,
     RegistryCapabilityProfileV4, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
@@ -1993,7 +1995,7 @@ fn detect_structured_schedule_v1(
     accounts: &[StructuredChainAccountV1<'_>],
 ) -> Result<DetectedStructuredScheduleV1> {
     let action = match accounts.len() {
-        36 => StructuredClaimActionV1::CreateDescriptor,
+        38 => StructuredClaimActionV1::CreateDescriptor,
         32 => {
             let compact = accounts
                 .get(10)
@@ -2674,6 +2676,41 @@ fn derive_structured_create_v1(
         accounts[35],
         &link_binding,
     )?;
+    let product_replay = MarketLifecycleReplayAccountV2::decode(accounts[36].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let replay_binding = product_replay.state.binding();
+    let family_policy = MarketFamilyCapabilityPolicyV1::decode(accounts[37].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let family_policy_id = family_policy
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    verify_product_artifact(
+        releases.base.program_id,
+        accounts[37],
+        ArtifactKind::MarketFamilyCapabilityPolicyV1,
+        family_policy_id.bytes(),
+    )?;
+    if accounts[36].owner()? != releases.base.program_id
+        || accounts[36].executable()
+        || replay_binding.replay_account_id.bytes() != accounts[36].address.to_bytes()
+        || replay_binding.lifecycle_root_account_id.bytes() != accounts[35].address.to_bytes()
+        || replay_binding.market_instance_id != link_binding.market_instance_id
+        || replay_binding.generation != link_binding.generation
+        || replay_binding.market_family_capability_policy_id
+            != family_policy_id.content_id()
+        || replay_binding.registry_release_id.content_id()
+            != product_root.state.binding_ref().registry_release_id
+        || replay_binding.capability_profile_id.content_id()
+            != product_root.state.binding_ref().capability_profile_id
+        || family_policy.registry_capability_profile_id.content_id()
+            != link_binding.capability_profile_id
+        || family_policy.realm_id != product_root.state.binding_ref().realm_id
+        || family_policy.collateral_profile_id
+            != product_root.state.binding_ref().collateral_profile_id
+        || !family_policy.is_enabled(MarketFamilyV1::Structured)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
     let bundle = CompiledProductSeriesBundleV7::decode(accounts[27].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let bundle_id = bundle
