@@ -574,13 +574,13 @@ mod tests {
     }
 
     #[test]
-    fn withdrawn_pair_tags_have_no_current_action_or_replay_decode() {
+    fn unallocated_action_bytes_have_no_replay_decode() {
         let founding =
             StructuredClaimReplayExtensionV1::founding([1; 32], [2; 32], [3; 32], [4; 32])
                 .unwrap();
-        for withdrawn_tag in [2_u8, 4_u8] {
+        for unallocated_tag in [2_u8, 4_u8] {
             assert_eq!(
-                StructuredClaimActionV1::from_tag(withdrawn_tag),
+                StructuredClaimActionV1::from_tag(unallocated_tag),
                 Err(Error::UnknownAction),
             );
         }

@@ -144,11 +144,5 @@ mod tests {
             STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1,
             IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
         );
-        for withdrawn in [2_u8, 4_u8] {
-            assert_eq!(
-                STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1 & (1_u16 << withdrawn),
-                0,
-            );
-        }
     }
 }

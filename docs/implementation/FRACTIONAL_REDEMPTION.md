@@ -128,8 +128,8 @@ resolved L_a(w) = D/gcd(D, dot(a,w)).
 
 The universal formula and its minimality are exhaustively tested over small
 three-outcome integer simplexes. This does not promote direct wrapper
-redemption: unwrapping to exact native components remains the conservative
-path described by `research/structured-claim-wrapper`.
+redemption: unwrapping to exact native components remains the conservative path
+implemented by `clutch-structured-claim-runtime-contract`.
 
 ### 2.2 Closure requirements
 

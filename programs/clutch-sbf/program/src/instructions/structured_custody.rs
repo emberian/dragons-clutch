@@ -8,18 +8,17 @@
 //! Full-vector routes write both Position V3 bodies, their purpose-owned Replay
 //! envelopes, and the Hoard V2/ClaimLedger V3 complete-set reclassification
 //! successors. Compaction additionally owns its exact Hoard-surplus disposition;
-//! retirement owns typed principal refunds and donation sinks. Historical
-//! canonical actions 2/4 have no endpoint in this module.
+//! retirement owns typed principal refunds and donation sinks.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6Id, CompiledProductSeriesBundleV7, ContentId, FixedCodec,
+    CompiledProductSeriesBundleV7, ContentId, FixedCodec,
     MarketFamilyStatusV1, MarketFamilyV1, MarketInstanceV2Id, MarketLifecyclePhaseV3,
     MarketLifecycleReplayPhaseV2,
     NativeClaimBasisV1,
-    RegistryProgramReleaseV2, RegistryReleaseLocusV2, SeriesAttachmentPlanV5Id,
+    RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV6, SeriesFundingTermsV2, SeriesLinkObligationStatusV3,
     SeriesLinkObligationV3,
-    SeriesMarketLinkPhaseV2, SeriesMarketLinkPhaseV3, SeriesMarketLinkV3,
+    SeriesMarketLinkPhaseV3, SeriesMarketLinkV3,
     SeriesMarketLinkV3Id, SeriesPlanV5Id,
 };
 use clutch_collateral_adapter_v2::{
@@ -318,7 +317,7 @@ const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
 ];
 
 // ProgramData proves the selected collateral release but is not part of the
-// historical Structured custody projection consumed by the adapter.
+// bounded Structured custody projection consumed by the adapter.
 const ACCOUNT_INDICES: [usize; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
 ];
@@ -843,10 +842,9 @@ const _: () = assert!(
 
 /// Enter the sole base-owned current Structured handler map.
 ///
-/// Allocated historical actions 2/4 are refused here and have no parallel
-/// endpoint. The outer dispatcher performs the central capability gate before
-/// calling this function; every successful branch below names one complete
-/// hostile-account implementation.
+/// The outer dispatcher performs the central capability gate before calling
+/// this function; every branch below names one complete hostile-account
+/// implementation.
 pub(crate) fn process_current_action(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -884,9 +882,6 @@ pub(crate) fn process_current_action(
         ),
         Action::RetireDescriptor => {
             process_retire_descriptor(program_id, accounts, sequence, payload)
-        }
-        Action::WrapCanonical | Action::UnwrapCanonical => {
-            Err(ClutchError::UnsupportedInstruction.into())
         }
     }
 }
@@ -5281,7 +5276,6 @@ fn map_adapter_error(error: StructuredAdapterError) -> Refusal {
         | StructuredAdapterError::PostStateMismatch
         | StructuredAdapterError::ReceiptMismatch => ClutchError::AggregateClosureMismatch,
         StructuredAdapterError::InvalidDeployment
-        | StructuredAdapterError::BaseCapabilityUnavailable
         | StructuredAdapterError::CapabilityDisabled => ClutchError::AuthorizationUnavailable,
         StructuredAdapterError::WrongFamily
         | StructuredAdapterError::WrongFamilyVersion
@@ -5301,27 +5295,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_base_handler_mask_is_exact_and_withdrawn_routes_are_absent() {
+    fn physical_base_handler_mask_is_exact() {
         assert_eq!(
             STRUCTURED_BASE_HANDLER_ACTION_MASK_V1,
             clutch_structured_claim_adapter::STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1,
         );
-        for withdrawn in [2_u8, 4_u8] {
-            assert_eq!(
-                STRUCTURED_BASE_HANDLER_ACTION_MASK_V1 & (1_u16 << withdrawn),
-                0,
-            );
-        }
-    }
-
-    #[test]
-    fn staged_profile_refuses_every_structured_action() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(74, 1, 35));
-        for action in 1..=8 {
-            assert!(!crate::capabilities::extension_intent_action_enabled(
-                75, 1, action
-            ));
-        }
     }
 
     #[test]
@@ -5390,11 +5368,6 @@ mod tests {
         ] {
             assert!(production.contains(required));
         }
-        assert!(!production.contains("terminalize_series_wrapper_obligation_v2("));
-        assert!(!production.contains("authenticate_series_wrapper_authorization_v2("));
-        assert!(!production.contains("admit_series_wrapper_obligation_v2("));
-        assert!(!production.contains("AuthenticatedSeriesWrapperAdmissionOwnerV2"));
-        assert!(!production.contains("AuthenticatedSeriesWrapperTerminalOwnerV2"));
         let receipt_start = production
             .find("pub(crate) struct AuthenticatedStructuredWrapperFamilyTerminalV3")
             .unwrap();
@@ -5405,17 +5378,6 @@ mod tests {
         let receipt_declaration = &production[receipt_start..receipt_end];
         assert!(!receipt_declaration.contains("derive(Clone"));
         assert!(!receipt_declaration.contains("derive(Copy"));
-        assert!(!production.contains(concat!("SeriesMarketLinkAccount", "V1")));
-        assert!(!production.contains(concat!("authenticate_series_market_link_", "v1(")));
-        assert!(!production.contains(concat!(
-            "authenticate_series_wrapper_authorization_",
-            "v1("
-        )));
-        assert!(!production.contains(concat!("admit_series_wrapper_obligation_", "v1(")));
-        assert!(!production.contains(concat!(
-            "terminalize_series_wrapper_obligation_",
-            "v1("
-        )));
         for move_only in [
             "struct AuthenticatedStructuredFamilyAdmissionPostwriteV3",
             "struct AuthenticatedStructuredLinkAdmissionPostwriteV3",

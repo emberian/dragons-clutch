@@ -40,15 +40,14 @@ extension-free mint remain permanent identity tombstones; retirement revokes
 mint authority instead of pretending Token-2022 can close an extension-free
 mint or redirect its locked rent.
 
-The central registry reserves eight family-local coordinates, while this
-current wire recognizes only descriptor creation, full-vector wrap/unwind,
+The central registry and current wire recognize only descriptor creation,
+full-vector wrap/unwind,
 beneficiary-free donation compaction, exact terminal redemption, and
-retirement. The former canonical action-2/4 variants and payload decoders are
-deleted; current source/account contracts exist only for actions 1/3/5/6/7/8.
-Every quantity payload
+retirement. Current source/account contracts exist exactly for actions
+1/3/5/6/7/8. Every quantity payload
 binds the wrapper product, user/vault generations, and both Replay sequences;
 trailing, truncated, zero-quantity, and unknown-action payloads have no
-interpretation. Reserved registry tags 2 and 4 fail as unknown actions.
+interpretation.
 
 Descriptor and mint creation is pre-fund safe: system-owned zero-data targets
 may already carry lamports, the creator funds only each exact rent shortfall,

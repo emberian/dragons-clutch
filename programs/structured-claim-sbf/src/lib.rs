@@ -8,7 +8,7 @@
 //! Full-vector wrap executes base custody before Token-2022 mint; full-vector
 //! unwind and terminal redemption burn before base custody. SVM rollback makes
 //! each sequence atomic, and this program re-reads exact integer deltas before
-//! success. Historical canonical actions 2/4 are decode-only refusals.
+//! success.
 
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 compile_error!("select the explicit profile-successor-chain-attached-dev wrapper profile");

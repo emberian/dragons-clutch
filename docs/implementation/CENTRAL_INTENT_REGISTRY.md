@@ -125,23 +125,19 @@ does not by itself initialize liquidity. Dealer Initialize separately consumes
 the published policy and schedule and atomically admits its seven segregated
 runtime-liveness compartment accounts from present native lamports.
 
-StructuredClaim `75/1` reserves actions 1 through 8:
+StructuredClaim `75/1` allocates exactly six actions:
 
 1. `CreateDescriptor`
-2. `WrapCanonical`
 3. `WrapFull`
-4. `UnwrapCanonical`
 5. `UnwrapFull`
 6. `CompactDonation`
 7. `RedeemTerminal`
 8. `RetireDescriptor`
 
-Current source/account contracts exist only for actions 1/3/5/6/7/8, with
-exact outer/base counts 34/32/32/32/33/33 respectively. Actions 2 and 4 are
-withdrawn execution routes. The checked Structured wrapper/base/Token-2022
-release join admits exactly mask `0x01ea` under the frozen base profile
-identity, while the central tuple registry still keeps every Structured action
-absent until the unified successor closure is callable.
+Current source/account contracts use exact outer/base counts
+38/32/32/32/33/34 respectively. The checked Structured
+wrapper/base/Token-2022 release join admits exactly mask `0x01ea` under the
+frozen base profile identity.
 
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:

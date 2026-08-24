@@ -1000,25 +1000,6 @@ def build_gates() -> list[dict[str, Any]]:
                 "note": "stable admission/fee-policy scenario report; no policy promotion",
             },
             {
-                "id": "python.structured_claim_wrapper_unittest",
-                "section": "current-research",
-                "command": (
-                    "python3 -m unittest discover -s research/structured-claim-wrapper "
-                    "-p 'test_*.py' -v"
-                ),
-                "expected": {"mode": "zero", "exit": 0},
-                "key_patterns": UNITTEST_PATTERNS,
-                "note": "structured-claim wrapper research model; not a Token-2022 path",
-            },
-            {
-                "id": "python.structured_claim_wrapper_lab",
-                "section": "current-research",
-                "command": "python3 research/structured-claim-wrapper/run_lab.py",
-                "expected": {"mode": "zero", "exit": 0},
-                "key_patterns": [r"^coefficients: ", r"^universal exact redemption lot: "],
-                "note": "stable structured-claim wrapper scenario report; MODEL evidence only",
-            },
-            {
                 "id": "python.bspline_window_semantics_unittest",
                 "section": "current-research",
                 "command": (

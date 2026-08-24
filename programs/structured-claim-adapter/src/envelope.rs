@@ -10,12 +10,6 @@ use crate::{
     STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
 };
 
-/// All family-local coordinates reserved by the central collision ledger.
-///
-/// Reservation is not decoding authority: current action parsing recognizes
-/// only the six actions in [`IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1`].
-pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0x01fe;
-
 /// Runtime actions admitted by this adapter artifact.
 ///
 /// The default is empty. The separately deployed wrapper admits only the
@@ -40,8 +34,6 @@ const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(
     ENABLED_STRUCTURED_CLAIM_ACTION_MASK == IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
 );
-const _: () =
-    assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(
     ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 == 0
 );

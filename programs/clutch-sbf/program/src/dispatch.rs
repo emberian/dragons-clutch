@@ -2083,9 +2083,7 @@ mod extension_registry_tests {
                 "series action {local_action}"
             );
         }
-        for local_action in clutch_solana_layout::registry::StructuredClaimAction::FIRST_TAG
-            ..=clutch_solana_layout::registry::StructuredClaimAction::LAST_TAG
-        {
+        for local_action in clutch_solana_layout::registry::StructuredClaimAction::TAGS {
             let bytes = extension_request(
                 clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
                 clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,

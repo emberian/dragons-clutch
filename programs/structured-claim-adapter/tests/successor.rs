@@ -2,17 +2,12 @@ use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     decode_historical_descriptor_v1, DescriptorBasisV1, DescriptorStateV1,
     StructuredClaimDescriptorV2, StructuredClaimRuntimeAddressesV1,
-    WrapperQuantityPayloadV1, DESCRIPTOR_ACCOUNT_BYTES,
-    DESCRIPTOR_ACCOUNT_TAG, STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
-    WRAPPER_QUANTITY_PAYLOAD_BYTES,
+    DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
 };
 use clutch_structured_claim_adapter::{
-    admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
-    canonical_series_scoped_wrapper_product_id_v2, decode_instruction_v1,
-    Error, PdaVerifierV1, RuntimeDeploymentsV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
+    bind_descriptor_v1, canonical_native_claim_id_v1,
+    canonical_series_scoped_wrapper_product_id_v2, PdaVerifierV1, RuntimeDeploymentsV1,
 };
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-use clutch_structured_claim_adapter::IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1;
 
 fn key(marker: u8) -> [u8; 32] {
     [marker; 32]
@@ -112,36 +107,6 @@ fn descriptor_v1_is_archivally_decodable_but_cannot_promote_live() {
     v1[383] = v2[448];
     assert_eq!(decode_historical_descriptor_v1(&v1), Ok(()));
     assert!(StructuredClaimDescriptorV2::decode(&v1).is_err());
-}
-
-#[test]
-fn family_payload_uses_the_runtime_contract_and_withdrawn_route_refuses() {
-    let payload = WrapperQuantityPayloadV1 {
-        wrapper_product_id: key(30),
-        quantity: 2,
-        user_generation: 3,
-        user_replay_sequence: 4,
-        vault_generation: 5,
-        vault_replay_sequence: 6,
-    };
-    let body = payload.encode().unwrap();
-    let mut instruction = [0_u8; 3 + WRAPPER_QUANTITY_PAYLOAD_BYTES];
-    instruction[0] = STRUCTURED_CLAIM_FAMILY_TAG;
-    instruction[1] = STRUCTURED_CLAIM_FAMILY_VERSION;
-    instruction[2] = 2;
-    instruction[3..].copy_from_slice(&body);
-    assert_eq!(decode_instruction_v1(&instruction), Err(Error::UnknownAction));
-    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
-    assert_eq!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK, 0);
-    #[cfg(feature = "profile-successor-chain-attached-dev")]
-    assert_eq!(
-        ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
-        IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
-    );
-    assert_eq!(
-        admit_runtime_envelope_v1(&instruction),
-        Err(Error::CapabilityDisabled)
-    );
 }
 
 #[test]

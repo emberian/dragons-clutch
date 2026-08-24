@@ -97,7 +97,7 @@ That identity is valid only for the complete callable closure: Product-owned
 SourceSeries actions 13--18, Source actions 1--12, General actions 1--34 and
 36--42, Direct actions 1--13, Fractional actions 1--10, Structured actions
 1/3/5/6/7/8, Dealer actions 1--25, and Recovery actions 10--13. General action
-35, Structured actions 2/4, and Recovery actions 1--9 remain withdrawn.
+35 and Recovery actions 1--9 remain withdrawn.
 
 The checker requires all twelve semantic owners linked, exact central tuple
 coverage, exclusive family ownership where one family owns the semantics, and

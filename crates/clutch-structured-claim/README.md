@@ -74,9 +74,7 @@ crate.
 Current runtime and account ownership is documented by the
 [runtime contract](../clutch-structured-claim-runtime-contract/README.md),
 [successor adapter](../../programs/structured-claim-adapter/README.md), and
-[SBF wrapper](../../programs/structured-claim-sbf/README.md). The former
-research [`ADAPTER_PLAN.md`](../../research/structured-claim-wrapper/ADAPTER_PLAN.md)
-is explicitly withdrawn design history.
+[SBF wrapper](../../programs/structured-claim-sbf/README.md).
 
 ## Evidence and compatibility
 
