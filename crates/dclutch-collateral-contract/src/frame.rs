@@ -1,6 +1,8 @@
 //! Exact ordered account-role schemas independent of Solana SDK types.
 
 use crate::{Error, Result, instruction::InstructionTag};
+use dclutch_core_contract::MarketRoot;
+use dclutch_realm_contract::RealmV1;
 
 /// Semantic identity class an SVM adapter must authenticate for one role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,6 +136,89 @@ pub struct AccountPrivilege {
     pub is_writable: bool,
     /// Whether the runtime presents this account as executable.
     pub is_executable: bool,
+}
+
+/// Authenticated decoded facts of a collateral token account used by a
+/// permissionless surplus sweep.
+///
+/// The composing adapter obtains these facts from the token account selected
+/// by the immutable Realm's token-program release. This SDK-free type does not
+/// decode a token account itself and cannot substitute for authentication of
+/// the account address, token-program owner, mint, or token owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SweepSurplusTokenAccountFactsV1 {
+    address: [u8; 32],
+    mint: [u8; 32],
+    token_owner: [u8; 32],
+}
+
+impl SweepSurplusTokenAccountFactsV1 {
+    /// Construct nonzero decoded token-account facts.
+    pub fn new(address: [u8; 32], mint: [u8; 32], token_owner: [u8; 32]) -> Result<Self> {
+        if is_zero_identifier(&address)
+            || is_zero_identifier(&mint)
+            || is_zero_identifier(&token_owner)
+        {
+            return Err(Error::ZeroIdentifier);
+        }
+        Ok(Self {
+            address,
+            mint,
+            token_owner,
+        })
+    }
+
+    /// Return the token-account address authenticated by the adapter.
+    pub const fn address(self) -> [u8; 32] {
+        self.address
+    }
+
+    /// Return the token Mint decoded and authenticated by the adapter.
+    pub const fn mint(self) -> [u8; 32] {
+        self.mint
+    }
+
+    /// Return the token-account owner decoded and authenticated by the adapter.
+    pub const fn token_owner(self) -> [u8; 32] {
+        self.token_owner
+    }
+}
+
+/// Authorize the fixed surplus-sweep destination selected by immutable Market
+/// and Realm state.
+///
+/// The composing adapter must first authenticate `market` as the exact Market
+/// root, `realm` as the root-committed Realm, and both fact records as the
+/// decoded token accounts in [`SWEEP_SURPLUS_FRAME`]. A permissionless sweep
+/// may transfer only to a different account whose Mint is the Realm Mint and
+/// whose token owner is the immutable `MarketRoot::rent_refund` identity.
+/// There is no caller-selected destination, destination signer, persisted
+/// treasury field, or fee authority in this contract.
+///
+/// After this check, the adapter must transfer exactly
+/// `vault.amount - Market.hoard` and leave `Market.hoard` unchanged. This
+/// helper intentionally owns destination authorization only; the authenticated
+/// adapter owns token balances, checked subtraction, and CPI atomicity.
+pub fn authorize_sweep_surplus_destination(
+    market: MarketRoot,
+    realm: RealmV1,
+    vault: SweepSurplusTokenAccountFactsV1,
+    destination: SweepSurplusTokenAccountFactsV1,
+) -> Result<()> {
+    if vault.address() == destination.address() {
+        return Err(Error::SweepDestinationAliasesVault);
+    }
+    if destination.mint() != *realm.collateral_mint() {
+        return Err(Error::SweepDestinationMintMismatch);
+    }
+    if destination.token_owner() != market.rent_refund() {
+        return Err(Error::SweepDestinationOwnerMismatch);
+    }
+    Ok(())
+}
+
+fn is_zero_identifier(identifier: &[u8; 32]) -> bool {
+    identifier.iter().all(|byte| *byte == 0)
 }
 
 /// Borrowed exact frame associated with one semantic instruction.
@@ -335,6 +420,14 @@ pub const REDEEM_RESOLVED_OUTCOME_FRAME: [AccountRole; 8] = [
 ];
 
 /// Exact permissionless collateral-surplus sweep frame.
+///
+/// The adapter must authenticate the Market root, Realm, Vault, and
+/// Destination then call [`authorize_sweep_surplus_destination`] with decoded
+/// token-account facts. `CollateralDestination` must be a different
+/// Realm-Mint token account owned by `MarketRoot::rent_refund`; it is not a
+/// caller-selected recipient. No role is a signer. The only admitted transfer
+/// is exactly `vault.amount - Market.hoard`, and the sweep must not mutate
+/// Hoard.
 pub const SWEEP_SURPLUS_FRAME: [AccountRole; 6] = [
     state(Role::Market, true),
     immutable(Role::Realm),
@@ -417,6 +510,37 @@ pub fn validate_account_frame(tag: InstructionTag, accounts: &[AccountPrivilege]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_core_contract::{ContentId, MarketIdentity};
+    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
+
+    fn root() -> MarketRoot {
+        let content = |value| ContentId::new([value; 32]).expect("nonzero test content");
+        let identity = MarketIdentity::new(
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            content(5),
+            7,
+        );
+        MarketRoot::founding(identity, [9; 32]).expect("nonzero test refund")
+    }
+
+    fn realm() -> RealmV1 {
+        RealmV1::new(RealmV1Input {
+            token_program: [1; 32],
+            collateral_mint: [2; 32],
+            collateral_adapter_release_id: [3; 32],
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("nonzero test Realm")
+    }
+
+    fn facts(address: u8, mint: u8, token_owner: u8) -> SweepSurplusTokenAccountFactsV1 {
+        SweepSurplusTokenAccountFactsV1::new([address; 32], [mint; 32], [token_owner; 32])
+            .expect("nonzero test token facts")
+    }
 
     fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 11] {
         let mut output = [AccountPrivilege {
@@ -555,5 +679,53 @@ mod tests {
             }
         }
         assert_eq!(validate_account_frame(tag, &escalated), Ok(()));
+    }
+
+    #[test]
+    fn sweep_destination_is_fixed_to_market_refund_and_realm_mint() {
+        assert_eq!(
+            authorize_sweep_surplus_destination(root(), realm(), facts(4, 2, 5), facts(6, 2, 9)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn sweep_destination_wrong_owner_refuses() {
+        assert_eq!(
+            authorize_sweep_surplus_destination(root(), realm(), facts(4, 2, 5), facts(6, 2, 8)),
+            Err(Error::SweepDestinationOwnerMismatch)
+        );
+    }
+
+    #[test]
+    fn sweep_destination_wrong_mint_refuses() {
+        assert_eq!(
+            authorize_sweep_surplus_destination(root(), realm(), facts(4, 2, 5), facts(6, 7, 9)),
+            Err(Error::SweepDestinationMintMismatch)
+        );
+    }
+
+    #[test]
+    fn sweep_destination_vault_alias_refuses() {
+        assert_eq!(
+            authorize_sweep_surplus_destination(root(), realm(), facts(4, 2, 5), facts(4, 2, 9)),
+            Err(Error::SweepDestinationAliasesVault)
+        );
+    }
+
+    #[test]
+    fn sweep_token_facts_reject_zero_identifiers() {
+        assert_eq!(
+            SweepSurplusTokenAccountFactsV1::new([0; 32], [2; 32], [9; 32]),
+            Err(Error::ZeroIdentifier)
+        );
+        assert_eq!(
+            SweepSurplusTokenAccountFactsV1::new([4; 32], [0; 32], [9; 32]),
+            Err(Error::ZeroIdentifier)
+        );
+        assert_eq!(
+            SweepSurplusTokenAccountFactsV1::new([4; 32], [2; 32], [0; 32]),
+            Err(Error::ZeroIdentifier)
+        );
     }
 }

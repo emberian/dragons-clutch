@@ -35,4 +35,11 @@ The program-owned collateral-custody root persists the Vault-opening sponsor as
 the one rent-refund recipient. Empty Vault retirement returns both Vault and
 custody-root lamports exactly there; it never strands them in Market state or
 pays an unauthenticated closer. Vault tokens are never a rent source, and
-surplus token sweeping transfers only `vault.amount - Market.hoard`.
+surplus token sweeping transfers only `vault.amount - Market.hoard` without
+mutating Hoard. Sweep is permissionless but has no caller-selected recipient or
+caller signer: the adapter must authenticate that `CollateralDestination` is a
+different token account for the immutable Realm Mint and that its token owner
+is exactly the immutable `MarketRoot.rent_refund` identity. The adapter must
+reject a wrong destination owner, wrong Mint, or Vault/Destination alias before
+the one exact surplus transfer; the contract adds no persisted treasury or
+destination field.

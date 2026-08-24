@@ -26,7 +26,8 @@ pub use custody::{
     COLLATERAL_CUSTODY_SCHEMA_VERSION, COLLATERAL_VAULT_PDA_DOMAIN, CollateralCustodyV1,
 };
 pub use frame::{
-    AccountClass, AccountPrivilege, AccountRole, InstructionFrame, Role, instruction_frame,
+    AccountClass, AccountPrivilege, AccountRole, InstructionFrame, Role,
+    SweepSurplusTokenAccountFactsV1, authorize_sweep_surplus_destination, instruction_frame,
     validate_account_frame,
 };
 pub use instruction::{
@@ -78,6 +79,12 @@ pub enum Error {
     AccountCountMismatch,
     /// An account had privileges inconsistent with its exact semantic role.
     AccountPrivilegeMismatch,
+    /// The permissionless sweep destination was the collateral Vault itself.
+    SweepDestinationAliasesVault,
+    /// The permissionless sweep destination did not use the immutable Realm Mint.
+    SweepDestinationMintMismatch,
+    /// The permissionless sweep destination owner did not match Market rent refund.
+    SweepDestinationOwnerMismatch,
 }
 
 /// Result alias for this contract crate.
