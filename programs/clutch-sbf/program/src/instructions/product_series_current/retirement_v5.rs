@@ -12,6 +12,7 @@ use super::{AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccount
 
 use super::super::failure_market_family_terminal_v2::{
     authenticate_failure_market_source_failure_lifecycle_terminal_v3,
+    AuthenticatedFailureMarketPhysicalTerminalV3,
     AuthenticatedFailureMarketPhysicalTerminalAuthorityV3,
     AuthenticatedFailureMarketFamilyTerminalReceiptV3,
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
@@ -28,6 +29,9 @@ use super::super::product_market_lifecycle_v3_current::{
 };
 use super::super::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
+};
+use super::super::product_series::physical_v5::{
+    retire_current_series_physical_v5, AuthenticatedSeriesPhysicalRetirementV5,
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
 use super::super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2;
@@ -88,6 +92,10 @@ const PRODUCT_SOURCE_SHARED_CORE_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-source-shared-core-postwrite/v5\0";
 const PRODUCT_MARKET_BEGIN_RETIREMENT_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-market-begin-retirement/v5\0";
+const PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-series-physical-retirement-postwrite/v5\0";
+const PRODUCT_MARKET_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-market-terminal-postwrite/v5\0";
 
 fn hashv(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
@@ -2890,6 +2898,452 @@ pub(crate) fn terminalize_product_series_funding_v5(
         artifacts,
         terminal_projection: projection,
         terminal_projection_id: projection_id,
+    })
+}
+
+/// Transaction-local Product postwrite over the sole physical FundingV5
+/// retirement.  It is private so callers cannot detach physical closure from
+/// the final RootV3 terminal postwrite below.
+#[derive(Debug)]
+struct AuthenticatedProductSeriesPhysicalRetirementPostwriteV5 {
+    id: ContentId,
+    physical: AuthenticatedSeriesPhysicalRetirementV5,
+    physical_receipt_transcript_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    root_binding_id: ContentId,
+    root_account: Pubkey,
+    root_data_id: ContentId,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    root_transition_sequence: u64,
+    link_account: Pubkey,
+    link_series_plan_id: SeriesPlanV5Id,
+    link_ordinal: u32,
+    link_data_id: ContentId,
+    link_authentication_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV3Id,
+    link_transition_sequence: u64,
+}
+
+fn physical_retirement_receipt_transcript_v5(
+    physical: &AuthenticatedSeriesPhysicalRetirementV5,
+) -> Outcome<ContentId> {
+    let mut transcript = hashv(&[
+        PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5,
+        b"physical-receipt-transcript",
+        &physical.id().bytes(),
+        &physical.funding_close_receipt_id().bytes(),
+    ]);
+    for receipts in [
+        physical.lamport_retirement_receipt_ids().as_slice(),
+        physical.collateral_principal_receipt_ids().as_slice(),
+        physical.collateral_donation_receipt_ids().as_slice(),
+        physical.collateral_close_receipt_ids().as_slice(),
+    ] {
+        for receipt in receipts {
+            require_live(*receipt)?;
+            transcript = hashv(&[
+                PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5,
+                &transcript.bytes(),
+                &receipt.bytes(),
+            ]);
+        }
+    }
+    require_live(transcript)?;
+    Ok(transcript)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn physically_retire_current_product_series_v5<'a>(
+    program_id: &Pubkey,
+    terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    root_account: &AccountInfo<'a>,
+    link_account: &AccountInfo<'a>,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    physical_accounts: &[AccountInfo<'a>],
+) -> Outcome<AuthenticatedProductSeriesPhysicalRetirementPostwriteV5> {
+    require(
+        root_account.key != link_account.key
+            && root_account.key != registry_account.key
+            && root_account.key != funding_account.key
+            && link_account.key != registry_account.key
+            && link_account.key != funding_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    for account in physical_accounts {
+        require(
+            account.key != root_account.key && account.key != link_account.key,
+            ClutchError::AccountAlias,
+        )?;
+    }
+    let source = terminal.source();
+    let source_facts = source.source_market_terminal_facts();
+    let source_projection = source.source_projection()?;
+    let lifecycle_terminal_id = terminal.id();
+    let terminal_projection = terminal.terminal_projection();
+    let terminal_projection_id = terminal.terminal_projection_id();
+    let market_instance_id =
+        MarketInstanceV2Id::from_bytes(source_facts.market_instance_id.bytes());
+    let (series_plan_id, ordinal) = observe_link_coordinate_v3(link_account)?;
+    let mut root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        source_facts.generation,
+        true,
+        &mut root_value,
+    )?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        source_facts.generation,
+        *root_account.key,
+        true,
+        &mut link_value,
+    )?;
+    require(
+        root.state().phase() == MarketLifecyclePhaseV3::Retiring
+            && root.binding_id() == source_facts.root_binding_id
+            && root.account() == source.root_account()
+            && root.data_id() == source.root_data_after_id
+            && root.authentication_id() == source.root_authentication_after_id()
+            && root.semantic_id() == source.root_semantic_after_id()
+            && root.state().transition_sequence() == source.root_transition_sequence_after()
+            && root
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::Source)
+                == source.source_shared_core_projection_id()
+            && link.account() == source.link_account()
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Retired
+            && link.data_id() == source.link_data_after_id
+            && link.authentication_id() == source.link_authentication_after_id()
+            && link.semantic_id() == source.link_semantic_after_id()
+            && link.state().transition_sequence() == source.link_transition_sequence_after()
+            && source_projection.facts.funding_account.bytes()
+                == funding_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let root_binding_id = root.binding_id();
+    let root_data_id = root.data_id();
+    let root_authentication_id = root.authentication_id();
+    let root_semantic_id = root.semantic_id();
+    let root_transition_sequence = root.state().transition_sequence();
+    let link_data_id = link.data_id();
+    let link_authentication_id = link.authentication_id();
+    let link_semantic_id = link.semantic_id();
+    let link_transition_sequence = link.state().transition_sequence();
+    drop(link);
+    drop(root);
+    let physical = retire_current_series_physical_v5(
+        program_id,
+        terminal,
+        registry_account,
+        funding_account,
+        physical_accounts,
+    )?;
+    require(
+        physical.lifecycle_terminal_id() == lifecycle_terminal_id
+            && physical.terminal_projection() == terminal_projection
+            && physical.terminal_projection_id() == terminal_projection_id
+            && physical.registry_account() == *registry_account.key
+            && physical.funding_account() == *funding_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let mut reopened_root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        source_facts.generation,
+        true,
+        &mut reopened_root_value,
+    )?;
+    let mut reopened_link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let reopened_link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        source_facts.generation,
+        *root_account.key,
+        true,
+        &mut reopened_link_value,
+    )?;
+    require(
+        reopened_root.data_id() == root_data_id
+            && reopened_root.authentication_id() == root_authentication_id
+            && reopened_root.semantic_id() == root_semantic_id
+            && reopened_root.state().transition_sequence() == root_transition_sequence
+            && reopened_link.data_id() == link_data_id
+            && reopened_link.authentication_id() == link_authentication_id
+            && reopened_link.semantic_id() == link_semantic_id
+            && reopened_link.state().transition_sequence() == link_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let physical_receipt_transcript_id =
+        physical_retirement_receipt_transcript_v5(&physical)?;
+    let id = hashv(&[
+        PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &lifecycle_terminal_id.bytes(),
+        &terminal_projection_id.bytes(),
+        &physical.id().bytes(),
+        &physical_receipt_transcript_id.bytes(),
+        root_account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &root_data_id.bytes(),
+        &root_authentication_id.bytes(),
+        &root_semantic_id.bytes(),
+        &root_transition_sequence.to_le_bytes(),
+        link_account.key.as_ref(),
+        &link_data_id.bytes(),
+        &link_authentication_id.bytes(),
+        &link_semantic_id.bytes(),
+        &link_transition_sequence.to_le_bytes(),
+        registry_account.key.as_ref(),
+        &physical.registry_data_id().bytes(),
+        &physical.registry_authentication_id().bytes(),
+        funding_account.key.as_ref(),
+        &physical.funding_data_before_id().bytes(),
+        &physical.funding_authentication_before_id().bytes(),
+        &physical.funding_close_receipt_id().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesPhysicalRetirementPostwriteV5 {
+        id,
+        physical,
+        physical_receipt_transcript_id,
+        market_instance_id,
+        generation: source_facts.generation,
+        root_binding_id,
+        root_account: *root_account.key,
+        root_data_id,
+        root_authentication_id,
+        root_semantic_id,
+        root_transition_sequence,
+        link_account: *link_account.key,
+        link_series_plan_id: series_plan_id,
+        link_ordinal: ordinal,
+        link_data_id,
+        link_authentication_id,
+        link_semantic_id,
+        link_transition_sequence,
+    })
+}
+
+/// Sole whole-Series Product terminal authority.  General action47 consumes
+/// this value directly; neither the physical Funding receipt nor the terminal
+/// RootV3 projection is detachable.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesRetirementV5 {
+    id: ContentId,
+    physical: AuthenticatedProductSeriesPhysicalRetirementPostwriteV5,
+    failure: AuthenticatedProductFailurePhysicalTerminalV5,
+    market_terminal_projection: clutch_product_series::MarketInstanceTerminalProjectionV3,
+    market_terminal_projection_id: ContentId,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+}
+
+impl AuthenticatedProductSeriesRetirementV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.physical.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.physical.generation }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.physical.root_account }
+    pub(crate) const fn root_binding_id(&self) -> ContentId {
+        self.physical.root_binding_id
+    }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.physical.link_account }
+    pub(crate) const fn link_series_plan_id(&self) -> SeriesPlanV5Id {
+        self.physical.link_series_plan_id
+    }
+    pub(crate) const fn link_ordinal(&self) -> u32 { self.physical.link_ordinal }
+    pub(crate) const fn link_authentication_id(&self) -> ContentId {
+        self.physical.link_authentication_id
+    }
+    pub(crate) const fn link_semantic_id(&self) -> SeriesMarketLinkV3Id {
+        self.physical.link_semantic_id
+    }
+    pub(crate) const fn physical_retirement_id(&self) -> ContentId {
+        self.physical.physical.id()
+    }
+    pub(crate) const fn physical_funding_close_receipt_id(&self) -> ContentId {
+        self.physical.physical.funding_close_receipt_id()
+    }
+    pub(crate) const fn market_terminal_projection_id(&self) -> ContentId {
+        self.market_terminal_projection_id
+    }
+    pub(crate) const fn market_terminal_projection(
+        &self,
+    ) -> clutch_product_series::MarketInstanceTerminalProjectionV3 {
+        self.market_terminal_projection
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn retire_current_product_series_v5<'a, 'failure>(
+    program_id: &Pubkey,
+    terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    failure_terminal: AuthenticatedFailureMarketPhysicalTerminalV3<'failure>,
+    root_account: &AccountInfo<'a>,
+    link_account: &AccountInfo<'a>,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    physical_accounts: &[AccountInfo<'a>],
+) -> Outcome<AuthenticatedProductSeriesRetirementV5> {
+    let physical = physically_retire_current_product_series_v5(
+        program_id,
+        terminal,
+        root_account,
+        link_account,
+        registry_account,
+        funding_account,
+        physical_accounts,
+    )?;
+    let failure = consume_failure_market_physical_terminal_v5(
+        program_id,
+        root_account,
+        failure_terminal,
+    )?;
+    let mut root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        physical.market_instance_id,
+        physical.generation,
+        true,
+        &mut root_value,
+    )?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        physical.link_series_plan_id,
+        physical.link_ordinal,
+        physical.market_instance_id,
+        physical.generation,
+        *root_account.key,
+        true,
+        &mut link_value,
+    )?;
+    require(
+        root.state().phase() == MarketLifecyclePhaseV3::Retiring
+            && root.binding_id() == physical.root_binding_id
+            && root.account() == failure.root_account()
+            && root.authentication_id() == failure.root_authentication_after_id()
+            && root.semantic_id() == failure.root_semantic_after_id()
+            && root.state().transition_sequence() == failure.root_transition_sequence_after()
+            && root
+                .state()
+                .shared_core_terminal_receipts()
+                .iter()
+                .all(|receipt| !receipt.is_zero())
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Retired
+            && link.data_id() == physical.link_data_id
+            && link.authentication_id() == physical.link_authentication_id
+            && link.semantic_id() == physical.link_semantic_id
+            && link.state().transition_sequence() == physical.link_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let root_data_before_id = root.data_id();
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    let mut root_next = Box::new(clutch_product_series::MarketLifecycleRootV3::decode_buffer());
+    let market_terminal_projection = root
+        .state()
+        .finalize_terminal_into(&mut root_next)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(link);
+    drop(root);
+    write_market_lifecycle_root_v3(root_account, &root_value, &root_next)?;
+    let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        physical.market_instance_id,
+        physical.generation,
+        true,
+        &mut reopened_value,
+    )?;
+    let market_terminal_projection_id = market_terminal_projection.id();
+    require(
+        reopened.state() == root_next.as_ref()
+            && reopened.state().phase() == MarketLifecyclePhaseV3::Terminal
+            && reopened.state().terminal_projection().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })? == market_terminal_projection
+            && market_terminal_projection.root_semantic_id() == reopened.semantic_id()
+            && market_terminal_projection.final_transition_sequence()
+                == reopened.state().transition_sequence(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_MARKET_TERMINAL_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &physical.id.bytes(),
+        &physical.physical.id().bytes(),
+        &physical.physical_receipt_transcript_id.bytes(),
+        &failure.id().bytes(),
+        &failure.shared_core_projection_id().bytes(),
+        root_account.key.as_ref(),
+        &physical.root_binding_id.bytes(),
+        &root_data_before_id.bytes(),
+        &reopened.data_id().bytes(),
+        &root_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &reopened.state().transition_sequence().to_le_bytes(),
+        &market_terminal_projection_id.bytes(),
+        link_account.key.as_ref(),
+        &physical.link_data_id.bytes(),
+        &physical.link_authentication_id.bytes(),
+        &physical.link_semantic_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesRetirementV5 {
+        id,
+        physical,
+        failure,
+        market_terminal_projection,
+        market_terminal_projection_id,
+        root_data_before_id,
+        root_data_after_id: reopened.data_id(),
+        root_authentication_before_id,
+        root_authentication_after_id: reopened.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: reopened.state().transition_sequence(),
     })
 }
 

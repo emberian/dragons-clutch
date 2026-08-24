@@ -1,5 +1,6 @@
 //! Canonical payer-envelope and recipient allocation.
 
+use clutch_batch::exact_integer::exact_mul_div_rem;
 use clutch_batch_policy_identity::revenue_policy_v1::{RevenuePolicyV1, StandingMakerV1};
 use clutch_batch_policy_identity::revenue_policy_v2::{
     MakerWeightAuthorityV2, RevenuePolicyV2,
@@ -251,6 +252,99 @@ pub struct RecipientAllocationV1 {
     collected_fee_atoms: u64,
 }
 
+/// Compact constructor-authenticated header for the current streaming
+/// recipient encoder. Maker rows are supplied only by the private traversal
+/// adapter and are checked again for canonical order and conservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertifiedRecipientAllocationHeaderV2 {
+    fee_record: Id,
+    maker_len: u8,
+    maker_rebate_total: u64,
+    executor_atoms: u64,
+    treasury_atoms: u64,
+    collected_fee_atoms: u64,
+    owner_fee_book_data_id: Id,
+    owner_order_set_digest: Id,
+    owner_count: u16,
+}
+
+impl CertifiedRecipientAllocationHeaderV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit(
+        selected: &SelectedCompositeFeeV2,
+        policy: &RevenuePolicyV2,
+        collected_fee_atoms: u64,
+        maker_len: u8,
+        owner_fee_book_data_id: Id,
+        owner_order_set_digest: Id,
+        owner_count: u16,
+    ) -> Result<Self> {
+        selected.binds_revenue_policy(policy)?;
+        live(owner_fee_book_data_id)?;
+        live(owner_order_set_digest)?;
+        if collected_fee_atoms == 0
+            || usize::from(maker_len) > MAX_FEE_ROWS_V1
+            || owner_count == 0
+            || usize::from(owner_count) > MAX_FEE_ROWS_V1
+            || u16::from(maker_len) > owner_count
+        {
+            return Err(Error::InvalidWidth);
+        }
+        let split = policy
+            .allocate_split(collected_fee_atoms)
+            .map_err(|_| Error::InvalidPolicy)?;
+        if split.executor_atoms != 0
+            || (split.maker_rebate_atoms != 0 && maker_len == 0)
+        {
+            return Err(Error::EmptyAllocation);
+        }
+        Ok(Self {
+            fee_record: selected.fee_record(),
+            maker_len,
+            maker_rebate_total: split.maker_rebate_atoms,
+            executor_atoms: split.executor_atoms,
+            treasury_atoms: split.treasury_atoms,
+            collected_fee_atoms,
+            owner_fee_book_data_id,
+            owner_order_set_digest,
+            owner_count,
+        })
+    }
+
+    pub const fn fee_record(&self) -> Id { self.fee_record }
+    pub const fn maker_len(&self) -> u8 { self.maker_len }
+    pub const fn maker_rebate_total(&self) -> u64 { self.maker_rebate_total }
+    pub const fn executor_atoms(&self) -> u64 { self.executor_atoms }
+    pub const fn treasury_atoms(&self) -> u64 { self.treasury_atoms }
+    pub const fn collected_fee_atoms(&self) -> u64 { self.collected_fee_atoms }
+    pub const fn owner_fee_book_data_id(&self) -> Id { self.owner_fee_book_data_id }
+    pub const fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
+    pub const fn owner_count(&self) -> u16 { self.owner_count }
+}
+
+/// One Hamilton base quotient/remainder over full u128 certified numerators.
+/// This is the only allocation division boundary before residual atoms are
+/// assigned by descending remainder and ascending Position identity.
+pub fn certified_maker_floor_v2(
+    maker_pool_atoms: u64,
+    owner_numerator: u128,
+    total_numerator: u128,
+) -> Result<(u64, u128)> {
+    if owner_numerator == 0 || total_numerator == 0 || owner_numerator > total_numerator {
+        return Err(Error::EmptyAllocation);
+    }
+    let (quotient, remainder) = exact_mul_div_rem(
+        u128::from(maker_pool_atoms),
+        owner_numerator,
+        total_numerator,
+    )
+    .map_err(|_| Error::ArithmeticOverflow)?;
+    Ok((
+        u64::try_from(quotient).map_err(|_| Error::AmountOutOfRange)?,
+        remainder,
+    ))
+}
+
 impl RecipientAllocationV1 {
     pub const fn fee_record(&self) -> Id {
         self.fee_record
@@ -336,6 +430,39 @@ impl RecipientAllocationV1 {
             treasury_atoms,
             collected_fee_atoms,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn certified_floor_is_exact_at_u128_boundary() {
+        assert_eq!(
+            certified_maker_floor_v2(u64::MAX, u128::MAX, u128::MAX),
+            Ok((u64::MAX, 0))
+        );
+        assert_eq!(
+            certified_maker_floor_v2(u64::MAX, u128::MAX - 1, u128::MAX),
+            Ok((u64::MAX - 1, u128::MAX - u128::from(u64::MAX)))
+        );
+    }
+
+    #[test]
+    fn certified_floor_refuses_uncertified_weight_domain() {
+        assert_eq!(
+            certified_maker_floor_v2(10, 0, 10),
+            Err(Error::EmptyAllocation)
+        );
+        assert_eq!(
+            certified_maker_floor_v2(10, 11, 10),
+            Err(Error::EmptyAllocation)
+        );
+        assert_eq!(
+            certified_maker_floor_v2(10, 1, 0),
+            Err(Error::EmptyAllocation)
+        );
     }
 }
 

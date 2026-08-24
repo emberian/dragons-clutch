@@ -126,6 +126,29 @@ pub const GENERAL_CLEARING_FEE_SHAPE_V1: FrozenPolicyV1 = FrozenPolicyV1 {
     },
 };
 
+/// Current fee-bearing General profile for successor RevenuePolicyV2 Realms.
+///
+/// This is a fresh registered policy body, not a reinterpretation of the
+/// historical zero-rate fee shape. Every non-fee selector remains identical
+/// to [`GENERAL_CLEARING_POLICY_V1`]; its exact 40/10 basis-point rates are
+/// jointly selected by the current immutable RevenuePolicyV2 profile.
+pub const GENERAL_CLEARING_SUCCESSOR_DEV_POLICY_V2: FrozenPolicyV1 = FrozenPolicyV1 {
+    allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
+    self_cross: SelfCrossPolicyV1::RefuseOverlap,
+    aon: AonPolicyV1::RefuseAdmission,
+    rounding: RoundingBoundaryV1::TerminalOwnerFloor,
+    residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
+    transfer_phase: TransferPhaseV1::ActiveOrResolved,
+    portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
+    pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
+    dust: DustPolicy::AssignCanonical,
+    score: ScorePolicyV1::LexicographicDispersionV1,
+    fee_base: FeeBaseV1::CompositeDispersionFloor {
+        dispersion_bps: 40,
+        floor_range_bps: 10,
+    },
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +543,29 @@ mod tests {
             batch_policy_digest(&policy).unwrap(),
             batch_policy_digest(&DIRECT_POLICY_V1).unwrap()
         );
+    }
+
+    #[test]
+    fn successor_dev_fee_policy_is_fresh_and_exactly_rated() {
+        let policy = GENERAL_CLEARING_SUCCESSOR_DEV_POLICY_V2;
+        assert_eq!(
+            policy.fee_base,
+            FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 40,
+                floor_range_bps: 10,
+            }
+        );
+        assert_eq!(policy.validate(), Ok(()));
+        assert_ne!(
+            batch_policy_digest(&policy).unwrap(),
+            batch_policy_digest(&GENERAL_CLEARING_POLICY_V1).unwrap()
+        );
+        assert_ne!(
+            batch_policy_digest(&policy).unwrap(),
+            batch_policy_digest(&GENERAL_CLEARING_FEE_SHAPE_V1).unwrap()
+        );
+        let bytes = canonical_batch_policy_bytes(&policy).unwrap();
+        assert_eq!(decode_batch_policy(&bytes), Ok(policy));
     }
 
     /// The domain validator admits the fee shape and every rate pair inside

@@ -17,8 +17,8 @@ use crate::{
     DirectScheduleV1, DirectTerminalReasonV1, MAX_DIRECT_RESERVATIONS_V1,
 };
 
-const PRODUCT_AUTHORITY_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/direct/current-product-authority/v3\0";
+const PRODUCT_AUTHORITY_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/direct/current-product-authority/v4\0";
 const GENERAL_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/current-general-authority/v2\0";
 pub(crate) const BINDING_DOMAIN_V3: &[u8] = b"dragons-clutch/direct/market-binding/v3\0";
@@ -28,7 +28,7 @@ const DIRECT_EPOCH_SEMANTICS_DOMAIN_V3: &[u8] =
 
 /// Exact current Product authority retained by Direct b1/v3.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectCurrentProductAuthorityV3 {
+pub struct DirectCurrentProductAuthorityV4 {
     pub product_root_account: [u8; 32],
     /// Exact immutable `MarketLifecycleBindingV3::id()` authenticated from
     /// Product RootV3. Direct does not duplicate that large binding.
@@ -60,12 +60,15 @@ pub struct DirectCurrentProductAuthorityV3 {
     pub product_preauthorization_id: [u8; 32],
     pub product_direct_global_liveness_account: [u8; 32],
     pub product_direct_global_liveness_binding_id: [u8; 32],
-    pub product_direct_global_liveness_activation_id: [u8; 32],
+    /// Hostile account authentication after the unique Candidate allocation.
+    /// Unlike the historical activation receipt, this identity is exactly
+    /// reconstructable from the live `0xba/v2` account through actions 2..12.
+    pub product_direct_global_liveness_allocation_authentication_id: [u8; 32],
     pub activated_product_market_binding_id: [u8; 32],
     pub direct_work_quote_id: [u8; 32],
 }
 
-impl DirectCurrentProductAuthorityV3 {
+impl DirectCurrentProductAuthorityV4 {
     /// Refuse zero identities, generation zero, and cross-role account aliases.
     pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
         if self.product_generation == 0 {
@@ -88,7 +91,7 @@ impl DirectCurrentProductAuthorityV3 {
     ) -> Result<[u8; 32], DirectMarketErrorV1> {
         self.validate()?;
         let id = backend.sha256_parts(&[
-            PRODUCT_AUTHORITY_DOMAIN_V3,
+            PRODUCT_AUTHORITY_DOMAIN_V4,
             &self.product_root_account,
             &self.product_market_binding_v3_id,
             &self.product_generation.to_le_bytes(),
@@ -112,7 +115,7 @@ impl DirectCurrentProductAuthorityV3 {
             &self.product_preauthorization_id,
             &self.product_direct_global_liveness_account,
             &self.product_direct_global_liveness_binding_id,
-            &self.product_direct_global_liveness_activation_id,
+            &self.product_direct_global_liveness_allocation_authentication_id,
             &self.activated_product_market_binding_id,
             &self.direct_work_quote_id,
         ]);
@@ -142,7 +145,7 @@ impl DirectCurrentProductAuthorityV3 {
             self.product_preauthorization_id,
             self.product_direct_global_liveness_account,
             self.product_direct_global_liveness_binding_id,
-            self.product_direct_global_liveness_activation_id,
+            self.product_direct_global_liveness_allocation_authentication_id,
             self.activated_product_market_binding_id,
             self.direct_work_quote_id,
         ]
@@ -242,7 +245,7 @@ pub struct DirectMarketBindingV3 {
     pub candidate_liveness_policy_id: [u8; 32],
     pub candidate_liveness: DirectCandidateLivenessBindingV1,
     pub direct_schedule_policy_id: [u8; 32],
-    pub product: DirectCurrentProductAuthorityV3,
+    pub product: DirectCurrentProductAuthorityV4,
     pub general: DirectCurrentGeneralAuthorityV2,
     pub direct_root_account: [u8; 32],
     pub action_replay_account: [u8; 32],
