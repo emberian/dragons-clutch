@@ -152,6 +152,11 @@ pub mod general_clearing_v1;
 /// the 60/0/40 + AllRestingMakers vector, the structural treasury deferral,
 /// the split arithmetic, and the digest machinery the per-Realm record pins.
 pub mod revenue_policy_v1;
+/// The fresh immutable fee-bearing RevenuePolicyV2 family.  It binds the
+/// composite rates, certified owner-netted maker-weight authority, split, and
+/// Realm-chosen treasury owner in one canonical identity; V1 is not re-read as
+/// this schema.
+pub mod revenue_policy_v2;
 
 /// Exact size of a canonical batch-policy artifact.
 pub const BATCH_POLICY_BYTES: usize = 64;

@@ -209,7 +209,7 @@ pub struct MarketLifecycleBindingV3 {
 
 impl MarketLifecycleBindingV3 {
     /// Validate all immutable identities and finite bounds.
-    pub fn validate(self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.market_instance_id.validate()?;
         self.foundation_account_graph_id.validate()?;
         self.foundation_schedule_id.validate()?;
@@ -232,7 +232,7 @@ impl MarketLifecycleBindingV3 {
     }
 
     /// Domain-separated identity of the complete binding.
-    pub fn id(self) -> Result<ContentId> {
+    pub fn id(&self) -> Result<ContentId> {
         self.validate()?;
         let mut body = [0u8; 1_183];
         let mut at = 0usize;
@@ -254,7 +254,7 @@ impl MarketLifecycleBindingV3 {
         Ok(content_id(MARKET_LIFECYCLE_BINDING_DOMAIN_V3, &body))
     }
 
-    fn identity_ids(self) -> [ContentId; MARKET_BINDING_ID_COUNT_V3] {
+    fn identity_ids(&self) -> [ContentId; MARKET_BINDING_ID_COUNT_V3] {
         [
             self.market_instance_id.content_id(),
             self.product_template_id,
@@ -675,7 +675,7 @@ pub struct SeriesLinkObligationConfigurationV3 {
 
 impl SeriesLinkObligationConfigurationV3 {
     /// Validate that every obligation begins in a nonterminal, explicit state.
-    pub fn validate(self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.capability_profile_id.validate()?;
         self.attachment_plan_id.validate()?;
         if self.capability_profile_id == self.attachment_plan_id
@@ -804,7 +804,7 @@ pub struct SeriesMarketLinkBindingV3 {
 
 impl SeriesMarketLinkBindingV3 {
     /// Validate the complete link without turning it into authority.
-    pub fn validate(self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         self.series_plan_id.validate()?;
         self.market_instance_id.validate()?;
         self.funding_terms_id.validate()?;
@@ -827,7 +827,7 @@ impl SeriesMarketLinkBindingV3 {
     }
 
     /// Immutable link-binding identity.
-    pub fn id(self) -> Result<ContentId> {
+    pub fn id(&self) -> Result<ContentId> {
         self.validate()?;
         let mut body = [0u8; 829];
         let mut at = 0usize;
@@ -850,7 +850,7 @@ impl SeriesMarketLinkBindingV3 {
         Ok(content_id(SERIES_MARKET_LINK_DOMAIN_V3, &body))
     }
 
-    fn identity_ids(self) -> [ContentId; LINK_BINDING_ID_COUNT_V3] {
+    fn identity_ids(&self) -> [ContentId; LINK_BINDING_ID_COUNT_V3] {
         [
             self.series_plan_id.content_id(),
             self.market_instance_id.content_id(),
@@ -1727,7 +1727,7 @@ impl MarketLifecycleRootV3 {
         Ok(())
     }
 
-    fn validate(self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         self.binding.validate()?;
         self.capital.founder_link_id.validate()?;
         for id in [
@@ -2709,13 +2709,19 @@ impl SeriesMarketLinkV3 {
     }
 
     /// Emit the exact link retirement projection consumed by the shared root.
-    pub fn retirement_projection(self) -> Result<SeriesMarketLinkRetirementProjectionV3> {
+    pub fn retirement_projection(
+        self,
+        source_family_terminal_receipt_id: ContentId,
+    ) -> Result<SeriesMarketLinkRetirementProjectionV3> {
         self.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV3::Retiring {
+        source_family_terminal_receipt_id.validate()?;
+        if self.phase != SeriesMarketLinkPhaseV3::Retiring
+            || source_family_terminal_receipt_id == self.market_admission_receipt_id
+        {
             return Err(Error::WorkStateMismatch);
         }
         let semantic_id = self.semantic_id()?;
-        let mut body = [0u8; 148];
+        let mut body = [0u8; 180];
         body[..32].copy_from_slice(&semantic_id.bytes());
         body[32..64].copy_from_slice(&self.binding.market_instance_id.bytes());
         body[64..96].copy_from_slice(&self.binding.series_plan_id.bytes());
@@ -2723,6 +2729,7 @@ impl SeriesMarketLinkV3 {
         body[100..108].copy_from_slice(&self.binding.generation.to_le_bytes());
         body[108..116].copy_from_slice(&self.transition_sequence.to_le_bytes());
         body[116..148].copy_from_slice(&self.market_admission_receipt_id.bytes());
+        body[148..180].copy_from_slice(&source_family_terminal_receipt_id.bytes());
         let id = content_id(b"dragons-clutch/series-market-link-retirement/v3", &body);
         Ok(SeriesMarketLinkRetirementProjectionV3 {
             id,
@@ -2733,6 +2740,7 @@ impl SeriesMarketLinkV3 {
             generation: self.binding.generation,
             transition_sequence: self.transition_sequence,
             market_admission_receipt_id: self.market_admission_receipt_id,
+            source_family_terminal_receipt_id,
         })
     }
 
@@ -2753,6 +2761,9 @@ impl SeriesMarketLinkV3 {
         if self.phase != SeriesMarketLinkPhaseV3::Retiring
             || projection.link_semantic_id != self.semantic_id()?
             || projection.market_admission_receipt_id != self.market_admission_receipt_id
+            || projection.source_family_terminal_receipt_id == ContentId::ZERO
+            || projection.source_family_terminal_receipt_id
+                == projection.market_admission_receipt_id
         {
             return Err(Error::UnauthenticatedAuthority);
         }
@@ -2795,65 +2806,65 @@ impl SeriesMarketLinkV3 {
         &self.binding
     }
     /// Link phase.
-    pub const fn phase(self) -> SeriesMarketLinkPhaseV3 {
+    pub const fn phase(&self) -> SeriesMarketLinkPhaseV3 {
         self.phase
     }
     /// Active Failure sessions pinning Source state.
-    pub const fn active_failure_sessions(self) -> u32 {
+    pub const fn active_failure_sessions(&self) -> u32 {
         self.active_failure_sessions
     }
     /// Monotone number of Failure sessions ever pinned to this link.
-    pub const fn failure_sessions_started(self) -> u32 {
+    pub const fn failure_sessions_started(&self) -> u32 {
         self.failure_sessions_started
     }
     /// Persistent transcript proving whether any Failure session was ever pinned.
-    pub const fn failure_session_transcript_id(self) -> ContentId {
+    pub const fn failure_session_transcript_id(&self) -> ContentId {
         self.failure_session_transcript_id
     }
     /// Exhaustive current state of one attachment obligation.
     pub const fn obligation_status(
-        self,
+        &self,
         obligation: SeriesLinkObligationV3,
     ) -> SeriesLinkObligationStatusV3 {
         self.obligation_statuses[obligation.index()]
     }
     /// Exact owner admission transcript for one live/terminal obligation.
     pub const fn obligation_admission_receipt_id(
-        self,
+        &self,
         obligation: SeriesLinkObligationV3,
     ) -> ContentId {
         self.admission_receipts[obligation.index()]
     }
     /// Exact Product terminal projection receipt for a consumed obligation.
     pub const fn obligation_terminal_receipt_id(
-        self,
+        &self,
         obligation: SeriesLinkObligationV3,
     ) -> ContentId {
         self.terminal_receipts[obligation.index()]
     }
     /// Link transition sequence.
-    pub const fn transition_sequence(self) -> u64 {
+    pub const fn transition_sequence(&self) -> u64 {
         self.transition_sequence
     }
     /// Exact root admission sequence.
-    pub const fn market_admission_sequence(self) -> u64 {
+    pub const fn market_admission_sequence(&self) -> u64 {
         self.market_admission_sequence
     }
     /// Exact root admission/abort receipt.
-    pub const fn market_admission_receipt_id(self) -> ContentId {
+    pub const fn market_admission_receipt_id(&self) -> ContentId {
         self.market_admission_receipt_id
     }
     /// Refundable link rent principal.
-    pub const fn rent_principal_lamports(self) -> u64 {
+    pub const fn rent_principal_lamports(&self) -> u64 {
         self.rent_principal_lamports
     }
     /// Current donation residue.
-    pub const fn current_donation_lamports(self) -> u64 {
+    pub const fn current_donation_lamports(&self) -> u64 {
         self.current_donation_lamports
     }
 
     /// Semantic state identity.
-    pub fn semantic_id(self) -> Result<SeriesMarketLinkV3Id> {
+    pub fn semantic_id(&self) -> Result<SeriesMarketLinkV3Id> {
         let mut body = [0u8; SERIES_MARKET_LINK_BYTES_V3];
         self.encode_into(&mut body)?;
         Ok(SeriesMarketLinkV3Id::from_bytes(
@@ -2861,7 +2872,7 @@ impl SeriesMarketLinkV3 {
         ))
     }
 
-    fn validate(self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         self.binding.validate()?;
         if self.rent_principal_lamports == 0
             || self.current_donation_lamports < self.donation_floor_lamports
@@ -2950,6 +2961,7 @@ pub struct SeriesMarketLinkRetirementProjectionV3 {
     generation: u64,
     transition_sequence: u64,
     market_admission_receipt_id: ContentId,
+    source_family_terminal_receipt_id: ContentId,
 }
 
 impl SeriesMarketLinkRetirementProjectionV3 {
@@ -2984,6 +2996,10 @@ impl SeriesMarketLinkRetirementProjectionV3 {
     /// Exact original root admission receipt.
     pub const fn market_admission_receipt_id(self) -> ContentId {
         self.market_admission_receipt_id
+    }
+    /// Exact move-only Source family terminal consumed before Product writes.
+    pub const fn source_family_terminal_receipt_id(self) -> ContentId {
+        self.source_family_terminal_receipt_id
     }
 }
 

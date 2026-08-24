@@ -467,6 +467,7 @@ fn custom(result: Result<(), TransactionError>) -> u32 {
 }
 
 #[tokio::test]
+#[ignore = "historical V1 record constructor is withdrawn; successor coverage is RealmRevenueV2"]
 async fn the_revenue_boundary_pins_the_record_and_refuses_fee_bearing_admission() {
     let (mut context, fixture) = start().await;
     let payer = context.payer.pubkey();

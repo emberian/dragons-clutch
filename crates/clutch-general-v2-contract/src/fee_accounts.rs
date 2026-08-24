@@ -11,14 +11,17 @@
 
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
+use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_fee_runtime_contract::allocation::{
     FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
 };
 use clutch_fee_runtime_contract::codec::{
-    decode_fee_record_v1, decode_owner_fee_carry_v1, decode_payer_allocation_v1,
+    decode_fee_record_v1, decode_fee_record_v2, decode_owner_fee_carry_v1,
+    decode_payer_allocation_v1,
     decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
-    decode_treasury_ledger_v1, encode_fee_record_v1, encode_owner_fee_carry_v1,
+    decode_treasury_ledger_v1, encode_fee_record_v1, encode_fee_record_v2,
+    encode_owner_fee_carry_v1,
     encode_certified_recipient_allocation_v2, encode_payer_allocation_v1,
     encode_recipient_allocation_v1, encode_treasury_ledger_v1,
     CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES,
@@ -28,6 +31,7 @@ use clutch_fee_runtime_contract::codec::{
 };
 use clutch_fee_runtime_contract::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
+    SelectedCompositeFeeV2,
 };
 use clutch_fee_runtime_contract::projection::CertifiedRecipientAllocationV2;
 pub use clutch_fee_runtime_contract::terminal::{
@@ -54,8 +58,11 @@ use crate::{
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
     RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
-    SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
-    TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2, SELECTED_FEE_RECORD_ACCOUNT_TAG,
+    SELECTED_FEE_RECORD_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+    TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_BYTES_V2,
+    TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
+    TREASURY_LEDGER_ACCOUNT_VERSION_V2,
 };
 
 const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 2;
@@ -63,6 +70,9 @@ const DELETABLE_RENT_OWNER_BYTES: usize = 32 + 8 + 8;
 /// Exact key-bound semantic identity for one selected fee-record outer body.
 pub const SELECTED_FEE_RECORD_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/selected-fee-record-data-id/v1\0";
+/// Exact key-bound data identity for the current V2 selected-fee outer.
+pub const SELECTED_FEE_RECORD_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/selected-fee-record-data-id/v2\0";
 
 /// Convert exact persisted bytes into the fee semantic owner's identity type.
 pub const fn fee_runtime_id_from_bytes(bytes: [u8; 32]) -> FeeRuntimeId {
@@ -224,6 +234,63 @@ impl SelectedFeeRecordV1AccountV1 {
     }
 }
 
+/// Sole future rent-owned selected composite-fee record (`0x82/v2`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedFeeRecordV2AccountV1 {
+    pub semantic: SelectedCompositeFeeV2,
+    pub rent: DeletableRentOwnerV1,
+    pub stored_bump: u8,
+}
+
+impl SelectedFeeRecordV2AccountV1 {
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(encode_fee_record_v2(&self.semantic))?;
+        encode_rent_owned_outer(
+            SELECTED_FEE_RECORD_ACCOUNT_TAG,
+            SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    pub fn decode(
+        input: &[u8],
+        batch: &FrozenPolicyV1,
+        revenue: &RevenuePolicyV2,
+    ) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_RECORD_ACCOUNT_V1_BYTES>(
+                SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+                input,
+            )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_fee_record_v2(&body, batch, revenue))?,
+            rent,
+            stored_bump,
+        })
+    }
+
+    pub fn data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        account_id: Id32,
+    ) -> Result<Id32, CodecError> {
+        if account_id.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        let mut bytes = [0u8; SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2];
+        self.encode(&mut bytes)?;
+        Id32::new(backend.sha256(&[
+            SELECTED_FEE_RECORD_DATA_ID_DOMAIN_V2,
+            &account_id.bytes(),
+            &bytes,
+        ]))
+    }
+}
+
 /// One owner-scoped fee carry outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerFeeCarryV1AccountV1 {
@@ -291,7 +358,7 @@ impl OwnerFeeCarryV3AccountV1 {
     }
 
     /// Decode hostile bytes only against the authenticated selected record.
-    pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV1) -> Result<Self, CodecError> {
+    pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV2) -> Result<Self, CodecError> {
         let (body, rent, stored_bump) = decode_rent_owned_outer(
             OWNER_FEE_CARRY_ACCOUNT_TAG,
             OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
@@ -659,8 +726,48 @@ impl TreasuryLedgerV1AccountV1 {
     }
 }
 
+/// Sole future rent-owned treasury ledger (`0x86/v2`).
+#[derive(Debug, Eq, PartialEq)]
+pub struct TreasuryLedgerV2AccountV1 {
+    pub semantic: TreasuryLedgerV1,
+    pub rent: DeletableRentOwnerV1,
+    pub stored_bump: u8,
+}
+
+impl TreasuryLedgerV2AccountV1 {
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(encode_treasury_ledger_v1(&self.semantic))?;
+        encode_rent_owned_outer(
+            TREASURY_LEDGER_ACCOUNT_TAG,
+            TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV2) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<TREASURY_LEDGER_ACCOUNT_V1_BYTES>(
+                TREASURY_LEDGER_ACCOUNT_TAG,
+                TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+                input,
+            )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_treasury_ledger_v1(&body, selected))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
 const _: () = assert!(
     SELECTED_FEE_RECORD_ACCOUNT_BYTES == FEE_RECORD_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2
+        == FEE_RECORD_ACCOUNT_V1_BYTES + DELETABLE_RENT_OWNER_BYTES + OUTER_FEE_ACCOUNT_BYTES
 );
 const _: () = assert!(
     OWNER_FEE_CARRY_ACCOUNT_BYTES == OWNER_FEE_CARRY_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
@@ -702,6 +809,10 @@ const _: () = assert!(
 );
 const _: () = assert!(
     TREASURY_LEDGER_ACCOUNT_BYTES == TREASURY_LEDGER_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    TREASURY_LEDGER_ACCOUNT_BYTES_V2
+        == TREASURY_LEDGER_ACCOUNT_V1_BYTES + DELETABLE_RENT_OWNER_BYTES + OUTER_FEE_ACCOUNT_BYTES
 );
 
 #[cfg(test)]

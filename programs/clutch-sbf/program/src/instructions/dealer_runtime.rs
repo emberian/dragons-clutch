@@ -1899,11 +1899,11 @@ const RETIRE_POSITION_REPLAY: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
 ];
 
-/// Current terminal cut with a live facility-owned Fractional a6/v2.
+/// Dealer-local terminal cut with a live facility-owned Fractional a6/v2.
 ///
-/// The first 44 roles are the exact Dealer terminal Replay, Product LinkV2,
-/// and Realm-selected Position retirement graph. Fractional exclusively owns
-/// the final four value roles and returns a non-Copy receipt to this outer.
+/// No Product Root, Link, receipt, Registry, compiler, or attachment account
+/// participates. Product RootV3 supplies and authenticates its own accounts in
+/// the outer that consumes Dealer's move-only family receipt.
 const RETIRE_ACTIVE_FACILITY_CREDIT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1930,15 +1930,6 @@ const RETIRE_ACTIVE_FACILITY_CREDIT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, true),
-    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::SeriesRegistry, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::CurrentProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
-    meta(DealerMetaRoleV1::CurrentProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
-    meta(DealerMetaRoleV1::RegistryRelease, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::CapabilityProfile, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, true),
-    meta(DealerMetaRoleV1::CompilerBundle, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::Attachment, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::Realm, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::CollateralProfile, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::CollateralPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1974,11 +1965,6 @@ const RETIRE_UNUSED_FUTURE_CREDIT: &[DealerMetaSpecV1] = &[
     RETIRE_ACTIVE_FACILITY_CREDIT[28], RETIRE_ACTIVE_FACILITY_CREDIT[29],
     RETIRE_ACTIVE_FACILITY_CREDIT[30], RETIRE_ACTIVE_FACILITY_CREDIT[31],
     RETIRE_ACTIVE_FACILITY_CREDIT[32], RETIRE_ACTIVE_FACILITY_CREDIT[33],
-    RETIRE_ACTIVE_FACILITY_CREDIT[34], RETIRE_ACTIVE_FACILITY_CREDIT[35],
-    RETIRE_ACTIVE_FACILITY_CREDIT[36], RETIRE_ACTIVE_FACILITY_CREDIT[37],
-    RETIRE_ACTIVE_FACILITY_CREDIT[38], RETIRE_ACTIVE_FACILITY_CREDIT[39],
-    RETIRE_ACTIVE_FACILITY_CREDIT[40], RETIRE_ACTIVE_FACILITY_CREDIT[41],
-    RETIRE_ACTIVE_FACILITY_CREDIT[42],
     meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::FutureCreditFunding, DealerMetaOwnerV1::SelfProgram, false, true),
 ];

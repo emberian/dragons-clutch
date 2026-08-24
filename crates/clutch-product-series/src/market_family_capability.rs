@@ -9,7 +9,8 @@
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, ContentId, Error, FixedCodec, MarketFamilyV1, RegistryCapabilityProfileV4Id,
-    Result, SeriesLinkObligationConfigurationV2, SeriesLinkObligationStatusV2,
+    Result, SeriesLinkObligationConfigurationV2, SeriesLinkObligationConfigurationV3,
+    SeriesLinkObligationStatusV2, SeriesLinkObligationStatusV3,
     MARKET_FAMILY_COUNT_V1,
 };
 
@@ -95,6 +96,39 @@ impl MarketFamilyCapabilityPolicyV1 {
             disabled
         };
         let value = SeriesLinkObligationConfigurationV2 {
+            capability_profile_id: self.registry_capability_profile_id.content_id(),
+            attachment_plan_id,
+            initial_statuses: [dealer, structured, dealer, structured],
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Derive the exact RootV3/LinkV3 obligation configuration.
+    ///
+    /// This is the current counterpart of [`Self::obligation_configuration`];
+    /// it preserves the same immutable Dealer/Liquidity and
+    /// Structured/Wrapper ownership mapping without reinterpreting the V2
+    /// configuration bytes.
+    pub fn obligation_configuration_v3(
+        &self,
+        attachment_plan_id: ContentId,
+    ) -> Result<SeriesLinkObligationConfigurationV3> {
+        self.validate()?;
+        attachment_plan_id.validate()?;
+        let enabled = SeriesLinkObligationStatusV3::EnabledNeverFounded;
+        let disabled = SeriesLinkObligationStatusV3::CapabilityDisabled;
+        let dealer = if self.is_enabled(MarketFamilyV1::Dealer) {
+            enabled
+        } else {
+            disabled
+        };
+        let structured = if self.is_enabled(MarketFamilyV1::Structured) {
+            enabled
+        } else {
+            disabled
+        };
+        let value = SeriesLinkObligationConfigurationV3 {
             capability_profile_id: self.registry_capability_profile_id.content_id(),
             attachment_plan_id,
             initial_statuses: [dealer, structured, dealer, structured],

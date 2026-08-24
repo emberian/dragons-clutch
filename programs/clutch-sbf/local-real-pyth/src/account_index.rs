@@ -35,7 +35,8 @@ use clutch_fractional_redemption_runtime::{
 use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
-    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
+    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketBindingV3,
+    MarketRuntimeV3AccountV1,
     OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
     SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
     CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION, CANDIDATE_FEED_STAGE_ACCOUNT_TAG,
@@ -43,7 +44,8 @@ use clutch_general_v2_contract::{
     ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG,
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
-    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2, MARKET_RUNTIME_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2,
+    MARKET_BINDING_ACCOUNT_VERSION_V3, MARKET_RUNTIME_ACCOUNT_TAG,
     MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
     OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
     OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -75,6 +77,9 @@ use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
 };
+use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
+use clutch_direct_market_runtime::codec_v2::authenticate_direct_root_transition_body_v2;
+use clutch_direct_market_runtime::DirectHashBackendV1;
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FailureMarketRootAccountV2, FailureReplayTombstoneV1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
@@ -170,6 +175,7 @@ pub enum CanonicalAccountKind {
     GeneralEpoch,
     GeneralEconomicDomain,
     GeneralMarketBinding,
+    GeneralMarketBindingV3Historical,
     GeneralOrderPage,
     GeneralReservation,
     GeneralCandidateWindow,
@@ -233,6 +239,7 @@ pub enum CanonicalAccountKind {
     FailureIntervalConsensusWork,
     FailureIntervalConsensusReplay,
     DirectMarketRootV1,
+    DirectMarketRootV2,
     DirectSelectionV1,
     DirectActionReplayV1,
     DirectReservationV1,
@@ -253,6 +260,7 @@ impl CanonicalAccountKind {
             Self::GeneralEpoch => "general-epoch",
             Self::GeneralEconomicDomain => "general-economic-domain",
             Self::GeneralMarketBinding => "general-market-binding",
+            Self::GeneralMarketBindingV3Historical => "general-market-binding-v3-historical",
             Self::GeneralOrderPage => "general-order-page-v5",
             Self::GeneralReservation => "general-reservation-v9",
             Self::GeneralCandidateWindow => "general-candidate-window",
@@ -316,6 +324,7 @@ impl CanonicalAccountKind {
             Self::FailureIntervalConsensusWork => "failure-interval-consensus-work-v1",
             Self::FailureIntervalConsensusReplay => "failure-interval-consensus-replay-v1",
             Self::DirectMarketRootV1 => "direct-market-root-v1",
+            Self::DirectMarketRootV2 => "direct-market-root-v2",
             Self::DirectSelectionV1 => "direct-selection-v1",
             Self::DirectActionReplayV1 => "direct-action-replay-v1",
             Self::DirectReservationV1 => "direct-reservation-v1",
@@ -443,6 +452,27 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     let projection = if tag_version(
         data,
         registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG,
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
+    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2
+    {
+        let frame = DirectMarketRootAccountV2::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let root = authenticate_direct_root_transition_body_v2(
+            frame.semantic_body(),
+            &AccountIndexDirectShaV2,
+        )
+        .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Direct,
+            CanonicalAccountKind::DirectMarketRootV2,
+        );
+        projection.generation = Some(root.generation());
+        projection.primary_binding = Some(root.market_instance_id());
+        projection.secondary_binding = Some(root.direct_root_account());
+        projection
+    } else if tag_version(
+        data,
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG,
         registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION,
     ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES
     {
@@ -514,6 +544,17 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         return Ok(None);
     };
     Ok(Some(projection))
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AccountIndexDirectShaV2;
+
+impl DirectHashBackendV1 for AccountIndexDirectShaV2 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        for part in parts { hash.update(part); }
+        hash.finalize().into()
+    }
 }
 
 fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
@@ -699,6 +740,22 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         );
         projection.primary_binding = Some(value.base().market.bytes());
         projection.secondary_binding = Some(value.base().market_instance_v2_id.bytes());
+        projection
+    } else if tag_version(
+        data,
+        MARKET_BINDING_ACCOUNT_TAG,
+        MARKET_BINDING_ACCOUNT_VERSION_V3,
+    ) {
+        let value =
+            MarketBindingV3::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::contextual(
+            CanonicalFamily::General,
+            CanonicalAccountKind::GeneralMarketBindingV3Historical,
+            "historical Product/General binding; current Direct founding requires MarketBindingV4",
+        );
+        projection.generation = Some(value.product_generation());
+        projection.primary_binding = Some(value.base().base().market_instance_v2_id.bytes());
+        projection.secondary_binding = Some(value.product_market_root_account().bytes());
         projection
     } else if tag_version(
         data,
@@ -970,6 +1027,21 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
                 "advance-series-occurrence"
             },
         });
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+        registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+    ) {
+        let value = ProductDirectGlobalLivenessAccountV2::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductDirectGlobalLivenessV2,
+        );
+        projection.generation = Some(value.state.generation());
+        projection.primary_binding = Some(value.state.market_instance_id().bytes());
+        projection.secondary_binding = Some(value.state.lifecycle_root_account().bytes());
         Ok(Some(projection))
     } else {
         Ok(None)
@@ -2638,6 +2710,14 @@ mod current_decoder_tests {
             );
         }
         assert_eq!(
+            decode_general(&[
+                MARKET_BINDING_ACCOUNT_TAG,
+                MARKET_BINDING_ACCOUNT_VERSION_V3,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a truncated current MarketBindingV3 cannot fall through to V2",
+        );
+        assert_eq!(
             decode_general(&[SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION]),
             Err(AccountIndexError::CanonicalDecodeRefused)
         );
@@ -2694,6 +2774,23 @@ mod current_decoder_tests {
                 FRACTIONAL_LEDGER_ACCOUNT_VERSION,
             ]),
             Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+
+        assert_eq!(
+            decode_series(&[
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a truncated Product 0xba header cannot enter the current decoder",
+        );
+        assert_eq!(
+            decode_series(&vec![
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG;
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a width-correct Product 0xba forgery must fail the full semantic decoder",
         );
 
         assert_eq!(decode_dealer(b"DCDSTAT1"), Ok(None));

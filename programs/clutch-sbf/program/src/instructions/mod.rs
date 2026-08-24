@@ -57,9 +57,12 @@ pub mod dealer_runtime;
 // Legacy Direct V2/V3 source remains in-tree for historical review, but is
 // deliberately absent from this executable module graph. Their allocated
 // wire coordinates are decode-only and refuse at the capability boundary.
-/// Capability-disabled current Direct `80/1` account/authentication plane.
+/// Historical b1/v1 Direct account plane; compiled for review but never routed.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
+/// Capability-disabled current b1/v2 Direct account/authentication plane.
+#[cfg(feature = "profile-full")]
+pub(crate) mod direct_market_v2;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
@@ -158,6 +161,8 @@ pub mod general_v2_settlement_root;
 /// action-24 materialization is reachable under the same profile.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_producer_v5;
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_market_foundation_v4;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
@@ -190,6 +195,12 @@ pub mod product_market;
 pub(crate) mod product_market_foundation_init;
 /// Immutable current five-family mask and namespace-anchor authority.
 pub(crate) mod product_market_family_capability_current;
+/// Hostile-only current RootV3/LinkV3 account authentication.
+pub(crate) mod product_market_lifecycle_v3_current;
+/// Persistent current ProductReplayAnchor generation and stage owner.
+pub(crate) mod product_market_replay_current;
+/// Sole current FundingV5 Active-to-Pending reservation postwrite.
+pub(crate) mod product_series_funding_v5_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain
@@ -200,6 +211,9 @@ pub(crate) mod product_series_current;
 pub(crate) mod product_source_current;
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod resolution_work;
+/// Realm-owned immutable fee-bearing RevenuePolicyV2 founding and private
+/// Product/General authentication receipt.
+pub mod revenue_policy_v2;
 pub mod series_failure_funding;
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_ingest;

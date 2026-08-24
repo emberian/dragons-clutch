@@ -16,8 +16,10 @@ mod fee_accounts;
 mod fee_rent_v3;
 mod fee_terminal;
 mod final_pot;
+mod general_founding_policy_v1;
 mod market_binding_v2;
 mod market_binding_v3;
+mod market_binding_v4;
 mod owner_settlement;
 mod payload;
 mod position_replay;
@@ -33,8 +35,10 @@ pub use fee_accounts::*;
 pub use fee_rent_v3::*;
 pub use fee_terminal::*;
 pub use final_pot::*;
+pub use general_founding_policy_v1::*;
 pub use market_binding_v2::*;
 pub use market_binding_v3::*;
+pub use market_binding_v4::*;
 pub use owner_settlement::*;
 pub use payload::*;
 pub use position_replay::*;
@@ -867,6 +871,10 @@ pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected composite-fee record outer bytes.
 pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 340;
+/// Current rent-owned RevenuePolicyV2 selected-fee record version.
+pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned RevenuePolicyV2 selected-fee record outer bytes.
+pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2: usize = 388;
 /// Fresh disabled owner fee-carry envelope tag.
 pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// First owner fee-carry envelope version.
@@ -911,6 +919,10 @@ pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 pub const TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected-record treasury-ledger outer bytes.
 pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 148;
+/// Current rent-owned RevenuePolicyV2 treasury-ledger version.
+pub const TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned RevenuePolicyV2 treasury-ledger outer bytes.
+pub const TREASURY_LEDGER_ACCOUNT_BYTES_V2: usize = 196;
 /// Fresh disabled buyer-first settlement cash-pot envelope tag.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// First buyer-first settlement cash-pot envelope version.
@@ -957,10 +969,18 @@ pub const MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact candidate-cost Market-binding successor bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES_V2: usize = 572;
-/// Product-family-authorized Market-binding successor version.
+/// Historical BundleV5/AttachmentV4 Product-authorized Market-binding version.
 pub const MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
-/// Exact Product-family-authorized, rent-owned Market-binding bytes.
+/// Exact historical Product-family-authorized, rent-owned Market-binding bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES_V3: usize = 952;
+/// Historical RootV2/LinkV2 Product/Revenue-authorized Market-binding version.
+pub const MARKET_BINDING_ACCOUNT_VERSION_V4: u8 = 4;
+/// Exact historical Product/Revenue-authorized, rent-owned Market-binding bytes.
+pub const MARKET_BINDING_ACCOUNT_BYTES_V4: usize = 1_304;
+/// Current RootV3/LinkV3/FundingV5 Product/Revenue-authorized version.
+pub const MARKET_BINDING_ACCOUNT_VERSION_V5: u8 = 5;
+/// Exact current Product/Revenue-authorized, rent-owned Market-binding bytes.
+pub const MARKET_BINDING_ACCOUNT_BYTES_V5: usize = 1_368;
 /// Codec projection of the centrally owned Replay-successor account tag.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// First Replay-successor account version.
@@ -992,7 +1012,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 40] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1039,6 +1059,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         owner: "clutch-general-v2-contract/SelectedFeeRecordV1AccountV1",
     },
     AccountAllocationV1 {
+        tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
+        version: SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/SelectedFeeRecordV2AccountV1",
+    },
+    AccountAllocationV1 {
         tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
         version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/OwnerFeeCarryV1AccountV1",
@@ -1082,6 +1107,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         tag: TREASURY_LEDGER_ACCOUNT_TAG,
         version: TREASURY_LEDGER_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/TreasuryLedgerV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: TREASURY_LEDGER_ACCOUNT_TAG,
+        version: TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/TreasuryLedgerV2AccountV1",
     },
     AccountAllocationV1 {
         tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,
@@ -1152,6 +1182,16 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         tag: MARKET_BINDING_ACCOUNT_TAG,
         version: MARKET_BINDING_ACCOUNT_VERSION_V3,
         owner: "clutch-general-v2-contract/MarketBindingV3",
+    },
+    AccountAllocationV1 {
+        tag: MARKET_BINDING_ACCOUNT_TAG,
+        version: MARKET_BINDING_ACCOUNT_VERSION_V4,
+        owner: "clutch-general-v2-contract/MarketBindingV4",
+    },
+    AccountAllocationV1 {
+        tag: MARKET_BINDING_ACCOUNT_TAG,
+        version: MARKET_BINDING_ACCOUNT_VERSION_V5,
+        owner: "clutch-general-v2-contract/MarketBindingV5",
     },
     AccountAllocationV1 {
         tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,

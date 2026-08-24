@@ -13,6 +13,7 @@ path = "src/lib.rs"
 clutch-batch = { path = "../clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
+clutch-liveness = { path = "../clutch-liveness" }
 clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 clutch-product-series = { path = "../clutch-product-series" }
 clutch-retirement = { path = "../clutch-retirement" }

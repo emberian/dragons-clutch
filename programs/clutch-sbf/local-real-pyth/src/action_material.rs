@@ -6,6 +6,8 @@
 //! control inspectable, but it cannot sign, submit, or predict poststate.
 
 use crate::account_index::{FinalizedAccountAbsence, IndexedBranch};
+use crate::collateral_release_catalog::CurrentCollateralExecutableAccountViewV1;
+pub use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1 as StructuredCollateralCatalogEntryV1;
 use crate::rpc_index::{
     CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
     ObservedRpcAccount, RpcCommitment,
@@ -21,18 +23,39 @@ use crate::workflow_graph::{
     SourceCrankObservation, SourceWorkflowActionMaterial, WorkflowGraphError,
 };
 use clutch_solana_layout::registry::{
-    AllocationStatus, ExtensionAction, ExtensionFamily, STRUCTURED_CLAIM_FAMILY_TAG,
+    AllocationStatus, DirectMarketAction, ExtensionAction, ExtensionFamily, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
-use clutch_solana_layout::product_series::{SeriesMarketLinkAccountV2, SeriesRegistryAccountV3};
+use clutch_solana_layout::product_series::{
+    SeriesMarketLinkAccountV2, SeriesRegistryAccountV3, SERIES_REGISTRY_PDA_PREFIX_V1,
+};
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_solana_layout::{ProfileAccount, RealmAccount};
 use clutch_collateral_adapter_v2::{
-    AdapterReleaseV2, ClaimLedgerV3, CollateralPolicyV2, HoardV2,
+    ClaimLedgerV3, CollateralPolicyV2, HoardV2,
     MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5,
     CLAIM_LEDGER_V3_PDA_SEED_V1, COLLATERAL_POLICY_PDA_SEED_V1,
     HOARD_AUTHORITY_V2_PDA_SEED_V1, HOARD_TOKEN_V2_PDA_SEED_V1,
     HOARD_V2_PDA_SEED_V1, PROFILE_PDA_SEED_V1, REALM_PDA_SEED_V1,
+};
+use clutch_dealer_runtime_contract::{
+    dealer_runtime_liveness_policy_id_v1, DealerActionReceiptV1, DealerFacilityReplayV1,
+    DealerFundedDependenciesV2,
+    DealerFutureCreditFundingV1, DealerLivenessCompartmentV1, DealerLivenessScheduleV1,
+    DealerPhaseV2, DealerPolicyV1, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
+    DealerSeriesObligationBindingV2, DealerSeriesObligationPhaseV1, DealerStateV3,
+    DeletableRentOwnerV1, FacilityPositionBindingV2, FixedCodec as DealerFixedCodec,
+    Id as DealerId, DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1,
+    DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2,
+    DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1, DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1,
+    DEALER_POLICY_CONTENT_DOMAIN_V1, DEALER_POLICY_PDA_DOMAIN_V1,
+    DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1, DEALER_STATE_PDA_DOMAIN_V2,
+};
+use clutch_fractional_redemption_runtime::{
+    FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV3,
+    FRACTIONAL_CREDIT_PDA_PREFIX, FRACTIONAL_LEDGER_PDA_PREFIX,
+    FRACTIONAL_POLICY_PDA_PREFIX,
 };
 use clutch_general_v2_contract::{
     MarketBindingV2, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
@@ -42,12 +65,16 @@ use clutch_product_series::{
     CompiledProductSeriesBundleV6, ContentId, FixedCodec, MarketInstancePreimageV2,
     NativeClaimBasisV1, RegistryCapabilityProfileV4, RegistryProgramReleaseV2,
     RegistryReleaseLocusV2,
-    SeriesAttachmentPlanV5, SeriesFundingTermsV2, SeriesLinkObligationStatusV2, SeriesLinkObligationV2,
-    SeriesMarketLinkPhaseV2,
+    MarketLifecyclePhaseV2, SeriesAttachmentPlanV5, SeriesFundingTermsV2,
+    SeriesLinkObligationStatusV2, SeriesLinkObligationV2, SeriesMarketLinkPhaseV2,
+};
+use clutch_liveness::{
+    RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
+    RuntimeLivenessPolicyV1,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
-    ReplayV3HashBackend, ReplayV3Lifecycle,
+    PositionV3Sha256Backend, ReplayV3HashBackend, ReplayV3Lifecycle,
     POSITION_V3_PDA_PREFIX, PURPOSE_REPLAY_V3_PDA_PREFIX,
 };
 use clutch_structured_claim::{ClaimVector, DeploymentBinding};
@@ -120,93 +147,6 @@ impl core::fmt::Display for CanonicalActionMaterialErrorV1 {
     }
 }
 
-/// Opaque checked collateral-catalog row selected by Profile V2.
-///
-/// The semantic adapter release owns parser/CPI behavior. The indexed program
-/// release and content-addressed RegistryProgramReleaseV2 own the exact loader
-/// deployment. Live role construction later reauthenticates the Program and
-/// ProgramData bodies from the same finalized account frame.
-#[derive(Clone, Copy, Debug)]
-pub struct StructuredCollateralCatalogEntryV1<'release> {
-    adapter: AdapterReleaseV2,
-    program: &'release IndexedProgramRelease,
-    artifact: RegistryProgramReleaseV2,
-    artifact_owner: Address,
-    receipt_id: [u8; 32],
-}
-
-impl<'release> StructuredCollateralCatalogEntryV1<'release> {
-    /// Authenticate one finalized, base-owned catalog artifact against the
-    /// checked operator release. No instruction account or browser field can
-    /// replace this chain artifact.
-    pub fn authenticate(
-        adapter: AdapterReleaseV2,
-        program: &'release IndexedProgramRelease,
-        artifact_owner: Address,
-        artifact_account: &ObservedRpcAccount,
-    ) -> Result<Self> {
-        adapter
-            .validate()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        program
-            .validate()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        if artifact_owner == Address::default()
-            || artifact_account.owner != artifact_owner
-            || artifact_account.executable
-            || artifact_account.provenance.commitment != RpcCommitment::Finalized
-            || artifact_account.provenance.slot == 0
-            || adapter.token_program.bytes() != program.program_id.to_bytes()
-            || adapter.token_program_deployment.bytes() != program.elf_sha256
-            || program
-                .families
-                .binary_search(&crate::rpc_index::CanonicalFamily::Collateral)
-                .is_err()
-        {
-            return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
-        }
-        let artifact = RegistryProgramReleaseV2::decode(&artifact_account.data)
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        let artifact_id = artifact
-            .id()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?
-            .content_id();
-        let kind = [ArtifactKind::RegistryProgramReleaseV2.byte()];
-        let expected_artifact = Address::find_program_address(
-            &[b"dc:product-artifact:v1", &kind, &artifact_id.bytes()],
-            &artifact_owner,
-        );
-        if artifact_account.address != expected_artifact.0
-            || artifact.program.bytes() != program.program_id.to_bytes()
-            || artifact.programdata.bytes() != program.program_data.to_bytes()
-            || artifact.deployment_slot != program.deployment_slot
-            || artifact.locus != RegistryReleaseLocusV2::ObservedPositive
-            || artifact.capability_manifest_id.bytes() != program.release_manifest_sha256
-        {
-            return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
-        }
-        let adapter_id = adapter
-            .id()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        let mut receipt = Sha256::new();
-        receipt.update(b"dragons-clutch/operator/structured-collateral-catalog/v1\0");
-        receipt.update(adapter_id.bytes());
-        receipt.update(artifact_id.bytes());
-        receipt.update(artifact_account.address.to_bytes());
-        receipt.update(artifact_account.lamports.to_le_bytes());
-        receipt.update(artifact_account.provenance.slot.to_le_bytes());
-        receipt.update(Sha256::digest(&artifact_account.data));
-        let receipt_id = receipt.finalize().into();
-        Ok(Self {
-            adapter,
-            program,
-            artifact,
-            artifact_owner,
-            receipt_id,
-        })
-    }
-}
-
 /// Opaque exact wrapper/base/Token/collateral release join for Structured construction.
 #[derive(Clone, Copy, Debug)]
 pub struct StructuredOperatorReleaseSetV1<'release> {
@@ -244,8 +184,8 @@ impl<'release> StructuredOperatorReleaseSetV1<'release> {
                 != STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1
             || wrapper.capability_profile_id != base.capability_profile_id
             || token_2022.capability_profile_id != base.capability_profile_id
-            || collateral.program.capability_profile_id != base.capability_profile_id
-            || collateral.artifact_owner != base.program_id
+            || collateral.program().capability_profile_id != base.capability_profile_id
+            || collateral.artifact_owner() != base.program_id
             || wrapper
                 .families
                 .binary_search(&crate::rpc_index::CanonicalFamily::StructuredClaim)
@@ -327,6 +267,27 @@ impl<'account> StructuredChainAccountV1<'account> {
             address,
             present: None,
             observed_slot: absence.slot(),
+        })
+    }
+
+    /// Retain absence of one exact program-owned PDA from an exhaustive
+    /// finalized owner scan. The semantic constructor must still derive and
+    /// equality-check the address before the absence is usable.
+    pub(crate) fn absent_from_snapshot(
+        address: Address,
+        snapshot: &'account crate::rpc_index::FinalizedAccountSnapshotV1,
+    ) -> Result<Self> {
+        if address == Address::default()
+            || snapshot.receipt().slot() == 0
+            || snapshot.receipt().release_key().trim().is_empty()
+            || snapshot.accounts().iter().any(|account| account.address == address)
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        Ok(Self {
+            address,
+            present: None,
+            observed_slot: snapshot.receipt().slot(),
         })
     }
 
@@ -473,6 +434,12 @@ impl ReplayV3HashBackend for OperatorSha256V1 {
     }
 }
 
+impl PositionV3Sha256Backend for OperatorSha256V1 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        self.hashv(&[domain, body])
+    }
+}
+
 impl std::error::Error for CanonicalActionMaterialErrorV1 {}
 
 /// Slot boundary derived from the same bounded finalized acquisition as the
@@ -497,6 +464,20 @@ pub struct CanonicalAccountRoleV1 {
 }
 
 impl CanonicalAccountRoleV1 {
+    pub(crate) const fn new(
+        label: &'static str,
+        address: Address,
+        writable: bool,
+        signer: bool,
+    ) -> Self {
+        Self {
+            label,
+            address,
+            writable,
+            signer,
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         self.label
@@ -558,6 +539,76 @@ pub struct CanonicalActionMaterialV1 {
 }
 
 impl CanonicalActionMaterialV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_chain_derived_direct_v2(
+        release: &IndexedProgramRelease,
+        coordinate: CanonicalIntentCoordinate,
+        driver_account: Address,
+        driver_account_slot: u64,
+        cursor: ResumableWorkflowCursor,
+        freshness: ActionFreshnessBoundaryV1,
+        fee_payer: Address,
+        account_roles: Vec<CanonicalAccountRoleV1>,
+        planned: PlannedWorkflowNode,
+        symbolic_postcondition_contract_id: [u8; 32],
+    ) -> Result<Self> {
+        freshness.validate()?;
+        if symbolic_postcondition_contract_id == [0; 32]
+            || cursor.observed_state_sha256 == [0; 32]
+            || planned.manifest_sha256 != release.release_manifest_sha256
+            || planned.cursor != cursor
+            || planned.coordinate
+                != CanonicalActionCoordinate::Direct(DirectMarketAction::FinalizeSelection)
+            || !planned.reload_authoritative_accounts
+            || planned.unsigned_transaction.has_recent_blockhash
+            || planned.unsigned_transaction.signed
+            || planned.unsigned_transaction.submitted
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+        validate_unsigned_direct_plan(coordinate, fee_payer, &account_roles, &planned)?;
+        let release_key = release.key();
+        let authority_state_sha256 = cursor.observed_state_sha256;
+        let base_id = action_material_id(
+            &release_key,
+            &release_key,
+            release.release_manifest_sha256,
+            release.capability_profile_id,
+            coordinate,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            authority_state_sha256,
+            freshness,
+            fee_payer,
+            &account_roles,
+            &planned.unsigned_transaction,
+        );
+        let draft_id = Sha256::new()
+            .chain_update(b"dragons-clutch/operator/direct-action8-material/v2\0")
+            .chain_update(base_id)
+            .chain_update(symbolic_postcondition_contract_id)
+            .finalize()
+            .into();
+        Ok(Self {
+            release_key: release_key.clone(),
+            driver_release_key: release_key,
+            release_manifest_sha256: release.release_manifest_sha256,
+            capability_profile_id: release.capability_profile_id,
+            coordinate,
+            variant: None,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            authority_state_sha256,
+            freshness,
+            fee_payer,
+            account_roles,
+            planned,
+            draft_id,
+        })
+    }
+
     #[must_use]
     pub fn release_key(&self) -> &str {
         &self.release_key
@@ -717,7 +768,7 @@ pub fn construct_structured_action_material_v1(
     let observed_state_sha256 = structured_authority_state_id(
         accounts,
         lookup_table.state_sha256,
-        releases.collateral.receipt_id,
+        releases.collateral.receipt_id(),
     );
     let dependencies = accounts
         .iter()
@@ -787,7 +838,7 @@ fn construct_detected_structured_action_material_v1(
             != structured_authority_state_id(
                 accounts,
                 lookup_table.state_sha256,
-                releases.collateral.receipt_id,
+                releases.collateral.receipt_id(),
             )
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
@@ -865,7 +916,7 @@ fn construct_detected_structured_action_material_v1(
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let unsigned_transaction = builder
-        .build_structured_v0(
+        .build_exact_v0(
             draft,
             lookup_table.table.clone(),
             lookup_table.observed_slot,
@@ -891,7 +942,7 @@ fn construct_detected_structured_action_material_v1(
         structured_authority_state_id(
             accounts,
             lookup_table.state_sha256,
-            releases.collateral.receipt_id,
+            releases.collateral.receipt_id(),
         );
     let draft_id = action_material_id(
         &release_key,
@@ -1559,7 +1610,7 @@ fn derive_structured_current_mutation_v1(
             if action == StructuredClaimActionV1::CompactDonation {
                 validate_compaction_trigger_v1(
                     accounts,
-                    releases.collateral.program.program_id,
+                    releases.collateral.program().program_id,
                     mint.supply,
                     vault,
                     backing,
@@ -2082,17 +2133,27 @@ fn validate_common_structured_market_chain_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    if accounts[collateral_program_index].address != releases.collateral.program.program_id
-        || accounts[collateral_data_index].address != releases.collateral.program.program_data
+    if accounts[collateral_program_index].address != releases.collateral.program().program_id
+        || accounts[collateral_data_index].address != releases.collateral.program().program_data
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
-    authenticate_indexed_loader_release(
-        releases.collateral.program,
-        releases.collateral.artifact,
-        accounts[collateral_program_index],
-        accounts[collateral_data_index],
-    )?;
+    let collateral_program = CurrentCollateralExecutableAccountViewV1::from_parts(
+        accounts[collateral_program_index].address,
+        accounts[collateral_program_index].owner()?,
+        accounts[collateral_program_index].executable(),
+        accounts[collateral_program_index].data()?,
+    );
+    let collateral_programdata = CurrentCollateralExecutableAccountViewV1::from_parts(
+        accounts[collateral_data_index].address,
+        accounts[collateral_data_index].owner()?,
+        accounts[collateral_data_index].executable(),
+        accounts[collateral_data_index].data()?,
+    );
+    releases
+        .collateral
+        .reauthenticate_executable(collateral_program, collateral_programdata)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
 
     let realm = RealmAccount::decode(accounts[realm_index].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -2103,18 +2164,16 @@ fn validate_common_structured_market_chain_v1(
     let policy_id = policy
         .id()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let collateral_release_id = releases
+    let selected_collateral = releases
         .collateral
-        .adapter
-        .id()
-        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-    policy
-        .validate_for_release(&releases.collateral.adapter)
+        .select_for(releases.base, policy)
         .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
+    let collateral_release_id = selected_collateral.entry().adapter_id();
     if profile.realm != realm.realm
         || profile.profile != realm.profile
-        || profile.collateral_policy_id.bytes() != policy_id.bytes()
-        || profile.adapter_release_id.bytes() != collateral_release_id.bytes()
+        || profile.collateral_policy_id.bytes() != selected_collateral.policy_id()
+        || policy_id.bytes() != selected_collateral.policy_id()
+        || profile.adapter_release_id.bytes() != collateral_release_id
         || policy.token_program.bytes() != accounts[collateral_program_index].address.to_bytes()
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -2950,6 +3009,1415 @@ fn validate_current_product_join(
     Ok(())
 }
 
+const DEALER_RUNTIME_LIVENESS_POLICY_PDA_DOMAIN_V1: &[u8] =
+    b"dc-dealer-runtime-liveness-policy-v1";
+const DEALER_RUNTIME_LIVENESS_ACCOUNT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-live-account-v1";
+const PRODUCT_MARKET_LIFECYCLE_ROOT_PDA_DOMAIN_V1: &[u8] = b"dc:market-lifecycle-root:v1";
+const PRODUCT_SERIES_MARKET_LINK_PDA_DOMAIN_V1: &[u8] = b"dc:series-market-link:v1";
+
+#[derive(Clone, Copy, Debug)]
+struct DerivedDealerTerminalV1 {
+    variant: CanonicalIntentVariantV1,
+    generation: u64,
+    replay_ordinal: u64,
+    liveness_call_ordinal: u32,
+    keeper_payment_lamports: u64,
+    collateral_selection_receipt_id: [u8; 32],
+}
+
+/// Construct one unsigned current Dealer action-25 terminal cut from a single
+/// finalized hostile account frame. The canonical tail body selects target 8
+/// (live facility a6/v2) or target 9 (unused 0xbc/v1); callers supply neither
+/// that discriminator nor replay/liveness semantic fields.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_dealer_terminal_action_material_v1(
+    release: &IndexedProgramRelease,
+    collateral: StructuredCollateralCatalogEntryV1<'_>,
+    builder: &ProtocolTransactionBuilder,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    accounts: &[StructuredChainAccountV1<'_>],
+    lookup_table: &StructuredAddressLookupTableV1,
+) -> Result<CanonicalActionMaterialV1> {
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    collateral
+        .program()
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    if workflow_id == [0; 32]
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || collateral.artifact_owner() != release.program_id
+        || lookup_table.observed_slot > freshness.observed_slot
+        || lookup_table.cluster_key.trim().is_empty()
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let variant = match accounts.len() {
+        48 => CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit,
+        45 => CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit,
+        _ => return Err(CanonicalActionMaterialErrorV1::InvalidChainState),
+    };
+    let coordinate = variant.coordinate();
+    if release.enabled_intents.binary_search(&coordinate).is_ok()
+        || release.enabled_intent_variants.binary_search(&variant).is_err()
+    {
+        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
+    }
+    if accounts.iter().any(|account| {
+        account.address == Address::default()
+            || account.observed_slot == 0
+            || account.observed_slot > freshness.observed_slot
+            || account.present.is_some_and(|present| {
+                present.provenance.commitment != RpcCommitment::Finalized
+                    || present.provenance.cluster_key != lookup_table.cluster_key
+            })
+    }) || accounts[15].present.is_some()
+        || accounts
+            .iter()
+            .enumerate()
+            .any(|(index, account)| index != 15 && account.present.is_none())
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    if builder.payer() != accounts[0].address {
+        return Err(CanonicalActionMaterialErrorV1::FeePayerMismatch);
+    }
+
+    let derived = derive_dealer_terminal_v1(release, collateral, accounts, variant)?;
+    let mut payload = [0u8; 40];
+    payload[0..8].copy_from_slice(&derived.generation.to_le_bytes());
+    payload[8..16].copy_from_slice(&derived.replay_ordinal.to_le_bytes());
+    payload[16] = derived.variant.payload_discriminator();
+    payload[24..28].copy_from_slice(&derived.liveness_call_ordinal.to_le_bytes());
+    payload[32..40].copy_from_slice(&derived.keeper_payment_lamports.to_le_bytes());
+
+    let mut metas = Vec::with_capacity(accounts.len());
+    let mut account_roles = Vec::with_capacity(accounts.len());
+    let mut index = 0usize;
+    while index < accounts.len() {
+        let spec = crate::transaction_builder::dealer_terminal_account_spec_v1(variant, index)
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+        metas.push(if spec.writable {
+            AccountMeta::new(accounts[index].address, spec.signer)
+        } else {
+            AccountMeta::new_readonly(accounts[index].address, spec.signer)
+        });
+        account_roles.push(CanonicalAccountRoleV1 {
+            label: spec.label,
+            address: accounts[index].address,
+            writable: spec.writable,
+            signer: spec.signer,
+        });
+        index += 1;
+    }
+    let draft = crate::transaction_builder::OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+        crate::transaction_builder::SemanticOwner {
+            package: "clutch-dealer-runtime-contract".into(),
+            schema: "dragons-clutch/dealer-terminal-retire/action25/targets8-9/v1".into(),
+            release_sha256: release.elf_sha256,
+        },
+        release.program_id,
+        metas,
+        vec![ExactEquation {
+            name: "chain-derived Dealer retirement keeper payment".into(),
+            unit: IntegerUnit::Lamports,
+            left: u128::from(derived.keeper_payment_lamports),
+            right: u128::from(derived.keeper_payment_lamports),
+        }],
+        variant,
+        derived.replay_ordinal,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_exact_v0(
+            draft,
+            lookup_table.table.clone(),
+            lookup_table.observed_slot,
+            lookup_table.state_sha256,
+        )
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let authority_state_sha256 = dealer_terminal_authority_state_id_v1(
+        accounts,
+        lookup_table.state_sha256,
+        derived.collateral_selection_receipt_id,
+        variant,
+    );
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: WorkflowLane::RecoveryRetirement,
+        generation: derived.generation,
+        position: WorkflowPosition {
+            phase: u16::from(
+                clutch_solana_layout::registry::DealerFacilityAction::Retire.tag(),
+            ),
+            item: u64::from(variant.payload_discriminator()),
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::DealerFacility {
+            action: clutch_solana_layout::registry::DealerFacilityAction::Retire,
+            payload_discriminator: variant.payload_discriminator(),
+        },
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_dealer_terminal_plan_v1(
+        coordinate,
+        variant,
+        builder.payer(),
+        &account_roles,
+        &planned,
+    )?;
+    let release_key = release.key();
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        accounts[2].address,
+        accounts[2].observed_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: Some(variant),
+        driver_account: accounts[2].address,
+        driver_account_slot: accounts[2].observed_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+fn decode_current_dealer_material_body_v1<T: DealerFixedCodec>(
+    program: Address,
+    account: StructuredChainAccountV1<'_>,
+    tag: u8,
+    version: u8,
+    account_bytes: usize,
+) -> Result<(u8, T)> {
+    let data = account.data()?;
+    if account.owner()? != program
+        || account.executable()
+        || data.len() != account_bytes
+        || account_bytes != 8usize.saturating_add(T::ENCODED_LEN)
+        || data[0] != tag
+        || data[1] != version
+        || data[3..8].iter().any(|byte| *byte != 0)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let value = <T as DealerFixedCodec>::decode(&data[8..])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    Ok((data[2], value))
+}
+
+fn require_pda_v1(
+    actual: Address,
+    program: Address,
+    seeds: &[&[u8]],
+    stored_bump: u8,
+) -> Result<()> {
+    let expected = Address::find_program_address(seeds, &program);
+    if actual != expected.0 || stored_bump != expected.1 {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(())
+}
+
+fn dealer_rent_is_covered_v1(
+    rent: DeletableRentOwnerV1,
+    account: Option<&ObservedRpcAccount>,
+) -> bool {
+    account.is_some_and(|account| {
+        rent.refundable_principal
+            .checked_add(rent.donation_floor)
+            .is_some_and(|minimum| account.lamports >= minimum)
+    })
+}
+
+fn require_dealer_terminal_system_roles_v1(
+    accounts: &[StructuredChainAccountV1<'_>],
+) -> Result<()> {
+    if accounts[21].address != solana_sdk_ids::sysvar::clock::ID
+        || accounts[22].address != solana_sdk_ids::sysvar::rent::ID
+        || accounts[23].address != solana_sdk_ids::system_program::ID
+        || !accounts[23].executable()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    for index in [0usize, 16, 17, 18, 19, 20] {
+        if !system_identity_is_valid(accounts[index]) {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
+    if accounts[20].address == accounts[17].address
+        || accounts[20].address == accounts[18].address
+        || accounts[20].address == accounts[19].address
+        || accounts[20].address == accounts[16].address
+        || accounts[20].address == accounts[0].address
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(())
+}
+
+fn dealer_terminal_authority_state_id_v1(
+    accounts: &[StructuredChainAccountV1<'_>],
+    lookup_table_state_sha256: [u8; 32],
+    collateral_catalog_receipt_id: [u8; 32],
+    variant: CanonicalIntentVariantV1,
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/dealer-terminal-authority/v1\0");
+    hash.update([variant.payload_discriminator()]);
+    hash.update(lookup_table_state_sha256);
+    hash.update(collateral_catalog_receipt_id);
+    hash.update(structured_chain_state_id(accounts));
+    hash.finalize().into()
+}
+
+fn validate_unsigned_dealer_terminal_plan_v1(
+    coordinate: CanonicalIntentCoordinate,
+    variant: CanonicalIntentVariantV1,
+    fee_payer: Address,
+    roles: &[CanonicalAccountRoleV1],
+    planned: &PlannedWorkflowNode,
+) -> Result<()> {
+    let transaction = &planned.unsigned_transaction;
+    let expected_signers = roles
+        .iter()
+        .filter(|role| role.signer)
+        .map(|role| role.address)
+        .chain(core::iter::once(fee_payer))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding_matches = matches!(
+        transaction.registry_bindings.as_slice(),
+        [Some(binding)]
+            if binding.family == ExtensionFamily::Dealer
+                && binding.local_action == coordinate.local_action
+                && Some(binding.family_status) == ExtensionFamily::Dealer.allocation_status()
+                && matches!(
+                    binding.central_action,
+                    Some(ExtensionAction::DealerFacility(action))
+                        if action
+                            == clutch_solana_layout::registry::DealerFacilityAction::Retire
+                )
+    );
+    let coordinate_matches = matches!(
+        planned.coordinate,
+        CanonicalActionCoordinate::DealerFacility { action, payload_discriminator }
+            if action == clutch_solana_layout::registry::DealerFacilityAction::Retire
+                && payload_discriminator == variant.payload_discriminator()
+    );
+    if !coordinate_matches
+        || transaction.flows != [ProtocolFlow::DealerFacilityTerminal]
+        || transaction.actions.len() != 1
+        || transaction.semantic_owners.len() != 1
+        || !binding_matches
+        || transaction.runtime_admissions
+            != [RuntimeAdmission::PayloadVariantReleaseBoundEnabled]
+        || transaction.required_signers != expected_signers
+        || transaction.message_version != TransactionMessageVersionV1::V0
+        || transaction.address_lookup_tables.len() != 1
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
+        || !planned.reload_authoritative_accounts
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DealerTerminalPositionV1 {
+    replay: DealerFacilityReplayV1,
+    binding: FacilityPositionBindingV2,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_dealer_terminal_position_replay_v1(
+    program: Address,
+    accounts: &[StructuredChainAccountV1<'_>],
+    policy: &DealerPolicyV1,
+    policy_id: DealerId,
+    state: &DealerStateV3,
+) -> Result<DealerTerminalPositionV1> {
+    let base = state.base;
+    let position = PositionAccountV3::decode(accounts[3].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let replay = <DealerFacilityReplayV1 as DealerFixedCodec>::decode(accounts[4].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let binding = FacilityPositionBindingV2 {
+        facility_id: base.facility_id,
+        policy_id,
+        market_instance_v2_id: policy.market_instance_v2_id,
+        collateral_policy_id: DealerId::from_bytes(position.collateral_policy_id().bytes()),
+        collateral_release_id: DealerId::from_bytes(position.collateral_release_id().bytes()),
+        dealer_state_account_id: DealerId::from_bytes(accounts[2].address.to_bytes()),
+        initial_position_generation: 1,
+    };
+    let binding_id = binding
+        .binding_id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let purpose = [u8::from(PositionPurposeV3::DealerFacility)];
+    let position_pda = Address::find_program_address(
+        &[
+            POSITION_V3_PDA_PREFIX,
+            &policy.market_instance_v2_id.bytes(),
+            &base.facility_id.bytes(),
+            &purpose,
+            &binding_id.bytes(),
+        ],
+        &program,
+    );
+    let replay_pda = Address::find_program_address(
+        &[
+            PURPOSE_REPLAY_V3_PDA_PREFIX,
+            &accounts[3].address.to_bytes(),
+            &purpose,
+            &binding_id.bytes(),
+        ],
+        &program,
+    );
+    let position_id = position
+        .semantic_id(&OperatorSha256V1)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let replay_rent = replay.rent();
+    if accounts[3].owner()? != program
+        || accounts[4].owner()? != program
+        || accounts[3].executable()
+        || accounts[4].executable()
+        || position.lifecycle() != PositionLifecycleV3::CloseRequested
+        || position.purpose() != PositionPurposeV3::DealerFacility
+        || position.market_instance_id().bytes() != policy.market_instance_v2_id.bytes()
+        || position.realm_id().bytes() != policy.realm_id.bytes()
+        || position.owner().bytes() != base.facility_id.bytes()
+        || position.controller().bytes() != accounts[2].address.to_bytes()
+        || position.replay_account().bytes() != accounts[4].address.to_bytes()
+        || position.purpose_binding_id().bytes() != binding_id.bytes()
+        || position.outcome_count() != policy.outcome_count
+        || position.generation() != base.generation
+        || position.cash_atoms() != 0
+        || position.reserved_cash_atoms() != 0
+        || position.native_eggs() != [0; clutch_retirement::MAX_OUTCOMES]
+        || position.outstanding_reservations() != 0
+        || position_id.bytes() != base.facility_position_id.bytes()
+        || accounts[3].address != position_pda.0
+        || position.stored_bump() != position_pda.1
+        || !position_rent_is_covered(position.rent(), accounts[3].present)
+        || position.rent().payer.bytes() != accounts[17].address.to_bytes()
+        || replay.lifecycle() != ReplayV3Lifecycle::Live
+        || replay.facility_position_account_id().bytes() != accounts[3].address.to_bytes()
+        || replay.replay_account_id().bytes() != accounts[4].address.to_bytes()
+        || replay.facility_position_binding_id() != binding_id
+        || replay.position_generation() != base.generation
+        || replay.next_transition_ordinal() == 0
+        || accounts[4].address != replay_pda.0
+        || replay.pda_seeds().stored_bump() != replay_pda.1
+        || !rent_is_covered(replay_rent, accounts[4].present)
+        || replay_rent.payer().bytes() != accounts[18].address.to_bytes()
+        || base.facility_position_account_id.bytes() != accounts[3].address.to_bytes()
+        || base.facility_replay_account_id.bytes() != accounts[4].address.to_bytes()
+        || base.facility_position_binding_id != binding_id
+        || base.children.facility_positions != 1
+        || base.children.facility_replays != 1
+        || base.children.live_lp_positions != 0
+        || base.children.unclaimed_lp_positions != 0
+        || base.children.exit_tickets != 0
+        || base.children.epoch_bindings != 0
+        || base.children.leases != 0
+        || base.children.settlement_pots != 0
+        || base.children.terminal_allocations != 0
+        || base.children.claim_work != 0
+        || policy.neutral_sink.bytes() != accounts[20].address.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(DealerTerminalPositionV1 {
+        replay,
+        binding,
+    })
+}
+
+fn authenticate_dealer_terminal_liveness_v1(
+    program: Address,
+    accounts: &[StructuredChainAccountV1<'_>],
+    state: &DealerStateV3,
+    policy: &DealerPolicyV1,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    binding: &FacilityPositionBindingV2,
+) -> Result<(DealerRuntimeLivenessBindingV1, RuntimeCompartmentV1)> {
+    if accounts[7].owner()? != program
+        || accounts[7].executable()
+        || accounts[7].data()?.len()
+            != clutch_liveness::runtime_v1::RUNTIME_LIVENESS_POLICY_BYTES_V1
+        || dependency.bindings.runtime_liveness_program_id.bytes() != program.to_bytes()
+        || dependency
+            .bindings
+            .runtime_liveness_policy_account_id
+            .bytes()
+            != accounts[7].address.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let runtime_policy = RuntimeLivenessPolicyV1::decode(accounts[7].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(runtime_policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let policy_pda = Address::find_program_address(
+        &[
+            DEALER_RUNTIME_LIVENESS_POLICY_PDA_DOMAIN_V1,
+            &runtime_policy_id.bytes(),
+        ],
+        &program,
+    );
+    if accounts[7].address != policy_pda.0
+        || runtime_policy.policy_id.bytes()
+            != dependency.bindings.runtime_liveness_policy_id.bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let first = RuntimeCompartmentV1::decode(accounts[8].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let mut compartments = [first; 7];
+    let mut index = 0usize;
+    while index < compartments.len() {
+        let account_index = 8usize
+            .checked_add(index)
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        let account = accounts[account_index];
+        let compartment = RuntimeCompartmentV1::decode(account.data()?)
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        let kind_seed = [match compartment.kind {
+            RuntimeCompartmentKindV1::Source => 0,
+            RuntimeCompartmentKindV1::Candidate => 1,
+            RuntimeCompartmentKindV1::Clearing => 2,
+            RuntimeCompartmentKindV1::Settlement => 3,
+            RuntimeCompartmentKindV1::Resolution => 4,
+            RuntimeCompartmentKindV1::Retirement => 5,
+            RuntimeCompartmentKindV1::Recovery => 6,
+        }];
+        let expected = Address::find_program_address(
+            &[
+                DEALER_RUNTIME_LIVENESS_ACCOUNT_PDA_DOMAIN_V1,
+                &state.base.facility_id.bytes(),
+                &kind_seed,
+            ],
+            &program,
+        );
+        let expected_balance = compartment
+            .expected_account_balance_lamports()
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        if account.owner()? != program
+            || account.executable()
+            || account.data()?.len()
+                != clutch_liveness::runtime_v1::RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
+            || compartment.kind.index() != index
+            || compartment.identity.account_id.bytes() != account.address.to_bytes()
+            || account.address != expected.0
+            || account
+                .present
+                .is_none_or(|present| present.lamports < expected_balance)
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        compartments[index] = compartment;
+        index += 1;
+    }
+    let runtime = DealerRuntimeLivenessBindingV1::from_canonical(&runtime_policy, &compartments)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    dependency
+        .validate_live_bindings_v4(binding, policy, schedule, &runtime)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    index = 1;
+    while index < compartments.len() {
+        let compartment = match index {
+            1 => DealerLivenessCompartmentV1::Candidate,
+            2 => DealerLivenessCompartmentV1::Clearing,
+            3 => DealerLivenessCompartmentV1::Settlement,
+            4 => DealerLivenessCompartmentV1::Resolution,
+            5 => DealerLivenessCompartmentV1::Retirement,
+            6 => DealerLivenessCompartmentV1::Recovery,
+            _ => return Err(CanonicalActionMaterialErrorV1::InvalidChainState),
+        };
+        if runtime.owner(compartment).bytes() != accounts[2].address.to_bytes()
+            || runtime.receipt_program_id(compartment).bytes() != program.to_bytes()
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        index += 1;
+    }
+    let retirement = compartments[DealerLivenessCompartmentV1::Retirement.index()];
+    if retirement.identity.payer.bytes() != accounts[16].address.to_bytes()
+        || retirement.identity.neutral_sink.bytes() != accounts[20].address.to_bytes()
+        || runtime.neutral_sink().bytes() != accounts[20].address.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok((runtime, retirement))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DealerTerminalMarketV1 {
+    market_instance_id: [u8; 32],
+    realm_id: [u8; 32],
+    collateral_policy_id: [u8; 32],
+    collateral_release_id: [u8; 32],
+    native_claim_basis_id: [u8; 32],
+    resolution_account: [u8; 32],
+    resolution_semantic_id: [u8; 32],
+    resolution_data_id: [u8; 32],
+    generation: u64,
+    outcome_count: u8,
+    collateral_selection_receipt_id: [u8; 32],
+}
+
+fn authenticate_dealer_terminal_product_and_value_v1(
+    release: &IndexedProgramRelease,
+    collateral: StructuredCollateralCatalogEntryV1<'_>,
+    accounts: &[StructuredChainAccountV1<'_>],
+    dealer_policy: &DealerPolicyV1,
+    obligation: &DealerSeriesObligationBindingV2,
+    variant: CanonicalIntentVariantV1,
+) -> Result<DealerTerminalMarketV1> {
+    let program = release.program_id;
+    let release_id = decode_release_artifact(
+        release,
+        program,
+        accounts[27],
+        accounts[28],
+        accounts[29],
+        release.release_manifest_sha256,
+    )?;
+    let registry = SeriesRegistryAccountV3::decode(accounts[26].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let registry_pda = Address::find_program_address(
+        &[SERIES_REGISTRY_PDA_PREFIX_V1, &registry.series_plan_id.bytes()],
+        &program,
+    );
+    let profile = RegistryCapabilityProfileV4::decode(accounts[30].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let profile_id = profile
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let bundle = CompiledProductSeriesBundleV6::decode(accounts[32].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let bundle_id = bundle
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let attachment = SeriesAttachmentPlanV5::decode(accounts[33].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let attachment_id = attachment
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    verify_product_artifact(
+        program,
+        accounts[30],
+        ArtifactKind::RegistryCapabilityProfileV4,
+        profile_id.bytes(),
+    )?;
+    verify_product_artifact(
+        program,
+        accounts[32],
+        ArtifactKind::CompiledProductSeriesBundleV6,
+        bundle_id.bytes(),
+    )?;
+    verify_product_artifact(
+        program,
+        accounts[33],
+        ArtifactKind::SeriesAttachmentPlanV5,
+        attachment_id.bytes(),
+    )?;
+    if accounts[26].owner()? != program
+        || accounts[26].executable()
+        || accounts[26]
+            .present
+            .is_none_or(|value| value.lamports < registry.rent_principal_lamports)
+        || accounts[26].address != registry_pda.0
+        || registry.stored_bump != registry_pda.1
+        || !registry.activation_consumed
+        || registry.registry_release_id != release_id
+        || registry.capability_profile_id != profile_id.content_id()
+        || registry.compiler_bundle_id != bundle_id
+        || registry.series_plan_id.bytes() != obligation.key.series_plan_v5_id.bytes()
+        || registry.funding_terms_id != bundle.funding_terms_id
+        || profile.registry_release_id().content_id() != release_id
+        || bundle.registry_release_id != release_id
+        || bundle.capability_profile_id != profile_id
+        || bundle.series_plan_id != registry.series_plan_id
+        || bundle.funding_terms_id != registry.funding_terms_id
+        || bundle.attachment_plan_id != attachment_id
+        || attachment.funding_quote_id != bundle.funding_quote_id
+        || attachment.liquidity_facility_plan_id.bytes() != obligation.key.policy_id.bytes()
+        || bundle_id.bytes() != obligation.key.compiler_bundle_v6_id.bytes()
+        || attachment_id.bytes() != obligation.key.attachment_plan_v5_id.bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let root = MarketLifecycleRootAccountV2::decode(accounts[25].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let root_state = &root.state;
+    let root_binding = root_state.binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let root_pda = Address::find_program_address(
+        &[
+            PRODUCT_MARKET_LIFECYCLE_ROOT_PDA_DOMAIN_V1,
+            &root_binding.market_instance_id.bytes(),
+            &root_binding.generation.to_le_bytes(),
+        ],
+        &program,
+    );
+    let link = SeriesMarketLinkAccountV2::decode(accounts[31].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let link_state = link.state;
+    let link_binding = link_state.binding();
+    let link_pda = Address::find_program_address(
+        &[
+            PRODUCT_SERIES_MARKET_LINK_PDA_DOMAIN_V1,
+            &link_binding.series_plan_id.bytes(),
+            &link_binding.ordinal.to_le_bytes(),
+        ],
+        &program,
+    );
+    let link_floor = link_state
+        .rent_principal_lamports()
+        .checked_add(link_state.current_donation_lamports())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    if accounts[25].owner()? != program
+        || accounts[31].owner()? != program
+        || accounts[25].executable()
+        || accounts[31].executable()
+        || accounts[25].address.to_bytes()
+            != obligation.key.product_market_root_account_id.bytes()
+        || accounts[31].address.to_bytes()
+            != obligation.key.series_market_link_account_id.bytes()
+        || accounts[25].address != root_pda.0
+        || root.stored_bump != root_pda.1
+        || accounts[25]
+            .present
+            .is_none_or(|value| value.lamports < root.rent_principal_lamports)
+        || root_state.phase() != MarketLifecyclePhaseV2::Active
+        || root_binding_id.bytes() != obligation.key.product_market_binding_id.bytes()
+        || root_binding.market_instance_id.bytes() != obligation.key.market_instance_v2_id.bytes()
+        || root_binding.generation != obligation.key.product_generation
+        || root_binding.outcome_count != dealer_policy.outcome_count
+        || root_binding.registry_release_id != release_id
+        || root_binding.capability_profile_id != profile_id.content_id()
+        || root_binding.native_claim_basis_id.bytes() != dealer_policy.claim_basis_id.bytes()
+        || root_state.resolution_semantic_id() == ContentId::ZERO
+        || root_state.resolution_data_id() == ContentId::ZERO
+        || root_state.resolution_activation_receipt_id() == ContentId::ZERO
+        || accounts[31].address != link_pda.0
+        || link.stored_bump != link_pda.1
+        || accounts[31]
+            .present
+            .is_none_or(|value| value.lamports < link_floor)
+        || link_state.phase() != SeriesMarketLinkPhaseV2::Active
+        || link_binding.market_instance_id != root_binding.market_instance_id
+        || link_binding.market_root_account_id.bytes() != accounts[25].address.to_bytes()
+        || link_binding.market_binding_id != root_binding_id
+        || link_binding.generation != root_binding.generation
+        || link_binding.series_plan_id.bytes() != obligation.key.series_plan_v5_id.bytes()
+        || link_binding.ordinal != obligation.key.series_ordinal
+        || link_binding.compiler_bundle_id != bundle_id
+        || link_binding.attachment_plan_id != attachment_id
+        || link_binding.capability_profile_id != profile_id.content_id()
+        || link_binding.rent_refund_owner.bytes() != obligation.rent.payer.bytes()
+        || link_binding.neutral_lamport_sink.bytes() != obligation.rent.neutral_sink.bytes()
+        || link_state.obligation_status(SeriesLinkObligationV2::Dealer)
+            != SeriesLinkObligationStatusV2::Live
+        || link_state
+            .obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer)
+            .bytes()
+            != obligation.admission_projection_id.bytes()
+        || link_state.transition_sequence() < obligation.admission_link_transition_sequence
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    for index in [34usize, 35, 36, 39, 40, 41, 42, 43] {
+        if accounts[index].owner()? != program || accounts[index].executable() {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
+    let collateral_program = accounts[37]
+        .present
+        .and_then(CurrentCollateralExecutableAccountViewV1::from_finalized)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_programdata = accounts[38]
+        .present
+        .and_then(CurrentCollateralExecutableAccountViewV1::from_finalized)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    collateral
+        .reauthenticate_executable(collateral_program, collateral_programdata)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
+    let realm = RealmAccount::decode(accounts[34].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_profile = ProfileAccount::decode(accounts[35].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_policy = CollateralPolicyV2::decode(accounts[36].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_policy_id = collateral_policy
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let selected_collateral = collateral
+        .select_for(release, collateral_policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
+    let collateral_release_id = collateral
+        .adapter()
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let realm_pda = Address::find_program_address(
+        &[REALM_PDA_SEED_V1, &realm.realm.bytes()],
+        &program,
+    );
+    let collateral_profile_pda = Address::find_program_address(
+        &[
+            PROFILE_PDA_SEED_V1,
+            &realm.realm.bytes(),
+            &collateral_profile.profile.bytes(),
+        ],
+        &program,
+    );
+    let collateral_policy_pda = Address::find_program_address(
+        &[
+            COLLATERAL_POLICY_PDA_SEED_V1,
+            &collateral_profile.profile.bytes(),
+            &collateral_policy_id.bytes(),
+        ],
+        &program,
+    );
+    if accounts[37].address != collateral.program().program_id
+        || accounts[38].address != collateral.program().program_data
+        || realm.profile != collateral_profile.profile
+        || realm.realm != collateral_profile.realm
+        || collateral_profile.collateral_policy_id.bytes() != collateral_policy_id.bytes()
+        || collateral_profile.adapter_release_id.bytes() != collateral_release_id.bytes()
+        || collateral_policy.token_program.bytes() != accounts[37].address.to_bytes()
+        || accounts[34].address != realm_pda.0
+        || realm.stored_bump != realm_pda.1
+        || accounts[35].address != collateral_profile_pda.0
+        || accounts[36].address != collateral_policy_pda.0
+        || realm.realm.bytes() != dealer_policy.realm_id.bytes()
+        || collateral_profile.profile.bytes() != dealer_policy.profile_id.bytes()
+        || collateral_policy.mint.bytes() != dealer_policy.collateral_mint.bytes()
+        || collateral_policy.token_program.bytes() != dealer_policy.token_program.bytes()
+        || root_binding.realm_id.bytes() != realm.realm.bytes()
+        || root_binding.collateral_profile_id.bytes() != collateral_profile.profile.bytes()
+        || root_binding.collateral_policy_id.bytes() != collateral_policy_id.bytes()
+        || root_binding.collateral_release_id.bytes() != collateral_release_id.bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let market_binding = MarketBindingV2::decode(accounts[39].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_base = market_binding.base();
+    let market_runtime = MarketRuntimeV3AccountV1::decode(accounts[40].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let binding_pda = Address::find_program_address(
+        &[
+            MARKET_BINDING_SEED_DOMAIN_V1,
+            &market_base.market_instance_v2_id.bytes(),
+        ],
+        &program,
+    );
+    let runtime_pda = Address::find_program_address(
+        &[MARKET_RUNTIME_SEED_DOMAIN_V1, &accounts[39].address.to_bytes()],
+        &program,
+    );
+    let runtime_floor = market_runtime
+        .rent
+        .refundable_principal
+        .checked_add(market_runtime.rent.donation_floor)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market = MarketInstancePreimageV2::decode(accounts[41].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_id = market
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    verify_product_artifact(
+        program,
+        accounts[41],
+        ArtifactKind::MarketInstancePreimageV2,
+        market_id.bytes(),
+    )?;
+    let hoard = HoardV2::decode(accounts[42].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let claim = ClaimLedgerV3::decode(accounts[43].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let hoard_pda = Address::find_program_address(
+        &[HOARD_V2_PDA_SEED_V1, &market_id.bytes()],
+        &program,
+    );
+    let claim_pda = Address::find_program_address(
+        &[CLAIM_LEDGER_V3_PDA_SEED_V1, &market_id.bytes()],
+        &program,
+    );
+    let hoard_authority = Address::find_program_address(
+        &[HOARD_AUTHORITY_V2_PDA_SEED_V1, &market_id.bytes()],
+        &program,
+    );
+    let hoard_token = Address::find_program_address(
+        &[HOARD_TOKEN_V2_PDA_SEED_V1, &market_id.bytes()],
+        &program,
+    );
+    if accounts[39].address != binding_pda.0
+        || market_base.stored_bump != binding_pda.1
+        || accounts[40].address != runtime_pda.0
+        || market_runtime.stored_bump != runtime_pda.1
+        || accounts[40]
+            .present
+            .is_none_or(|value| value.lamports < runtime_floor)
+        || market_base.market.bytes() != accounts[40].address.to_bytes()
+        || market_runtime.market_binding.bytes() != accounts[39].address.to_bytes()
+        || market_runtime.market_instance_v2_id != market_base.market_instance_v2_id
+        || market_id.bytes() != market_base.market_instance_v2_id.bytes()
+        || market_id.bytes() != dealer_policy.market_instance_v2_id.bytes()
+        || market_base.market_genesis_profile_v2_id.bytes()
+            != market.market_genesis_profile_id.bytes()
+        || market_base.market_instance_v2_id.bytes() != root_binding.market_instance_id.bytes()
+        || market_base.series_plan_v5_id.bytes() != link_binding.series_plan_id.bytes()
+        || market_base.series_funding_terms_v2_id.bytes() != link_binding.funding_terms_id.bytes()
+        || market_base.native_claim_basis_id.bytes() != root_binding.native_claim_basis_id.bytes()
+        || market_base.outcome_count != root_binding.outcome_count
+        || accounts[42].address != hoard_pda.0
+        || hoard.stored_bump != hoard_pda.1
+        || accounts[43].address != claim_pda.0
+        || claim.stored_bump != claim_pda.1
+        || hoard.market_instance_id.bytes() != market_id.bytes()
+        || hoard.realm_id.bytes() != realm.realm.bytes()
+        || hoard.profile_id.bytes() != collateral_profile.profile.bytes()
+        || hoard.collateral_policy_id.bytes() != collateral_policy_id.bytes()
+        || hoard.collateral_release_id.bytes() != collateral_release_id.bytes()
+        || hoard.authority.bytes() != hoard_authority.0.to_bytes()
+        || hoard.token_account.bytes() != hoard_token.0.to_bytes()
+        || hoard.collateral_cap_atoms != market.collateral_cap
+        || hoard.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim.market_instance_id != hoard.market_instance_id
+        || claim.realm_id != hoard.realm_id
+        || claim.native_claim_basis_id.bytes() != root_binding.native_claim_basis_id.bytes()
+        || claim.resolution_account.bytes() != root_binding.resolution_account_id.bytes()
+        || claim.lifecycle != hoard.lifecycle
+        || claim.outcome_count != hoard.outcome_count
+        || claim.outcome_count != dealer_policy.outcome_count
+        || !rent_is_covered(hoard.rent, accounts[42].present)
+        || !rent_is_covered(claim.rent, accounts[43].present)
+        || (variant == CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit
+            && claim.fractional_ledger_account.is_zero())
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(DealerTerminalMarketV1 {
+        market_instance_id: market_id.bytes(),
+        realm_id: realm.realm.bytes(),
+        collateral_policy_id: collateral_policy_id.bytes(),
+        collateral_release_id: collateral_release_id.bytes(),
+        native_claim_basis_id: root_binding.native_claim_basis_id.bytes(),
+        resolution_account: root_binding.resolution_account_id.bytes(),
+        resolution_semantic_id: root_state.resolution_semantic_id().bytes(),
+        resolution_data_id: root_state.resolution_data_id().bytes(),
+        generation: root_binding.generation,
+        outcome_count: root_binding.outcome_count,
+        collateral_selection_receipt_id: selected_collateral.receipt_id(),
+    })
+}
+
+fn authenticate_dealer_terminal_credit_tail_v1(
+    program: Address,
+    accounts: &[StructuredChainAccountV1<'_>],
+    variant: CanonicalIntentVariantV1,
+    policy: &DealerPolicyV1,
+    state: &DealerStateV3,
+    obligation: &DealerSeriesObligationBindingV2,
+    market: DealerTerminalMarketV1,
+) -> Result<()> {
+    let claim = ClaimLedgerV3::decode(accounts[43].data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    match variant {
+        CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => {
+            let resolution = ResolutionV5::decode(accounts[44].data()?)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let resolution_pda = Address::find_program_address(
+                &[b"dc:resolution:v5", &market.market_instance_id],
+                &program,
+            );
+            let resolution_semantic_id = resolution
+                .semantic_id(&OperatorSha256V1)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let resolution_data_id = resolution
+                .data_id(clutch_collateral_adapter_v2::Id::from_bytes(
+                    accounts[44].address.to_bytes(),
+                ))
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let fractional_policy = FractionalPolicyV3::decode(accounts[45].data()?)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let fractional_ledger = FractionalLedgerV1::decode(accounts[46].data()?)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let facility_credit = FractionalCreditV2::decode(accounts[47].data()?)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let policy_pda = Address::find_program_address(
+                &[
+                    FRACTIONAL_POLICY_PDA_PREFIX,
+                    &fractional_policy.market_instance.bytes(),
+                    &fractional_policy.resolution_account.bytes(),
+                ],
+                &program,
+            );
+            let ledger_pda = Address::find_program_address(
+                &[FRACTIONAL_LEDGER_PDA_PREFIX, &accounts[45].address.to_bytes()],
+                &program,
+            );
+            let credit_pda = Address::find_program_address(
+                &[
+                    FRACTIONAL_CREDIT_PDA_PREFIX,
+                    &accounts[45].address.to_bytes(),
+                    &state.base.facility_id.bytes(),
+                ],
+                &program,
+            );
+            let payout = clutch_fractional_redemption_runtime::PayoutVectorV1::from_resolution_v5(
+                resolution,
+            )
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let fractional_policy_account = clutch_retirement::Identity32V1::new(
+                accounts[45].address.to_bytes(),
+            )
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let fractional_ledger_account = clutch_retirement::Identity32V1::new(
+                accounts[46].address.to_bytes(),
+            )
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            facility_credit
+                .validate_with(
+                    fractional_policy_account,
+                    fractional_policy,
+                    fractional_ledger_account,
+                    fractional_ledger,
+                    payout,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if accounts[44].owner()? != program
+                || accounts[45].owner()? != program
+                || accounts[46].owner()? != program
+                || accounts[47].owner()? != program
+                || accounts[44].executable()
+                || accounts[45].executable()
+                || accounts[46].executable()
+                || accounts[47].executable()
+                || accounts[44].address != resolution_pda.0
+                || resolution.stored_bump != resolution_pda.1
+                || !rent_is_covered(resolution.rent, accounts[44].present)
+                || resolution.state != ResolutionStateV5::Finalized
+                || resolution.facts.market_instance_id.bytes() != market.market_instance_id
+                || resolution.facts.native_claim_basis_id.bytes()
+                    != market.native_claim_basis_id
+                || resolution.facts.generation != market.generation
+                || resolution.facts.outcome_count != market.outcome_count
+                || resolution_semantic_id.bytes() != market.resolution_semantic_id
+                || resolution_data_id.bytes() != market.resolution_data_id
+                || accounts[44].address.to_bytes() != market.resolution_account
+                || accounts[45].address != policy_pda.0
+                || fractional_policy.stored_bump != policy_pda.1
+                || !rent_is_covered(fractional_policy.rent, accounts[45].present)
+                || fractional_policy.market_instance.bytes() != market.market_instance_id
+                || fractional_policy.resolution_account.bytes() != market.resolution_account
+                || fractional_policy.resolution_data_id.bytes() != market.resolution_data_id
+                || fractional_policy.realm.bytes() != market.realm_id
+                || fractional_policy.collateral_policy.bytes() != market.collateral_policy_id
+                || fractional_policy.collateral_release.bytes() != market.collateral_release_id
+                || fractional_policy.domain_generation != market.generation
+                || fractional_policy.outcome_count != market.outcome_count
+                || accounts[46].address != ledger_pda.0
+                || fractional_ledger.stored_bump != ledger_pda.1
+                || !rent_is_covered(fractional_ledger.rent, accounts[46].present)
+                || fractional_ledger.policy_account.bytes() != accounts[45].address.to_bytes()
+                || fractional_ledger.claim_ledger_account.bytes()
+                    != accounts[43].address.to_bytes()
+                || fractional_ledger.domain_generation != market.generation
+                || fractional_ledger.active_credit_accounts == 0
+                || claim.fractional_policy_id.bytes() != accounts[45].address.to_bytes()
+                || claim.fractional_ledger_account.bytes() != accounts[46].address.to_bytes()
+                || claim.resolution_account.bytes() != accounts[44].address.to_bytes()
+                || claim.next_fractional_sequence != fractional_ledger.next_sequence
+                || accounts[47].address != credit_pda.0
+                || facility_credit.stored_bump != credit_pda.1
+                || !position_rent_is_covered(facility_credit.rent, accounts[47].present)
+                || facility_credit.rent.payer.bytes() != accounts[19].address.to_bytes()
+                || facility_credit.policy_account.bytes() != accounts[45].address.to_bytes()
+                || facility_credit.ledger_account.bytes() != accounts[46].address.to_bytes()
+                || facility_credit.market_instance.bytes() != market.market_instance_id
+                || facility_credit.resolution_account.bytes() != market.resolution_account
+                || facility_credit.resolution_data_id.bytes() != market.resolution_data_id
+                || facility_credit.claimant.bytes() != state.base.facility_id.bytes()
+                || facility_credit.domain_generation != market.generation
+                || facility_credit.numerator != 0
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+        }
+        CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => {
+            let (bump, funding) =
+                decode_current_dealer_material_body_v1::<DealerFutureCreditFundingV1>(
+                    program,
+                    accounts[44],
+                    clutch_solana_layout::registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+                    clutch_solana_layout::registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+                    clutch_solana_layout::registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
+                )?;
+            require_pda_v1(
+                accounts[44].address,
+                program,
+                &[
+                    DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1,
+                    &state.base.facility_id.bytes(),
+                ],
+                bump,
+            )?;
+            let minimum = funding
+                .minimum_balance_lamports()
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if funding.funding_account_id.bytes() != accounts[44].address.to_bytes()
+                || accounts[44]
+                    .present
+                    .is_none_or(|account| account.lamports < minimum)
+                || funding.policy_id != state.base.policy_id
+                || funding.facility_id != state.base.facility_id
+                || funding.market_instance_v2_id.bytes() != market.market_instance_id
+                || funding.realm_id.bytes() != market.realm_id
+                || funding.collateral_policy_id.bytes() != market.collateral_policy_id
+                || funding.collateral_release_id.bytes() != market.collateral_release_id
+                || funding.dealer_state_account_id.bytes() != accounts[2].address.to_bytes()
+                || funding.facility_position_account_id.bytes()
+                    != accounts[3].address.to_bytes()
+                || funding.facility_position_binding_id
+                    != state.base.facility_position_binding_id
+                || funding.dealer_replay_account_id.bytes() != accounts[4].address.to_bytes()
+                || funding.refund_owner.bytes() != accounts[19].address.to_bytes()
+                || funding.neutral_sink.bytes() != accounts[20].address.to_bytes()
+                || funding.neutral_sink != obligation.rent.neutral_sink
+                || funding.founding_generation > state.base.generation
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+        }
+    }
+    if policy.market_instance_v2_id.bytes() != market.market_instance_id
+        || policy.realm_id.bytes() != market.realm_id
+        || policy.claim_basis_id.bytes() != market.native_claim_basis_id
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(())
+}
+
+fn derive_dealer_terminal_v1(
+    release: &IndexedProgramRelease,
+    collateral: StructuredCollateralCatalogEntryV1<'_>,
+    accounts: &[StructuredChainAccountV1<'_>],
+    variant: CanonicalIntentVariantV1,
+) -> Result<DerivedDealerTerminalV1> {
+    let program = release.program_id;
+    require_dealer_terminal_system_roles_v1(accounts)?;
+    let policy_data = accounts[1].data()?;
+    if accounts[1].owner()? != program
+        || accounts[1].executable()
+        || policy_data.len() != clutch_solana_layout::registry::DEALER_POLICY_ACCOUNT_BYTES
+        || policy_data[0] != clutch_solana_layout::registry::DEALER_POLICY_ACCOUNT_TAG
+        || policy_data[1] != clutch_solana_layout::registry::DEALER_POLICY_ACCOUNT_VERSION
+        || policy_data[3..8].iter().any(|byte| *byte != 0)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let policy_principal = read_u64_le(policy_data, 40)?;
+    if policy_principal == 0
+        || accounts[1]
+            .present
+            .is_none_or(|account| account.lamports < policy_principal)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let policy_body = &policy_data
+        [clutch_solana_layout::registry::DEALER_POLICY_ACCOUNT_HEADER_BYTES..];
+    let policy = <DealerPolicyV1 as DealerFixedCodec>::decode(policy_body)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let mut policy_hash = Sha256::new();
+    policy_hash.update(DEALER_POLICY_CONTENT_DOMAIN_V1);
+    policy_hash.update(policy_body);
+    let policy_id = DealerId::from_bytes(policy_hash.finalize().into());
+    if policy
+        .policy_id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?
+        != policy_id
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    require_pda_v1(
+        accounts[1].address,
+        program,
+        &[DEALER_POLICY_PDA_DOMAIN_V1, &policy_id.bytes()],
+        policy_data[2],
+    )?;
+
+    let (state_bump, state) = decode_current_dealer_material_body_v1::<DealerStateV3>(
+        program,
+        accounts[2],
+        clutch_solana_layout::registry::DEALER_STATE_V3_ACCOUNT_TAG,
+        clutch_solana_layout::registry::DEALER_STATE_V3_ACCOUNT_VERSION,
+        clutch_solana_layout::registry::DEALER_STATE_V3_ACCOUNT_BYTES,
+    )?;
+    let state_base = state.base;
+    require_pda_v1(
+        accounts[2].address,
+        program,
+        &[DEALER_STATE_PDA_DOMAIN_V2, &state_base.facility_id.bytes()],
+        state_bump,
+    )?;
+    let state_floor = state_base
+        .rent
+        .refundable_live_principal
+        .checked_add(state_base.rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(state_base.rent.donation_floor))
+        .and_then(|value| value.checked_add(state.product_upgrade_rent.refundable_principal))
+        .and_then(|value| value.checked_add(state.product_upgrade_rent.donation_floor))
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    if state_base.phase != DealerPhaseV2::Retiring
+        || state_base.policy_id != policy_id
+        || state.series_obligation_children != 1
+        || accounts[2]
+            .present
+            .is_none_or(|account| account.lamports < state_floor)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let (obligation_bump, obligation) =
+        decode_current_dealer_material_body_v1::<DealerSeriesObligationBindingV2>(
+            program,
+            accounts[24],
+            clutch_solana_layout::registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            clutch_solana_layout::registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
+            clutch_solana_layout::registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+        )?;
+    let obligation_id = obligation
+        .binding_id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    require_pda_v1(
+        accounts[24].address,
+        program,
+        &[
+            DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1,
+            &state_base.facility_id.bytes(),
+        ],
+        obligation_bump,
+    )?;
+    let obligation_floor = obligation
+        .rent
+        .refundable_principal
+        .checked_add(obligation.rent.donation_floor)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    if obligation.phase != DealerSeriesObligationPhaseV1::Live
+        || obligation.key.binding_account_id.bytes() != accounts[24].address.to_bytes()
+        || obligation.key.policy_id != policy_id
+        || obligation.key.facility_id != state_base.facility_id
+        || obligation.key.dealer_state_account_id.bytes() != accounts[2].address.to_bytes()
+        || obligation.key.facility_position_binding_id != state_base.facility_position_binding_id
+        || state.series_obligation_binding_account_id.bytes() != accounts[24].address.to_bytes()
+        || state.series_obligation_binding_id != obligation_id
+        || obligation.rent.payer.bytes() != accounts[19].address.to_bytes()
+        || obligation.rent.neutral_sink.bytes() != accounts[20].address.to_bytes()
+        || accounts[24]
+            .present
+            .is_none_or(|account| account.lamports < obligation_floor)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let position = authenticate_dealer_terminal_position_replay_v1(
+        program, accounts, &policy, policy_id, &state,
+    )?;
+    let (dependency_bump, dependency) =
+        decode_current_dealer_material_body_v1::<DealerFundedDependenciesV2>(
+            program,
+            accounts[5],
+            clutch_solana_layout::registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
+            clutch_solana_layout::registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION,
+            clutch_solana_layout::registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES,
+        )?;
+    let (schedule_bump, schedule) =
+        decode_current_dealer_material_body_v1::<DealerLivenessScheduleV1>(
+            program,
+            accounts[6],
+            clutch_solana_layout::registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG,
+            clutch_solana_layout::registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
+            clutch_solana_layout::registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
+        )?;
+    require_pda_v1(
+        accounts[5].address,
+        program,
+        &[
+            DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2,
+            &state_base.facility_id.bytes(),
+        ],
+        dependency_bump,
+    )?;
+    let schedule_id = schedule
+        .schedule_id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?
+        .untyped();
+    require_pda_v1(
+        accounts[6].address,
+        program,
+        &[DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1, &schedule_id.bytes()],
+        schedule_bump,
+    )?;
+    if dependency.bindings.facility_id != state_base.facility_id
+        || dependency.bindings.policy_id != policy_id
+        || dependency.facility_position_binding_id != state_base.facility_position_binding_id
+        || dependency.bindings.liveness_schedule_id != schedule_id
+        || schedule_id != policy.liveness_policy_id
+        || dependency.rent.neutral_sink != policy.neutral_sink
+        || !dealer_rent_is_covered_v1(dependency.rent, accounts[5].present)
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let (runtime_binding, retirement) = authenticate_dealer_terminal_liveness_v1(
+        program,
+        accounts,
+        &state,
+        &policy,
+        &dependency,
+        &schedule,
+        &position.binding,
+    )?;
+    let call_ordinal = retirement
+        .completed_calls
+        .checked_add(1)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let action_index = DealerLivenessScheduleV1::action_index(DealerRuntimeActionV1::Retire);
+    let payment = schedule.reward_lamports[action_index];
+    if retirement.phase != RuntimeCompartmentPhaseV1::Active
+        || retirement.remaining_calls == 0
+        || payment == 0
+        || payment > retirement.maximum_lamports_per_call
+        || payment > retirement.remaining_work_lamports
+        || u64::from(call_ordinal) > schedule.maximum_calls[action_index]
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let market = authenticate_dealer_terminal_product_and_value_v1(
+        release,
+        collateral,
+        accounts,
+        &policy,
+        &obligation,
+        variant,
+    )?;
+    if position.binding.collateral_policy_id.bytes() != market.collateral_policy_id
+        || position.binding.collateral_release_id.bytes() != market.collateral_release_id
+        || position.binding.market_instance_v2_id.bytes() != market.market_instance_id
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    authenticate_dealer_terminal_credit_tail_v1(
+        program,
+        accounts,
+        variant,
+        &policy,
+        &state,
+        &obligation,
+        market,
+    )?;
+
+    let receipt = DealerActionReceiptV1 {
+        policy_id,
+        facility_id: state_base.facility_id,
+        dealer_state_account_id: DealerId::from_bytes(accounts[2].address.to_bytes()),
+        liveness_schedule_id: schedule_id,
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding
+            .account_id(DealerLivenessCompartmentV1::Retirement),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Retirement),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Retirement),
+        receipt_account_id: DealerId::from_bytes(accounts[15].address.to_bytes()),
+        receipt_program_id: DealerId::from_bytes(program.to_bytes()),
+        keeper: DealerId::from_bytes(accounts[0].address.to_bytes()),
+        replay_account_id: DealerId::from_bytes(accounts[4].address.to_bytes()),
+        action: DealerRuntimeActionV1::Retire,
+        compartment: DealerLivenessCompartmentV1::Retirement,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Retirement),
+        facility_generation: state_base.generation,
+        call_ordinal,
+        call_ceiling_lamports: payment,
+        keeper_payment_lamports: payment,
+        expected_replay_ordinal: position.replay.next_transition_ordinal(),
+        // Rent amount is intentionally absent from the receipt-slot identity.
+        // The onchain handler recomputes the exact live Rent principal before
+        // allocating this already-derived absent PDA.
+        rent: DeletableRentOwnerV1 {
+            payer: DealerId::from_bytes(accounts[0].address.to_bytes()),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: 1,
+            donation_floor: 0,
+        },
+    };
+    receipt
+        .authorization(&schedule, &runtime_binding, &retirement)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let slot = receipt
+        .receipt_slot_id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let expected_receipt = Address::find_program_address(
+        &[DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1, &slot.bytes()],
+        &program,
+    );
+    if accounts[15].address != expected_receipt.0 {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(DerivedDealerTerminalV1 {
+        variant,
+        generation: state_base.generation,
+        replay_ordinal: position.replay.next_transition_ordinal(),
+        liveness_call_ordinal: call_ordinal,
+        keeper_payment_lamports: payment,
+        collateral_selection_receipt_id: market.collateral_selection_receipt_id,
+    })
+}
+
 /// Construct one Source material artifact through the sole typed Source graph.
 /// The caller supplies decoded semantic-owner values and physical identities;
 /// it cannot supply instruction bytes, account metas, signer vectors, or the
@@ -3250,6 +4718,56 @@ fn validate_unsigned_structured_plan(
         || transaction.signed
         || transaction.submitted
         || !planned.reload_authoritative_accounts
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+fn validate_unsigned_direct_plan(
+    coordinate: CanonicalIntentCoordinate,
+    fee_payer: Address,
+    roles: &[CanonicalAccountRoleV1],
+    planned: &PlannedWorkflowNode,
+) -> Result<()> {
+    let transaction = &planned.unsigned_transaction;
+    let expected_signers = roles
+        .iter()
+        .filter(|role| role.signer)
+        .map(|role| role.address)
+        .chain(core::iter::once(fee_payer))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding_matches = matches!(
+        transaction.registry_bindings.as_slice(),
+        [Some(binding)]
+            if binding.family.tag() == coordinate.family_tag
+                && binding.family.version() == coordinate.family_version
+                && binding.local_action == coordinate.local_action
+                && binding.family_status == AllocationStatus::Frozen
+                && matches!(
+                    binding.central_action,
+                    Some(ExtensionAction::DirectMarket(action))
+                        if action.tag() == coordinate.local_action
+                )
+    );
+    if !matches!(
+        planned.coordinate,
+        CanonicalActionCoordinate::Direct(action)
+            if action.tag() == coordinate.local_action
+    )
+        || transaction.flows != [ProtocolFlow::DirectMarketV1]
+        || transaction.actions.len() != 1
+        || transaction.semantic_owners.len() != 1
+        || !binding_matches
+        || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
+        || transaction.required_signers != expected_signers
+        || transaction.exact_equations.is_empty()
+        || transaction.serialized_transaction.is_empty()
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
