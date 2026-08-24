@@ -331,10 +331,10 @@ pub const SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY: &[u8] =
     clutch_solana_layout::product_series::SERIES_LIFECYCLE_REPLAY_PDA_PREFIX_V1;
 /// Product-owned Direct global-liveness manifest/allocation lifecycle.
 pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS: &[u8] =
-    clutch_solana_layout::product_series::PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V1;
-/// One physical generic-liveness row owned by Product `0xba/v1`.
+    clutch_solana_layout::product_series::PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V2;
+/// One physical generic-liveness row owned by Product `0xba/v2`.
 pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT: &[u8] =
-    b"dc:product-direct-row:v1";
+    b"dc:product-direct-row:v2";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {

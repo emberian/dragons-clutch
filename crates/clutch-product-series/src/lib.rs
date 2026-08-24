@@ -34,6 +34,7 @@ mod funding_state;
 mod funding_state_v2;
 mod failure_begin_schedule;
 mod funding_state_v3;
+mod funding_state_v4;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
@@ -93,15 +94,16 @@ pub use compiler_output_v6::{
     COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
 };
 pub use direct_global_liveness::{
-    DirectGlobalLivenessAllocationV1, DirectGlobalLivenessCapitalizationV1,
-    DirectGlobalLivenessPhaseV1, DirectGlobalLivenessTerminalAccountingV1,
-    DirectGlobalLivenessTerminalProjectionV1, DirectGlobalLivenessV1,
-    ProductDirectGlobalLivenessAuthorityV1, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
-    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1, DIRECT_GLOBAL_LIVENESS_BYTES_V1,
-    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_COUNT_V1, DIRECT_GLOBAL_LIVENESS_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V1,
+    DirectGlobalLivenessAllocationV2, DirectGlobalLivenessCapitalizationV2,
+    DirectGlobalLivenessPhaseV2, DirectGlobalLivenessTerminalAccountingV2,
+    DirectGlobalLivenessTerminalProjectionV2, DirectGlobalLivenessV2, DirectWorkQuoteV1,
+    ProductDirectGlobalLivenessAuthorityV2, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
+    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2, DIRECT_GLOBAL_LIVENESS_BYTES_V2,
+    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_COUNT_V2, DIRECT_GLOBAL_LIVENESS_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V2,
+    DIRECT_WORK_QUOTE_BYTES_V1, DIRECT_WORK_QUOTE_DOMAIN_V1,
 };
 pub use failure_begin_schedule_v2::{
     derive_product_failure_begin_schedule_projection_v2,
@@ -160,6 +162,16 @@ pub use funding_state_v3::{
     SeriesFundingStateV3, SeriesFundingTerminalProjectionV3, SERIES_COMPONENT_CAPITAL_BYTES_V3,
     SERIES_FUNDING_STATE_BYTES_V3, SERIES_FUNDING_STATE_V3_DOMAIN,
     SERIES_FUNDING_TERMINAL_PROJECTION_V3_DOMAIN,
+};
+pub use funding_state_v4::{
+    AuthenticatedSeriesFundingAuthorityV4, SeriesComponentCapitalV4,
+    SeriesFundingAbortBindingV4, SeriesFundingAbortDispositionV4,
+    SeriesFundingCompletionBindingV4, SeriesFundingPhaseV4,
+    SeriesFundingReservationBindingV4, SeriesFundingStateV4,
+    SeriesFundingTerminalProjectionV4, SERIES_COMPONENT_CAPITAL_BYTES_V4,
+    SERIES_FUNDING_ABORT_BINDING_V4_DOMAIN, SERIES_FUNDING_COMPLETION_BINDING_V4_DOMAIN,
+    SERIES_FUNDING_RESERVATION_BINDING_V4_DOMAIN, SERIES_FUNDING_STATE_BYTES_V4,
+    SERIES_FUNDING_STATE_V4_DOMAIN, SERIES_FUNDING_TERMINAL_PROJECTION_V4_DOMAIN,
 };
 pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
@@ -428,7 +440,23 @@ typed_id!(
 );
 typed_id!(
     SeriesFundingStateV3Id,
-    "Typed semantic identity of one current `SeriesFundingStateV3`."
+    "Typed semantic identity of one historical `SeriesFundingStateV3`."
+);
+typed_id!(
+    SeriesFundingStateV4Id,
+    "Typed semantic identity of one current acyclic `SeriesFundingStateV4`."
+);
+typed_id!(
+    SeriesFundingReservationBindingV4Id,
+    "Typed identity of one acyclic current pre-Source funding reservation."
+);
+typed_id!(
+    SeriesFundingCompletionBindingV4Id,
+    "Typed identity of one current Source/Root/Link/replay completion join."
+);
+typed_id!(
+    SeriesFundingAbortBindingV4Id,
+    "Typed identity of one current Source-absent or Source-retired funding abort."
 );
 typed_id!(
     SeriesAttachmentPlanV4Id,

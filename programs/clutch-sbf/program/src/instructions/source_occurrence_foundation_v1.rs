@@ -1098,7 +1098,7 @@ pub(crate) fn capitalize_source_work_v2<
 }
 
 /// Non-copy current Source pre-root receipt consumed by Product's V3 founder.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedPreRootSourceOccurrenceV2 {
     id: ContentId,
     product_preauthorization_id: ContentId,
