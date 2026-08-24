@@ -35,6 +35,7 @@ mod market_replay;
 mod product_registry;
 mod registry;
 mod source_series;
+mod series_lifecycle_replay;
 mod successor;
 
 pub use artifacts::{
@@ -173,6 +174,15 @@ pub use source_series::{
     compile_source_occurrence_v3, compile_source_occurrence_v4,
     AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
+};
+pub use series_lifecycle_replay::{
+    SeriesLifecycleAdmissionProjectionV1, SeriesLifecycleLapseProjectionV1,
+    SeriesLifecycleLinkRetirementProjectionV1, SeriesLifecycleReplayBindingV1,
+    SeriesLifecycleReplayPhaseV1, SeriesLifecycleReplayV1,
+    SeriesLifecycleTerminalEvidenceV1, SeriesLifecycleTerminalProjectionV1,
+    SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V1, SERIES_LIFECYCLE_REPLAY_BINDING_DOMAIN_V1,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_LIFECYCLE_REPLAY_DOMAIN_V1,
+    SERIES_LIFECYCLE_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
@@ -351,6 +361,18 @@ typed_id!(
 typed_id!(
     SeriesMarketLinkV1Id,
     "Typed semantic-state identity of one Series ordinal's Market admission link."
+);
+typed_id!(
+    SeriesLifecycleReplayBindingV1Id,
+    "Typed identity of one immutable per-Series lifecycle replay binding."
+);
+typed_id!(
+    SeriesLifecycleReplayV1Id,
+    "Typed semantic identity of one counted per-Series lifecycle replay state."
+);
+typed_id!(
+    SeriesLifecycleTerminalProjectionV1Id,
+    "Typed identity of one exhaustive per-Series lifecycle terminal projection."
 );
 typed_id!(
     SeriesFundingTermsId,

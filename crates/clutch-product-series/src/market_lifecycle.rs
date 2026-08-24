@@ -1358,6 +1358,20 @@ impl MarketLifecycleRootV1 {
         self,
         retirement: SeriesMarketLinkRetirementProjectionV1,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.retire_series_link_into(retirement, &mut output)?;
+        Ok(output)
+    }
+
+    /// Consume one retiring Series link into caller-owned storage.
+    ///
+    /// The SBF owner uses this frame-bounded form so a 2,452-byte root
+    /// successor is never retained as an additional adapter-frame local.
+    pub fn retire_series_link_into(
+        &self,
+        retirement: SeriesMarketLinkRetirementProjectionV1,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Active
             || retirement.market_instance_id != self.binding.market_instance_id
@@ -1371,7 +1385,7 @@ impl MarketLifecycleRootV1 {
             .transition_sequence
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
-        let next = Self {
+        *output = Self {
             transition_sequence: sequence,
             live_series_links: self
                 .live_series_links
@@ -1387,10 +1401,9 @@ impl MarketLifecycleRootV1 {
                 retirement.id,
                 sequence,
             ),
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Disable new links and delegate product-family admission sealing.
@@ -2522,7 +2535,7 @@ impl SeriesMarketLinkV1 {
     pub fn pin_failure_session(self, failure_begin_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_begin_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 0 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2556,7 +2569,7 @@ impl SeriesMarketLinkV1 {
     pub fn release_failure_session(self, failure_terminal_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_terminal_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions == 0 {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 1 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2635,6 +2648,13 @@ impl SeriesMarketLinkV1 {
 
     /// Enter link retirement only after every obligation and Failure pin closes.
     pub fn begin_retirement(self) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.begin_retirement_into(&mut output)?;
+        Ok(output)
+    }
+
+    /// Enter link retirement into caller-owned storage.
+    pub fn begin_retirement_into(&self, output: &mut Self) -> Result<()> {
         self.validate()?;
         if self.phase != SeriesMarketLinkPhaseV1::Active
             || self.active_failure_sessions != 0
@@ -2645,16 +2665,15 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkIncomplete);
         }
-        let next = Self {
+        *output = Self {
             phase: SeriesMarketLinkPhaseV1::Retiring,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Emit the exact link retirement projection consumed by the shared root.
@@ -2687,6 +2706,17 @@ impl SeriesMarketLinkV1 {
 
     /// Mark the link retired only in the same atomic instruction as root consumption.
     pub fn mark_retired(self, projection: SeriesMarketLinkRetirementProjectionV1) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.mark_retired_into(projection, &mut output)?;
+        Ok(output)
+    }
+
+    /// Mark the link retired into caller-owned storage.
+    pub fn mark_retired_into(
+        &self,
+        projection: SeriesMarketLinkRetirementProjectionV1,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != SeriesMarketLinkPhaseV1::Retiring
             || projection.link_semantic_id != self.semantic_id()?
@@ -2694,16 +2724,15 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::UnauthenticatedAuthority);
         }
-        let next = Self {
+        *output = Self {
             phase: SeriesMarketLinkPhaseV1::Retired,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Mark a never-activated link aborted after exact shared-root abort authorization.
@@ -2863,7 +2892,8 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkStateMismatch);
         }
-        if self.active_failure_sessions > self.failure_sessions_started
+        if self.active_failure_sessions > 1
+            || self.active_failure_sessions > self.failure_sessions_started
             || (self.failure_sessions_started == 0)
                 != (self.failure_session_transcript_id == ContentId::ZERO)
         {
