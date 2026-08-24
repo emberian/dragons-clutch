@@ -818,7 +818,10 @@ fn retirement_refund_is_writable_for_token_close_and_root_refund() -> Result<()>
         account.key = [byte.saturating_add(1); 32];
     }
     for index in [0usize, 1, 4, 8, 9] {
-        accounts[index].is_writable = true;
+        accounts
+            .get_mut(index)
+            .ok_or(Error::InvalidAccountFrame)?
+            .is_writable = true;
     }
     accounts[5].is_executable = true;
     accounts[6].is_executable = true;

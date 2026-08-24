@@ -31,10 +31,18 @@ maker)`:
    `fill == max_fill`; IOC accepts a positive smaller fill and discards the
    remainder.
 2. Registered resting consumes the exact next nonce, increments live count, and
-   creates a 304-byte live record. A Sell moves `max_fill` native claims from
+   creates a 320-byte live record. A Sell moves `max_fill` native claims from
    the signed Position into record custody. A Buy moves
-   `floor(max_fill * limit / PRICE_SCALE)` plus the maximum floor fee into a
+   `floor(max_fill * limit / PRICE_SCALE)` plus the maximum cumulative fee into a
    record-associated token escrow. Partial fills consume only this custody.
+
+The live record owns cumulative fee-bearing gross and cumulative charged fee.
+Each fee-paying partial fill charges
+`floor((prior_gross + fill_gross) * bps / 10_000) - prior_fee`; this is the one
+named floor boundary. Final fee is therefore independent of matcher-selected
+partitioning, including one-atom fragmentation. Ordinary Buyers, split Buyers,
+and merge Sellers accumulate this basis; ordinary Sellers do not because that
+route charges its one venue fee from Buy escrow.
 
 There is no per-order terminal tombstone. Full fill, cancellation, or expiry
 closes the live record and decrements root live count. A closed nonce is below
@@ -132,6 +140,12 @@ founding entry selected by `fee_config`, and verifies policy Market, generation,
 fee rate, and recipient.
 This makes policy selection a Market-founding fact rather than a caller-shaped
 program-owned account assertion.
+The selected entry must also match the exact SHA-256 coordinates for Direct
+kind, semantic adapter release, N=2..16 capacity, child-set schema, and PDA
+derivation. It is founding-required, dependency-free, has no Realm funding
+binding, and quotes zero capability funding: maker/order rent remains
+user-funded and RentCredit-bound. The semantic release coordinate is not a
+claim about a deployed ELF without a checked release manifest.
 
 ## Rent and RentCredit
 
@@ -140,6 +154,12 @@ Every root/record/escrow creation frame carries the separate System payer plus a
 pre-existing canonical RentCredit for that beneficiary. The root and live
 record persist their original payer identity; a Buy record and escrow share one
 beneficiary.
+System-owned, nonexecutable, empty deterministic PDAs remain valid absence even
+when pre-funded. Creation tops up only the Rent shortfall and PDA-signs
+allocate/assign, so lamport dust cannot veto first use; excess later remains an
+explicit `unclassified_donation`. Tokens donated to a Buy escrow likewise
+cannot veto closure: surplus is preserved across partial fills and returned
+only to the collateral destination fixed by the signed intent.
 
 Every full fill, cancellation, expiry, invalidated-record unwind, and root close
 classifies each closed program or token account independently.
@@ -169,7 +189,7 @@ payout addresses.
 |---|---:|---|
 | Signed intent | 232 | header 16 + economic facts 152 + Position 32 + collateral account 32 |
 | Maker replay root | 144 | header 16 + Market 32 + generation 8 + maker 32 + next nonce 8 + live count 8 + minimum-live nonce 8 + payer 32 |
-| Live intent | 304 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + payer 32 |
+| Live intent | 320 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + fee-bearing gross 8 + cumulative fee 8 + payer 32 |
 | Cancel message | 96 | header 16 + Market 32 + generation 8 + maker 32 + nonce 8 |
 | Venue fee policy | 88 | header/fee rate 16 + Market 32 + generation 8 + recipient 32 |
 
@@ -272,12 +292,13 @@ complement only at N=2; operators must construct and measure the pinned v0
 profile. Adding compute-budget instructions or changing ALT placement changes
 bytes and must be remeasured before submission.
 
-## Remaining SBF seam
+## Remaining SBF evidence seam
 
-The kernel now describes sufficient action routing, account roles, phase/slot
-policy, manifest-selected venue policy, replay-root Market-child accounting,
-source delegation, escrow authority, custody, RentCredit beneficiary, and close
-effects, but it does not execute them. The SBF adapter must still:
+The SBF adapter now implements the Direct action family and uses bounded heap
+slices plus borrowed/in-place pure complementary transitions so N=16 does not
+place whole input/output matrices in a 4,096-byte frame. It still needs literal
+checked SBF evidence for stack frames, ELF size, CU, CPI rollback, and complete
+token/RentCredit lifecycles. Its trust boundary must:
 
 - decode canonical Market/Realm/Position/policy/manifest/root/record state,
   content hashes, finalized raw-record identities and staging absence, and PDA
@@ -295,5 +316,5 @@ effects, but it does not execute them. The SBF adapter must still:
   split/merge to the Market ledger, and apply Position/root/record/token effects
   with rollback on any refusal or failed CPI.
 
-Until that adapter exists and is exercised, Direct is not deployed or an
-end-to-end trading implementation.
+Until that adapter is built and exercised by the SVM harness, Direct is not
+deployed or an end-to-end trading implementation.

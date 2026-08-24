@@ -26,37 +26,124 @@ mod settlement;
 mod state;
 
 pub use settlement::{
-    ComplementaryBuyMatchV2, ComplementarySellMatchV2, InlineComplementaryMatchV2,
-    InlineComplementarySettlementV2, InlineOrdinaryMatchV2, InlineOrdinarySettlementV2,
-    MergeSettlementV2, OrdinaryMatchV2, OrdinarySettlementV2, SplitSettlementV2,
-    settle_inline_complementary_v2, settle_inline_ordinary_v2, settle_merge_v2, settle_ordinary_v2,
-    settle_split_v2,
+    settle_inline_complementary_v2, settle_inline_ordinary_v2, settle_merge_in_place_v2,
+    settle_ordinary_v2, settle_split_in_place_v2, ComplementaryBuyMatchInPlaceV2,
+    ComplementarySellMatchInPlaceV2, InlineComplementaryMatchV2, InlineComplementarySettlementV2,
+    InlineOrdinaryMatchV2, InlineOrdinarySettlementV2, MergeSettlementEffectsV2, OrdinaryMatchV2,
+    OrdinarySettlementV2, SplitSettlementEffectsV2,
 };
 pub use state::{
-    CancelThroughV1, CancellationInputV2, CancellationV2, DIRECT_CANCEL_BYTES_V2,
-    DIRECT_CANCEL_MAGIC_V2, DIRECT_CANCEL_SCHEMA_VERSION_V2, DIRECT_CANCEL_THROUGH_BYTES_V1,
+    cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1, close_replay_registration_v2,
+    expire_intent_v2, prepare_replay_root_close_v2, register_intent_v2,
+    terminal_rent_credit_close_plan_v1, terminal_rent_transition_v2,
+    validate_venue_policy_selection_v2, CancelThroughV1, CancellationInputV2, CancellationV2,
+    DirectCancelV2, DirectIntentInputV2, DirectIntentRecordV2, DirectIntentV2,
+    DirectRentCreditClosePlanV1, ExpirationInputV2, ExpirationV2, InlineParticipantAccountsV2,
+    IntentLifecycleV2, InvalidatedCloseInputV1, LiveRecordCloseV2, MakerReplayRootV2,
+    ParticipantAccountsV2, RecordAfterFillV2, RegistrationInputV2, RegistrationV2,
+    ReplayRegistrationStatusV2, ReplayRootStateV2, RootClosureV2, Side, TerminalRentTransitionV2,
+    VenueFeePolicyV2, DIRECT_CANCEL_BYTES_V2, DIRECT_CANCEL_MAGIC_V2,
+    DIRECT_CANCEL_SCHEMA_VERSION_V2, DIRECT_CANCEL_THROUGH_BYTES_V1,
     DIRECT_CANCEL_THROUGH_MAGIC_V1, DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1,
     DIRECT_INTENT_BYTES_V2, DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2, DIRECT_INTENT_MAGIC_V2,
     DIRECT_INTENT_RECORD_BYTES_V2, DIRECT_INTENT_RECORD_MAGIC_V2,
     DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_SCHEMA_VERSION_V2,
-    DIRECT_INTENT_SCHEMA_VERSION_V2, DirectCancelV2, DirectIntentInputV2, DirectIntentRecordV2,
-    DirectIntentV2, DirectRentCreditClosePlanV1, ExpirationInputV2, ExpirationV2,
-    InlineParticipantAccountsV2, IntentLifecycleV2, InvalidatedCloseInputV1, LiveRecordCloseV2,
-    MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_MAGIC_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
-    MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2, MakerReplayRootV2, ParticipantAccountsV2,
-    RecordAfterFillV2, RegistrationInputV2, RegistrationV2, ReplayRegistrationStatusV2,
-    ReplayRootStateV2, RootClosureV2, Side, TerminalRentTransitionV2, VENUE_FEE_POLICY_BYTES_V2,
-    VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
-    VENUE_FEE_POLICY_SCHEMA_VERSION_V2, VenueFeePolicyV2, cancel_intent_v2, cancel_through_v1,
-    close_invalidated_intent_v1, close_replay_registration_v2, expire_intent_v2,
-    prepare_replay_root_close_v2, register_intent_v2, terminal_rent_credit_close_plan_v1,
-    terminal_rent_transition_v2, validate_venue_policy_selection_v2,
+    DIRECT_INTENT_SCHEMA_VERSION_V2, MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_MAGIC_V2,
+    MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2,
+    VENUE_FEE_POLICY_BYTES_V2, VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+    VENUE_FEE_POLICY_SCHEMA_VERSION_V2,
 };
 
 /// Exact scaled integer price denominator.
 pub const PRICE_SCALE: u64 = 1_000_000;
 /// Fee rate denominator.
 pub const FEE_BASIS_POINTS_DENOMINATOR: u64 = 10_000;
+
+/// SHA-256 of `dclutch/capability/direct/v2`, the canonical Direct kind.
+pub const DIRECT_CAPABILITY_KIND_ID_V2: [u8; 32] = [
+    0x84, 0x3c, 0xf4, 0x76, 0x33, 0x18, 0xac, 0x99, 0xa6, 0x9e, 0x15, 0x66, 0x39, 0xac, 0xd2, 0xae,
+    0x6c, 0x5e, 0x3f, 0xb0, 0x6c, 0x2f, 0x90, 0x98, 0x72, 0xa9, 0x44, 0x9e, 0xa8, 0x54, 0xcc, 0xd2,
+];
+/// SHA-256 of `dclutch/release/direct-adapter-v2`.
+///
+/// This identifies the semantic adapter code coordinate. It is not a claim
+/// that any particular deployed ELF has passed a checked release manifest.
+pub const DIRECT_ADAPTER_RELEASE_ID_V2: [u8; 32] = [
+    0x9d, 0x8a, 0xd1, 0x7f, 0xd1, 0x38, 0x95, 0x6e, 0x55, 0x44, 0xde, 0x0d, 0xad, 0x5d, 0x16, 0x31,
+    0xd5, 0xf6, 0xee, 0x52, 0x54, 0x9f, 0xcf, 0x91, 0x6d, 0xe8, 0xb4, 0xa6, 0x18, 0x01, 0x8e, 0x23,
+];
+/// SHA-256 of `dclutch/capacity/direct-n2-n16-v2`.
+pub const DIRECT_CAPACITY_PROFILE_ID_V2: [u8; 32] = [
+    0x6f, 0x86, 0xe9, 0x93, 0x33, 0x5d, 0x11, 0x68, 0x20, 0xf0, 0x88, 0x5b, 0x19, 0x7c, 0x3e, 0x73,
+    0x68, 0x03, 0xab, 0x24, 0xc0, 0x27, 0xc5, 0x77, 0x4b, 0xff, 0xa2, 0x78, 0xe4, 0xf3, 0x6f, 0xbc,
+];
+/// SHA-256 of `dclutch/schema/direct-child-set-v2`.
+pub const DIRECT_CHILD_SCHEMA_ID_V2: [u8; 32] = [
+    0x04, 0xec, 0xcd, 0x25, 0x53, 0x53, 0x88, 0x47, 0x1f, 0xd7, 0xd6, 0x28, 0xb6, 0xdc, 0xbd, 0x71,
+    0x98, 0xa5, 0xba, 0xb5, 0x7c, 0xb3, 0xcf, 0xc9, 0x56, 0xfe, 0x25, 0xe6, 0x70, 0xb7, 0x6d, 0x1a,
+];
+/// SHA-256 of `dclutch/derivation/direct-pdas-v2`.
+pub const DIRECT_CHILD_DERIVATION_ID_V2: [u8; 32] = [
+    0xf6, 0xaf, 0x89, 0x52, 0xe5, 0xe3, 0xe0, 0xbc, 0xa8, 0x00, 0xac, 0x7c, 0xa3, 0x13, 0xff, 0x1d,
+    0x36, 0x3e, 0x81, 0x39, 0xf5, 0x64, 0x55, 0xb4, 0x4a, 0x1b, 0x07, 0x96, 0x82, 0x0f, 0x77, 0xda,
+];
+
+/// Adapter projection of the uniquely selected manifest entry for Direct V2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCapabilitySelectionV2 {
+    /// Capability kind coordinate.
+    pub kind_id: [u8; 32],
+    /// Semantic adapter-release coordinate.
+    pub release_id: [u8; 32],
+    /// Exact canonical venue-policy content digest.
+    pub config_id: [u8; 32],
+    /// Measured N=2..16 capacity coordinate.
+    pub capacity_profile_id: [u8; 32],
+    /// Direct child-set schema coordinate.
+    pub child_schema_id: [u8; 32],
+    /// Direct PDA-derivation coordinate.
+    pub child_derivation_id: [u8; 32],
+    /// Whether activation is required during Market founding.
+    pub required_at_founding: bool,
+    /// Activation deadline, which is zero for founding-required Direct.
+    pub activation_deadline_slot: u64,
+    /// Number of manifest dependencies; Direct V2 has none.
+    pub dependency_count: u8,
+    /// Checked native-lamport funding total.
+    pub native_funding_total: u64,
+    /// Checked Realm-collateral funding total.
+    pub realm_funding_total: u64,
+    /// Whether a Realm-collateral funding binding is present.
+    pub has_realm_funding_binding: bool,
+}
+
+/// Authenticate the exact stateless Direct V2 manifest coordinate.
+///
+/// User-funded replay/order rent is intentionally outside capability funding;
+/// therefore every manifest funding compartment is canonically zero and no
+/// Realm funding binding or dependency is admitted.
+pub fn validate_direct_capability_selection_v2(
+    selection: DirectCapabilitySelectionV2,
+    expected_fee_config: [u8; 32],
+) -> Result<()> {
+    if selection.kind_id != DIRECT_CAPABILITY_KIND_ID_V2
+        || selection.release_id != DIRECT_ADAPTER_RELEASE_ID_V2
+        || selection.config_id != expected_fee_config
+        || selection.capacity_profile_id != DIRECT_CAPACITY_PROFILE_ID_V2
+        || selection.child_schema_id != DIRECT_CHILD_SCHEMA_ID_V2
+        || selection.child_derivation_id != DIRECT_CHILD_DERIVATION_ID_V2
+        || !selection.required_at_founding
+        || selection.activation_deadline_slot != 0
+        || selection.dependency_count != 0
+        || selection.native_funding_total != 0
+        || selection.realm_funding_total != 0
+        || selection.has_realm_funding_binding
+    {
+        return Err(Error::DirectCapabilityUnauthorized);
+    }
+    nonzero(&expected_fee_config)?;
+    Ok(())
+}
 
 /// Explicit refusal from a Direct parser or pure transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +166,8 @@ pub enum Error {
     UnknownIntentLifecycle,
     /// Requested adapter lifecycle differed from maker-signed lifecycle.
     IntentLifecycleMismatch,
+    /// Manifest entry did not select the exact Direct V2 capability coordinate.
+    DirectCapabilityUnauthorized,
     /// Persisted status was unknown.
     UnknownIntentStatus,
     /// A slot interval was inverted.

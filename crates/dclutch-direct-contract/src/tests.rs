@@ -4,9 +4,7 @@ use dclutch_realm_contract::PositionV1;
 
 use super::*;
 use crate::adapter::{
-    AdapterActionV2, ED25519_PROGRAM_ID_3_0, Ed25519ExpectationV2, Ed25519InstructionViewV2,
-    MEASURED_LOOKUP_TABLES_V2, MEASURED_TRANSACTION_SIGNATURES_V2, PacketAdmissionV2,
-    SOLANA_PACKET_DATA_SIZE_3_0, admit_settlement_packet_v2, canonical_ed25519_test_instruction,
+    admit_settlement_packet_v2, canonical_ed25519_test_instruction,
     canonical_ed25519_test_instruction_len, decode_inline_complementary_instruction_v2,
     decode_inline_ordinary_instruction_v2, decode_ordinary_instruction_v2,
     encode_cancel_instruction_v2, encode_inline_complementary_instruction_v2,
@@ -14,7 +12,9 @@ use crate::adapter::{
     encode_register_instruction_v2, inline_complementary_instruction_bytes_v2,
     inspect_preceding_ed25519_batch_v2, inspect_preceding_ed25519_v2,
     measured_inline_complementary_reference_v2, measured_settlement_envelope_v2,
-    stateless_shared_message_ed25519_minimum_v2,
+    stateless_shared_message_ed25519_minimum_v2, AdapterActionV2, Ed25519ExpectationV2,
+    Ed25519InstructionViewV2, PacketAdmissionV2, ED25519_PROGRAM_ID_3_0, MEASURED_LOOKUP_TABLES_V2,
+    MEASURED_TRANSACTION_SIGNATURES_V2, SOLANA_PACKET_DATA_SIZE_3_0,
 };
 
 fn key(value: u8) -> [u8; 32] {
@@ -88,6 +88,10 @@ fn accounts(value: DirectIntentV2) -> ParticipantAccountsV2 {
 }
 
 fn position(owner: u8, balances: [u64; 2]) -> Result<PositionV1<2>> {
+    PositionV1::new(key(7), key(owner), 3, balances).map_err(position_error)
+}
+
+fn position_n<const N: usize>(owner: u8, balances: [u64; N]) -> Result<PositionV1<N>> {
     PositionV1::new(key(7), key(owner), 3, balances).map_err(position_error)
 }
 
@@ -212,6 +216,38 @@ fn register(
     })
 }
 
+fn register_n<const N: usize>(
+    value: DirectIntentV2,
+    replay_root: MakerReplayRootV2,
+    balances: [u64; N],
+) -> Result<RegistrationV2<N>> {
+    let instruction = encode_register_instruction_v2(value)?;
+    let buy_debit = if value.side() == Side::Buy {
+        Some(buy_authority(value, buy_reserve(value)))
+    } else {
+        None
+    };
+    register_intent_v2(RegistrationInputV2 {
+        replay_root: ReplayRootStateV2::existing(replay_root),
+        intent: value,
+        authorization: authorization(*value.maker(), &value.signed_preimage(), &instruction, 16)?,
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        accounts: accounts(value),
+        system_payer: key(200 + value.maker()[0]),
+        collateral_mint: if value.side() == Side::Buy {
+            Some(key(6))
+        } else {
+            None
+        },
+        buy_debit_authority: buy_debit,
+        record_bump: 9,
+        fee_policy: policy(value.fee_basis_points())?,
+        fee_config_digest: key(8),
+        position: position_n(value.maker()[0], balances)?,
+    })
+}
+
 #[test]
 fn fixed_layout_round_trips_one_semantic_intent_root_and_record() -> Result<()> {
     let value = intent(1, Side::Buy, 1, 0, 600_000, 10, 100)?;
@@ -249,6 +285,83 @@ fn fixed_layout_round_trips_one_semantic_intent_root_and_record() -> Result<()> 
         Err(Error::VenueUnauthorized)
     );
     assert_eq!(registration.reserved_collateral_debit, 6);
+    Ok(())
+}
+
+#[test]
+fn direct_manifest_coordinate_refuses_every_substitution_and_funding_shape() -> Result<()> {
+    let expected_config = key(8);
+    let exact = DirectCapabilitySelectionV2 {
+        kind_id: DIRECT_CAPABILITY_KIND_ID_V2,
+        release_id: DIRECT_ADAPTER_RELEASE_ID_V2,
+        config_id: expected_config,
+        capacity_profile_id: DIRECT_CAPACITY_PROFILE_ID_V2,
+        child_schema_id: DIRECT_CHILD_SCHEMA_ID_V2,
+        child_derivation_id: DIRECT_CHILD_DERIVATION_ID_V2,
+        required_at_founding: true,
+        activation_deadline_slot: 0,
+        dependency_count: 0,
+        native_funding_total: 0,
+        realm_funding_total: 0,
+        has_realm_funding_binding: false,
+    };
+    validate_direct_capability_selection_v2(exact, expected_config)?;
+    let substitutions = [
+        DirectCapabilitySelectionV2 {
+            kind_id: key(1),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            release_id: key(2),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            config_id: key(3),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            capacity_profile_id: key(4),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            child_schema_id: key(5),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            child_derivation_id: key(6),
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            required_at_founding: false,
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            activation_deadline_slot: 1,
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            dependency_count: 1,
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            native_funding_total: 1,
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            realm_funding_total: 1,
+            ..exact
+        },
+        DirectCapabilitySelectionV2 {
+            has_realm_funding_binding: true,
+            ..exact
+        },
+    ];
+    for substitution in substitutions {
+        assert_eq!(
+            validate_direct_capability_selection_v2(substitution, expected_config),
+            Err(Error::DirectCapabilityUnauthorized)
+        );
+    }
     Ok(())
 }
 
@@ -520,6 +633,124 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
 }
 
 #[test]
+fn cumulative_fee_floor_is_partition_independent_and_cancel_refunds_remainder() -> Result<()> {
+    fn charge_for_partition(parts: &[u64]) -> Result<u64> {
+        let ask = intent(1, Side::Sell, 0, 0, PRICE_SCALE, 10, 1_000)?;
+        let bid = intent(2, Side::Buy, 0, 0, PRICE_SCALE, 10, 1_000)?;
+        let seller = register(ask, root(1)?, [10, 0])?;
+        let buyer = register(bid, root(2)?, [0, 0])?;
+        let mut seller_root = seller.replay_root;
+        let mut buyer_root = buyer.replay_root;
+        let mut seller_record = Some(seller.record);
+        let mut buyer_record = Some(buyer.record);
+        let mut seller_position = seller.position;
+        let mut buyer_position = buyer.position;
+        let mut charged = 0_u64;
+        for fill in parts {
+            let settlement = settle_ordinary_v2(OrdinaryMatchV2 {
+                phase: adapter::MarketPhaseV2::Open,
+                slot: 12,
+                seller_replay_root: seller_root,
+                buyer_replay_root: buyer_root,
+                seller_record: seller_record.ok_or(Error::InvalidReservation)?,
+                buyer_record: buyer_record.ok_or(Error::InvalidReservation)?,
+                seller_accounts: accounts(ask),
+                buyer_accounts: accounts(bid),
+                seller_position,
+                buyer_position,
+                collateral_mint: key(6),
+                buyer_escrow_authority: escrow_authority(bid),
+                fill: *fill,
+                execution_price: PRICE_SCALE,
+                fee_policy: policy(1_000)?,
+                fee_config_digest: key(8),
+                fee_recipient_account: key(99),
+            })?;
+            charged = charged
+                .checked_add(settlement.venue_fee_transfer)
+                .ok_or(Error::ArithmeticOverflow)?;
+            seller_root = settlement.seller_replay_root;
+            buyer_root = settlement.buyer_replay_root;
+            seller_record = settlement.seller_record.live_record;
+            buyer_record = settlement.buyer_record.live_record;
+            seller_position = settlement.seller_position;
+            buyer_position = settlement.buyer_position;
+        }
+        if seller_record.is_some() || buyer_record.is_some() {
+            return Err(Error::InvalidReservation);
+        }
+        Ok(charged)
+    }
+
+    let one_fill = charge_for_partition(&[10])?;
+    let atomized = charge_for_partition(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1])?;
+    let uneven = charge_for_partition(&[3, 2, 5])?;
+    assert_eq!(one_fill, 1);
+    assert_eq!(atomized, one_fill);
+    assert_eq!(uneven, one_fill);
+
+    let ask = intent(1, Side::Sell, 0, 0, PRICE_SCALE, 10, 1_000)?;
+    let bid = intent(2, Side::Buy, 0, 0, PRICE_SCALE, 10, 1_000)?;
+    let seller = register(ask, root(1)?, [10, 0])?;
+    let buyer = register(bid, root(2)?, [0, 0])?;
+    let partial = settle_ordinary_v2(OrdinaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        seller_replay_root: seller.replay_root,
+        buyer_replay_root: buyer.replay_root,
+        seller_record: seller.record,
+        buyer_record: buyer.record,
+        seller_accounts: accounts(ask),
+        buyer_accounts: accounts(bid),
+        seller_position: seller.position,
+        buyer_position: buyer.position,
+        collateral_mint: key(6),
+        buyer_escrow_authority: escrow_authority(bid),
+        fill: 2,
+        execution_price: PRICE_SCALE,
+        fee_policy: policy(1_000)?,
+        fee_config_digest: key(8),
+        fee_recipient_account: key(99),
+    })?;
+    let live_buyer = partial
+        .buyer_record
+        .live_record
+        .ok_or(Error::InvalidReservation)?;
+    assert_eq!(live_buyer.fee_basis_gross(), 2);
+    assert_eq!(live_buyer.cumulative_fee(), 0);
+    assert_eq!(live_buyer.reserved_collateral(), 9);
+    let cancel_message = DirectCancelV2::for_record(live_buyer).signed_preimage();
+    let cancel_instruction =
+        encode_cancel_instruction_v2(Side::Buy, DirectCancelV2::for_record(live_buyer));
+    let cancelled = cancel_intent_v2(CancellationInputV2 {
+        replay_root: partial.buyer_replay_root,
+        record: live_buyer,
+        authorization: authorization(key(2), &cancel_message, &cancel_instruction, 16)?,
+        phase: adapter::MarketPhaseV2::Open,
+        accounts: accounts(bid),
+        collateral_mint: Some(key(6)),
+        escrow_authority: Some(escrow_authority(bid)),
+        position: partial.buyer_position,
+    })?;
+    assert_eq!(cancelled.close.collateral_refund, 9);
+
+    let mut hostile = [0_u8; DIRECT_INTENT_RECORD_BYTES_V2];
+    buyer.record.encode(&mut hostile)?;
+    hostile[272..280].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        DirectIntentRecordV2::decode(&hostile),
+        Err(Error::InvalidReservation)
+    );
+    buyer.record.encode(&mut hostile)?;
+    hostile[248..256].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        DirectIntentRecordV2::decode(&hostile),
+        Err(Error::ArithmeticOverflow)
+    );
+    Ok(())
+}
+
+#[test]
 fn cancellation_expiry_refunds_exact_payers_and_double_close_refuses() -> Result<()> {
     let sell = intent(1, Side::Sell, 0, 0, PRICE_SCALE, 10, 0)?;
     let registration = register(sell, root(1)?, [10, 0])?;
@@ -689,7 +920,7 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
     let buy1 = intent(2, Side::Buy, 1, 0, 500_000, 10, 0)?;
     let first = register(buy0, root(1)?, [0, 0])?;
     let second = register(buy1, root(2)?, [0, 0])?;
-    let split_input = ComplementaryBuyMatchV2 {
+    let split_input = crate::settlement::ComplementaryBuyMatchV2 {
         phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         buyer_replay_roots: [first.replay_root, second.replay_root],
@@ -704,24 +935,95 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
         fee_config_digest: key(8),
         fee_recipient_account: key(99),
     };
-    let split = settle_split_v2(split_input)?;
+    let split = crate::settlement::settle_split_v2(split_input)?;
     assert_eq!(split.buyer_gross_collateral_debits, [5, 5]);
     assert_eq!(split.market_vault_collateral_credit, 10);
     assert_eq!(split.buyer_positions[0].balances(), &[10, 0]);
     assert_eq!(split.buyer_positions[1].balances(), &[0, 10]);
+    let mut split_roots = split_input.buyer_replay_roots;
+    let mut split_records = split_input.buyer_records;
+    let mut split_positions = split_input.buyer_positions;
+    let mut split_closes = [None; 2];
+    let split_effects = settle_split_in_place_v2(ComplementaryBuyMatchInPlaceV2 {
+        phase: split_input.phase,
+        slot: split_input.slot,
+        buyer_replay_roots: &mut split_roots,
+        buyer_records: &mut split_records,
+        buyer_accounts: &split_input.buyer_accounts,
+        buyer_positions: &mut split_positions,
+        collateral_mint: split_input.collateral_mint,
+        escrow_authorities: &split_input.escrow_authorities,
+        record_closes: &mut split_closes,
+        fill: split_input.fill,
+        execution_prices: &split_input.execution_prices,
+        fee_policy: split_input.fee_policy,
+        fee_config_digest: split_input.fee_config_digest,
+        fee_recipient_account: split_input.fee_recipient_account,
+    })?;
+    assert_eq!(
+        split_effects.buyer_gross_collateral_debits,
+        split.buyer_gross_collateral_debits
+    );
+    assert_eq!(split_effects.buyer_fee_debits, split.buyer_fee_debits);
+    assert_eq!(split_roots, split.buyer_replay_roots);
+    assert_eq!(split_positions, split.buyer_positions);
+    for (close, reference) in split_closes.iter().zip(&split.buyer_records) {
+        assert_eq!(*close, reference.close);
+    }
 
     let mut hostile = split_input;
     hostile.fill = 1;
     hostile.execution_prices = [400_000, 600_000];
     let before = hostile;
-    assert_eq!(settle_split_v2(hostile), Err(Error::NonIntegralQuote));
+    assert_eq!(
+        crate::settlement::settle_split_v2(hostile),
+        Err(Error::NonIntegralQuote)
+    );
     assert_eq!(hostile, before);
+    let mut hostile_roots = hostile.buyer_replay_roots;
+    let mut hostile_records = hostile.buyer_records;
+    let mut hostile_positions = hostile.buyer_positions;
+    let mut hostile_closes = [None; 2];
+    let hostile_before = (
+        hostile_roots,
+        hostile_records,
+        hostile_positions,
+        hostile_closes,
+    );
+    assert_eq!(
+        settle_split_in_place_v2(ComplementaryBuyMatchInPlaceV2 {
+            phase: hostile.phase,
+            slot: hostile.slot,
+            buyer_replay_roots: &mut hostile_roots,
+            buyer_records: &mut hostile_records,
+            buyer_accounts: &hostile.buyer_accounts,
+            buyer_positions: &mut hostile_positions,
+            collateral_mint: hostile.collateral_mint,
+            escrow_authorities: &hostile.escrow_authorities,
+            record_closes: &mut hostile_closes,
+            fill: hostile.fill,
+            execution_prices: &hostile.execution_prices,
+            fee_policy: hostile.fee_policy,
+            fee_config_digest: hostile.fee_config_digest,
+            fee_recipient_account: hostile.fee_recipient_account,
+        }),
+        Err(Error::NonIntegralQuote)
+    );
+    assert_eq!(
+        (
+            hostile_roots,
+            hostile_records,
+            hostile_positions,
+            hostile_closes,
+        ),
+        hostile_before
+    );
 
     let sell0 = intent(3, Side::Sell, 0, 0, 500_000, 10, 0)?;
     let sell1 = intent(4, Side::Sell, 1, 0, 500_000, 10, 0)?;
     let third = register(sell0, root(3)?, [10, 0])?;
     let fourth = register(sell1, root(4)?, [0, 10])?;
-    let merge = settle_merge_v2(ComplementarySellMatchV2 {
+    let merge_input = crate::settlement::ComplementarySellMatchV2 {
         phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         seller_replay_roots: [third.replay_root, fourth.replay_root],
@@ -733,16 +1035,229 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
         fee_policy: policy(0)?,
         fee_config_digest: key(8),
         fee_recipient_account: key(99),
-    })?;
+    };
+    let merge = crate::settlement::settle_merge_v2(merge_input)?;
     assert_eq!(merge.seller_gross_collateral_credits, [5, 5]);
     assert_eq!(merge.market_vault_collateral_debit, 10);
-    assert!(
-        merge
-            .seller_records
-            .iter()
-            .all(RecordAfterFillV2::is_closed)
+    assert!(merge
+        .seller_records
+        .iter()
+        .all(RecordAfterFillV2::is_closed));
+    let mut merge_roots = merge_input.seller_replay_roots;
+    let mut merge_records = merge_input.seller_records;
+    let mut merge_closes = [None; 2];
+    let merge_effects = settle_merge_in_place_v2(ComplementarySellMatchInPlaceV2 {
+        phase: merge_input.phase,
+        slot: merge_input.slot,
+        seller_replay_roots: &mut merge_roots,
+        seller_records: &mut merge_records,
+        seller_accounts: &merge_input.seller_accounts,
+        seller_positions: &merge_input.seller_positions,
+        record_closes: &mut merge_closes,
+        fill: merge_input.fill,
+        execution_prices: &merge_input.execution_prices,
+        fee_policy: merge_input.fee_policy,
+        fee_config_digest: merge_input.fee_config_digest,
+        fee_recipient_account: merge_input.fee_recipient_account,
+    })?;
+    assert_eq!(
+        merge_effects.seller_gross_collateral_credits,
+        merge.seller_gross_collateral_credits
     );
+    assert_eq!(merge_effects.seller_fee_debits, merge.seller_fee_debits);
+    assert_eq!(merge_roots, merge.seller_replay_roots);
+    for (close, reference) in merge_closes.iter().zip(&merge.seller_records) {
+        assert_eq!(*close, reference.close);
+    }
     Ok(())
+}
+
+fn exercise_in_place_complement_width<const N: usize>() -> Result<()> {
+    let n = u64::try_from(N).map_err(|_| Error::InvalidOutcomeWidth)?;
+    let base_price = PRICE_SCALE / n;
+    let remainder = usize::try_from(PRICE_SCALE % n).map_err(|_| Error::ArithmeticOverflow)?;
+    let mut prices = [base_price; N];
+    for price in prices.iter_mut().take(remainder) {
+        *price = price.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+
+    let first_buy = intent(1, Side::Buy, 0, 0, prices[0], 2 * PRICE_SCALE, 17)?;
+    let first_buy_registration = register_n(first_buy, root(1)?, [0; N])?;
+    let mut buy_roots = [first_buy_registration.replay_root; N];
+    let mut buy_records = [first_buy_registration.record; N];
+    let mut buy_accounts = [accounts(first_buy); N];
+    let mut buy_positions = [first_buy_registration.position; N];
+    let mut buy_escrows = [escrow_authority(first_buy); N];
+    for index in 0..N {
+        let maker = u8::try_from(index + 1).map_err(|_| Error::InvalidOutcome)?;
+        let outcome = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        let buy = intent(
+            maker,
+            Side::Buy,
+            outcome,
+            0,
+            prices[index],
+            2 * PRICE_SCALE,
+            17,
+        )?;
+        let registration = register_n(buy, root(maker)?, [0; N])?;
+        buy_roots[index] = registration.replay_root;
+        buy_records[index] = registration.record;
+        buy_accounts[index] = accounts(buy);
+        buy_positions[index] = registration.position;
+        buy_escrows[index] = escrow_authority(buy);
+    }
+    let initial_buy_roots = buy_roots;
+    let initial_buy_records = buy_records;
+    let initial_buy_positions = buy_positions;
+    let mut buy_closes = [None; N];
+    let split = settle_split_in_place_v2(ComplementaryBuyMatchInPlaceV2 {
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        buyer_replay_roots: &mut buy_roots,
+        buyer_records: &mut buy_records,
+        buyer_accounts: &buy_accounts,
+        buyer_positions: &mut buy_positions,
+        collateral_mint: key(6),
+        escrow_authorities: &buy_escrows,
+        record_closes: &mut buy_closes,
+        fill: PRICE_SCALE,
+        execution_prices: &prices,
+        fee_policy: policy(17)?,
+        fee_config_digest: key(8),
+        fee_recipient_account: key(99),
+    })?;
+    assert_eq!(split.market_vault_collateral_credit, PRICE_SCALE);
+    assert_eq!(split.buyer_gross_collateral_debits, prices);
+    assert!(buy_closes.iter().all(Option::is_none));
+    for (index, position) in buy_positions.iter().enumerate() {
+        assert_eq!(position.balances()[index], PRICE_SCALE);
+    }
+
+    let mut hostile_accounts = buy_accounts;
+    hostile_accounts[1].collateral = hostile_accounts[0].replay_root;
+    let mut hostile_roots = initial_buy_roots;
+    let mut hostile_records = initial_buy_records;
+    let mut hostile_positions = initial_buy_positions;
+    let mut hostile_closes = [None; N];
+    assert_eq!(
+        settle_split_in_place_v2(ComplementaryBuyMatchInPlaceV2 {
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 12,
+            buyer_replay_roots: &mut hostile_roots,
+            buyer_records: &mut hostile_records,
+            buyer_accounts: &hostile_accounts,
+            buyer_positions: &mut hostile_positions,
+            collateral_mint: key(6),
+            escrow_authorities: &buy_escrows,
+            record_closes: &mut hostile_closes,
+            fill: PRICE_SCALE,
+            execution_prices: &prices,
+            fee_policy: policy(17)?,
+            fee_config_digest: key(8),
+            fee_recipient_account: key(99),
+        }),
+        Err(Error::Alias)
+    );
+    assert_eq!(hostile_roots, initial_buy_roots);
+    assert_eq!(hostile_records, initial_buy_records);
+    assert_eq!(hostile_positions, initial_buy_positions);
+    assert!(hostile_closes.iter().all(Option::is_none));
+
+    let first_sell = intent(32, Side::Sell, 0, 0, prices[0], 2 * PRICE_SCALE, 17)?;
+    let mut first_balance = [0; N];
+    first_balance[0] = 2 * PRICE_SCALE;
+    let first_sell_registration = register_n(first_sell, root(32)?, first_balance)?;
+    let mut sell_roots = [first_sell_registration.replay_root; N];
+    let mut sell_records = [first_sell_registration.record; N];
+    let mut sell_accounts = [accounts(first_sell); N];
+    let mut sell_positions = [first_sell_registration.position; N];
+    for index in 0..N {
+        let maker = u8::try_from(index + 32).map_err(|_| Error::InvalidOutcome)?;
+        let outcome = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        let sell = intent(
+            maker,
+            Side::Sell,
+            outcome,
+            0,
+            prices[index],
+            2 * PRICE_SCALE,
+            17,
+        )?;
+        let mut balances = [0; N];
+        balances[index] = 2 * PRICE_SCALE;
+        let registration = register_n(sell, root(maker)?, balances)?;
+        sell_roots[index] = registration.replay_root;
+        sell_records[index] = registration.record;
+        sell_accounts[index] = accounts(sell);
+        sell_positions[index] = registration.position;
+    }
+    let initial_sell_roots = sell_roots;
+    let initial_sell_records = sell_records;
+    let mut sell_closes = [None; N];
+    let merge = settle_merge_in_place_v2(ComplementarySellMatchInPlaceV2 {
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        seller_replay_roots: &mut sell_roots,
+        seller_records: &mut sell_records,
+        seller_accounts: &sell_accounts,
+        seller_positions: &sell_positions,
+        record_closes: &mut sell_closes,
+        fill: PRICE_SCALE,
+        execution_prices: &prices,
+        fee_policy: policy(17)?,
+        fee_config_digest: key(8),
+        fee_recipient_account: key(99),
+    })?;
+    assert_eq!(merge.market_vault_collateral_debit, PRICE_SCALE);
+    assert_eq!(merge.seller_gross_collateral_credits, prices);
+    assert!(sell_closes.iter().all(Option::is_none));
+
+    let mut hostile_sell_accounts = sell_accounts;
+    hostile_sell_accounts[1].position = hostile_sell_accounts[0].record;
+    let mut hostile_sell_roots = initial_sell_roots;
+    let mut hostile_sell_records = initial_sell_records;
+    let mut hostile_sell_closes = [None; N];
+    assert_eq!(
+        settle_merge_in_place_v2(ComplementarySellMatchInPlaceV2 {
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 12,
+            seller_replay_roots: &mut hostile_sell_roots,
+            seller_records: &mut hostile_sell_records,
+            seller_accounts: &hostile_sell_accounts,
+            seller_positions: &sell_positions,
+            record_closes: &mut hostile_sell_closes,
+            fill: PRICE_SCALE,
+            execution_prices: &prices,
+            fee_policy: policy(17)?,
+            fee_config_digest: key(8),
+            fee_recipient_account: key(99),
+        }),
+        Err(Error::Alias)
+    );
+    assert_eq!(hostile_sell_roots, initial_sell_roots);
+    assert_eq!(hostile_sell_records, initial_sell_records);
+    assert!(hostile_sell_closes.iter().all(Option::is_none));
+    Ok(())
+}
+
+#[test]
+fn in_place_complements_preserve_atomicity_for_every_supported_width() -> Result<()> {
+    exercise_in_place_complement_width::<2>()?;
+    exercise_in_place_complement_width::<3>()?;
+    exercise_in_place_complement_width::<4>()?;
+    exercise_in_place_complement_width::<5>()?;
+    exercise_in_place_complement_width::<6>()?;
+    exercise_in_place_complement_width::<7>()?;
+    exercise_in_place_complement_width::<8>()?;
+    exercise_in_place_complement_width::<9>()?;
+    exercise_in_place_complement_width::<10>()?;
+    exercise_in_place_complement_width::<11>()?;
+    exercise_in_place_complement_width::<12>()?;
+    exercise_in_place_complement_width::<13>()?;
+    exercise_in_place_complement_width::<14>()?;
+    exercise_in_place_complement_width::<15>()?;
+    exercise_in_place_complement_width::<16>()
 }
 
 #[test]
@@ -1269,6 +1784,29 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         Err(Error::InvalidAccountFrame)
     );
 
+    let mut ordinary = [adapter::AdapterAccountMetaV2 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+    }; 21];
+    for (index, meta) in ordinary.iter_mut().enumerate() {
+        meta.key = key(u8::try_from(index + 120).map_err(|_| Error::ArithmeticOverflow)?);
+        meta.is_writable = matches!(index, 5 | 10..=11 | 13..=20);
+    }
+    ordinary[8].key = [0; 32];
+    adapter::validate_account_frame_v2(AdapterActionV2::Ordinary, 2, &ordinary)?;
+    ordinary[12].is_writable = true;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::Ordinary, 2, &ordinary),
+        Err(Error::InvalidAccountFrame)
+    );
+    ordinary[12].is_writable = false;
+    ordinary[10].is_writable = false;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::Ordinary, 2, &ordinary),
+        Err(Error::InvalidAccountFrame)
+    );
+
     let mut inline = [adapter::AdapterAccountMetaV2 {
         key: [0; 32],
         is_signer: false,
@@ -1308,6 +1846,10 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
     assert_eq!(inline_envelope.instruction_accounts, 19);
     assert_eq!(inline_envelope.total_account_locks, 21);
     assert_eq!(inline_envelope.serialized_transaction_bytes, 999);
+    let ordinary_envelope = adapter::measured_action_envelope_v2(AdapterActionV2::Ordinary, 2)?;
+    assert_eq!(ordinary_envelope.instruction_accounts, 21);
+    assert_eq!(ordinary_envelope.total_account_locks, 23);
+    assert_eq!(ordinary_envelope.serialized_transaction_bytes, 312);
     let split16 = adapter::measured_action_envelope_v2(AdapterActionV2::Split, 16)?;
     assert_eq!(split16.total_account_locks, 110);
     assert_eq!(split16.serialized_transaction_bytes, 621);

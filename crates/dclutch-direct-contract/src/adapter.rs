@@ -1,10 +1,10 @@
 //! Exact SDK-free description of the Direct SBF adapter boundary.
 
 use crate::state::{
-    CancelThroughV1, DIRECT_INTENT_BYTES_V2, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2,
-    Side,
+    CancelThroughV1, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2, Side,
+    DIRECT_INTENT_BYTES_V2,
 };
-use crate::{Error, Result, array, nonzero, one, put, zeros};
+use crate::{array, nonzero, one, put, zeros, Error, Result};
 
 /// Native Ed25519 program bytes pinned by `solana-sdk-ids = 3.0.0`.
 pub const ED25519_PROGRAM_ID_3_0: [u8; 32] = [
@@ -1577,7 +1577,7 @@ const fn expected_privileges(
                     | AdapterActionV2::ExpireBuy
                     | AdapterActionV2::CloseInvalidatedBuy
                     | AdapterActionV2::Merge
-            ) || (matches!(action, AdapterActionV2::Ordinary) && index == 10) =>
+            ) || (matches!(action, AdapterActionV2::Ordinary) && index == 12) =>
         {
             (false, false)
         }

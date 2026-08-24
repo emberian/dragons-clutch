@@ -2,8 +2,8 @@ use dclutch_realm_contract::PositionV1;
 use dclutch_rent_contract::{RefundAuthority, RentCreditV1, SourceCloseCreditPlanV1};
 
 use crate::{
-    Error, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE, Result, adapter, array, fee, nonzero, one,
-    position_error, put, width, zeros,
+    adapter, array, fee, nonzero, one, position_error, put, width, zeros, Error, Result,
+    FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE,
 };
 
 /// Canonical signed-intent preimage magic.
@@ -23,7 +23,7 @@ pub const DIRECT_INTENT_RECORD_MAGIC_V2: [u8; 8] = *b"DCLTREC2";
 /// Live intent-record schema version.
 pub const DIRECT_INTENT_RECORD_SCHEMA_VERSION_V2: u16 = 2;
 /// Exact live intent-record width.
-pub const DIRECT_INTENT_RECORD_BYTES_V2: usize = 304;
+pub const DIRECT_INTENT_RECORD_BYTES_V2: usize = 320;
 /// Canonical cancellation-message magic.
 pub const DIRECT_CANCEL_MAGIC_V2: [u8; 8] = *b"DCLTCAN2";
 /// Cancellation-message schema version.
@@ -91,7 +91,9 @@ const RECORD_INTENT_OFFSET: usize = 16;
 const RECORD_FILLED_OFFSET: usize = 248;
 const RECORD_CLAIMS_OFFSET: usize = 256;
 const RECORD_COLLATERAL_OFFSET: usize = 264;
-const RECORD_RENT_PAYER_OFFSET: usize = 272;
+const RECORD_FEE_GROSS_OFFSET: usize = 272;
+const RECORD_CUMULATIVE_FEE_OFFSET: usize = 280;
+const RECORD_RENT_PAYER_OFFSET: usize = 288;
 
 const FEE_BPS_OFFSET: usize = 10;
 const FEE_RESERVED_OFFSET: usize = 12;
@@ -805,6 +807,8 @@ pub struct DirectIntentRecordV2 {
     filled: u64,
     reserved_claims: u64,
     reserved_collateral: u64,
+    fee_basis_gross: u64,
+    cumulative_fee: u64,
     rent_payer: [u8; 32],
     bump: u8,
 }
@@ -834,6 +838,8 @@ impl DirectIntentRecordV2 {
             filled: u64::from_le_bytes(array(bytes, RECORD_FILLED_OFFSET)?),
             reserved_claims: u64::from_le_bytes(array(bytes, RECORD_CLAIMS_OFFSET)?),
             reserved_collateral: u64::from_le_bytes(array(bytes, RECORD_COLLATERAL_OFFSET)?),
+            fee_basis_gross: u64::from_le_bytes(array(bytes, RECORD_FEE_GROSS_OFFSET)?),
+            cumulative_fee: u64::from_le_bytes(array(bytes, RECORD_CUMULATIVE_FEE_OFFSET)?),
             rent_payer: array(bytes, RECORD_RENT_PAYER_OFFSET)?,
             bump: one(bytes, RECORD_BUMP_OFFSET)?,
         };
@@ -869,6 +875,16 @@ impl DirectIntentRecordV2 {
             RECORD_COLLATERAL_OFFSET,
             &self.reserved_collateral.to_le_bytes(),
         );
+        put(
+            output,
+            RECORD_FEE_GROSS_OFFSET,
+            &self.fee_basis_gross.to_le_bytes(),
+        );
+        put(
+            output,
+            RECORD_CUMULATIVE_FEE_OFFSET,
+            &self.cumulative_fee.to_le_bytes(),
+        );
         put(output, RECORD_RENT_PAYER_OFFSET, &self.rent_payer);
         Ok(())
     }
@@ -889,6 +905,14 @@ impl DirectIntentRecordV2 {
     pub const fn reserved_collateral(&self) -> u64 {
         self.reserved_collateral
     }
+    /// Aggregate gross on which this intent has actually owed venue fees.
+    pub const fn fee_basis_gross(&self) -> u64 {
+        self.fee_basis_gross
+    }
+    /// Cumulative venue fee charged at the one named floor boundary.
+    pub const fn cumulative_fee(&self) -> u64 {
+        self.cumulative_fee
+    }
     /// Return original live-record-rent payer.
     pub const fn rent_payer(&self) -> &[u8; 32] {
         &self.rent_payer
@@ -900,6 +924,16 @@ impl DirectIntentRecordV2 {
 
     fn validate(self) -> Result<()> {
         nonzero(&self.rent_payer)?;
+        let maximum_fee_basis_gross = self
+            .filled
+            .checked_mul(PRICE_SCALE)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if self.fee_basis_gross > maximum_fee_basis_gross {
+            return Err(Error::InvalidReservation);
+        }
+        if self.cumulative_fee != fee(self.fee_basis_gross, self.intent.fee_basis_points())? {
+            return Err(Error::InvalidReservation);
+        }
         if self.filled >= self.intent.max_fill {
             return Err(Error::StateOverfilled);
         }
@@ -931,8 +965,9 @@ impl DirectIntentRecordV2 {
         root: MakerReplayRootV2,
         slot: u64,
         fill: u64,
-        collateral_debit: u64,
-    ) -> Result<(RecordAfterFillV2, MakerReplayRootV2)> {
+        fee_basis_gross: u64,
+        buy_gross_debit: u64,
+    ) -> Result<(RecordAfterFillV2, MakerReplayRootV2, u64)> {
         self.validate()?;
         root.for_active_intent(self.intent)?;
         if slot < self.intent.from || slot > self.intent.through {
@@ -950,8 +985,22 @@ impl DirectIntentRecordV2 {
             .filled
             .checked_add(fill)
             .ok_or(Error::ArithmeticOverflow)?;
+        let next_fee_basis_gross = self
+            .fee_basis_gross
+            .checked_add(fee_basis_gross)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let next_cumulative_fee = fee(next_fee_basis_gross, self.intent.fee_basis_points())?;
+        let fee_delta = next_cumulative_fee
+            .checked_sub(self.cumulative_fee)
+            .ok_or(Error::InvalidReservation)?;
         let (claims, collateral) = match self.intent.side {
             Side::Buy => {
+                if fee_basis_gross != buy_gross_debit {
+                    return Err(Error::InvalidReservation);
+                }
+                let collateral_debit = buy_gross_debit
+                    .checked_add(fee_delta)
+                    .ok_or(Error::ArithmeticOverflow)?;
                 let collateral = self
                     .reserved_collateral
                     .checked_sub(collateral_debit)
@@ -959,7 +1008,7 @@ impl DirectIntentRecordV2 {
                 (0, collateral)
             }
             Side::Sell => {
-                if collateral_debit != 0 {
+                if buy_gross_debit != 0 {
                     return Err(Error::InvalidReservation);
                 }
                 (
@@ -980,16 +1029,19 @@ impl DirectIntentRecordV2 {
                     claim_refund: claims,
                 }),
                 next_root,
+                fee_delta,
             ))
         } else {
             let next = Self {
                 filled,
                 reserved_claims: claims,
                 reserved_collateral: collateral,
+                fee_basis_gross: next_fee_basis_gross,
+                cumulative_fee: next_cumulative_fee,
                 ..self
             };
             next.validate()?;
-            Ok((RecordAfterFillV2::live(next), root))
+            Ok((RecordAfterFillV2::live(next), root, fee_delta))
         }
     }
 }
@@ -1151,6 +1203,8 @@ pub fn register_intent_v2<const N: usize>(
             filled: 0,
             reserved_claims: claims,
             reserved_collateral: collateral,
+            fee_basis_gross: 0,
+            cumulative_fee: 0,
             rent_payer: system_payer,
             bump: record_bump,
         },

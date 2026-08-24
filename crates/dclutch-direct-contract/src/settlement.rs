@@ -3,11 +3,11 @@
 use dclutch_realm_contract::PositionV1;
 
 use crate::state::{
-    DirectIntentRecordV2, DirectIntentV2, InlineParticipantAccountsV2, MakerReplayRootV2,
-    ParticipantAccountsV2, RecordAfterFillV2, ReplayRootStateV2, Side, VenueFeePolicyV2,
-    position_matches, venue_authorized,
+    position_matches, venue_authorized, DirectIntentRecordV2, DirectIntentV2,
+    InlineParticipantAccountsV2, MakerReplayRootV2, ParticipantAccountsV2, RecordAfterFillV2,
+    ReplayRootStateV2, Side, VenueFeePolicyV2,
 };
-use crate::{Error, Result, fee, quote, width};
+use crate::{fee, quote, width, Error, Result};
 
 /// Inputs to an immediate signed two-party FOK/IOC execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -486,18 +486,23 @@ pub fn settle_ordinary_v2<const N: usize>(
         return Err(Error::PriceIncompatible);
     }
     let gross = quote(input.fill, input.execution_price)?;
-    let venue_fee = fee(gross, input.fee_policy.fee_basis_points())?;
+    let (seller_record, seller_replay_root, seller_fee) =
+        input
+            .seller_record
+            .consume(input.seller_replay_root, input.slot, input.fill, 0, 0)?;
+    if seller_fee != 0 {
+        return Err(Error::InvalidReservation);
+    }
+    let (buyer_record, buyer_replay_root, venue_fee) = input.buyer_record.consume(
+        input.buyer_replay_root,
+        input.slot,
+        input.fill,
+        gross,
+        gross,
+    )?;
     let buyer_debit = gross
         .checked_add(venue_fee)
         .ok_or(Error::ArithmeticOverflow)?;
-    let (seller_record, seller_replay_root) =
-        input
-            .seller_record
-            .consume(input.seller_replay_root, input.slot, input.fill, 0)?;
-    let (buyer_record, buyer_replay_root) =
-        input
-            .buyer_record
-            .consume(input.buyer_replay_root, input.slot, input.fill, buyer_debit)?;
     let outcome = usize::from(ask.outcome());
     if outcome >= N {
         return Err(Error::InvalidOutcome);
@@ -521,6 +526,7 @@ pub fn settle_ordinary_v2<const N: usize>(
 }
 
 /// Inputs to one exhaustive complementary-buy split.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComplementaryBuyMatchV2<const N: usize> {
     /// Canonical Market phase authenticated from program-owned state.
@@ -552,6 +558,7 @@ pub struct ComplementaryBuyMatchV2<const N: usize> {
 }
 
 /// Exact effects of one complete-set split.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SplitSettlementV2<const N: usize> {
     /// Updated replay roots in canonical outcome order.
@@ -571,6 +578,7 @@ pub struct SplitSettlementV2<const N: usize> {
 }
 
 /// Check one atomic permissionless complementary-buy split.
+#[cfg(test)]
 pub fn settle_split_v2<const N: usize>(
     input: ComplementaryBuyMatchV2<N>,
 ) -> Result<SplitSettlementV2<N>> {
@@ -636,13 +644,16 @@ pub fn settle_split_v2<const N: usize>(
             .checked_add(price)
             .ok_or(Error::ArithmeticOverflow)?;
         gross[index] = quote(input.fill, price)?;
-        fees[index] = fee(gross[index], input.fee_policy.fee_basis_points())?;
-        let debit = gross[index]
-            .checked_add(fees[index])
-            .ok_or(Error::ArithmeticOverflow)?;
-        let transition = record.consume(roots[index], input.slot, input.fill, debit)?;
+        let transition = record.consume(
+            roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            gross[index],
+        )?;
         records[index] = transition.0;
         roots[index] = transition.1;
+        fees[index] = transition.2;
         positions[index]
             .credit_outcome(index, input.fill)
             .map_err(crate::position_error)?;
@@ -668,6 +679,7 @@ pub fn settle_split_v2<const N: usize>(
 }
 
 /// Inputs to one exhaustive complementary-sell merge.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComplementarySellMatchV2<const N: usize> {
     /// Canonical Market phase authenticated from program-owned state.
@@ -695,6 +707,7 @@ pub struct ComplementarySellMatchV2<const N: usize> {
 }
 
 /// Exact effects of one complete-set merge.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MergeSettlementV2<const N: usize> {
     /// Updated replay roots in canonical outcome order.
@@ -716,6 +729,7 @@ pub struct MergeSettlementV2<const N: usize> {
 }
 
 /// Check one atomic permissionless complementary-sell merge.
+#[cfg(test)]
 pub fn settle_merge_v2<const N: usize>(
     input: ComplementarySellMatchV2<N>,
 ) -> Result<MergeSettlementV2<N>> {
@@ -774,11 +788,11 @@ pub fn settle_merge_v2<const N: usize>(
             .checked_add(price)
             .ok_or(Error::ArithmeticOverflow)?;
         gross[index] = quote(input.fill, price)?;
-        fees[index] = fee(gross[index], input.fee_policy.fee_basis_points())?;
+        let transition = record.consume(roots[index], input.slot, input.fill, gross[index], 0)?;
+        fees[index] = transition.2;
         net[index] = gross[index]
             .checked_sub(fees[index])
             .ok_or(Error::ArithmeticOverflow)?;
-        let transition = record.consume(roots[index], input.slot, input.fill, 0)?;
         records[index] = transition.0;
         roots[index] = transition.1;
         gross_sum = gross_sum
@@ -801,6 +815,339 @@ pub fn settle_merge_v2<const N: usize>(
         market_vault_collateral_debit: input.fill,
         venue_fee_transfer: fee_sum,
     })
+}
+
+/// Borrowed inputs and caller-owned outputs for one complete-set Buy split.
+///
+/// The bounded SBF adapter keeps these slices on its heap. This pure owner
+/// validates the whole complement before changing any root, record, Position,
+/// or close slot, avoiding an N=16 by-value stack frame.
+pub struct ComplementaryBuyMatchInPlaceV2<'a, const N: usize> {
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Replay roots, replaced in canonical outcome order on success.
+    pub buyer_replay_roots: &'a mut [MakerReplayRootV2],
+    /// Records, replaced only where the corresponding fill remains live.
+    pub buyer_records: &'a mut [DirectIntentRecordV2],
+    /// Exact participant account tuples in canonical outcome order.
+    pub buyer_accounts: &'a [ParticipantAccountsV2],
+    /// Positions, replaced in canonical outcome order on success.
+    pub buyer_positions: &'a mut [PositionV1<N>],
+    /// Realm-selected collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated escrow authorities in canonical outcome order.
+    pub escrow_authorities: &'a [crate::adapter::EscrowAuthorityV2],
+    /// Caller-owned close slots; `Some` means that record closes.
+    pub record_closes: &'a mut [Option<crate::LiveRecordCloseV2>],
+    /// Common matcher-selected fill.
+    pub fill: u64,
+    /// Exact prices summing to [`crate::PRICE_SCALE`].
+    pub execution_prices: &'a [u64],
+    /// Canonical program-owned fee policy.
+    pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee-recipient account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Small transfer effects of one in-place complete-set Buy split.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplitSettlementEffectsV2<const N: usize> {
+    /// Gross escrow debits in canonical outcome order.
+    pub buyer_gross_collateral_debits: [u64; N],
+    /// Cumulative-difference fee debits in canonical outcome order.
+    pub buyer_fee_debits: [u64; N],
+    /// Exact Market-vault collateral credit.
+    pub market_vault_collateral_credit: u64,
+    /// Aggregate fee transfer.
+    pub venue_fee_transfer: u64,
+}
+
+/// Check and atomically project one permissionless complementary-buy split.
+pub fn settle_split_in_place_v2<const N: usize>(
+    input: ComplementaryBuyMatchInPlaceV2<'_, N>,
+) -> Result<SplitSettlementEffectsV2<N>> {
+    width(N)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Split, input.phase)?;
+    if input.fill == 0 {
+        return Err(Error::ZeroQuantity);
+    }
+    require_complementary_lengths(
+        N,
+        &[
+            input.buyer_replay_roots.len(),
+            input.buyer_records.len(),
+            input.buyer_accounts.len(),
+            input.buyer_positions.len(),
+            input.escrow_authorities.len(),
+            input.record_closes.len(),
+            input.execution_prices.len(),
+        ],
+    )?;
+    distinct_participants(input.buyer_accounts)?;
+    let first = input
+        .buyer_records
+        .first()
+        .ok_or(Error::InvalidOutcomeWidth)?
+        .intent();
+    let mut gross = [0; N];
+    let mut fees = [0; N];
+    let mut price_sum = 0_u64;
+    let mut gross_sum = 0_u64;
+    let mut fee_sum = 0_u64;
+
+    for index in 0..N {
+        let record = input.buyer_records[index];
+        let intent = record.intent();
+        let expected = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        if intent.side() != Side::Buy
+            || intent.market() != first.market()
+            || intent.generation() != first.generation()
+            || intent.outcome() != expected
+        {
+            return Err(Error::NonCanonicalComplement);
+        }
+        if input.buyer_records[..index]
+            .iter()
+            .any(|prior| prior.intent().maker() == intent.maker())
+        {
+            return Err(Error::Alias);
+        }
+        input.buyer_accounts[index].validate(intent)?;
+        crate::adapter::validate_registered_escrow_authority_v2(
+            input.escrow_authorities[index],
+            record,
+            input.buyer_accounts[index].record,
+            input.buyer_accounts[index].escrow,
+            input.collateral_mint,
+        )?;
+        position_matches(input.buyer_positions[index], intent)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
+        let price = input.execution_prices[index];
+        if price > intent.limit_price() {
+            return Err(Error::PriceIncompatible);
+        }
+        price_sum = price_sum
+            .checked_add(price)
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross[index] = quote(input.fill, price)?;
+        let transition = record.consume(
+            input.buyer_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            gross[index],
+        )?;
+        fees[index] = transition.2;
+        let mut position = input.buyer_positions[index];
+        position
+            .credit_outcome(index, input.fill)
+            .map_err(crate::position_error)?;
+        gross_sum = gross_sum
+            .checked_add(gross[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        fee_sum = fee_sum
+            .checked_add(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    if price_sum != crate::PRICE_SCALE || gross_sum != input.fill {
+        return Err(Error::SplitFundingMismatch);
+    }
+
+    for (index, gross_value) in gross.iter().copied().enumerate() {
+        let transition = input.buyer_records[index].consume(
+            input.buyer_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross_value,
+            gross_value,
+        )?;
+        input.buyer_replay_roots[index] = transition.1;
+        input.record_closes[index] = transition.0.close;
+        if let Some(record) = transition.0.live_record {
+            input.buyer_records[index] = record;
+        }
+        input.buyer_positions[index]
+            .credit_outcome(index, input.fill)
+            .map_err(crate::position_error)?;
+    }
+    Ok(SplitSettlementEffectsV2 {
+        buyer_gross_collateral_debits: gross,
+        buyer_fee_debits: fees,
+        market_vault_collateral_credit: input.fill,
+        venue_fee_transfer: fee_sum,
+    })
+}
+
+/// Borrowed inputs and caller-owned outputs for one complete-set Sell merge.
+pub struct ComplementarySellMatchInPlaceV2<'a, const N: usize> {
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Replay roots, replaced in canonical outcome order on success.
+    pub seller_replay_roots: &'a mut [MakerReplayRootV2],
+    /// Records, replaced only where the corresponding fill remains live.
+    pub seller_records: &'a mut [DirectIntentRecordV2],
+    /// Exact participant account tuples in canonical outcome order.
+    pub seller_accounts: &'a [ParticipantAccountsV2],
+    /// Positions authenticated in canonical outcome order; registration
+    /// already removed the reserved claims, so merge leaves them unchanged.
+    pub seller_positions: &'a [PositionV1<N>],
+    /// Caller-owned close slots; `Some` means that record closes.
+    pub record_closes: &'a mut [Option<crate::LiveRecordCloseV2>],
+    /// Common matcher-selected fill.
+    pub fill: u64,
+    /// Exact prices summing to [`crate::PRICE_SCALE`].
+    pub execution_prices: &'a [u64],
+    /// Canonical program-owned fee policy.
+    pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee-recipient account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Small transfer effects of one in-place complete-set Sell merge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MergeSettlementEffectsV2<const N: usize> {
+    /// Gross collateral credits in canonical outcome order.
+    pub seller_gross_collateral_credits: [u64; N],
+    /// Cumulative-difference seller fees in canonical outcome order.
+    pub seller_fee_debits: [u64; N],
+    /// Net credits to signed collateral accounts.
+    pub seller_net_collateral_credits: [u64; N],
+    /// Exact Market-vault debit.
+    pub market_vault_collateral_debit: u64,
+    /// Aggregate fee transfer.
+    pub venue_fee_transfer: u64,
+}
+
+/// Check and atomically project one permissionless complementary-sell merge.
+pub fn settle_merge_in_place_v2<const N: usize>(
+    input: ComplementarySellMatchInPlaceV2<'_, N>,
+) -> Result<MergeSettlementEffectsV2<N>> {
+    width(N)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Merge, input.phase)?;
+    if input.fill == 0 {
+        return Err(Error::ZeroQuantity);
+    }
+    require_complementary_lengths(
+        N,
+        &[
+            input.seller_replay_roots.len(),
+            input.seller_records.len(),
+            input.seller_accounts.len(),
+            input.seller_positions.len(),
+            input.record_closes.len(),
+            input.execution_prices.len(),
+        ],
+    )?;
+    distinct_participants(input.seller_accounts)?;
+    let first = input
+        .seller_records
+        .first()
+        .ok_or(Error::InvalidOutcomeWidth)?
+        .intent();
+    let mut gross = [0; N];
+    let mut fees = [0; N];
+    let mut net = [0; N];
+    let mut price_sum = 0_u64;
+    let mut gross_sum = 0_u64;
+    let mut fee_sum = 0_u64;
+
+    for index in 0..N {
+        let record = input.seller_records[index];
+        let intent = record.intent();
+        let expected = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        if intent.side() != Side::Sell
+            || intent.market() != first.market()
+            || intent.generation() != first.generation()
+            || intent.outcome() != expected
+        {
+            return Err(Error::NonCanonicalComplement);
+        }
+        if input.seller_records[..index]
+            .iter()
+            .any(|prior| prior.intent().maker() == intent.maker())
+        {
+            return Err(Error::Alias);
+        }
+        input.seller_accounts[index].validate(intent)?;
+        position_matches(input.seller_positions[index], intent)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
+        let price = input.execution_prices[index];
+        if price < intent.limit_price() {
+            return Err(Error::PriceIncompatible);
+        }
+        price_sum = price_sum
+            .checked_add(price)
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross[index] = quote(input.fill, price)?;
+        let transition = record.consume(
+            input.seller_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            0,
+        )?;
+        fees[index] = transition.2;
+        net[index] = gross[index]
+            .checked_sub(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross_sum = gross_sum
+            .checked_add(gross[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        fee_sum = fee_sum
+            .checked_add(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    if price_sum != crate::PRICE_SCALE || gross_sum != input.fill {
+        return Err(Error::SplitFundingMismatch);
+    }
+
+    for (index, gross_value) in gross.iter().copied().enumerate() {
+        let transition = input.seller_records[index].consume(
+            input.seller_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross_value,
+            0,
+        )?;
+        input.seller_replay_roots[index] = transition.1;
+        input.record_closes[index] = transition.0.close;
+        if let Some(record) = transition.0.live_record {
+            input.seller_records[index] = record;
+        }
+    }
+    Ok(MergeSettlementEffectsV2 {
+        seller_gross_collateral_credits: gross,
+        seller_fee_debits: fees,
+        seller_net_collateral_credits: net,
+        market_vault_collateral_debit: input.fill,
+        venue_fee_transfer: fee_sum,
+    })
+}
+
+fn require_complementary_lengths(expected: usize, lengths: &[usize]) -> Result<()> {
+    if lengths.iter().all(|length| *length == expected) {
+        Ok(())
+    } else {
+        Err(Error::InvalidOutcomeWidth)
+    }
 }
 
 fn distinct_participants(accounts: &[ParticipantAccountsV2]) -> Result<()> {
