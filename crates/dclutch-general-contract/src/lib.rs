@@ -16,8 +16,9 @@ extern crate std;
 use core::convert::{TryFrom, TryInto};
 
 use dclutch_capability_contract::{
-    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1,
-    FundingCompartment as CapabilityFundingCompartment, FundingStateV1,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, FundingAssetClassV1,
+    FundingCompartment as CapabilityFundingCompartment, FundingCustodyObservationV1,
+    FundingStateV1,
 };
 use dclutch_core_contract::{MarketIdentity, MarketRoot, Phase as MarketPhase};
 
@@ -87,9 +88,9 @@ pub const GENERAL_CAPABILITY_RELEASE_PREIMAGE_V1: &[u8] =
 pub const GENERAL_CHILD_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/general/child-schema/v1";
 /// Domain-separated preimage of the General child-derivation policy identity.
 pub const GENERAL_CHILD_DERIVATION_PREIMAGE_V1: &[u8] = b"dclutch/general/child-derivation/v1";
+/// Domain-separated generic-record schema label for immutable General config.
+pub const GENERAL_CONFIG_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/schema/general-config-v1";
 
-/// PDA seed domain for one immutable General config child.
-pub const GENERAL_CONFIG_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-config/v1";
 /// PDA seed domain for one capability-bound General funding child.
 pub const GENERAL_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-funding/v1";
 /// PDA seed domain for one General capability root.
@@ -190,8 +191,10 @@ pub enum Error {
     UnrecognizedCapability,
     /// Capability funding did not bind or transition canonically into General funding.
     CapabilityFundingMismatch,
-    /// A General capability quote carried provider or liquidity principal.
+    /// A General capability quote selected a forbidden compartment or asset class.
     ExtraneousCapabilityFunding,
+    /// Physical General-funding lamports did not equal Rent plus remaining compartments.
+    GeneralFundingCustodyMismatch,
     /// Persisted order custody did not bind the signed order or settlement receipt.
     CustodyMismatch,
     /// Locked quote or claim principal was insufficient for an authenticated receipt.
@@ -284,31 +287,11 @@ pub const GENERAL_CHILD_DERIVATION_ID_V1: ContentId = ContentId([
     0x56, 0xd5, 0xff, 0xe7, 0xce, 0x62, 0x82, 0x2c, 0x62, 0x32, 0x11, 0xea, 0x3e, 0x4a, 0x53, 0x3c,
     0xfb, 0x5c, 0xd9, 0xa5, 0x84, 0x60, 0xf7, 0x85, 0xea, 0x52, 0x01, 0x69, 0x97, 0x18, 0x8b, 0xb0,
 ]);
-
-/// Exact PDA seed projection for one immutable General config.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralConfigPdaSeedsV1 {
-    config_id: [u8; 32],
-}
-
-impl GeneralConfigPdaSeedsV1 {
-    /// Construct from the SHA-256 identity of the canonical config bytes.
-    pub const fn new(config_id: ContentId) -> Self {
-        Self {
-            config_id: config_id.to_bytes(),
-        }
-    }
-
-    /// Return `[domain, config_id]` in canonical order.
-    pub fn seed_components(&self) -> [&[u8]; 2] {
-        [GENERAL_CONFIG_PDA_DOMAIN_V1, self.config_id.as_slice()]
-    }
-
-    /// Return the immutable config content-identity seed.
-    pub const fn config_id(self) -> [u8; 32] {
-        self.config_id
-    }
-}
+/// SHA-256 identity of [`GENERAL_CONFIG_SCHEMA_PREIMAGE_V1`].
+pub const GENERAL_CONFIG_SCHEMA_ID_V1: ContentId = ContentId([
+    0xdc, 0xf6, 0xa5, 0x2b, 0x26, 0x42, 0xeb, 0xd0, 0xeb, 0xcf, 0xfc, 0x7f, 0xf6, 0x82, 0x83, 0x5a,
+    0xa7, 0xf8, 0x75, 0xb7, 0xf6, 0x7c, 0xdf, 0xa5, 0x65, 0xc6, 0xa4, 0x2c, 0x79, 0xca, 0x70, 0xf9,
+]);
 
 /// Exact PDA seed projection for one active General root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -560,7 +543,7 @@ pub const GENERAL_INSTRUCTION_SCHEMA_V1: u16 = 1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum GeneralInstructionTagV1 {
-    /// Activate the manifest-selected capability and create config/root/funding.
+    /// Activate from finalized config and create root/funding.
     Activate = 1,
     /// Reserve and create the next collecting batch.
     OpenBatch = 2,
@@ -627,13 +610,11 @@ impl GeneralInstructionTagV1 {
     }
 }
 
-/// Activation replay plus the sole canonical config payload.
+/// Activation replay beyond authenticated Market, manifest, funding, and config records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivateGeneralV1 {
     /// Direct Market child count required before activation.
     pub expected_market_child_count: u64,
-    /// Immutable General config whose exact bytes are content-addressed.
-    pub config: GeneralConfigV1,
 }
 
 /// Batch/generation replay facts shared by batch lifecycle actions.
@@ -666,7 +647,7 @@ pub struct GeneralCandidatePageV1<const N: usize> {
 /// One hostile-decoded General instruction at exact ClaimBasis width `N`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralInstructionV1<const N: usize> {
-    /// Activate config/root/funding from generic capability funding.
+    /// Activate root/funding from finalized config and generic capability funding.
     Activate(ActivateGeneralV1),
     /// Open the next batch.
     OpenBatch(GeneralBatchReplayV1),
@@ -713,21 +694,9 @@ impl<const N: usize> GeneralInstructionV1<N> {
         let tag = GeneralInstructionTagV1::decode(read_u8(bytes, 10)?)?;
         match tag {
             GeneralInstructionTagV1::Activate => {
-                exact_len(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES + 8 + GENERAL_CONFIG_BYTES,
-                )?;
-                let config = GeneralConfigV1::decode(subslice(
-                    bytes,
-                    GENERAL_INSTRUCTION_HEADER_BYTES + 8,
-                    GENERAL_CONFIG_BYTES,
-                )?)?;
-                if usize::from(config.outcome_count()) != N {
-                    return Err(Error::InvalidOutcomeCount);
-                }
+                exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
                 Ok(Self::Activate(ActivateGeneralV1 {
                     expected_market_child_count: read_u64(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    config,
                 }))
             }
             GeneralInstructionTagV1::OpenBatch
@@ -833,7 +802,7 @@ impl<const N: usize> GeneralInstructionV1<N> {
     /// Return the exact wire width for this action.
     pub fn encoded_len(&self) -> Result<usize> {
         match self {
-            Self::Activate(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 8 + GENERAL_CONFIG_BYTES),
+            Self::Activate(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 8),
             Self::OpenBatch(_)
             | Self::LockBatch(_)
             | Self::LockSelection(_)
@@ -890,9 +859,6 @@ impl<const N: usize> GeneralInstructionV1<N> {
                     GENERAL_INSTRUCTION_HEADER_BYTES,
                     &instruction.expected_market_child_count.to_le_bytes(),
                 );
-                let mut config_bytes = instruction.config.to_bytes();
-                put(out, GENERAL_INSTRUCTION_HEADER_BYTES + 8, &config_bytes);
-                config_bytes.fill(0);
             }
             Self::OpenBatch(replay)
             | Self::LockBatch(replay)
@@ -1024,10 +990,8 @@ pub enum GeneralAccountRoleV1 {
     StagingCursorVacancy,
     /// Mutable generic capability FundingState source.
     CapabilityFunding,
-    /// Vacant or immutable General config PDA.
-    WritableConfig,
-    /// Readonly General config PDA.
-    ReadonlyConfig,
+    /// Permanent immutable General-config raw record.
+    GeneralConfig,
     /// Vacant or mutable General root PDA.
     WritableRoot,
     /// Readonly General root PDA.
@@ -1145,32 +1109,32 @@ impl<'a> GeneralAccountFrameV1<'a> {
 fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Result<usize> {
     let page_count = usize::from(count);
     let fixed = match tag {
-        GeneralInstructionTagV1::Activate => 18,
-        GeneralInstructionTagV1::OpenBatch => 10,
-        GeneralInstructionTagV1::LockBatch => 4,
-        GeneralInstructionTagV1::AdmitOrder => 18,
-        GeneralInstructionTagV1::CancelOrder => 16,
-        GeneralInstructionTagV1::CloseOrder => 14,
-        GeneralInstructionTagV1::SubmitCandidate => 9,
-        GeneralInstructionTagV1::FinishCandidate => 2,
-        GeneralInstructionTagV1::ConsiderCandidate => 4,
+        GeneralInstructionTagV1::Activate => 19,
+        GeneralInstructionTagV1::OpenBatch => 11,
+        GeneralInstructionTagV1::LockBatch => 6,
+        GeneralInstructionTagV1::AdmitOrder => 19,
+        GeneralInstructionTagV1::CancelOrder => 17,
+        GeneralInstructionTagV1::CloseOrder => 15,
+        GeneralInstructionTagV1::SubmitCandidate => 10,
+        GeneralInstructionTagV1::FinishCandidate => 4,
+        GeneralInstructionTagV1::ConsiderCandidate => 6,
         GeneralInstructionTagV1::LockSelection => 2,
-        GeneralInstructionTagV1::BeginSettlement => 14,
-        GeneralInstructionTagV1::FinishSettlement => 5,
+        GeneralInstructionTagV1::BeginSettlement => 16,
+        GeneralInstructionTagV1::FinishSettlement => 7,
         GeneralInstructionTagV1::CloseBatch => 3,
         GeneralInstructionTagV1::Quiesce => 1,
-        GeneralInstructionTagV1::CloseGeneral => 5,
+        GeneralInstructionTagV1::CloseGeneral => 7,
         GeneralInstructionTagV1::CloseCandidate => 3,
         GeneralInstructionTagV1::CloseSettlement => 4,
         GeneralInstructionTagV1::VerifyCandidatePage => {
             require_page_count(count)?;
-            return 4usize
+            return 6usize
                 .checked_add(page_count)
                 .ok_or(Error::ArithmeticOverflow);
         }
         GeneralInstructionTagV1::SettlePage => {
             require_page_count(count)?;
-            return 8usize
+            return 10usize
                 .checked_add(page_count.checked_mul(5).ok_or(Error::ArithmeticOverflow)?)
                 .ok_or(Error::ArithmeticOverflow);
         }
@@ -1194,13 +1158,14 @@ fn general_frame_role(
             Role::Realm,
             Role::ClaimBasis,
             Role::Manifest,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::Mint,
             Role::TokenProgram,
             Role::CapabilityFunding,
-            Role::WritableConfig,
             Role::WritableRoot,
             Role::WritableGeneralFunding,
             Role::ReadonlyRentCredit,
@@ -1213,11 +1178,12 @@ fn general_frame_role(
         GeneralInstructionTagV1::OpenBatch => *[
             Role::WorkActor,
             Role::ReadonlyMarket,
-            Role::ReadonlyConfig,
+            Role::GeneralConfig,
             Role::WritableRoot,
             Role::WritableGeneralFunding,
             Role::WritableBatch,
             Role::ReadonlyRentCredit,
+            Role::StagingCursorVacancy,
             Role::SystemProgram,
             Role::RentSysvar,
             Role::ClockSysvar,
@@ -1225,9 +1191,11 @@ fn general_frame_role(
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::LockBatch => *[
-            Role::ReadonlyConfig,
+            Role::GeneralConfig,
             Role::ReadonlyRoot,
             Role::WritableBatch,
+            Role::StagingCursorVacancy,
+            Role::RentSysvar,
             Role::ClockSysvar,
         ]
         .get(index)
@@ -1236,10 +1204,11 @@ fn general_frame_role(
             Role::OrderOwnerPayer,
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::Mint,
             Role::TokenProgram,
-            Role::ReadonlyConfig,
             Role::ReadonlyRoot,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
@@ -1258,8 +1227,9 @@ fn general_frame_role(
             Role::OrderOwner,
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::GeneralConfig,
             Role::StagingCursorVacancy,
-            Role::ReadonlyConfig,
+            Role::StagingCursorVacancy,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
@@ -1277,8 +1247,9 @@ fn general_frame_role(
         GeneralInstructionTagV1::CloseOrder => *[
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::GeneralConfig,
             Role::StagingCursorVacancy,
-            Role::ReadonlyConfig,
+            Role::StagingCursorVacancy,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
@@ -1294,11 +1265,12 @@ fn general_frame_role(
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::SubmitCandidate => *[
             Role::CandidateSubmitter,
-            Role::ReadonlyConfig,
+            Role::GeneralConfig,
             Role::ReadonlyRoot,
             Role::ReadonlyBatch,
             Role::WritableCandidate,
             Role::ReadonlyRentCredit,
+            Role::StagingCursorVacancy,
             Role::SystemProgram,
             Role::RentSysvar,
             Role::ClockSysvar,
@@ -1307,28 +1279,43 @@ fn general_frame_role(
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::VerifyCandidatePage => {
             require_page_count(count)?;
-            if index < 4 {
+            let execution_end = 3usize
+                .checked_add(usize::from(count))
+                .ok_or(Error::ArithmeticOverflow)?;
+            if index < 3 {
                 *[
-                    Role::ReadonlyConfig,
+                    Role::GeneralConfig,
                     Role::ReadonlyBatch,
                     Role::WritableCandidate,
-                    Role::ClockSysvar,
                 ]
                 .get(index)
                 .ok_or(Error::InvalidLength)?
-            } else {
+            } else if index < execution_end {
                 Role::ReadonlyOrderState
+            } else {
+                *[
+                    Role::StagingCursorVacancy,
+                    Role::RentSysvar,
+                    Role::ClockSysvar,
+                ]
+                .get(index - execution_end)
+                .ok_or(Error::InvalidLength)?
             }
         }
-        GeneralInstructionTagV1::FinishCandidate => {
-            *[Role::ReadonlyConfig, Role::WritableCandidate]
-                .get(index)
-                .ok_or(Error::InvalidLength)?
-        }
+        GeneralInstructionTagV1::FinishCandidate => *[
+            Role::GeneralConfig,
+            Role::WritableCandidate,
+            Role::StagingCursorVacancy,
+            Role::RentSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::ConsiderCandidate => *[
-            Role::ReadonlyConfig,
+            Role::GeneralConfig,
             Role::WritableBatch,
             Role::WritableCandidate,
+            Role::StagingCursorVacancy,
+            Role::RentSysvar,
             Role::ClockSysvar,
         ]
         .get(index)
@@ -1339,10 +1326,12 @@ fn general_frame_role(
         GeneralInstructionTagV1::BeginSettlement => *[
             Role::WritableMarket,
             Role::Realm,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
             Role::Mint,
             Role::TokenProgram,
             Role::CollateralVault,
-            Role::ReadonlyConfig,
             Role::WritableBatch,
             Role::ReadonlyCandidate,
             Role::WritableSettlementCursor,
@@ -1356,10 +1345,17 @@ fn general_frame_role(
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::SettlePage => {
             require_page_count(count)?;
+            let execution_end = 8usize
+                .checked_add(
+                    usize::from(count)
+                        .checked_mul(5)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                )
+                .ok_or(Error::ArithmeticOverflow)?;
             if index < 8 {
                 *[
                     Role::ReadonlyMarket,
-                    Role::ReadonlyConfig,
+                    Role::GeneralConfig,
                     Role::ReadonlyBatch,
                     Role::ReadonlyCandidate,
                     Role::WritableSettlementCursor,
@@ -1369,7 +1365,7 @@ fn general_frame_role(
                 ]
                 .get(index)
                 .ok_or(Error::InvalidLength)?
-            } else {
+            } else if index < execution_end {
                 *[
                     Role::WritableOrderState,
                     Role::WritableOrderCustody,
@@ -1379,14 +1375,20 @@ fn general_frame_role(
                 ]
                 .get((index - 8) % 5)
                 .ok_or(Error::InvalidLength)?
+            } else {
+                *[Role::StagingCursorVacancy, Role::RentSysvar]
+                    .get(index - execution_end)
+                    .ok_or(Error::InvalidLength)?
             }
         }
         GeneralInstructionTagV1::FinishSettlement => *[
-            Role::ReadonlyConfig,
+            Role::GeneralConfig,
             Role::WritableBatch,
             Role::ReadonlyCandidate,
             Role::ReadonlySettlementCursor,
             Role::WritableGeneralFunding,
+            Role::StagingCursorVacancy,
+            Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
@@ -1402,10 +1404,12 @@ fn general_frame_role(
             .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::CloseGeneral => *[
             Role::WritableMarket,
-            Role::WritableConfig,
+            Role::GeneralConfig,
             Role::WritableRoot,
             Role::WritableGeneralFunding,
             Role::WritableRentCredit,
+            Role::StagingCursorVacancy,
+            Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
@@ -1441,7 +1445,6 @@ fn validate_general_account_role(
         Role::TokenProgram | Role::SystemProgram => (false, false, true),
         Role::WritableMarket
         | Role::CapabilityFunding
-        | Role::WritableConfig
         | Role::WritableRoot
         | Role::WritableGeneralFunding
         | Role::WritableBatch
@@ -1505,24 +1508,17 @@ fn require_distinct_general_accounts(accounts: &[GeneralAccountMetaV1]) -> Resul
 /// Adapter-observed current Rent minima for the activated General account cluster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralActivationCapitalizationV1 {
-    config_rent: u64,
     root_rent: u64,
     funding_rent: u64,
 }
 
 impl GeneralActivationCapitalizationV1 {
-    /// Construct from the trusted current Rent calculation for each exact width.
-    pub const fn new(config_rent: u64, root_rent: u64, funding_rent: u64) -> Self {
+    /// Construct from trusted current Rent calculations for the two new accounts.
+    pub const fn new(root_rent: u64, funding_rent: u64) -> Self {
         Self {
-            config_rent,
             root_rent,
             funding_rent,
         }
-    }
-
-    /// Return the exact config-account Rent minimum.
-    pub const fn config_rent(self) -> u64 {
-        self.config_rent
     }
 
     /// Return the exact root-account Rent minimum.
@@ -1536,9 +1532,8 @@ impl GeneralActivationCapitalizationV1 {
     }
 
     fn total(self) -> Result<u64> {
-        self.config_rent
-            .checked_add(self.root_rent)
-            .and_then(|value| value.checked_add(self.funding_rent))
+        self.root_rent
+            .checked_add(self.funding_rent)
             .ok_or(Error::ArithmeticOverflow)
     }
 }
@@ -1593,7 +1588,6 @@ pub struct GeneralActivationPlanV1<'a> {
     root: GeneralRootV1,
     funding: GeneralFundingActivationV1,
     capitalization: GeneralActivationCapitalizationV1,
-    config_seeds: GeneralConfigPdaSeedsV1,
     root_seeds: GeneralRootPdaSeedsV1,
     funding_seeds: GeneralFundingPdaSeedsV1,
     commitments: GeneralActivationCommitmentsV1<'a>,
@@ -1621,11 +1615,6 @@ impl<'a> GeneralActivationPlanV1<'a> {
         self.capitalization
     }
 
-    /// Return the immutable config PDA seeds.
-    pub const fn config_seeds(self) -> GeneralConfigPdaSeedsV1 {
-        self.config_seeds
-    }
-
     /// Return the active General-root PDA seeds.
     pub const fn root_seeds(self) -> GeneralRootPdaSeedsV1 {
         self.root_seeds
@@ -1650,7 +1639,7 @@ impl<'a> GeneralActivationPlanV1<'a> {
     pub fn general_funding_account_balance(self) -> Result<u64> {
         self.capitalization
             .funding_rent
-            .checked_add(self.funding.general_principal())
+            .checked_add(self.funding.general_lamports())
             .ok_or(Error::ArithmeticOverflow)
     }
 }
@@ -1662,10 +1651,11 @@ pub fn activate_general_v1<'a>(
     instruction: ActivateGeneralV1,
     mut market_root: MarketRoot,
     config_id: ContentId,
+    config: GeneralConfigV1,
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'a>,
     capability_funding: FundingStateV1,
-    observed_present_principal: u64,
+    capability_custody: FundingCustodyObservationV1,
     capitalization: GeneralActivationCapitalizationV1,
     current_slot: u64,
 ) -> Result<GeneralActivationPlanV1<'a>> {
@@ -1677,66 +1667,195 @@ pub fn activate_general_v1<'a>(
     let market = accounts.get(1).ok_or(Error::InvalidLength)?.key;
     let identity = market_root.identity();
     if market_root.phase() != MarketPhase::Open
-        || identity.generation() != instruction.config.generation
-        || identity.claim_basis_id().to_bytes() != instruction.config.claim_basis_id.to_bytes()
+        || identity.generation() != config.generation
+        || identity.claim_basis_id().to_bytes() != config.claim_basis_id.to_bytes()
         || identity.capability_manifest_id().to_bytes() != manifest_id.to_bytes()
     {
         return Err(Error::AuthorityMismatch);
     }
     market_root
-        .register_child(
-            instruction.config.generation,
-            instruction.expected_market_child_count,
-        )
+        .register_child(config.generation, instruction.expected_market_child_count)
         .map_err(|_| Error::AuthorityMismatch)?;
     let funding = GeneralFundingV1::activate_from_capability(
         market,
         config_id,
-        instruction.config,
+        config,
         manifest_id,
         manifest,
         capability_funding,
-        observed_present_principal,
+        capability_custody,
         current_slot,
     )?;
-    if funding.rent_principal() != capitalization.total()? {
+    if funding.rent_lamports() != capitalization.total()? {
         return Err(Error::CapabilityFundingMismatch);
     }
     let rent_beneficiary = market_root.rent_refund();
-    if accounts.get(14).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
+    if accounts.get(15).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
         return Err(Error::AuthorityMismatch);
     }
-    let root = GeneralRootV1::founding(
-        market,
-        config_id,
-        instruction.config.generation,
-        rent_beneficiary,
-    )?;
-    let config_seeds = GeneralConfigPdaSeedsV1::new(config_id);
-    let root_seeds = GeneralRootPdaSeedsV1::new(market, instruction.config.generation, config_id)?;
+    let root = GeneralRootV1::founding(market, config_id, config.generation, rent_beneficiary)?;
+    let root_seeds = GeneralRootPdaSeedsV1::new(market, config.generation, config_id)?;
     let funding_seeds = GeneralFundingPdaSeedsV1::new(
         market,
-        instruction.config.generation,
+        config.generation,
         config_id,
-        instruction.config.capability_release_id,
+        config.capability_release_id,
     )?;
     Ok(GeneralActivationPlanV1 {
         market_root_after: market_root,
         root,
         funding,
         capitalization,
-        config_seeds,
         root_seeds,
         funding_seeds,
         commitments: GeneralActivationCommitmentsV1 {
             config_id,
-            config: instruction.config,
-            market_identity_id: instruction.config.market_identity_id,
+            config,
+            market_identity_id: config.market_identity_id,
             market_identity: identity,
             manifest_id,
             manifest,
         },
         creation_recipient: activator,
+    })
+}
+
+/// Adapter-observed native custody for the segregated General funding account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingCustodyObservationV1 {
+    account_lamports: u64,
+    exact_account_rent_lamports: u64,
+}
+
+impl GeneralFundingCustodyObservationV1 {
+    /// Construct one physical observation without accepting compartment amounts.
+    pub fn new(account_lamports: u64, exact_account_rent_lamports: u64) -> Result<Self> {
+        if account_lamports < exact_account_rent_lamports {
+            return Err(Error::GeneralFundingCustodyMismatch);
+        }
+        Ok(Self {
+            account_lamports,
+            exact_account_rent_lamports,
+        })
+    }
+
+    /// Return all observed account lamports.
+    pub const fn account_lamports(self) -> u64 {
+        self.account_lamports
+    }
+
+    /// Return the current Rent minimum for the exact funding-state width.
+    pub const fn exact_account_rent_lamports(self) -> u64 {
+        self.exact_account_rent_lamports
+    }
+}
+
+/// Complete pure plan for one permissionless, prepaid General batch opening.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOpenBatchPlanV1 {
+    root_after: GeneralRootV1,
+    funding_after: GeneralFundingV1,
+    batch: BatchRootV1,
+    batch_seeds: GeneralBatchPdaSeedsV1,
+    batch_rent_lamports: u64,
+    funding_account_lamports_after: u64,
+}
+
+impl GeneralOpenBatchPlanV1 {
+    /// Return the root after reserving exactly one sequence and direct child.
+    pub const fn root_after(self) -> GeneralRootV1 {
+        self.root_after
+    }
+
+    /// Return funding after consuming exact batch Rent from liveness.
+    pub const fn funding_after(self) -> GeneralFundingV1 {
+        self.funding_after
+    }
+
+    /// Return the newly opened canonical collecting batch.
+    pub const fn batch(self) -> BatchRootV1 {
+        self.batch
+    }
+
+    /// Return the exact root/sequence batch derivation.
+    pub const fn batch_seeds(self) -> GeneralBatchPdaSeedsV1 {
+        self.batch_seeds
+    }
+
+    /// Return exact current Rent transferred into the batch account.
+    pub const fn batch_rent_lamports(self) -> u64 {
+        self.batch_rent_lamports
+    }
+
+    /// Return exact required General-funding lamports after batch creation.
+    pub const fn funding_account_lamports_after(self) -> u64 {
+        self.funding_account_lamports_after
+    }
+}
+
+/// Reserve and capitalize one batch from segregated native liveness funding.
+///
+/// `batch_rent_lamports` is the adapter's current Rent calculation for the
+/// exact [`BATCH_ROOT_BYTES`] width, not a caller-selected fee or reward.
+#[allow(clippy::too_many_arguments)]
+pub fn open_general_batch_v1(
+    frame: GeneralAccountFrameV1<'_>,
+    instruction: GeneralBatchReplayV1,
+    config_id: ContentId,
+    config: GeneralConfigV1,
+    mut root: GeneralRootV1,
+    mut funding: GeneralFundingV1,
+    custody: GeneralFundingCustodyObservationV1,
+    batch_rent_lamports: u64,
+    current_slot: u64,
+) -> Result<GeneralOpenBatchPlanV1> {
+    if frame.tag != GeneralInstructionTagV1::OpenBatch || frame.execution_count != 0 {
+        return Err(Error::InvalidInstruction);
+    }
+    let accounts = frame.accounts();
+    if instruction.generation != config.generation
+        || instruction.generation != root.generation
+        || instruction.batch_sequence != root.next_batch_sequence
+        || root.config_id != config_id
+        || root.market != accounts.get(1).ok_or(Error::InvalidLength)?.key
+        || root.rent_beneficiary != accounts.get(6).ok_or(Error::InvalidLength)?.key
+        || funding.capability_release_id != config.capability_release_id
+    {
+        return Err(Error::AuthorityMismatch);
+    }
+    let expected_lamports = custody
+        .exact_account_rent_lamports
+        .checked_add(funding.remaining_lamports()?)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if custody.account_lamports != expected_lamports {
+        return Err(Error::GeneralFundingCustodyMismatch);
+    }
+    let sequence = root.open_batch()?;
+    if sequence != instruction.batch_sequence {
+        return Err(Error::CursorMismatch);
+    }
+    funding.consume(FundingCompartment::Liveness, batch_rent_lamports)?;
+    let batch = BatchRootV1::open(config_id, sequence, current_slot, config)?;
+    let batch_seeds =
+        GeneralBatchPdaSeedsV1::new(accounts.get(3).ok_or(Error::InvalidLength)?.key, sequence)?;
+    let funding_account_lamports_after = custody
+        .account_lamports
+        .checked_sub(batch_rent_lamports)
+        .ok_or(Error::GeneralFundingCustodyMismatch)?;
+    let canonical_after = custody
+        .exact_account_rent_lamports
+        .checked_add(funding.remaining_lamports()?)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if funding_account_lamports_after != canonical_after {
+        return Err(Error::GeneralFundingCustodyMismatch);
+    }
+    Ok(GeneralOpenBatchPlanV1 {
+        root_after: root,
+        funding_after: funding,
+        batch,
+        batch_seeds,
+        batch_rent_lamports,
+        funding_account_lamports_after,
     })
 }
 
@@ -2106,6 +2225,11 @@ impl GeneralRootV1 {
     /// Return the exact direct batch-child count.
     pub const fn open_batches(self) -> u32 {
         self.open_batches
+    }
+
+    /// Return the next unreserved batch sequence.
+    pub const fn next_batch_sequence(self) -> u64 {
+        self.next_batch_sequence
     }
 }
 
@@ -4458,9 +4582,9 @@ pub struct GeneralFundingActivationV1 {
     capability_funding_after: FundingStateV1,
     capability_funding_derivation: CapabilityFundingDerivationV1,
     general_funding: GeneralFundingV1,
-    rent_principal: u64,
-    creation_principal: u64,
-    general_principal: u64,
+    rent_lamports: u64,
+    creation_lamports: u64,
+    general_lamports: u64,
 }
 
 impl GeneralFundingActivationV1 {
@@ -4480,18 +4604,18 @@ impl GeneralFundingActivationV1 {
     }
 
     /// Return exact child-rent principal released during activation.
-    pub const fn rent_principal(self) -> u64 {
-        self.rent_principal
+    pub const fn rent_lamports(self) -> u64 {
+        self.rent_lamports
     }
 
     /// Return exact physical-creation principal released during activation.
-    pub const fn creation_principal(self) -> u64 {
-        self.creation_principal
+    pub const fn creation_lamports(self) -> u64 {
+        self.creation_lamports
     }
 
     /// Return exact principal transferred into the General funding child.
-    pub const fn general_principal(self) -> u64 {
-        self.general_principal
+    pub const fn general_lamports(self) -> u64 {
+        self.general_lamports
     }
 }
 
@@ -4530,7 +4654,7 @@ impl GeneralFundingV1 {
         manifest_id: ContentId,
         manifest: CapabilityManifestV1<'_>,
         mut capability_funding: FundingStateV1,
-        observed_present_principal: u64,
+        capability_custody: FundingCustodyObservationV1,
         current_slot: u64,
     ) -> Result<GeneralFundingActivationV1> {
         let capability_manifest_id =
@@ -4545,33 +4669,32 @@ impl GeneralFundingV1 {
         )
         .map_err(|_| Error::CapabilityFundingMismatch)?;
         capability_funding
-            .validate_against(capability_manifest_id, manifest, observed_present_principal)
+            .validate_against(capability_manifest_id, manifest, capability_custody)
             .map_err(|_| Error::CapabilityFundingMismatch)?;
         let entry = manifest
             .entry(capability_funding.entry_index())
             .map_err(|_| Error::CapabilityFundingMismatch)?;
         validate_general_capability_entry_v1(entry, config_id, config)?;
         let quote = entry.funding_quote();
-        if quote.provider_principal() != 0 || quote.liquidity_principal() != 0 {
-            return Err(Error::ExtraneousCapabilityFunding);
-        }
+        validate_general_funding_quote_v1(quote)?;
 
         let activation = capability_funding
             .activate(
                 capability_manifest_id,
                 manifest,
-                observed_present_principal,
+                capability_custody,
                 current_slot,
             )
             .map_err(|_| Error::CapabilityFundingMismatch)?;
+        let amounts = quote.amounts();
         let remaining = capability_funding.remaining();
         let released = capability_funding.released();
-        if remaining.service_principal() != quote.service_principal()
-            || remaining.work_principal() != quote.work_principal()
-            || remaining.bounty_principal() != quote.bounty_principal()
-            || released.service_principal() != 0
-            || released.work_principal() != 0
-            || released.bounty_principal() != 0
+        if remaining.service() != amounts.service()
+            || remaining.work() != amounts.work()
+            || remaining.bounty() != amounts.bounty()
+            || released.service().amount() != 0
+            || released.work().amount() != 0
+            || released.bounty().amount() != 0
         {
             return Err(Error::CapabilityFundingMismatch);
         }
@@ -4580,44 +4703,53 @@ impl GeneralFundingV1 {
             &mut capability_funding,
             capability_manifest_id,
             manifest,
+            capability_custody.exact_state_rent_lamports(),
             CapabilityFundingCompartment::Service,
-            quote.service_principal(),
+            amounts.service().amount(),
         )?;
         release_capability_compartment(
             &mut capability_funding,
             capability_manifest_id,
             manifest,
+            capability_custody.exact_state_rent_lamports(),
             CapabilityFundingCompartment::Work,
-            quote.work_principal(),
+            amounts.work().amount(),
         )?;
         release_capability_compartment(
             &mut capability_funding,
             capability_manifest_id,
             manifest,
+            capability_custody.exact_state_rent_lamports(),
             CapabilityFundingCompartment::Bounty,
-            quote.bounty_principal(),
+            amounts.bounty().amount(),
         )?;
+        let closed_custody = FundingCustodyObservationV1::native_only(
+            capability_custody.exact_state_rent_lamports(),
+            capability_custody.exact_state_rent_lamports(),
+        )
+        .map_err(|_| Error::CapabilityFundingMismatch)?;
         capability_funding
-            .validate_against(capability_manifest_id, manifest, 0)
+            .validate_against(capability_manifest_id, manifest, closed_custody)
             .map_err(|_| Error::CapabilityFundingMismatch)?;
 
-        let general_principal = quote
-            .service_principal()
-            .checked_add(quote.work_principal())
-            .and_then(|value| value.checked_add(quote.bounty_principal()))
+        let general_lamports = amounts
+            .service()
+            .amount()
+            .checked_add(amounts.work().amount())
+            .and_then(|value| value.checked_add(amounts.bounty().amount()))
             .ok_or(Error::ArithmeticOverflow)?;
         Ok(GeneralFundingActivationV1 {
             capability_funding_after: capability_funding,
             capability_funding_derivation,
             general_funding: Self::founding(
                 GENERAL_CAPABILITY_RELEASE_ID_V1,
-                quote.service_principal(),
-                quote.work_principal(),
-                quote.bounty_principal(),
+                amounts.service().amount(),
+                amounts.work().amount(),
+                amounts.bounty().amount(),
             ),
-            rent_principal: activation.rent_principal(),
-            creation_principal: activation.creation_principal(),
-            general_principal,
+            rent_lamports: activation.rent_lamports(),
+            creation_lamports: activation.creation_lamports(),
+            general_lamports,
         })
     }
 
@@ -4703,6 +4835,15 @@ impl GeneralFundingV1 {
         amount: u64,
         recipient: ContentId,
     ) -> Result<FundingDebitV1> {
+        self.consume(compartment, amount)?;
+        Ok(FundingDebitV1 {
+            compartment,
+            amount,
+            recipient,
+        })
+    }
+
+    fn consume(&mut self, compartment: FundingCompartment, amount: u64) -> Result<()> {
         if amount == 0 {
             return Err(Error::ZeroFundingDebit);
         }
@@ -4718,11 +4859,7 @@ impl GeneralFundingV1 {
         let target_spent = self.spent.get_mut(index).ok_or(Error::InvalidLength)?;
         *target_spent = next_spent;
         self.validate()?;
-        Ok(FundingDebitV1 {
-            compartment,
-            amount,
-            recipient,
-        })
+        Ok(())
     }
 
     /// Refund all unspent compartments only after General is terminal.
@@ -4782,6 +4919,14 @@ impl GeneralFundingV1 {
             .get(funding_index(compartment))
             .copied()
             .ok_or(Error::InvalidLength)
+    }
+
+    /// Return the checked native-lamport total still held for all compartments.
+    pub fn remaining_lamports(self) -> Result<u64> {
+        self.remaining
+            .iter()
+            .try_fold(0u64, |total, value| total.checked_add(*value))
+            .ok_or(Error::ArithmeticOverflow)
     }
 }
 
@@ -4914,22 +5059,53 @@ fn release_capability_compartment(
     funding: &mut FundingStateV1,
     manifest_id: dclutch_capability_contract::ContentId,
     manifest: CapabilityManifestV1<'_>,
+    exact_state_rent_lamports: u64,
     compartment: CapabilityFundingCompartment,
     amount: u64,
 ) -> Result<()> {
-    if amount == 0 {
-        return Ok(());
+    let state_account_lamports = exact_state_rent_lamports
+        .checked_add(funding.remaining().native_lamports_total())
+        .ok_or(Error::ArithmeticOverflow)?;
+    let custody =
+        FundingCustodyObservationV1::native_only(state_account_lamports, exact_state_rent_lamports)
+            .map_err(|_| Error::CapabilityFundingMismatch)?;
+    let release = funding
+        .release(manifest_id, manifest, custody, compartment, amount)
+        .map_err(|_| Error::CapabilityFundingMismatch)?;
+    if release.compartment() != compartment
+        || release.asset_class() != FundingAssetClassV1::NativeLamports
+        || release.amount() != amount
+    {
+        return Err(Error::CapabilityFundingMismatch);
     }
-    let observed_present_principal = funding.remaining().total_principal();
-    funding
-        .release(
-            manifest_id,
-            manifest,
-            observed_present_principal,
-            compartment,
-            amount,
-        )
-        .map_err(|_| Error::CapabilityFundingMismatch)
+    Ok(())
+}
+
+fn validate_general_funding_quote_v1(
+    quote: dclutch_capability_contract::FundingQuoteV1,
+) -> Result<()> {
+    let amounts = quote.amounts();
+    let native = [
+        amounts.rent(),
+        amounts.creation(),
+        amounts.work(),
+        amounts.bounty(),
+        amounts.service(),
+    ];
+    if quote.realm_collateral().is_some()
+        || amounts.realm_collateral_total() != 0
+        || native.iter().any(|allocation| {
+            allocation.asset_class() != FundingAssetClassV1::NativeLamports
+                || allocation.amount() == 0
+        })
+        || amounts.provider().asset_class() != FundingAssetClassV1::NotApplicable
+        || amounts.provider().amount() != 0
+        || amounts.liquidity().asset_class() != FundingAssetClassV1::NotApplicable
+        || amounts.liquidity().amount() != 0
+    {
+        return Err(Error::ExtraneousCapabilityFunding);
+    }
+    Ok(())
 }
 
 fn portfolio_dot<const N: usize>(

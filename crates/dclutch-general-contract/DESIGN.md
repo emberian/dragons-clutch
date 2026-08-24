@@ -21,6 +21,13 @@ settlement-asset identity: Market -> Realm -> Mint/token release is the sole
 authority for that fact. There is no second feature bitmap, admin switch, or
 static client authority.
 
+`GeneralConfigV1` is a permanent generic finalized record under the
+domain-separated schema label `dclutch/schema/general-config-v1`. Its exported
+schema identity is SHA-256 of that exact label. General neither creates nor
+closes a local config PDA. Every consumer authenticates the 200-byte canonical
+raw config, its matching vacant staging cursor, and current Rent through the
+shared finalized-record boundary.
+
 The recognized V1 release is closed by four domain-separated SHA-256 preimages
 and their exported content identities:
 
@@ -33,7 +40,6 @@ and their exported content identities:
 schema, and derivation identities plus the exact config and capacity-profile
 identities. Every General address now has a contract-owned ordered seed tuple:
 
-- config: `[general-config-domain, config-content-id]`;
 - General root: `[general-root-domain, Market, generation-le, config-id]`;
 - General funding: `[general-funding-domain, Market, generation-le, config-id,
   release-id]`;
@@ -57,8 +63,11 @@ identity substitution.
 
 `GeneralInstructionV1<N>` owns the hostile wire grammar. Every instruction has
 one magic, schema, closed action tag, exact `N`, and zero reserved bytes.
-Variable payloads embed the existing canonical config, signed order, candidate
+Variable payloads embed the existing canonical signed order, candidate
 submission, or verification-page codec directly; they are not parallel DTOs.
+Activation carries only the Market child-count replay guard. Config identity
+and bytes come solely from the manifest-selected finalized raw record, so the
+wire has no caller-authored config copy or config-ID assertion.
 The remaining payload fields are only generation, child-count, batch-sequence,
 candidate-ID, or transcript replay guards. There are no caller allocation,
 status, winner, liveness, or custody assertions. Decoders reject short,
@@ -67,26 +76,27 @@ trailing, unknown-action, reserved, and width-substituted bytes.
 `GeneralAccountFrameV1` owns exact ordered SVM role geometry and privilege
 bits for every action from activation through close. All V1 roles are distinct;
 there is no implicit alias exception. System, Rent, and Clock roles bind their
-canonical keys. Every remaining raw Realm, ClaimBasis, or manifest consumer
+canonical keys. Every raw Realm, ClaimBasis, manifest, or General-config consumer
 also supplies its canonical readonly staging-cursor vacancy; one shared Rent
 sysvar proves the raw record is currently rent-exempt and the exact cursor is a
-system-owned, empty, zero-lamport vacancy. The activation frame orders the three
-raw records first and then their three matching vacancies, so no record or Rent
+system-owned, empty, zero-lamport vacancy. The activation frame orders its four
+raw records first and then their four matching vacancies, so no record or Rent
 fact is duplicated. Signed-order raw records are absent: the canonical signed
 message is already embedded in the instruction or page and replay binds its
-derived identity. Verification frames contain exactly `4 + M` accounts and
-settlement frames exactly `8 + 5M` accounts for the instruction's leading
+derived identity. Verification frames contain exactly `6 + M` accounts and
+settlement frames exactly `10 + 5M` accounts for the instruction's leading
 execution count `M = 1..4`, so unused execution accounts are not padded into a
-transaction. The maximum V1 settlement frame is therefore 28 accounts.
-The finalized-content-sensitive fixed frames are activation 18, admission 18,
-cancellation 16, and post-batch order close 14 accounts; cancellation and close
-both reauthenticate the raw Realm with its vacancy and their shared Rent sysvar
-before moving or closing Realm-mint quote custody.
+transaction. The maximum V1 settlement frame is therefore 30 accounts.
+The finalized-content-sensitive fixed frames are activation 19, admission 19,
+cancellation 17, and post-batch order close 15 accounts. Every one shares a
+single Rent role across its raw records and cursor vacancies. Terminal General
+close reads the finalized config but has no config-close authority.
 
 ## Canonical mutable-state records
 
 The contract is the sole codec and invariant owner for its persisted records.
-`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 136 bytes,
+The immutable generic-record `GeneralConfigV1` is exactly 200 bytes;
+`GeneralRootV1` is exactly 136 bytes,
 `GeneralFundingV1` is exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and
 `OrderStateV1` is exactly 96 bytes. Exact-N `GeneralOrderCustodyV1<N>` is
 `192 + 8N` bytes, `CandidateStateV1<N>` is `376 + 24N` bytes, and
@@ -101,7 +111,7 @@ payload when absent. Batch deadlines are strictly increasing, batch winner
 shape agrees with candidate count and phase, root child counts cannot exceed
 reserved sequences or survive terminalization, and order replay phase agrees
 with remaining lots. The root persists the nonzero permanent RentCredit
-beneficiary for config/root/funding and batch rent plus the exact Market key
+beneficiary for root/funding and batch rent plus the exact Market key
 needed to reconstruct its own PDA from persisted truth; neither is supplied by
 a later caller. Candidate submission uses an exact signing key which is also that
 candidate's permanent rent beneficiary. Replay authentication additionally
@@ -265,19 +275,27 @@ authority.
 
 `GeneralFundingV1` contains three immutable, prepaid, independently conserved
 compartments: liveness, work, and bounty. Its only capability activation
-constructor authenticates the exact manifest funding state and closed General
-release, invokes the capability ledger's activation transition, and maps the
-immutable quote exactly: service -> General liveness, work -> work, and bounty
--> bounty. Provider and liquidity must both be zero. Rent and creation remain
-the capability activation outputs. No caller supplies compartment amounts, and
+constructor authenticates the exact manifest funding state, native-only
+physical custody observation, and closed General release; invokes the
+capability ledger's typed activation transition; and maps the immutable quote
+exactly: native service -> General liveness, native work -> work, and native
+bounty -> bounty. Rent and creation are also required native lamports. Provider
+and liquidity are exactly NotApplicable, and any Realm-collateral binding,
+amount, or vault is refused. No caller supplies compartment amounts, and
 the returned plan releases all quote principal from the generic ledger so one
 principal cannot remain owned twice. The same plan exposes the capability-owned
 source PDA derivation. The exact activation plan registers the direct child in
 the open Market root, takes the Market's immutable `rent_refund` key as the
 General root's permanent RentCredit beneficiary, and fixes the frame's activator
 only as the physical-creation recipient. Current Rent minima and actual account
-balances remain adapter-observed facts, never wire amounts; their exact sum must
-equal the manifest's immutable activation-rent quote.
+balances remain adapter-observed facts, never wire amounts. Root plus
+General-funding Rent must equal the immutable activation-rent quote; finalized
+config Rent is owned permanently by the generic-record lifecycle.
+
+Permissionless batch opening consumes exactly the current batch-account Rent
+from General liveness, reimburses the work actor that creates the PDA, and
+rejects any General-funding balance other than current account Rent plus the
+exact remaining compartments.
 
 A General debit consumes present principal from exactly one compartment.
 Remaining plus spent plus refunded must always equal the founding quote for
@@ -309,9 +327,9 @@ operator implement and test all of the following:
 
 1. Authenticate config, Market identity, ClaimBasis, capability release, and
    transcript hashes from canonical bytes.
-2. Verify `OwnerKeyV1` signatures and every returned exact config, generic
-   capability-funding, General-funding/root/batch/replay/custody/escrow/
-   candidate/settlement PDA derivation.
+2. Verify `OwnerKeyV1` signatures, finalized config identity, and every returned
+   exact generic capability-funding or General funding/root/batch/replay/
+   custody/escrow/candidate/settlement PDA derivation.
 3. Atomically execute the contract-returned admission reserve against the
    owner's Position and quote escrow, then couple every receipt or release to
    the corresponding token/Position movement.

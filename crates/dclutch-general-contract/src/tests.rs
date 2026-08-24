@@ -1,8 +1,9 @@
 use super::*;
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    FundingAmountsV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    CompartmentFundingV1, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
+    FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    RealmCollateralBindingV1,
 };
 use dclutch_core_contract::{
     ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase as MarketPhase,
@@ -42,9 +43,48 @@ fn capability_entry(config_id: ContentId, quote: FundingAmountsV1) -> Capability
         100,
         0,
         [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-        quote,
+        FundingQuoteV1::new(quote, None).expect("native-only quote"),
     )
     .expect("General capability entry")
+}
+
+fn native(amount: u64) -> CompartmentFundingV1 {
+    if amount == 0 {
+        CompartmentFundingV1::not_applicable()
+    } else {
+        CompartmentFundingV1::native_lamports(amount).expect("native allocation")
+    }
+}
+
+fn native_amounts(
+    rent: u64,
+    creation: u64,
+    work: u64,
+    provider: u64,
+    bounty: u64,
+    liquidity: u64,
+    service: u64,
+) -> FundingAmountsV1 {
+    FundingAmountsV1::new(
+        native(rent),
+        native(creation),
+        native(work),
+        native(provider),
+        native(bounty),
+        native(liquidity),
+        native(service),
+    )
+    .expect("typed native amounts")
+}
+
+fn funding_custody(amounts: FundingAmountsV1, state_rent: u64) -> FundingCustodyObservationV1 {
+    FundingCustodyObservationV1::native_only(
+        state_rent
+            .checked_add(amounts.native_lamports_total())
+            .expect("custody balance"),
+        state_rent,
+    )
+    .expect("native custody")
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
@@ -209,7 +249,6 @@ fn valid_frame_meta(role: GeneralAccountRoleV1, fill: u8) -> GeneralAccountMetaV
         Role::TokenProgram | Role::SystemProgram => (false, false, true),
         Role::WritableMarket
         | Role::CapabilityFunding
-        | Role::WritableConfig
         | Role::WritableRoot
         | Role::WritableGeneralFunding
         | Role::WritableBatch
@@ -269,6 +308,37 @@ fn golden_config_and_order_round_trip() {
     );
     assert_eq!(&bytes[..8], b"DCLTGOR1");
     assert_eq!(PortfolioOrderV1::<2>::decode(&bytes), Ok(order));
+}
+
+#[test]
+fn general_config_is_one_noncircular_permanent_generic_record() {
+    let canonical = config();
+    let bytes = canonical.to_bytes();
+    let config_id = digest(&bytes);
+    assert_eq!(bytes.len(), GENERAL_CONFIG_BYTES);
+    assert_eq!(GeneralConfigV1::decode(&bytes), Ok(canonical));
+    assert_eq!(
+        digest(GENERAL_CONFIG_SCHEMA_PREIMAGE_V1),
+        GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes()
+    );
+
+    let mut changed_bytes = bytes;
+    changed_bytes[152..160].copy_from_slice(&(canonical.price_scale() + 1).to_le_bytes());
+    let changed = GeneralConfigV1::decode(&changed_bytes).expect("changed config");
+    assert_ne!(digest(&changed.to_bytes()), config_id);
+
+    let instruction = GeneralInstructionV1::<2>::Activate(ActivateGeneralV1 {
+        expected_market_child_count: 7,
+    });
+    assert_eq!(instruction.encoded_len(), Ok(24));
+    let mut wire = [0u8; 24];
+    instruction.encode(&mut wire).expect("activation wire");
+    assert_eq!(GeneralInstructionV1::<2>::decode(&wire), Ok(instruction));
+    assert!(
+        !wire
+            .windows(config_id.len())
+            .any(|window| window == config_id)
+    );
 }
 
 #[test]
@@ -1073,7 +1143,7 @@ fn funding_decoder_rejects_overflow_broken_conservation_and_partial_refund() {
 }
 
 #[test]
-fn recognized_general_release_ids_are_derived_and_pda_domains_are_distinct() {
+fn recognized_general_release_and_config_schema_ids_are_derived_and_pda_domains_are_distinct() {
     assert_eq!(
         digest(GENERAL_CAPABILITY_KIND_PREIMAGE_V1),
         GENERAL_CAPABILITY_KIND_ID_V1.to_bytes()
@@ -1090,9 +1160,12 @@ fn recognized_general_release_ids_are_derived_and_pda_domains_are_distinct() {
         digest(GENERAL_CHILD_DERIVATION_PREIMAGE_V1),
         GENERAL_CHILD_DERIVATION_ID_V1.to_bytes()
     );
+    assert_eq!(
+        digest(GENERAL_CONFIG_SCHEMA_PREIMAGE_V1),
+        GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes()
+    );
 
     let domains = [
-        GENERAL_CONFIG_PDA_DOMAIN_V1,
         GENERAL_FUNDING_PDA_DOMAIN_V1,
         GENERAL_ROOT_PDA_DOMAIN_V1,
         GENERAL_BATCH_PDA_DOMAIN_V1,
@@ -1113,7 +1186,7 @@ fn recognized_general_release_ids_are_derived_and_pda_domains_are_distinct() {
 fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
     let config_id = id(70);
     let manifest_id = id(71);
-    let quote = FundingAmountsV1::new(11, 13, 17, 0, 19, 0, 23).expect("quote");
+    let quote = native_amounts(11, 13, 17, 0, 19, 0, 23);
     let entry = capability_entry(config_id, quote);
     let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes)
@@ -1123,7 +1196,7 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
         capability_id_from(manifest_id),
         manifest,
         0,
-        quote.total_principal(),
+        funding_custody(quote, 100),
     )
     .expect("prepaid generic funding");
 
@@ -1134,13 +1207,13 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
         manifest_id,
         manifest,
         capability_funding,
-        quote.total_principal(),
+        funding_custody(quote, 100),
         10,
     )
     .expect("exact General activation");
-    assert_eq!(activation.rent_principal(), 11);
-    assert_eq!(activation.creation_principal(), 13);
-    assert_eq!(activation.general_principal(), 59);
+    assert_eq!(activation.rent_lamports(), 11);
+    assert_eq!(activation.creation_lamports(), 13);
+    assert_eq!(activation.general_lamports(), 59);
     let derivation = activation.capability_funding_derivation();
     assert_eq!(derivation.market(), [72; 32]);
     assert_eq!(derivation.generation(), 7);
@@ -1158,15 +1231,15 @@ fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
         activation
             .capability_funding_after()
             .remaining()
-            .total_principal(),
+            .native_lamports_total(),
         0
     );
     assert_eq!(
         activation
             .capability_funding_after()
             .released()
-            .total_principal(),
-        quote.total_principal()
+            .native_lamports_total(),
+        quote.native_lamports_total()
     );
     let general = activation.general_funding();
     assert_eq!(general.remaining(FundingCompartment::Liveness), Ok(23));
@@ -1183,7 +1256,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
     let config = config();
     let config_id = id(70);
     let manifest_id = id(71);
-    let quote = FundingAmountsV1::new(11, 13, 17, 0, 19, 0, 23).expect("quote");
+    let quote = native_amounts(11, 13, 17, 0, 19, 0, 23);
     let entry = capability_entry(config_id, quote);
     let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes)
@@ -1192,7 +1265,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
         capability_id_from(manifest_id),
         manifest,
         0,
-        quote.total_principal(),
+        funding_custody(quote, 100),
     )
     .expect("prepaid generic funding");
     let identity = MarketIdentity::new(
@@ -1208,12 +1281,11 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
         .transition_phase(config.generation(), MarketPhase::Open)
         .expect("Market opens");
     let mut accounts = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
-    accounts.get_mut(14).expect("RentCredit role").key = [90; 32];
+    accounts.get_mut(15).expect("RentCredit role").key = [90; 32];
     let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &accounts)
         .expect("activation frame");
     let instruction = ActivateGeneralV1 {
         expected_market_child_count: 0,
-        config,
     };
 
     let plan = activate_general_v1(
@@ -1221,11 +1293,12 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
         instruction,
         market_root,
         config_id,
+        config,
         manifest_id,
         manifest,
         funding,
-        quote.total_principal(),
-        GeneralActivationCapitalizationV1::new(3, 4, 4),
+        funding_custody(quote, 100),
+        GeneralActivationCapitalizationV1::new(4, 7),
         10,
     )
     .expect("complete activation plan");
@@ -1233,8 +1306,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
     assert_eq!(plan.root().market(), [2; 32]);
     assert_eq!(plan.root().rent_beneficiary(), [90; 32]);
     assert_eq!(plan.creation_recipient(), [1; 32]);
-    assert_eq!(plan.general_funding_account_balance(), Ok(63));
-    assert_eq!(plan.config_seeds().config_id(), config_id.to_bytes());
+    assert_eq!(plan.general_funding_account_balance(), Ok(66));
     assert_eq!(plan.root_seeds().market(), [2; 32]);
     assert_eq!(plan.funding_seeds().seed_components()[1], [2; 32]);
     assert_eq!(
@@ -1258,11 +1330,12 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
             instruction,
             market_root,
             config_id,
+            config,
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
-            GeneralActivationCapitalizationV1::new(3, 4, 5),
+            funding_custody(quote, 100),
+            GeneralActivationCapitalizationV1::new(4, 8),
             10,
         ),
         Err(Error::CapabilityFundingMismatch)
@@ -1270,7 +1343,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
 
     let mut substituted_accounts = accounts.clone();
     substituted_accounts
-        .get_mut(14)
+        .get_mut(15)
         .expect("RentCredit role")
         .key = [91; 32];
     let substituted_frame =
@@ -1282,11 +1355,12 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
             instruction,
             market_root,
             config_id,
+            config,
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
-            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            funding_custody(quote, 100),
+            GeneralActivationCapitalizationV1::new(4, 7),
             10,
         ),
         Err(Error::AuthorityMismatch)
@@ -1299,11 +1373,12 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
             instruction,
             founding_market,
             config_id,
+            config,
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
-            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            funding_custody(quote, 100),
+            GeneralActivationCapitalizationV1::new(4, 7),
             10,
         ),
         Err(Error::AuthorityMismatch)
@@ -1319,11 +1394,12 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
             instruction,
             market_root,
             config_id,
+            config,
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
-            GeneralActivationCapitalizationV1::new(3, 4, 4),
+            funding_custody(quote, 100),
+            GeneralActivationCapitalizationV1::new(4, 7),
             10,
         ),
         Err(Error::InvalidInstruction)
@@ -1334,7 +1410,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
 fn capability_activation_rejects_extra_compartments_release_substitution_and_deadline() {
     let config_id = id(70);
     let manifest_id = id(71);
-    let extra = FundingAmountsV1::new(1, 1, 2, 1, 3, 0, 4).expect("quote");
+    let extra = native_amounts(1, 1, 2, 1, 3, 0, 4);
     let extra_entry = capability_entry(config_id, extra);
     let mut extra_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     let extra_manifest =
@@ -1343,7 +1419,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
         capability_id_from(manifest_id),
         extra_manifest,
         0,
-        extra.total_principal(),
+        funding_custody(extra, 100),
     )
     .expect("funding");
     assert_eq!(
@@ -1354,13 +1430,13 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
             manifest_id,
             extra_manifest,
             extra_funding,
-            extra.total_principal(),
+            funding_custody(extra, 100),
             10,
         ),
         Err(Error::ExtraneousCapabilityFunding)
     );
 
-    let quote = FundingAmountsV1::new(1, 1, 2, 0, 3, 0, 4).expect("quote");
+    let quote = native_amounts(1, 1, 2, 0, 3, 0, 4);
     let wrong_release = CapabilityEntryV1::new(
         capability_id_from(GENERAL_CAPABILITY_KIND_ID_V1),
         capability_id(88),
@@ -1372,7 +1448,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
         100,
         0,
         [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-        quote,
+        FundingQuoteV1::new(quote, None).expect("native-only quote"),
     )
     .expect("entry");
     assert_eq!(
@@ -1388,7 +1464,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
         capability_id_from(manifest_id),
         manifest,
         0,
-        quote.total_principal(),
+        funding_custody(quote, 100),
     )
     .expect("funding");
     assert_eq!(
@@ -1399,7 +1475,7 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
+            funding_custody(quote, 100),
             101,
         ),
         Err(Error::CapabilityFundingMismatch)
@@ -1412,10 +1488,133 @@ fn capability_activation_rejects_extra_compartments_release_substitution_and_dea
             manifest_id,
             manifest,
             funding,
-            quote.total_principal(),
+            funding_custody(quote, 100),
             10,
         ),
         Err(Error::UnrecognizedCapability)
+    );
+
+    let realm_amounts = FundingAmountsV1::new(
+        native(1),
+        native(1),
+        CompartmentFundingV1::realm_collateral(2).expect("Realm work"),
+        CompartmentFundingV1::not_applicable(),
+        native(3),
+        CompartmentFundingV1::not_applicable(),
+        native(4),
+    )
+    .expect("typed Realm substitution");
+    let realm_binding = RealmCollateralBindingV1::new(
+        capability_id(91),
+        capability_id(92),
+        [93; 32],
+        [94; 32],
+        [95; 32],
+    )
+    .expect("Realm binding");
+    let realm_quote = FundingQuoteV1::new(realm_amounts, Some(realm_binding)).expect("Realm quote");
+    assert_eq!(
+        validate_general_funding_quote_v1(realm_quote),
+        Err(Error::ExtraneousCapabilityFunding)
+    );
+    assert_eq!(
+        validate_general_funding_quote_v1(
+            FundingQuoteV1::new(native_amounts(1, 1, 0, 0, 3, 0, 4), None)
+                .expect("missing-work quote")
+        ),
+        Err(Error::ExtraneousCapabilityFunding)
+    );
+}
+
+#[test]
+fn open_batch_consumes_exact_liveness_rent_and_rejects_physical_substitution() {
+    let config = config();
+    let config_id = id(70);
+    let mut accounts = valid_frame_accounts(GeneralInstructionTagV1::OpenBatch, 0);
+    let market = accounts.get(1).expect("Market").key;
+    let root_key = accounts.get(3).expect("root").key;
+    let rent_credit = accounts.get(6).expect("RentCredit").key;
+    let root = GeneralRootV1::founding(market, config_id, config.generation(), rent_credit)
+        .expect("General root");
+    let funding = GeneralFundingV1::founding(GENERAL_CAPABILITY_RELEASE_ID_V1, 10, 20, 30);
+    let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &accounts)
+        .expect("open frame");
+    let instruction = GeneralBatchReplayV1 {
+        generation: config.generation(),
+        batch_sequence: 0,
+    };
+    let custody = GeneralFundingCustodyObservationV1::new(160, 100).expect("custody");
+    let plan = open_general_batch_v1(
+        frame,
+        instruction,
+        config_id,
+        config,
+        root,
+        funding,
+        custody,
+        4,
+        5,
+    )
+    .expect("batch opens");
+    assert_eq!(plan.root_after().next_batch_sequence(), 1);
+    assert_eq!(plan.root_after().open_batches(), 1);
+    assert_eq!(
+        plan.funding_after().remaining(FundingCompartment::Liveness),
+        Ok(6)
+    );
+    assert_eq!(plan.batch().sequence(), 0);
+    assert_eq!(plan.batch().collection_close(), 15);
+    assert_eq!(plan.batch_rent_lamports(), 4);
+    assert_eq!(plan.funding_account_lamports_after(), 156);
+    assert_eq!(plan.batch_seeds().seed_components()[1], root_key);
+    round_trip_general_root(plan.root_after());
+    round_trip_funding(plan.funding_after());
+    round_trip_batch_root(plan.batch());
+
+    assert_eq!(
+        open_general_batch_v1(
+            frame,
+            instruction,
+            config_id,
+            config,
+            root,
+            funding,
+            GeneralFundingCustodyObservationV1::new(161, 100).expect("donated custody"),
+            4,
+            5,
+        ),
+        Err(Error::GeneralFundingCustodyMismatch)
+    );
+    assert_eq!(
+        open_general_batch_v1(
+            frame,
+            instruction,
+            config_id,
+            config,
+            root,
+            funding,
+            custody,
+            11,
+            5,
+        ),
+        Err(Error::InsufficientFunding)
+    );
+    accounts.get_mut(6).expect("RentCredit").key = [99; 32];
+    let substituted = GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &accounts)
+        .expect("substituted structural frame");
+    assert_eq!(
+        open_general_batch_v1(
+            substituted,
+            instruction,
+            config_id,
+            config,
+            root,
+            funding,
+            custody,
+            4,
+            5,
+        ),
+        Err(Error::AuthorityMismatch)
     );
 }
 
@@ -1813,12 +2012,6 @@ fn hostile_receipt_and_underfunded_custody_leave_replay_and_reserves_unchanged()
 #[test]
 fn derivation_seed_tuples_are_ordered_closed_and_substitution_resistant() {
     let config_id = id(70);
-    let config_seeds = GeneralConfigPdaSeedsV1::new(config_id);
-    assert_eq!(
-        config_seeds.seed_components(),
-        [GENERAL_CONFIG_PDA_DOMAIN_V1, config_id.as_bytes()]
-    );
-
     let root = GeneralRootPdaSeedsV1::new([8; 32], 7, config_id).expect("root seeds");
     let generation = 7_u64.to_le_bytes();
     assert_eq!(
@@ -2076,7 +2269,6 @@ fn general_instruction_family_round_trips_and_refuses_width_or_tag_substitution(
     let instructions = [
         GeneralInstructionV1::Activate(ActivateGeneralV1 {
             expected_market_child_count: 1,
-            config: config(),
         }),
         GeneralInstructionV1::OpenBatch(replay),
         GeneralInstructionV1::LockBatch(replay),
@@ -2165,14 +2357,18 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
     let activation_frame =
         GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &activation)
             .expect("activation frame");
-    assert_eq!(activation.len(), 18);
+    assert_eq!(activation.len(), 19);
     assert_eq!(activation_frame.role(2), Ok(GeneralAccountRoleV1::Realm));
     assert_eq!(
         activation_frame.role(3),
         Ok(GeneralAccountRoleV1::ClaimBasis)
     );
     assert_eq!(activation_frame.role(4), Ok(GeneralAccountRoleV1::Manifest));
-    for index in 5..=7 {
+    assert_eq!(
+        activation_frame.role(5),
+        Ok(GeneralAccountRoleV1::GeneralConfig)
+    );
+    for index in 6..=9 {
         assert_eq!(
             activation_frame.role(index),
             Ok(GeneralAccountRoleV1::StagingCursorVacancy)
@@ -2180,22 +2376,39 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
     }
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::AdmitOrder, 0).len(),
-        18
+        19
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::CancelOrder, 0).len(),
-        16
+        17
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::CloseOrder, 0).len(),
-        14
+        15
     );
     assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::VerifyCandidatePage, 4).len(),
-        8
+        10
     );
     let settlement = valid_frame_accounts(GeneralInstructionTagV1::SettlePage, 4);
-    assert_eq!(settlement.len(), 28);
+    assert_eq!(settlement.len(), 30);
+    let close_general = valid_frame_accounts(GeneralInstructionTagV1::CloseGeneral, 0);
+    let close_general_frame =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::CloseGeneral, 0, &close_general)
+            .expect("terminal frame");
+    assert_eq!(close_general.len(), 7);
+    assert_eq!(
+        close_general_frame.role(1),
+        Ok(GeneralAccountRoleV1::GeneralConfig)
+    );
+    assert_eq!(
+        close_general_frame.role(5),
+        Ok(GeneralAccountRoleV1::StagingCursorVacancy)
+    );
+    assert_eq!(
+        close_general_frame.role(6),
+        Ok(GeneralAccountRoleV1::RentSysvar)
+    );
 
     let mut wrong_privilege = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
     wrong_privilege.get_mut(0).expect("activator").is_signer = false;
@@ -2205,7 +2418,7 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
     );
     let mut alias = valid_frame_accounts(GeneralInstructionTagV1::Activate, 0);
     let realm_key = alias.get(2).expect("realm").key;
-    alias.get_mut(5).expect("realm staging vacancy").key = realm_key;
+    alias.get_mut(6).expect("realm staging vacancy").key = realm_key;
     assert_eq!(
         GeneralAccountFrameV1::new(GeneralInstructionTagV1::Activate, 0, &alias),
         Err(Error::AccountAlias)
