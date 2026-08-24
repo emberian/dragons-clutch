@@ -6,7 +6,7 @@ Its `profile-successor-chain-attached-dev` identity admits exactly actions
 the exact checked manifest and hostile loader boundary. It is not a production
 or deployment claim.
 
-The create route uses an exact 36-account frame. The base side
+The create route uses an exact 38-account frame. The base side
 authenticates the Product RootV3, SeriesRegistryV4, SeriesMarketLinkV3, current BundleV7,
 ReleaseV2/ProfileV4, current AttachmentV6, and the read-only content-addressed
 WrapperRecipeSetV1 artifact selected by that attachment. It hostile-decodes the
@@ -18,9 +18,14 @@ separation, and founds the empty PositionV3/Replay pair. The wrapper snapshots
 and reauthenticates the root across CPI rather than treating successful CPI as
 evidence of the claimed Product/root transition. Product RootV3 and the Series
 link are writable only for first root admission; later descriptors must present
-both read-only and cannot advance Product state. The first-admission route
-remains gated until Product's sole RootV3/LinkV3 admission writer is frozen; no
-withdrawn V2 writer is a current fallback.
+both read-only and cannot advance Product state. ProductReplayV2 and the
+MarketFamilyCapabilityPolicyV1 are appended read-only so first admission can
+use Product's current family authority. First admission prepares the RootV3
+Structured-family successor, admits Wrapper against the already-created
+descriptor/mint, initializes and hostile-reopens the final Structured root,
+admits Structured against that root, and commits RootV3 last. Each Product
+mutation consumes a distinct move-only physical postwrite; no withdrawn V2
+writer is a current fallback.
 
 The full-vector and terminal frames use 32 and 33 accounts. Each
 places the Realm-selected collateral ProgramData immediately after its token
@@ -30,7 +35,7 @@ The withdrawn action-2/4 current codecs have been deleted. The wrapper rejects
 those reserved registry tags as unknown before payload or account decoding.
 
 The wrapper and base import one exact source/account contract from the adapter:
-action 1 uses 36 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
+action 1 uses 38 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
 33, and action 8 uses 34. That contract's implemented-source mask is distinct
 from its checked-release admission mask; the named development profile requires
 them to be exactly equal.

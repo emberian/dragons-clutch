@@ -53,9 +53,14 @@ the identically named unified profile and admits the same six tuples. Actions
 2 and 4 refuse before payload or account loading on both sides.
 
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
-both wrapper and base: founding uses 36 accounts, full-vector wrap/unwind use
+both wrapper and base: founding uses 38 accounts, full-vector wrap/unwind use
 32, compaction uses 32, terminal redemption uses 33, and retirement uses 34.
-Founding and retirement append Product RootV3 without shifting existing roles.
+Founding appends Product RootV3, ProductReplayV2, and the immutable Market
+family capability policy without shifting existing roles; retirement appends
+Product RootV3. The first founding invocation consumes Product's two-phase
+RootV3 family admission plus separate Wrapper and Structured LinkV3 obligation
+admissions; later descriptor additions authenticate those persisted live facts
+read-only.
 Retirement reopens BundleV7 and AttachmentV6; RootV3 and LinkV3 are writable
 only for the final family terminal. The final Structured root close creates one
 non-Copy Structured+Wrapper receipt inside the base invocation and immediately
