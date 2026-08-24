@@ -231,19 +231,15 @@ pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
 
 /// Bind one hostile-reopened Candidate batch and return only current state.
 pub fn bind_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     batch: DirectCandidateWorkBatchV1,
     backend: &B,
-) -> Result<DirectRootReplayPostV2, DirectMarketErrorV1> {
+) -> Result<(), DirectMarketErrorV1> {
     let projection = state.transition_projection(backend)?;
     let replay = bind_direct_candidate_work_batch_v1(&projection, batch, backend)?;
     replay.validate_against(projection.root)?;
-    let value = DirectRootReplayPostV2 {
-        root: state.root,
-        replay,
-    };
-    value.validate(backend)?;
-    Ok(value)
+    state.replay = replay;
+    state.validate(backend)
 }
 
 /// Default-deny current action-2 account authority.
@@ -272,8 +268,6 @@ impl AuthenticatedDirectReservationAdmissionV2 for NoDirectReservationAdmissionA
 /// Complete current action-2 plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectReservationAdmissionPlanV2 {
-    /// Current b1/v2 root and permanent b3 replay successor.
-    pub state: DirectRootReplayPostV2,
     /// Fresh exact Reservation.
     pub reservation: DirectReservationV1,
     /// Position successor.
@@ -293,7 +287,7 @@ pub fn prepare_direct_reservation_admission_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     position_replay: GeneralPositionReplayPrestateV1,
     existing_peer: Option<DirectReservationV1>,
     consumed_sequence: u64,
@@ -302,7 +296,7 @@ pub fn prepare_direct_reservation_admission_v2<
     backend: &B,
 ) -> Result<DirectReservationAdmissionPlanV2, DirectMarketErrorV1> {
     authority.authenticate_admission_v2(
-        &state,
+        state,
         position_replay,
         existing_peer,
         consumed_sequence,
@@ -326,9 +320,8 @@ pub fn prepare_direct_reservation_admission_v2<
         order,
         backend,
     )?;
-    let current_state = state.accept_transition_projection(projection, plan.state, backend)?;
+    state.accept_transition_projection_in_place(projection, plan.state, backend)?;
     Ok(DirectReservationAdmissionPlanV2 {
-        state: current_state,
         reservation: plan.reservation,
         position_poststate: plan.position_poststate,
         replay_transition: plan.replay_transition,
@@ -409,8 +402,6 @@ impl AuthenticatedDirectReservationCancelV2 for NoDirectReservationCancelAuthori
 /// Complete current action-3 plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectReservationCancelPlanV2 {
-    /// Current b1/v2 root and permanent replay successor.
-    pub state: DirectRootReplayPostV2,
     /// Terminal Reservation/Position/GEN1 endpoint.
     pub endpoint: DirectEndpointTerminalPlanV1,
     /// Exact one-source principal/surplus transfer vector.
@@ -428,7 +419,7 @@ pub fn prepare_direct_reservation_cancel_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     reservation: DirectReservationV1,
     position_replay: GeneralPositionReplayPrestateV1,
     observed_reservation_lamports: u64,
@@ -437,7 +428,7 @@ pub fn prepare_direct_reservation_cancel_v2<
     backend: &B,
 ) -> Result<DirectReservationCancelPlanV2, DirectMarketErrorV1> {
     authority.authenticate_cancel_v2(
-        &state,
+        state,
         reservation,
         position_replay,
         observed_reservation_lamports,
@@ -463,9 +454,8 @@ pub fn prepare_direct_reservation_cancel_v2<
         observed_slot,
         backend,
     )?;
-    let current_state = state.accept_transition_projection(projection, plan.state, backend)?;
+    state.accept_transition_projection_in_place(projection, plan.state, backend)?;
     Ok(DirectReservationCancelPlanV2 {
-        state: current_state,
         endpoint: plan.endpoint,
         retirement: plan.retirement,
         retirement_transfer_id: plan.retirement_transfer_id,
@@ -536,8 +526,6 @@ impl AuthenticatedDirectSelectionFreezeV2 for NoDirectSelectionFreezeAuthorityV2
 /// Current action 4..8 Selection plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectSelectionPlanV2 {
-    /// Current b1/v2 root and permanent replay successor.
-    pub state: DirectRootReplayPostV2,
     /// Selection successor.
     pub selection: DirectSelectionV1,
     /// Exact retained-candidate principal movement for action 5.
@@ -553,7 +541,7 @@ pub fn prepare_direct_selection_freeze_v2<
     B: DirectHashBackendV1,
 >(
     authority: &A,
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     consumed_sequence: u64,
     observed_slot: u64,
     selection_account: [u8; 32],
@@ -564,7 +552,7 @@ pub fn prepare_direct_selection_freeze_v2<
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
     authority.authenticate_freeze_v2(
-        &state,
+        state,
         selection_account,
         rent,
         &reservations,
@@ -645,7 +633,7 @@ impl AuthenticatedDirectSelectionFreezeV1 for ProjectedFreezeAuthorityV2 {
 
 /// Prepare current action 5 and retain only the canonical best-three prefix.
 pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -668,7 +656,7 @@ pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 6's exhaustive verification traversal.
 pub fn begin_direct_candidate_verification_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -687,7 +675,7 @@ pub fn begin_direct_candidate_verification_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 7 for exactly the next retained candidate.
 pub fn verify_next_direct_candidate_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -706,7 +694,7 @@ pub fn verify_next_direct_candidate_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 8 and select the best valid submitted candidate.
 pub fn finalize_direct_selection_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -724,14 +712,13 @@ pub fn finalize_direct_selection_v2<B: DirectHashBackendV1>(
 }
 
 fn convert_selection_plan_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     projection: DirectRootReplayPostV1,
     plan: crate::selection_v1::DirectSelectionFreezePlanV1,
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
-    let current_state = state.accept_transition_projection(projection, plan.state, backend)?;
+    state.accept_transition_projection_in_place(projection, plan.state, backend)?;
     Ok(DirectSelectionPlanV2 {
-        state: current_state,
         selection: plan.selection,
         candidate_bond_movement: plan.candidate_bond_movement,
         candidate_bond_refunds: plan.candidate_bond_refunds,
@@ -772,8 +759,6 @@ impl AuthenticatedDirectEconomicTerminalV2 for NoDirectEconomicTerminalAuthority
 /// Atomic current action-9..12 poststate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectEconomicTerminalPlanV2 {
-    /// Terminal b1/v2 root and permanent b3 replay.
-    pub state: DirectRootReplayPostV2,
     /// Terminal Selection archive.
     pub selection: DirectSelectionV1,
     /// Canonical Selection-order endpoint prefix.
@@ -802,7 +787,7 @@ pub fn prepare_direct_economic_terminal_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection: DirectSelectionV1,
     endpoints: [Option<DirectEndpointPrestateV1>; 2],
     realm: [u8; 32],
@@ -818,7 +803,7 @@ pub fn prepare_direct_economic_terminal_v2<
     let projection = state.transition_projection(backend)?;
     let projection_authority = ProjectedEconomicAuthorityV2 {
         authority,
-        current_state: &state,
+        current_state: state,
         projected_state: projection,
         fee_policy,
         realm,
@@ -857,7 +842,7 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
 >(
     freeze_authority: &F,
     terminal_authority: &A,
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     selection_account: [u8; 32],
     selection_rent: DirectRentOwnerV1,
     reservations: [Option<DirectReservationV1>; 2],
@@ -869,7 +854,7 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
     backend: &B,
 ) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
     freeze_authority.authenticate_freeze_v2(
-        &state,
+        state,
         selection_account,
         selection_rent,
         &reservations,
@@ -897,12 +882,13 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
         domain,
         price,
     };
+    let realm = state.root.binding().realm_id;
     let projected_terminal = ProjectedEconomicAuthorityV2 {
         authority: terminal_authority,
-        current_state: &state,
+        current_state: state,
         projected_state: projection,
         fee_policy,
-        realm: state.root.binding().realm_id,
+        realm,
         batch_policy: None,
         revenue_policy: None,
         treasury: None,
@@ -985,14 +971,13 @@ impl<A: AuthenticatedDirectEconomicTerminalV2 + ?Sized>
 }
 
 fn convert_economic_plan_v2<B: DirectHashBackendV1>(
-    state: DirectRootReplayPostV2,
+    state: &mut DirectRootReplayPostV2,
     projection: DirectRootReplayPostV1,
     plan: crate::settlement_v1::DirectEconomicTerminalPlanV1,
     backend: &B,
 ) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
-    let current_state = state.accept_transition_projection(projection, plan.state, backend)?;
+    state.accept_transition_projection_in_place(projection, plan.state, backend)?;
     Ok(DirectEconomicTerminalPlanV2 {
-        state: current_state,
         selection: plan.selection,
         endpoints: plan.endpoints,
         fee_terminal: plan.fee_terminal,

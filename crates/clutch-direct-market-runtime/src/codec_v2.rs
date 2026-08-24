@@ -9,9 +9,11 @@ use crate::current_v2::{
     DirectMarketBindingV2, DirectMarketRootV2,
 };
 use crate::liveness_v1::{DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1};
+use crate::reservation_v1::DirectReservationV1;
+use crate::selection_v1::DirectSelectionV1;
 use crate::{
-    DirectMarketErrorV1, DirectRentOwnerV1, DirectRootPhaseV1, DirectScheduleV1,
-    DirectTerminalReasonV1,
+    DirectActionReplayV1, DirectMarketErrorV1, DirectRentOwnerV1,
+    DirectRootPhaseV1, DirectScheduleV1, DirectTerminalReasonV1,
 };
 
 /// Exact current b1/v2 semantic-body width.
@@ -82,6 +84,67 @@ pub fn decode_direct_market_root_body_v2(
     value.validate()?;
     Ok(value)
 }
+
+/// Encode the unchanged permanent b3/v1 replay against current b1/v2.
+pub fn encode_direct_action_replay_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    value: DirectActionReplayV1,
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::encode_direct_action_replay_body_v1(value, projection)
+}
+
+/// Hostile-decode the unchanged permanent b3/v1 replay against current b1/v2.
+pub fn decode_direct_action_replay_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    input: &[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1],
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<DirectActionReplayV1, DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::decode_direct_action_replay_body_v1(input, projection)
+}
+
+/// Encode the unchanged b4/v1 Reservation against current b1/v2.
+pub fn encode_direct_reservation_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    value: DirectReservationV1,
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::encode_direct_reservation_body_v1(value, projection)
+}
+
+/// Hostile-decode the unchanged b4/v1 Reservation against current b1/v2.
+pub fn decode_direct_reservation_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    input: &[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1],
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<DirectReservationV1, DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::decode_direct_reservation_body_v1(input, projection)
+}
+
+/// Encode the unchanged b2/v1 Selection against current b1/v2.
+pub fn encode_direct_selection_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    value: DirectSelectionV1,
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1], DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::encode_direct_selection_body_v1(value, projection)
+}
+
+/// Hostile-decode the unchanged b2/v1 Selection against current b1/v2.
+pub fn decode_direct_selection_body_for_root_v2<B: crate::DirectHashBackendV1>(
+    input: &[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1],
+    root: &DirectMarketRootV2,
+    backend: &B,
+) -> Result<DirectSelectionV1, DirectMarketErrorV1> {
+    let projection = root.transition_projection(backend)?;
+    crate::codec_v1::decode_direct_selection_body_v1(input, projection)
+}
+
 
 fn write_binding(
     writer: &mut BodyWriter<'_>,

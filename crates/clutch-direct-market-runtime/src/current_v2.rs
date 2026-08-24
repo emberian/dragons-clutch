@@ -734,6 +734,37 @@ impl DirectRootReplayPostV2 {
             replay: after.replay,
         })
     }
+
+    /// Apply one reviewed arithmetic successor directly into caller-owned
+    /// current storage. This avoids materializing a second 2.5KiB V2 root in
+    /// an SBF frame while preserving the same injective pre/post checks.
+    pub(crate) fn accept_transition_projection_in_place<B: DirectHashBackendV1>(
+        &mut self,
+        before: crate::DirectRootReplayPostV1,
+        after: crate::DirectRootReplayPostV1,
+        backend: &B,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if before != self.transition_projection(backend)?
+            || after.root.binding != before.root.binding
+            || after.root.schedule != before.root.schedule
+            || after.root.root_rent != before.root.root_rent
+        {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        self.root.phase = after.root.phase;
+        self.root.terminal_reason = after.root.terminal_reason;
+        self.root.admitted_reservations = after.root.admitted_reservations;
+        self.root.live_reservations = after.root.live_reservations;
+        self.root.retired_reservations = after.root.retired_reservations;
+        self.root.reservation_accounts = after.root.reservation_accounts;
+        self.root.reservation_semantic_ids = after.root.reservation_semantic_ids;
+        self.root.selection_account = after.root.selection_account;
+        after
+            .replay
+            .validate_against(self.root.transition_projection(backend)?)?;
+        self.replay = after.replay;
+        self.validate(backend)
+    }
 }
 
 fn candidate_liveness_id_v2<B: DirectHashBackendV1>(
