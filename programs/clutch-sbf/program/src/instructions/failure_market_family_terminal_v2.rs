@@ -32,9 +32,10 @@ use crate::instructions::product_market::{
     AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
-    plan_seal_failure_market_interval_history_v2, AuthenticatedFailureMarketIntervalFamilySealV2,
-    FailureMarketIntervalFamilySealFactsV2, FailureMarketIntervalFamilySealReceiptV2,
-    FailureMarketIntervalFundingReceiptV2,
+    plan_seal_failure_market_interval_history_v2,
+    reconstruct_failure_market_interval_family_seal_v2,
+    AuthenticatedFailureMarketIntervalFamilySealV2, FailureMarketIntervalFamilySealFactsV2,
+    FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingReceiptV2,
 };
 use clutch_failure_policy_runtime::market_replay_v2::{
     plan_terminalize_failure_market_replay_v2, AuthenticatedFailureMarketReplayTerminalV2,
@@ -365,6 +366,18 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
         self.interval
     }
 
+    /// Reconstruct the unique private seal receipt from the durable terminal
+    /// owner. No earlier transaction-local seal token is required.
+    pub(crate) fn family_seal(self) -> Outcome<FailureMarketIntervalFamilySealReceiptV2> {
+        reconstruct_failure_market_interval_family_seal_v2(
+            &self,
+            self.interval.history(),
+            self.admission.state(),
+            self.interval.quote(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
     fn derived_owner_release_id(&self) -> Outcome<ContentId> {
         derive_terminal_owner_release_id_v2(
             self.admission,
@@ -395,6 +408,30 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
             ])
             .to_bytes(),
         )
+    }
+}
+
+impl AuthenticatedFailureMarketIntervalFamilySealV2
+    for AuthenticatedFailureMarketFamilyTerminalOwnerV2
+{
+    fn authenticate_failure_market_interval_family_seal(
+        &self,
+        expected: FailureMarketIntervalFamilySealFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        let history = self.interval.history();
+        if expected.history_before.bytes() == [0; 32]
+            || expected.history_before == self.interval.history_state_id()
+            || expected.history_root != history.history_root()
+            || expected.completed_session_count != history.completed_session_count()
+            || expected.completed_work_calls != history.completed_work_calls()
+            || expected.exact_reward_lamports != history.exact_reward_lamports()
+            || expected.family_terminal_receipt_id.bytes()
+                != self.family_terminal_receipt_id.bytes()
+            || expected.family_terminal_receipt_id != history.family_terminal_receipt_id()
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -1126,6 +1163,31 @@ mod adversarial_family_terminal_tests {
         ] {
             assert!(auth.contains(predicate), "missing durable guard {predicate}");
         }
+    }
+
+    #[test]
+    fn durable_terminal_owner_reconstructs_the_only_interval_seal() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let owner = source
+            .split("impl AuthenticatedFailureMarketFamilyTerminalOwnerV2")
+            .nth(1)
+            .and_then(|value| {
+                value.split("fn derive_terminal_owner_release_id_v2")
+                    .next()
+            })
+            .expect("durable owner");
+        for predicate in [
+            "reconstruct_failure_market_interval_family_seal_v2",
+            "self.interval.history()",
+            "self.admission.state()",
+            "self.interval.quote()",
+            "expected.history_root != history.history_root()",
+            "expected.family_terminal_receipt_id.bytes()",
+            "history.family_terminal_receipt_id()",
+        ] {
+            assert!(owner.contains(predicate));
+        }
+        assert!(!owner.contains("FailureMarketIntervalFamilySealReceiptV2 {"));
     }
 
     #[test]
