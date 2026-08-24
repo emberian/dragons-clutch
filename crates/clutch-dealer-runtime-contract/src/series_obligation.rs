@@ -36,6 +36,10 @@ const DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/series-obligation-admission-receipt/v1\0";
 const DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/series-obligation-terminal-receipt/v1\0";
+const DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation-admission-receipt/v2\0";
+const DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation-terminal-receipt/v2\0";
 
 /// Immutable Dealer-owned join to current Product RootV2/LinkV2 artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +116,25 @@ impl DealerSeriesObligationKeyV2 {
         }
         Ok(())
     }
+
+    /// Derive the exact Dealer receipt consumed by current LinkV2 admission.
+    pub fn admission_owner_receipt_id(
+        &self,
+        link_pre_semantic_id: Id,
+        link_transition_sequence: u64,
+    ) -> Result<Id> {
+        self.validate()?;
+        link_pre_semantic_id.validate_live()?;
+        if link_transition_sequence == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V2);
+        hash_key_v2(self, &mut hasher);
+        hasher.update(link_pre_semantic_id.bytes());
+        hasher.update(link_transition_sequence.to_le_bytes());
+        Ok(Id::from_bytes(hasher.finalize().into()))
+    }
 }
 
 /// Current facility-lifetime Product obligation. Product alone advances its
@@ -160,6 +183,14 @@ impl DealerSeriesObligationBindingV2 {
         admission_link_transition_sequence: u64,
         rent: DeletableRentOwnerV1,
     ) -> Result<Self> {
+        if admission_owner_receipt_id
+            != key.admission_owner_receipt_id(
+                admission_link_pre_semantic_id,
+                admission_link_transition_sequence,
+            )?
+        {
+            return Err(Error::MismatchedBinding);
+        }
         let value = Self {
             key,
             admission_owner_receipt_id,
@@ -243,7 +274,13 @@ impl DealerSeriesObligationBindingV2 {
         terminal_state_receipt_id: Id,
         terminal_link_transition_sequence: u64,
     ) -> Result<Self> {
-        if self.phase != DealerSeriesObligationPhaseV1::Live
+        let expected_owner_receipt = self.terminal_owner_receipt_id(
+            terminal_state_receipt_id,
+            terminal_link_pre_semantic_id,
+            terminal_link_transition_sequence,
+        )?;
+        if terminal_owner_receipt_id != expected_owner_receipt
+            || self.phase != DealerSeriesObligationPhaseV1::Live
             || terminal_link_transition_sequence <= self.admission_link_transition_sequence
         {
             return Err(Error::InvalidPhase);
@@ -260,6 +297,30 @@ impl DealerSeriesObligationBindingV2 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Derive the once-only Dealer receipt supplied to current LinkV2 terminalization.
+    pub fn terminal_owner_receipt_id(
+        &self,
+        terminal_state_receipt_id: Id,
+        terminal_link_pre_semantic_id: Id,
+        terminal_link_transition_sequence: u64,
+    ) -> Result<Id> {
+        self.validate()?;
+        terminal_state_receipt_id.validate_live()?;
+        terminal_link_pre_semantic_id.validate_live()?;
+        if self.phase != DealerSeriesObligationPhaseV1::Live
+            || terminal_link_transition_sequence <= self.admission_link_transition_sequence
+        {
+            return Err(Error::InvalidPhase);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V2);
+        hasher.update(self.binding_id()?.bytes());
+        hasher.update(terminal_state_receipt_id.bytes());
+        hasher.update(terminal_link_pre_semantic_id.bytes());
+        hasher.update(terminal_link_transition_sequence.to_le_bytes());
+        Ok(Id::from_bytes(hasher.finalize().into()))
     }
 }
 
@@ -919,6 +980,27 @@ fn hash_key(key: &DealerSeriesObligationKeyV1, hasher: &mut Sha256) {
     hasher.update(key.series_ordinal.to_le_bytes());
 }
 
+fn hash_key_v2(key: &DealerSeriesObligationKeyV2, hasher: &mut Sha256) {
+    for identity in [
+        key.binding_account_id,
+        key.policy_id,
+        key.facility_id,
+        key.dealer_state_account_id,
+        key.facility_position_binding_id,
+        key.market_instance_v2_id,
+        key.product_market_root_account_id,
+        key.product_market_binding_id,
+        key.series_plan_v5_id,
+        key.series_market_link_account_id,
+        key.compiler_bundle_v6_id,
+        key.attachment_plan_v5_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(key.product_generation.to_le_bytes());
+    hasher.update(key.series_ordinal.to_le_bytes());
+}
+
 const _: () = assert!(DEALER_SERIES_OBLIGATION_BYTES_V1 == 764);
 const _: () = assert!(DEALER_SERIES_OBLIGATION_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_SERIES_OBLIGATION_BYTES_V2 == 796);
@@ -971,8 +1053,7 @@ mod tests {
     }
 
     fn current_live() -> DealerSeriesObligationBindingV2 {
-        DealerSeriesObligationBindingV2::new_live(
-            DealerSeriesObligationKeyV2 {
+        let key = DealerSeriesObligationKeyV2 {
                 binding_account_id: id(31),
                 policy_id: id(32),
                 facility_id: id(33),
@@ -987,8 +1068,10 @@ mod tests {
                 attachment_plan_v5_id: id(42),
                 product_generation: 43,
                 series_ordinal: 44,
-            },
-            id(45),
+            };
+        DealerSeriesObligationBindingV2::new_live(
+            key,
+            key.admission_owner_receipt_id(id(47), 49).unwrap(),
             id(46),
             id(47),
             id(48),
@@ -1076,6 +1159,18 @@ mod tests {
         substituted = live;
         substituted.key.attachment_plan_v5_id = id(55);
         assert_ne!(substituted.binding_id().unwrap(), live.binding_id().unwrap());
+        assert_eq!(
+            DealerSeriesObligationBindingV2::new_live(
+                live.key,
+                id(56),
+                live.admission_projection_id,
+                live.admission_link_pre_semantic_id,
+                live.admission_link_post_semantic_id,
+                live.admission_link_transition_sequence,
+                live.rent,
+            ),
+            Err(Error::MismatchedBinding)
+        );
     }
 
     #[test]
@@ -1098,12 +1193,15 @@ mod tests {
     #[test]
     fn current_product_terminal_successor_is_once_only_and_sequence_ordered() {
         let live = current_live();
+        let owner_receipt = live
+            .terminal_owner_receipt_id(id(60), id(58), 50)
+            .unwrap();
         assert_eq!(
-            live.terminalized(id(56), id(57), id(58), id(59), id(60), 49),
+            live.terminalized(owner_receipt, id(57), id(58), id(59), id(60), 49),
             Err(Error::InvalidPhase)
         );
         let terminal = live
-            .terminalized(id(56), id(57), id(58), id(59), id(60), 50)
+            .terminalized(owner_receipt, id(57), id(58), id(59), id(60), 50)
             .unwrap();
         assert_eq!(terminal.phase, DealerSeriesObligationPhaseV1::Terminal);
         assert_eq!(

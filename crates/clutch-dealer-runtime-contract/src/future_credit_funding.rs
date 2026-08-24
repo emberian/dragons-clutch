@@ -543,8 +543,7 @@ mod tests {
     }
 
     fn terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV2) {
-        let live = DealerSeriesObligationBindingV2::new_live(
-            DealerSeriesObligationKeyV2 {
+        let key = DealerSeriesObligationKeyV2 {
                 binding_account_id: id(30),
                 policy_id: id(2),
                 facility_id: id(3),
@@ -559,8 +558,10 @@ mod tests {
                 attachment_plan_v5_id: id(36),
                 product_generation: 1,
                 series_ordinal: 7,
-            },
-            id(37),
+            };
+        let live = DealerSeriesObligationBindingV2::new_live(
+            key,
+            key.admission_owner_receipt_id(id(39), 1).unwrap(),
             id(38),
             id(39),
             id(40),
@@ -573,8 +574,18 @@ mod tests {
             },
         )
         .unwrap();
+        let terminal_owner_receipt = live
+            .terminal_owner_receipt_id(id(26), id(44), 2)
+            .unwrap();
         let terminal = live
-            .terminalized(id(42), id(43), id(44), id(45), id(26), 2)
+            .terminalized(
+                terminal_owner_receipt,
+                id(43),
+                id(44),
+                id(45),
+                id(26),
+                2,
+            )
             .unwrap();
         let base = crate::DealerStateV2 {
             policy_id: id(2),
