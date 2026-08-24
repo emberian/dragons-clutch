@@ -935,6 +935,18 @@ pub enum DealerMetaRoleV1 {
     Hoard,
     /// Full-width native ClaimLedger V3.
     ClaimLedger,
+    /// Exact active and unresolved shared Product Market root.
+    ProductMarketRoot,
+    /// Current Product SeriesRegistry V2 selecting release/profile/bundle.
+    SeriesRegistry,
+    /// Current executable Dragon's Clutch program observed by its loader.
+    CurrentProgram,
+    /// Exact linked ProgramData for the current Registry release.
+    CurrentProgramData,
+    /// Content-addressed Registry ReleaseV2 artifact.
+    RegistryRelease,
+    /// Content-addressed Registry Capability ProfileV4 artifact.
+    CapabilityProfile,
     /// Signed immutable CoveredDealer quote admission bytes.
     QuoteAdmission,
     /// Instructions sysvar proving the immediately preceding Ed25519 signature.
@@ -1235,7 +1247,7 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
-const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 52;
+const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 58;
 const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1285,6 +1297,12 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::MarketRuntime, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesRegistry, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CurrentProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
+    meta(DealerMetaRoleV1::CurrentProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::RegistryRelease, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CapabilityProfile, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::CompilerBundle, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::Attachment, DealerMetaOwnerV1::SelfProgram, false, false),
