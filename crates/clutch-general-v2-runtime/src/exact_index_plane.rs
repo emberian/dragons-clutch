@@ -489,6 +489,16 @@ pub fn authenticate_counted_exact_index_read_v1<'a>(input: AuthenticateCountedEx
     -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1>
 { let (_, sealed) = authenticate_join(input, false, false)?; Ok(sealed) }
 
+fn authenticate_feed_bump_v1(
+    stored_bump: u8,
+    canonical_bump: u8,
+) -> Result<(), ExactIndexPlaneErrorV1> {
+    if stored_bump != canonical_bump {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    Ok(())
+}
+
 fn authenticate_join<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>, root_writable: bool,
     children_writable: bool) -> Result<(IndexedSettlementRootV1AccountV1,
     SealedExactIndexPairInputV1<'a>), ExactIndexPlaneErrorV1>
@@ -526,6 +536,7 @@ fn authenticate_join<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>, ro
     let adjacency = decode_common(input.adjacency.body, CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1)?;
     let feed_view = authenticate_settlement_feed_view_v5(input.feed.account, input.feed.body)
         .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
+    authenticate_feed_bump_v1(feed_view.header().stored_bump, input.feed.canonical_bump)?;
     let feed_bundle_id = feed_view.candidate_bundle_digest();
     let feed_full_data_id = feed_view.data_id();
     if !locator.semantic_eq(&adjacency) || locator.sibling_account != input.adjacency.account
@@ -1496,8 +1507,18 @@ mod tests {
             feed_close_credits(rent, 5, 42, id(12), id(13)),
             Err(ExactIndexPlaneErrorV1::InvalidRent),
         );
-        // Credit roles may intentionally coalesce; only source-account aliases
-        // are forbidden by the action composer.
-        assert!(feed_close_credits(rent, 5, 43, id(11), id(11)).is_ok());
+        assert_eq!(
+            feed_close_credits(rent, 5, 43, id(11), id(13)),
+            Err(ExactIndexPlaneErrorV1::InvalidRent),
+        );
+    }
+
+    #[test]
+    fn retained_feed_stored_bump_must_match_the_rederived_pda() {
+        assert_eq!(authenticate_feed_bump_v1(17, 17), Ok(()));
+        assert_eq!(
+            authenticate_feed_bump_v1(17, 18),
+            Err(ExactIndexPlaneErrorV1::BindingMismatch),
+        );
     }
 }

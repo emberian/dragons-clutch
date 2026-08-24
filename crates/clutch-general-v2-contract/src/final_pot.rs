@@ -248,3 +248,116 @@ impl FinalPotV1AccountV1 {
 
 const _: () = assert!(FINAL_POT_BODY_V1_BYTES == 328);
 const _: () = assert!(FINAL_POT_ACCOUNT_BYTES == 2 + 328 + 2);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SettlementRootV1AccountV1, VirtualCashDirectionV1};
+
+    fn retiring_split_root() -> SettlementRootV1AccountV1 {
+        let root = crate::settlement_root::tests::virtual_root(VirtualCashDirectionV1::Split);
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        root.retire_one_owner_row().unwrap().begin_retiring().unwrap()
+    }
+
+    fn terminal_split_pot(root: &SettlementRootV1AccountV1) -> AuthenticatedFinalPotV1 {
+        AuthenticatedFinalPotV1 {
+            account: root.final_pot().bytes(),
+            market: root.market().bytes(),
+            epoch: root.epoch().bytes(),
+            candidate: root.settlement_candidate_id().bytes(),
+            owner_order_set_digest: root.owner_order_set_digest().bytes(),
+            relation_witness_digest: root.settlement_witness_digest().bytes(),
+            cash_principal_atoms: 0,
+            internal_claims: [0; crate::MAX_OUTCOMES],
+            inventory_kind: VirtualReceiptKindV1::Split,
+            authorized_complete_set_atoms: root.virtual_cash_atoms(),
+            processed_complete_set_atoms: root.virtual_cash_atoms(),
+            inventory_transition_sequence: 1,
+            inventory_state: VirtualInventoryStateV1::Complete,
+            outcome_count: root.outcome_count(),
+            phase: 0,
+            writable: true,
+            selected_budget_authenticated: true,
+        }
+    }
+
+    fn outer_bytes(semantic: AuthenticatedFinalPotV1, bump: u8) -> [u8; FINAL_POT_ACCOUNT_BYTES] {
+        let mut output = [0u8; FINAL_POT_ACCOUNT_BYTES];
+        let mut writer = Writer::exact(&mut output, FINAL_POT_ACCOUNT_BYTES).unwrap();
+        writer.u8(FINAL_POT_ACCOUNT_TAG).unwrap();
+        writer.u8(FINAL_POT_ACCOUNT_VERSION).unwrap();
+        writer.bytes(&semantic.encode_body().unwrap()).unwrap();
+        writer.u8(bump).unwrap();
+        writer.u8(0).unwrap();
+        writer.finish().unwrap();
+        output
+    }
+
+    #[test]
+    fn counted_root_retirement_is_terminal_root_bound_and_bump_exact() {
+        let root = retiring_split_root();
+        let bump = 19;
+        let bytes = outer_bytes(terminal_split_pot(&root), bump);
+        let (_, terminal) = FinalPotV1AccountV1::decode_counted_root_retirement(
+            &bytes,
+            root.final_pot(),
+            bump,
+            &root,
+        )
+        .unwrap();
+        assert_eq!(terminal.account(), root.final_pot().bytes());
+        assert_eq!(terminal.inventory_kind(), VirtualReceiptKindV1::Split);
+        assert_eq!(terminal.authorized_complete_set_atoms(), root.virtual_cash_atoms());
+
+        assert_eq!(
+            FinalPotV1AccountV1::decode_counted_root_retirement(
+                &bytes,
+                root.final_pot(),
+                bump.wrapping_add(1),
+                &root,
+            ),
+            Err(CodecError::MismatchedBinding),
+        );
+        let settling = crate::settlement_root::tests::virtual_root(VirtualCashDirectionV1::Split);
+        assert_eq!(
+            FinalPotV1AccountV1::decode_counted_root_retirement(
+                &bytes,
+                root.final_pot(),
+                bump,
+                &settling,
+            ),
+            Err(CodecError::InvalidState),
+        );
+
+        let mut wrong_owner = terminal_split_pot(&root);
+        wrong_owner.owner_order_set_digest = [91; 32];
+        let wrong_owner = outer_bytes(wrong_owner, bump);
+        assert_eq!(
+            FinalPotV1AccountV1::decode_counted_root_retirement(
+                &wrong_owner,
+                root.final_pot(),
+                bump,
+                &root,
+            ),
+            Err(CodecError::MismatchedBinding),
+        );
+
+        let mut live_principal = terminal_split_pot(&root);
+        live_principal.cash_principal_atoms = 1;
+        let live_principal = outer_bytes(live_principal, bump);
+        assert_eq!(
+            FinalPotV1AccountV1::decode_counted_root_retirement(
+                &live_principal,
+                root.final_pot(),
+                bump,
+                &root,
+            ),
+            Err(CodecError::InvalidState),
+        );
+    }
+}
