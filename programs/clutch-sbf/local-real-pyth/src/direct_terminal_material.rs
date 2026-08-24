@@ -45,7 +45,7 @@ use clutch_direct_market_runtime::{
     DirectRetirementTransferV1, DirectRootPhaseV1, DirectTerminalReasonV1,
 };
 use clutch_general_v2_contract::{
-    project_general_position_replay_prestate_v1, Id32, MarketBindingV4,
+    project_general_position_replay_prestate_v1, Id32, MarketBindingV5,
     MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
     MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
@@ -96,8 +96,8 @@ const REVENUE_POLICY_SEED: &[u8] = b"dragons-clutch:revenue-policy:v1";
 const TREASURY_SERVICE_LEDGER_SEED_V1: &[u8] = b"treasury-service-v1";
 const PRICE_GRID_SEED_V1: &[u8] = b"dragons-clutch:grid:v1";
 const PRODUCT_ARTIFACT_SEED: &[u8] = b"dc:product-artifact:v1";
-const GENERAL_BINDING_DATA_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/general-market/binding-data/v4\0";
+const GENERAL_BINDING_DATA_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/general-market-binding/data/v5\0";
 const GENERAL_RUNTIME_DATA_DOMAIN_V3: &[u8] =
     b"dragons-clutch/general-market/runtime-data/v3\0";
 
@@ -109,14 +109,14 @@ pub struct DirectTerminalEndpointSnapshotV2<'a> {
     pub replay: &'a ObservedRpcAccount,
 }
 
-/// Current General V4 account graph common to actions 9 through 12.
+/// Current General V5 account graph common to actions 9 through 12.
 #[derive(Clone, Copy, Debug)]
 pub struct DirectTerminalMarketSnapshotV2<'a> {
     pub realm: &'a ObservedRpcAccount,
     pub profile: &'a ObservedRpcAccount,
     pub collateral_policy: &'a ObservedRpcAccount,
     pub token_2022_program: &'a ObservedRpcAccount,
-    pub market_binding_v4: &'a ObservedRpcAccount,
+    pub market_binding_v5: &'a ObservedRpcAccount,
     pub market_runtime_v3: &'a ObservedRpcAccount,
     pub market_instance_v2: &'a ObservedRpcAccount,
     pub market_genesis_v2: &'a ObservedRpcAccount,
@@ -180,7 +180,7 @@ pub struct DirectMissedFreezeSnapshotV2<'a> {
     pub profile: &'a ObservedRpcAccount,
     pub collateral_policy: &'a ObservedRpcAccount,
     pub token_2022_program: &'a ObservedRpcAccount,
-    pub market_binding_v4: &'a ObservedRpcAccount,
+    pub market_binding_v5: &'a ObservedRpcAccount,
     pub market_runtime_v3: &'a ObservedRpcAccount,
     pub market_instance_v2: &'a ObservedRpcAccount,
     pub endpoints: [Option<DirectTerminalEndpointSnapshotV2<'a>>; 2],
@@ -688,7 +688,7 @@ fn construct_missed_freeze(
             profile: snapshot.profile,
             collateral_policy: snapshot.collateral_policy,
             token_2022_program: snapshot.token_2022_program,
-            market_binding_v4: snapshot.market_binding_v4,
+            market_binding_v5: snapshot.market_binding_v5,
             market_runtime_v3: snapshot.market_runtime_v3,
             market_instance_v2: snapshot.market_instance_v2,
             market_genesis_v2: snapshot.market_genesis_v2,
@@ -740,7 +740,7 @@ fn construct_missed_freeze(
         (snapshot.profile, "collateral-profile", false, false),
         (snapshot.collateral_policy, "collateral-policy", false, false),
         (snapshot.token_2022_program, "token-2022-program", false, false),
-        (snapshot.market_binding_v4, "general-market-binding-v4", false, false),
+        (snapshot.market_binding_v5, "general-market-binding-v5", false, false),
         (snapshot.market_runtime_v3, "general-market-runtime-v3", false, false),
         (snapshot.market_instance_v2, "market-instance-v2", false, false),
     ] {
@@ -846,7 +846,7 @@ fn authenticate_market_graph(
         market.realm,
         market.profile,
         market.collateral_policy,
-        market.market_binding_v4,
+        market.market_binding_v5,
         market.market_runtime_v3,
         market.market_instance_v2,
         market.market_genesis_v2,
@@ -887,7 +887,7 @@ fn authenticate_market_graph(
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
-    let binding = MarketBindingV4::decode(&market.market_binding_v4.data)
+    let binding = MarketBindingV5::decode(&market.market_binding_v5.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let runtime = MarketRuntimeV3AccountV1::decode(&market.market_runtime_v3.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
@@ -901,7 +901,7 @@ fn authenticate_market_graph(
         release.program_id,
         &[
             MARKET_RUNTIME_SEED_DOMAIN_V1,
-            market.market_binding_v4.address.as_ref(),
+            market.market_binding_v5.address.as_ref(),
         ],
     );
     let binding_rent = binding.rent();
@@ -914,11 +914,11 @@ fn authenticate_market_graph(
         .refundable_principal
         .checked_add(runtime.rent.donation_floor)
         .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    if market.market_binding_v4.address.to_bytes() != current.general_market_binding_account
+    if market.market_binding_v5.address.to_bytes() != current.general_market_binding_account
         || market.market_runtime_v3.address.to_bytes() != current.general_market_runtime_account
         || account_data_id(
-            GENERAL_BINDING_DATA_DOMAIN_V4,
-            market.market_binding_v4,
+            GENERAL_BINDING_DATA_DOMAIN_V5,
+            market.market_binding_v5,
         ) != current.general_market_binding_v5_data_id
         || account_data_id(
             GENERAL_RUNTIME_DATA_DOMAIN_V3,
@@ -935,12 +935,12 @@ fn authenticate_market_graph(
         || binding.base().batch_policy_id().bytes() != root.fee_policy().batch_policy_id
         || base.market_genesis_profile_v2_id.bytes()
             != content_id::<MarketGenesisProfileV2>(market.market_genesis_v2, ArtifactKind::MarketGenesisProfileV2)?
-        || runtime.market_binding.bytes() != market.market_binding_v4.address.to_bytes()
+        || runtime.market_binding.bytes() != market.market_binding_v5.address.to_bytes()
         || runtime.market_instance_v2_id.bytes() != root.market_instance_id()
         || runtime.stored_bump != runtime_pda.1
-        || market.market_binding_v4.address != binding_pda.0
+        || market.market_binding_v5.address != binding_pda.0
         || market.market_runtime_v3.address != runtime_pda.0
-        || market.market_binding_v4.lamports < binding_rent_floor
+        || market.market_binding_v5.lamports < binding_rent_floor
         || market.market_runtime_v3.lamports < runtime_rent_floor
         || content_id::<MarketInstancePreimageV2>(market.market_instance_v2, ArtifactKind::MarketInstancePreimageV2)?
             != root.market_instance_id()
@@ -1456,7 +1456,7 @@ fn authenticate_existing_aliases(
         snapshot.market.profile.address,
         snapshot.market.collateral_policy.address,
         snapshot.market.token_2022_program.address,
-        snapshot.market.market_binding_v4.address,
+        snapshot.market.market_binding_v5.address,
         snapshot.market.market_runtime_v3.address,
         snapshot.market.market_instance_v2.address,
         snapshot.market.market_genesis_v2.address,
@@ -1568,7 +1568,7 @@ fn authenticate_missed_aliases(
         snapshot.profile.address,
         snapshot.collateral_policy.address,
         snapshot.token_2022_program.address,
-        snapshot.market_binding_v4.address,
+        snapshot.market_binding_v5.address,
         snapshot.market_runtime_v3.address,
         snapshot.market_instance_v2.address,
     ];
@@ -1896,7 +1896,7 @@ fn push_existing_fixed(
         (snapshot.market.profile, "collateral-profile", false),
         (snapshot.market.collateral_policy, "collateral-policy", false),
         (snapshot.market.token_2022_program, "token-2022-program", false),
-        (snapshot.market.market_binding_v4, "general-market-binding-v4", false),
+        (snapshot.market.market_binding_v5, "general-market-binding-v5", false),
         (snapshot.market.market_runtime_v3, "general-market-runtime-v3", false),
         (snapshot.market.market_instance_v2, "market-instance-v2", false),
         (snapshot.market.market_genesis_v2, "market-genesis-v2", false),
@@ -2006,7 +2006,7 @@ fn authenticate_existing_observations(
         value.market.profile,
         value.market.collateral_policy,
         value.market.token_2022_program,
-        value.market.market_binding_v4,
+        value.market.market_binding_v5,
         value.market.market_runtime_v3,
         value.market.market_instance_v2,
         value.market.market_genesis_v2,
@@ -2055,7 +2055,7 @@ fn authenticate_missed_observations(
         value.profile,
         value.collateral_policy,
         value.token_2022_program,
-        value.market_binding_v4,
+        value.market_binding_v5,
         value.market_runtime_v3,
         value.market_instance_v2,
         value.liveness.policy,

@@ -8,7 +8,8 @@
 //! this account deliberately does not persist the later Product admission
 //! projection, avoiding a cyclic identity between the General and Product
 //! postwrites. Its BundleV5/AttachmentV4 coordinates are decode-only after the
-//! current Product graph advanced; V4 is the only live successor authority.
+//! current Product graph advanced; V4 is historical and V5 is the only live
+//! successor authority.
 
 use crate::{
     CodecError, DeletableRentOwnerV1, Id32, MarketBindingV2,

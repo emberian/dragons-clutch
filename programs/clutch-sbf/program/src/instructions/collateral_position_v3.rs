@@ -15,10 +15,10 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketBindingV4, MarketBindingV5,
+    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketBindingV5,
     MarketRuntimeV3AccountV1,
     MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    MARKET_BINDING_ACCOUNT_BYTES_V3, MARKET_BINDING_ACCOUNT_BYTES_V4,
+    MARKET_BINDING_ACCOUNT_BYTES_V3,
     MARKET_BINDING_ACCOUNT_BYTES_V5,
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
@@ -47,10 +47,6 @@ const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/value-authority/v2\0";
 const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/liability-authority/v2\0";
-const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/general-market/value-authority/v4\0";
-const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/general-market/liability-authority/v4\0";
 const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V5: &[u8] =
     b"dragons-clutch/general-market/value-authority/v5\0";
 const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V5: &[u8] =
@@ -59,8 +55,6 @@ const GENERAL_MARKET_NARROW_AUTHENTICATION_DOMAIN_V5: &[u8] =
     b"dragons-clutch/general-market/narrow-authentication/v5\0";
 const GENERAL_MARKET_BINDING_DATA_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/binding-data/v2\0";
-const GENERAL_MARKET_BINDING_DATA_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/general-market/binding-data/v4\0";
 const GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3: &[u8] =
     b"dragons-clutch/general-market/runtime-data/v3\0";
 const GENERAL_MARKET_LIABILITY_FOUNDING_POSTWRITE_DOMAIN_V3: &[u8] =
@@ -140,17 +134,6 @@ pub(crate) struct GeneralPositionReplayAuthorityV3 {
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
 }
 
-/// Complete authenticated ordinary-Position and GEN1 Replay prestate under
-/// the sole current Product/Revenue-authorized MarketBinding V4 account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GeneralPositionReplayAuthorityV4 {
-    pub(crate) position: AuthenticatedPositionV3,
-    pub(crate) projection: GeneralPositionProjectionV3,
-    pub(crate) replay: GeneralPositionReplayPrestateV1,
-    pub(crate) market_binding: MarketBindingV4,
-    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
-}
-
 /// Complete ordinary-Position/Replay prestate under the hostile-authenticated
 /// Product RootV3/LinkV3/FundingV5 General authority.  The compact current
 /// authentication ID is retained so consumers cannot silently fall back to
@@ -170,17 +153,6 @@ struct GeneralPositionReplayBodyV2 {
     position: AuthenticatedPositionV3,
     projection: GeneralPositionProjectionV3,
     replay: GeneralPositionReplayPrestateV1,
-}
-
-/// Current General market bodies plus General-owned full account-data IDs.
-/// Downstream families consume this projection rather than defining parallel
-/// binding/runtime hash transcripts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedGeneralMarketV4 {
-    binding: MarketBindingV4,
-    runtime: MarketRuntimeV3AccountV1,
-    binding_data_id: CollateralId,
-    runtime_data_id: CollateralId,
 }
 
 /// Current General V5 bodies plus their canonical full account-data IDs.
@@ -205,20 +177,6 @@ impl AuthenticatedGeneralMarketV5 {
     pub(crate) const fn id(&self) -> CollateralId { self.id }
 }
 
-impl AuthenticatedGeneralMarketV4 {
-    pub(crate) const fn binding(self) -> MarketBindingV4 {
-        self.binding
-    }
-    pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 {
-        self.runtime
-    }
-    pub(crate) const fn binding_data_id(self) -> CollateralId {
-        self.binding_data_id
-    }
-    pub(crate) const fn runtime_data_id(self) -> CollateralId {
-        self.runtime_data_id
-    }
-}
 /// Authenticated full-width collateral and native-claim Market owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralMarketLiabilityAuthorityV2 {
@@ -243,33 +201,6 @@ pub(crate) struct GeneralMarketLiabilityAuthorityV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralMarketValueAuthorityV2 {
     pub(crate) liabilities: GeneralMarketLiabilityAuthorityV2,
-    pub(crate) deployment:
-        crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
-    pub(crate) receipt_id: CollateralId,
-}
-
-/// Current RootV3/FoundationV4 liability authority. It deliberately refuses
-/// the legacy General V2/V3 binding layouts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GeneralMarketLiabilityAuthorityV4 {
-    pub(crate) bound: BoundCollateralProfileV2,
-    pub(crate) market_binding: MarketBindingV4,
-    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
-    pub(crate) market_instance: MarketInstancePreimageV2,
-    pub(crate) hoard: HoardV2,
-    pub(crate) claim_ledger: ClaimLedgerV3,
-    pub(crate) market_binding_data_id: CollateralId,
-    pub(crate) market_runtime_data_id: CollateralId,
-    pub(crate) hoard_semantic_id: CollateralId,
-    pub(crate) claim_ledger_semantic_id: CollateralId,
-    pub(crate) hoard_lamports: u64,
-    pub(crate) claim_ledger_lamports: u64,
-    pub(crate) receipt_id: CollateralId,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GeneralMarketValueAuthorityV4 {
-    pub(crate) liabilities: GeneralMarketLiabilityAuthorityV4,
     pub(crate) deployment:
         crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
     pub(crate) receipt_id: CollateralId,
@@ -762,83 +693,6 @@ pub(crate) fn authenticate_general_market_v3(
     Ok((binding, runtime))
 }
 
-/// Authenticate only the current Product/Revenue-authorized General
-/// MarketBinding V4 and its stable runtime. V1/V2/V3 accounts cannot enter
-/// this successor authority.
-pub(crate) fn authenticate_general_market_v4(
-    program_id: &Pubkey,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-) -> Outcome<(MarketBindingV4, MarketRuntimeV3AccountV1)> {
-    require_program_account(
-        program_id,
-        market_binding_account,
-        false,
-        MARKET_BINDING_ACCOUNT_BYTES_V4,
-    )?;
-    require_program_account(
-        program_id,
-        market_runtime_account,
-        false,
-        MARKET_RUNTIME_ACCOUNT_BYTES,
-    )?;
-    let binding = MarketBindingV4::decode(&market_binding_account.data.borrow())?;
-    let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
-    let base = binding.base().base();
-    expect_pda(
-        market_binding_account.key,
-        seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),
-        Some(base.stored_bump),
-    )?;
-    expect_pda(
-        market_runtime_account.key,
-        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.key.to_bytes()),
-        Some(runtime.stored_bump),
-    )?;
-    require(
-        base.market.bytes() == market_runtime_account.key.to_bytes()
-            && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
-            && runtime.market_instance_v2_id == base.market_instance_v2_id,
-        ClutchError::MismatchedState,
-    )?;
-    Ok((binding, runtime))
-}
-
-/// Authenticate current V4/Runtime bodies and derive their sole canonical
-/// account-key-plus-full-body identities for downstream family founders.
-pub(crate) fn authenticate_general_market_v4_with_data_ids(
-    program_id: &Pubkey,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedGeneralMarketV4> {
-    let (binding, runtime) =
-        authenticate_general_market_v4(program_id, market_binding_account, market_runtime_account)?;
-    let binding_data = market_binding_account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let binding_data_id = authenticated_account_data_id_v1(
-        GENERAL_MARKET_BINDING_DATA_DOMAIN_V4,
-        market_binding_account.key,
-        &binding_data,
-    )?;
-    drop(binding_data);
-    let runtime_data = market_runtime_account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let runtime_data_id = authenticated_account_data_id_v1(
-        GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
-        market_runtime_account.key,
-        &runtime_data,
-    )?;
-    drop(runtime_data);
-    Ok(AuthenticatedGeneralMarketV4 {
-        binding,
-        runtime,
-        binding_data_id,
-        runtime_data_id,
-    })
-}
-
 /// Authenticate only the fresh Product/FundingV5-authorized General binding
 /// and stable runtime. This narrow boundary is used by already-founded Direct
 /// actions to reconstruct the exact General authority persisted at action 1.
@@ -1158,251 +1012,6 @@ pub(crate) fn authenticate_general_market_value_authority_v2(
         .require_live()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     Ok(GeneralMarketValueAuthorityV2 {
-        liabilities,
-        deployment,
-        receipt_id,
-    })
-}
-
-/// Current V4-only liability/value authentication used by RootV3 families.
-/// Authenticate ProfileV2 collateral, the full Product MarketInstance, and
-/// the replacement Hoard/ClaimLedger accounts without consulting any lowered
-/// legacy Market, Kernel, or SupplyLedger identity.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_market_liabilities_v4(
-    program_id: &Pubkey,
-    realm_account: &AccountInfo<'_>,
-    profile_account: &AccountInfo<'_>,
-    policy_account: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-    market_instance_account: &AccountInfo<'_>,
-    hoard_account: &AccountInfo<'_>,
-    claim_ledger_account: &AccountInfo<'_>,
-    hoard_writable: bool,
-    claim_ledger_writable: bool,
-) -> Outcome<GeneralMarketLiabilityAuthorityV4> {
-    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
-        program_id,
-        realm_account,
-        profile_account,
-        policy_account,
-        token_program,
-    )?;
-    let (market_binding, market_runtime) =
-        authenticate_general_market_v4(program_id, market_binding_account, market_runtime_account)?;
-    let relation_market = market_binding.base().base();
-    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        market_instance_account,
-        relation_market.market_instance_v2_id.content_id(),
-    )?;
-    let market_instance = *market_instance_artifact.value();
-    let market_instance_id = market_instance
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        market_instance_id.bytes() == relation_market.market_instance_v2_id.bytes()
-            && market_instance.market_genesis_profile_id.bytes()
-                == relation_market.market_genesis_profile_v2_id.bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    require_program_account(program_id, hoard_account, hoard_writable, HOARD_V2_BYTES)?;
-    require_program_account(
-        program_id,
-        claim_ledger_account,
-        claim_ledger_writable,
-        CLAIM_LEDGER_V3_BYTES,
-    )?;
-    let hoard = HoardV2::decode(&hoard_account.data.borrow())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_account.data.borrow())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market_bytes = relation_market.market_instance_v2_id.bytes();
-    expect_pda(
-        hoard_account.key,
-        seeds::hoard_v2_pda(program_id, &market_bytes),
-        Some(hoard.stored_bump),
-    )?;
-    expect_pda(
-        claim_ledger_account.key,
-        seeds::claim_ledger_v3_pda(program_id, &market_bytes),
-        Some(claim_ledger.stored_bump),
-    )?;
-    let authority = seeds::hoard_authority_v2_pda(program_id, &market_bytes).0;
-    let token_account = seeds::hoard_token_v2_pda(program_id, &market_bytes).0;
-    require(
-        hoard.market_instance_id == CollateralId::from_bytes(market_bytes)
-            && hoard.realm_id == realm.realm().realm
-            && hoard.profile_id == realm.realm().profile
-            && hoard.collateral_policy_id == realm.policy_id()
-            && hoard.collateral_release_id
-                == realm
-                    .release()
-                    .id()
-                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            && hoard.authority == CollateralId::from_bytes(authority.to_bytes())
-            && hoard.token_account == CollateralId::from_bytes(token_account.to_bytes())
-            && hoard.collateral_cap_atoms == market_instance.collateral_cap
-            && claim_ledger.market_instance_id == hoard.market_instance_id
-            && claim_ledger.realm_id == hoard.realm_id
-            && claim_ledger.native_claim_basis_id
-                == CollateralId::from_bytes(relation_market.native_claim_basis_id.bytes())
-            && claim_ledger.lifecycle == hoard.lifecycle
-            && claim_ledger.outcome_count == hoard.outcome_count
-            && claim_ledger.outcome_count == relation_market.outcome_count,
-        ClutchError::MismatchedState,
-    )?;
-    let bound = refine_market_collateral_v2(
-        realm,
-        MarketCollateralBindingV2 {
-            market: CollateralId::from_bytes(market_bytes),
-            realm: hoard.realm_id,
-            profile: hoard.profile_id,
-            collateral_cap_atoms: hoard.collateral_cap_atoms,
-            hoard_authority: hoard.authority,
-            hoard_token_account: hoard.token_account,
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let hoard_semantic_id = hoard
-        .semantic_id(&RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let claim_ledger_semantic_id = claim_ledger
-        .semantic_id(&RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market_binding_data = market_binding_account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let market_binding_data_id = authenticated_account_data_id_v1(
-        GENERAL_MARKET_BINDING_DATA_DOMAIN_V4,
-        market_binding_account.key,
-        &market_binding_data[..],
-    )?;
-    drop(market_binding_data);
-    let market_runtime_data = market_runtime_account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let market_runtime_data_id = authenticated_account_data_id_v1(
-        GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
-        market_runtime_account.key,
-        &market_runtime_data[..],
-    )?;
-    drop(market_runtime_data);
-    let hoard_lamports = hoard_account.lamports();
-    let claim_ledger_lamports = claim_ledger_account.lamports();
-    require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, false)?;
-    require_deletable_rent_coverage_v1(claim_ledger.rent, claim_ledger_lamports, false)?;
-    let receipt_id = CollateralId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V4,
-            market_binding_account.key.as_ref(),
-            &market_binding_data_id.bytes(),
-            market_runtime_account.key.as_ref(),
-            &market_runtime_data_id.bytes(),
-            market_instance_account.key.as_ref(),
-            &market_instance_id.bytes(),
-            hoard_account.key.as_ref(),
-            &hoard_semantic_id.bytes(),
-            &hoard_lamports.to_le_bytes(),
-            claim_ledger_account.key.as_ref(),
-            &claim_ledger_semantic_id.bytes(),
-            &claim_ledger_lamports.to_le_bytes(),
-            &realm.policy_id().bytes(),
-            &bound
-                .release()
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
-                .bytes(),
-        ])
-        .to_bytes(),
-    );
-    receipt_id
-        .require_live()
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(GeneralMarketLiabilityAuthorityV4 {
-        bound,
-        market_binding,
-        market_runtime,
-        market_instance,
-        hoard,
-        claim_ledger,
-        market_binding_data_id,
-        market_runtime_data_id,
-        hoard_semantic_id,
-        claim_ledger_semantic_id,
-        hoard_lamports,
-        claim_ledger_lamports,
-        receipt_id,
-    })
-}
-
-/// Authenticate the full-width liability owners and the exact current
-/// Profile-selected collateral ProgramData before any value-bearing CPI.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_market_value_authority_v4(
-    program_id: &Pubkey,
-    realm_account: &AccountInfo<'_>,
-    profile_account: &AccountInfo<'_>,
-    policy_account: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    token_programdata: &AccountInfo<'_>,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-    market_instance_account: &AccountInfo<'_>,
-    hoard_account: &AccountInfo<'_>,
-    claim_ledger_account: &AccountInfo<'_>,
-    hoard_writable: bool,
-    claim_ledger_writable: bool,
-) -> Outcome<GeneralMarketValueAuthorityV4> {
-    let liabilities = authenticate_general_market_liabilities_v4(
-        program_id,
-        realm_account,
-        profile_account,
-        policy_account,
-        token_program,
-        market_binding_account,
-        market_runtime_account,
-        market_instance_account,
-        hoard_account,
-        claim_ledger_account,
-        hoard_writable,
-        claim_ledger_writable,
-    )?;
-    let deployment = crate::collateral_release::authenticate_collateral_release_deployment_v2(
-        liabilities.bound.release(),
-        token_program,
-        token_programdata,
-    )?;
-    require(
-        deployment.release_id()
-            == liabilities
-                .bound
-                .release()
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    let receipt_id = CollateralId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V4,
-            &liabilities.receipt_id.bytes(),
-            &liabilities.market_binding.base().base().market_instance_v2_id.bytes(),
-            &liabilities.bound.policy_id().bytes(),
-            &deployment.release_id().bytes(),
-            &deployment.programdata_account().bytes(),
-            &deployment.deployment_slot().to_le_bytes(),
-            &deployment.receipt_id().bytes(),
-            &liabilities.hoard_semantic_id.bytes(),
-            &liabilities.claim_ledger_semantic_id.bytes(),
-        ])
-        .to_bytes(),
-    );
-    receipt_id
-        .require_live()
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(GeneralMarketValueAuthorityV4 {
         liabilities,
         deployment,
         receipt_id,
@@ -2129,92 +1738,6 @@ pub(crate) fn authenticate_general_position_replay_readonly_v2(
         false,
     )?;
     Ok(GeneralPositionReplayAuthorityV2 {
-        position: body.position,
-        projection: body.projection,
-        replay: body.replay,
-        market_binding,
-        market_runtime,
-    })
-}
-
-/// Authenticate one writable ordinary Position and Replay under the sole
-/// current MarketBinding V4 authority.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_position_replay_v4(
-    program_id: &Pubkey,
-    bound: BoundCollateralProfileV2,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-    position_account: &AccountInfo<'_>,
-    replay_account: &AccountInfo<'_>,
-    expected_owner: [u8; 32],
-    expected_sequence: u64,
-) -> Outcome<GeneralPositionReplayAuthorityV4> {
-    authenticate_general_position_replay_with_access_v4(
-        program_id,
-        bound,
-        market_binding_account,
-        market_runtime_account,
-        position_account,
-        replay_account,
-        expected_owner,
-        expected_sequence,
-        true,
-    )
-}
-
-/// Authenticate one read-only ordinary Position and writable Replay under
-/// the sole current MarketBinding V4 authority.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_position_replay_readonly_v4(
-    program_id: &Pubkey,
-    bound: BoundCollateralProfileV2,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-    position_account: &AccountInfo<'_>,
-    replay_account: &AccountInfo<'_>,
-    expected_owner: [u8; 32],
-    expected_sequence: u64,
-) -> Outcome<GeneralPositionReplayAuthorityV4> {
-    authenticate_general_position_replay_with_access_v4(
-        program_id,
-        bound,
-        market_binding_account,
-        market_runtime_account,
-        position_account,
-        replay_account,
-        expected_owner,
-        expected_sequence,
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn authenticate_general_position_replay_with_access_v4(
-    program_id: &Pubkey,
-    bound: BoundCollateralProfileV2,
-    market_binding_account: &AccountInfo<'_>,
-    market_runtime_account: &AccountInfo<'_>,
-    position_account: &AccountInfo<'_>,
-    replay_account: &AccountInfo<'_>,
-    expected_owner: [u8; 32],
-    expected_sequence: u64,
-    position_writable: bool,
-) -> Outcome<GeneralPositionReplayAuthorityV4> {
-    let (market_binding, market_runtime) =
-        authenticate_general_market_v4(program_id, market_binding_account, market_runtime_account)?;
-    let body = authenticate_general_position_replay_body_v2(
-        program_id,
-        bound,
-        market_binding.relation_projection(),
-        market_runtime_account,
-        position_account,
-        replay_account,
-        expected_owner,
-        expected_sequence,
-        position_writable,
-    )?;
-    Ok(GeneralPositionReplayAuthorityV4 {
         position: body.position,
         projection: body.projection,
         replay: body.replay,

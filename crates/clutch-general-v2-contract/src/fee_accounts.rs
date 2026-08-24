@@ -286,7 +286,7 @@ impl SelectedFeeRecordV2AccountV1 {
 
     /// Structurally decode the current immutable outer without a parallel
     /// policy preimage. Current callers must independently bind every copied
-    /// authority field to the hostile-authenticated MarketBindingV4.
+    /// authority field to the hostile-authenticated MarketBindingV5.
     pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
         let (body, rent, stored_bump) =
             decode_rent_owned_outer::<FEE_RECORD_ACCOUNT_V1_BYTES>(
