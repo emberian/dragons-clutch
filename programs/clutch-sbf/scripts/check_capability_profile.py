@@ -75,6 +75,7 @@ PROFILE_FEATURES = frozenset(
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "production-inert": None,
+    "runtime-real-pyth-release": None,
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
 }

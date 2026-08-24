@@ -750,6 +750,36 @@ class CapabilityProfileTests(unittest.TestCase):
                     repo=ROOT,
                 )
 
+    def test_source_identity_selector_registry_is_exact(self) -> None:
+        self.assertEqual(
+            checker.SOURCE_IDENTITY_FEATURE,
+            {
+                "production-inert": None,
+                "runtime-real-pyth-release": None,
+                "non-production-mock-source-lab": "non-production-mock-source",
+                "non-production-real-pyth-lab": "non-production-real-pyth-lab",
+            },
+        )
+        valid = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        self.assertEqual(
+            checker.cargo_features(valid),
+            ["custom-heap", checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE],
+        )
+        with self.assertRaisesRegex(checker.ProfileError, "unknown class"):
+            checker.validate_build_contract(
+                {
+                    "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                    "source_identity": "caller-invented-release",
+                    "expected_undefined_dynamic_symbols": SYSCALLS,
+                }
+            )
+
     def test_runtime_real_pyth_release_never_enables_a_fixture_feature(self) -> None:
         inert = checker.validate_manifest(
             manifest(profile_feature="profile-full"), repo=ROOT
