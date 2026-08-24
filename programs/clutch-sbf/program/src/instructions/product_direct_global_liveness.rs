@@ -73,6 +73,10 @@ const PRODUCT_DIRECT_CANDIDATE_ALLOCATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/product-direct-candidate-allocation/v3\0";
 const PRODUCT_DIRECT_CANDIDATE_ALLOCATION_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/product-direct-candidate-allocation-postwrite/v3\0";
+const PRODUCT_DIRECT_FOUNDER_ACTIVATION_PLAN_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-direct-founder-activation-plan/v3\0";
+const PRODUCT_DIRECT_FOUNDER_ACTIVATION_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-direct-founder-activation-postwrite/v3\0";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -265,6 +269,15 @@ impl AuthenticatedDirectCandidateLivenessAuthorityV1
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedProductDirectCandidateAllocationV3 {
     id: ContentId,
+    founder_activation_id: ContentId,
+    family_plan_id: ContentId,
+    product_root_account: Pubkey,
+    product_root_binding_id: ContentId,
+    product_root_semantic_after_family_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    direct_root_account: Pubkey,
+    product_preauthorization_id: ContentId,
     manifest_account: Pubkey,
     manifest_state_before_id: ContentId,
     manifest_state_after_id: ContentId,
@@ -278,6 +291,27 @@ pub(crate) struct AuthenticatedProductDirectCandidateAllocationV3 {
 
 impl AuthenticatedProductDirectCandidateAllocationV3 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn founder_activation_id(&self) -> ContentId {
+        self.founder_activation_id
+    }
+    pub(crate) const fn family_plan_id(&self) -> ContentId { self.family_plan_id }
+    pub(crate) const fn product_root_account(&self) -> Pubkey {
+        self.product_root_account
+    }
+    pub(crate) const fn product_root_binding_id(&self) -> ContentId {
+        self.product_root_binding_id
+    }
+    pub(crate) const fn product_root_semantic_after_family_id(&self) -> ContentId {
+        self.product_root_semantic_after_family_id
+    }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn direct_root_account(&self) -> Pubkey { self.direct_root_account }
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
+        self.product_preauthorization_id
+    }
     pub(crate) const fn manifest_account(&self) -> Pubkey { self.manifest_account }
     pub(crate) const fn manifest_state_after_id(&self) -> ContentId {
         self.manifest_state_after_id
@@ -296,6 +330,160 @@ impl AuthenticatedProductDirectCandidateAllocationV3 {
     }
 }
 
+/// Move-only proof that the persisted `0xba/v2` manifest became Active only
+/// for one exact prepared Direct RootV3 family admission. RootV3 is written
+/// last by the atomic Product/Direct outer; rollback therefore covers this
+/// predecessor write if the Direct child or Product successor refuses.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductDirectGlobalLivenessActivationV3 {
+    id: ContentId,
+    family_plan_id: ContentId,
+    manifest_account: Pubkey,
+    manifest_state_before_id: ContentId,
+    manifest_state_after_id: ContentId,
+    manifest_data_before_id: ContentId,
+    manifest_data_after_id: ContentId,
+    manifest_authentication_before_id: ContentId,
+    manifest_authentication_after_id: ContentId,
+    founder_activation_receipt_id: ContentId,
+    activated_market_binding_id: ContentId,
+}
+
+impl AuthenticatedProductDirectGlobalLivenessActivationV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn family_plan_id(&self) -> ContentId { self.family_plan_id }
+    pub(crate) const fn manifest_account(&self) -> Pubkey { self.manifest_account }
+    pub(crate) const fn manifest_authentication_after_id(&self) -> ContentId {
+        self.manifest_authentication_after_id
+    }
+    pub(crate) const fn founder_activation_receipt_id(&self) -> ContentId {
+        self.founder_activation_receipt_id
+    }
+    pub(crate) const fn activated_market_binding_id(&self) -> ContentId {
+        self.activated_market_binding_id
+    }
+}
+
+/// Activate `0xba/v2` against the exact immutable RootV3 binding and prepared
+/// Direct family successor. No caller supplies a founder receipt: Product
+/// derives it from the hostile manifest prestate and the move-only family
+/// plan, then the allocation transition must consume this postwrite by value.
+#[inline(never)]
+pub(crate) fn activate_product_direct_global_liveness_for_family_v3(
+    program_id: &Pubkey,
+    manifest_account: &AccountInfo<'_>,
+    family_plan: &AuthenticatedProductFamilyAdmissionPlanV3,
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV3> {
+    require(
+        family_plan.family() == MarketFamilyV1::Direct
+            && family_plan.root_direct_global_liveness_binding_id() != ContentId::ZERO
+            && manifest_account.key != &family_plan.root_account()
+            && manifest_account.key != &family_plan.child_account(),
+        ClutchError::MismatchedState,
+    )?;
+    let current = authenticate_product_direct_global_liveness_v2(
+        program_id,
+        manifest_account,
+        true,
+    )?;
+    let state_before_id = current
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        current.state().phase() == DirectGlobalLivenessPhaseV2::Founding
+            && current.state().lifecycle_root_account().bytes()
+                == family_plan.root_account().to_bytes()
+            && current.state().global_bundle_binding_id()
+                == family_plan.root_direct_global_liveness_binding_id()
+            && current.state().founder_preauthorization_id()
+                == family_plan.owner_prewrite_id()
+            && current.state().activated_market_binding_id() == ContentId::ZERO
+            && current.state().admitted_allocations()
+                == family_plan.family_admission_sequence(),
+        ClutchError::MismatchedState,
+    )?;
+    let founder_activation_receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_DIRECT_FOUNDER_ACTIVATION_PLAN_DOMAIN_V3,
+            program_id.as_ref(),
+            manifest_account.key.as_ref(),
+            &current.data_id().bytes(),
+            &current.authentication_id().bytes(),
+            &state_before_id.bytes(),
+            &family_plan.id().bytes(),
+            &family_plan.root_binding_id().bytes(),
+            &family_plan.root_semantic_before_id().bytes(),
+            &family_plan.root_semantic_after_id().bytes(),
+            &family_plan.owner_prewrite_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!founder_activation_receipt_id.is_zero(), ClutchError::MismatchedState)?;
+    let data_before_id = current.data_id();
+    let authentication_before_id = current.authentication_id();
+    let observed_lamports = current.observed_lamports();
+    let stored_bump = current.stored_bump;
+    let next = current
+        .into_state()
+        .activate_founder(
+            &ExactFounderActivationAuthorityV2 {
+                expected_state_semantic_id: state_before_id,
+                expected_founder_receipt_id: founder_activation_receipt_id,
+                expected_market_binding_id: family_plan.root_binding_id(),
+            },
+            founder_activation_receipt_id,
+            family_plan.root_binding_id(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let state_after_id = next
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_manifest_state_v2(
+        manifest_account,
+        &next,
+        next.manifest_rent_principal_lamports(),
+        stored_bump,
+    )?;
+    let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
+        program_id,
+        manifest_account,
+        state_after_id,
+        observed_lamports,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_DIRECT_FOUNDER_ACTIVATION_POSTWRITE_DOMAIN_V3,
+            program_id.as_ref(),
+            &family_plan.id().bytes(),
+            manifest_account.key.as_ref(),
+            &state_before_id.bytes(),
+            &state_after_id.bytes(),
+            &data_before_id.bytes(),
+            &reopened.data_id.bytes(),
+            &authentication_before_id.bytes(),
+            &reopened.authentication_id.bytes(),
+            &founder_activation_receipt_id.bytes(),
+            &family_plan.root_binding_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedProductDirectGlobalLivenessActivationV3 {
+        id,
+        family_plan_id: family_plan.id(),
+        manifest_account: *manifest_account.key,
+        manifest_state_before_id: state_before_id,
+        manifest_state_after_id: state_after_id,
+        manifest_data_before_id: data_before_id,
+        manifest_data_after_id: reopened.data_id,
+        manifest_authentication_before_id: authentication_before_id,
+        manifest_authentication_after_id: reopened.authentication_id,
+        founder_activation_receipt_id,
+        activated_market_binding_id: family_plan.root_binding_id(),
+    })
+}
+
 /// Allocate Product's exact next Candidate range for one prepared Direct
 /// family admission. The manifest is the only write; all seven runtime rows
 /// are hostile-authenticated, read-only inputs in canonical order.
@@ -305,6 +493,7 @@ pub(crate) fn allocate_product_direct_candidate_v3(
     manifest_account: &AccountInfo<'_>,
     compartments: &[AccountInfo<'_>],
     family_plan: &AuthenticatedProductFamilyAdmissionPlanV3,
+    activation: AuthenticatedProductDirectGlobalLivenessActivationV3,
 ) -> Outcome<AuthenticatedProductDirectCandidateAllocationV3> {
     require(
         compartments.len() == RUNTIME_COMPARTMENT_COUNT_V1
@@ -318,6 +507,19 @@ pub(crate) fn allocate_product_direct_candidate_v3(
         true,
     )?;
     let state = authenticated.state();
+    require(
+        activation.family_plan_id == family_plan.id()
+            && activation.manifest_account == *manifest_account.key
+            && activation.manifest_state_after_id
+                == state
+                    .semantic_id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && activation.manifest_data_after_id == authenticated.data_id()
+            && activation.manifest_authentication_after_id
+                == authenticated.authentication_id()
+            && activation.activated_market_binding_id == family_plan.root_binding_id(),
+        ClutchError::MismatchedState,
+    )?;
     let market_instance_id = state.market_instance_id();
     let generation = state.generation();
     let direct_root_account = family_plan.child_account();
@@ -521,6 +723,7 @@ pub(crate) fn allocate_product_direct_candidate_v3(
     let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
         PRODUCT_DIRECT_CANDIDATE_ALLOCATION_POSTWRITE_DOMAIN_V3,
         program_id.as_ref(),
+        &activation.id.bytes(),
         manifest_account.key.as_ref(),
         &state_before_id.bytes(),
         &state_after_id.bytes(),
@@ -541,6 +744,15 @@ pub(crate) fn allocate_product_direct_candidate_v3(
     )?;
     Ok(AuthenticatedProductDirectCandidateAllocationV3 {
         id,
+        founder_activation_id: activation.id,
+        family_plan_id: family_plan.id(),
+        product_root_account: family_plan.root_account(),
+        product_root_binding_id: family_plan.root_binding_id(),
+        product_root_semantic_after_family_id: family_plan.root_semantic_after_id(),
+        market_instance_id: family_plan.market_instance_id(),
+        generation: family_plan.generation(),
+        direct_root_account,
+        product_preauthorization_id: family_plan.owner_prewrite_id(),
         manifest_account: *manifest_account.key,
         manifest_state_before_id: state_before_id,
         manifest_state_after_id: state_after_id,

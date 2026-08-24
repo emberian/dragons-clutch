@@ -39,7 +39,7 @@ use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
 use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
-use super::general_v2_fee_terminal_pair_v1::AuthenticatedFeeTerminalPairV1;
+use super::general_v2_fee_terminal_pair_v1::AuthenticatedFinalMarketFeeTerminalV1;
 use super::product_market_lifecycle_v3_current::authenticate_market_lifecycle_root_v3;
 use super::product_series_current::retirement_v5::write_market_lifecycle_root_v3;
 use super::revenue_policy_v2::authenticate_treasury_service_ledger_v1;
@@ -238,7 +238,7 @@ impl AuthenticatedProductPositionPhysicalTerminalV5 {
 pub(crate) fn retire_current_general_treasury_position_into_product_v5(
     program_id: &Pubkey,
     current: AuthenticatedGeneralMarketCurrentV5,
-    fee_terminal: &AuthenticatedFeeTerminalPairV1,
+    fee_terminal: &AuthenticatedFinalMarketFeeTerminalV1,
     product_root: &AccountInfo<'_>,
     treasury_service_ledger: &AccountInfo<'_>,
     position_account: &AccountInfo<'_>,
@@ -264,8 +264,14 @@ pub(crate) fn retire_current_general_treasury_position_into_product_v5(
                 == *treasury_service_ledger.key
             && current.binding().base().base().neutral_sink.bytes()
                 == neutral_sink.key.to_bytes()
-            && fee_terminal.general().outcome == FeeTerminalOutcomeV1::Settled
-            && fee_terminal.general().market.0 == current.runtime_account().to_bytes()
+            && fee_terminal.authentication_id() != ContentId::ZERO
+            && fee_terminal.current_binding_account().bytes()
+                == current.binding_account().to_bytes()
+            && fee_terminal.current_binding_data_id().bytes()
+                == current.binding_data_id().bytes()
+            && fee_terminal.current_market_authority() == current.binding().authority()
+            && fee_terminal.outcome() == FeeTerminalOutcomeV1::Settled
+            && fee_terminal.market().bytes() == current.runtime_account().to_bytes()
             && fee_terminal.revenue_policy().bytes()
                 == current.revenue().policy_digest().bytes()
             && fee_terminal.treasury_position().bytes() == position_account.key.to_bytes()
@@ -391,9 +397,13 @@ pub(crate) fn retire_current_general_treasury_position_into_product_v5(
         &current.id().bytes(),
         &current.binding_data_id().bytes(),
         &current.runtime_data_id().bytes(),
+        &fee_terminal.authentication_id().bytes(),
         &fee_terminal.manifest_account_data_id().bytes(),
         &fee_terminal.terminal_account_data_id().bytes(),
-        &fee_terminal.terminal_semantic_data_id().bytes(),
+        &fee_terminal.fee_record().bytes(),
+        &fee_terminal.epoch().bytes(),
+        &fee_terminal.settlement_candidate().bytes(),
+        &fee_terminal.value_disposition_receipt().bytes(),
         &service_data_id.bytes(),
         position_account.key.as_ref(),
         &position_semantic_id.bytes(),

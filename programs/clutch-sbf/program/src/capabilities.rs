@@ -285,13 +285,20 @@ const _: () = assert!(
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///
-/// Failure actions 10 through 13 and the complete Fractional family have
-/// current handlers joined to their persisted semantic owners. Other target
-/// tuples remain absent until their current authority tranche is integrated.
+/// The six current Structured actions, Failure actions 10 through 13, and the
+/// complete Fractional family have current handlers joined to their persisted
+/// semantic owners. Other target tuples remain absent until their current
+/// authority tranche is integrated.
 /// In particular, Source actions 1 through 12 stay gated until Product
 /// consumes the private whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (75, 1, 1),
+    (75, 1, 3),
+    (75, 1, 5),
+    (75, 1, 6),
+    (75, 1, 7),
+    (75, 1, 8),
     (78, 1, 10),
     (78, 1, 11),
     (78, 1, 12),
@@ -577,7 +584,9 @@ mod tests {
                         && matches!(local_action, 1 | 2 | 3 | 4);
                     let successor_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
                         && family_version == 1
-                        && ((family_tag == 78 && matches!(local_action, 10..=13))
+                        && ((family_tag == 75
+                            && matches!(local_action, 1 | 3 | 5 | 6 | 7 | 8))
+                            || (family_tag == 78 && matches!(local_action, 10..=13))
                             || (family_tag == 79 && matches!(local_action, 1..=10)));
                     let expected_enabled = dealer_enabled
                         || general_enabled

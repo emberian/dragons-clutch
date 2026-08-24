@@ -130,6 +130,7 @@ pub(crate) struct AuthenticatedProductFamilyAdmissionPlanV3 {
     id: ContentId,
     root_account: Pubkey,
     root_binding_id: ContentId,
+    root_direct_global_liveness_binding_id: ContentId,
     root_authentication_id: ContentId,
     root_data_id: ContentId,
     root_semantic_before_id: ContentId,
@@ -154,6 +155,9 @@ impl AuthenticatedProductFamilyAdmissionPlanV3 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
     pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
     pub(crate) const fn root_binding_id(&self) -> ContentId { self.root_binding_id }
+    pub(crate) const fn root_direct_global_liveness_binding_id(&self) -> ContentId {
+        self.root_direct_global_liveness_binding_id
+    }
     pub(crate) const fn root_semantic_before_id(&self) -> ContentId {
         self.root_semantic_before_id
     }
@@ -232,6 +236,7 @@ impl AuthenticatedProductFamilyAdmissionV3 {
     pub(crate) const fn family_admission_receipt_id(&self) -> ContentId {
         self.family_admission_receipt_id
     }
+    pub(crate) const fn child_account(&self) -> Pubkey { self.child_account }
 }
 
 /// Prepare one exact Product family admission without writing RootV3.
@@ -314,6 +319,7 @@ where
         program_id.as_ref(),
         root.account().as_ref(),
         &root.binding_id().bytes(),
+        &binding.direct_global_liveness_binding_id.bytes(),
         &root.authentication_id().bytes(),
         &root.semantic_id().bytes(),
         &root_transition_sequence_before.to_le_bytes(),
@@ -370,6 +376,8 @@ where
         id,
         root_account: root.account(),
         root_binding_id: root.binding_id(),
+        root_direct_global_liveness_binding_id:
+            binding.direct_global_liveness_binding_id,
         root_authentication_id: root.authentication_id(),
         root_data_id: root.data_id(),
         root_semantic_before_id: root.semantic_id(),

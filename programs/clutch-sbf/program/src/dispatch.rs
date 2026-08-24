@@ -729,13 +729,22 @@ fn process_structured_claim(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::StructuredClaim(action) => structured_custody::process_current_action(
-            program_id,
-            accounts,
-            request.sequence,
-            action,
-            request.envelope.payload,
-        ),
+        ExtensionAction::StructuredClaim(action) => {
+            if !capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
+                action.tag(),
+            ) {
+                return Err(ClutchError::UnsupportedInstruction.into());
+            }
+            structured_custody::process_current_action(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }

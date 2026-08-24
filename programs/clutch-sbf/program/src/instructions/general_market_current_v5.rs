@@ -131,6 +131,7 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     source_release_authentication_id: ContentId,
     compiler_bundle_account: Pubkey,
     compiler_bundle_id: ContentId,
+    collateral_profile_id: ContentId,
     revenue: AuthenticatedRevenuePolicyRecordV2,
     treasury: RevenueMarketTreasuryDerivationV1,
 }
@@ -221,6 +222,9 @@ impl AuthenticatedGeneralMarketCurrentV5 {
         self.compiler_bundle_account
     }
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
+    pub(crate) const fn collateral_profile_id(&self) -> ContentId {
+        self.collateral_profile_id
+    }
     pub(crate) const fn revenue(&self) -> AuthenticatedRevenuePolicyRecordV2 { self.revenue }
     pub(crate) const fn treasury(&self) -> RevenueMarketTreasuryDerivationV1 { self.treasury }
 }
@@ -318,26 +322,42 @@ pub(crate) fn authenticate_general_market_current_v5(
     root_output: &mut MarketLifecycleRootAccountV3,
     link_output: &mut SeriesMarketLinkAccountV3,
 ) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
-    authenticate_general_market_current_v5_with_root_access(
+    authenticate_general_market_current_v5_with_product_access(
         program_id,
         frame,
-        false,
         root_output,
         link_output,
+        false,
     )
 }
 
-/// Authenticate the same complete current graph while requiring the Product
-/// Root meta to carry the exact access needed by a same-instruction RootV3
-/// retirement postwrite. All other graph roles remain read-only.
-#[allow(clippy::too_many_lines)]
-#[inline(never)]
-pub(crate) fn authenticate_general_market_current_v5_with_root_access(
+/// Same hostile current-market join for a terminal outer which will mutate
+/// Product RootV3/LinkV3 later in the same instruction. No mutation occurs in
+/// this authentication boundary; the exact writable privilege is only
+/// admitted so the returned receipt can precede Product terminalization.
+pub(crate) fn authenticate_general_market_current_v5_for_terminal(
     program_id: &Pubkey,
     frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
-    product_root_writable: bool,
     root_output: &mut MarketLifecycleRootAccountV3,
     link_output: &mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    authenticate_general_market_current_v5_with_product_access(
+        program_id,
+        frame,
+        root_output,
+        link_output,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+#[inline(never)]
+fn authenticate_general_market_current_v5_with_product_access(
+    program_id: &Pubkey,
+    frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
+    root_output: &mut MarketLifecycleRootAccountV3,
+    link_output: &mut SeriesMarketLinkAccountV3,
+    product_state_writable: bool,
 ) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
     require_distinct_frame(frame)?;
     require_exact_readonly_account(
@@ -416,7 +436,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         frame.product_root,
         market_instance_id,
         authority.product_generation(),
-        product_root_writable,
+        product_state_writable,
         root_output,
     )?;
     let link = authenticate_series_market_link_v3(
@@ -427,7 +447,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         market_instance_id,
         authority.product_generation(),
         *frame.product_root.key,
-        false,
+        product_state_writable,
         link_output,
     )?;
     let root_binding = root.binding();
@@ -451,7 +471,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         program_id,
         frame.series_funding,
         series_plan_id,
-        false,
+        product_state_writable,
     )?;
     let source_release = authenticate_release(program_id, frame.source_release)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -806,6 +826,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         source_release_authentication_id,
         compiler_bundle_account,
         compiler_bundle_id: bundle_id,
+        collateral_profile_id: registry_collateral.profile_id,
         revenue,
         treasury,
     })
@@ -844,7 +865,7 @@ mod adversarial_source_tests {
     fn large_product_bodies_use_caller_storage_and_all_accounts_are_disjoint() {
         let source = include_str!("general_market_current_v5.rs");
         let auth = source
-            .split("pub(crate) fn authenticate_general_market_current_v5")
+            .split("fn authenticate_general_market_current_v5_with_product_access")
             .nth(1)
             .and_then(|body| body.split("#[cfg(test)]").next())
             .expect("bounded authenticator");

@@ -249,7 +249,9 @@ pub struct StructuredProductLineageV1 {
     pub link_binding_id: ContentId,
     /// Immutable configuration governing Product's Wrapper obligation.
     pub wrapper_obligation_configuration_id: ContentId,
-    /// Persisted receipt which moved Wrapper from never-founded to live.
+    /// Persisted Product projection which moved Wrapper from never-founded to
+    /// live. This is deliberately distinct from Structured's first descriptor
+    /// admission transcript.
     pub product_admission_receipt_id: ContentId,
     /// Most recently observed Product link sequence, retained for audit only.
     /// Live authentication permits unrelated monotone sibling transitions.
@@ -374,7 +376,7 @@ impl StructuredMarketRootV1 {
             1,
             hasher,
         )?;
-        if product_lineage.product_admission_receipt_id != admission_transcript_id {
+        if product_lineage.product_admission_receipt_id == admission_transcript_id {
             return Err(Error::InvalidIdentity);
         }
         let value = Self {
@@ -1023,20 +1025,60 @@ mod tests {
         );
     }
 
-    fn lineage(hash: &DeterministicHash) -> StructuredProductLineageV1 {
+    fn lineage(_hash: &DeterministicHash) -> StructuredProductLineageV1 {
         StructuredProductLineageV1 {
             link_binding_id: id(14),
             wrapper_obligation_configuration_id: id(15),
-            product_admission_receipt_id: structured_descriptor_admission_receipt_v1(
+            product_admission_receipt_id: id(16),
+            last_observed_link_transition_sequence: 3,
+        }
+    }
+
+    #[test]
+    fn product_projection_and_descriptor_transcript_are_distinct_authorities() {
+        let hash = DeterministicHash;
+        let root = StructuredMarketRootV1::initialize(
+            binding(),
+            lineage(&hash),
+            id(17),
+            id(18),
+            1_000,
+            40,
+            7,
+            &hash,
+        )
+        .unwrap();
+        assert_eq!(root.product_lineage.product_admission_receipt_id, id(16));
+        assert_eq!(
+            root.admission_transcript_id,
+            structured_descriptor_admission_receipt_v1(
                 ContentId::ZERO,
                 id(17),
                 id(18),
                 1,
-                hash,
+                &hash,
             )
             .unwrap(),
-            last_observed_link_transition_sequence: 3,
-        }
+        );
+        assert_ne!(
+            root.product_lineage.product_admission_receipt_id,
+            root.admission_transcript_id,
+        );
+        let mut aliased = lineage(&hash);
+        aliased.product_admission_receipt_id = root.admission_transcript_id;
+        assert_eq!(
+            StructuredMarketRootV1::initialize(
+                binding(),
+                aliased,
+                id(17),
+                id(18),
+                1_000,
+                40,
+                7,
+                &hash,
+            ),
+            Err(Error::InvalidIdentity),
+        );
     }
 
     #[test]

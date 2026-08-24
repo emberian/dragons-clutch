@@ -15,7 +15,7 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketBindingV4,
+    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketBindingV4, MarketBindingV5,
     MarketRuntimeV3AccountV1,
     MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
     MARKET_BINDING_ACCOUNT_BYTES_V3, MARKET_BINDING_ACCOUNT_BYTES_V4,
@@ -39,6 +39,7 @@ use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
+use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
 use super::product_artifact::authenticate_product_artifact_v1;
 
 const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2: &[u8] =
@@ -141,6 +142,20 @@ pub(crate) struct GeneralPositionReplayAuthorityV4 {
     pub(crate) replay: GeneralPositionReplayPrestateV1,
     pub(crate) market_binding: MarketBindingV4,
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
+}
+
+/// Complete ordinary-Position/Replay prestate under the hostile-authenticated
+/// Product RootV3/LinkV3/FundingV5 General authority.  The compact current
+/// authentication ID is retained so consumers cannot silently fall back to
+/// the inherited MarketBindingV2 relation alone.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct GeneralPositionReplayAuthorityV5 {
+    pub(crate) position: AuthenticatedPositionV3,
+    pub(crate) projection: GeneralPositionProjectionV3,
+    pub(crate) replay: GeneralPositionReplayPrestateV1,
+    pub(crate) market_binding: MarketBindingV5,
+    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
+    pub(crate) current_authentication_id: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1835,6 +1850,49 @@ fn authenticate_general_position_replay_with_access_v4(
         replay: body.replay,
         market_binding,
         market_runtime,
+    })
+}
+
+/// Authenticate one writable ordinary Position and Replay using the sole
+/// hostile current-market authority rather than re-decoding an inherited
+/// General binding version.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_from_current_v5(
+    program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV5> {
+    require(
+        current.binding_account() == *market_binding_account.key
+            && current.runtime_account() == *market_runtime_account.key
+            && current.binding().base().market.bytes() == market_runtime_account.key.to_bytes()
+            && current.runtime().market_binding.bytes() == market_binding_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let body = authenticate_general_position_replay_body_v2(
+        program_id,
+        bound,
+        current.binding().base().relation_projection(),
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        true,
+    )?;
+    Ok(GeneralPositionReplayAuthorityV5 {
+        position: body.position,
+        projection: body.projection,
+        replay: body.replay,
+        market_binding: *current.binding(),
+        market_runtime: *current.runtime(),
+        current_authentication_id: current.id().bytes(),
     })
 }
 

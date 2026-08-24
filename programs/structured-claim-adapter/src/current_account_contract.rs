@@ -9,15 +9,15 @@ use crate::runtime_contract::StructuredClaimActionV1;
 
 /// Canonical label committing the exact current action/count/token-effect set.
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1: &str =
-    "dragons-clutch/structured-claim/current-account-contract/v1/product=root-v3+link-v3+registry-v4+bundle-v7+attachment-v6;a1=36:init-mint+recipe-set;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=34:revoke-mint-authority";
+    "dragons-clutch/structured-claim/current-account-contract/v1/product=root-v3+link-v3+replay-v2+family-policy-v1+registry-v4+bundle-v7+attachment-v6;a1=38:init-mint+recipe-set;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=34:revoke-mint-authority";
 /// SHA-256 identity of [`STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1`].
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1: [u8; 32] = [
-    0x69, 0xb8, 0x2f, 0x81, 0x5b, 0xa0, 0xeb, 0x72, 0xbb, 0x01, 0xcf, 0x8b, 0x0c, 0x1f, 0xf0, 0x7c,
-    0x67, 0x17, 0x16, 0xbb, 0xb5, 0x2b, 0x50, 0x51, 0x4e, 0xc3, 0x59, 0x9e, 0x18, 0xd1, 0xac, 0x4a,
+    0x48, 0x9c, 0xb4, 0xd9, 0x68, 0x18, 0xd7, 0x44, 0x8d, 0x37, 0x59, 0xb0, 0x06, 0xea, 0x76, 0xb4,
+    0x34, 0x49, 0xa0, 0xe7, 0x83, 0xa2, 0x7f, 0xa6, 0x2a, 0x4e, 0x06, 0x60, 0x6d, 0x07, 0xa9, 0xe7,
 ];
 
 /// Exact account count for action 1.
-pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 36;
+pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 38;
 /// Exact account count for actions 3 and 5.
 pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1: usize = 32;
 /// Exact account count for action 6.
@@ -103,6 +103,8 @@ enum CurrentStructuredAccountRoleV1 {
     NeutralToken,
     StructuredRoot,
     ProductRootV3,
+    ProductReplayV2,
+    MarketFamilyCapabilityPolicyV1,
     SeriesLinkV3,
     CompilerBundleV7,
     AttachmentV6,
@@ -161,6 +163,8 @@ impl CurrentStructuredAccountRoleV1 {
             Self::NeutralToken => "realm-neutral-token",
             Self::StructuredRoot => "structured-root",
             Self::ProductRootV3 => "product-market-root-v3",
+            Self::ProductReplayV2 => "product-market-replay-v2",
+            Self::MarketFamilyCapabilityPolicyV1 => "market-family-capability-policy-v1",
             Self::SeriesLinkV3 => "series-market-link-v3",
             Self::CompilerBundleV7 => "compiler-bundle-v7",
             Self::AttachmentV6 => "attachment-v6",
@@ -299,6 +303,7 @@ const fn create_role(index: usize) -> Option<CurrentStructuredAccountRoleV1> {
         27 => R::CompilerBundleV7, 28 => R::AttachmentV6, 29 => R::WrapperRecipeSetV1,
         30 => R::SeriesRegistryV4, 31 => R::RegistryReleaseV2, 32 => R::CapabilityProfileV4,
         33 => R::WrapperReleaseV2, 34 => R::TokenReleaseV2, 35 => R::ProductRootV3,
+        36 => R::ProductReplayV2, 37 => R::MarketFamilyCapabilityPolicyV1,
         _ => return None,
     })
 }
@@ -486,6 +491,18 @@ mod tests {
             true,
         )
         .unwrap();
+        let create_replay = current_structured_account_meta_v1(
+            StructuredClaimActionV1::CreateDescriptor,
+            36,
+            true,
+        )
+        .unwrap();
+        let create_family_policy = current_structured_account_meta_v1(
+            StructuredClaimActionV1::CreateDescriptor,
+            37,
+            true,
+        )
+        .unwrap();
         let terminal_root = current_structured_account_meta_v1(
             StructuredClaimActionV1::RetireDescriptor,
             33,
@@ -495,6 +512,13 @@ mod tests {
         assert!(create_link.writable);
         assert!(terminal_link.writable);
         assert!(create_root.writable);
+        assert_eq!(create_replay.role, CurrentStructuredAccountRoleV1::ProductReplayV2);
+        assert_eq!(
+            create_family_policy.role,
+            CurrentStructuredAccountRoleV1::MarketFamilyCapabilityPolicyV1,
+        );
+        assert!(!create_replay.writable);
+        assert!(!create_family_policy.writable);
         assert!(terminal_root.writable);
         assert!(!current_structured_account_meta_v1(
             StructuredClaimActionV1::CreateDescriptor,

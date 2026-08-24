@@ -22,6 +22,9 @@ use super::super::fractional_product_consumer::consume_fractional_terminal_v2;
 use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
 use super::super::general_treasury_position_terminal_v5::
     AuthenticatedProductPositionPhysicalTerminalV5;
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+use super::super::general_v2_exact_index_retirement_v1::
+    AuthenticatedProductSeriesRetirementForGeneralV5;
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
 use super::super::direct_market_v2::{
     AuthenticatedDirectFamilyTerminalV3, AuthenticatedProductDirectFamilyPreterminalV3,
@@ -2913,6 +2916,7 @@ struct AuthenticatedProductSeriesPhysicalRetirementPostwriteV5 {
     physical_receipt_transcript_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
+    compiler_bundle_id: CompiledProductSeriesBundleV7Id,
     root_binding_id: ContentId,
     root_account: Pubkey,
     root_data_id: ContentId,
@@ -2986,6 +2990,7 @@ fn physically_retire_current_product_series_v5<'a>(
     let source_facts = source.source_market_terminal_facts();
     let source_projection = source.source_projection()?;
     let lifecycle_terminal_id = terminal.id();
+    let compiler_bundle_id = terminal.bundle().bundle_id();
     let terminal_projection = terminal.terminal_projection();
     let terminal_projection_id = terminal.terminal_projection_id();
     let market_instance_id =
@@ -3118,6 +3123,7 @@ fn physically_retire_current_product_series_v5<'a>(
         PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
         &lifecycle_terminal_id.bytes(),
+        &compiler_bundle_id.bytes(),
         &terminal_projection_id.bytes(),
         &physical.id().bytes(),
         &physical_receipt_transcript_id.bytes(),
@@ -3147,6 +3153,7 @@ fn physically_retire_current_product_series_v5<'a>(
         physical_receipt_transcript_id,
         market_instance_id,
         generation: source_facts.generation,
+        compiler_bundle_id,
         root_binding_id,
         root_account: *root_account.key,
         root_data_id,
@@ -3230,9 +3237,43 @@ impl AuthenticatedProductSeriesRetirementV5 {
     }
 }
 
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+impl AuthenticatedProductSeriesRetirementForGeneralV5
+    for AuthenticatedProductSeriesRetirementV5
+{
+    fn consume_for_general_indexed_close_v5(
+        self,
+        market_instance_id: clutch_general_v2_contract::Id32,
+        authority: clutch_general_v2_contract::CurrentMarketAuthorityV5,
+    ) -> Outcome<ContentId> {
+        require(
+            self.market_instance_id().bytes() == market_instance_id.bytes()
+                && self.root_account().to_bytes()
+                    == authority.product_market_root_account().bytes()
+                && self.root_binding_id().bytes()
+                    == authority.product_market_binding_v3_id().bytes()
+                && self.generation() == authority.product_generation()
+                && self.link_account().to_bytes()
+                    == authority.series_market_link_account().bytes()
+                && self.link_semantic_id().bytes()
+                    == authority.series_market_link_v3_id().bytes()
+                && self.link_ordinal() == authority.series_ordinal()
+                && self.physical.compiler_bundle_id.bytes()
+                    == authority.compiler_bundle_v7_id().bytes()
+                && self.physical.physical.funding_account().to_bytes()
+                    == authority.series_funding_v5_account().bytes()
+                && self.position.position_account().to_bytes()
+                    == authority.treasury_position_account().bytes()
+                && !self.id.is_zero(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn retire_current_product_series_v5<'a, 'failure>(
+pub(crate) fn retire_current_product_series_v5<'a, 'failure>(
     program_id: &Pubkey,
     terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
     position: AuthenticatedProductPositionPhysicalTerminalV5,

@@ -7,13 +7,11 @@
 //! creates the hostile-authenticated durable `0xb9/v2` + `0xb9/v3` pair.
 
 use core::cell::{Ref, RefMut};
+use std::boxed::Box;
 
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
-};
-use clutch_batch_policy_identity::revenue_policy_v2::{
-    encode_revenue_policy_v2, REVENUE_POLICY_V2_BYTES,
 };
 use clutch_fee_runtime_contract::projection::SelectedOwnerFeeBookHashV1;
 use clutch_fee_runtime_contract::codec::CertifiedRecipientAllocationAccessV3;
@@ -30,32 +28,23 @@ use clutch_fee_runtime_contract::terminal::{
 use clutch_fee_runtime_contract::{Id as FeeId, OwnerFeeFinalizationOutcomeV2};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    decode_fee_retirement_payload_v1, decode_settlement_retirement_payload_v1,
+    decode_fee_retirement_payload_v1,
     CountedSettlementRootSelectorV1, FeeFinalizeGlobalsPayloadV1,
     FeeMakerDistributionPayloadV1,
     FeeRetirementPayloadV1,
     fee_runtime_semantic_release_id_v2, DeletableRentOwnerV1,
     FeeClosureManifestV2AccountV1, FeeRecordTerminalV3AccountV1,
     FeeRetirementAccumulatorV1AccountV1, GeneralEpochPhaseV1,
-    GeneralEpochV6AccountV1, Id32, MarketBindingV4, SelectedFeeRecordV2AccountV1,
+    GeneralEpochV6AccountV1, Id32, MarketBindingV5, SelectedFeeRecordV2AccountV1,
     SettlementCashPotV1AccountV1,
-    SettlementChildRetirementPayloadV1,
-    SettlementRetirementPayloadKindV1, TreasuryLedgerV2AccountV1,
+    TreasuryLedgerV2AccountV1,
 };
-use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{PositionAccountV3, PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::registry::GeneralV2Action;
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
+};
 use clutch_solana_layout::Hash32;
-use clutch_solana_layout::reservation::RESERVATION_STATE_CONSUMED;
-use clutch_solana_layout::MAX_OUTCOMES;
-use clutch_solana_layout::reservation_v9::{
-    DeletableRentOwnerV1 as LayoutRentV1, ReservationAccountV9,
-    RESERVATION_ACCOUNT_BYTES_V9,
-};
-use clutch_solana_layout::settlement_receipt_v5::{
-    SettlementReceiptAccountV5, SettlementReceiptTransitionCommitmentV5,
-    SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
-};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -71,10 +60,9 @@ use super::general_v2_fee_terminal_pair_v1::{
     authenticate_fee_terminal_pair_v1, FeeTerminalPairExpectationV1,
 };
 use super::revenue_policy_v2::{
-    accept_treasury_service_transition_v1, authenticate_revenue_policy_record_v2,
-    authenticate_treasury_service_ledger_v1, derive_revenue_market_treasury_v1,
+    accept_treasury_service_transition_v1, authenticate_treasury_service_ledger_v1,
     prepare_treasury_service_settlement_v1, AuthenticatedTreasuryServiceAdmissionV1,
-    AuthenticatedTreasuryServiceSettlementV1, RevenueMarketTreasuryDerivationV1,
+    AuthenticatedTreasuryServiceSettlementV1,
 };
 
 use super::general_v2_settlement_root::{
@@ -82,30 +70,17 @@ use super::general_v2_settlement_root::{
     authenticate_writable_general_settlement_root_epoch_v1,
     AuthenticatedGeneralSettlementRootV1,
 };
-use super::collateral_position_v3::authenticate_general_market_v4;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
-use super::product_artifact::authenticate_product_artifact_v1;
+use super::general_market_current_v5::{
+    authenticate_general_market_current_v5, AuthenticatedGeneralMarketCurrentV5,
+    GeneralMarketCurrentAccountFrameV5, GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v5;
 
-/// Root, child, MarketBinding, principal payer, and neutral sink.
-pub const SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1: usize = 5;
-/// Root, finalization, MarketBinding, refund owner, neutral sink, accumulator.
-pub const FEE_FINALIZATION_CLOSE_ACCOUNT_COUNT_V1: usize = 6;
-/// Root, already-closed selected fee-record address, and MarketBinding.
-pub const FEE_RECORD_RETIREMENT_ACCOUNT_COUNT_V1: usize = 3;
-/// Writable root and immutable MarketBinding.
-pub const BEGIN_RETIRING_ACCOUNT_COUNT_V1: usize = 2;
 /// Action-50 maker credit including the complete current collateral join.
-pub const FEE_MAKER_DISTRIBUTION_ACCOUNT_COUNT_V1: usize = 14;
+pub const FEE_MAKER_DISTRIBUTION_ACCOUNT_COUNT_V1: usize = 34;
 /// Action-50 final treasury credit, service settlement, four temporary closes,
 /// and creation of the durable b9/v2+v3 pair.
-pub const FEE_FINALIZE_GLOBALS_ACCOUNT_COUNT_V1: usize = 26;
-
-const IX_ROOT: usize = 0;
-const IX_CHILD: usize = 1;
-const IX_BINDING: usize = 2;
-const IX_PAYER: usize = 3;
-const IX_SINK: usize = 4;
-const IX_FEE_ACCUMULATOR: usize = 5;
+pub const FEE_FINALIZE_GLOBALS_ACCOUNT_COUNT_V1: usize = 45;
 
 const FEE_IX_ROOT: usize = 0;
 const FEE_IX_ACCUMULATOR: usize = 1;
@@ -120,20 +95,32 @@ const FEE_IX_PROFILE: usize = 9;
 const FEE_IX_POLICY: usize = 10;
 const FEE_IX_TOKEN: usize = 11;
 const FEE_IX_MARKET_INSTANCE: usize = 12;
-const FEE_IX_MARKET_GENESIS: usize = 13;
+const CURRENT_IX_PRODUCT_ROOT: usize = 13;
+const CURRENT_IX_SERIES_LINK: usize = 14;
+const CURRENT_IX_SERIES_FUNDING: usize = 15;
+const CURRENT_IX_SERIES_REGISTRY: usize = 16;
+const CURRENT_IX_REGISTRY_PROGRAM: usize = 17;
+const CURRENT_IX_REGISTRY_PROGRAMDATA: usize = 18;
+const CURRENT_IX_REGISTRY_RELEASE: usize = 19;
+const CURRENT_IX_CAPABILITY_PROFILE: usize = 20;
+const CURRENT_IX_SOURCE_RELEASE: usize = 21;
+const CURRENT_IX_COMPILER_BUNDLE: usize = 22;
+const CURRENT_IX_REVENUE_RECORD: usize = 23;
+const CURRENT_IX_REVENUE_PREIMAGE: usize = 24;
+const CURRENT_IX_ARTIFACTS_START: usize = 25;
+const CURRENT_IX_ARTIFACTS_END: usize = 34;
 
-const FINAL_IX_EPOCH: usize = 14;
-const FINAL_IX_SELECTED: usize = 15;
-const FINAL_IX_TREASURY: usize = 16;
-const FINAL_IX_SERVICE: usize = 17;
-const FINAL_IX_REVENUE_RECORD: usize = 18;
-const FINAL_IX_MANIFEST: usize = 19;
-const FINAL_IX_TERMINAL: usize = 20;
-const FINAL_IX_CREATION_PAYER: usize = 21;
-const FINAL_IX_REFUND_PAYER: usize = 22;
-const FINAL_IX_NEUTRAL_SINK: usize = 23;
-const FINAL_IX_SYSTEM_PROGRAM: usize = 24;
-const FINAL_IX_RENT_SYSVAR: usize = 25;
+const FINAL_IX_EPOCH: usize = 34;
+const FINAL_IX_SELECTED: usize = 35;
+const FINAL_IX_TREASURY: usize = 36;
+const FINAL_IX_SERVICE: usize = 37;
+const FINAL_IX_MANIFEST: usize = 38;
+const FINAL_IX_TERMINAL: usize = 39;
+const FINAL_IX_CREATION_PAYER: usize = 40;
+const FINAL_IX_REFUND_PAYER: usize = 41;
+const FINAL_IX_NEUTRAL_SINK: usize = 42;
+const FINAL_IX_SYSTEM_PROGRAM: usize = 43;
+const FINAL_IX_RENT_SYSVAR: usize = 44;
 
 const OWNER_FEE_CLOSE_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-owner-fee-close/v1\0";
@@ -240,6 +227,49 @@ fn borrow_mut_data<'a, 'info>(
     Ok(RefMut::map(data, |bytes| &mut **bytes))
 }
 
+/// Hostile-authenticate the complete current Product/General/Revenue graph
+/// from the shared action-50 prefix.  Product RootV3 and LinkV3 use heap-owned
+/// caller buffers; no full-width account value crosses this helper's frame.
+#[inline(never)]
+fn authenticate_action50_current_market_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    require(
+        accounts.len() >= CURRENT_IX_ARTIFACTS_END
+            && CURRENT_IX_ARTIFACTS_END - CURRENT_IX_ARTIFACTS_START == 9
+            && GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 == 25,
+        ClutchError::AccountCount,
+    )?;
+    let frame = GeneralMarketCurrentAccountFrameV5 {
+        market_binding: &accounts[FEE_IX_BINDING],
+        market_runtime: &accounts[FEE_IX_RUNTIME],
+        product_root: &accounts[CURRENT_IX_PRODUCT_ROOT],
+        series_link: &accounts[CURRENT_IX_SERIES_LINK],
+        series_funding: &accounts[CURRENT_IX_SERIES_FUNDING],
+        series_registry: &accounts[CURRENT_IX_SERIES_REGISTRY],
+        registry_program: &accounts[CURRENT_IX_REGISTRY_PROGRAM],
+        registry_programdata: &accounts[CURRENT_IX_REGISTRY_PROGRAMDATA],
+        registry_release_artifact: &accounts[CURRENT_IX_REGISTRY_RELEASE],
+        capability_profile_artifact: &accounts[CURRENT_IX_CAPABILITY_PROFILE],
+        source_release: &accounts[CURRENT_IX_SOURCE_RELEASE],
+        compiler_bundle: &accounts[CURRENT_IX_COMPILER_BUNDLE],
+        market_instance: &accounts[FEE_IX_MARKET_INSTANCE],
+        realm: &accounts[FEE_IX_REALM],
+        revenue_record: &accounts[CURRENT_IX_REVENUE_RECORD],
+        revenue_policy_preimage: &accounts[CURRENT_IX_REVENUE_PREIMAGE],
+        artifacts: &accounts[CURRENT_IX_ARTIFACTS_START..CURRENT_IX_ARTIFACTS_END],
+    };
+    let mut product_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut product_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    authenticate_general_market_current_v5(
+        program_id,
+        &frame,
+        &mut product_root,
+        &mut product_link,
+    )
+}
+
 fn require_program_state(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -264,27 +294,9 @@ fn require_destination(account: &AccountInfo<'_>) -> Outcome<()> {
     require(!account.executable, ClutchError::ExecutableAccount)
 }
 
-fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<Box<MarketBindingV4>> {
-    require_program_state(
-        program_id,
-        account,
-        false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
-    )?;
-    let binding = Box::new(MarketBindingV4::decode(&borrow_data(account)?)?);
-    let canonical = seeds::general_v2_market_binding_pda(
-        program_id,
-        &binding.base().base().market_instance_v2_id.bytes(),
-    );
-    require(
-        *account.key == canonical.0 && binding.base().base().stored_bump == canonical.1,
-        ClutchError::WrongPda,
-    )?;
-    Ok(binding)
-}
-
 fn authenticate_fee_distribution_collateral(
     program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     root: &AuthenticatedGeneralSettlementRootV1,
     accounts: &[AccountInfo<'_>],
 ) -> Outcome<BoundCollateralProfileV2> {
@@ -295,29 +307,17 @@ fn authenticate_fee_distribution_collateral(
         &accounts[FEE_IX_POLICY],
         &accounts[FEE_IX_TOKEN],
     )?;
-    let (binding, runtime) = authenticate_general_market_v4(
-        program_id,
-        &accounts[FEE_IX_BINDING],
-        &accounts[FEE_IX_RUNTIME],
-    )?;
-    let base = binding.base().base();
-    let instance = *authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        &accounts[FEE_IX_MARKET_INSTANCE],
-        ContentId::from_bytes(base.market_instance_v2_id.bytes()),
-    )?
-    .value();
-    let genesis = *authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
-        &accounts[FEE_IX_MARKET_GENESIS],
-        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
-    )?
-    .value();
+    let binding = current.binding();
+    let runtime = current.runtime();
+    let base = binding.base();
+    let instance = current.market_instance();
     require(
-        id(accounts[FEE_IX_BINDING].key) == root.root().market_binding()
+        current.binding_account() == *accounts[FEE_IX_BINDING].key
+            && current.runtime_account() == *accounts[FEE_IX_RUNTIME].key
+            && id(accounts[FEE_IX_BINDING].key) == root.root().market_binding()
             && base.market == root.root().market()
             && base.market_instance_v2_id == root.root().market_instance_v2_id()
-            && binding.base().batch_policy_id() == root.root().batch_policy_id()
+            && base.batch_policy_id() == root.root().batch_policy_id()
             && runtime.market_instance_v2_id == base.market_instance_v2_id
             && instance
                 .id()
@@ -326,9 +326,8 @@ fn authenticate_fee_distribution_collateral(
                 == base.market_instance_v2_id.bytes()
             && instance.market_genesis_profile_id.content_id().bytes()
                 == base.market_genesis_profile_v2_id.bytes()
-            && genesis.realm_id.bytes() == realm.realm().realm.bytes()
-            && genesis.profile_id.bytes() == realm.realm().profile.bytes()
-            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
+            && current.revenue().realm().bytes() == realm.realm().realm.bytes()
+            && current.collateral_profile_id().bytes() == realm.realm().profile.bytes(),
         ClutchError::MismatchedState,
     )?;
     let market_bytes = base.market_instance_v2_id.bytes();
@@ -383,13 +382,13 @@ fn authenticate_readonly_root(
 fn require_root_binding(
     root: &AuthenticatedGeneralSettlementRootV1,
     binding_account: &AccountInfo<'_>,
-    binding: &MarketBindingV4,
+    binding: &MarketBindingV5,
 ) -> Outcome<()> {
     let value = root.root();
     require(
         value.market_binding() == id(binding_account.key)
-            && value.market() == binding.base().base().market
-            && value.market_instance_v2_id() == binding.base().base().market_instance_v2_id
+            && value.market() == binding.base().market
+            && value.market_instance_v2_id() == binding.base().market_instance_v2_id
             && value.batch_policy_id() == binding.base().batch_policy_id(),
         ClutchError::MismatchedState,
     )
@@ -721,14 +720,17 @@ fn distribute_maker_fee(
             && pot.semantic.expectation == root.root().cash_pot_expectation()?,
         ClutchError::MismatchedState,
     )?;
-    let bound = authenticate_fee_distribution_collateral(program_id, &root, accounts)?;
+    let current = authenticate_action50_current_market_v5(program_id, accounts)?;
+    require_root_binding(&root, &accounts[FEE_IX_BINDING], current.binding())?;
+    let bound = authenticate_fee_distribution_collateral(program_id, &current, &root, accounts)?;
     let position_data = borrow_data(&accounts[FEE_IX_POSITION])?;
     let position = PositionAccountV3::decode(&position_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let position_owner = position.owner().bytes();
     drop(position_data);
-    let position_replay = authenticate_current_general_position_replay_v2(
+    let position_replay = authenticate_current_general_position_replay_v5(
         program_id,
+        &current,
         bound,
         &accounts[FEE_IX_BINDING],
         &accounts[FEE_IX_RUNTIME],
@@ -812,6 +814,25 @@ pub fn process(
         }
     }
 }
+
+#[cfg(test)]
+mod current_action50_source_tests {
+    use super::*;
+
+    #[test]
+    fn action50_frames_are_current_and_below_the_deployed_account_ceiling() {
+        assert_eq!(FEE_MAKER_DISTRIBUTION_ACCOUNT_COUNT_V1, 34);
+        assert_eq!(FEE_FINALIZE_GLOBALS_ACCOUNT_COUNT_V1, 45);
+        assert!(FEE_MAKER_DISTRIBUTION_ACCOUNT_COUNT_V1 < 64);
+        assert!(FEE_FINALIZE_GLOBALS_ACCOUNT_COUNT_V1 < 64);
+        assert_eq!(CURRENT_IX_ARTIFACTS_END - CURRENT_IX_ARTIFACTS_START, 9);
+        let source = include_str!("general_v2_fee_retirement_v2.rs");
+        assert!(source.contains("authenticate_action50_current_market_v5"));
+        assert!(source.contains("authenticate_current_general_position_replay_v5"));
+        assert!(!source.contains("authenticate_current_general_position_replay_v2("));
+        assert!(!source.contains("FINAL_IX_REVENUE_RECORD"));
+    }
+}
 fn finalize_treasury_and_fee_globals(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -846,13 +867,19 @@ fn finalize_treasury_and_fee_globals(
             && selector.closure_manifest == id(accounts[FINAL_IX_MANIFEST].key),
         ClutchError::MismatchedState,
     )?;
-    let binding = decode_binding(program_id, &accounts[FEE_IX_BINDING])?;
-    require_root_binding(&root, &accounts[FEE_IX_BINDING], &binding)?;
+    let current_market = authenticate_action50_current_market_v5(program_id, accounts)?;
+    let binding = current_market.binding();
+    require_root_binding(&root, &accounts[FEE_IX_BINDING], binding)?;
     require(
-        binding.base().base().neutral_sink == id(accounts[FINAL_IX_NEUTRAL_SINK].key),
+        binding.base().neutral_sink == id(accounts[FINAL_IX_NEUTRAL_SINK].key),
         ClutchError::MismatchedState,
     )?;
-    let bound = authenticate_fee_distribution_collateral(program_id, &root, accounts)?;
+    let bound = authenticate_fee_distribution_collateral(
+        program_id,
+        &current_market,
+        &root,
+        accounts,
+    )?;
 
     require_program_state(
         program_id,
@@ -976,8 +1003,8 @@ fn finalize_treasury_and_fee_globals(
             && selected.semantic.treasury_owner().0 == current.treasury_owner().bytes()
             && selected.semantic.treasury_position().0
                 == current.treasury_position_account().bytes()
-            && selected.semantic.price_scale() == binding.base().base().price_scale
-            && selected.semantic.outcome_count() == binding.base().base().outcome_count
+            && selected.semantic.price_scale() == binding.base().price_scale
+            && selected.semantic.outcome_count() == binding.base().outcome_count
             && recipient.semantic().fee_record().0 == selector.fee_record.bytes()
             && recipient_data_id.bytes()
                 == accumulator.semantic.recipient_allocation_data_id().0
@@ -1009,19 +1036,14 @@ fn finalize_treasury_and_fee_globals(
             && pot.semantic.collected_fee_atoms == recipient.semantic().treasury_atoms(),
         ClutchError::MismatchedState,
     )?;
+    let revenue_authority = current_market.revenue();
     selected
         .semantic
-        .binds_revenue_policy(&selector.revenue_policy)
+        .binds_revenue_policy(&revenue_authority.policy())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-
-    let mut revenue_policy_bytes = [0u8; REVENUE_POLICY_V2_BYTES];
-    encode_revenue_policy_v2(&selector.revenue_policy, &mut revenue_policy_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let revenue_authority = authenticate_revenue_policy_record_v2(
-        program_id,
-        &accounts[FEE_IX_REALM],
-        &accounts[FINAL_IX_REVENUE_RECORD],
-        &revenue_policy_bytes,
+    require(
+        selector.revenue_policy == revenue_authority.policy(),
+        ClutchError::MismatchedState,
     )?;
     require(
         current.revenue_policy_record_account().bytes()
@@ -1034,16 +1056,11 @@ fn finalize_treasury_and_fee_globals(
             && current.treasury_position_derivation_policy_v2_id().bytes()
                 == revenue_authority.treasury_position_derivation_policy_id().bytes()
             && current.treasury_service_ledger_account().bytes()
-                == accounts[FINAL_IX_SERVICE].key.to_bytes(),
+                == accounts[FINAL_IX_SERVICE].key.to_bytes()
+            && revenue_authority.record_account() == *accounts[CURRENT_IX_REVENUE_RECORD].key,
         ClutchError::MismatchedState,
     )?;
-    let treasury_derivation: RevenueMarketTreasuryDerivationV1 =
-        derive_revenue_market_treasury_v1(
-            program_id,
-            revenue_authority,
-            Hash32::from_bytes(root.root().market_instance_v2_id().bytes()),
-            *accounts[FEE_IX_RUNTIME].key,
-        )?;
+    let treasury_derivation = current_market.treasury();
     require(
         treasury_derivation.treasury_position_account()
                 == *accounts[FEE_IX_POSITION].key
@@ -1090,8 +1107,9 @@ fn finalize_treasury_and_fee_globals(
         ClutchError::MismatchedState,
     )?;
     drop(position_data);
-    let position_replay = authenticate_current_general_position_replay_v2(
+    let position_replay = authenticate_current_general_position_replay_v5(
         program_id,
+        &current_market,
         bound,
         &accounts[FEE_IX_BINDING],
         &accounts[FEE_IX_RUNTIME],

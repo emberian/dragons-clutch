@@ -150,17 +150,20 @@ The always-compiled, currently capability-refused account order is:
 
 The SBF lifecycle outers authenticate the current 50-slot
 `MarketFoundationAccountGraphV4` while carrying only the accounts they
-observe: 15 fixed core accounts, including the exact release-selected
-`HoardCollateralVault`, plus one OutcomeMint per active outcome. The omitted
-OutcomeCustody and General treasury roles are reconstructed from their
-canonical PDAs and the authenticated RootV3/current General revenue binding;
-their absence from the instruction is not an alternate graph truth. They
+observe: 15 fixed roles plus one OutcomeMint per active outcome. On action 1,
+roles 0 through 13 are the graph prefix and role 14 is the hostile current
+family-policy artifact; the graph's release-selected `HoardCollateralVault`
+is reconstructed from its canonical PDA. On action 10, role 14 remains that
+exact Hoard collateral account. The omitted OutcomeCustody and General
+treasury roles are reconstructed from their canonical PDAs and the
+authenticated RootV3/current General revenue binding; their absence from the
+instruction is not an alternate graph truth. They
 authenticate the current Product `0xaa/v3` root, `0xad/v3` founder link,
 `SeriesFundingQuoteV6`, and read-only `SeriesRegistryV4`; Product's narrow,
 default-refusing writer remains the sole owner of the root successor.
 
-- `Initialize`: the 15 Product Foundation core accounts in slot order, the
-  active OutcomeMint prefix, then Realm,
+- `Initialize`: Product Foundation slots 0 through 13, the hostile current
+  family-policy artifact, the active OutcomeMint prefix, then Realm,
   Profile, collateral policy/program/ProgramData, claim program/ProgramData,
   MarketInstance artifact, founder Series link, FundingQuoteV6 artifact,
   SeriesRegistryV4, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,

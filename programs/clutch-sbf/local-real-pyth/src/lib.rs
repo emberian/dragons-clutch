@@ -18,6 +18,8 @@ pub mod direct_action8_material;
 pub mod direct_terminal_material;
 #[cfg(feature = "operator")]
 pub mod dealer_terminal_material;
+#[cfg(feature = "operator")]
+pub mod failure_action11_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
