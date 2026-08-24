@@ -66,7 +66,9 @@ use clutch_source_plane_v3_runtime::{
     OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
     REOPEN_LINEAGE_ACCOUNT_VERSION, RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
     SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
-    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
+    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG, SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION,
+    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
     WINDOW_WORK_ACCOUNT_TAG,
 };
 use solana_account_info::AccountInfo;
@@ -174,6 +176,14 @@ const _: () = assert!(
 const _: () = assert!(
     SOURCE_WORK_RECEIPT_ACCOUNT_VERSION
         == clutch_solana_layout::registry::SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION
+);
+const _: () = assert!(
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG
+        == clutch_solana_layout::registry::SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG
+        && SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION
+        && SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES
+            == clutch_solana_layout::registry::SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES
 );
 
 /// Fail-closed SourcePlane V3 refusal at the real SBF boundary.
@@ -926,7 +936,8 @@ pub fn authenticate_result_absence(
 
 /// Authenticate an unallocated StatisticResult slot while retaining the sole
 /// mutable lineage authority needed by the same-call Failure terminal path.
-/// The System-owned absent slot itself remains exact read-only and zero-lamport.
+/// The absent slot is exact writable under the branch-union contract, but it
+/// remains System-owned, zero-lamport and zero-data and is never mutated.
 pub(crate) fn authenticate_result_absence_for_terminal_v1(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,

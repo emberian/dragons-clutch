@@ -175,6 +175,12 @@ pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
 pub(crate) mod source_occurrence_foundation_v1;
+/// Private Product-retirement consumer for the prepaid Source lifecycle
+/// custody. It is always compiled and has no caller-facing dispatcher.
+pub(crate) mod source_funding_custody_retirement_v1;
+/// Private post-Product-pin Source terminal owner for exact absence/refusal.
+/// Failure consumes its postwrite; no caller-facing dispatcher enters here.
+pub(crate) mod source_failure_terminal_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.

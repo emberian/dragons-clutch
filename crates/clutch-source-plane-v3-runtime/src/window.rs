@@ -632,6 +632,13 @@ impl StatisticResultAbsenceAccessV1 {
             Self::TerminalMutable => LineageAccessV1::Mutable,
         }
     }
+
+    const fn result_writable(self) -> bool {
+        match self {
+            Self::ExistingReadOnly => false,
+            Self::TerminalMutable => true,
+        }
+    }
 }
 
 /// Runtime-authenticated persisted immutable StatisticResult generation.
@@ -758,9 +765,10 @@ pub fn authenticate_statistic_result_absence(
 }
 
 /// Authenticate the exact never-created result slot under the sole terminal
-/// privilege union. The lineage is writable only so the same instruction can
-/// persist its permanent no-reopen tombstone; no result account exists to
-/// close on this branch.
+/// privilege union. The never-created Result slot is writable solely because
+/// the same instruction contract also admits the refused-Result close branch;
+/// it remains System-owned, zero-lamport, zero-data and is never mutated. The
+/// lineage is writable so this branch can persist its permanent tombstone.
 pub fn authenticate_statistic_result_absence_for_terminal(
     route: AuthenticatedSourceRouteV1,
     key: &StatisticKeyV3,
@@ -801,13 +809,16 @@ fn authenticate_statistic_result_absence_inner(
         account.key,
         derived_pda.bump,
     )?;
-    if account.owner != route.system_program()
-        || account.lamports != 0
-        || !account.data.is_empty()
-        || account.executable
-        || account.signer
-        || account.writable
-    {
+    if !exact_absent_result_account_shape(
+        route.system_program(),
+        account.owner,
+        account.lamports,
+        account.data.is_empty(),
+        account.executable,
+        account.signer,
+        account.writable,
+        access,
+    ) {
         return Err(Error::MismatchedBinding);
     }
     if lineage.adapter_program != route.adapter_program()
@@ -815,6 +826,7 @@ fn authenticate_statistic_result_absence_inner(
         || lineage.semantic_binding_id != key_id
         || lineage.latest_generation != 0
         || lineage.is_open
+        || !lineage.last_close_receipt_id.is_zero()
         || lineage.source_work_schedule_id != route.source_work_schedule_id()
         || lineage.neutral_sink != route.neutral_sink()
     {
@@ -835,6 +847,25 @@ fn authenticate_statistic_result_absence_inner(
         access,
         absence_id: domain_id(RESULT_ABSENCE_DOMAIN, &bytes),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exact_absent_result_account_shape(
+    system_program: RuntimeKey,
+    owner: RuntimeKey,
+    lamports: u64,
+    data_empty: bool,
+    executable: bool,
+    signer: bool,
+    writable: bool,
+    access: StatisticResultAbsenceAccessV1,
+) -> bool {
+    owner == system_program
+        && lamports == 0
+        && data_empty
+        && !executable
+        && !signer
+        && writable == access.result_writable()
 }
 
 impl AuthenticatedEvaluationV1 {
@@ -2599,6 +2630,30 @@ mod tests {
             StatisticResultAbsenceAccessV1::ExistingReadOnly.lineage_access(),
             StatisticResultAbsenceAccessV1::TerminalMutable.lineage_access()
         );
+        assert!(!StatisticResultAbsenceAccessV1::ExistingReadOnly.result_writable());
+        assert!(StatisticResultAbsenceAccessV1::TerminalMutable.result_writable());
+    }
+
+    #[test]
+    fn terminal_absence_requires_writable_unchanged_system_slot() {
+        let system = RuntimeKey::from_bytes([1; 32]);
+        let other = RuntimeKey::from_bytes([2; 32]);
+        let access = StatisticResultAbsenceAccessV1::TerminalMutable;
+        assert!(exact_absent_result_account_shape(
+            system, system, 0, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 0, true, false, false, false, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, other, 0, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 1, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 0, false, false, false, true, access,
+        ));
     }
 
     fn seal(window: &WindowSpecV3) -> WindowSealV3 {

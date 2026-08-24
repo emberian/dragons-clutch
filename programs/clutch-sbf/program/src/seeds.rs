@@ -183,7 +183,7 @@ pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Immutable Source-selected runtime-liveness policy account prefix.
 pub const SEED_SOURCE_LIVENESS_POLICY_V1: &[u8] = b"dc:source-live-policy:v1";
-/// Zero-data, System-owned prepaid Source lifecycle rent custody.
+/// Program-owned exact-principal Source lifecycle custody ledger.
 pub const SEED_SOURCE_FUNDING_CUSTODY_V1: &[u8] = b"dc:source-funding:v1";
 /// Mutable prepaid Source liveness compartment for one lifecycle.
 pub const SEED_SOURCE_COMPARTMENT_V1: &[u8] = b"dc:source-compartment:v1";
