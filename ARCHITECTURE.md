@@ -6,10 +6,12 @@ or completeness claim.
 ## Product thesis
 
 dClutch issues fully collateralized claims over a bounded canonical state
-domain. User-facing ranges, tents, crash protection, and other bounded shapes
-compile into exact native claim coefficients. The protocol should make a simple
-claim simple while retaining atomic portfolios and sophisticated clearing as
-optional execution capabilities.
+domain. Digitals, ranges, tails, and explicit bucket approximations compile
+exactly over native categorical claims. Within-cell graded ramps and tents do
+not: they require either an explicit categorical discretization or a future
+reviewed nonnegative partition-of-unity basis. The protocol should make a
+simple claim simple while retaining atomic portfolios and sophisticated
+clearing as optional execution capabilities.
 
 The first product target is recurring stable-collateral tail and range
 protection using an objective, release-bound source. DREGG may be a dogfood
