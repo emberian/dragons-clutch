@@ -117,6 +117,7 @@ pub(crate) struct AuthenticatedProductMarketFoundationDebitV4 {
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     slot: MarketFoundationSlotV4,
+    root_transition_sequence_after: u64,
     foundation_vault_account: Pubkey,
     destination_account: Pubkey,
     principal_lamports: u64,
@@ -149,6 +150,9 @@ impl AuthenticatedProductMarketFoundationDebitV4 {
     }
     pub(crate) const fn generation(&self) -> u64 { self.generation }
     pub(crate) const fn slot(&self) -> MarketFoundationSlotV4 { self.slot }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
     pub(crate) const fn foundation_vault_account(&self) -> Pubkey {
         self.foundation_vault_account
     }
@@ -193,6 +197,7 @@ pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV4: Sized {
         _market_instance_id: MarketInstanceV2Id,
         _generation: u64,
         _slot: MarketFoundationSlotV4,
+        _root_transition_sequence_after: u64,
         _account_id: ContentId,
         _principal_lamports: u64,
         _principal_before_lamports: u64,
@@ -611,6 +616,10 @@ pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
         slot,
+        root_transition_sequence_after: state
+            .transition_sequence()
+            .checked_add(1)
+            .ok_or(ClutchError::Arithmetic)?,
         foundation_vault_account: *foundation_vault.key,
         destination_account: *destination.key,
         principal_lamports,
@@ -657,6 +666,12 @@ where
                 == root_before.binding().foundation_schedule_id.content_id()
             && debit.foundation_graph_id
                 == root_before.binding().foundation_account_graph_id.content_id()
+            && debit.root_transition_sequence_after
+                == root_before
+                    .state()
+                    .transition_sequence()
+                    .checked_add(1)
+                    .ok_or(ClutchError::Arithmetic)?
             && debit.destination_account.to_bytes()
                 == graph
                     .account(debit.slot)
@@ -676,6 +691,7 @@ where
             debit.market_instance_id,
             debit.generation,
             debit.slot,
+            debit.root_transition_sequence_after,
             ContentId::from_bytes(debit.destination_account.to_bytes()),
             debit.principal_lamports,
             debit.principal_before_lamports,
@@ -696,11 +712,7 @@ where
     let projection = MarketFoundationStepProjectionV4 {
         binding_id: debit.market_binding_id,
         slot: debit.slot,
-        root_transition_sequence: root_before
-            .state()
-            .transition_sequence()
-            .checked_add(1)
-            .ok_or(ClutchError::Arithmetic)?,
+        root_transition_sequence: debit.root_transition_sequence_after,
         principal_lamports: debit.principal_lamports,
         principal_before_lamports: debit.principal_before_lamports,
         principal_after_lamports: debit.principal_after_lamports,
