@@ -25,13 +25,13 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 882;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_078;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
 /// Exact semantic bytes inside the `0xb3/1` frame.
-pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 289;
+pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 321;
 /// Exact semantic bytes inside the `0xb4/1` frame.
-pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 421;
+pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 453;
 
 /// Encode the sole canonical Direct root body.
 pub fn encode_direct_market_root_body_v1(
@@ -90,6 +90,7 @@ pub fn encode_direct_action_replay_body_v1(
     let mut writer = BodyWriter::new(&mut output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
+    writer.id(value.direct_epoch_semantics_id)?;
     writer.id(value.direct_root_account)?;
     writer.id(value.replay_account)?;
     write_rent(&mut writer, value.rent)?;
@@ -112,6 +113,7 @@ pub fn decode_direct_action_replay_body_v1(
     let value = DirectActionReplayV1 {
         market_instance_id: reader.id()?,
         generation: reader.u64()?,
+        direct_epoch_semantics_id: reader.id()?,
         direct_root_account: reader.id()?,
         replay_account: reader.id()?,
         rent: read_rent(&mut reader)?,
@@ -137,6 +139,7 @@ pub fn encode_direct_reservation_body_v1(
     let mut writer = BodyWriter::new(&mut output);
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
+    writer.id(value.direct_epoch_semantics_id)?;
     writer.id(value.direct_root_account)?;
     writer.id(value.reservation_account)?;
     writer.id(value.general_market_runtime)?;
@@ -172,6 +175,7 @@ pub fn decode_direct_reservation_body_v1(
     let value = DirectReservationV1 {
         market_instance_id: reader.id()?,
         generation: reader.u64()?,
+        direct_epoch_semantics_id: reader.id()?,
         direct_root_account: reader.id()?,
         reservation_account: reader.id()?,
         general_market_runtime: reader.id()?,
@@ -384,9 +388,15 @@ fn write_binding(
     writer.id(value.collateral_policy_id)?;
     writer.id(value.collateral_release_id)?;
     writer.id(value.resolution_account)?;
-    writer.id(value.resolution_semantic_id)?;
-    writer.id(value.resolution_data_id)?;
+    writer.id(value.direct_epoch_semantics_id)?;
+    writer.id(value.fee_policy_id)?;
+    writer.id(value.direct_fee_shape_id)?;
+    writer.id(value.candidate_lifecycle_policy_id)?;
+    writer.id(value.candidate_liveness_policy_id)?;
+    writer.id(value.direct_schedule_policy_id)?;
     writer.id(value.product_root_account)?;
+    writer.id(value.product_family_prestate_id)?;
+    writer.u32(value.family_admission_sequence)?;
     writer.id(value.founder_series_link_account)?;
     writer.id(value.founder_series_link_binding_id)?;
     writer.id(value.compiler_bundle_v5_id)?;
@@ -394,6 +404,7 @@ fn write_binding(
     writer.u32(value.founder_series_ordinal)?;
     writer.id(value.direct_root_account)?;
     writer.id(value.action_replay_account)?;
+    writer.id(value.general_market_binding)?;
     writer.id(value.general_market_runtime)?;
     writer.id(value.neutral_lamport_sink)?;
     writer.id(value.relation_policy_id)?;
@@ -411,9 +422,15 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         collateral_policy_id: reader.id()?,
         collateral_release_id: reader.id()?,
         resolution_account: reader.id()?,
-        resolution_semantic_id: reader.id()?,
-        resolution_data_id: reader.id()?,
+        direct_epoch_semantics_id: reader.id()?,
+        fee_policy_id: reader.id()?,
+        direct_fee_shape_id: reader.id()?,
+        candidate_lifecycle_policy_id: reader.id()?,
+        candidate_liveness_policy_id: reader.id()?,
+        direct_schedule_policy_id: reader.id()?,
         product_root_account: reader.id()?,
+        product_family_prestate_id: reader.id()?,
+        family_admission_sequence: reader.u32()?,
         founder_series_link_account: reader.id()?,
         founder_series_link_binding_id: reader.id()?,
         compiler_bundle_v5_id: reader.id()?,
@@ -421,6 +438,7 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         founder_series_ordinal: reader.u32()?,
         direct_root_account: reader.id()?,
         action_replay_account: reader.id()?,
+        general_market_binding: reader.id()?,
         general_market_runtime: reader.id()?,
         neutral_lamport_sink: reader.id()?,
         relation_policy_id: reader.id()?,
@@ -746,9 +764,9 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 882);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_078);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
-const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 289);
-const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 421);
+const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
+const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 453);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);
 const _: EconomicOrderV2 = EMPTY_ECONOMIC_ORDER_V2;

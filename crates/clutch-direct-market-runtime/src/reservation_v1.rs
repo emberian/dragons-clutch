@@ -73,6 +73,7 @@ impl AuthenticatedDirectReservationAdmissionV1 for NoDirectReservationAdmissionA
 pub struct DirectReservationV1 {
     pub(crate) market_instance_id: [u8; 32],
     pub(crate) generation: u64,
+    pub(crate) direct_epoch_semantics_id: [u8; 32],
     pub(crate) direct_root_account: [u8; 32],
     pub(crate) reservation_account: [u8; 32],
     pub(crate) general_market_runtime: [u8; 32],
@@ -127,6 +128,7 @@ impl DirectReservationV1 {
     pub fn validate(self) -> Result<(), DirectMarketErrorV1> {
         for id in [
             self.market_instance_id,
+            self.direct_epoch_semantics_id,
             self.direct_root_account,
             self.reservation_account,
             self.general_market_runtime,
@@ -140,7 +142,7 @@ impl DirectReservationV1 {
         self.rent.validate()?;
         if self.generation == 0
             || self.position_generation == 0
-            || self.expiry_epoch < self.generation
+            || self.expiry_epoch == 0
             || !(2..=MAX_OUTCOMES).contains(&usize::from(self.outcome_count))
             || usize::from(self.outcome) >= usize::from(self.outcome_count)
             || self.quantity == 0
@@ -183,6 +185,7 @@ impl DirectReservationV1 {
         let binding = root.binding();
         if self.market_instance_id != binding.market_instance_id
             || self.generation != binding.generation
+            || self.direct_epoch_semantics_id != binding.direct_epoch_semantics_id
             || self.direct_root_account != binding.direct_root_account
             || self.general_market_runtime != binding.general_market_runtime
             || self.outcome_count != binding.outcome_count
@@ -223,6 +226,7 @@ impl DirectReservationV1 {
             RESERVATION_STATE_DOMAIN_V1,
             &self.market_instance_id,
             &self.generation.to_le_bytes(),
+            &self.direct_epoch_semantics_id,
             &self.direct_root_account,
             &self.reservation_account,
             &self.general_market_runtime,
@@ -327,7 +331,8 @@ pub fn prepare_direct_reservation_admission_v1<
         || fields.replay_account.bytes() == reservation_account
         || fields.outcome_count != binding.outcome_count
         || usize::from(outcome) >= usize::from(binding.outcome_count)
-        || expiry_epoch < binding.generation
+        || expiry_epoch < binding.direct_window_index()?
+        || limit_price_units_per_egg > u128::from(binding.price_scale)
         || quantity == 0
         || minimum_fill > quantity
         || (partial_policy == PartialPolicy::AllOrNone && minimum_fill != quantity)
@@ -346,7 +351,17 @@ pub fn prepare_direct_reservation_admission_v1<
                 || peer.order_id() == order_id
                 || peer.side() == side
                 || peer.outcome() != outcome
+                || peer.limit_price_units_per_egg > u128::from(binding.price_scale)
+                || limit_price_units_per_egg > u128::from(binding.price_scale)
             {
+                return Err(DirectMarketErrorV1::MismatchedBinding);
+            }
+            let (buy_limit, sell_limit) = if side == Side::Buy {
+                (limit_price_units_per_egg, peer.limit_price_units_per_egg)
+            } else {
+                (peer.limit_price_units_per_egg, limit_price_units_per_egg)
+            };
+            if buy_limit < sell_limit {
                 return Err(DirectMarketErrorV1::MismatchedBinding);
             }
         }
@@ -402,6 +417,7 @@ pub fn prepare_direct_reservation_admission_v1<
     let reservation = DirectReservationV1 {
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
+        direct_epoch_semantics_id: binding.direct_epoch_semantics_id,
         direct_root_account: binding.direct_root_account,
         reservation_account,
         general_market_runtime: binding.general_market_runtime,

@@ -8,56 +8,11 @@ use crate::{registry, CodecError, Result};
 use clutch_batch::direct_pair_v1::DirectEconomicCandidateV1;
 use clutch_batch::{PartialPolicy, Side};
 
-/// Exact action-1 schedule payload bytes.
-pub const DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1: usize = 40;
 /// Exact action-2 owner-blind order payload bytes.
 pub const DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1: usize = 80;
-/// Exact action-4 full-width price-simplex payload bytes.
-pub const DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1: usize = 128;
 /// Exact action-5 compact candidate payload bytes.
 pub const DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1: usize = 24;
 
-/// Strict action-1 schedule. Slot observation is always the Clock sysvar and
-/// therefore is not repeated here.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectInitializeMarketPayloadV1 {
-    /// Inclusive Reservation admission open.
-    pub admission_opens_slot: u64,
-    /// Exclusive admission/cancellation close.
-    pub admission_closes_slot: u64,
-    /// Exclusive candidate submission close.
-    pub submission_closes_slot: u64,
-    /// Exclusive verification/selection close.
-    pub selection_deadline_slot: u64,
-    /// Exclusive selected-pair settlement close.
-    pub settlement_deadline_slot: u64,
-}
-
-impl DirectInitializeMarketPayloadV1 {
-    /// Encode the exact forty-byte schedule without restating Clock evidence.
-    pub fn encode_into(
-        &self,
-        output: &mut [u8; DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1],
-    ) {
-        output[0..8].copy_from_slice(&self.admission_opens_slot.to_le_bytes());
-        output[8..16].copy_from_slice(&self.admission_closes_slot.to_le_bytes());
-        output[16..24].copy_from_slice(&self.submission_closes_slot.to_le_bytes());
-        output[24..32].copy_from_slice(&self.selection_deadline_slot.to_le_bytes());
-        output[32..40].copy_from_slice(&self.settlement_deadline_slot.to_le_bytes());
-    }
-
-    /// Decode exactly forty schedule bytes.
-    pub fn decode(input: &[u8]) -> Result<Self> {
-        require_len(input, DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1)?;
-        Ok(Self {
-            admission_opens_slot: u64_at(input, 0),
-            admission_closes_slot: u64_at(input, 8),
-            submission_closes_slot: u64_at(input, 16),
-            selection_deadline_slot: u64_at(input, 24),
-            settlement_deadline_slot: u64_at(input, 32),
-        })
-    }
-}
 
 /// Strict action-2 coordinates. Owner, Position, Replay, root, rent principal,
 /// hostile prefund, Reservation PDA, and the current action ordinal all come
@@ -140,45 +95,6 @@ impl DirectAdmitOrderPayloadV1 {
             expiry_epoch: u64_at(input, 56),
             limit_price_units_per_egg: u128_at(input, 64),
         })
-    }
-}
-
-/// Strict action-4 full-width exact price vector. Active width and zero tail
-/// are checked against Product and the root; grid membership is an SBF account
-/// join and is intentionally not represented by caller bytes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectFreezeBookPayloadV1 {
-    /// Sixteen exact integer price components.
-    pub prices: [u64; 16],
-}
-
-impl DirectFreezeBookPayloadV1 {
-    /// Encode all sixteen simplex coordinates in canonical outcome order.
-    pub fn encode_into(
-        &self,
-        output: &mut [u8; DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1],
-    ) -> Result<()> {
-        let mut index = 0usize;
-        while index < self.prices.len() {
-            let start = index.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?;
-            let end = start.checked_add(8).ok_or(CodecError::ArithmeticOverflow)?;
-            output[start..end].copy_from_slice(&self.prices[index].to_le_bytes());
-            index += 1;
-        }
-        Ok(())
-    }
-
-    /// Decode exactly sixteen little-endian components.
-    pub fn decode(input: &[u8]) -> Result<Self> {
-        require_len(input, DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1)?;
-        let mut prices = [0u64; 16];
-        let mut index = 0usize;
-        while index < prices.len() {
-            let start = index.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?;
-            prices[index] = u64_at(input, start);
-            index += 1;
-        }
-        Ok(Self { prices })
     }
 }
 
@@ -475,10 +391,10 @@ fn require_nonzero(value: &[u8]) -> Result<()> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 882);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_078);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
-const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 289);
-const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 421);
+const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
+const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 453);
 
 #[cfg(test)]
 mod tests {
@@ -507,10 +423,6 @@ mod tests {
 
     #[test]
     fn direct_payloads_refuse_truncation_enums_and_padding() {
-        assert_eq!(
-            DirectInitializeMarketPayloadV1::decode(&[0; 39]),
-            Err(CodecError::WrongLength)
-        );
         let mut order = [0u8; DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1];
         order[..32].fill(1);
         order[32] = 1;

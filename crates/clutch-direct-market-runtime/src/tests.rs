@@ -155,7 +155,14 @@ fn rent(payer: u8, principal: u64, donation: u64) -> DirectRentOwnerV1 {
 }
 
 fn state() -> DirectRootReplayPostV1 {
-    let binding = DirectMarketBindingV1 {
+    let schedule = DirectScheduleV1 {
+        admission_opens_slot: 10,
+        admission_closes_slot: 20,
+        submission_closes_slot: 30,
+        selection_deadline_slot: 40,
+        settlement_deadline_slot: 50,
+    };
+    let mut binding = DirectMarketBindingV1 {
         market_instance_id: id(1),
         generation: 1,
         outcome_count: 16,
@@ -164,9 +171,18 @@ fn state() -> DirectRootReplayPostV1 {
         collateral_policy_id: id(4),
         collateral_release_id: id(5),
         resolution_account: id(6),
-        resolution_semantic_id: id(7),
-        resolution_data_id: id(8),
+        direct_epoch_semantics_id: [0; 32],
+        fee_policy_id: DirectZeroFeeVenueV1::canonical().unwrap().revenue_policy_id,
+        direct_fee_shape_id: DirectZeroFeeVenueV1::canonical()
+            .unwrap()
+            .semantic_id(&Sha)
+            .unwrap(),
+        candidate_lifecycle_policy_id: id(36),
+        candidate_liveness_policy_id: id(37),
+        direct_schedule_policy_id: [0; 32],
         product_root_account: id(9),
+        product_family_prestate_id: id(35),
+        family_admission_sequence: 0,
         founder_series_link_account: id(18),
         founder_series_link_binding_id: id(19),
         compiler_bundle_v5_id: id(32),
@@ -174,21 +190,19 @@ fn state() -> DirectRootReplayPostV1 {
         founder_series_ordinal: 0,
         direct_root_account: id(10),
         action_replay_account: id(11),
+        general_market_binding: id(34),
         general_market_runtime: id(12),
         neutral_lamport_sink: id(13),
         relation_policy_id: id(14),
         price_policy_id: id(15),
         price_scale: 1_000,
     };
+    binding.direct_schedule_policy_id = direct_schedule_policy_id_v1(binding, &Sha).unwrap();
+    binding.direct_epoch_semantics_id =
+        direct_epoch_semantics_id_v1(binding, schedule, &Sha).unwrap();
     let root = DirectMarketRootV1 {
         binding,
-        schedule: DirectScheduleV1 {
-            admission_opens_slot: 10,
-            admission_closes_slot: 20,
-            submission_closes_slot: 30,
-            selection_deadline_slot: 40,
-            settlement_deadline_slot: 50,
-        },
+        schedule,
         root_rent: rent(16, 1_000, 7),
         phase: DirectRootPhaseV1::Open,
         terminal_reason: None,
@@ -202,6 +216,7 @@ fn state() -> DirectRootReplayPostV1 {
     let replay = DirectActionReplayV1 {
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
+        direct_epoch_semantics_id: binding.direct_epoch_semantics_id,
         direct_root_account: binding.direct_root_account,
         replay_account: binding.action_replay_account,
         rent: rent(17, 900, 3),
@@ -437,6 +452,49 @@ fn cross_namespace_equal_bytes_are_not_account_aliases() {
         .freeze(3, 20, id(24), id(24), &Sha)
         .unwrap();
     assert_eq!(frozen.root.phase(), DirectRootPhaseV1::SubmissionOpen);
+}
+
+#[test]
+fn direct_fee_shape_refuses_every_nonzero_rate_and_envelope() {
+    let canonical = DirectZeroFeeVenueV1::canonical().unwrap();
+    assert_eq!(canonical.validate(), Ok(()));
+    assert_ne!(canonical.semantic_id(&Sha).unwrap(), [0; 32]);
+    for hostile in [
+        DirectZeroFeeVenueV1 { buyer_fee_bps: 1, ..canonical },
+        DirectZeroFeeVenueV1 { seller_fee_bps: 1, ..canonical },
+        DirectZeroFeeVenueV1 { max_buyer_fee_atoms: 1, ..canonical },
+        DirectZeroFeeVenueV1 { max_seller_fee_atoms: 1, ..canonical },
+    ] {
+        assert_eq!(hostile.validate(), Err(DirectMarketErrorV1::MismatchedBinding));
+    }
+}
+
+#[test]
+fn direct_epoch_identity_is_pre_resolution_and_schedule_exact() {
+    let value = state();
+    let before = direct_epoch_semantics_id_v1(value.root.binding(), value.root.schedule(), &Sha)
+        .unwrap();
+    assert_eq!(before, value.root.binding().direct_epoch_semantics_id);
+    let mut changed = value.root.schedule();
+    changed.settlement_deadline_slot += 1;
+    assert_ne!(
+        direct_epoch_semantics_id_v1(value.root.binding(), changed, &Sha).unwrap(),
+        before,
+    );
+}
+
+#[test]
+fn direct_schedule_is_clock_stamped_and_bounded_by_the_release_policy() {
+    let schedule = DirectScheduleV1::canonical_from_foundation_slot(100).unwrap();
+    assert_eq!(schedule.admission_opens_slot, 100);
+    assert_eq!(schedule.admission_closes_slot, 164);
+    assert_eq!(schedule.submission_closes_slot, 228);
+    assert_eq!(schedule.selection_deadline_slot, 292);
+    assert_eq!(schedule.settlement_deadline_slot, 356);
+    assert_eq!(
+        DirectScheduleV1::canonical_from_foundation_slot(u64::MAX),
+        Err(DirectMarketErrorV1::Arithmetic),
+    );
 }
 
 #[test]
@@ -712,6 +770,33 @@ fn reservation_refuses_rounding_and_debits_seller_eggs_exactly() {
 }
 
 #[test]
+fn reservation_expiry_uses_the_product_direct_occurrence_not_market_generation() {
+    let mut value = state();
+    value.root.binding.family_admission_sequence = 7;
+    assert_eq!(value.root.binding.direct_window_index(), Ok(8));
+    assert_eq!(
+        prepare_direct_reservation_admission_v1(
+            &AllowReservation,
+            value.root,
+            position(100, 0),
+            None,
+            id(50),
+            id(51),
+            Side::Buy,
+            0,
+            10,
+            0,
+            PartialPolicy::Allow,
+            7,
+            0,
+            rent(52, 70, 2),
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::MismatchedBinding),
+    );
+}
+
+#[test]
 fn admission_requires_current_generation_and_the_exact_compatible_peer() {
     assert_eq!(
         prepare_direct_reservation_admission_v1(
@@ -825,15 +910,16 @@ fn admission_requires_current_generation_and_the_exact_compatible_peer() {
 }
 
 fn direct_domain_and_price(selected_price: u64) -> (EconomicDomainV2, PricePreconditionV2) {
+    let binding = state().root.binding();
     let domain = EconomicDomainV2 {
         relation_version: ECONOMIC_RELATION_VERSION_V2,
-        market_semantics_digest: id(1),
-        epoch_semantics_digest: id(7),
-        relation_policy_digest: id(14),
-        price_policy_digest: id(15),
-        epoch_index: 1,
-        outcome_count: 16,
-        price_scale: 1_000,
+        market_semantics_digest: binding.market_instance_id,
+        epoch_semantics_digest: binding.direct_epoch_semantics_id,
+        relation_policy_digest: binding.relation_policy_id,
+        price_policy_digest: binding.price_policy_id,
+        epoch_index: binding.direct_window_index().unwrap(),
+        outcome_count: binding.outcome_count,
+        price_scale: binding.price_scale,
     };
     let mut prices = [0u64; MAX_OUTCOMES];
     prices[0] = selected_price;
@@ -1094,10 +1180,17 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
 
     let first = submit_direct_candidate_v1(frozen.state, frozen.selection, 4, 21, candidate(5), &Sha).unwrap();
     let second = submit_direct_candidate_v1(first.state, first.selection, 5, 22, candidate(10), &Sha).unwrap();
-    let begun = begin_direct_candidate_verification_v1(second.state, second.selection, 6, 30, &Sha).unwrap();
-    let verified_first = verify_next_direct_candidate_v1(begun.state, begun.selection, 7, 31, &Sha).unwrap();
-    let verified_second = verify_next_direct_candidate_v1(verified_first.state, verified_first.selection, 8, 32, &Sha).unwrap();
-    let selected = finalize_direct_selection_v1(verified_second.state, verified_second.selection, 9, 33, &Sha).unwrap();
+    let third = submit_direct_candidate_v1(second.state, second.selection, 6, 23, candidate(8), &Sha).unwrap();
+    let fourth = submit_direct_candidate_v1(third.state, third.selection, 7, 24, candidate(6), &Sha).unwrap();
+    assert_eq!(fourth.selection.candidate_count(), 3);
+    assert_eq!(fourth.selection.candidate(0).unwrap(), candidate(10));
+    assert_eq!(fourth.selection.candidate(1).unwrap(), candidate(8));
+    assert_eq!(fourth.selection.candidate(2).unwrap(), candidate(6));
+    let begun = begin_direct_candidate_verification_v1(fourth.state, fourth.selection, 8, 30, &Sha).unwrap();
+    let verified_first = verify_next_direct_candidate_v1(begun.state, begun.selection, 9, 31, &Sha).unwrap();
+    let verified_second = verify_next_direct_candidate_v1(verified_first.state, verified_first.selection, 10, 32, &Sha).unwrap();
+    let verified_third = verify_next_direct_candidate_v1(verified_second.state, verified_second.selection, 11, 33, &Sha).unwrap();
+    let selected = finalize_direct_selection_v1(verified_third.state, verified_third.selection, 12, 34, &Sha).unwrap();
     let pair = selected.selection.selected_pair().unwrap();
     assert_eq!(pair.quantity(), 10);
     assert_eq!(pair.consideration_cash_atoms(), 0);
@@ -1127,6 +1220,22 @@ fn selection_refuses_missing_extra_duplicate_and_partial_traversal() {
         2, 11, id(60), seller.reservation.semantic_id(&Sha).unwrap(), id(82), &Sha,
     ).unwrap();
     let (domain, price) = direct_domain_and_zero_price();
+    let (_, substituted_price) = direct_domain_and_price(500);
+    assert_eq!(
+        prepare_direct_selection_freeze_v1(
+            &AllowFreeze,
+            after_seller,
+            3,
+            20,
+            id(70),
+            rent(71, 80, 3),
+            [Some(seller.reservation), Some(buyer.reservation)],
+            domain,
+            substituted_price,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::MismatchedBinding),
+    );
     assert_eq!(
         prepare_direct_selection_freeze_v1(
             &AllowFreeze, after_seller, 3, 20, id(70), rent(71, 80, 3),
@@ -1493,6 +1602,19 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
         &Sha,
     )
     .unwrap();
+    assert_eq!(
+        submit_direct_candidate_v1(
+            frozen.state,
+            frozen.selection,
+            4,
+            21,
+            candidate(5),
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::DirectPair(
+            clutch_batch::direct_pair_v1::DirectPairErrorV1::InexactCashConversion,
+        )),
+    );
     let submitted = submit_direct_candidate_v1(
         frozen.state,
         frozen.selection,

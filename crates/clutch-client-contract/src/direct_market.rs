@@ -5,9 +5,8 @@
 //! that a deployed release executes the action.
 
 use clutch_solana_layout::direct_market_v1::{
-    DirectAdmitOrderPayloadV1, DirectFreezeBookPayloadV1, DirectInitializeMarketPayloadV1,
+    DirectAdmitOrderPayloadV1,
     DirectSubmitCandidatePayloadV1, DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1,
-    DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1, DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1,
     DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1,
 };
 use clutch_solana_layout::registry::{
@@ -18,7 +17,7 @@ use clutch_solana_reference::ExtensionRequest;
 
 /// Largest current Direct family payload.
 pub const DIRECT_MARKET_CLIENT_MAX_PAYLOAD_BYTES_V1: usize =
-    DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1;
+    DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1;
 /// Largest exact replay-bearing request for the current Direct family.
 pub const DIRECT_MARKET_CLIENT_MAX_REQUEST_BYTES_V1: usize =
     clutch_solana_reference::MAX_REQUEST_LEN - clutch_solana_layout::MAX_INTENT_BYTES
@@ -34,20 +33,6 @@ pub struct DirectMarketClientPayloadV1 {
 }
 
 impl DirectMarketClientPayloadV1 {
-    /// Construct action 1 from the authoritative layout payload.
-    #[must_use]
-    pub fn initialize_market(value: DirectInitializeMarketPayloadV1) -> Self {
-        let mut bytes = [0; DIRECT_MARKET_CLIENT_MAX_PAYLOAD_BYTES_V1];
-        let mut encoded = [0; DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1];
-        value.encode_into(&mut encoded);
-        bytes[..DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1].copy_from_slice(&encoded);
-        Self {
-            action: DirectMarketAction::InitializeMarket,
-            bytes,
-            len: 40,
-        }
-    }
-
     /// Construct action 2 from the authoritative layout payload.
     pub fn admit_order(value: DirectAdmitOrderPayloadV1) -> Result<Self, DirectClientRefusalV1> {
         let mut bytes = [0; DIRECT_MARKET_CLIENT_MAX_PAYLOAD_BYTES_V1];
@@ -60,19 +45,6 @@ impl DirectMarketClientPayloadV1 {
             action: DirectMarketAction::AdmitOrder,
             bytes,
             len: 80,
-        })
-    }
-
-    /// Construct action 4 from all sixteen exact simplex coordinates.
-    pub fn freeze_book(value: DirectFreezeBookPayloadV1) -> Result<Self, DirectClientRefusalV1> {
-        let mut bytes = [0; DIRECT_MARKET_CLIENT_MAX_PAYLOAD_BYTES_V1];
-        value
-            .encode_into(&mut bytes)
-            .map_err(|_| DirectClientRefusalV1::NonCanonicalPayload)?;
-        Ok(Self {
-            action: DirectMarketAction::FreezeBook,
-            bytes,
-            len: 128,
         })
     }
 
@@ -93,7 +65,9 @@ impl DirectMarketClientPayloadV1 {
     /// Construct one of the exact empty-payload lifecycle actions.
     pub const fn empty(action: DirectMarketAction) -> Result<Self, DirectClientRefusalV1> {
         match action {
-            DirectMarketAction::CancelOrder
+            DirectMarketAction::InitializeMarket
+            | DirectMarketAction::CancelOrder
+            | DirectMarketAction::FreezeBook
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
             | DirectMarketAction::FinalizeSelection
@@ -106,9 +80,7 @@ impl DirectMarketClientPayloadV1 {
                 bytes: [0; DIRECT_MARKET_CLIENT_MAX_PAYLOAD_BYTES_V1],
                 len: 0,
             }),
-            DirectMarketAction::InitializeMarket
-            | DirectMarketAction::AdmitOrder
-            | DirectMarketAction::FreezeBook
+            DirectMarketAction::AdmitOrder
             | DirectMarketAction::SubmitCandidate => {
                 Err(DirectClientRefusalV1::ActionPayloadMismatch)
             }
@@ -149,6 +121,9 @@ impl DirectMarketClientRequestV1 {
         sequence: u64,
         payload: &DirectMarketClientPayloadV1,
     ) -> Result<Self, DirectClientRefusalV1> {
+        if (payload.action() == DirectMarketAction::InitializeMarket) != (sequence == 0) {
+            return Err(DirectClientRefusalV1::ReplayCoordinateMismatch);
+        }
         let envelope = ExtensionEnvelope {
             family: ExtensionFamily::DirectMarket,
             action: ExtensionAction::DirectMarket(payload.action()),
@@ -178,6 +153,8 @@ pub enum DirectClientRefusalV1 {
     NonCanonicalPayload,
     /// The authoritative registry or replay-request encoder refused the join.
     NonCanonicalRequest,
+    /// Action 1 alone uses sequence zero; every successor consumes nonzero replay.
+    ReplayCoordinateMismatch,
 }
 
 #[cfg(test)]
@@ -208,11 +185,13 @@ mod tests {
     #[test]
     fn payload_classes_are_disjoint() {
         assert_eq!(
-            DirectMarketClientPayloadV1::empty(DirectMarketAction::FreezeBook),
+            DirectMarketClientPayloadV1::empty(DirectMarketAction::AdmitOrder),
             Err(DirectClientRefusalV1::ActionPayloadMismatch)
         );
         for action in [
+            DirectMarketAction::InitializeMarket,
             DirectMarketAction::CancelOrder,
+            DirectMarketAction::FreezeBook,
             DirectMarketAction::BeginVerification,
             DirectMarketAction::VerifyCandidate,
             DirectMarketAction::FinalizeSelection,
@@ -229,6 +208,22 @@ mod tests {
                 &[]
             );
         }
+    }
+
+    #[test]
+    fn request_owner_refuses_wrong_replay_coordinate_for_every_consumer() {
+        let init = DirectMarketClientPayloadV1::empty(
+            DirectMarketAction::InitializeMarket,
+        ).unwrap();
+        assert_eq!(
+            DirectMarketClientRequestV1::encode(1, &init),
+            Err(DirectClientRefusalV1::ReplayCoordinateMismatch),
+        );
+        let freeze = DirectMarketClientPayloadV1::empty(DirectMarketAction::FreezeBook).unwrap();
+        assert_eq!(
+            DirectMarketClientRequestV1::encode(0, &freeze),
+            Err(DirectClientRefusalV1::ReplayCoordinateMismatch),
+        );
     }
 
     #[test]

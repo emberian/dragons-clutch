@@ -16,8 +16,8 @@ use clutch_batch::direct_pair_v1::{
     DirectEconomicCandidateV1, DirectPairErrorV1, SelectedDirectPairV1,
 };
 use clutch_batch::relation_v2::{
-    EconomicDomainV2, EconomicOrderV2, PricePreconditionV2, VerifiedEconomicsV2,
-    ECONOMIC_RELATION_VERSION_V2, EMPTY_ECONOMIC_ORDER_V2,
+    price_semantics_digest_v2, EconomicDomainV2, EconomicOrderV2, PricePreconditionV2,
+    VerifiedEconomicsV2, ECONOMIC_RELATION_VERSION_V2, EMPTY_ECONOMIC_ORDER_V2,
 };
 use clutch_batch::Side;
 
@@ -39,6 +39,85 @@ const SELECTED_TRAVERSAL_DOMAIN_V1: &[u8] =
 const _: () = assert!(MAX_DIRECT_RESERVATIONS_V1 == 2);
 const _: () = assert!(MAX_DIRECT_CANDIDATES_V1 == 3);
 const CANDIDATE_CAPACITY_V1: usize = 3;
+
+/// Derive the sole Direct clearing price from the exact frozen pair.
+///
+/// The seller's authenticated limit fixes the traded outcome coordinate. The
+/// entire remaining simplex mass lands at the next active outcome (wrapping
+/// once), so every coordinate is deterministic and the caller supplies none.
+/// Both coordinates remain subject to the authenticated Product price policy
+/// and PriceGrid at the SBF boundary.
+pub fn canonical_direct_price_precondition_v1(
+    domain: &EconomicDomainV2,
+    book: &DirectEconomicBookV1,
+) -> Result<PricePreconditionV2, DirectMarketErrorV1> {
+    domain.validate()?;
+    book.validate(domain)?;
+    if book.len < MAX_DIRECT_RESERVATIONS_V1 {
+        let mut prices = [0u64; 16];
+        prices[0] = domain.price_scale;
+        let semantic_price_digest = price_semantics_digest_v2(domain, &prices)?;
+        let price = PricePreconditionV2 {
+            policy_digest: domain.price_policy_digest,
+            semantic_price_digest,
+            prices,
+        };
+        price.validate(domain)?;
+        return Ok(price);
+    }
+    let mut seller = None;
+    let mut index = 0usize;
+    while index < 2 {
+        if book.orders[index].side == Side::Sell {
+            if seller.is_some() {
+                return Err(DirectMarketErrorV1::MismatchedBinding);
+            }
+            seller = Some(book.orders[index]);
+        }
+        index += 1;
+    }
+    let seller = seller.ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+    let mut selected_outcome = None;
+    index = 0;
+    while index < seller.coefficients.len() {
+        let coefficient = seller.coefficients[index];
+        if index < usize::from(domain.outcome_count) {
+            if coefficient == 1 {
+                if selected_outcome.is_some() {
+                    return Err(DirectMarketErrorV1::MismatchedBinding);
+                }
+                selected_outcome = Some(index);
+            } else if coefficient != 0 {
+                return Err(DirectMarketErrorV1::MismatchedBinding);
+            }
+        } else if coefficient != 0 {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        index += 1;
+    }
+    let selected_outcome = selected_outcome.ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+    let selected_price = u64::try_from(seller.limit_value_price_units_per_unit)
+        .map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+    let complement = domain
+        .price_scale
+        .checked_sub(selected_price)
+        .ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+    let fallback = if selected_outcome == 0 { 1 } else { 0 };
+    if fallback >= usize::from(domain.outcome_count) {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut prices = [0u64; 16];
+    prices[selected_outcome] = selected_price;
+    prices[fallback] = complement;
+    let semantic_price_digest = price_semantics_digest_v2(domain, &prices)?;
+    let price = PricePreconditionV2 {
+        policy_digest: domain.price_policy_digest,
+        semantic_price_digest,
+        prices,
+    };
+    price.validate(domain)?;
+    Ok(price)
+}
 
 /// Exhaustive persisted Selection phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,7 +271,7 @@ impl DirectSelectionV1 {
         {
             return Err(DirectMarketErrorV1::MismatchedBinding);
         }
-        validate_domain_binding(root, &self.domain, &self.price)?;
+        validate_domain_binding(root, &self.domain, &self.book, &self.price)?;
         self.book.validate(&self.domain)?;
         let mut index = 0usize;
         while index < 2 {
@@ -215,10 +294,8 @@ impl DirectSelectionV1 {
         index = 0;
         while index < CANDIDATE_CAPACITY_V1 {
             if index < usize::from(self.candidate_count) {
-                let economics = verify_compact_direct_candidate_v1(
-                    &self.domain,
-                    &self.book,
-                    &self.price,
+                let economics = settlement_valid_economics_v1(
+                    &self,
                     self.candidates[index],
                 )?;
                 if economics.economic_candidate_digest != self.candidate_digests[index] {
@@ -230,6 +307,21 @@ impl DirectSelectionV1 {
                         return Err(DirectMarketErrorV1::IdentityAlias);
                     }
                     previous += 1;
+                }
+                if index != 0 {
+                    let prior = settlement_valid_economics_v1(
+                        &self,
+                        self.candidates[index - 1],
+                    )?;
+                    if compare_candidate_priority_v1(
+                        &prior,
+                        self.candidate_digests[index - 1],
+                        &economics,
+                        self.candidate_digests[index],
+                    )? == Ordering::Less
+                    {
+                        return Err(DirectMarketErrorV1::MismatchedBinding);
+                    }
                 }
             } else if self.candidates[index] != DirectEconomicCandidateV1::EMPTY
                 || self.candidate_digests[index] != [0; 32]
@@ -472,7 +564,6 @@ pub(crate) fn build_direct_selection_v1<
     }
     require_fresh_child_account(root.binding(), selection_account)?;
     rent.validate()?;
-    validate_domain_binding(root, &domain, &price)?;
     let (ordered, reservation_count) =
         canonical_reservation_prefix(root, reservations, backend)?;
     let mut reservation_accounts = [[0u8; 32]; 2];
@@ -493,6 +584,7 @@ pub(crate) fn build_direct_selection_v1<
         index += 1;
     }
     book.len = reservation_count;
+    validate_domain_binding(root, &domain, &book, &price)?;
     book.validate(&domain)?;
     if reservation_count == MAX_DIRECT_RESERVATIONS_V1 {
         validate_complete_pair(&ordered)?;
@@ -557,6 +649,11 @@ pub(crate) fn build_direct_selection_v1<
 }
 
 /// Submit one checked, nonduplicate candidate under action 5.
+///
+/// The persisted set is the canonical best three seen so far. A later better
+/// candidate therefore replaces the current worst entry; transaction order
+/// cannot let an inferior early trio exclude it. Equal scores use the full
+/// candidate digest as the deterministic tie-breaker.
 pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
     state: DirectRootReplayPostV1,
     mut selection: DirectSelectionV1,
@@ -566,17 +663,10 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
     backend: &B,
 ) -> Result<DirectSelectionFreezePlanV1, DirectMarketErrorV1> {
     selection.validate_against(state.root)?;
-    if selection.phase != DirectSelectionPhaseV1::SubmissionOpen
-        || usize::from(selection.candidate_count) >= CANDIDATE_CAPACITY_V1
-    {
+    if selection.phase != DirectSelectionPhaseV1::SubmissionOpen {
         return Err(DirectMarketErrorV1::WrongPhase);
     }
-    let economics = verify_compact_direct_candidate_v1(
-        &selection.domain,
-        &selection.book,
-        &selection.price,
-        candidate,
-    )?;
+    let economics = settlement_valid_economics_v1(&selection, candidate)?;
     let mut index = 0usize;
     while index < usize::from(selection.candidate_count) {
         if selection.candidate_digests[index] == economics.economic_candidate_digest {
@@ -584,13 +674,43 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
         }
         index += 1;
     }
-    let at = usize::from(selection.candidate_count);
-    selection.candidates[at] = candidate;
-    selection.candidate_digests[at] = economics.economic_candidate_digest;
-    selection.candidate_count = selection
-        .candidate_count
-        .checked_add(1)
-        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let count = usize::from(selection.candidate_count);
+    let mut insertion = count;
+    index = 0;
+    while index < count {
+        let retained = settlement_valid_economics_v1(
+            &selection,
+            selection.candidates[index],
+        )?;
+        if compare_candidate_priority_v1(
+            &economics,
+            economics.economic_candidate_digest,
+            &retained,
+            selection.candidate_digests[index],
+        )? == Ordering::Greater
+        {
+            insertion = index;
+            break;
+        }
+        index += 1;
+    }
+    if insertion < CANDIDATE_CAPACITY_V1 {
+        let successor_count = if count < CANDIDATE_CAPACITY_V1 {
+            count.checked_add(1).ok_or(DirectMarketErrorV1::Arithmetic)?
+        } else {
+            count
+        };
+        let mut shift = successor_count;
+        while shift > insertion + 1 {
+            selection.candidates[shift - 1] = selection.candidates[shift - 2];
+            selection.candidate_digests[shift - 1] = selection.candidate_digests[shift - 2];
+            shift -= 1;
+        }
+        selection.candidates[insertion] = candidate;
+        selection.candidate_digests[insertion] = economics.economic_candidate_digest;
+        selection.candidate_count =
+            u8::try_from(successor_count).map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+    }
     let selection_poststate_id = selection.semantic_id(state.root, backend)?;
     let state = state.record_submission(
         consumed_sequence,
@@ -599,6 +719,53 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
         backend,
     )?;
     Ok(DirectSelectionFreezePlanV1 { state, selection })
+}
+
+fn compare_candidate_priority_v1(
+    left: &VerifiedEconomicsV2,
+    left_digest: [u8; 32],
+    right: &VerifiedEconomicsV2,
+    right_digest: [u8; 32],
+) -> Result<Ordering, DirectMarketErrorV1> {
+    let score = left
+        .score
+        .total_order_same_domain(&right.score)
+        .map_err(|error| {
+            DirectMarketErrorV1::Economic(
+                clutch_batch::relation_v2::EconomicErrorV2::Score(error),
+            )
+        })?;
+    if score == Ordering::Equal {
+        Ok(right_digest.cmp(&left_digest))
+    } else {
+        Ok(score)
+    }
+}
+
+fn settlement_valid_economics_v1(
+    selection: &DirectSelectionV1,
+    candidate: DirectEconomicCandidateV1,
+) -> Result<VerifiedEconomicsV2, DirectMarketErrorV1> {
+    let economics = verify_compact_direct_candidate_v1(
+        &selection.domain,
+        &selection.book,
+        &selection.price,
+        candidate,
+    )?;
+    let authority = FrozenSelectionAuthorityV1 {
+        selected_traversal_id: selection.traversal_transcript_id,
+        expected_candidate_digest: economics.economic_candidate_digest,
+        expected_price_digest: selection.price.semantic_price_digest,
+    };
+    authenticate_compact_selected_direct_pair_v1(
+        &authority,
+        selection.traversal_transcript_id,
+        &selection.domain,
+        &selection.book,
+        &selection.price,
+        candidate,
+    )?;
+    Ok(economics)
 }
 
 /// Begin action 6's exhaustive submission-order traversal.
@@ -641,10 +808,8 @@ pub fn verify_next_direct_candidate_v1<B: DirectHashBackendV1>(
         return Err(DirectMarketErrorV1::WrongPhase);
     }
     let at = usize::from(selection.verification_cursor);
-    let economics = verify_compact_direct_candidate_v1(
-        &selection.domain,
-        &selection.book,
-        &selection.price,
+    let economics = settlement_valid_economics_v1(
+        &selection,
         selection.candidates[at],
     )?;
     if economics.economic_candidate_digest != selection.candidate_digests[at] {
@@ -692,18 +857,14 @@ pub fn finalize_direct_selection_v1<B: DirectHashBackendV1>(
         return Err(DirectMarketErrorV1::WrongPhase);
     }
     let mut best_index = 0usize;
-    let mut best_economics = verify_compact_direct_candidate_v1(
-        &selection.domain,
-        &selection.book,
-        &selection.price,
+    let mut best_economics = settlement_valid_economics_v1(
+        &selection,
         selection.candidates[0],
     )?;
     let mut index = 1usize;
     while index < usize::from(selection.candidate_count) {
-        let economics = verify_compact_direct_candidate_v1(
-            &selection.domain,
-            &selection.book,
-            &selection.price,
+        let economics = settlement_valid_economics_v1(
+            &selection,
             selection.candidates[index],
         )?;
         if economics
@@ -868,15 +1029,16 @@ fn validate_complete_pair(
 fn validate_domain_binding(
     root: DirectMarketRootV1,
     domain: &EconomicDomainV2,
+    book: &DirectEconomicBookV1,
     price: &PricePreconditionV2,
 ) -> Result<(), DirectMarketErrorV1> {
     let binding = root.binding();
     if domain.relation_version != ECONOMIC_RELATION_VERSION_V2
         || domain.market_semantics_digest != binding.market_instance_id
-        || domain.epoch_semantics_digest != binding.resolution_semantic_id
+        || domain.epoch_semantics_digest != binding.direct_epoch_semantics_id
         || domain.relation_policy_digest != binding.relation_policy_id
         || domain.price_policy_digest != binding.price_policy_id
-        || domain.epoch_index != binding.generation
+        || domain.epoch_index != binding.direct_window_index()?
         || domain.outcome_count != binding.outcome_count
         || domain.price_scale != binding.price_scale
     {
@@ -884,6 +1046,9 @@ fn validate_domain_binding(
     }
     domain.validate()?;
     price.validate(domain)?;
+    if *price != canonical_direct_price_precondition_v1(domain, book)? {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
     Ok(())
 }
 

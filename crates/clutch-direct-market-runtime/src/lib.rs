@@ -26,12 +26,26 @@ pub mod codec_v1;
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
 /// Maximum retained submitted candidates owned by one Direct Selection.
 pub const MAX_DIRECT_CANDIDATES_V1: u8 = 3;
+/// Fixed bounded Reservation-admission interval for the staged V1 profile.
+pub const DIRECT_ADMISSION_SPAN_SLOTS_V1: u64 = 64;
+/// Fixed bounded candidate-submission interval for the staged V1 profile.
+pub const DIRECT_SUBMISSION_SPAN_SLOTS_V1: u64 = 64;
+/// Fixed bounded retained-candidate verification interval.
+pub const DIRECT_VERIFICATION_SPAN_SLOTS_V1: u64 = 64;
+/// Fixed bounded interval after selection for settlement or lapse.
+pub const DIRECT_SETTLEMENT_SPAN_SLOTS_V1: u64 = 64;
 /// Root, replay, Selection, and at most two live Reservations close together.
 pub const MAX_DIRECT_RETIREMENT_SOURCES_V1: usize = 5;
 /// At most five distinct persisted principal payers receive refunds.
 pub const MAX_DIRECT_REFUND_RECIPIENTS_V1: usize = 5;
 
 const FOUNDATION_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/foundation-receipt/v1\0";
+const DIRECT_EPOCH_SEMANTICS_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/epoch-semantics/v1\0";
+const DIRECT_ZERO_FEE_VENUE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/zero-fee-venue/v1\0";
+const DIRECT_SCHEDULE_POLICY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/schedule-policy/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
 const ROOT_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/root-state/v1\0";
 const REPLAY_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/replay-state/v1\0";
@@ -412,12 +426,25 @@ pub struct DirectMarketBindingV1 {
     pub collateral_release_id: [u8; 32],
     /// Canonical Resolution V5 account.
     pub resolution_account: [u8; 32],
-    /// Exact Resolution V5 semantic identity.
-    pub resolution_semantic_id: [u8; 32],
-    /// Exact Resolution V5 hostile-byte data identity.
-    pub resolution_data_id: [u8; 32],
+    /// Direct window identity derived before resolution from the immutable
+    /// Market, General owner, and complete schedule.
+    pub direct_epoch_semantics_id: [u8; 32],
+    /// Exact compile-time zero-fee policy selected by GenesisV2.
+    pub fee_policy_id: [u8; 32],
+    /// Canonical Direct zero-rate/envelope venue shape.
+    pub direct_fee_shape_id: [u8; 32],
+    /// Product-selected candidate lifecycle policy.
+    pub candidate_lifecycle_policy_id: [u8; 32],
+    /// Product-selected present-funded candidate liveness policy.
+    pub candidate_liveness_policy_id: [u8; 32],
+    /// Direct release-owned timing projection over those two Product owners.
+    pub direct_schedule_policy_id: [u8; 32],
     /// Product MarketLifecycleRoot account.
     pub product_root_account: [u8; 32],
+    /// Exact Product family-aggregator prestate which admitted this occurrence.
+    pub product_family_prestate_id: [u8; 32],
+    /// Zero-based Product Direct-family admission coordinate for this occurrence.
+    pub family_admission_sequence: u32,
     /// Exact founder SeriesMarketLink account.
     pub founder_series_link_account: [u8; 32],
     /// Immutable founder SeriesMarketLink binding identity.
@@ -432,6 +459,8 @@ pub struct DirectMarketBindingV1 {
     pub direct_root_account: [u8; 32],
     /// Permanent Direct action replay/receipt account.
     pub action_replay_account: [u8; 32],
+    /// Exact current General MarketBinding account.
+    pub general_market_binding: [u8; 32],
     /// Existing General owner-balance runtime for PositionV3/GEN1.
     pub general_market_runtime: [u8; 32],
     /// Realm-authenticated neutral lamport sink.
@@ -459,8 +488,13 @@ impl DirectMarketBindingV1 {
             self.collateral_profile_id,
             self.collateral_policy_id,
             self.collateral_release_id,
-            self.resolution_semantic_id,
-            self.resolution_data_id,
+            self.direct_epoch_semantics_id,
+            self.fee_policy_id,
+            self.direct_fee_shape_id,
+            self.candidate_lifecycle_policy_id,
+            self.candidate_liveness_policy_id,
+            self.direct_schedule_policy_id,
+            self.product_family_prestate_id,
             self.founder_series_link_binding_id,
             self.compiler_bundle_v5_id,
             self.founder_series_plan_id,
@@ -478,6 +512,7 @@ impl DirectMarketBindingV1 {
             self.founder_series_link_account,
             self.direct_root_account,
             self.action_replay_account,
+            self.general_market_binding,
             self.general_market_runtime,
             self.neutral_lamport_sink,
         ])
@@ -511,16 +546,8 @@ fn validate_product_join_v1(
             SeriesMarketLinkPhaseV1::Active | SeriesMarketLinkPhaseV1::Retiring
         )
     } else {
-        match product_root.phase() {
-            MarketLifecyclePhaseV1::Founding => {
-                founder_link.phase() == SeriesMarketLinkPhaseV1::PendingMarket
-                    && product_root.capital().founder_link_id.bytes() == link_semantic_id
-            }
-            MarketLifecyclePhaseV1::Active => {
-                founder_link.phase() == SeriesMarketLinkPhaseV1::Active
-            }
-            _ => false,
-        }
+        product_root.phase() == MarketLifecyclePhaseV1::Active
+            && founder_link.phase() == SeriesMarketLinkPhaseV1::Active
     };
     if !phase_matches
         || link.disposition != SeriesMarketDispositionV1::Founder
@@ -563,13 +590,157 @@ fn validate_product_join_v1(
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    if terminal_join
-        && (product_root.resolution_semantic_id().bytes() != direct.resolution_semantic_id
-            || product_root.resolution_data_id().bytes() != direct.resolution_data_id)
-    {
-        return Err(DirectMarketErrorV1::MismatchedBinding);
-    }
+    let _ = terminal_join;
     Ok(link_semantic_id)
+}
+
+/// Exact finalized Resolution V5 identities consumed only by action 13.
+///
+/// Foundation deliberately cannot carry these values: Product has not yet
+/// activated resolution while a Direct admission window is being founded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFinalResolutionV1 {
+    /// Canonical Resolution V5 account fixed at Product foundation.
+    pub account: [u8; 32],
+    /// Exact finalized Resolution V5 semantic identity.
+    pub semantic_id: [u8; 32],
+    /// Exact finalized hostile-byte data identity.
+    pub data_id: [u8; 32],
+}
+
+impl DirectFinalResolutionV1 {
+    fn validate(
+        self,
+        binding: DirectMarketBindingV1,
+        product_root: &MarketLifecycleRootV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        require_live(self.semantic_id)?;
+        require_live(self.data_id)?;
+        if self.account != binding.resolution_account
+            || product_root.binding().resolution_account_id.bytes() != self.account
+            || product_root.resolution_semantic_id().bytes() != self.semantic_id
+            || product_root.resolution_data_id().bytes() != self.data_id
+        {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        Ok(())
+    }
+}
+
+/// Exact Direct venue shape which can express only zero fees.
+///
+/// Revenue allocation remains owned by the canonical RevenuePolicyV1 digest;
+/// this type owns only the Direct rate and signed-envelope coordinates that
+/// are absent from b4 Reservations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectZeroFeeVenueV1 {
+    /// Existing canonical RevenuePolicyV1 identity selected by GenesisV2.
+    pub revenue_policy_id: [u8; 32],
+    /// Buyer fee rate in basis points; exactly zero.
+    pub buyer_fee_bps: u32,
+    /// Seller fee rate in basis points; exactly zero.
+    pub seller_fee_bps: u32,
+    /// Maximum signed buyer fee envelope; exactly zero.
+    pub max_buyer_fee_atoms: u64,
+    /// Maximum signed seller fee envelope; exactly zero.
+    pub max_seller_fee_atoms: u64,
+}
+
+impl DirectZeroFeeVenueV1 {
+    /// Construct the only admitted shape from the existing revenue owner.
+    pub fn canonical() -> Result<Self, DirectMarketErrorV1> {
+        let revenue_policy_id = clutch_batch_policy_identity::revenue_policy_v1::revenue_policy_digest(
+            &clutch_batch_policy_identity::revenue_policy_v1::REVENUE_POLICY_V1,
+        )
+        .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?
+        .0;
+        let value = Self {
+            revenue_policy_id,
+            buyer_fee_bps: 0,
+            seller_fee_bps: 0,
+            max_buyer_fee_atoms: 0,
+            max_seller_fee_atoms: 0,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Refuse every nonzero rate or fee envelope.
+    pub fn validate(self) -> Result<(), DirectMarketErrorV1> {
+        require_live(self.revenue_policy_id)?;
+        if self.buyer_fee_bps != 0
+            || self.seller_fee_bps != 0
+            || self.max_buyer_fee_atoms != 0
+            || self.max_seller_fee_atoms != 0
+        {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Canonical identity committed by the Direct root and every transcript.
+    pub fn semantic_id<B: DirectHashBackendV1>(
+        self,
+        backend: &B,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        self.validate()?;
+        let id = backend.sha256_parts(&[
+            DIRECT_ZERO_FEE_VENUE_DOMAIN_V1,
+            &self.revenue_policy_id,
+            &self.buyer_fee_bps.to_le_bytes(),
+            &self.seller_fee_bps.to_le_bytes(),
+            &self.max_buyer_fee_atoms.to_le_bytes(),
+            &self.max_seller_fee_atoms.to_le_bytes(),
+        ]);
+        require_live(id)?;
+        Ok(id)
+    }
+}
+
+/// Derive the pre-resolution Direct window identity from immutable owners.
+pub fn direct_epoch_semantics_id_v1<B: DirectHashBackendV1>(
+    binding: DirectMarketBindingV1,
+    schedule: DirectScheduleV1,
+    backend: &B,
+) -> Result<[u8; 32], DirectMarketErrorV1> {
+    schedule.validate()?;
+    let id = backend.sha256_parts(&[
+        DIRECT_EPOCH_SEMANTICS_DOMAIN_V1,
+        &binding.market_instance_id,
+        &binding.generation.to_le_bytes(),
+        &binding.direct_root_account,
+        &binding.direct_schedule_policy_id,
+        &binding.product_family_prestate_id,
+        &binding.family_admission_sequence.to_le_bytes(),
+        &binding.general_market_binding,
+        &binding.general_market_runtime,
+        &schedule.admission_opens_slot.to_le_bytes(),
+        &schedule.admission_closes_slot.to_le_bytes(),
+        &schedule.submission_closes_slot.to_le_bytes(),
+        &schedule.selection_deadline_slot.to_le_bytes(),
+        &schedule.settlement_deadline_slot.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(id)
+}
+
+/// Derive the only Direct V1 timing projection selected by the release.
+pub fn direct_schedule_policy_id_v1<B: DirectHashBackendV1>(
+    binding: DirectMarketBindingV1,
+    backend: &B,
+) -> Result<[u8; 32], DirectMarketErrorV1> {
+    let id = backend.sha256_parts(&[
+        DIRECT_SCHEDULE_POLICY_DOMAIN_V1,
+        &binding.candidate_lifecycle_policy_id,
+        &binding.candidate_liveness_policy_id,
+        &DIRECT_ADMISSION_SPAN_SLOTS_V1.to_le_bytes(),
+        &DIRECT_SUBMISSION_SPAN_SLOTS_V1.to_le_bytes(),
+        &DIRECT_VERIFICATION_SPAN_SLOTS_V1.to_le_bytes(),
+        &DIRECT_SETTLEMENT_SPAN_SLOTS_V1.to_le_bytes(),
+        &[MAX_DIRECT_CANDIDATES_V1],
+    ]);
+    require_live(id)?;
+    Ok(id)
 }
 
 /// Immutable half-open Direct schedule.
@@ -588,6 +759,33 @@ pub struct DirectScheduleV1 {
 }
 
 impl DirectScheduleV1 {
+    /// Stamp the bounded V1 schedule from Clock and authenticated candidate policy spans.
+    pub fn canonical_from_foundation_slot(
+        foundation_slot: u64,
+    ) -> Result<Self, DirectMarketErrorV1> {
+        let admission_closes_slot = foundation_slot
+            .checked_add(DIRECT_ADMISSION_SPAN_SLOTS_V1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let submission_closes_slot = admission_closes_slot
+            .checked_add(DIRECT_SUBMISSION_SPAN_SLOTS_V1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let selection_deadline_slot = submission_closes_slot
+            .checked_add(DIRECT_VERIFICATION_SPAN_SLOTS_V1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let settlement_deadline_slot = selection_deadline_slot
+            .checked_add(DIRECT_SETTLEMENT_SPAN_SLOTS_V1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let value = Self {
+            admission_opens_slot: foundation_slot,
+            admission_closes_slot,
+            submission_closes_slot,
+            selection_deadline_slot,
+            settlement_deadline_slot,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Require a strictly ordered finite schedule.
     pub fn validate(self) -> Result<(), DirectMarketErrorV1> {
         if self.admission_opens_slot >= self.admission_closes_slot
@@ -599,6 +797,15 @@ impl DirectScheduleV1 {
         } else {
             Ok(())
         }
+    }
+}
+
+impl DirectMarketBindingV1 {
+    /// One-based Direct occurrence coordinate used by Relation expiry facts.
+    pub fn direct_window_index(self) -> Result<u64, DirectMarketErrorV1> {
+        u64::from(self.family_admission_sequence)
+            .checked_add(1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)
     }
 }
 
@@ -785,13 +992,20 @@ impl DirectMarketRootV1 {
             &[self.binding.outcome_count], &self.binding.realm_id,
             &self.binding.collateral_profile_id, &self.binding.collateral_policy_id,
             &self.binding.collateral_release_id, &self.binding.resolution_account,
-            &self.binding.resolution_semantic_id, &self.binding.resolution_data_id,
-            &self.binding.product_root_account, &self.binding.founder_series_link_account,
+            &self.binding.direct_epoch_semantics_id, &self.binding.fee_policy_id,
+            &self.binding.direct_fee_shape_id,
+            &self.binding.candidate_lifecycle_policy_id,
+            &self.binding.candidate_liveness_policy_id,
+            &self.binding.direct_schedule_policy_id,
+            &self.binding.product_root_account, &self.binding.product_family_prestate_id,
+            &self.binding.family_admission_sequence.to_le_bytes(),
+            &self.binding.founder_series_link_account,
             &self.binding.founder_series_link_binding_id, &self.binding.compiler_bundle_v5_id,
             &self.binding.founder_series_plan_id,
             &self.binding.founder_series_ordinal.to_le_bytes(),
             &self.binding.direct_root_account,
-            &self.binding.action_replay_account, &self.binding.general_market_runtime,
+            &self.binding.action_replay_account, &self.binding.general_market_binding,
+            &self.binding.general_market_runtime,
             &self.binding.neutral_lamport_sink, &self.binding.relation_policy_id,
             &self.binding.price_policy_id, &self.binding.price_scale.to_le_bytes(),
             &self.schedule.admission_opens_slot.to_le_bytes(),
@@ -833,6 +1047,7 @@ impl DirectReplayPhaseV1 {
 pub struct DirectActionReplayV1 {
     market_instance_id: [u8; 32],
     generation: u64,
+    direct_epoch_semantics_id: [u8; 32],
     direct_root_account: [u8; 32],
     replay_account: [u8; 32],
     rent: DirectRentOwnerV1,
@@ -869,6 +1084,7 @@ impl DirectActionReplayV1 {
         root.validate()?;
         self.rent.validate()?;
         require_live(self.market_instance_id)?;
+        require_live(self.direct_epoch_semantics_id)?;
         require_live(self.direct_root_account)?;
         require_live(self.replay_account)?;
         require_live(self.action_transcript_id)?;
@@ -877,6 +1093,7 @@ impl DirectActionReplayV1 {
         if self.generation == 0 || self.next_action_sequence == 0
             || self.market_instance_id != binding.market_instance_id
             || self.generation != binding.generation
+            || self.direct_epoch_semantics_id != binding.direct_epoch_semantics_id
             || self.direct_root_account != binding.direct_root_account
             || self.replay_account != binding.action_replay_account
         {
@@ -914,6 +1131,7 @@ impl DirectActionReplayV1 {
         self.validate_against(root)?;
         let id = backend.sha256_parts(&[
             REPLAY_STATE_DOMAIN_V1, &self.market_instance_id, &self.generation.to_le_bytes(),
+            &self.direct_epoch_semantics_id,
             &self.direct_root_account, &self.replay_account, &self.rent.payer,
             &self.rent.principal_lamports.to_le_bytes(),
             &self.rent.donation_floor_lamports.to_le_bytes(), &[self.phase.byte()],
@@ -1322,14 +1540,15 @@ impl DirectRootReplayPostV1 {
 
 /// Default-deny SBF foundation authentication boundary.
 pub trait AuthenticatedDirectFoundationV1 {
-    /// Authenticate Product root, absent root/replay PDAs, funding, Realm
-    /// collateral, and exact Resolution V5 hostile bytes.
+    /// Authenticate Product root, policy spans, Clock, absent root/replay PDAs,
+    /// funding, and Realm collateral.
     fn authenticate_foundation(
         &self, _product_root: &MarketLifecycleRootV1,
         _founder_link: &SeriesMarketLinkV1,
         _compiler_bundle: &CompiledProductSeriesBundleV5,
         _binding: DirectMarketBindingV1,
-        _schedule: DirectScheduleV1, _root_rent: DirectRentOwnerV1,
+        _schedule: DirectScheduleV1, _foundation_slot: u64,
+        _root_rent: DirectRentOwnerV1,
         _action_replay_rent: DirectRentOwnerV1, _family_admission_sequence: u32,
     ) -> Result<(), DirectMarketErrorV1> {
         Err(DirectMarketErrorV1::UnauthenticatedAuthority)
@@ -1387,14 +1606,25 @@ pub fn prepare_direct_foundation_v1<
     founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
     binding: DirectMarketBindingV1,
-    schedule: DirectScheduleV1, root_rent: DirectRentOwnerV1,
+    schedule: DirectScheduleV1, foundation_slot: u64,
+    root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1, family_admission_sequence: u32, backend: &B,
 ) -> Result<DirectFoundationPlanV1, DirectMarketErrorV1> {
     binding.validate()?;
     schedule.validate()?;
+    if schedule != DirectScheduleV1::canonical_from_foundation_slot(foundation_slot)? {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
     root_rent.validate()?;
     action_replay_rent.validate()?;
-    if !matches!(product_root.phase(), MarketLifecyclePhaseV1::Founding | MarketLifecyclePhaseV1::Active) {
+    if root_rent.payer == binding.neutral_lamport_sink
+        || action_replay_rent.payer == binding.neutral_lamport_sink
+    {
+        return Err(DirectMarketErrorV1::IdentityAlias);
+    }
+    if product_root.phase() != MarketLifecyclePhaseV1::Active
+        || founder_link.phase() != SeriesMarketLinkPhaseV1::Active
+    {
         return Err(DirectMarketErrorV1::WrongPhase);
     }
     let founder_link_semantic_id = validate_product_join_v1(
@@ -1406,6 +1636,8 @@ pub fn prepare_direct_foundation_v1<
     )?;
     let product_binding = product_root.binding();
     let families = product_root.product_families();
+    let aggregator_prestate_id = families.semantic_id()
+        .map_err(|_| DirectMarketErrorV1::Product)?.content_id();
     let direct = families.family(MarketFamilyV1::Direct);
     if product_binding.market_instance_id.bytes() != binding.market_instance_id
         || product_binding.generation != binding.generation
@@ -1418,8 +1650,20 @@ pub fn prepare_direct_foundation_v1<
         || product_binding.price_measure_policy_id.bytes() != binding.price_policy_id
         || families.binding().family_root_id(MarketFamilyV1::Direct).bytes()
             != binding.direct_root_account
+        || binding.product_family_prestate_id != aggregator_prestate_id.bytes()
+        || binding.family_admission_sequence != family_admission_sequence
+        || families.family(MarketFamilyV1::General).counts().live == 0
         || !families.admits_new_child(MarketFamilyV1::Direct)
         || direct.counts().admitted != family_admission_sequence
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    let zero_fee = DirectZeroFeeVenueV1::canonical()?;
+    if binding.fee_policy_id != zero_fee.revenue_policy_id
+        || binding.direct_fee_shape_id != zero_fee.semantic_id(backend)?
+        || binding.direct_schedule_policy_id != direct_schedule_policy_id_v1(binding, backend)?
+        || binding.direct_epoch_semantics_id
+            != direct_epoch_semantics_id_v1(binding, schedule, backend)?
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
@@ -1429,23 +1673,28 @@ pub fn prepare_direct_foundation_v1<
         compiler_bundle,
         binding,
         schedule,
+        foundation_slot,
         root_rent,
         action_replay_rent,
         family_admission_sequence,
     )?;
-    let aggregator_prestate_id = families.semantic_id()
-        .map_err(|_| DirectMarketErrorV1::Product)?.content_id();
     let receipt_bytes = backend.sha256_parts(&[
         FOUNDATION_RECEIPT_DOMAIN_V1, &aggregator_prestate_id.bytes(),
         &binding.market_instance_id, &binding.generation.to_le_bytes(), &[binding.outcome_count],
         &binding.realm_id, &binding.collateral_profile_id, &binding.collateral_policy_id,
         &binding.collateral_release_id, &binding.resolution_account,
-        &binding.resolution_semantic_id, &binding.resolution_data_id,
-        &binding.product_root_account, &binding.founder_series_link_account,
+        &binding.direct_epoch_semantics_id, &binding.fee_policy_id,
+        &binding.direct_fee_shape_id,
+        &binding.candidate_lifecycle_policy_id, &binding.candidate_liveness_policy_id,
+        &binding.direct_schedule_policy_id,
+        &binding.product_root_account, &binding.product_family_prestate_id,
+        &binding.family_admission_sequence.to_le_bytes(),
+        &binding.founder_series_link_account,
         &binding.founder_series_link_binding_id, &founder_link_semantic_id,
         &binding.compiler_bundle_v5_id, &binding.founder_series_plan_id,
         &binding.founder_series_ordinal.to_le_bytes(), &binding.direct_root_account,
-        &binding.action_replay_account, &binding.general_market_runtime,
+        &binding.action_replay_account, &binding.general_market_binding,
+        &binding.general_market_runtime,
         &binding.neutral_lamport_sink, &binding.relation_policy_id,
         &binding.price_policy_id, &binding.price_scale.to_le_bytes(),
         &schedule.admission_opens_slot.to_le_bytes(),
@@ -1474,6 +1723,7 @@ pub fn prepare_direct_foundation_v1<
     };
     let replay = DirectActionReplayV1 {
         market_instance_id: binding.market_instance_id, generation: binding.generation,
+        direct_epoch_semantics_id: binding.direct_epoch_semantics_id,
         direct_root_account: binding.direct_root_account,
         replay_account: binding.action_replay_account, rent: action_replay_rent,
         phase: DirectReplayPhaseV1::Active, next_action_sequence: 1,
@@ -1505,6 +1755,7 @@ pub trait AuthenticatedDirectTerminalV1 {
         _replay_semantic_id: [u8; 32],
         _selection: &crate::selection_v1::DirectSelectionV1,
         _reservations: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
+        _final_resolution: DirectFinalResolutionV1,
         _retirement: &DirectRetirementTransferV1,
         _retirement_transfer_id: [u8; 32], _consumed_sequence: u64,
         _observed_slot: u64, _family_terminal_sequence: u32,
@@ -1555,6 +1806,8 @@ pub struct DirectFamilyTerminalPlanV1 {
     pub retirement: DirectRetirementTransferV1,
     /// Identity of the complete transfer vector.
     pub retirement_transfer_id: [u8; 32],
+    /// Exact finalized Resolution V5 joined only at family retirement.
+    pub final_resolution: DirectFinalResolutionV1,
     /// Terminal replay/receipt successor used to derive the Product receipt
     /// before the owning replay account is closed in the same transition.
     pub replay_post: DirectActionReplayV1,
@@ -1579,6 +1832,7 @@ pub fn prepare_direct_family_terminal_v1<
     state: &DirectRootReplayPostV1,
     selection: &crate::selection_v1::DirectSelectionV1,
     reservations: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
+    final_resolution: DirectFinalResolutionV1,
     retirement: &DirectRetirementTransferV1, consumed_sequence: u64,
     observed_slot: u64, family_terminal_sequence: u32, backend: &B,
 ) -> Result<DirectFamilyTerminalPlanV1, DirectMarketErrorV1> {
@@ -1591,6 +1845,7 @@ pub fn prepare_direct_family_terminal_v1<
         return Err(DirectMarketErrorV1::WrongPhase);
     }
     let binding = state.root.binding;
+    final_resolution.validate(binding, product_root)?;
     let founder_link_semantic_id = validate_product_join_v1(
         product_root,
         founder_link,
@@ -1665,6 +1920,7 @@ pub fn prepare_direct_family_terminal_v1<
         replay_pre_semantic_id,
         selection,
         &ordered_reservations,
+        final_resolution,
         retirement,
         retirement_transfer_id,
         consumed_sequence,
@@ -1681,6 +1937,7 @@ pub fn prepare_direct_family_terminal_v1<
         &binding.direct_root_account, &binding.action_replay_account, &root_semantic_id,
         &binding.founder_series_link_account, &binding.founder_series_link_binding_id,
         &founder_link_semantic_id, &binding.compiler_bundle_v5_id,
+        &final_resolution.account, &final_resolution.semantic_id, &final_resolution.data_id,
         &selection_semantic_id, &reservation_ids[0], &reservation_ids[1],
         &replay_pre_semantic_id, &replay_with_action.action_transcript_id,
         &state.replay.economic_terminal_receipt_id, &retirement_transfer_id,
@@ -1695,7 +1952,7 @@ pub fn prepare_direct_family_terminal_v1<
     let terminal_receipt_id = ContentId::from_bytes(terminal_bytes);
     Ok(DirectFamilyTerminalPlanV1 {
         root_semantic_id, replay_pre_semantic_id, retirement: *retirement,
-        retirement_transfer_id,
+        retirement_transfer_id, final_resolution,
         replay_post, terminal_receipt_id,
         product_authority: DirectProductTerminalAuthorityV1 {
             aggregator_prestate_id,
