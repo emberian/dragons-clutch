@@ -315,7 +315,6 @@ fn checked_close_balances(
     require(
         source.key != payer.key
             && source.key != sink.key
-            && payer.key != sink.key
             && rent.payer == id(payer.key),
         ClutchError::AccountAlias,
     )?;
@@ -328,6 +327,14 @@ fn checked_close_balances(
         .lamports()
         .checked_sub(rent.refundable_principal)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    if payer.key == sink.key {
+        let combined = payer
+            .lamports()
+            .checked_add(rent.refundable_principal)
+            .and_then(|value| value.checked_add(donation))
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        return Ok((combined, combined));
+    }
     let payer_after = payer
         .lamports()
         .checked_add(rent.refundable_principal)
@@ -393,7 +400,11 @@ fn apply_child_close(
     borrow_mut_data(root_account)?.copy_from_slice(root_output);
     close_program_account(child)?;
     set_lamports(payer, payer_after)?;
-    set_lamports(sink, sink_after)
+    if payer.key == sink.key {
+        require(payer_after == sink_after, ClutchError::MismatchedState)
+    } else {
+        set_lamports(sink, sink_after)
+    }
 }
 
 fn prepare_child_frame(
@@ -686,14 +697,25 @@ fn close_fee_finalization(
     selector: SettlementChildRetirementPayloadV1,
 ) -> Outcome<()> {
     require_count(accounts, FEE_FINALIZATION_CLOSE_ACCOUNT_COUNT_V1)?;
+    let state = [
+        &accounts[IX_ROOT],
+        &accounts[IX_CHILD],
+        &accounts[IX_BINDING],
+        &accounts[IX_FEE_ACCUMULATOR],
+    ];
     let mut left = 0usize;
-    while left < accounts.len() {
+    while left < state.len() {
         let mut right = left + 1;
-        while right < accounts.len() {
-            require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
+        while right < state.len() {
+            require(state[left].key != state[right].key, ClutchError::AccountAlias)?;
             right += 1;
         }
         left += 1;
+    }
+    for destination in [&accounts[IX_PAYER], &accounts[IX_SINK]] {
+        for account in state {
+            require(destination.key != account.key, ClutchError::AccountAlias)?;
+        }
     }
     require(selector.child == id(accounts[IX_CHILD].key), ClutchError::MismatchedState)?;
     require_program_state(
@@ -846,7 +868,11 @@ fn close_fee_finalization(
     borrow_mut_data(&accounts[IX_FEE_ACCUMULATOR])?.copy_from_slice(&accumulator_output);
     close_program_account(&accounts[IX_CHILD])?;
     set_lamports(&accounts[IX_PAYER], payer_after)?;
-    set_lamports(&accounts[IX_SINK], sink_after)
+    if accounts[IX_PAYER].key == accounts[IX_SINK].key {
+        require(payer_after == sink_after, ClutchError::MismatchedState)
+    } else {
+        set_lamports(&accounts[IX_SINK], sink_after)
+    }
 }
 
 #[inline(never)]
