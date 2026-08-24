@@ -3363,9 +3363,18 @@ pub(crate) fn stage_current_product_series_retirement_v5(
     require(
         root.key != link.key
             && root.key != funding_account.key
-            && link.key != funding_account.key
-            && funding.account() == *funding_account.key,
+            && link.key != funding_account.key,
         ClutchError::AccountAlias,
+    )?;
+    require(
+        registry.series_registry_account() == *frame.registry.key
+            && funding.account() == *funding_account.key
+            && source
+                .replay_link_retirement
+                .as_ref()
+                .map(|retirement| retirement.replay().account())
+                == Some(*frame.lifecycle_replay.key),
+        ClutchError::MismatchedState,
     )?;
     let retiring = begin_current_product_market_retirement_v5(
         program_id,
