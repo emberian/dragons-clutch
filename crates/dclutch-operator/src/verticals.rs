@@ -29,12 +29,19 @@ use dclutch_series_contract::{
     SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1, SeriesRootV1,
     VacantAccountFactsV1, plan_instantiate_next_v1,
 };
+use dclutch_source_contract::{
+    RetireInstructionV1, SourceAccountPrivilegeV1, SourceActionV1, SourceFrameKindV1,
+    SourceResolutionStateV1, validate_source_frame_v1,
+};
 use solana_program::{
+    account_info::AccountInfo,
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
+    sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{native_loader, system_program};
+use solana_sdk_ids::{native_loader, system_program, sysvar};
 
 use crate::{
     Finality, Observation, ObservedAccount, authenticate_rent_credit,
@@ -378,6 +385,192 @@ pub struct DirectCloseReplayRootReport {
     pub observation: Observation,
     /// Immutable rent-credit beneficiary selected from the replay root.
     pub rent_beneficiary: Pubkey,
+}
+
+/// Finalized state required to retire one terminal Source-resolution child.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRetireResolutionState {
+    /// Terminal Source-resolution state to close.
+    pub resolution_state: ObservedAccount,
+    /// Canonical Market which owns the direct-child count.
+    pub market: ObservedAccount,
+    /// Permanent credit selected by the Source state's immutable beneficiary.
+    pub rent_credit: ObservedAccount,
+    /// Canonical Clock sysvar observed with the terminal state.
+    pub clock_sysvar: ObservedAccount,
+}
+
+/// Chain-derived Source-resolution retirement instruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRetireResolutionReport {
+    /// Exact unsigned four-account Source V1 instruction.
+    pub instruction: Instruction,
+    /// Finalized observation selecting terminal timing and child replay state.
+    pub observation: Observation,
+    /// Exact Market child count guarded in the emitted wire.
+    pub expected_market_child_count: u64,
+}
+
+/// Construct the exact Source V1 terminal-resolution retirement frame.
+///
+/// The expected generation and child count are copied only from decoded state
+/// and Market state. The terminal-time check runs against exact Clock sysvar
+/// bytes, never an operator wall clock.
+pub fn build_source_retire_resolution_v1(
+    program_id: Pubkey,
+    state: &SourceRetireResolutionState,
+) -> Result<SourceRetireResolutionReport, VerticalError> {
+    let observation = observation(&[
+        &state.resolution_state,
+        &state.market,
+        &state.rent_credit,
+        &state.clock_sysvar,
+    ])?;
+    let clock = decode_clock(&state.clock_sysvar)?;
+    let source = decode_owned(
+        &state.resolution_state,
+        program_id,
+        SourceResolutionStateV1::decode,
+    )?;
+    if source.to_bytes().as_slice() != state.resolution_state.data.as_slice() {
+        return Err(VerticalError::InvalidState);
+    }
+    let seeds = source.pda_seeds();
+    let (expected_state, bump) = Pubkey::find_program_address(
+        &[seeds.domain(), &seeds.market(), &seeds.generation_le()],
+        &program_id,
+    );
+    if state.resolution_state.key != expected_state || seeds.bump() != bump {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let market = source_market(program_id, &state.market)?;
+    if source.market() != state.market.key.to_bytes()
+        || source.generation() != market.generation
+        || source.material_id().to_bytes() != market.resolution_policy_id
+        || market.phase == Phase::Retired
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let beneficiary = Pubkey::new_from_array(source.rent_beneficiary());
+    authenticate_rent_credit(program_id, &state.rent_credit, beneficiary)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    let mut transition = source;
+    transition
+        .retire(
+            source.generation(),
+            clock.unix_timestamp,
+            market.child_count,
+            market.child_count,
+        )
+        .map_err(|_| VerticalError::InvalidPhase)?;
+    let wire = RetireInstructionV1::new(
+        SourceActionV1::RetireResolution,
+        source.generation(),
+        market.child_count,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    let frame = [
+        SourceAccountPrivilegeV1 {
+            key: state.resolution_state.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+            is_executable: false,
+        },
+        SourceAccountPrivilegeV1 {
+            key: state.market.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+            is_executable: false,
+        },
+        SourceAccountPrivilegeV1 {
+            key: state.rent_credit.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+            is_executable: false,
+        },
+        SourceAccountPrivilegeV1 {
+            key: state.clock_sysvar.key.to_bytes(),
+            is_signer: false,
+            is_writable: false,
+            is_executable: false,
+        },
+    ];
+    validate_source_frame_v1(SourceFrameKindV1::RetireResolution, &frame)
+        .map_err(|_| VerticalError::InvalidState)?;
+    Ok(SourceRetireResolutionReport {
+        instruction: Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(state.resolution_state.key, false),
+                AccountMeta::new(state.market.key, false),
+                AccountMeta::new(state.rent_credit.key, false),
+                AccountMeta::new_readonly(state.clock_sysvar.key, false),
+            ],
+            data: wire.to_bytes().to_vec(),
+        },
+        observation,
+        expected_market_child_count: market.child_count,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct SourceMarketFacts {
+    generation: u64,
+    phase: Phase,
+    child_count: u64,
+    resolution_policy_id: [u8; 32],
+}
+
+fn source_market(
+    program_id: Pubkey,
+    account: &ObservedAccount,
+) -> Result<SourceMarketFacts, VerticalError> {
+    match decode_market_outcome_count(&account.data).map_err(|_| VerticalError::InvalidState)? {
+        2 => source_market_width::<2>(program_id, account),
+        3 => source_market_width::<3>(program_id, account),
+        4 => source_market_width::<4>(program_id, account),
+        5 => source_market_width::<5>(program_id, account),
+        6 => source_market_width::<6>(program_id, account),
+        7 => source_market_width::<7>(program_id, account),
+        8 => source_market_width::<8>(program_id, account),
+        9 => source_market_width::<9>(program_id, account),
+        10 => source_market_width::<10>(program_id, account),
+        11 => source_market_width::<11>(program_id, account),
+        12 => source_market_width::<12>(program_id, account),
+        13 => source_market_width::<13>(program_id, account),
+        14 => source_market_width::<14>(program_id, account),
+        15 => source_market_width::<15>(program_id, account),
+        16 => source_market_width::<16>(program_id, account),
+        _ => Err(VerticalError::InvalidState),
+    }
+}
+
+fn source_market_width<const N: usize>(
+    program_id: Pubkey,
+    account: &ObservedAccount,
+) -> Result<SourceMarketFacts, VerticalError> {
+    let market: CategoricalMarketV1<N> =
+        decode_owned(account, program_id, CategoricalMarketV1::decode)?;
+    let encoded_len =
+        CategoricalMarketV1::<N>::encoded_len().map_err(|_| VerticalError::InvalidState)?;
+    let mut canonical = vec![0; encoded_len];
+    market
+        .encode(&mut canonical)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if account.data != canonical {
+        return Err(VerticalError::InvalidState);
+    }
+    let identity = hash(&market.root().identity().to_bytes()).to_bytes();
+    let (expected, _) = Pubkey::find_program_address(&[crate::MARKET_SEED, &identity], &program_id);
+    if account.key != expected {
+        return Err(VerticalError::PdaMismatch);
+    }
+    Ok(SourceMarketFacts {
+        generation: market.root().identity().generation(),
+        phase: market.root().phase(),
+        child_count: market.root().outstanding_children(),
+        resolution_policy_id: market.root().identity().resolution_policy_id().to_bytes(),
+    })
 }
 
 /// Construct the exact Direct V2 replay-root-close frame.
@@ -783,6 +976,28 @@ fn authenticate_system_program(account: &ObservedAccount) -> Result<(), Vertical
     }
 }
 
+fn decode_clock(account: &ObservedAccount) -> Result<Clock, VerticalError> {
+    if account.key != sysvar::clock::ID
+        || account.owner != sysvar::ID
+        || account.executable
+        || account.data.len() != Clock::size_of()
+    {
+        return Err(VerticalError::InvalidState);
+    }
+    let mut lamports = account.lamports;
+    let mut data = account.data.clone();
+    let info = AccountInfo::new(
+        &account.key,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &account.owner,
+        false,
+    );
+    Clock::from_account_info(&info).map_err(|_| VerticalError::InvalidState)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,5 +1037,19 @@ mod tests {
         let root =
             MakerReplayRootV2::new([1; 32], 0, [2; 32], [3; 32], 7).expect("canonical replay root");
         assert!(prepare_replay_root_close_v2(root, MarketPhaseV2::Retiring).is_err());
+    }
+
+    #[test]
+    fn source_retirement_refuses_nonterminal_state_and_manual_clock() {
+        let material = dclutch_source_contract::ContentId::new([9; 32])
+            .expect("nonzero source material identity");
+        let mut primary = SourceResolutionStateV1::fresh([1; 32], 0, material, [2; 32], 7, 0, 0)
+            .expect("fresh source state")
+            .state();
+        assert!(primary.retire(0, 1, 1, 1).is_err());
+        assert_eq!(
+            decode_clock(&account(9, Finality::Finalized)),
+            Err(VerticalError::InvalidState)
+        );
     }
 }
