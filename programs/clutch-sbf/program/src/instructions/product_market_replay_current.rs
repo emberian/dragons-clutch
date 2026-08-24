@@ -23,6 +23,7 @@ use crate::instructions::product_series_current::AuthenticatedRegistryCapability
 use crate::seeds;
 use clutch_product_series::{
     derive_initial_market_generation_v2, AuthenticatedMarketLifecycleGenerationAuthorityV2,
+    AuthenticatedMarketLifecycleReplayActivationAuthorityV2,
     AuthenticatedMarketLifecycleReplayFoundationAuthorityV2, ContentId,
     MarketFoundationScheduleV4, MarketFoundationSlotV4, MarketInstanceV2Id,
     MarketLifecycleGenerationBindingV2, MarketLifecycleReplayPhaseV2,
@@ -35,6 +36,9 @@ use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+use super::product_market_activation_v3_current::
+    AuthenticatedCurrentProductMarketActivationV3;
 
 const PRODUCT_MARKET_REPLAY_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-market-replay-account-authentication/v2\0";
@@ -111,6 +115,42 @@ impl AuthenticatedMarketLifecycleGenerationAuthorityV2 for ExactGenerationInitia
 struct ExactFoundationSettlementV2 {
     state_id: ContentId,
     settlement_receipt_id: ContentId,
+}
+
+struct ExactMarketActivationV2 {
+    replay_semantic_before_id: ContentId,
+    root_semantic_id: ContentId,
+    root_activation_receipt_id: ContentId,
+}
+
+impl AuthenticatedMarketLifecycleReplayActivationAuthorityV2 for ExactMarketActivationV2 {
+    fn authenticate_market_lifecycle_replay_activation_v2(
+        &self,
+        state: &MarketLifecycleReplayV2,
+        root: &clutch_product_series::MarketLifecycleRootV3,
+        root_activation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if state.id()?.content_id() != self.replay_semantic_before_id
+            || root.semantic_id()? != self.root_semantic_id
+            || root_activation_receipt_id != self.root_activation_receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Final instruction-local lineage after RootV3, LinkV3, and the permanent
+/// market-only replay all persist the same activation.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentProductMarketReplayActivationV3<'root, 'link> {
+    id: ContentId,
+    market_activation: AuthenticatedCurrentProductMarketActivationV3<'root, 'link>,
+    replay_after: AuthenticatedMarketLifecycleReplayV2,
+}
+
+impl<'root, 'link> AuthenticatedCurrentProductMarketReplayActivationV3<'root, 'link> {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
 }
 
 impl AuthenticatedMarketLifecycleReplayFoundationAuthorityV2 for ExactFoundationSettlementV2 {
@@ -749,6 +789,93 @@ pub(crate) fn settle_current_product_market_replay_foundation_v2<'a>(
             binding.market_family_capability_authentication_id,
         foundation_schedule_id: binding.foundation_schedule_id.content_id(),
         foundation_graph_id: binding.foundation_account_graph_id.content_id(),
+    })
+}
+
+/// Consume Product's exact RootV3/LinkV3 activation and persist the matching
+/// permanent replay activation before the atomic action-1 outer returns.
+#[inline(never)]
+pub(crate) fn activate_current_product_market_replay_v3<'root, 'link>(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'_>,
+    replay_before: AuthenticatedMarketLifecycleReplayV2,
+    market_activation: AuthenticatedCurrentProductMarketActivationV3<'root, 'link>,
+) -> Outcome<AuthenticatedCurrentProductMarketReplayActivationV3<'root, 'link>> {
+    let root = market_activation.root();
+    let market_instance_id = root.binding().market_instance_id;
+    let replay_semantic_before_id = replay_before
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        replay_before.is_writable()
+            && replay_before.account() == *replay_account.key
+            && replay_before.state().phase() == MarketLifecycleReplayPhaseV2::FoundationSettled
+            && replay_before.state().generation() == root.binding().generation
+            && replay_before.state().binding().market_instance_id == market_instance_id,
+        ClutchError::MismatchedState,
+    )?;
+    let successor = replay_before
+        .state()
+        .activate(
+            &ExactMarketActivationV2 {
+                replay_semantic_before_id,
+                root_semantic_id: root.semantic_id(),
+                root_activation_receipt_id: market_activation.id(),
+            },
+            root.state(),
+            market_activation.id(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let successor_account = MarketLifecycleReplayAccountV2 {
+        state: successor,
+        permanent_rent_principal_lamports:
+            replay_before.value().permanent_rent_principal_lamports,
+        stored_bump: replay_before.value().stored_bump,
+    };
+    {
+        let mut data = replay_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        successor_account.encode(&mut data)?;
+    }
+    let replay_after = authenticate_market_lifecycle_replay_v2(
+        program_id,
+        replay_account,
+        market_instance_id,
+        true,
+    )?;
+    require(
+        replay_after.value() == &successor_account
+            && replay_after.observed_lamports() == replay_before.observed_lamports()
+            && replay_after.authentication_id() != replay_before.authentication_id()
+            && replay_after.data_id() != replay_before.data_id()
+            && replay_after.state().phase() == MarketLifecycleReplayPhaseV2::Active
+            && replay_after.state().root_binding_id() == root.binding_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let replay_semantic_after_id = replay_after
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let id = hashv(&[
+        b"dragons-clutch/sbf/product-market-replay-activation/v3\0",
+        program_id.as_ref(),
+        replay_account.key.as_ref(),
+        &replay_before.authentication_id().bytes(),
+        &replay_after.authentication_id().bytes(),
+        &replay_semantic_before_id.bytes(),
+        &replay_semantic_after_id.bytes(),
+        &market_activation.id().bytes(),
+        &root.authentication_id().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedCurrentProductMarketReplayActivationV3 {
+        id,
+        market_activation,
+        replay_after,
     })
 }
 

@@ -919,7 +919,7 @@ fn authenticate_market_graph(
         || account_data_id(
             GENERAL_BINDING_DATA_DOMAIN_V4,
             market.market_binding_v4,
-        ) != current.general_market_binding_v4_data_id
+        ) != current.general_market_binding_v5_data_id
         || account_data_id(
             GENERAL_RUNTIME_DATA_DOMAIN_V3,
             market.market_runtime_v3,

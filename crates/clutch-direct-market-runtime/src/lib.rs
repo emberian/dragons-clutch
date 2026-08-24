@@ -726,12 +726,28 @@ pub fn direct_schedule_policy_id_v1<B: DirectHashBackendV1>(
     binding: DirectMarketBindingV1,
     backend: &B,
 ) -> Result<[u8; 32], DirectMarketErrorV1> {
+    direct_schedule_policy_id_v2(
+        binding.candidate_lifecycle_policy_id,
+        binding.candidate_liveness_policy_id,
+        binding.candidate_liveness,
+        backend,
+    )
+}
+
+/// Derive the current Direct timing-policy identity without projecting a
+/// current Product/General authority through the historical V1 binding.
+pub fn direct_schedule_policy_id_v2<B: DirectHashBackendV1>(
+    candidate_lifecycle_policy_id: [u8; 32],
+    candidate_liveness_policy_id: [u8; 32],
+    candidate_liveness: DirectCandidateLivenessBindingV1,
+    backend: &B,
+) -> Result<[u8; 32], DirectMarketErrorV1> {
     let id = backend.sha256_parts(&[
         DIRECT_SCHEDULE_POLICY_DOMAIN_V1,
-        &binding.candidate_lifecycle_policy_id,
-        &binding.candidate_liveness_policy_id,
-        &binding.candidate_liveness.work_schedule_id,
-        &binding.candidate_liveness.allocation_receipt_id,
+        &candidate_lifecycle_policy_id,
+        &candidate_liveness_policy_id,
+        &candidate_liveness.work_schedule_id,
+        &candidate_liveness.allocation_receipt_id,
         &DIRECT_ADMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_SUBMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_VERIFICATION_SPAN_SLOTS_V1.to_le_bytes(),

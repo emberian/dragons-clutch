@@ -15,8 +15,8 @@ use clutch_general_v2_contract::{
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_product_series::{
-    ContentId, MarketInstancePreimageV2, MarketLifecyclePhaseV3, SeriesMarketLinkPhaseV3,
-    SeriesFundingPhaseV5, SeriesPlanV5Id,
+    ContentId, MarketFoundationScheduleV4, MarketInstancePreimageV2,
+    MarketLifecyclePhaseV3, SeriesMarketLinkPhaseV3, SeriesFundingPhaseV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
@@ -126,6 +126,7 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     compiler_bundle_account: Pubkey,
     compiler_bundle_id: ContentId,
     collateral_profile_id: ContentId,
+    foundation_schedule: MarketFoundationScheduleV4,
     revenue: AuthenticatedRevenuePolicyRecordV2,
     treasury: RevenueMarketTreasuryDerivationV1,
 }
@@ -200,6 +201,9 @@ impl AuthenticatedGeneralMarketCurrentV5 {
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
     pub(crate) const fn collateral_profile_id(&self) -> ContentId {
         self.collateral_profile_id
+    }
+    pub(crate) const fn foundation_schedule(&self) -> MarketFoundationScheduleV4 {
+        self.foundation_schedule
     }
     pub(crate) const fn revenue(&self) -> AuthenticatedRevenuePolicyRecordV2 { self.revenue }
     pub(crate) const fn treasury(&self) -> RevenueMarketTreasuryDerivationV1 { self.treasury }
@@ -312,6 +316,24 @@ pub(crate) fn authenticate_general_market_current_v5(
 /// this authentication boundary; the exact writable privilege is only
 /// admitted so the returned receipt can precede Product terminalization.
 pub(crate) fn authenticate_general_market_current_v5_for_terminal(
+    program_id: &Pubkey,
+    frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
+    root_output: &mut MarketLifecycleRootAccountV3,
+    link_output: &mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    authenticate_general_market_current_v5_with_product_access(
+        program_id,
+        frame,
+        root_output,
+        link_output,
+        true,
+    )
+}
+
+/// Same exact writable Product-state join for Direct's atomic family and
+/// founder-Link activation. It remains separately named so the action-1
+/// account contract cannot be confused with terminal mutation authority.
+pub(crate) fn authenticate_general_market_current_for_product_activation_v5(
     program_id: &Pubkey,
     frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
     root_output: &mut MarketLifecycleRootAccountV3,
@@ -797,6 +819,7 @@ fn authenticate_general_market_current_v5_with_product_access(
         compiler_bundle_account,
         compiler_bundle_id: bundle_id,
         collateral_profile_id: registry_collateral.profile_id,
+        foundation_schedule: artifacts.quote().foundation,
         revenue,
         treasury,
     })
