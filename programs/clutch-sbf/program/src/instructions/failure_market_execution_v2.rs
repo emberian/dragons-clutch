@@ -87,6 +87,18 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     pub(crate) const fn quote(&self) -> FailureMarketRecoveryQuoteAdmissionReceiptV1 {
         self.quote
     }
+
+    /// Bind the wire replay sequence to the next exact mutable Failure-runtime
+    /// transition. State-specific owners still enforce their finer ordinals.
+    pub(crate) fn require_next_sequence(&self, sequence: u64) -> Outcome<()> {
+        let expected = self
+            .runtime
+            .state()
+            .transition_sequence()
+            .checked_add(1)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(sequence == expected, ClutchError::Replay)
+    }
 }
 
 /// Current immutable Product bodies and central work profile admitted for a
