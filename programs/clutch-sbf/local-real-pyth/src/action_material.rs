@@ -53,6 +53,7 @@ use clutch_structured_claim::{ClaimVector, DeploymentBinding};
 use clutch_structured_claim_adapter::{
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
     current_structured_account_meta_v1, current_structured_action_contract_v1,
+    current_structured_alias_allowed_v1,
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
     STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1,
@@ -260,7 +261,14 @@ impl<'release> StructuredOperatorReleaseSetV1<'release> {
             StructuredClaimActionV1::RetireDescriptor,
         ] {
             let coordinate = structured_coordinate(action);
-            if wrapper.enabled_intents.binary_search(&coordinate).is_err() {
+            if !structured_release_intents_joined_v1(
+                [
+                    wrapper.enabled_intents.as_slice(),
+                    base.enabled_intents.as_slice(),
+                    token_2022.enabled_intents.as_slice(),
+                ],
+                coordinate,
+            ) {
                 return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
             }
         }
@@ -271,6 +279,15 @@ impl<'release> StructuredOperatorReleaseSetV1<'release> {
             collateral,
         })
     }
+}
+
+fn structured_release_intents_joined_v1(
+    releases: [&[CanonicalIntentCoordinate]; 3],
+    coordinate: CanonicalIntentCoordinate,
+) -> bool {
+    releases
+        .iter()
+        .all(|intents| intents.binary_search(&coordinate).is_ok())
 }
 
 /// One role account reacquired from finalized chain state. An absence can only
@@ -1083,13 +1100,13 @@ fn validate_structured_account_aliases_v1(
     accounts: &[StructuredChainAccountV1<'_>],
     action: StructuredClaimActionV1,
 ) -> Result<()> {
-    let (collateral_program, collateral_data, token_program, token_data) = match action {
-        StructuredClaimActionV1::CreateDescriptor => (7, 8, 19, 20),
+    let (collateral_program, token_program) = match action {
+        StructuredClaimActionV1::CreateDescriptor => (7, 19),
         StructuredClaimActionV1::WrapFull
         | StructuredClaimActionV1::UnwrapFull
-        | StructuredClaimActionV1::RedeemTerminal => (4, 5, 18, 19),
+        | StructuredClaimActionV1::RedeemTerminal => (4, 18),
         StructuredClaimActionV1::CompactDonation
-        | StructuredClaimActionV1::RetireDescriptor => (4, 5, 15, 16),
+        | StructuredClaimActionV1::RetireDescriptor => (4, 15),
     };
     let same_token_release =
         accounts[collateral_program].address == accounts[token_program].address;
@@ -1097,15 +1114,8 @@ fn validate_structured_account_aliases_v1(
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let permitted_release_alias = structured_release_alias_is_permitted_v1(
-                left,
-                right,
-                collateral_program,
-                collateral_data,
-                token_program,
-                token_data,
-                same_token_release,
-            );
+            let permitted_release_alias = same_token_release
+                && current_structured_alias_allowed_v1(action, left, right);
             if accounts[left].address == accounts[right].address && !permitted_release_alias {
                 return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
             }
@@ -1114,21 +1124,6 @@ fn validate_structured_account_aliases_v1(
         left += 1;
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-const fn structured_release_alias_is_permitted_v1(
-    left: usize,
-    right: usize,
-    collateral_program: usize,
-    collateral_data: usize,
-    token_program: usize,
-    token_data: usize,
-    same_token_release: bool,
-) -> bool {
-    same_token_release
-        && ((left == collateral_program && right == token_program)
-            || (left == collateral_data && right == token_data))
 }
 
 fn derive_structured_current_mutation_v1(
@@ -3589,18 +3584,25 @@ mod tests {
     }
 
     #[test]
-    fn structured_alias_boundary_admits_only_one_identical_token_release() {
-        assert!(structured_release_alias_is_permitted_v1(
-            4, 18, 4, 5, 18, 19, true,
+    fn structured_coordinate_requires_wrapper_base_and_token_release_admission() {
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: STRUCTURED_CLAIM_FAMILY_TAG,
+            family_version: STRUCTURED_CLAIM_FAMILY_VERSION,
+            local_action: StructuredClaimActionV1::WrapFull.tag(),
+        };
+        let present = [coordinate];
+        let absent = [];
+        assert!(structured_release_intents_joined_v1(
+            [&present, &present, &present],
+            coordinate,
         ));
-        assert!(structured_release_alias_is_permitted_v1(
-            5, 19, 4, 5, 18, 19, true,
+        assert!(!structured_release_intents_joined_v1(
+            [&present, &absent, &present],
+            coordinate,
         ));
-        assert!(!structured_release_alias_is_permitted_v1(
-            5, 19, 4, 5, 18, 19, false,
-        ));
-        assert!(!structured_release_alias_is_permitted_v1(
-            4, 19, 4, 5, 18, 19, true,
+        assert!(!structured_release_intents_joined_v1(
+            [&present, &present, &absent],
+            coordinate,
         ));
     }
 
