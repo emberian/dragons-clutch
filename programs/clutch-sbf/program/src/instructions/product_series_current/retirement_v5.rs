@@ -201,6 +201,8 @@ pub(crate) struct AuthenticatedProductDirectFamilyPreterminalV5 {
     root_binding_id: ContentId,
     root_authentication_id: ContentId,
     root_semantic_id: ContentId,
+    series_link_account: Pubkey,
+    series_link_binding_id: ContentId,
     direct_root_account_id: ContentId,
     family_prestate_id: ContentId,
     family_terminal_sequence: u32,
@@ -224,6 +226,8 @@ impl AuthenticatedProductDirectFamilyPreterminalV3
         product_root_account: ContentId,
         product_market_binding_id: ContentId,
         current_product_authority_id: ContentId,
+        series_link_account: ContentId,
+        series_link_binding_id: ContentId,
         direct_root_account: ContentId,
         product_family_prestate_id: ContentId,
         family_terminal_sequence: u32,
@@ -237,6 +241,8 @@ impl AuthenticatedProductDirectFamilyPreterminalV3
                 && !current_product_authority_id.is_zero()
                 && current_product_authority_id != product_root_account
                 && current_product_authority_id != product_market_binding_id
+                && series_link_account == account_id(self.series_link_account)
+                && series_link_binding_id == self.series_link_binding_id
                 && current_product_authority_id != direct_root_account
                 && current_product_authority_id != product_family_prestate_id
                 && direct_root_account == self.direct_root_account_id
@@ -254,7 +260,9 @@ impl AuthenticatedProductDirectFamilyPreterminalV3
 pub(crate) fn authenticate_product_direct_family_preterminal_v5(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedProductDirectFamilyPreterminalV5> {
+    require(root_account.key != link_account.key, ClutchError::AccountAlias)?;
     let mut observed = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     {
         let data = root_account
@@ -286,8 +294,23 @@ pub(crate) fn authenticate_product_direct_family_preterminal_v5(
         .binding()
         .family_root_id(MarketFamilyV1::Direct);
     let root_binding_id = root.binding_id();
+    let (series_plan_id, ordinal) = observe_link_coordinate_v3(link_account)?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        generation,
+        *root_account.key,
+        false,
+        &mut link_value,
+    )?;
     require(
         root.state().phase() == MarketLifecyclePhaseV3::Active
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+            && link.binding().market_binding_id == root_binding_id
             && family.counts().live != 0
             && family.counts().terminal < family.counts().admitted
             && !direct_root_account_id.is_zero(),
@@ -301,6 +324,12 @@ pub(crate) fn authenticate_product_direct_family_preterminal_v5(
         &root.data_id().bytes(),
         &root.authentication_id().bytes(),
         &root.semantic_id().bytes(),
+        link_account.key.as_ref(),
+        &link.binding_id().bytes(),
+        &link.data_id().bytes(),
+        &link.authentication_id().bytes(),
+        &link.semantic_id().bytes(),
+        &link.state().transition_sequence().to_le_bytes(),
         &family_prestate_id.bytes(),
         &direct_root_account_id.bytes(),
         &family.counts().terminal.to_le_bytes(),
@@ -314,6 +343,8 @@ pub(crate) fn authenticate_product_direct_family_preterminal_v5(
         root_binding_id,
         root_authentication_id: root.authentication_id(),
         root_semantic_id: root.semantic_id(),
+        series_link_account: *link_account.key,
+        series_link_binding_id: link.binding_id(),
         direct_root_account_id,
         family_prestate_id,
         family_terminal_sequence: family.counts().terminal,
@@ -335,6 +366,11 @@ pub(crate) struct AuthenticatedProductDirectFamilyTerminalV5 {
     root_semantic_after_id: ContentId,
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
+    series_link_account: Pubkey,
+    series_link_data_id: ContentId,
+    series_link_authentication_id: ContentId,
+    series_link_semantic_id: SeriesMarketLinkV3Id,
+    series_link_transition_sequence: u64,
 }
 
 impl AuthenticatedProductDirectFamilyTerminalV5 {
@@ -357,11 +393,14 @@ impl AuthenticatedProductDirectFamilyTerminalV5 {
 pub(crate) fn consume_direct_family_terminal_v5(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
     terminal: AuthenticatedDirectFamilyTerminalV3,
 ) -> Outcome<AuthenticatedProductDirectFamilyTerminalV5> {
     let market_instance_id = MarketInstanceV2Id::from_bytes(terminal.market_instance_id().bytes());
     require(
-        terminal.product_root_account() == account_id(*root_account.key),
+        root_account.key != link_account.key
+            && terminal.product_root_account() == account_id(*root_account.key)
+            && terminal.series_link_account() == account_id(*link_account.key),
         ClutchError::MismatchedState,
     )?;
     let mut value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
@@ -380,9 +419,25 @@ pub(crate) fn consume_direct_family_terminal_v5(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
     let family = root.state().product_families().family(MarketFamilyV1::Direct);
+    let (series_plan_id, ordinal) = observe_link_coordinate_v3(link_account)?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        terminal.generation(),
+        *root_account.key,
+        false,
+        &mut link_value,
+    )?;
     require(
         root.state().phase() == MarketLifecyclePhaseV3::Active
             && root.binding_id() == terminal.product_market_binding_id()
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+            && link.binding_id() == terminal.series_link_binding_id()
+            && link.binding().market_binding_id == root.binding_id()
             && family_prestate_id == terminal.product_family_prestate_id()
             && family.counts().terminal == terminal.family_terminal_sequence()
             && root
@@ -414,6 +469,11 @@ pub(crate) fn consume_direct_family_terminal_v5(
     let root_authentication_before_id = root.authentication_id();
     let root_semantic_before_id = root.semantic_id();
     let root_transition_sequence_before = root.state().transition_sequence();
+    let series_link_data_id = link.data_id();
+    let series_link_authentication_id = link.authentication_id();
+    let series_link_semantic_id = link.semantic_id();
+    let series_link_transition_sequence = link.state().transition_sequence();
+    drop(link);
     drop(root);
     write_market_lifecycle_root_v3(root_account, &value, &next)?;
     let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
@@ -440,6 +500,11 @@ pub(crate) fn consume_direct_family_terminal_v5(
         &reopened.semantic_id().bytes(),
         &root_transition_sequence_before.to_le_bytes(),
         &reopened.state().transition_sequence().to_le_bytes(),
+        link_account.key.as_ref(),
+        &series_link_data_id.bytes(),
+        &series_link_authentication_id.bytes(),
+        &series_link_semantic_id.bytes(),
+        &series_link_transition_sequence.to_le_bytes(),
     ]);
     require_live(id)?;
     Ok(AuthenticatedProductDirectFamilyTerminalV5 {
@@ -454,6 +519,11 @@ pub(crate) fn consume_direct_family_terminal_v5(
         root_semantic_after_id: reopened.semantic_id(),
         root_transition_sequence_before,
         root_transition_sequence_after: reopened.state().transition_sequence(),
+        series_link_account: *link_account.key,
+        series_link_data_id,
+        series_link_authentication_id,
+        series_link_semantic_id,
+        series_link_transition_sequence,
     })
 }
 

@@ -126,6 +126,10 @@ use super::product_market_family_admission_v3_current::{
     AuthenticatedProductFamilyAdmissionPlanV3,
     AuthenticatedProductFamilyAdmissionPostwriteV3,
 };
+use super::product_series_current::retirement_v5::{
+    authenticate_product_direct_family_preterminal_v5,
+    consume_direct_family_terminal_v5,
+};
 use super::product_direct_global_liveness::
     retire_product_direct_candidate_allocation_v2,
     AuthenticatedDirectCandidateTerminalPostwriteV2,
@@ -599,10 +603,101 @@ pub(crate) fn process(
         | DirectMarketAction::LapseSelected => {
             process_direct_lapse_terminal_v2(program_id, accounts, sequence, action, payload)
         }
-        DirectMarketAction::InitializeMarket | DirectMarketAction::RetireTerminal => {
+        DirectMarketAction::RetireTerminal => {
+            process_direct_family_retirement_v3(program_id, accounts, sequence, payload)
+        }
+        DirectMarketAction::InitializeMarket => {
             Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
         }
     }
+}
+
+/// Route the exact current action-13 account vector through Product's
+/// RootV3/LinkV3 preterminal, Direct's physical archive close, and Product's
+/// RootV3 successor writer in that order.
+#[inline(never)]
+fn process_direct_family_retirement_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    const FIXED_PREFIX: usize = 8;
+    const FIXED_SUFFIX: usize = 5;
+    const PRODUCT_ROOT: usize = 0;
+    const SERIES_LINK: usize = 1;
+    const DIRECT_ROOT: usize = 2;
+    const DIRECT_REPLAY: usize = 3;
+    const SELECTION: usize = 4;
+    const RESOLUTION: usize = 5;
+    const CLOCK: usize = 6;
+    const NEUTRAL_SINK: usize = 7;
+
+    require(payload.is_empty(), ClutchError::WrongDataLength)?;
+    require(
+        accounts.len() >= FIXED_PREFIX + FIXED_SUFFIX
+            && accounts.len() <= 20,
+        ClutchError::AccountCount,
+    )?;
+    let variable_end = accounts
+        .len()
+        .checked_sub(FIXED_SUFFIX)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let reservation_count = {
+        let root = authenticate_direct_market_root_writable_v2(
+            program_id,
+            &accounts[DIRECT_ROOT],
+        )?;
+        usize::from(root.transition().live_reservations())
+    };
+    let reservation_end = FIXED_PREFIX
+        .checked_add(reservation_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(reservation_end <= variable_end, ClutchError::AccountCount)?;
+    let manifest = variable_end;
+    let liveness_start = manifest
+        .checked_add(1)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let mut index = 2usize;
+    while index < accounts.len() {
+        require(
+            accounts[PRODUCT_ROOT].key != accounts[index].key
+                && accounts[SERIES_LINK].key != accounts[index].key,
+            ClutchError::AccountAlias,
+        )?;
+        index += 1;
+    }
+    require(
+        accounts[PRODUCT_ROOT].key != accounts[SERIES_LINK].key,
+        ClutchError::AccountAlias,
+    )?;
+    let preterminal = authenticate_product_direct_family_preterminal_v5(
+        program_id,
+        &accounts[PRODUCT_ROOT],
+        &accounts[SERIES_LINK],
+    )?;
+    let terminal = retire_direct_family_archives_v3(
+        program_id,
+        preterminal,
+        &accounts[DIRECT_ROOT],
+        &accounts[DIRECT_REPLAY],
+        &accounts[SELECTION],
+        &accounts[FIXED_PREFIX..reservation_end],
+        &accounts[RESOLUTION],
+        &accounts[CLOCK],
+        &accounts[NEUTRAL_SINK],
+        &accounts[reservation_end..variable_end],
+        &accounts[manifest],
+        &accounts[liveness_start..],
+        sequence,
+    )?;
+    let _postwrite = consume_direct_family_terminal_v5(
+        program_id,
+        &accounts[PRODUCT_ROOT],
+        &accounts[SERIES_LINK],
+        terminal,
+    )?;
+    Ok(())
 }
 
 /// Execute action 2 across current b1/v3, fresh b4, and one General V4
@@ -3770,6 +3865,8 @@ pub(crate) trait AuthenticatedProductDirectFamilyPreterminalV3 {
         _product_root_account: ContentId,
         _product_market_binding_id: ContentId,
         _current_product_authority_id: ContentId,
+        _series_link_account: ContentId,
+        _series_link_binding_id: ContentId,
         _direct_root_account: ContentId,
         _product_family_prestate_id: ContentId,
         _family_terminal_sequence: u32,
@@ -3789,6 +3886,8 @@ pub(crate) struct AuthenticatedDirectFamilyTerminalV3 {
     product_root_account: ContentId,
     product_market_binding_id: ContentId,
     current_product_authority_id: ContentId,
+    series_link_account: ContentId,
+    series_link_binding_id: ContentId,
     product_family_prestate_id: ContentId,
     family_terminal_sequence: u32,
     direct_root_account: ContentId,
@@ -3820,6 +3919,12 @@ impl AuthenticatedDirectFamilyTerminalV3 {
     }
     pub(crate) const fn current_product_authority_id(&self) -> ContentId {
         self.current_product_authority_id
+    }
+    pub(crate) const fn series_link_account(&self) -> ContentId {
+        self.series_link_account
+    }
+    pub(crate) const fn series_link_binding_id(&self) -> ContentId {
+        self.series_link_binding_id
     }
     pub(crate) const fn product_family_prestate_id(&self) -> ContentId {
         self.product_family_prestate_id
@@ -4065,6 +4170,10 @@ where
         ContentId::from_bytes(root.transition().product_market_binding_v3_id());
     let current_product_authority_id =
         ContentId::from_bytes(root.transition().current_product_authority_id());
+    let series_link_account =
+        ContentId::from_bytes(root.transition().series_link_account());
+    let series_link_binding_id =
+        ContentId::from_bytes(root.transition().series_link_binding_v3_id());
     let direct_root_id = ContentId::from_bytes(root.account().to_bytes());
     let product_family_prestate_id = product.product_family_prestate_id()?;
     let family_terminal_sequence = product.family_terminal_sequence()?;
@@ -4074,6 +4183,8 @@ where
         product_root_account,
         product_market_binding_id,
         current_product_authority_id,
+        series_link_account,
+        series_link_binding_id,
         direct_root_id,
         product_family_prestate_id,
         family_terminal_sequence,
@@ -4241,6 +4352,8 @@ where
         &product_root_account.bytes(),
         &product_market_binding_id.bytes(),
         &current_product_authority_id.bytes(),
+        &series_link_account.bytes(),
+        &series_link_binding_id.bytes(),
         &product_family_prestate_id.bytes(),
         &family_terminal_sequence.to_le_bytes(),
         &direct_terminal_receipt_id.bytes(),
@@ -4254,6 +4367,8 @@ where
         product_root_account,
         product_market_binding_id,
         current_product_authority_id,
+        series_link_account,
+        series_link_binding_id,
         product_family_prestate_id,
         family_terminal_sequence,
         direct_root_account: direct_root_id,
