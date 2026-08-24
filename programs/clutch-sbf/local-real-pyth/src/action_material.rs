@@ -666,6 +666,34 @@ impl CanonicalActionMaterialV1 {
             && !self.planned.unsigned_transaction.submitted
     }
 
+    /// Join current Structured material to the separately indexed base
+    /// release that owns its scheduling cursor. The wrapper execution release
+    /// remains `self.release_key`; this predicate deliberately does not
+    /// reinterpret the base release as the instruction owner.
+    #[must_use]
+    pub fn matches_structured_driver_release(
+        &self,
+        driver_release: &IndexedProgramRelease,
+        coordinate: CanonicalIntentCoordinate,
+        selection: &KeeperActionSelection,
+    ) -> bool {
+        self.release_key != driver_release.key()
+            && self.driver_release_key == driver_release.key()
+            && self.capability_profile_id == driver_release.capability_profile_id
+            && self.coordinate == coordinate
+            && self.variant.is_none()
+            && self.driver_account == selection.account
+            && self.driver_account_slot == selection.account_slot
+            && self.cursor == selection.cursor
+            && selection.release_key == self.driver_release_key
+            && selection.effective_commitment == crate::rpc_index::RpcCommitment::Finalized
+            && self.planned.unsigned_transaction.flows == [ProtocolFlow::StructuredClaim]
+            && self.planned.reload_authoritative_accounts
+            && !self.planned.unsigned_transaction.has_recent_blockhash
+            && !self.planned.unsigned_transaction.signed
+            && !self.planned.unsigned_transaction.submitted
+    }
+
 
     /// Exact payload-scoped release join. Unlike ordinary coordinates, these
     /// variants deliberately require the coarse tuple to remain absent.

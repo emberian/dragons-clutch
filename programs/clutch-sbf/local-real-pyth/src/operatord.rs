@@ -795,7 +795,16 @@ fn action_verdict_json(
         .map(|selection| {
             action_materials
                 .iter()
-                .filter(|material| material.matches(release, coordinate, selection))
+                .filter(|material| {
+                    material.matches(release, coordinate, selection)
+                        || (coordinate.family_tag == STRUCTURED_CLAIM_FAMILY_TAG
+                            && coordinate.family_version == STRUCTURED_CLAIM_FAMILY_VERSION
+                            && material.matches_structured_driver_release(
+                                release,
+                                coordinate,
+                                selection,
+                            ))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -1027,6 +1036,27 @@ fn callable_action_verdict_json(
         })
         .collect::<Vec<_>>();
     let freshness = material.freshness();
+    let release_admission = if family == "structured-claim" {
+        json!({
+            "enabled": true,
+            "scope": "structured-composite-wrapper-execution-base-driver-v1",
+            "releaseKey": release.key(),
+            "executionReleaseKey": material.release_key(),
+            "driverReleaseKey": material.driver_release_key(),
+            "executionReleaseManifestSha256": hex32(material.release_manifest_sha256()),
+            "capabilityProfileId": hex32(material.capability_profile_id())
+        })
+    } else {
+        json!({
+            "enabled": true,
+            "scope": "single-release-execution-and-driver-v1",
+            "releaseKey": release.key(),
+            "executionReleaseKey": material.release_key(),
+            "driverReleaseKey": material.driver_release_key(),
+            "executionReleaseManifestSha256": hex32(material.release_manifest_sha256()),
+            "capabilityProfileId": hex32(release.capability_profile_id)
+        })
+    };
     json!({
         "coordinate": {
             "familyTag": coordinate.family_tag.to_string(),
@@ -1035,11 +1065,7 @@ fn callable_action_verdict_json(
             "family": family,
             "action": action
         },
-        "releaseAdmission": {
-            "enabled": true,
-            "releaseKey": release.key(),
-            "capabilityProfileId": hex32(release.capability_profile_id)
-        },
+        "releaseAdmission": release_admission,
         "stateSelection": selection_json(selection),
         "semanticOwnerConstructor": semantic_builder,
         "accountRoles": roles,
@@ -1053,6 +1079,7 @@ fn callable_action_verdict_json(
             "driverAccount": material.driver_account().to_string(),
             "driverAccountSlot": material.driver_account_slot().to_string(),
             "driverReleaseKey": material.driver_release_key(),
+            "executionReleaseKey": material.release_key(),
             "authorityStateSha256": hex32(material.authority_state_sha256()),
             "releaseManifestSha256": hex32(material.release_manifest_sha256()),
             "capabilityProfileId": hex32(material.capability_profile_id()),
@@ -1551,15 +1578,6 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
 
 fn hex32(bytes: [u8; 32]) -> String {
     let mut output = String::with_capacity(64);
-    for byte in bytes {
-        use core::fmt::Write as _;
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         use core::fmt::Write as _;
         let _ = write!(output, "{byte:02x}");
