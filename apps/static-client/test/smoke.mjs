@@ -250,6 +250,56 @@ test("direct_actions_accept_only_exact_current_chain_material", () => {
   assert.equal(result.legacyRefused, true);
 });
 
+test("fractional_terminal_material_keeps_authority_chain_derived", () => {
+  const context = browserRealm("chain-client.js");
+  const result = vm.runInContext(`(() => {
+    const address = (value) => GlassChainClient.encodeBase58(new Uint8Array(32).fill(value));
+    const roles = ["realm", "profile", "collateral-policy", "collateral-token-program", "market-binding-v2", "market-runtime-v3", "market-instance-preimage-v2", "hoard-v2", "claim-ledger-v3", "resolution-v5", "fractional-policy-v3", "fractional-ledger-v1"];
+    const addresses = roles.map((_, index) => address(index + 1));
+    const feePayer = address(40);
+    const manifest = "31".repeat(32);
+    const profile = "32".repeat(32);
+    const elf = "33".repeat(32);
+    const state = "34".repeat(32);
+    const releaseKey = address(50) + ":1:" + elf + ":" + manifest;
+    const coordinate = { familyTag: "79", familyVersion: "1", localAction: "9", family: "fractional", action: "seal-fractional-claims-exhausted" };
+    const cursor = { workflowId: "35".repeat(32), lane: "fractional-redemption", generation: "1", phase: "9", item: "1", observedStateSha256: state };
+    const selection = { account: addresses[11], releaseKey, action: coordinate.action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
+    const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, elfSha256: elf, enabledIntents: [{ familyTag: "79", familyVersion: "1", localAction: "9" }], enabledIntentVariants: [] } };
+    const session = { sessionId: "36".repeat(32), release: { releaseKey }, restart: { cursors: [selection] } };
+    const row = {
+      coordinate,
+      releaseAdmission: { enabled: true, scope: "single-release-execution-and-driver-v1", releaseKey, executionReleaseKey: releaseKey, driverReleaseKey: releaseKey, executionReleaseManifestSha256: manifest, capabilityProfileId: profile },
+      stateSelection: selection,
+      semanticOwnerConstructor: "clutch-fractional-redemption-runtime/fractional-redemption/79/1/9/seal-claims-exhausted",
+      accountRoles: roles.map((role, index) => ({ index: String(index), role, signer: false, writable: index === 8 || index === 11, address: addresses[index], identityDisposition: "semantic-owner-derived-and-bound-to-draft" })),
+      callable: true,
+      verdict: "callable-unsigned-draft",
+      reason: "exact claims-exhausted frame",
+      transactionDraft: {
+        schema: "dragons-clutch/operator-canonical-action-material/v1", draftId: "37".repeat(32), constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3",
+        driverAccount: addresses[11], driverAccountSlot: "100", driverReleaseKey: releaseKey, executionReleaseKey: releaseKey, authorityStateSha256: state,
+        releaseManifestSha256: manifest, capabilityProfileId: profile, feePayer, messageVersion: "legacy", addressLookupTables: [], recentBlockhash: null,
+        hasRecentBlockhash: false, signed: false, submitted: false, serializedTransactionHex: "00", serializedBytes: "1", actions: [coordinate.action], flows: ["fractional-redemption"],
+        semanticOwners: [{ package: "clutch-fractional-redemption-runtime", schema: "fractional-redemption/79/1/9/seal-claims-exhausted", releaseSha256: elf }],
+        registryBindings: [{ familyTag: "79", familyVersion: "1", localAction: "9", allocationStatus: "frozen", centralAction: "9" }], runtimeAdmissions: ["release-bound-enabled"],
+        exactEquations: [{ name: "chain-derived zero native claim supply", unit: { kind: "egg-atoms" }, left: "0", right: "0" }], reloadAuthoritativeAccounts: true
+      },
+      symbolicPostcondition: null,
+      signerRequirements: [{ address: feePayer, semanticRoles: ["transaction-fee-payer"], signaturePresent: false, keyAccess: false }],
+      freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" }
+    };
+    const raw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId: session.sessionId, releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [row] };
+    const accepted = GlassChainClient.validateActionCapabilities(raw, configuration, session);
+    row.accountRoles[8].writable = false;
+    let weakenedRefused = false;
+    try { GlassChainClient.validateActionCapabilities(raw, configuration, session); } catch (_) { weakenedRefused = true; }
+    return { holderChoice: accepted.actions[0].fractionalContract.holderChoice, weakenedRefused };
+  })()`, context);
+  assert.equal(result.holderChoice, null);
+  assert.equal(result.weakenedRefused, true);
+});
+
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
   assert.match(html, /current BundleV7 assembler/);
