@@ -37,6 +37,8 @@ pub mod provider;
 #[cfg(feature = "operator")]
 pub mod rpc_index;
 #[cfg(feature = "operator")]
+pub mod source_action11_material;
+#[cfg(feature = "operator")]
 pub mod source_action12_material;
 #[cfg(feature = "operator")]
 pub mod source_action1_material;
