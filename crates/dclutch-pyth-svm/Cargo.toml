@@ -8,5 +8,9 @@ rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+synthetic-local-fixture = []
+
 [lints]
 workspace = true

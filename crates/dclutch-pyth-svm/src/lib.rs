@@ -19,6 +19,9 @@ pub mod price_update;
 pub mod receiver_config;
 /// Immutable Pyth adapter release contracts and the empty production catalog.
 pub mod release;
+/// Provenance-pinned synthetic-local release facts, never production catalog data.
+#[cfg(feature = "synthetic-local-fixture")]
+pub mod synthetic_fixture;
 
 pub use loader::{LoaderV3Error, ProgramDataV3View, ProgramV3View};
 pub use post_update::{POST_UPDATE_PROOF_ELEMENT_LEN, PostUpdateParamsError, PostUpdateParamsView};
@@ -33,3 +36,5 @@ pub use release::{
     ReleaseField, SyntheticLocalReleaseV1, SyntheticLocalReleaseV1Error,
     SyntheticLocalReleaseV1Input,
 };
+#[cfg(feature = "synthetic-local-fixture")]
+pub use synthetic_fixture::{SYNTHETIC_LOCAL_LABEL_V1, synthetic_local_release_v1};
