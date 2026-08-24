@@ -1,6 +1,7 @@
 //! Authenticated projection into the General V2 owner-settlement fee rows.
 
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
+use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_owner_settlement::{
     owner_debit_atoms, CandidateSettlementTotalsV1, CandidateSettlementTotalsV2,
     OwnerSettlementExpectationBasisV2, OwnerSettlementExpectationBasisV3,
@@ -15,7 +16,8 @@ use crate::allocation::{
 };
 use crate::intent::{OwnerFeeTransitionIntentV1, RecipientAllocationIntentV1};
 use crate::selected::{
-    AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
+    AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1,
+    SelectedCompositeFeeAccess, SelectedCompositeFeeV1, SelectedCompositeFeeV2,
 };
 use crate::weight_v2::{
     CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2, COMPOSITE_FEE_WEIGHT_POLICY_V2,
@@ -496,11 +498,10 @@ impl CertifiedRecipientAllocationV3 {
         if weight_policy_id != COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
             || traversed_owner_count == 0
             || usize::from(traversed_owner_count) > MAX_ORDERS
-            || nonzero_weight_row_count == 0
             || usize::from(nonzero_weight_row_count) > MAX_FEE_ROWS_V1
             || u16::from(nonzero_weight_row_count) > traversed_owner_count
             || allocation.maker_len() != nonzero_weight_row_count
-            || allocation.collected_fee_atoms() == 0
+            || (nonzero_weight_row_count == 0) != (allocation.collected_fee_atoms() == 0)
         {
             return Err(Error::InvalidAccountData);
         }
@@ -524,8 +525,8 @@ impl CertifiedRecipientAllocationV3 {
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 pub fn certify_recipient_allocation_v3<F>(
-    selected: &SelectedCompositeFeeV1,
-    revenue: &RevenuePolicyV1,
+    selected: &SelectedCompositeFeeV2,
+    revenue: &RevenuePolicyV2,
     transcript: CompositeFeeWeightTranscriptV2,
     owner_order_set_digest: Id,
     traversed_owner_count: u16,
@@ -866,8 +867,8 @@ pub fn project_pre_row_owner_fee_v3(
 /// owner/order cardinality and selected-fee identities; it seals and returns
 /// the complete expectation without lowering through V3. The caller must
 /// separately authenticate the SettlementRoot and derive the supplied row PDA.
-pub fn project_pre_row_owner_fee_v4(
-    selected: &SelectedCompositeFeeV1,
+pub fn project_pre_row_owner_fee_v4<S: SelectedCompositeFeeAccess + ?Sized>(
+    selected: &S,
     owner_settlement_account: Id,
     basis: OwnerSettlementExpectationBasisV4,
     snapshot: AuthenticatedPayerAllocationSnapshotV1,
@@ -1331,6 +1332,7 @@ mod tests {
         LamportSinkV1, RevenuePolicyV1, RevenueResidualV1, StandingMakerV1,
         REVENUE_POLICY_SCHEMA_V1,
     };
+    use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
     use clutch_owner_settlement::{
         build_owner_settlement_expectation_basis_book_v4, PresentConsiderationV2,
         SettlementSideV1, VerifiedSettlementOrderV4,
@@ -1385,6 +1387,40 @@ mod tests {
             standing_maker: StandingMakerV1::AllRestingMakers,
             lamport_sink: LamportSinkV1::None,
         }
+    }
+
+    fn selected_v2() -> (SelectedCompositeFeeV2, RevenuePolicyV2) {
+        let batch = FrozenPolicyV1 {
+            allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
+            self_cross: SelfCrossPolicyV1::RefuseOverlap,
+            aon: AonPolicyV1::RefuseAdmission,
+            rounding: RoundingBoundaryV1::TerminalOwnerFloor,
+            residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
+            transfer_phase: TransferPhaseV1::ActiveOrResolved,
+            portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
+            pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
+            dust: DustPolicy::AssignCanonical,
+            score: ScorePolicyV1::LexicographicDispersionV1,
+            fee_base: FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 40,
+                floor_range_bps: 10,
+            },
+        };
+        let revenue = RevenuePolicyV2::successor_development([9; 32]);
+        let selected = SelectedCompositeFeeV2::select(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            10_000,
+            2,
+            &batch,
+            &revenue,
+        )
+        .unwrap();
+        (selected, revenue)
     }
 
     fn basis(
@@ -1609,8 +1645,7 @@ mod tests {
 
     #[test]
     fn v3_persists_only_stream_provenance_and_exact_hamilton_output() {
-        let selected = selected();
-        let revenue = revenue();
+        let (selected, revenue) = selected_v2();
         let denominator = selected.carry_denominator();
         let rows = [
             CompositeFeeWeightRowV2::structural(id(20), denominator).unwrap(),
@@ -1728,6 +1763,66 @@ mod tests {
                 certified.nonzero_weight_row_count(),
             ),
             Err(Error::InvalidAccountData)
+        );
+    }
+
+    #[test]
+    fn v3_canonically_persists_present_fee_policy_with_zero_weight() {
+        let (selected, revenue) = selected_v2();
+        let transcript = crate::weight_v2::composite_fee_weight_transcript_from_indexed_rows_v2(
+            selected.fee_record(),
+            selected.carry_denominator(),
+            0,
+            |_| Ok(None),
+        )
+        .unwrap();
+        assert_eq!(transcript.len(), 0);
+        assert_eq!(transcript.total_weight(), 0);
+
+        let certified = certify_recipient_allocation_v3(
+            &selected,
+            &revenue,
+            transcript,
+            id(30),
+            2,
+            |_| Ok(None),
+        )
+        .unwrap();
+        assert_eq!(certified.nonzero_weight_row_count(), 0);
+        assert_eq!(certified.allocation().maker_len(), 0);
+        assert_eq!(certified.allocation().maker_rebate_total(), 0);
+        assert_eq!(certified.allocation().executor_atoms(), 0);
+        assert_eq!(certified.allocation().treasury_atoms(), 0);
+        assert_eq!(certified.allocation().collected_fee_atoms(), 0);
+
+        let mut encoded = [0u8; crate::codec::CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES];
+        crate::codec::encode_certified_recipient_allocation_v3_into(
+            &certified,
+            &mut encoded,
+        )
+        .unwrap();
+        let borrowed = crate::codec::decode_borrowed_certified_recipient_allocation_v3(
+            &encoded,
+        )
+        .unwrap();
+        assert_eq!(borrowed.summary().row_count(), 0);
+        assert_eq!(borrowed.summary().traversed_owner_count(), 2);
+        assert_eq!(borrowed.summary().collected_fee_atoms(), 0);
+        assert_eq!(borrowed.allocation().row(0).unwrap(), None);
+
+        let mut hostile_row_count = encoded;
+        hostile_row_count[2_738] = 1;
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(
+                &hostile_row_count,
+            ),
+            Err(Error::InvalidAccountData)
+        );
+        let mut hostile_total = encoded;
+        hostile_total[72..80].copy_from_slice(&1u64.to_le_bytes());
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_total),
+            Err(Error::ConservationFailure)
         );
     }
 }

@@ -222,6 +222,49 @@ where
     })
 }
 
+/// Commit an exact Position-sorted compact cache by dense row index.
+///
+/// This is the SBF-friendly counterpart to the predecessor-based callback.
+/// A private adapter can heap-cache each traversal-derived row once, sort that
+/// cache by Position identity, and commit it without copying a fixed-capacity
+/// book through the stack. The callback must return every active row, then
+/// `None` at the exact canonical tail; this function rechecks row liveness,
+/// strict ordering, nonzero weights, count, total, and transcript identity.
+pub fn composite_fee_weight_transcript_from_indexed_rows_v2<F>(
+    fee_record: Id,
+    common_denominator: u128,
+    len: u8,
+    mut row_at: F,
+) -> Result<CompositeFeeWeightTranscriptV2>
+where
+    F: FnMut(u8) -> Result<Option<CompositeFeeWeightRowV2>>,
+{
+    if usize::from(len) > MAX_FEE_ROWS_V1 {
+        return Err(Error::InvalidWidth);
+    }
+    let mut index = 0u8;
+    let transcript = composite_fee_weight_transcript_v2(
+        fee_record,
+        common_denominator,
+        |_| {
+            if index < len {
+                let row = row_at(index)?.ok_or(Error::MissingParticipant)?;
+                index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                Ok(Some(row))
+            } else {
+                if row_at(index)?.is_some() {
+                    return Err(Error::NonCanonicalPadding);
+                }
+                Ok(None)
+            }
+        },
+    )?;
+    if transcript.len() != len {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(transcript)
+}
+
 impl CompositeFeeWeightRowV2 {
     /// Canonical zero padding row for structural fixed-capacity books only.
     pub const EMPTY: Self = Self { position: Id([0; 32]), exact_numerator: 0 };

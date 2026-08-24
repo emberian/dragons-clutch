@@ -20,7 +20,8 @@ use clutch_fee_runtime_contract::codec::{
     decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_owner_fee_carry_v1,
-    encode_payer_allocation_v1, encode_certified_recipient_allocation_v3_from_access_into,
+    encode_payer_allocation_v1,
+    encode_certified_recipient_allocation_v3_from_access_into,
     BorrowedCertifiedRecipientAllocationV3, CertifiedRecipientAllocationAccessV3,
     encode_treasury_ledger_v1,
     CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES,
@@ -295,7 +296,7 @@ impl OwnerFeeCarryV3AccountV1 {
     }
 
     /// Decode hostile bytes only against the authenticated selected record.
-    pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV1) -> Result<Self, CodecError> {
+    pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV2) -> Result<Self, CodecError> {
         let (body, rent, stored_bump) = decode_rent_owned_outer(
             OWNER_FEE_CARRY_ACCOUNT_TAG,
             OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
