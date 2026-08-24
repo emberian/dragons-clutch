@@ -10,6 +10,9 @@
 use dclutch_capability_contract::{
     CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
 };
+use dclutch_direct_contract::{
+    VENUE_FEE_POLICY_BYTES_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2, VenueFeePolicyV2,
+};
 use dclutch_product_contract::{
     capacity::{CAPACITY_PROFILE_BYTES, CapacityProfileV1},
     claim::{CATEGORICAL_UNIT_BYTES, CategoricalUnitV1},
@@ -88,7 +91,7 @@ pub(crate) const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
 ];
 
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 8] = [
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 9] = [
     (
         b"dclutch/sbf-record-page-envelope/provisional-v1",
         PAGE_ENVELOPE_RELEASE_ID_V1,
@@ -117,6 +120,10 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 8] = [
     (
         b"dclutch/schema/capability-manifest-profile-1-v1",
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/direct-venue-fee-policy-v2",
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
     ),
 ];
 
@@ -904,6 +911,14 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             .map(|value| value.as_bytes() == content)
             .unwrap_or(false);
     }
+    if schema == VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2 {
+        return VenueFeePolicyV2::decode(content)
+            .map(|value| {
+                let mut canonical = [0; VENUE_FEE_POLICY_BYTES_V2];
+                value.encode(&mut canonical).is_ok() && canonical.as_slice() == content
+            })
+            .unwrap_or(false);
+    }
     false
 }
 
@@ -916,6 +931,7 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1
             | PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
+            | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2
     )
 }
 
@@ -936,6 +952,7 @@ fn is_admissible_found_schema_length(
             (MANIFEST_HEADER_BYTES..=MAX_MANIFEST_BYTES).contains(&length)
                 && length.saturating_sub(MANIFEST_HEADER_BYTES) % CAPABILITY_ENTRY_BYTES == 0
         }
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2 => length == VENUE_FEE_POLICY_BYTES_V2,
         _ => false,
     }
 }
@@ -945,7 +962,11 @@ fn release_id(label: &[u8]) -> Result<SchemaReleaseId, ProgramError> {
     SchemaReleaseId::new(hash(label).to_bytes()).map_err(map_record_error)
 }
 
-fn derive_record_pda(program_id: &Pubkey, key: RecordKeyV1, staging: bool) -> (Pubkey, u8) {
+pub(crate) fn derive_record_pda(
+    program_id: &Pubkey,
+    key: RecordKeyV1,
+    staging: bool,
+) -> (Pubkey, u8) {
     let domain = if staging {
         STAGING_CURSOR_PDA_SEED_V1
     } else {
@@ -1496,6 +1517,10 @@ mod tests {
                 CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
                 MANIFEST_HEADER_BYTES,
             ),
+            (
+                VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+                VENUE_FEE_POLICY_BYTES_V2,
+            ),
         ] {
             let schema = SchemaReleaseId::new(schema_id).expect("known schema");
             assert!(is_supported_found_schema_release(schema));
@@ -1717,20 +1742,20 @@ mod tests {
         .expect("actual vacancy authenticates");
         assert_eq!(authenticated_length, content.len());
 
-        let false_vacancy = test_account(
+        let live_staging_cursor = test_account(
             cursor_key,
             false,
             false,
             1,
-            Vec::new(),
-            system_program::ID,
+            vec![0; STAGING_CURSOR_BYTES_V1],
+            program_id,
             false,
         );
         assert_eq!(
             with_authenticated_finalized_record_v1(
                 &program_id,
                 &raw,
-                &false_vacancy,
+                &live_staging_cursor,
                 &rent_account,
                 schema,
                 digest,

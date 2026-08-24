@@ -15,6 +15,8 @@ pub enum AccountClass {
     ProtocolState,
     /// Immutable protocol record authenticated by a content commitment.
     ImmutableProtocolRecord,
+    /// Canonical vacant staging cursor proving a paired immutable record finalized.
+    StagingCursorVacancy,
     /// Collateral Mint named by the immutable Realm.
     CollateralMint,
     /// Collateral token account checked by the selected adapter release.
@@ -38,12 +40,20 @@ pub enum Role {
     PositionOwner,
     /// Immutable reusable collateral Realm PDA.
     Realm,
+    /// Canonical vacant staging cursor paired with `Realm`.
+    RealmStagingCursor,
     /// Immutable occurrence-specific Product Instance committed by Market identity.
     ProductInstance,
+    /// Canonical vacant staging cursor paired with `ProductInstance`.
+    ProductInstanceStagingCursor,
     /// Immutable Product ClaimBasis committed by Market and Product Instance.
     ClaimBasis,
+    /// Canonical vacant staging cursor paired with `ClaimBasis`.
+    ClaimBasisStagingCursor,
     /// Immutable Product CapacityProfile governing the admitted ClaimBasis.
     CapacityProfile,
+    /// Canonical vacant staging cursor paired with `CapacityProfile`.
+    CapacityProfileStagingCursor,
     /// Mutable Market root and collateral-liability state.
     Market,
     /// Prepaid one-shot resolution Fund direct child.
@@ -52,8 +62,12 @@ pub enum Role {
     FundingState,
     /// Immutable resolution-policy record committed by Market identity.
     ResolutionPolicy,
+    /// Canonical vacant staging cursor paired with `ResolutionPolicy`.
+    ResolutionPolicyStagingCursor,
     /// Immutable capability manifest committed by Market identity.
     CapabilityManifest,
+    /// Canonical vacant staging cursor paired with `CapabilityManifest`.
+    CapabilityManifestStagingCursor,
     /// Transient program-owned canonical capability-opening readiness child.
     CapabilityReadiness,
     /// Market's collateral Vault token account.
@@ -276,6 +290,16 @@ const fn immutable(role: Role) -> AccountRole {
     )
 }
 
+const fn staging_cursor(role: Role) -> AccountRole {
+    AccountRole::new(
+        role,
+        AccountClass::StagingCursorVacancy,
+        false,
+        false,
+        false,
+    )
+}
+
 const fn mint() -> AccountRole {
     AccountRole::new(
         Role::CollateralMint,
@@ -341,7 +365,7 @@ pub const CREATE_REALM_FRAME: [AccountRole; 6] = [
 /// `ResolutionPolicy`, validates its specialized Fund quote against `Rent`,
 /// and derives all Fund amounts from that entry. No founding instruction field
 /// or sponsor argument may override the immutable quote.
-pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 12] = [
+pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 18] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::FundingState, true),
@@ -352,6 +376,12 @@ pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 12] = [
     immutable(Role::CapacityProfile),
     immutable(Role::ResolutionPolicy),
     immutable(Role::CapabilityManifest),
+    staging_cursor(Role::RealmStagingCursor),
+    staging_cursor(Role::ProductInstanceStagingCursor),
+    staging_cursor(Role::ClaimBasisStagingCursor),
+    staging_cursor(Role::CapacityProfileStagingCursor),
+    staging_cursor(Role::ResolutionPolicyStagingCursor),
+    staging_cursor(Role::CapabilityManifestStagingCursor),
     SYSTEM_PROGRAM,
     RENT_SYSVAR,
 ];
@@ -364,7 +394,7 @@ pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 12] = [
 /// readiness while creating custody and refunding its rent. Readiness is a
 /// direct Market child, so this replacement keeps the Market child count
 /// coherent.
-pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 12] = [
+pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 14] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::CapabilityReadiness, true),
@@ -374,6 +404,8 @@ pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 12] = [
     state(Role::CollateralCustody, true),
     token_account(Role::CollateralVault),
     mint(),
+    staging_cursor(Role::CapabilityManifestStagingCursor),
+    staging_cursor(Role::RealmStagingCursor),
     TOKEN_PROGRAM,
     SYSTEM_PROGRAM,
     RENT_SYSVAR,
@@ -581,12 +613,12 @@ mod tests {
             .expect("nonzero test token facts")
     }
 
-    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 12] {
+    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 18] {
         let mut output = [AccountPrivilege {
             is_signer: false,
             is_writable: false,
             is_executable: false,
-        }; 12];
+        }; 18];
         for (destination, role) in output.iter_mut().zip(instruction_frame(tag).roles()) {
             *destination = AccountPrivilege {
                 is_signer: role.is_signer(),
@@ -654,7 +686,8 @@ mod tests {
             OPEN_COLLATERAL_VAULT_FRAME.get(4).map(|role| role.class()),
             Some(AccountClass::ImmutableProtocolRecord)
         );
-        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 12);
+        assert_eq!(FOUND_MARKET_AND_FUND_FRAME.len(), 18);
+        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 14);
     }
 
     #[test]

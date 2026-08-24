@@ -22,6 +22,10 @@ pub enum ResolutionAccountClassV1 {
     FundingState,
     /// Immutable program-owned record authenticated by a Market content ID.
     ImmutableProtocolRecord,
+    /// Canonical vacant staging cursor proving a paired immutable record finalized.
+    StagingCursorVacancy,
+    /// The canonical Rent sysvar used for immutable-record finality authentication.
+    RentSysvar,
     /// A writable externally supplied account receiving a fixed payout.
     PayoutAccount,
     /// A writable permanent program-owned rent-credit PDA.
@@ -51,8 +55,12 @@ pub enum ResolutionRoleV1 {
     FundingState,
     /// Immutable Pyth policy plus feed-semantics materialization.
     ResolutionMaterial,
+    /// Canonical vacant staging cursor paired with `ResolutionMaterial`.
+    ResolutionMaterialStagingCursor,
     /// Immutable capability manifest that selects the funding state.
     CapabilityManifest,
+    /// Canonical vacant staging cursor paired with `CapabilityManifest`.
+    CapabilityManifestStagingCursor,
     /// Permanent Market-beneficiary rent-credit PDA receiving Fund residuals.
     RentCredit,
     /// Executable Pyth receiver program.
@@ -71,6 +79,8 @@ pub enum ResolutionRoleV1 {
     Treasury,
     /// Executable System Program.
     SystemProgram,
+    /// Canonical Rent sysvar shared by immutable-record finality authentication.
+    RentSysvar,
     /// Permissionless failure bounty recipient.
     BountyRecipient,
 }
@@ -199,11 +209,12 @@ const fn role(
 
 /// Exact ordered price-resolution frame.
 ///
-/// This is the canonical 15-role order: resolver, update, Market, funding
+/// This is the canonical 18-role order: resolver, update, Market, funding
 /// state, resolution material, capability manifest, RentCredit, receiver,
 /// receiver ProgramData, receiver config, encoded VAA, router, router
-/// ProgramData, treasury, System Program.
-pub const PRICE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 15] = [
+/// ProgramData, treasury, the two paired staging-cursor vacancies, System
+/// Program, and Rent sysvar.
+pub const PRICE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 18] = [
     role(
         ResolutionRoleV1::Resolver,
         ResolutionAccountClassV1::ResolverAuthority,
@@ -303,16 +314,37 @@ pub const PRICE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 15] = [
         false,
     ),
     role(
+        ResolutionRoleV1::ResolutionMaterialStagingCursor,
+        ResolutionAccountClassV1::StagingCursorVacancy,
+        false,
+        false,
+        false,
+    ),
+    role(
+        ResolutionRoleV1::CapabilityManifestStagingCursor,
+        ResolutionAccountClassV1::StagingCursorVacancy,
+        false,
+        false,
+        false,
+    ),
+    role(
         ResolutionRoleV1::SystemProgram,
         ResolutionAccountClassV1::SystemProgram,
         false,
         false,
         true,
     ),
+    role(
+        ResolutionRoleV1::RentSysvar,
+        ResolutionAccountClassV1::RentSysvar,
+        false,
+        false,
+        false,
+    ),
 ];
 
 /// Exact ordered permissionless failure-resolution frame.
-pub const FAILURE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 6] = [
+pub const FAILURE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 9] = [
     role(
         ResolutionRoleV1::BountyRecipient,
         ResolutionAccountClassV1::PayoutAccount,
@@ -353,6 +385,27 @@ pub const FAILURE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 6] = [
         ResolutionAccountClassV1::RentCredit,
         false,
         true,
+        false,
+    ),
+    role(
+        ResolutionRoleV1::ResolutionMaterialStagingCursor,
+        ResolutionAccountClassV1::StagingCursorVacancy,
+        false,
+        false,
+        false,
+    ),
+    role(
+        ResolutionRoleV1::CapabilityManifestStagingCursor,
+        ResolutionAccountClassV1::StagingCursorVacancy,
+        false,
+        false,
+        false,
+    ),
+    role(
+        ResolutionRoleV1::RentSysvar,
+        ResolutionAccountClassV1::RentSysvar,
+        false,
+        false,
         false,
     ),
 ];
@@ -458,13 +511,13 @@ fn validate_aliases(accounts: &[ResolutionAccountPrivilegeV1]) -> ResolutionFram
 mod tests {
     use super::*;
 
-    fn accounts(kind: ResolutionFrameKindV1) -> [ResolutionAccountPrivilegeV1; 15] {
+    fn accounts(kind: ResolutionFrameKindV1) -> [ResolutionAccountPrivilegeV1; 18] {
         let mut result = [ResolutionAccountPrivilegeV1 {
             key: [0; 32],
             is_signer: false,
             is_writable: false,
             is_executable: false,
-        }; 15];
+        }; 18];
         for (index, required) in resolution_frame_v1(kind).roles().iter().enumerate() {
             let key = u8::try_from(index)
                 .expect("bounded test frame index")
@@ -487,8 +540,8 @@ mod tests {
     fn exact_orders_classes_and_privileges_validate() {
         let price = accounts(ResolutionFrameKindV1::Price);
         let failure = accounts(ResolutionFrameKindV1::Failure);
-        assert_eq!(PRICE_RESOLUTION_FRAME_V1.len(), 15);
-        assert_eq!(FAILURE_RESOLUTION_FRAME_V1.len(), 6);
+        assert_eq!(PRICE_RESOLUTION_FRAME_V1.len(), 18);
+        assert_eq!(FAILURE_RESOLUTION_FRAME_V1.len(), 9);
         assert_eq!(
             PRICE_RESOLUTION_FRAME_V1.get(4).map(|role| role.role()),
             Some(ResolutionRoleV1::ResolutionMaterial)
@@ -506,14 +559,14 @@ mod tests {
             Some(ResolutionRoleV1::RentCredit)
         );
         assert_eq!(validate_price_resolution_frame_v1(&price), Ok(()));
-        assert_eq!(validate_failure_resolution_frame_v1(&failure[..6]), Ok(()));
+        assert_eq!(validate_failure_resolution_frame_v1(&failure[..9]), Ok(()));
     }
 
     #[test]
     fn missing_extra_and_required_privilege_refuse() {
         let price = accounts(ResolutionFrameKindV1::Price);
         assert_eq!(
-            validate_price_resolution_frame_v1(&price[..14]),
+            validate_price_resolution_frame_v1(&price[..17]),
             Err(ResolutionFrameErrorV1::InvalidAccountCount)
         );
         let extra = price;
@@ -629,14 +682,14 @@ mod tests {
         let sponsor = failure.get_mut(5).expect("sponsor exists");
         sponsor.key = bounty_key;
         assert_eq!(
-            validate_failure_resolution_frame_v1(&failure[..6]),
+            validate_failure_resolution_frame_v1(&failure[..9]),
             Err(ResolutionFrameErrorV1::UnsafeAlias)
         );
         let fund_key = failure.get(2).expect("FundingState exists").key;
         let bounty = failure.get_mut(0).expect("bounty recipient exists");
         bounty.key = fund_key;
         assert_eq!(
-            validate_failure_resolution_frame_v1(&failure[..6]),
+            validate_failure_resolution_frame_v1(&failure[..9]),
             Err(ResolutionFrameErrorV1::UnsafeAlias)
         );
 
@@ -650,7 +703,7 @@ mod tests {
             .expect("sponsor exists");
         sponsor.is_signer = true;
         assert_eq!(
-            validate_failure_resolution_frame_v1(&independent_failure_payouts[..6]),
+            validate_failure_resolution_frame_v1(&independent_failure_payouts[..9]),
             Err(ResolutionFrameErrorV1::UnexpectedPrivilege),
             "RentCredit cannot be made a caller authority"
         );

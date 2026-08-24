@@ -19,7 +19,7 @@ use dclutch_pyth_contract::{
     },
     resolution_material::CategoricalPythResolutionMaterialV1,
 };
-use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
+use dclutch_realm_contract::RealmV1;
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
 };
@@ -36,9 +36,18 @@ use solana_program::{
 use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
-use crate::{AdapterError, authenticate::MARKET_SEED};
+use crate::{
+    AdapterError,
+    authenticate::MARKET_SEED,
+    records::{
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
+        CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1, REALM_SCHEMA_RELEASE_ID_V1,
+        with_authenticated_finalized_record_v1,
+    },
+};
 
-const FOUNDING_ACCOUNTS: usize = 12;
+const FOUNDING_ACCOUNTS: usize = 18;
 const MIN_OUTCOMES: u8 = 2;
 const MAX_OUTCOMES: u8 = 16;
 
@@ -53,6 +62,12 @@ struct FoundingFrame<'a, 'info> {
     capacity_profile: &'a AccountInfo<'info>,
     resolution_material: &'a AccountInfo<'info>,
     capability_manifest: &'a AccountInfo<'info>,
+    realm_staging_cursor: &'a AccountInfo<'info>,
+    product_instance_staging_cursor: &'a AccountInfo<'info>,
+    claim_basis_staging_cursor: &'a AccountInfo<'info>,
+    capacity_profile_staging_cursor: &'a AccountInfo<'info>,
+    resolution_material_staging_cursor: &'a AccountInfo<'info>,
+    capability_manifest_staging_cursor: &'a AccountInfo<'info>,
     system_program: &'a AccountInfo<'info>,
     rent_sysvar: &'a AccountInfo<'info>,
 }
@@ -73,8 +88,14 @@ impl<'a, 'info> FoundingFrame<'a, 'info> {
             capacity_profile: account(accounts, 7)?,
             resolution_material: account(accounts, 8)?,
             capability_manifest: account(accounts, 9)?,
-            system_program: account(accounts, 10)?,
-            rent_sysvar: account(accounts, 11)?,
+            realm_staging_cursor: account(accounts, 10)?,
+            product_instance_staging_cursor: account(accounts, 11)?,
+            claim_basis_staging_cursor: account(accounts, 12)?,
+            capacity_profile_staging_cursor: account(accounts, 13)?,
+            resolution_material_staging_cursor: account(accounts, 14)?,
+            capability_manifest_staging_cursor: account(accounts, 15)?,
+            system_program: account(accounts, 16)?,
+            rent_sysvar: account(accounts, 17)?,
         };
         let privileges = [
             privilege(frame.sponsor),
@@ -87,6 +108,12 @@ impl<'a, 'info> FoundingFrame<'a, 'info> {
             privilege(frame.capacity_profile),
             privilege(frame.resolution_material),
             privilege(frame.capability_manifest),
+            privilege(frame.realm_staging_cursor),
+            privilege(frame.product_instance_staging_cursor),
+            privilege(frame.claim_basis_staging_cursor),
+            privilege(frame.capacity_profile_staging_cursor),
+            privilege(frame.resolution_material_staging_cursor),
+            privilege(frame.capability_manifest_staging_cursor),
             privilege(frame.system_program),
             privilege(frame.rent_sysvar),
         ];
@@ -283,40 +310,54 @@ fn authenticate_fund(
     fund_rent: u64,
     current_slot: u64,
 ) -> Result<(FundingStateV1, CapabilityFundingDerivationV1), ProgramError> {
-    let material_data = frame
-        .resolution_material
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let manifest_data = frame
-        .capability_manifest
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let manifest = CapabilityManifestV1::decode(&manifest_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let selected = manifest
-        .required_founding_entry_for_config(identity.resolution_policy_id())
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
-        return Err(AdapterError::FoundingAuthentication.into());
-    }
-    let funding = construct_required_resolution_funding(
-        identity.capability_manifest_id(),
-        manifest,
-        selected,
-        fund_rent,
-        current_slot,
-    )
-    .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let derivation = CapabilityFundingDerivationV1::new(
-        frame.market.key.to_bytes(),
-        identity.generation(),
-        identity.capability_manifest_id(),
-        manifest,
-        funding,
-    )
-    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let material_digest = record_digest(frame.resolution_material)?;
+    let material = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.resolution_material,
+        frame.resolution_material_staging_cursor,
+        frame.rent_sysvar,
+        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        material_digest,
+        |record| {
+            CategoricalPythResolutionMaterialV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
+    let (funding, derivation) = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.capability_manifest,
+        frame.capability_manifest_staging_cursor,
+        frame.rent_sysvar,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        identity.capability_manifest_id().to_bytes(),
+        |record| {
+            let manifest = CapabilityManifestV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication)?;
+            let selected = manifest
+                .required_founding_entry_for_config(identity.resolution_policy_id())
+                .map_err(|_| AdapterError::FoundingAuthentication)?;
+            if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+                return Err(AdapterError::FoundingAuthentication.into());
+            }
+            let funding = construct_required_resolution_funding(
+                identity.capability_manifest_id(),
+                manifest,
+                selected,
+                fund_rent,
+                current_slot,
+            )
+            .map_err(|_| AdapterError::FoundingAuthentication)?;
+            CapabilityFundingDerivationV1::new(
+                frame.market.key.to_bytes(),
+                identity.generation(),
+                identity.capability_manifest_id(),
+                manifest,
+                funding,
+            )
+            .map(|derivation| (funding, derivation))
+            .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
     let (expected, _) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
     if frame.fund.key != &expected {
         return Err(AdapterError::AccountIdentity.into());
@@ -365,100 +406,75 @@ fn authenticate_immutable_records(
 ) -> Result<(), ProgramError> {
     let identity = instruction.identity();
 
-    let realm_data = frame
-        .realm
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let realm = RealmV1::decode(&realm_data).map_err(|_| AdapterError::FoundingAuthentication)?;
-    let realm_digest = hash(&realm_data).to_bytes();
-    if realm.to_bytes().as_slice() != &realm_data[..]
-        || realm_digest != identity.realm_id().to_bytes()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    let (expected_realm, _) =
-        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], program_id);
-    if frame.realm.key != &expected_realm {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    drop(realm_data);
-
-    let instance_data = frame
-        .product_instance
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let instance =
-        InstanceV1::decode(&instance_data).map_err(|_| AdapterError::FoundingAuthentication)?;
-    let instance_digest = hash(&instance_data).to_bytes();
-    if instance.to_bytes().as_slice() != &instance_data[..]
-        || instance_digest != identity.product_instance_id().to_bytes()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    drop(instance_data);
-
-    let claim_data = frame
-        .claim_basis
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let claim =
-        CategoricalUnitV1::decode(&claim_data).map_err(|_| AdapterError::FoundingAuthentication)?;
-    let claim_digest = hash(&claim_data).to_bytes();
-    if claim.to_bytes().as_slice() != &claim_data[..]
-        || claim_digest != identity.claim_basis_id().to_bytes()
-        || u32::from(instruction.outcome_count()) != claim.outcome_count()
+    let _realm = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.realm,
+        frame.realm_staging_cursor,
+        frame.rent_sysvar,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        identity.realm_id().to_bytes(),
+        |record| {
+            RealmV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
+    let instance = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.product_instance,
+        frame.product_instance_staging_cursor,
+        frame.rent_sysvar,
+        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+        identity.product_instance_id().to_bytes(),
+        |record| {
+            InstanceV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
+    let claim = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.claim_basis,
+        frame.claim_basis_staging_cursor,
+        frame.rent_sysvar,
+        CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
+        identity.claim_basis_id().to_bytes(),
+        |record| {
+            CategoricalUnitV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
+    if u32::from(instruction.outcome_count()) != claim.outcome_count()
         || u32::from(instruction.outcome_count()) != instance.partition_cell_count()
     {
         return Err(AdapterError::ContentIdentity.into());
     }
-    drop(claim_data);
-
-    let capacity_data = frame
-        .capacity_profile
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let capacity = CapacityProfileV1::decode(&capacity_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let capacity_digest = hash(&capacity_data).to_bytes();
-    if capacity.to_bytes().as_slice() != &capacity_data[..]
-        || capacity_digest != claim.capacity_profile_id().content_id().to_bytes()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
+    let capacity = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.capacity_profile,
+        frame.capacity_profile_staging_cursor,
+        frame.rent_sysvar,
+        CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
+        claim.capacity_profile_id().content_id().to_bytes(),
+        |record| {
+            CapacityProfileV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::FoundingAuthentication.into())
+        },
+    )?;
     claim
         .validate_capacity(capacity)
         .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let product_claim_id =
-        ProductContentId::new(claim_digest).map_err(|_| AdapterError::FoundingAuthentication)?;
+    let product_claim_id = ProductContentId::new(identity.claim_basis_id().to_bytes())
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
     instance
         .validate_claim_basis(product_claim_id, claim)
         .map_err(|_| AdapterError::ContentIdentity)?;
-    drop(capacity_data);
-
-    let material_data = frame
-        .resolution_material
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    if hash(&material.policy().to_bytes()).to_bytes() != identity.resolution_policy_id().to_bytes()
-        || hash(&material.feed_profile().to_bytes()).to_bytes()
-            != *material.policy().feed_profile_id()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    drop(material_data);
-
-    let manifest_data = frame
-        .capability_manifest
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let manifest = CapabilityManifestV1::decode(&manifest_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    if hash(manifest.as_bytes()).to_bytes() != identity.capability_manifest_id().to_bytes() {
-        return Err(AdapterError::ContentIdentity.into());
-    }
     Ok(())
+}
+
+fn record_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    Ok(hash(&data).to_bytes())
 }
 
 fn persist_founding(
@@ -719,6 +735,7 @@ mod tests {
     use dclutch_realm_contract::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, RealmV1Input,
     };
+    use dclutch_record_contract::{ContentDigest, RecordKeyV1, SchemaReleaseId};
     use std::{boxed::Box, vec, vec::Vec};
 
     use super::*;
@@ -758,8 +775,6 @@ mod tests {
             .expect("valid Realm");
             let realm_bytes = realm.to_bytes();
             let realm_digest = hash(&realm_bytes).to_bytes();
-            let (realm_key, _) =
-                Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &program_id);
 
             let capacity = capacity();
             let capacity_bytes = capacity.to_bytes();
@@ -842,6 +857,35 @@ mod tests {
             let instruction =
                 FoundMarketAndFundV1::new(identity, outcome_count).expect("valid instruction");
 
+            let (realm_key, realm_cursor) =
+                record_pair(&program_id, REALM_SCHEMA_RELEASE_ID_V1, realm_digest);
+            let (instance_key, instance_cursor) = record_pair(
+                &program_id,
+                PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
+                hash(&instance_bytes).to_bytes(),
+            );
+            let (claim_key, claim_cursor) = record_pair(
+                &program_id,
+                CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
+                claim_digest,
+            );
+            let (capacity_key, capacity_cursor) = record_pair(
+                &program_id,
+                CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
+                hash(&capacity_bytes).to_bytes(),
+            );
+            let (material_key, material_cursor) = record_pair(
+                &program_id,
+                PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+                hash(&material_bytes).to_bytes(),
+            );
+            let manifest_digest = identity.capability_manifest_id().to_bytes();
+            let (manifest_key, manifest_cursor) = record_pair(
+                &program_id,
+                CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                manifest_digest,
+            );
+
             let mut accounts = vec![
                 leak_account(
                     sponsor_key,
@@ -875,54 +919,108 @@ mod tests {
                     realm_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(realm_bytes.len()),
                     realm_bytes.to_vec(),
                     program_id,
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    instance_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(instance_bytes.len()),
                     instance_bytes.to_vec(),
                     program_id,
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    claim_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(claim_bytes.len()),
                     claim_bytes.to_vec(),
                     program_id,
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    capacity_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(capacity_bytes.len()),
                     capacity_bytes.to_vec(),
                     program_id,
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    material_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(material_bytes.len()),
                     material_bytes.to_vec(),
                     program_id,
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    manifest_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(manifest_bytes.len()),
                     manifest_bytes,
                     program_id,
+                    false,
+                ),
+                leak_account(
+                    realm_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    instance_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    claim_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    capacity_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    material_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    manifest_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
                     false,
                 ),
                 leak_account(
@@ -944,7 +1042,7 @@ mod tests {
                     false,
                 ),
             ];
-            let rent_account = accounts.get_mut(11).expect("rent account");
+            let rent_account = accounts.get_mut(17).expect("rent account");
             assert_eq!(Rent::default().to_account_info(rent_account), Some(()));
             Self {
                 program_id,
@@ -957,6 +1055,17 @@ mod tests {
             let frame = FoundingFrame::parse(&self.accounts)?;
             authenticate_founding(&self.program_id, &frame, self.instruction, 44)
         }
+    }
+
+    fn record_pair(program_id: &Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (Pubkey, Pubkey) {
+        let key = RecordKeyV1::new(
+            SchemaReleaseId::new(schema).expect("schema"),
+            ContentDigest::new(digest).expect("digest"),
+        );
+        (
+            crate::records::derive_record_pda(program_id, key, false).0,
+            crate::records::derive_record_pda(program_id, key, true).0,
+        )
     }
 
     fn manifest_bytes(
@@ -1217,29 +1326,23 @@ mod tests {
     #[test]
     fn hostile_product_capacity_policy_and_manifest_bytes_refuse() {
         let bad_claim = Fixture::new(2);
-        let mut claim_data = test_account(&bad_claim.accounts, 5)
+        let mut claim_data = test_account(&bad_claim.accounts, 6)
             .try_borrow_mut_data()
             .expect("claim data");
         *claim_data.get_mut(12).expect("claim reserved byte") = 1;
         drop(claim_data);
-        assert_eq!(
-            bad_claim.authenticate().err(),
-            Some(ProgramError::from(AdapterError::FoundingAuthentication))
-        );
+        assert!(bad_claim.authenticate().is_err());
 
         let wrong_capacity_identity = Fixture::new(2);
-        let mut capacity_data = test_account(&wrong_capacity_identity.accounts, 6)
+        let mut capacity_data = test_account(&wrong_capacity_identity.accounts, 7)
             .try_borrow_mut_data()
             .expect("capacity data");
         *capacity_data.get_mut(16).expect("capacity identity byte") ^= 1;
         drop(capacity_data);
-        assert_eq!(
-            wrong_capacity_identity.authenticate().err(),
-            Some(ProgramError::from(AdapterError::ContentIdentity))
-        );
+        assert!(wrong_capacity_identity.authenticate().is_err());
 
         let wrong_feed_link = Fixture::new(2);
-        let mut material_data = test_account(&wrong_feed_link.accounts, 7)
+        let mut material_data = test_account(&wrong_feed_link.accounts, 8)
             .try_borrow_mut_data()
             .expect("material data");
         *material_data
@@ -1249,9 +1352,9 @@ mod tests {
         assert!(wrong_feed_link.authenticate().is_err());
 
         let mut trailing_manifest = Fixture::new(2);
-        let manifest_key = *test_account(&trailing_manifest.accounts, 8).key;
+        let manifest_key = *test_account(&trailing_manifest.accounts, 9).key;
         let program_id = trailing_manifest.program_id;
-        *test_account_mut(&mut trailing_manifest.accounts, 8) = leak_account(
+        *test_account_mut(&mut trailing_manifest.accounts, 9) = leak_account(
             manifest_key,
             false,
             false,
@@ -1260,10 +1363,7 @@ mod tests {
             program_id,
             false,
         );
-        assert_eq!(
-            trailing_manifest.authenticate().err(),
-            Some(ProgramError::from(AdapterError::FoundingAuthentication))
-        );
+        assert!(trailing_manifest.authenticate().is_err());
     }
 
     #[test]

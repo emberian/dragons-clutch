@@ -59,7 +59,10 @@ fn process_price(
         frame.market,
         frame.material,
         frame.manifest,
+        frame.material_staging_cursor,
+        frame.manifest_staging_cursor,
         frame.sponsor,
+        frame.rent_sysvar,
         market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
@@ -104,7 +107,10 @@ fn process_failure(
         frame.market,
         frame.material,
         frame.manifest,
+        frame.material_staging_cursor,
+        frame.manifest_staging_cursor,
         frame.sponsor,
+        frame.rent_sysvar,
         market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;

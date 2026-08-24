@@ -13,7 +13,7 @@ use dclutch_collateral_contract::{
 };
 use dclutch_core_contract::{ContentId, Phase as RootPhase};
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
-use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
+use dclutch_realm_contract::RealmV1;
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
     SourceCloseCreditPlanV1,
@@ -39,9 +39,13 @@ use crate::{
         recognized_program_loader, require_authority_policy, require_freeze_policy,
         select_adapter_release,
     },
+    records::{
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, REALM_SCHEMA_RELEASE_ID_V1,
+        with_authenticated_finalized_record_v1,
+    },
 };
 
-const OPEN_ACCOUNTS: usize = 12;
+const OPEN_ACCOUNTS: usize = 14;
 const REQUIRED_FUND_CHILD_COUNT: u64 = 1;
 const REQUIRED_PREOPEN_CHILD_COUNT: u64 = 2;
 const OPENED_CHILD_COUNT: u64 = 2;
@@ -58,6 +62,8 @@ struct OpenFrame<'a, 'info> {
     custody: &'a AccountInfo<'info>,
     vault: &'a AccountInfo<'info>,
     mint: &'a AccountInfo<'info>,
+    capability_manifest_staging_cursor: &'a AccountInfo<'info>,
+    realm_staging_cursor: &'a AccountInfo<'info>,
     token_program: &'a AccountInfo<'info>,
     system_program: &'a AccountInfo<'info>,
     rent_sysvar: &'a AccountInfo<'info>,
@@ -78,9 +84,11 @@ impl<'a, 'info> OpenFrame<'a, 'info> {
             custody: account(accounts, 6)?,
             vault: account(accounts, 7)?,
             mint: account(accounts, 8)?,
-            token_program: account(accounts, 9)?,
-            system_program: account(accounts, 10)?,
-            rent_sysvar: account(accounts, 11)?,
+            capability_manifest_staging_cursor: account(accounts, 9)?,
+            realm_staging_cursor: account(accounts, 10)?,
+            token_program: account(accounts, 11)?,
+            system_program: account(accounts, 12)?,
+            rent_sysvar: account(accounts, 13)?,
         };
         let privileges = [
             privilege(frame.sponsor),
@@ -92,6 +100,8 @@ impl<'a, 'info> OpenFrame<'a, 'info> {
             privilege(frame.custody),
             privilege(frame.vault),
             privilege(frame.mint),
+            privilege(frame.capability_manifest_staging_cursor),
+            privilege(frame.realm_staging_cursor),
             privilege(frame.token_program),
             privilege(frame.system_program),
             privilege(frame.rent_sysvar),
@@ -223,38 +233,7 @@ fn authenticate_open(
     let (realm, realm_digest) = authenticate_realm(program_id, frame)?;
     let release = authenticate_token(frame, realm)?;
 
-    let manifest_data = frame
-        .capability_manifest
-        .try_borrow_data()
-        .map_err(|_| AdapterError::VaultAuthentication)?;
-    let manifest = CapabilityManifestV1::decode(&manifest_data)
-        .map_err(|_| AdapterError::VaultAuthentication)?;
-    if manifest.as_bytes() != &manifest_data[..] {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    let manifest_digest = hash(manifest.as_bytes()).to_bytes();
-    let manifest_id =
-        ContentId::new(manifest_digest).map_err(|_| AdapterError::VaultAuthentication)?;
-
-    let readiness_data = frame
-        .readiness
-        .try_borrow_data()
-        .map_err(|_| AdapterError::VaultAuthentication)?;
-    let readiness = MarketOpeningReadinessV1::decode(&readiness_data)
-        .map_err(|_| AdapterError::VaultAuthentication)?;
-    if readiness.to_bytes().as_slice() != &readiness_data[..]
-        || readiness.sponsor_rent_refund() != frame.sponsor.key.as_ref()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    readiness
-        .require_ready_for_open(
-            frame.market.key.to_bytes(),
-            instruction.generation(),
-            manifest_id,
-            manifest,
-        )
-        .map_err(|_| AdapterError::VaultAuthentication)?;
+    let manifest_digest = authenticate_manifest_and_readiness(program_id, frame, instruction)?;
     let rent_credit = authenticate_rent_credit(program_id, frame.rent_credit, frame.sponsor.key)?;
     let rent_credit_lamports = frame
         .rent_credit
@@ -289,8 +268,6 @@ fn authenticate_open(
         instruction,
     )?;
     drop(market_data);
-    drop(readiness_data);
-    drop(manifest_data);
 
     let (expected_custody, custody_bump) = Pubkey::find_program_address(
         &[COLLATERAL_CUSTODY_PDA_DOMAIN, frame.market.key.as_ref()],
@@ -400,8 +377,6 @@ fn authenticate_account_identities(
         || !frame.sponsor.data_is_empty()
         || frame.market.owner != program_id
         || frame.readiness.owner != program_id
-        || frame.capability_manifest.owner != program_id
-        || frame.realm.owner != program_id
         || frame.custody.owner != &system_program::ID
         || !frame.custody.data_is_empty()
         || frame.custody.lamports() != 0
@@ -422,21 +397,68 @@ fn authenticate_realm(
     program_id: &Pubkey,
     frame: &OpenFrame<'_, '_>,
 ) -> Result<(RealmV1, [u8; 32]), ProgramError> {
-    let realm_data = frame
-        .realm
+    let realm_digest = record_digest(frame.realm)?;
+    let realm = with_authenticated_finalized_record_v1(
+        program_id,
+        frame.realm,
+        frame.realm_staging_cursor,
+        frame.rent_sysvar,
+        REALM_SCHEMA_RELEASE_ID_V1,
+        realm_digest,
+        |record| {
+            RealmV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::VaultAuthentication.into())
+        },
+    )?;
+    Ok((realm, realm_digest))
+}
+
+fn authenticate_manifest_and_readiness(
+    program_id: &Pubkey,
+    frame: &OpenFrame<'_, '_>,
+    instruction: OpenCollateralVaultV1,
+) -> Result<[u8; 32], ProgramError> {
+    let digest = record_digest(frame.capability_manifest)?;
+    let manifest_id = ContentId::new(digest).map_err(|_| AdapterError::VaultAuthentication)?;
+    with_authenticated_finalized_record_v1(
+        program_id,
+        frame.capability_manifest,
+        frame.capability_manifest_staging_cursor,
+        frame.rent_sysvar,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        digest,
+        |record| {
+            let manifest = CapabilityManifestV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::VaultAuthentication)?;
+            let readiness_data = frame
+                .readiness
+                .try_borrow_data()
+                .map_err(|_| AdapterError::VaultAuthentication)?;
+            let readiness = MarketOpeningReadinessV1::decode(&readiness_data)
+                .map_err(|_| AdapterError::VaultAuthentication)?;
+            if readiness.to_bytes().as_slice() != &readiness_data[..]
+                || readiness.sponsor_rent_refund() != frame.sponsor.key.as_ref()
+            {
+                return Err(AdapterError::ContentIdentity.into());
+            }
+            readiness
+                .require_ready_for_open(
+                    frame.market.key.to_bytes(),
+                    instruction.generation(),
+                    manifest_id,
+                    manifest,
+                )
+                .map_err(|_| AdapterError::VaultAuthentication.into())
+        },
+    )?;
+    Ok(digest)
+}
+
+fn record_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
+    let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::VaultAuthentication)?;
-    let realm = RealmV1::decode(&realm_data).map_err(|_| AdapterError::VaultAuthentication)?;
-    let realm_digest = hash(&realm_data).to_bytes();
-    if realm.to_bytes().as_slice() != &realm_data[..] {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    let (expected_realm, _) =
-        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], program_id);
-    if frame.realm.key != &expected_realm {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    Ok((realm, realm_digest))
+    Ok(hash(&data).to_bytes())
 }
 
 fn authenticate_token(
@@ -904,6 +926,7 @@ mod tests {
     use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
     use dclutch_pyth_contract::funding::{FUNDING_BYTES, construct_required_resolution_funding};
     use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
+    use dclutch_record_contract::{ContentDigest, RecordKeyV1, SchemaReleaseId};
     use dclutch_token_svm::{
         LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID,
         state::MINT_BYTES,
@@ -942,8 +965,6 @@ mod tests {
             .expect("Realm");
             let realm_bytes = realm.to_bytes();
             let realm_digest = hash(&realm_bytes).to_bytes();
-            let (realm_key, _) =
-                Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &program_id);
 
             let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
             let entry = CapabilityEntryV1::new(
@@ -1047,6 +1068,13 @@ mod tests {
             .expect("Market");
             let mut market_bytes = vec![0; CategoricalMarketV1::<2>::encoded_len().expect("width")];
             market.encode(&mut market_bytes).expect("Market bytes");
+            let (manifest_key, manifest_cursor) = record_pair(
+                &program_id,
+                CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+                manifest_id.to_bytes(),
+            );
+            let (realm_key, realm_cursor) =
+                record_pair(&program_id, REALM_SCHEMA_RELEASE_ID_V1, realm_digest);
 
             let mut accounts = vec![
                 leak_account(
@@ -1086,10 +1114,10 @@ mod tests {
                     false,
                 ),
                 leak_account(
-                    Pubkey::new_unique(),
+                    manifest_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(manifest_bytes.len()),
                     manifest_bytes,
                     program_id,
                     false,
@@ -1098,7 +1126,7 @@ mod tests {
                     realm_key,
                     false,
                     false,
-                    1,
+                    Rent::default().minimum_balance(realm_bytes.len()),
                     realm_bytes.to_vec(),
                     program_id,
                     false,
@@ -1120,6 +1148,24 @@ mod tests {
                     1,
                     mint_bytes(),
                     Pubkey::new_from_array(token_program),
+                    false,
+                ),
+                leak_account(
+                    manifest_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
+                    false,
+                ),
+                leak_account(
+                    realm_cursor,
+                    false,
+                    false,
+                    0,
+                    vec![],
+                    system_program::ID,
                     false,
                 ),
                 leak_account(
@@ -1150,7 +1196,7 @@ mod tests {
                     false,
                 ),
             ];
-            let rent = accounts.get_mut(11).expect("rent");
+            let rent = accounts.get_mut(13).expect("rent");
             assert_eq!(Rent::default().to_account_info(rent), Some(()));
             Self {
                 program_id,
@@ -1163,6 +1209,17 @@ mod tests {
             let frame = OpenFrame::parse(&self.accounts)?;
             authenticate_open(&self.program_id, &frame, self.instruction)
         }
+    }
+
+    fn record_pair(program_id: &Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (Pubkey, Pubkey) {
+        let key = RecordKeyV1::new(
+            SchemaReleaseId::new(schema).expect("schema"),
+            ContentDigest::new(digest).expect("digest"),
+        );
+        (
+            crate::records::derive_record_pda(program_id, key, false).0,
+            crate::records::derive_record_pda(program_id, key, true).0,
+        )
     }
 
     fn core_id(bytes: [u8; 32]) -> ContentId {

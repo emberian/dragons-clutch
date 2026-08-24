@@ -21,10 +21,16 @@ use dclutch_rent_contract::{
 };
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
-    sysvar::Sysvar,
+    sysvar::SysvarSerialize,
 };
 
-use crate::AdapterError;
+use crate::{
+    AdapterError,
+    records::{
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        with_authenticated_finalized_record_v1,
+    },
+};
 
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_CONFIG_SEED: &[u8] = b"config";
@@ -37,7 +43,7 @@ const UPGRADEABLE_LOADER: Pubkey = Pubkey::new_from_array([
 /// Canonical System Program address.
 pub(crate) const SYSTEM_PROGRAM: Pubkey = Pubkey::new_from_array([0; 32]);
 
-/// Exact 15-role price-resolution account frame.
+/// Exact 18-role price-resolution account frame.
 pub(crate) struct PriceFrame<'a, 'info> {
     pub(crate) resolver: &'a AccountInfo<'info>,
     pub(crate) update: &'a AccountInfo<'info>,
@@ -53,12 +59,15 @@ pub(crate) struct PriceFrame<'a, 'info> {
     pub(crate) router: &'a AccountInfo<'info>,
     pub(crate) router_programdata: &'a AccountInfo<'info>,
     pub(crate) treasury: &'a AccountInfo<'info>,
+    pub(crate) material_staging_cursor: &'a AccountInfo<'info>,
+    pub(crate) manifest_staging_cursor: &'a AccountInfo<'info>,
     pub(crate) system: &'a AccountInfo<'info>,
+    pub(crate) rent_sysvar: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> PriceFrame<'a, 'info> {
     pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != 15 {
+        if accounts.len() != 18 {
             return Err(AdapterError::AccountFrameLength.into());
         }
         let frame = Self {
@@ -76,7 +85,10 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
             router: account(accounts, 11)?,
             router_programdata: account(accounts, 12)?,
             treasury: account(accounts, 13)?,
-            system: account(accounts, 14)?,
+            material_staging_cursor: account(accounts, 14)?,
+            manifest_staging_cursor: account(accounts, 15)?,
+            system: account(accounts, 16)?,
+            rent_sysvar: account(accounts, 17)?,
         };
         frame.validate_privileges()?;
         Ok(frame)
@@ -98,13 +110,16 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
             resolution_privilege(self.router),
             resolution_privilege(self.router_programdata),
             resolution_privilege(self.treasury),
+            resolution_privilege(self.material_staging_cursor),
+            resolution_privilege(self.manifest_staging_cursor),
             resolution_privilege(self.system),
+            resolution_privilege(self.rent_sysvar),
         ];
         validate_price_resolution_frame_v1(&privileges).map_err(map_resolution_frame_error)
     }
 }
 
-/// Exact six-role permissionless failure-resolution account frame.
+/// Exact nine-role permissionless failure-resolution account frame.
 pub(crate) struct FailureFrame<'a, 'info> {
     pub(crate) bounty_recipient: &'a AccountInfo<'info>,
     pub(crate) market: &'a AccountInfo<'info>,
@@ -112,11 +127,14 @@ pub(crate) struct FailureFrame<'a, 'info> {
     pub(crate) material: &'a AccountInfo<'info>,
     pub(crate) manifest: &'a AccountInfo<'info>,
     pub(crate) sponsor: &'a AccountInfo<'info>,
+    pub(crate) material_staging_cursor: &'a AccountInfo<'info>,
+    pub(crate) manifest_staging_cursor: &'a AccountInfo<'info>,
+    pub(crate) rent_sysvar: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> FailureFrame<'a, 'info> {
     pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != 6 {
+        if accounts.len() != 9 {
             return Err(AdapterError::AccountFrameLength.into());
         }
         let frame = Self {
@@ -126,6 +144,9 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
             material: account(accounts, 3)?,
             manifest: account(accounts, 4)?,
             sponsor: account(accounts, 5)?,
+            material_staging_cursor: account(accounts, 6)?,
+            manifest_staging_cursor: account(accounts, 7)?,
+            rent_sysvar: account(accounts, 8)?,
         };
         let privileges = [
             resolution_privilege(frame.bounty_recipient),
@@ -134,6 +155,9 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
             resolution_privilege(frame.material),
             resolution_privilege(frame.manifest),
             resolution_privilege(frame.sponsor),
+            resolution_privilege(frame.material_staging_cursor),
+            resolution_privilege(frame.manifest_staging_cursor),
+            resolution_privilege(frame.rent_sysvar),
         ];
         validate_failure_resolution_frame_v1(&privileges).map_err(map_resolution_frame_error)?;
         Ok(frame)
@@ -232,50 +256,40 @@ fn market_facts<const N: usize>(
     })
 }
 
-pub(crate) fn authenticate_fund(
+#[allow(clippy::too_many_arguments)] // Exact raw/cursor/Rent finality witnesses are independent frame roles.
+pub(crate) fn authenticate_fund<'info>(
     program_id: &Pubkey,
-    fund_account: &AccountInfo<'_>,
-    market: &AccountInfo<'_>,
-    material_account: &AccountInfo<'_>,
-    manifest_account: &AccountInfo<'_>,
-    rent_credit_account: &AccountInfo<'_>,
+    fund_account: &AccountInfo<'info>,
+    market: &AccountInfo<'info>,
+    material_account: &AccountInfo<'info>,
+    manifest_account: &AccountInfo<'info>,
+    material_staging_cursor: &AccountInfo<'info>,
+    manifest_staging_cursor: &AccountInfo<'info>,
+    rent_credit_account: &AccountInfo<'info>,
+    rent_sysvar: &AccountInfo<'info>,
     market_facts: MarketFacts,
 ) -> Result<(FundFacts, CategoricalPythResolutionMaterialV1), ProgramError> {
-    if fund_account.owner != program_id
-        || material_account.owner != program_id
-        || manifest_account.owner != program_id
-        || fund_account.key == rent_credit_account.key
-    {
+    if fund_account.owner != program_id || fund_account.key == rent_credit_account.key {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let material_data = material_account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::AccountData)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-        .map_err(|_| AdapterError::AccountData)?;
-    if material.to_bytes().as_slice() != &material_data[..]
-        || hash(&material.policy().to_bytes()).to_bytes()
-            != market_facts.resolution_policy_id.to_bytes()
+    let material_digest = record_digest(material_account)?;
+    let material = with_authenticated_finalized_record_v1(
+        program_id,
+        material_account,
+        material_staging_cursor,
+        rent_sysvar,
+        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        material_digest,
+        |record| {
+            CategoricalPythResolutionMaterialV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::AccountData.into())
+        },
+    )?;
+    if hash(&material.policy().to_bytes()).to_bytes()
+        != market_facts.resolution_policy_id.to_bytes()
         || hash(&material.feed_profile().to_bytes()).to_bytes()
             != *material.policy().feed_profile_id()
     {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-
-    let manifest_data = manifest_account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::AccountData)?;
-    let manifest =
-        CapabilityManifestV1::decode(&manifest_data).map_err(|_| AdapterError::AccountData)?;
-    if manifest.as_bytes() != &manifest_data[..]
-        || hash(manifest.as_bytes()).to_bytes() != market_facts.capability_manifest_id.to_bytes()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    let selected = manifest
-        .required_founding_entry_for_config(market_facts.resolution_policy_id)
-        .map_err(|_| AdapterError::AccountData)?;
-    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
         return Err(AdapterError::ContentIdentity.into());
     }
 
@@ -283,35 +297,56 @@ pub(crate) fn authenticate_fund(
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
     let funding = FundingStateV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
-    let derivation = CapabilityFundingDerivationV1::new(
-        market.key.to_bytes(),
-        market_facts.generation,
-        market_facts.capability_manifest_id,
-        manifest,
-        funding,
-    )
-    .map_err(|_| AdapterError::AccountIdentity)?;
-    let (expected, _) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
-    if fund_account.key != &expected {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
-    let required_rent = rent.minimum_balance(data.len());
-    let minimum =
-        required_resolution_minimum_balance(funding).map_err(|_| AdapterError::FundUnderfunded)?;
-    let credit_excess = fund_account
-        .lamports()
-        .checked_sub(minimum)
-        .ok_or(AdapterError::FundUnderfunded)?;
-    validate_required_resolution_funding(
-        funding,
-        market_facts.capability_manifest_id,
-        manifest,
-        selected,
-        required_rent,
-        funding.remaining().total_principal(),
-    )
-    .map_err(|_| AdapterError::FundUnderfunded)?;
+    let (required_rent, credit_excess) = with_authenticated_finalized_record_v1(
+        program_id,
+        manifest_account,
+        manifest_staging_cursor,
+        rent_sysvar,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        market_facts.capability_manifest_id.to_bytes(),
+        |record| {
+            let manifest = CapabilityManifestV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::AccountData)?;
+            let selected = manifest
+                .required_founding_entry_for_config(market_facts.resolution_policy_id)
+                .map_err(|_| AdapterError::AccountData)?;
+            if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+                return Err(AdapterError::ContentIdentity.into());
+            }
+            let derivation = CapabilityFundingDerivationV1::new(
+                market.key.to_bytes(),
+                market_facts.generation,
+                market_facts.capability_manifest_id,
+                manifest,
+                funding,
+            )
+            .map_err(|_| AdapterError::AccountIdentity)?;
+            let (expected, _) =
+                Pubkey::find_program_address(&derivation.seed_components(), program_id);
+            if fund_account.key != &expected {
+                return Err(AdapterError::AccountIdentity.into());
+            }
+            let rent =
+                Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+            let required_rent = rent.minimum_balance(data.len());
+            let minimum = required_resolution_minimum_balance(funding)
+                .map_err(|_| AdapterError::FundUnderfunded)?;
+            let credit_excess = fund_account
+                .lamports()
+                .checked_sub(minimum)
+                .ok_or(AdapterError::FundUnderfunded)?;
+            validate_required_resolution_funding(
+                funding,
+                market_facts.capability_manifest_id,
+                manifest,
+                selected,
+                required_rent,
+                funding.remaining().total_principal(),
+            )
+            .map_err(|_| AdapterError::FundUnderfunded)?;
+            Ok((required_rent, credit_excess))
+        },
+    )?;
     let rent_credit = authenticate_rent_credit(
         program_id,
         rent_credit_account,
@@ -392,7 +427,7 @@ pub(crate) fn authenticate_provider(
     if funding.funding.remaining().provider_principal() != config.fee() {
         return Err(AdapterError::FundUnderfunded.into());
     }
-    let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
+    let rent = Rent::from_account_info(frame.rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let update_rent = rent.minimum_balance(dclutch_pyth_svm::FULL_PRICE_UPDATE_V2_LEN);
     let required_resolver_lamports = update_rent
         .checked_add(config.fee())
@@ -410,6 +445,13 @@ pub(crate) fn authenticate_provider(
         update_rent,
         fee: config.fee(),
     })
+}
+
+fn record_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    Ok(hash(&data).to_bytes())
 }
 
 fn authenticate_rent_credit(
@@ -539,7 +581,7 @@ mod tests {
         AccountInfo::new(key, signer, writable, lamports, data, owner, executable)
     }
 
-    fn price_accounts() -> [AccountInfo<'static>; 15] {
+    fn price_accounts() -> [AccountInfo<'static>; 18] {
         [
             test_account(true, true, false),
             test_account(true, true, false),
@@ -555,11 +597,14 @@ mod tests {
             test_account(false, false, true),
             test_account(false, false, false),
             test_account(false, true, false),
+            test_account(false, false, false),
+            test_account(false, false, false),
             test_account(false, false, true),
+            test_account(false, false, false),
         ]
     }
 
-    fn failure_accounts(bounty_signer: bool, sponsor_signer: bool) -> [AccountInfo<'static>; 6] {
+    fn failure_accounts(bounty_signer: bool, sponsor_signer: bool) -> [AccountInfo<'static>; 9] {
         [
             test_account(bounty_signer, true, false),
             test_account(false, true, false),
@@ -567,6 +612,9 @@ mod tests {
             test_account(false, false, false),
             test_account(false, false, false),
             test_account(sponsor_signer, true, false),
+            test_account(false, false, false),
+            test_account(false, false, false),
+            test_account(false, false, false),
         ]
     }
 
