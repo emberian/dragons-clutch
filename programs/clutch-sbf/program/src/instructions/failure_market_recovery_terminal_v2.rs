@@ -111,6 +111,7 @@ pub(crate) struct AuthenticatedFailureMarketRecoveryClosePostwriteV2 {
     transition: RuntimeAtomicTransitionV1,
     close: FailureMarketRecoveryCloseReceiptV2,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
 }
 
 impl AuthenticatedFailureMarketRecoveryClosePostwriteV2 {
@@ -137,6 +138,11 @@ impl AuthenticatedFailureMarketRecoveryClosePostwriteV2 {
     /// Hostile-reopened `RecoveryClosed` runtime.
     pub(crate) const fn runtime(self) -> AuthenticatedFailureMarketRuntimeRootV1 {
         self.runtime
+    }
+
+    /// Unchanged Idle cell and full unsealed history retained for family seal.
+    pub(crate) const fn interval(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.interval
     }
 }
 
@@ -192,7 +198,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         archived_accounts.funding(),
         archived_accounts.quote(),
         false,
-        false,
+        true,
     )?;
     let policy = live_admission.state().binding().facts();
     let source_liveness = source_terminal.liveness();
@@ -366,6 +372,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         transition,
         close,
         runtime: runtime_after,
+        interval: live_interval,
     })
 }
 
