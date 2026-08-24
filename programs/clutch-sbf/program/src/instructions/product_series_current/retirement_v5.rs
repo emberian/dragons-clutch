@@ -37,7 +37,8 @@ use clutch_product_series::{
     MarketFamilyV1, MarketInstanceV2Id, MarketLifecyclePhaseV3,
     MarketSharedCoreTerminalProjectionV3, MarketSharedCoreV3,
     SeriesLinkObligationDispositionV3, SeriesLinkObligationTerminalProjectionV3,
-    SeriesLinkObligationV3, SeriesMarketLinkPhaseV3, SeriesMarketLinkV3Id,
+    SeriesLinkObligationStatusV3, SeriesLinkObligationV3, SeriesMarketLinkPhaseV3,
+    SeriesMarketLinkV3Id,
     SeriesFundingAbortBindingV5, SeriesFundingComponentV2,
     SeriesFundingCompletionBindingV5, SeriesFundingPhaseV5, SeriesFundingQuoteV6,
     SeriesFundingReservationBindingV5, SeriesFundingStateV5,
@@ -58,6 +59,10 @@ const PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-failure-core-terminal-postwrite/v5\0";
 const PRODUCT_STRUCTURED_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-structured-family-terminal-postwrite/v5\0";
+const PRODUCT_LIQUIDITY_OBLIGATION_ABSENCE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-liquidity-obligation-absence/v5\0";
+const PRODUCT_LIQUIDITY_OBLIGATION_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-liquidity-obligation-postwrite/v5\0";
 const PRODUCT_SERIES_FUNDING_TERMINAL_AUTHORITY_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-funding-terminal-authority/v5\0";
 const PRODUCT_SERIES_LIFECYCLE_TERMINAL_DOMAIN_V5: &[u8] =
@@ -86,6 +91,53 @@ fn observe_link_coordinate_v3(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let value = SeriesMarketLinkAccountV3::decode(&data)?;
     Ok((value.state.binding_ref().series_plan_id, value.state.binding_ref().ordinal))
+}
+
+/// Product is the sole semantic owner of an attachment obligation which was
+/// never founded.  The durable LinkV3 status and its immutable binding are the
+/// absence proof; no caller-provided receipt or family DTO participates.
+fn liquidity_absence_projection_v5(
+    program_id: &Pubkey,
+    root_binding_id: ContentId,
+    link: &clutch_product_series::SeriesMarketLinkV3,
+) -> Outcome<SeriesLinkObligationTerminalProjectionV3> {
+    let status = link.obligation_status(SeriesLinkObligationV3::Liquidity);
+    require(
+        matches!(
+            status,
+            SeriesLinkObligationStatusV3::CapabilityDisabled
+                | SeriesLinkObligationStatusV3::EnabledNeverFounded
+        ) && link
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Liquidity)
+            .is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    let binding = link.binding_ref();
+    let semantic_id = link
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let owner_receipt_id = hashv(&[
+        PRODUCT_LIQUIDITY_OBLIGATION_ABSENCE_DOMAIN_V5,
+        program_id.as_ref(),
+        &root_binding_id.bytes(),
+        &semantic_id.bytes(),
+        &binding.compiler_bundle_id.bytes(),
+        &binding.attachment_plan_id.bytes(),
+        &binding.capability_profile_id.bytes(),
+        &binding.obligation_configuration_id.bytes(),
+        &[status.wire_byte()],
+    ]);
+    require_live(owner_receipt_id)?;
+    Ok(SeriesLinkObligationTerminalProjectionV3 {
+        link_semantic_id: semantic_id,
+        obligation: SeriesLinkObligationV3::Liquidity,
+        disposition: SeriesLinkObligationDispositionV3::Absent,
+        link_transition_sequence: link
+            .transition_sequence()
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        owner_terminal_receipt_id: owner_receipt_id,
+    })
 }
 
 fn write_market_lifecycle_root_v3(
@@ -665,6 +717,183 @@ pub(crate) fn consume_structured_family_terminal_v5(
     })
 }
 
+/// Move-only Product-owned proof that an immutable absent liquidity
+/// obligation was consumed once.  It is separate from Dealer's physical
+/// terminal: no Dealer receipt exists when the capability was disabled or the
+/// attachment was never founded.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductLiquidityObligationAbsenceV5 {
+    id: ContentId,
+    registry_capability_id: ContentId,
+    root_account: Pubkey,
+    root_authentication_id: ContentId,
+    link_account: Pubkey,
+    link_authentication_before_id: ContentId,
+    link_authentication_after_id: ContentId,
+    link_semantic_before_id: SeriesMarketLinkV3Id,
+    link_semantic_after_id: SeriesMarketLinkV3Id,
+    projection_id: ContentId,
+}
+
+impl AuthenticatedProductLiquidityObligationAbsenceV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_after_id(&self) -> ContentId {
+        self.link_authentication_after_id
+    }
+    pub(crate) const fn link_semantic_after_id(&self) -> SeriesMarketLinkV3Id {
+        self.link_semantic_after_id
+    }
+    pub(crate) const fn projection_id(&self) -> ContentId { self.projection_id }
+}
+
+/// Consume canonical absence for Liquidity directly from the hostile current
+/// Registry/Bundle/RootV3/LinkV3 graph.  A Live obligation is categorically
+/// refused and must instead consume Dealer's move-only physical value receipt.
+#[inline(never)]
+pub(crate) fn consume_absent_liquidity_obligation_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedProductLiquidityObligationAbsenceV5> {
+    require(root_account.key != link_account.key, ClutchError::AccountAlias)?;
+    artifacts.validate_registry_projection(&registry.projection())?;
+    let mut observed_link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    {
+        let data = link_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        SeriesMarketLinkAccountV3::decode_into(&data, &mut observed_link)?;
+    }
+    let observed_binding = *observed_link.state.binding_ref();
+    let mut root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        observed_binding.market_instance_id,
+        observed_binding.generation,
+        true,
+        &mut root_value,
+    )?;
+    let root_binding_id = root.binding_id();
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        observed_binding.series_plan_id,
+        observed_binding.ordinal,
+        observed_binding.market_instance_id,
+        observed_binding.generation,
+        *root_account.key,
+        true,
+        &mut link_value,
+    )?;
+    let series_plan_id = artifacts
+        .series()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let quote_id = artifacts
+        .quote()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_id = artifacts
+        .attachment()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry.activation_consumed()
+            && registry.series_plan_id() == series_plan_id
+            && registry.funding_terms_id() == funding_terms_id
+            && registry.compiler_bundle_id() == bundle.bundle_id()
+            && bundle.bundle().series_plan_id == series_plan_id
+            && bundle.bundle().funding_terms_id == funding_terms_id
+            && bundle.bundle().funding_quote_id == quote_id
+            && bundle.bundle().attachment_plan_id == attachment_id
+            && root.state().phase() == MarketLifecyclePhaseV3::Active
+            && root.binding().product_template_id
+                == bundle.bundle().product_template_id.content_id()
+            && root.binding().market_genesis_profile_id
+                == bundle.bundle().market_genesis_profile_id.content_id()
+            && root.binding().capability_profile_id == registry.capability_profile_id()
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+            && link.binding().market_binding_id == root_binding_id
+            && link.binding().series_plan_id == series_plan_id
+            && link.binding().funding_terms_id == funding_terms_id
+            && link.binding().funding_quote_id == quote_id
+            && link.binding().attachment_plan_id == attachment_id
+            && link.binding().compiler_bundle_id == bundle.bundle_id()
+            && link.binding().capability_profile_id == registry.capability_profile_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let projection = liquidity_absence_projection_v5(program_id, root_binding_id, link.state())?;
+    let next = (*link.state())
+        .consume_obligation(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_authentication_id = root.authentication_id();
+    let link_authentication_before_id = link.authentication_id();
+    let link_semantic_before_id = link.semantic_id();
+    drop(link);
+    drop(root);
+    write_series_market_link_v3(link_account, &link_value, &next)?;
+    let mut reopened_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let reopened = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        observed_binding.series_plan_id,
+        observed_binding.ordinal,
+        observed_binding.market_instance_id,
+        observed_binding.generation,
+        *root_account.key,
+        true,
+        &mut reopened_value,
+    )?;
+    let projection_id = projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        reopened.state() == &next
+            && reopened
+                .state()
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Liquidity)
+                == projection_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_LIQUIDITY_OBLIGATION_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &registry.id().bytes(),
+        root_account.key.as_ref(),
+        &root_authentication_id.bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &link_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &projection_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductLiquidityObligationAbsenceV5 {
+        id,
+        registry_capability_id: registry.id(),
+        root_account: *root_account.key,
+        root_authentication_id,
+        link_account: *link_account.key,
+        link_authentication_before_id,
+        link_authentication_after_id: reopened.authentication_id(),
+        link_semantic_before_id,
+        link_semantic_after_id: reopened.semantic_id(),
+        projection_id,
+    })
+}
+
 /// Move-only postwrite proving that Dealer's complete physical terminal was
 /// consumed into both the Dealer family counter and this Series' Dealer
 /// obligation.  The Dealer receipt remains owned here and cannot authorize a
@@ -690,6 +919,7 @@ pub(crate) struct AuthenticatedProductDealerFamilyTerminalV5 {
     link_transition_sequence_before: u64,
     link_transition_sequence_after: u64,
     dealer_obligation_projection_id: ContentId,
+    liquidity_obligation_projection_id: ContentId,
 }
 
 impl AuthenticatedProductDealerFamilyTerminalV5 {
@@ -718,6 +948,9 @@ impl AuthenticatedProductDealerFamilyTerminalV5 {
     }
     pub(crate) const fn dealer_obligation_projection_id(&self) -> ContentId {
         self.dealer_obligation_projection_id
+    }
+    pub(crate) const fn liquidity_obligation_projection_id(&self) -> ContentId {
+        self.liquidity_obligation_projection_id
     }
 }
 
@@ -809,8 +1042,38 @@ pub(crate) fn consume_dealer_family_terminal_v5(
             .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
         owner_terminal_receipt_id: terminal.dealer_obligation_close_receipt_id(),
     };
-    let link_next = (*link.state())
+    let link_after_dealer = (*link.state())
         .consume_obligation(dealer_projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let liquidity_projection = match link_after_dealer
+        .obligation_status(SeriesLinkObligationV3::Liquidity)
+    {
+        SeriesLinkObligationStatusV3::Live => {
+            let owner_terminal_receipt_id = terminal.value_terminal_receipt_id();
+            require_live(owner_terminal_receipt_id)?;
+            SeriesLinkObligationTerminalProjectionV3 {
+                link_semantic_id: link_after_dealer
+                    .semantic_id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+                obligation: SeriesLinkObligationV3::Liquidity,
+                disposition: SeriesLinkObligationDispositionV3::Terminal,
+                link_transition_sequence: link_after_dealer
+                    .transition_sequence()
+                    .checked_add(1)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+                owner_terminal_receipt_id,
+            }
+        }
+        SeriesLinkObligationStatusV3::CapabilityDisabled
+        | SeriesLinkObligationStatusV3::EnabledNeverFounded => {
+            liquidity_absence_projection_v5(program_id, root_binding_id, &link_after_dealer)?
+        }
+        SeriesLinkObligationStatusV3::Terminal => {
+            return Err(Refusal::Adapter(ClutchError::Replay));
+        }
+    };
+    let link_next = link_after_dealer
+        .consume_obligation(liquidity_projection)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_authentication_before_id = root.authentication_id();
     let root_semantic_before_id = root.semantic_id();
@@ -848,13 +1111,20 @@ pub(crate) fn consume_dealer_family_terminal_v5(
     let dealer_projection_id = dealer_projection
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let liquidity_projection_id = liquidity_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         reopened_root.state() == &root_next
             && reopened_link.state() == &link_next
             && reopened_link
                 .state()
                 .obligation_terminal_receipt_id(SeriesLinkObligationV3::Dealer)
-                == dealer_projection_id,
+                == dealer_projection_id
+            && reopened_link
+                .state()
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Liquidity)
+                == liquidity_projection_id,
         ClutchError::MismatchedState,
     )?;
     let id = hashv(&[
@@ -878,6 +1148,7 @@ pub(crate) fn consume_dealer_family_terminal_v5(
         &link_transition_sequence_before.to_le_bytes(),
         &reopened_link.state().transition_sequence().to_le_bytes(),
         &dealer_projection_id.bytes(),
+        &liquidity_projection_id.bytes(),
     ]);
     require_live(id)?;
     Ok(AuthenticatedProductDealerFamilyTerminalV5 {
@@ -900,6 +1171,7 @@ pub(crate) fn consume_dealer_family_terminal_v5(
         link_transition_sequence_before,
         link_transition_sequence_after: reopened_link.state().transition_sequence(),
         dealer_obligation_projection_id: dealer_projection_id,
+        liquidity_obligation_projection_id: liquidity_projection_id,
     })
 }
 
