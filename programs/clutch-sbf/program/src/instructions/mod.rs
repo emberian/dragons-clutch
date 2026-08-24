@@ -155,6 +155,8 @@ pub mod product_artifact;
 pub(crate) mod product_general_family;
 /// Private full-payer capitalization and authentication of Product `0xba/v1`.
 pub(crate) mod product_direct_global_liveness;
+/// Current RegistryV3/BundleV6/QuoteV5 Failure attempt compiler authority.
+pub(crate) mod product_failure_begin_current;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
 /// Capability-disabled Product FoundationVault/Recovery/founder compositor.
