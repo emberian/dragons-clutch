@@ -53,8 +53,10 @@ pub trait FeeRetirementHashV1: SelectedOwnerFeeBookHashV1 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; 32];
 }
 
-/// Compact builder for the exact Position-PDA-sorted owner fee rows produced
-/// by one authenticated traversal. It never materializes the 64-row book.
+/// Compact builder for the exact Position-PDA-sorted nonzero owner fee rows
+/// produced by one authenticated traversal. Zero-fee traversed owners remain
+/// committed by the allocation's traversal count/order digest but create no
+/// rent-bearing fee-finalization child. It never materializes a 64-row book.
 #[derive(Debug, Eq, PartialEq)]
 pub struct StreamingOwnerFeeBookV2 {
     fee_record: Id,
@@ -65,7 +67,7 @@ pub struct StreamingOwnerFeeBookV2 {
     processed_owner_count: u8,
     expected_fee_atoms: u128,
     processed_fee_atoms: u128,
-    prior_owner: Id,
+    prior_position: Id,
     initial_row_fold: Id,
     row_fold: Id,
 }
@@ -94,10 +96,9 @@ impl StreamingOwnerFeeBookV2 {
         hash: &H,
     ) -> Result<Self> {
         live(owner_order_set_digest)?;
-        if owner_count == 0
-            || usize::from(owner_count) > MAX_FEE_ROWS_V1
-            || fee_atoms == 0
+        if usize::from(owner_count) > MAX_FEE_ROWS_V1
             || fee_atoms > u128::from(u64::MAX)
+            || (owner_count == 0) != (fee_atoms == 0)
         {
             return Err(Error::InvalidWidth);
         }
@@ -117,7 +118,7 @@ impl StreamingOwnerFeeBookV2 {
             processed_owner_count: 0,
             expected_fee_atoms: fee_atoms,
             processed_fee_atoms: 0,
-            prior_owner: Id([0; 32]),
+            prior_position: Id([0; 32]),
             initial_row_fold,
             row_fold: initial_row_fold,
         })
@@ -125,19 +126,22 @@ impl StreamingOwnerFeeBookV2 {
 
     pub fn fold<H: FeeRetirementHashV1>(
         mut self,
+        position: Id,
         owner: Id,
         fee_atoms: u64,
         hash: &H,
     ) -> Result<Self> {
+        live(position)?;
         live(owner)?;
         if self.processed_owner_count >= self.expected_owner_count
-            || (!self.prior_owner.is_zero() && owner <= self.prior_owner)
+            || (!self.prior_position.is_zero() && position <= self.prior_position)
         {
             return Err(Error::NonCanonicalOrder);
         }
         self.row_fold = fold_owner_book_row_v2(
             self.row_fold,
             self.processed_owner_count,
+            position,
             owner,
             fee_atoms,
             hash,
@@ -146,7 +150,7 @@ impl StreamingOwnerFeeBookV2 {
             .processed_fee_atoms
             .checked_add(u128::from(fee_atoms))
             .ok_or(Error::ArithmeticOverflow)?;
-        self.prior_owner = owner;
+        self.prior_position = position;
         self.processed_owner_count = self
             .processed_owner_count
             .checked_add(1)
@@ -215,7 +219,7 @@ pub struct FeeRetirementAccumulatorV1 {
     observed_owner_row_fold: Id,
     owner_closure_fold: Id,
     value_disposition_fold: Id,
-    prior_owner: Id,
+    prior_position: Id,
     expected_owner_count: u8,
     processed_owner_count: u8,
     expected_maker_count: u8,
@@ -380,7 +384,7 @@ impl FeeRetirementAccumulatorV1 {
             observed_owner_row_fold: book.initial_row_fold,
             owner_closure_fold,
             value_disposition_fold,
-            prior_owner: Id([0; 32]),
+            prior_position: Id([0; 32]),
             expected_owner_count: book.owner_count,
             processed_owner_count: 0,
             expected_maker_count: certified.maker_len(),
@@ -419,7 +423,7 @@ impl FeeRetirementAccumulatorV1 {
         observed_owner_row_fold: Id,
         owner_closure_fold: Id,
         value_disposition_fold: Id,
-        prior_owner: Id,
+        prior_position: Id,
         expected_owner_count: u8,
         processed_owner_count: u8,
         expected_maker_count: u8,
@@ -450,7 +454,7 @@ impl FeeRetirementAccumulatorV1 {
             observed_owner_row_fold,
             owner_closure_fold,
             value_disposition_fold,
-            prior_owner,
+            prior_position,
             expected_owner_count,
             processed_owner_count,
             expected_maker_count,
@@ -487,7 +491,8 @@ impl FeeRetirementAccumulatorV1 {
             || closure.fee_record() != self.fee_record
             || closure.account() != owner.carry_account
             || closure.semantic_owner() != owner.receipt.owner()
-            || (!self.prior_owner.is_zero() && owner.receipt.owner() <= self.prior_owner)
+            || (!self.prior_position.is_zero()
+                && owner.receipt.position() <= self.prior_position)
         {
             return Err(Error::MismatchedBinding);
         }
@@ -495,6 +500,7 @@ impl FeeRetirementAccumulatorV1 {
         self.observed_owner_row_fold = fold_owner_book_row_v2(
             self.observed_owner_row_fold,
             ordinal,
+            owner.receipt.position(),
             owner.receipt.owner(),
             owner.receipt.authorized_fee_atoms(),
             hash,
@@ -517,7 +523,7 @@ impl FeeRetirementAccumulatorV1 {
             self.owner_neutral_credit_lamports,
             closure.neutral_credit_lamports(),
         )?;
-        self.prior_owner = owner.receipt.owner();
+        self.prior_position = owner.receipt.position();
         self.processed_owner_count = self
             .processed_owner_count
             .checked_add(1)
@@ -739,12 +745,12 @@ impl FeeRetirementAccumulatorV1 {
         ] {
             live(identity)?;
         }
-        if self.expected_owner_count == 0
-            || usize::from(self.expected_owner_count) > MAX_FEE_ROWS_V1
+        if usize::from(self.expected_owner_count) > MAX_FEE_ROWS_V1
+            || (self.expected_owner_count == 0) != (self.expected_fee_atoms == 0)
             || self.processed_owner_count > self.expected_owner_count
             || self.processed_maker_count > self.expected_maker_count
             || self.processed_fee_atoms > self.expected_fee_atoms
-            || (self.processed_owner_count == 0) != self.prior_owner.is_zero()
+            || (self.processed_owner_count == 0) != self.prior_position.is_zero()
             || (!self.treasury_distributed && self.distributed_treasury_atoms != 0)
         {
             return Err(Error::InvalidAccountData);
@@ -769,7 +775,7 @@ impl FeeRetirementAccumulatorV1 {
     pub const fn observed_owner_row_fold(&self) -> Id { self.observed_owner_row_fold }
     pub const fn owner_closure_fold(&self) -> Id { self.owner_closure_fold }
     pub const fn value_disposition_receipt(&self) -> Id { self.value_disposition_fold }
-    pub const fn prior_owner(&self) -> Id { self.prior_owner }
+    pub const fn prior_position(&self) -> Id { self.prior_position }
     pub const fn expected_owner_count(&self) -> u8 { self.expected_owner_count }
     pub const fn processed_owner_count(&self) -> u8 { self.processed_owner_count }
     pub const fn expected_maker_count(&self) -> u8 { self.expected_maker_count }
@@ -825,7 +831,7 @@ impl FeeRetirementAccumulatorV1 {
             self.observed_owner_row_fold,
             self.owner_closure_fold,
             self.value_disposition_fold,
-            self.prior_owner,
+            self.prior_position,
         ] {
             put(&mut output, &mut at, &identity.0)?;
         }
@@ -879,7 +885,7 @@ impl FeeRetirementAccumulatorV1 {
         let observed_owner_row_fold = take_id(input, &mut at)?;
         let owner_closure_fold = take_id(input, &mut at)?;
         let value_disposition_fold = take_id(input, &mut at)?;
-        let prior_owner = take_id(input, &mut at)?;
+        let prior_position = take_id(input, &mut at)?;
         let expected_fee_atoms = take_u128(input, &mut at)?;
         let processed_fee_atoms = take_u128(input, &mut at)?;
         let distributed_maker_atoms = take_u64(input, &mut at)?;
@@ -907,7 +913,7 @@ impl FeeRetirementAccumulatorV1 {
             observed_owner_row_fold,
             owner_closure_fold,
             value_disposition_fold,
-            prior_owner,
+            prior_position,
             expected_owner_count,
             processed_owner_count,
             expected_maker_count,
@@ -998,16 +1004,19 @@ fn closure_fold_start<H: FeeRetirementHashV1>(fee_record: Id, hash: &H) -> Resul
 fn fold_owner_book_row_v2<H: FeeRetirementHashV1>(
     prior: Id,
     ordinal: u8,
+    position: Id,
     owner: Id,
     fee_atoms: u64,
     hash: &H,
 ) -> Result<Id> {
     live(prior)?;
+    live(position)?;
     live(owner)?;
     let value = Id(hash.sha256(&[
         FEE_OWNER_BOOK_STREAM_ROW_DOMAIN_V2,
         &prior.0,
         &[ordinal],
+        &position.0,
         &owner.0,
         &fee_atoms.to_le_bytes(),
     ]));
@@ -1265,18 +1274,23 @@ mod tests {
     #[test]
     fn row_fold_is_order_and_amount_sensitive() {
         let start = Id([1; 32]);
-        let first = fold_owner_book_row_v2(start, 0, Id([2; 32]), 7, &ToyHash).unwrap();
+        let first =
+            fold_owner_book_row_v2(start, 0, Id([2; 32]), Id([3; 32]), 7, &ToyHash).unwrap();
         assert_ne!(
             first,
-            fold_owner_book_row_v2(start, 0, Id([2; 32]), 8, &ToyHash).unwrap()
+            fold_owner_book_row_v2(start, 0, Id([2; 32]), Id([3; 32]), 8, &ToyHash).unwrap()
         );
         assert_ne!(
             first,
-            fold_owner_book_row_v2(start, 1, Id([2; 32]), 7, &ToyHash).unwrap()
+            fold_owner_book_row_v2(start, 1, Id([2; 32]), Id([3; 32]), 7, &ToyHash).unwrap()
         );
         assert_ne!(
             first,
-            fold_owner_book_row_v2(start, 0, Id([3; 32]), 7, &ToyHash).unwrap()
+            fold_owner_book_row_v2(start, 0, Id([4; 32]), Id([3; 32]), 7, &ToyHash).unwrap()
+        );
+        assert_ne!(
+            first,
+            fold_owner_book_row_v2(start, 0, Id([2; 32]), Id([4; 32]), 7, &ToyHash).unwrap()
         );
     }
 
@@ -1291,9 +1305,9 @@ mod tests {
             &ToyHash,
         )
         .unwrap()
-        .fold(Id([21; 32]), 5, &ToyHash)
+        .fold(Id([21; 32]), Id([31; 32]), 5, &ToyHash)
         .unwrap()
-        .fold(Id([22; 32]), 7, &ToyHash)
+        .fold(Id([22; 32]), Id([32; 32]), 7, &ToyHash)
         .unwrap()
         .complete(&ToyHash)
         .unwrap();
@@ -1308,9 +1322,9 @@ mod tests {
             &ToyHash,
         )
         .unwrap()
-        .fold(Id([22; 32]), 5, &ToyHash)
+        .fold(Id([22; 32]), Id([31; 32]), 5, &ToyHash)
         .unwrap()
-        .fold(Id([21; 32]), 7, &ToyHash);
+        .fold(Id([21; 32]), Id([32; 32]), 7, &ToyHash);
         assert_eq!(wrong_order, Err(Error::NonCanonicalOrder));
 
         let wrong_sum = StreamingOwnerFeeBookV2::begin(
@@ -1321,10 +1335,37 @@ mod tests {
             &ToyHash,
         )
         .unwrap()
-        .fold(Id([21; 32]), 11, &ToyHash)
+        .fold(Id([21; 32]), Id([31; 32]), 11, &ToyHash)
         .unwrap()
         .complete(&ToyHash);
         assert_eq!(wrong_sum, Err(Error::MissingParticipant));
+    }
+
+    #[test]
+    fn streaming_book_uses_canonical_empty_for_zero_fee_candidate() {
+        let selected = selected_v2();
+        let complete = StreamingOwnerFeeBookV2::begin(
+            &selected,
+            Id([20; 32]),
+            0,
+            0,
+            &ToyHash,
+        )
+        .unwrap()
+        .complete(&ToyHash)
+        .unwrap();
+        assert_eq!(complete.owner_count(), 0);
+        assert_eq!(complete.fee_atoms(), 0);
+        assert_eq!(
+            StreamingOwnerFeeBookV2::begin(
+                &selected,
+                Id([20; 32]),
+                1,
+                0,
+                &ToyHash,
+            ),
+            Err(Error::InvalidWidth),
+        );
     }
 
     #[test]

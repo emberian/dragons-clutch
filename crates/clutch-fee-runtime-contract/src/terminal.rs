@@ -23,7 +23,10 @@ use crate::projection::{
     AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
 };
 use crate::retirement::{CompletedFeeRetirementV1, FeeRetirementHashV1};
-use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1, SelectedCompositeFeeV2};
+use crate::selected::{
+    OwnerFeeCarryV1, SelectedCompositeFeeAccess, SelectedCompositeFeeV1,
+    SelectedCompositeFeeV2,
+};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -318,8 +321,8 @@ impl OwnerFeeFinalizationReceiptV1 {
     /// V5 row poststate data ID, Position semantic ID, Replay successor, pot
     /// data ID, and persisted rent transition carried in `bindings`.
     #[allow(clippy::too_many_arguments)]
-    pub fn settle_delivery_complete_v4(
-        selected: &SelectedCompositeFeeV1,
+    pub fn settle_delivery_complete_v4<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         projection: &AuthenticatedSelectedOwnerFeeV4,
         carry: &OwnerFeeCarryV1,
         bindings: OwnerFeeFinalizationBindingsV2,
@@ -1238,7 +1241,6 @@ impl FeeClosureManifestReceiptV2 {
         live(self.accumulator_rent_payer)?;
         if self.outcome != FeeTerminalOutcomeV1::Settled
             || self.selected_record != self.fee_record
-            || self.owner_count == 0
             || usize::from(self.owner_count) > MAX_FEE_ROWS_V1
             || self.account_count != u16::from(self.owner_count) + 4
             || self.accumulator_refund_lamports == 0
@@ -1477,12 +1479,13 @@ impl FeeRecordTerminalReceiptV1 {
             self.value_disposition_receipt,
             self.terminal_authority_receipt,
         ])?;
-        if self.owner_count == 0 || usize::from(self.owner_count) > MAX_FEE_ROWS_V1 {
+        if usize::from(self.owner_count) > MAX_FEE_ROWS_V1 {
             return Err(Error::InvalidWidth);
         }
         match self.outcome {
             FeeTerminalOutcomeV1::Settled => {
-                if self.released_authorization_atoms != 0
+                if (self.owner_count == 0) != (self.collected_fee_atoms == 0)
+                    || self.released_authorization_atoms != 0
                     || u128::from(add(
                         add(self.maker_rebate_atoms, self.executor_atoms)?,
                         self.treasury_atoms,
@@ -1492,7 +1495,8 @@ impl FeeRecordTerminalReceiptV1 {
                 }
             }
             FeeTerminalOutcomeV1::Aborted => {
-                if self.collected_fee_atoms != 0
+                if self.owner_count == 0
+                    || self.collected_fee_atoms != 0
                     || self.maker_rebate_atoms != 0
                     || self.executor_atoms != 0
                     || self.treasury_atoms != 0
@@ -2340,6 +2344,31 @@ mod tests {
         assert_eq!(decoded.closure_manifest().retirement_accumulator(), id(18));
         assert_eq!(decoded.closure_manifest().accumulator_refund_lamports(), 30);
         assert_eq!(decoded.closure_manifest().terminal_data_id(), id(99));
+    }
+
+    #[test]
+    fn streaming_manifest_admits_canonical_empty_fee_children_with_four_globals() {
+        let mut terminal = terminal();
+        terminal.owner_count = 0;
+        terminal.collected_fee_atoms = 0;
+        terminal.maker_rebate_atoms = 0;
+        terminal.treasury_atoms = 0;
+        let mut manifest = manifest(&terminal);
+        manifest.owner_count = 0;
+        manifest.account_count = 4;
+        manifest.terminal_data_id = terminal_data_id_v2(&terminal, &TerminalHash).unwrap();
+
+        let decoded = FeeTerminalReceiptBundleV2::decode(
+            &manifest.encode().unwrap(),
+            &terminal.encode().unwrap(),
+            &TerminalHash,
+        )
+        .unwrap();
+        assert_eq!(decoded.terminal().owner_count(), 0);
+        assert_eq!(decoded.closure_manifest().account_count(), 4);
+
+        terminal.collected_fee_atoms = 1;
+        assert_eq!(terminal.encode(), Err(Error::ConservationFailure));
     }
 
     #[test]

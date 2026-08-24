@@ -630,10 +630,11 @@ impl SettlementRootV1AccountV1 {
             self.selected_ordinal,
         )?;
         let fee_present = !self.fee_record.is_zero();
-        if fee_present != (self.selected_fee_atoms != 0)
-            || fee_present != (self.fee_record_state != SettlementRootChildStateV1::Absent)
+        if fee_present != (self.fee_record_state != SettlementRootChildStateV1::Absent)
             || (!fee_present && self.fee_record_state != SettlementRootChildStateV1::Absent)
+            || (!fee_present && self.selected_fee_atoms != 0)
             || (!fee_present && self.counts.live_fee_finalizations != 0)
+            || (self.selected_fee_atoms == 0 && self.counts.live_fee_finalizations != 0)
         {
             return Err(CodecError::InvalidState);
         }
@@ -1028,17 +1029,20 @@ impl SettlementRootV1AccountV1 {
         Ok(next)
     }
 
-    /// Record one complete action-38 owner transition. `fee_receipt_created`
-    /// must be true exactly for fee-bearing roots; zero-fee roots rely on the
-    /// action-38 row/pot GEN1 Replay evidence and create no phantom fee PDA.
-    /// This structural successor authenticates no outer account.
+    /// Record one complete action-38 owner transition. A current fee record
+    /// may carry zero candidate value, and a nonzero candidate may still have
+    /// zero-fee owners. `fee_receipt_created` is therefore permitted only for
+    /// a live record with nonzero candidate value; the action-38 adapter must
+    /// derive it from the authenticated owner fee row. This structural
+    /// successor authenticates no outer account.
     pub fn complete_owner_finalization(
         &self,
         fee_receipt_created: bool,
     ) -> Result<Self, CodecError> {
         self.validate()?;
         if self.phase != SettlementRootPhaseV1::Settling
-            || fee_receipt_created != !self.fee_record.is_zero()
+            || (fee_receipt_created
+                && (self.fee_record.is_zero() || self.selected_fee_atoms == 0))
             || self.counts.completed_owner_finalizations >= self.counts.expected_owner_rows
         {
             return Err(CodecError::InvalidState);
@@ -2631,6 +2635,36 @@ pub(crate) mod tests {
         let root = root.retire_fee_record().unwrap();
         let root = root.retire_cash_pot().unwrap();
         assert!(root.at_retained_feed_retirement_frontier());
+    }
+
+    #[test]
+    fn live_current_fee_record_permits_zero_value_without_fee_children() {
+        let mut root = fee_settling_root();
+        root.selected_fee_atoms = 0;
+        root.counts.live_fee_finalizations = 0;
+        root.validate().unwrap();
+
+        assert_eq!(
+            root.complete_owner_finalization(true),
+            Err(CodecError::InvalidState),
+        );
+        let successor = root.complete_owner_finalization(false).unwrap();
+        assert_eq!(successor.counts.live_fee_finalizations, 0);
+
+        let mut phantom_child = root;
+        phantom_child.counts.live_fee_finalizations = 1;
+        assert_eq!(phantom_child.validate(), Err(CodecError::InvalidState));
+
+        let mut absent_with_value = portfolio_settling_root();
+        absent_with_value.selected_fee_atoms = 1;
+        assert_eq!(absent_with_value.validate(), Err(CodecError::InvalidState));
+    }
+
+    #[test]
+    fn nonzero_candidate_may_have_an_exact_zero_fee_owner() {
+        let root = fee_settling_root();
+        let successor = root.complete_owner_finalization(false).unwrap();
+        assert_eq!(successor.counts.live_fee_finalizations, 2);
     }
 
     fn close_two_scalar_children(
