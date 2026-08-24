@@ -4,7 +4,7 @@
 //! record, the Pool occurrence that selected it, and all physical claim,
 //! collateral, rent, and typed capability-funding custody it changes.
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_capability_contract::{
     CapabilityFundingAuthorityDerivationV1, CapabilityFundingDerivationV1,
@@ -243,60 +243,98 @@ fn validate_frame<const N: usize>(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+struct PreparedActivation {
+    profile: LiquidityProfileV1,
+    config_id: ContentId,
+    generation: u64,
+    initial_lp_id: [u8; 32],
+    pool_bytes: Vec<u8>,
+    market_bytes: Vec<u8>,
+    funding_bytes: Vec<u8>,
+    lp_bytes: Vec<u8>,
+    participant_bytes: Vec<u8>,
+    pool_position_bytes: Vec<u8>,
+    pool_account_rent: u64,
+    lp_rent: u64,
+    position_rent: u64,
+    token_rent: u64,
+    total_creation_rent: u64,
+    state_rent: u64,
+    activator_before: u64,
+    liquidity_amount: u64,
+    service_amount: u64,
+    pool_bump: u8,
+    lp_bump: u8,
+    position_bump: u8,
+    funding_authority_bump: u8,
+    pool_credit: RentCreditV1,
+    lp_credit: RentCreditV1,
+    pool_position_credit: RentCreditV1,
+}
+
+struct ActivationFundingFacts {
+    manifest_bytes: Vec<u8>,
+    funding: FundingStateV1,
+    custody: FundingCustodyObservationV1,
+    release_id: ContentId,
+    authority_bump: u8,
+}
+
+struct ActivationPhysicalFacts {
+    participant_bytes: Vec<u8>,
+    pool_position_bytes: Vec<u8>,
+    pool_account_rent: u64,
+    lp_rent: u64,
+    position_rent: u64,
+    token_rent: u64,
+    pool_bundle_rent: u64,
+    total_creation_rent: u64,
+    state_rent: u64,
+    activator_before: u64,
+    pool_bump: u8,
+    lp_bump: u8,
+    position_bump: u8,
+    pool_credit: RentCreditV1,
+    lp_credit: RentCreditV1,
+    pool_position_credit: RentCreditV1,
+}
+
+struct ActivationSemanticFacts {
+    pool_bytes: Vec<u8>,
+    market_bytes: Vec<u8>,
+    funding_bytes: Vec<u8>,
+    lp_bytes: Vec<u8>,
+    liquidity_amount: u64,
+    service_amount: u64,
+}
+
+#[inline(never)]
 fn activate<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: dclutch_dealer_contract::instruction::ActivatePoolV1,
 ) -> Result<(), ProgramError> {
-    let activator = account(accounts, 0)?;
-    let owner = account(accounts, 1)?;
+    let prepared = prepare_activation::<N>(program_id, accounts, request)?;
+    commit_activation::<N>(program_id, accounts, prepared.as_ref())
+}
+
+#[inline(never)]
+fn authenticate_activation_funding<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    generation: u64,
+) -> Result<Box<ActivationFundingFacts>, ProgramError> {
     let realm_account = account(accounts, 2)?;
     let market_account = account(accounts, 3)?;
     let manifest_account = account(accounts, 4)?;
     let funding_account = account(accounts, 5)?;
     let funding_authority = account(accounts, 6)?;
     let funding_vault = account(accounts, 7)?;
-    let config_account = account(accounts, 8)?;
-    let config_staging = account(accounts, 9)?;
-    let pool_account = account(accounts, 10)?;
-    let lp_account = account(accounts, 11)?;
-    let participant_account = account(accounts, 12)?;
-    let pool_position_account = account(accounts, 13)?;
-    let principal_vault = account(accounts, 14)?;
-    let fee_vault = account(accounts, 15)?;
-    let service_vault = account(accounts, 16)?;
-    let pool_position_credit = account(accounts, 17)?;
-    let pool_credit = account(accounts, 18)?;
-    let lp_credit = account(accounts, 19)?;
     let mint = account(accounts, 20)?;
     let token_program = account(accounts, 21)?;
-    let system = account(accounts, 22)?;
     let rent_sysvar = account(accounts, 23)?;
-    authenticate_system_and_rent(system, rent_sysvar)?;
-    for vacant in [
-        pool_account,
-        lp_account,
-        pool_position_account,
-        principal_vault,
-        fee_vault,
-        service_vault,
-    ] {
-        require_vacant(vacant)?;
-    }
-    if funding_authority.owner != &system_program::ID
-        || !funding_authority.data_is_empty()
-        || funding_authority.lamports() != 0
-    {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-
-    let market = authenticate_market::<N>(program_id, market_account, request.generation())?;
+    let market = authenticate_market::<N>(program_id, market_account, generation)?;
     let realm = authenticate_realm(program_id, realm_account, mint, token_program, market)?;
-    let (config_bytes, profile, config_id) =
-        authenticate_config::<N>(program_id, config_account, config_staging)?;
-    let config = LiquidityConfigViewV1::new(config_id, profile, &config_bytes)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
     let manifest_data = manifest_account
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -332,7 +370,7 @@ fn activate<const N: usize>(
     }
     let funding_seeds = CapabilityFundingDerivationV1::new(
         market_account.key.to_bytes(),
-        request.generation(),
+        generation,
         manifest_id,
         manifest,
         funding,
@@ -345,7 +383,7 @@ fn activate<const N: usize>(
     let authority_seeds =
         CapabilityFundingAuthorityDerivationV1::new(funding_account.key.to_bytes())
             .map_err(|_| AdapterError::PositionAuthentication)?;
-    let (expected_authority, funding_authority_bump) =
+    let (expected_authority, authority_bump) =
         find_pda(program_id, &authority_seeds.seed_components());
     if funding_authority.key != &expected_authority {
         return Err(AdapterError::AccountIdentity.into());
@@ -385,11 +423,9 @@ fn activate<const N: usize>(
             funding_authority.key.to_bytes(),
         )
         .map_err(|_| AdapterError::PositionAuthentication)?;
-
     let rent =
         Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::PositionAuthentication)?;
     let state_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
-    let funding_vault_rent = rent.minimum_balance(ACCOUNT_BYTES);
     let collateral_observation = RealmCollateralVaultObservationV1::new(
         funding_vault.key.to_bytes(),
         funding_authority.key.to_bytes(),
@@ -397,7 +433,7 @@ fn activate<const N: usize>(
         mint.key.to_bytes(),
         funding_token.amount,
         funding_vault.lamports(),
-        funding_vault_rent,
+        rent.minimum_balance(ACCOUNT_BYTES),
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
     let collateral_custody = RealmCollateralCustodyV1::new(
@@ -408,13 +444,62 @@ fn activate<const N: usize>(
         collateral_observation,
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
-    let funding_custody = FundingCustodyObservationV1::with_realm_collateral(
+    let custody = FundingCustodyObservationV1::with_realm_collateral(
         funding_account.lamports(),
         state_rent,
         collateral_custody,
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
+    Ok(Box::new(ActivationFundingFacts {
+        manifest_bytes: copy_bytes(&manifest_data)?,
+        funding,
+        custody,
+        release_id: selected.release_id(),
+        authority_bump,
+    }))
+}
 
+#[inline(never)]
+fn authenticate_activation_physical<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: dclutch_dealer_contract::instruction::ActivatePoolV1,
+    profile: LiquidityProfileV1,
+    config_id: ContentId,
+) -> Result<Box<ActivationPhysicalFacts>, ProgramError> {
+    let activator = account(accounts, 0)?;
+    let owner = account(accounts, 1)?;
+    let market_account = account(accounts, 3)?;
+    let funding_authority = account(accounts, 6)?;
+    let pool_account = account(accounts, 10)?;
+    let lp_account = account(accounts, 11)?;
+    let participant_account = account(accounts, 12)?;
+    let pool_position_account = account(accounts, 13)?;
+    let principal_vault = account(accounts, 14)?;
+    let fee_vault = account(accounts, 15)?;
+    let service_vault = account(accounts, 16)?;
+    let pool_position_credit = account(accounts, 17)?;
+    let pool_credit = account(accounts, 18)?;
+    let lp_credit = account(accounts, 19)?;
+    let system = account(accounts, 22)?;
+    let rent_sysvar = account(accounts, 23)?;
+    authenticate_system_and_rent(system, rent_sysvar)?;
+    for vacant in [
+        pool_account,
+        lp_account,
+        pool_position_account,
+        principal_vault,
+        fee_vault,
+        service_vault,
+    ] {
+        require_vacant(vacant)?;
+    }
+    if funding_authority.owner != &system_program::ID
+        || !funding_authority.data_is_empty()
+        || funding_authority.lamports() != 0
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
     let pool_seeds = PoolPdaSeedsV1::new(
         market_account.key.to_bytes(),
         request.generation(),
@@ -444,14 +529,14 @@ fn activate<const N: usize>(
     if pool_position_account.key != &expected_position {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let mut participant_position = authenticate_position::<N>(
+    let mut participant = authenticate_position::<N>(
         program_id,
         participant_account,
         market_account,
         owner.key,
         request.generation(),
     )?;
-    participant_position
+    participant
         .debit_complete_set(request.initial_claim_quantity())
         .map_err(|_| AdapterError::MarketTransition)?;
     let mut pool_position = PositionV1::<N>::empty(
@@ -463,7 +548,10 @@ fn activate<const N: usize>(
     pool_position
         .credit_complete_set(request.initial_claim_quantity())
         .map_err(|_| AdapterError::MarketTransition)?;
-
+    let participant_bytes = encode_position(participant)?;
+    let pool_position_bytes = encode_position(pool_position)?;
+    let rent =
+        Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::PositionAuthentication)?;
     let pool_account_rent =
         rent.minimum_balance(profile.pool_len().map_err(|_| AdapterError::Arithmetic)?);
     let lp_rent = rent.minimum_balance(dclutch_dealer_contract::LP_POSITION_BYTES);
@@ -473,10 +561,128 @@ fn activate<const N: usize>(
     let pool_bundle_rent = pool_account_rent
         .checked_add(token_rent.checked_mul(3).ok_or(AdapterError::Arithmetic)?)
         .ok_or(AdapterError::Arithmetic)?;
-    let pool_credit_state = authenticate_rent_credit(program_id, pool_credit, owner.key)?;
-    let lp_credit_state = authenticate_rent_credit(program_id, lp_credit, owner.key)?;
-    let pool_position_credit_state =
-        authenticate_rent_credit(program_id, pool_position_credit, pool_account.key)?;
+    let total_creation_rent = pool_bundle_rent
+        .checked_add(lp_rent)
+        .and_then(|value| value.checked_add(position_rent))
+        .ok_or(AdapterError::Arithmetic)?;
+    let activator_before = activator.lamports();
+    if activator_before < total_creation_rent {
+        return Err(AdapterError::PositionRentUnderfunded.into());
+    }
+    for (vault, compartment) in [
+        (principal_vault, DealerCollateralCompartmentV1::Principal),
+        (fee_vault, DealerCollateralCompartmentV1::RealizedFees),
+        (service_vault, DealerCollateralCompartmentV1::Service),
+    ] {
+        let seeds = DealerCollateralVaultPdaSeedsV1::new(pool_account.key.to_bytes(), compartment)
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+        let (expected, _) = find_pda(program_id, &seeds.seed_components());
+        if vault.key != &expected {
+            return Err(AdapterError::AccountIdentity.into());
+        }
+    }
+    Ok(Box::new(ActivationPhysicalFacts {
+        participant_bytes,
+        pool_position_bytes,
+        pool_account_rent,
+        lp_rent,
+        position_rent,
+        token_rent,
+        pool_bundle_rent,
+        total_creation_rent,
+        state_rent: rent.minimum_balance(FUNDING_STATE_BYTES),
+        activator_before,
+        pool_bump,
+        lp_bump,
+        position_bump,
+        pool_credit: authenticate_rent_credit(program_id, pool_credit, owner.key)?,
+        lp_credit: authenticate_rent_credit(program_id, lp_credit, owner.key)?,
+        pool_position_credit: authenticate_rent_credit(
+            program_id,
+            pool_position_credit,
+            pool_account.key,
+        )?,
+    }))
+}
+
+#[inline(never)]
+fn prepare_activation<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: dclutch_dealer_contract::instruction::ActivatePoolV1,
+) -> Result<Box<PreparedActivation>, ProgramError> {
+    let config_account = account(accounts, 8)?;
+    let config_staging = account(accounts, 9)?;
+    let funding_facts =
+        authenticate_activation_funding::<N>(program_id, accounts, request.generation())?;
+    let (config_bytes, profile, config_id) =
+        authenticate_config::<N>(program_id, config_account, config_staging)?;
+    let mut physical =
+        authenticate_activation_physical::<N>(program_id, accounts, request, profile, config_id)?;
+    let mut semantic = materialize_activation::<N>(
+        program_id,
+        accounts,
+        request,
+        profile,
+        config_id,
+        &config_bytes,
+        funding_facts.as_ref(),
+        physical.as_ref(),
+    )?;
+    let funding_authority_bump = funding_facts.authority_bump;
+    let participant_bytes = core::mem::take(&mut physical.participant_bytes);
+    let pool_position_bytes = core::mem::take(&mut physical.pool_position_bytes);
+    Ok(Box::new(PreparedActivation {
+        profile,
+        config_id,
+        generation: request.generation(),
+        initial_lp_id: request.initial_lp_id(),
+        pool_bytes: core::mem::take(&mut semantic.pool_bytes),
+        market_bytes: core::mem::take(&mut semantic.market_bytes),
+        funding_bytes: core::mem::take(&mut semantic.funding_bytes),
+        lp_bytes: core::mem::take(&mut semantic.lp_bytes),
+        participant_bytes,
+        pool_position_bytes,
+        pool_account_rent: physical.pool_account_rent,
+        lp_rent: physical.lp_rent,
+        position_rent: physical.position_rent,
+        token_rent: physical.token_rent,
+        total_creation_rent: physical.total_creation_rent,
+        state_rent: physical.state_rent,
+        activator_before: physical.activator_before,
+        liquidity_amount: semantic.liquidity_amount,
+        service_amount: semantic.service_amount,
+        pool_bump: physical.pool_bump,
+        lp_bump: physical.lp_bump,
+        position_bump: physical.position_bump,
+        funding_authority_bump,
+        pool_credit: physical.pool_credit,
+        lp_credit: physical.lp_credit,
+        pool_position_credit: physical.pool_position_credit,
+    }))
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[inline(never)]
+fn materialize_activation<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: dclutch_dealer_contract::instruction::ActivatePoolV1,
+    profile: LiquidityProfileV1,
+    config_id: ContentId,
+    config_bytes: &[u8],
+    funding_facts: &ActivationFundingFacts,
+    physical: &ActivationPhysicalFacts,
+) -> Result<Box<ActivationSemanticFacts>, ProgramError> {
+    let owner = account(accounts, 1)?;
+    let market_account = account(accounts, 3)?;
+    let funding_account = account(accounts, 5)?;
+    let funding_authority = account(accounts, 6)?;
+    let pool_account = account(accounts, 10)?;
+    let lp_account = account(accounts, 11)?;
+    let market = authenticate_market::<N>(program_id, market_account, request.generation())?;
+    let config = LiquidityConfigViewV1::new(config_id, profile, config_bytes)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     if config
         .liquidity_owner()
         .map_err(|_| AdapterError::PositionAuthentication)?
@@ -487,9 +693,11 @@ fn activate<const N: usize>(
     let now_slot = Clock::get()
         .map_err(|_| AdapterError::PositionAuthentication)?
         .slot;
+    let manifest = CapabilityManifestV1::decode(&funding_facts.manifest_bytes)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     let attachment = dclutch_dealer_contract::LiquidityAttachment::new(
         market.root().identity(),
-        selected.release_id(),
+        funding_facts.release_id,
         config_id,
         owner.key.to_bytes(),
     )
@@ -499,10 +707,10 @@ fn activate<const N: usize>(
         market.root(),
         market_account.key.to_bytes(),
         manifest,
-        funding,
+        funding_facts.funding,
         funding_account.key.to_bytes(),
         funding_authority.key.to_bytes(),
-        funding_custody,
+        funding_facts.custody,
         attachment,
         config,
         profile,
@@ -510,21 +718,17 @@ fn activate<const N: usize>(
         pool_account.key.to_bytes(),
         lp_account.key.to_bytes(),
         owner.key.to_bytes(),
-        RentCreditTerms::new(owner.key.to_bytes(), pool_bundle_rent)
+        RentCreditTerms::new(owner.key.to_bytes(), physical.pool_bundle_rent)
             .map_err(|_| AdapterError::PositionAuthentication)?,
-        RentCreditTerms::new(owner.key.to_bytes(), lp_rent)
+        RentCreditTerms::new(owner.key.to_bytes(), physical.lp_rent)
             .map_err(|_| AdapterError::PositionAuthentication)?,
-        RentCreditTerms::new(pool_account.key.to_bytes(), position_rent)
+        RentCreditTerms::new(pool_account.key.to_bytes(), physical.position_rent)
             .map_err(|_| AdapterError::PositionAuthentication)?,
         request,
         now_slot,
     )
     .map_err(|_| AdapterError::MarketTransition)?;
-    let total_creation_rent = pool_bundle_rent
-        .checked_add(lp_rent)
-        .and_then(|value| value.checked_add(position_rent))
-        .ok_or(AdapterError::Arithmetic)?;
-    if plan.funding_debit().activation().rent_lamports() != total_creation_rent
+    if plan.funding_debit().activation().rent_lamports() != physical.total_creation_rent
         || plan.funding_debit().activation().creation_lamports() != 0
     {
         return Err(AdapterError::PositionAuthentication.into());
@@ -537,17 +741,59 @@ fn activate<const N: usize>(
         return Err(AdapterError::MarketTransition.into());
     }
     let market_bytes = encode_market(market_after)?;
-    let funding_bytes = plan.funding().to_bytes();
-    let lp_bytes = plan
-        .initial_position()
-        .to_bytes()
+    let funding_bytes = encode_funding_state(plan.funding())?;
+    let lp_bytes = encode_lp_position(plan.initial_position())?;
+    Ok(Box::new(ActivationSemanticFacts {
+        pool_bytes,
+        market_bytes,
+        funding_bytes,
+        lp_bytes,
+        liquidity_amount: plan.funding_debit().liquidity().amount(),
+        service_amount: plan
+            .funding_debit()
+            .service()
+            .map_or(0, dclutch_capability_contract::FundingReleasePlanV1::amount),
+    }))
+}
+
+#[allow(clippy::too_many_lines)]
+#[inline(never)]
+fn commit_activation<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    prepared: &PreparedActivation,
+) -> Result<(), ProgramError> {
+    let activator = account(accounts, 0)?;
+    let owner = account(accounts, 1)?;
+    let realm_account = account(accounts, 2)?;
+    let market_account = account(accounts, 3)?;
+    let funding_account = account(accounts, 5)?;
+    let funding_authority = account(accounts, 6)?;
+    let funding_vault = account(accounts, 7)?;
+    let config_account = account(accounts, 8)?;
+    let pool_account = account(accounts, 10)?;
+    let lp_account = account(accounts, 11)?;
+    let participant_account = account(accounts, 12)?;
+    let pool_position_account = account(accounts, 13)?;
+    let principal_vault = account(accounts, 14)?;
+    let fee_vault = account(accounts, 15)?;
+    let service_vault = account(accounts, 16)?;
+    let pool_position_credit = account(accounts, 17)?;
+    let pool_credit = account(accounts, 18)?;
+    let lp_credit = account(accounts, 19)?;
+    let mint = account(accounts, 20)?;
+    let token_program = account(accounts, 21)?;
+    let system = account(accounts, 22)?;
+    authenticate_system(system)?;
+    let realm = {
+        let market = authenticate_market::<N>(program_id, market_account, prepared.generation)?;
+        authenticate_realm(program_id, realm_account, mint, token_program, market)?
+    };
+    let config_data = config_account
+        .try_borrow_data()
         .map_err(|_| AdapterError::PositionAuthentication)?;
-    let participant_bytes = encode_position(participant_position)?;
-    let pool_position_bytes = encode_position(pool_position)?;
-    let activator_before = activator.lamports();
-    if activator_before < total_creation_rent {
-        return Err(AdapterError::PositionRentUnderfunded.into());
-    }
+    let config = LiquidityConfigViewV1::new(prepared.config_id, prepared.profile, &config_data)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     preflight_mutable(&[
         activator,
         market_account,
@@ -562,38 +808,54 @@ fn activate<const N: usize>(
         service_vault,
     ])?;
 
+    let pool_seeds = PoolPdaSeedsV1::new(
+        market_account.key.to_bytes(),
+        prepared.generation,
+        prepared.config_id,
+    )
+    .map_err(|_| AdapterError::PositionAuthentication)?;
     create_pda_account(
         program_id,
         activator,
         pool_account,
         system,
-        pool_account_rent,
-        pool_bytes.len(),
+        prepared.pool_account_rent,
+        prepared.pool_bytes.len(),
         program_id,
         &pool_seeds.seed_components(),
-        pool_bump,
+        prepared.pool_bump,
     )?;
+    let lp_seeds = LpPositionPdaSeedsV1::new(
+        market_account.key.to_bytes(),
+        prepared.generation,
+        prepared.config_id,
+        prepared.initial_lp_id,
+    )
+    .map_err(|_| AdapterError::PositionAuthentication)?;
     create_pda_account(
         program_id,
         activator,
         lp_account,
         system,
-        lp_rent,
-        lp_bytes.len(),
+        prepared.lp_rent,
+        prepared.lp_bytes.len(),
         program_id,
         &lp_seeds.seed_components(),
-        lp_bump,
+        prepared.lp_bump,
     )?;
+    let position_seeds =
+        PoolPositionPdaSeedsV1::new(market_account.key.to_bytes(), pool_account.key.to_bytes())
+            .map_err(|_| AdapterError::PositionAuthentication)?;
     create_pda_account(
         program_id,
         activator,
         pool_position_account,
         system,
-        position_rent,
-        pool_position_bytes.len(),
+        prepared.position_rent,
+        prepared.pool_position_bytes.len(),
         program_id,
         &position_seeds.seed_components(),
-        position_bump,
+        prepared.position_bump,
     )?;
     for (vault, compartment) in [
         (principal_vault, DealerCollateralCompartmentV1::Principal),
@@ -611,7 +873,7 @@ fn activate<const N: usize>(
             activator,
             vault,
             system,
-            token_rent,
+            prepared.token_rent,
             ACCOUNT_BYTES,
             token_program.key,
             &seeds.seed_components(),
@@ -619,7 +881,10 @@ fn activate<const N: usize>(
         )?;
         initialize_token_vault(vault, mint, token_program, realm.release, pool_account.key)?;
     }
-    let funding_authority_bump_seed = [funding_authority_bump];
+    let authority_seeds =
+        CapabilityFundingAuthorityDerivationV1::new(funding_account.key.to_bytes())
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+    let funding_authority_bump_seed = [prepared.funding_authority_bump];
     let funding_signer = append_bump(
         &authority_seeds.seed_components(),
         &funding_authority_bump_seed,
@@ -631,21 +896,19 @@ fn activate<const N: usize>(
         token_program,
         realm,
         funding_authority,
-        plan.funding_debit().liquidity().amount(),
+        prepared.liquidity_amount,
         Some(funding_signer.as_slice()),
     )?;
-    if let Some(service) = plan.funding_debit().service() {
-        transfer_if_nonzero(
-            funding_vault,
-            service_vault,
-            mint,
-            token_program,
-            realm,
-            funding_authority,
-            service.amount(),
-            Some(funding_signer.as_slice()),
-        )?;
-    }
+    transfer_if_nonzero(
+        funding_vault,
+        service_vault,
+        mint,
+        token_program,
+        realm,
+        funding_authority,
+        prepared.service_amount,
+        Some(funding_signer.as_slice()),
+    )?;
     {
         let mut payer_lamports = activator
             .try_borrow_mut_lamports()
@@ -654,34 +917,44 @@ fn activate<const N: usize>(
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::PositionPostcondition)?;
         **payer_lamports = (**payer_lamports)
-            .checked_add(total_creation_rent)
+            .checked_add(prepared.total_creation_rent)
             .ok_or(AdapterError::Arithmetic)?;
         **funding_lamports = (**funding_lamports)
-            .checked_sub(total_creation_rent)
+            .checked_sub(prepared.total_creation_rent)
             .ok_or(AdapterError::PositionRentUnderfunded)?;
     }
-    persist_market(market_account, &market_bytes, market_after)?;
-    persist_bytes(funding_account, &funding_bytes)?;
+    persist_market_bytes::<N>(market_account, &prepared.market_bytes)?;
+    persist_bytes(funding_account, &prepared.funding_bytes)?;
     persist_pool(
         pool_account,
-        &pool_bytes,
-        profile,
+        &prepared.pool_bytes,
+        prepared.profile,
         pool_account.key.to_bytes(),
         config,
     )?;
-    persist_lp(lp_account, &lp_bytes, plan.initial_position())?;
-    persist_position(
-        participant_account,
-        &participant_bytes,
-        participant_position,
-    )?;
-    persist_position(pool_position_account, &pool_position_bytes, pool_position)?;
-    if activator.lamports() != activator_before || funding_account.lamports() != state_rent {
+    persist_lp_bytes(lp_account, &prepared.lp_bytes)?;
+    persist_position_bytes::<N>(participant_account, &prepared.participant_bytes)?;
+    persist_position_bytes::<N>(pool_position_account, &prepared.pool_position_bytes)?;
+    if activator.lamports() != prepared.activator_before
+        || funding_account.lamports() != prepared.state_rent
+    {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    require_unchanged_rent_credit(program_id, pool_credit, pool_credit_state)?;
-    require_unchanged_rent_credit(program_id, lp_credit, lp_credit_state)?;
-    require_unchanged_rent_credit(program_id, pool_position_credit, pool_position_credit_state)
+    require_unchanged_rent_credit(program_id, pool_credit, prepared.pool_credit)?;
+    require_unchanged_rent_credit(program_id, lp_credit, prepared.lp_credit)?;
+    require_unchanged_rent_credit(
+        program_id,
+        pool_position_credit,
+        prepared.pool_position_credit,
+    )?;
+    if owner.key.to_bytes()
+        != config
+            .liquidity_owner()
+            .map_err(|_| AdapterError::PositionPostcondition)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
 }
 
 fn create_lp_position<const N: usize>(
@@ -2409,6 +2682,17 @@ fn persist_lp(
     Ok(())
 }
 
+fn persist_lp_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
+    persist_bytes(account, bytes)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if &data[..] != bytes || LpPosition::decode(&data).is_err() {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
 fn persist_position<const N: usize>(
     account: &AccountInfo<'_>,
     bytes: &[u8],
@@ -2424,6 +2708,20 @@ fn persist_position<const N: usize>(
     Ok(())
 }
 
+fn persist_position_bytes<const N: usize>(
+    account: &AccountInfo<'_>,
+    bytes: &[u8],
+) -> Result<(), ProgramError> {
+    persist_bytes(account, bytes)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if &data[..] != bytes || PositionV1::<N>::decode(&data).is_err() {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
 fn persist_market<const N: usize>(
     account: &AccountInfo<'_>,
     bytes: &[u8],
@@ -2434,6 +2732,20 @@ fn persist_market<const N: usize>(
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionPostcondition)?;
     if CategoricalMarketV1::<N>::decode(&data) != Ok(expected) || &data[..] != bytes {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
+fn persist_market_bytes<const N: usize>(
+    account: &AccountInfo<'_>,
+    bytes: &[u8],
+) -> Result<(), ProgramError> {
+    persist_bytes(account, bytes)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if &data[..] != bytes || CategoricalMarketV1::<N>::decode(&data).is_err() {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
@@ -2467,6 +2779,20 @@ fn encode_market<const N: usize>(value: CategoricalMarketV1<N>) -> Result<Vec<u8
         .encode(&mut bytes)
         .map_err(|_| AdapterError::PositionAuthentication)?;
     Ok(bytes)
+}
+
+#[inline(never)]
+fn encode_funding_state(value: FundingStateV1) -> Result<Vec<u8>, ProgramError> {
+    let bytes = value.to_bytes();
+    copy_bytes(&bytes)
+}
+
+#[inline(never)]
+fn encode_lp_position(value: LpPosition) -> Result<Vec<u8>, ProgramError> {
+    let bytes = value
+        .to_bytes()
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    copy_bytes(&bytes)
 }
 
 fn exact_zeroed(length: usize) -> Result<Vec<u8>, ProgramError> {
