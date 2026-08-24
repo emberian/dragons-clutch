@@ -922,6 +922,15 @@ fn decode_header(bytes: &[u8]) -> Result<InstructionTag> {
     InstructionTag::decode(read_byte(bytes, TAG_OFFSET)?)
 }
 
+/// Decode only the canonical V1 collateral header and return its semantic tag.
+///
+/// Concrete instruction decoders still revalidate the tag and exact body
+/// width. This projection lets an adapter select a small action-specific stack
+/// frame without treating an unauthenticated byte as dispatch authority.
+pub fn decode_instruction_tag(bytes: &[u8]) -> Result<InstructionTag> {
+    decode_header(bytes)
+}
+
 fn require_header(bytes: &[u8], expected: usize, tag: InstructionTag) -> Result<()> {
     if bytes.len() != expected {
         return Err(Error::InvalidLength);

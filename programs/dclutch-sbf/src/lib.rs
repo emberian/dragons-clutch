@@ -19,15 +19,15 @@ extern crate std;
 
 use dclutch_capability_contract::readiness_instruction::READINESS_INSTRUCTION_MAGIC;
 use dclutch_collateral_contract::{
-    INSTRUCTION_MAGIC as COLLATERAL_INSTRUCTION_MAGIC, InstructionV1 as CollateralInstructionV1,
+    CloseEmptyPositionV1, CompactTerminalMarketV1, CreatePositionAndSplitV1, CreateRealmV1,
+    FoundMarketAndFundV1, INSTRUCTION_MAGIC as COLLATERAL_INSTRUCTION_MAGIC, InstructionTag,
+    MergeCompleteSetV1, OpenCollateralVaultV1, RedeemResolvedOutcomeV1, SplitCompleteSetV1,
+    SweepSurplusV1, TransferClaimsV1, decode_instruction_tag,
 };
 use dclutch_pyth_contract::instruction::ResolveCategoricalInstructionV1;
 use dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1;
 use dclutch_rent_contract::RENT_CREDIT_INSTRUCTION_MAGIC_V1;
-use solana_program::{
-    account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
-    pubkey::Pubkey,
-};
+use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubkey::Pubkey};
 
 mod authenticate;
 mod close_fund;
@@ -72,114 +72,138 @@ pub fn process_instruction(
     {
         return records::dispatch(program_id, accounts, instruction_data);
     }
-    match decode_instruction(instruction_data)? {
-        RoutedInstruction::Resolve(instruction) => {
-            resolution::dispatch(program_id, accounts, instruction)
-        }
-        RoutedInstruction::CreateRealm(instruction) => {
-            realm::process_create_realm(program_id, accounts, instruction)
-        }
-        RoutedInstruction::FoundMarketAndFund(instruction) => {
-            found_market::process_found_market_and_fund(program_id, accounts, instruction)
-        }
-        RoutedInstruction::OpenCollateralVault(instruction) => {
-            open_vault::process_open_collateral_vault(program_id, accounts, instruction)
-        }
-        RoutedInstruction::CreatePositionAndSplit(instruction) => {
-            position::process_create_position_and_split(program_id, accounts, instruction)
-        }
-        RoutedInstruction::SplitCompleteSet(instruction) => {
-            position::process_split_complete_set(program_id, accounts, instruction)
-        }
-        RoutedInstruction::MergeCompleteSet(instruction) => {
-            position::process_merge_complete_set(program_id, accounts, instruction)
-        }
-        RoutedInstruction::RedeemResolvedOutcome(instruction) => {
-            position::process_redeem_resolved_outcome(program_id, accounts, instruction)
-        }
-        RoutedInstruction::TransferClaims(instruction) => {
-            position::process_transfer_claims(program_id, accounts, instruction)
-        }
-        RoutedInstruction::SweepSurplus(instruction) => {
-            position::process_sweep_surplus(program_id, accounts, instruction)
-        }
-        RoutedInstruction::CloseEmptyPosition(instruction) => {
-            position::process_close_empty_position(program_id, accounts, instruction)
-        }
-        RoutedInstruction::CompactTerminalMarket(instruction) => {
-            terminal::process_compact_terminal_market(program_id, accounts, instruction)
-        }
-    }
+    dispatch_collateral_or_resolution(program_id, accounts, instruction_data)
 }
 
-enum RoutedInstruction<'a> {
-    Resolve(ResolveCategoricalInstructionV1<'a>),
-    CreateRealm(dclutch_collateral_contract::CreateRealmV1),
-    FoundMarketAndFund(dclutch_collateral_contract::FoundMarketAndFundV1),
-    OpenCollateralVault(dclutch_collateral_contract::OpenCollateralVaultV1),
-    CreatePositionAndSplit(dclutch_collateral_contract::CreatePositionAndSplitV1),
-    SplitCompleteSet(dclutch_collateral_contract::SplitCompleteSetV1),
-    MergeCompleteSet(dclutch_collateral_contract::MergeCompleteSetV1),
-    RedeemResolvedOutcome(dclutch_collateral_contract::RedeemResolvedOutcomeV1),
-    TransferClaims(dclutch_collateral_contract::TransferClaimsV1),
-    SweepSurplus(dclutch_collateral_contract::SweepSurplusV1),
-    CloseEmptyPosition(dclutch_collateral_contract::CloseEmptyPositionV1),
-    CompactTerminalMarket(dclutch_collateral_contract::CompactTerminalMarketV1),
-}
-
-fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, ProgramError> {
+#[inline(never)]
+fn dispatch_collateral_or_resolution(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
     if instruction_data.get(..COLLATERAL_INSTRUCTION_MAGIC.len())
         == Some(&COLLATERAL_INSTRUCTION_MAGIC)
     {
-        return match CollateralInstructionV1::decode(instruction_data)
-            .map_err(|_| AdapterError::InvalidInstruction)?
-        {
-            CollateralInstructionV1::CreateRealm(instruction) => {
-                Ok(RoutedInstruction::CreateRealm(instruction))
-            }
-            CollateralInstructionV1::FoundMarketAndFund(instruction) => {
-                Ok(RoutedInstruction::FoundMarketAndFund(instruction))
-            }
-            CollateralInstructionV1::OpenCollateralVault(instruction) => {
-                Ok(RoutedInstruction::OpenCollateralVault(instruction))
-            }
-            CollateralInstructionV1::CreatePositionAndSplit(instruction) => {
-                Ok(RoutedInstruction::CreatePositionAndSplit(instruction))
-            }
-            CollateralInstructionV1::SplitCompleteSet(instruction) => {
-                Ok(RoutedInstruction::SplitCompleteSet(instruction))
-            }
-            CollateralInstructionV1::MergeCompleteSet(instruction) => {
-                Ok(RoutedInstruction::MergeCompleteSet(instruction))
-            }
-            CollateralInstructionV1::RedeemResolvedOutcome(instruction) => {
-                Ok(RoutedInstruction::RedeemResolvedOutcome(instruction))
-            }
-            CollateralInstructionV1::TransferClaims(instruction) => {
-                Ok(RoutedInstruction::TransferClaims(instruction))
-            }
-            CollateralInstructionV1::SweepSurplus(instruction) => {
-                Ok(RoutedInstruction::SweepSurplus(instruction))
-            }
-            CollateralInstructionV1::CloseEmptyPosition(instruction) => {
-                Ok(RoutedInstruction::CloseEmptyPosition(instruction))
-            }
-            CollateralInstructionV1::CompactTerminalMarket(instruction) => {
-                Ok(RoutedInstruction::CompactTerminalMarket(instruction))
-            }
-            _ => Err(AdapterError::InvalidInstruction.into()),
-        };
+        return dispatch_collateral(program_id, accounts, instruction_data);
     }
     ResolveCategoricalInstructionV1::decode(instruction_data)
-        .map(RoutedInstruction::Resolve)
         .map_err(|_| AdapterError::InvalidInstruction.into())
+        .and_then(|instruction| resolution::dispatch(program_id, accounts, instruction))
 }
+
+#[inline(never)]
+fn dispatch_collateral(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    match decode_instruction_tag(instruction_data).map_err(|_| AdapterError::InvalidInstruction)? {
+        InstructionTag::CreateRealm => {
+            dispatch_create_realm(program_id, accounts, instruction_data)
+        }
+        InstructionTag::FoundMarketAndFund => {
+            dispatch_found_market(program_id, accounts, instruction_data)
+        }
+        InstructionTag::OpenCollateralVault => {
+            dispatch_open_vault(program_id, accounts, instruction_data)
+        }
+        InstructionTag::CreatePositionAndSplit => {
+            dispatch_create_position(program_id, accounts, instruction_data)
+        }
+        InstructionTag::SplitCompleteSet => dispatch_split(program_id, accounts, instruction_data),
+        InstructionTag::MergeCompleteSet => dispatch_merge(program_id, accounts, instruction_data),
+        InstructionTag::RedeemResolvedOutcome => {
+            dispatch_redeem(program_id, accounts, instruction_data)
+        }
+        InstructionTag::SweepSurplus => dispatch_sweep(program_id, accounts, instruction_data),
+        InstructionTag::TransferClaims => dispatch_transfer(program_id, accounts, instruction_data),
+        InstructionTag::CloseEmptyPosition => {
+            dispatch_close_position(program_id, accounts, instruction_data)
+        }
+        InstructionTag::CompactTerminalMarket => {
+            dispatch_compact_terminal(program_id, accounts, instruction_data)
+        }
+        InstructionTag::RetireEmptyVault => Err(AdapterError::InvalidInstruction.into()),
+    }
+}
+
+macro_rules! collateral_dispatch {
+    ($name:ident, $instruction:ty, $processor:path) => {
+        #[inline(never)]
+        fn $name(
+            program_id: &Pubkey,
+            accounts: &[AccountInfo<'_>],
+            instruction_data: &[u8],
+        ) -> ProgramResult {
+            let instruction = <$instruction>::decode(instruction_data)
+                .map_err(|_| AdapterError::InvalidInstruction)?;
+            $processor(program_id, accounts, instruction)
+        }
+    };
+}
+
+collateral_dispatch!(
+    dispatch_create_realm,
+    CreateRealmV1,
+    realm::process_create_realm
+);
+collateral_dispatch!(
+    dispatch_found_market,
+    FoundMarketAndFundV1,
+    found_market::process_found_market_and_fund
+);
+collateral_dispatch!(
+    dispatch_open_vault,
+    OpenCollateralVaultV1,
+    open_vault::process_open_collateral_vault
+);
+collateral_dispatch!(
+    dispatch_create_position,
+    CreatePositionAndSplitV1,
+    position::process_create_position_and_split
+);
+collateral_dispatch!(
+    dispatch_split,
+    SplitCompleteSetV1,
+    position::process_split_complete_set
+);
+collateral_dispatch!(
+    dispatch_merge,
+    MergeCompleteSetV1,
+    position::process_merge_complete_set
+);
+collateral_dispatch!(
+    dispatch_redeem,
+    RedeemResolvedOutcomeV1,
+    position::process_redeem_resolved_outcome
+);
+collateral_dispatch!(
+    dispatch_sweep,
+    SweepSurplusV1,
+    position::process_sweep_surplus
+);
+collateral_dispatch!(
+    dispatch_transfer,
+    TransferClaimsV1,
+    position::process_transfer_claims
+);
+collateral_dispatch!(
+    dispatch_close_position,
+    CloseEmptyPositionV1,
+    position::process_close_empty_position
+);
+collateral_dispatch!(
+    dispatch_compact_terminal,
+    CompactTerminalMarketV1,
+    terminal::process_compact_terminal_market
+);
 
 #[cfg(test)]
 mod tests {
     use dclutch_collateral_contract::{
         COMPACT_TERMINAL_MARKET_BYTES, CREATE_REALM_BYTES, CompactTerminalMarketV1, CreateRealmV1,
-        FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1, OPEN_COLLATERAL_VAULT_BYTES,
+        FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
+        InstructionV1 as CollateralInstructionV1, OPEN_COLLATERAL_VAULT_BYTES,
         OpenCollateralVaultV1,
     };
     use dclutch_core_contract::{ContentId, MarketIdentity};
@@ -209,8 +233,8 @@ mod tests {
             .encode(&mut create)
             .expect("exact encoding");
         assert!(matches!(
-            decode_instruction(&create),
-            Ok(RoutedInstruction::CreateRealm(_))
+            CollateralInstructionV1::decode(&create),
+            Ok(CollateralInstructionV1::CreateRealm(_))
         ));
 
         let identity = MarketIdentity::new(
@@ -227,8 +251,8 @@ mod tests {
             .encode(&mut found)
             .expect("exact encoding");
         assert!(matches!(
-            decode_instruction(&found),
-            Ok(RoutedInstruction::FoundMarketAndFund(_))
+            CollateralInstructionV1::decode(&found),
+            Ok(CollateralInstructionV1::FoundMarketAndFund(_))
         ));
 
         let mut failure = [0; RESOLVE_FAILURE_BYTES];
@@ -236,10 +260,8 @@ mod tests {
             .encode(&mut failure)
             .expect("exact encoding");
         assert!(matches!(
-            decode_instruction(&failure),
-            Ok(RoutedInstruction::Resolve(
-                ResolveCategoricalInstructionV1::Failure(_)
-            ))
+            ResolveCategoricalInstructionV1::decode(&failure),
+            Ok(ResolveCategoricalInstructionV1::Failure(_))
         ));
 
         let mut open = [0; OPEN_COLLATERAL_VAULT_BYTES];
@@ -247,8 +269,8 @@ mod tests {
             .encode(&mut open)
             .expect("exact encoding");
         assert!(matches!(
-            decode_instruction(&open),
-            Ok(RoutedInstruction::OpenCollateralVault(_))
+            CollateralInstructionV1::decode(&open),
+            Ok(CollateralInstructionV1::OpenCollateralVault(_))
         ));
 
         let mut compact = [0; COMPACT_TERMINAL_MARKET_BYTES];
@@ -256,8 +278,8 @@ mod tests {
             .encode(&mut compact)
             .expect("terminal compaction encoding");
         assert!(matches!(
-            decode_instruction(&compact),
-            Ok(RoutedInstruction::CompactTerminalMarket(_))
+            CollateralInstructionV1::decode(&compact),
+            Ok(CollateralInstructionV1::CompactTerminalMarket(_))
         ));
     }
 

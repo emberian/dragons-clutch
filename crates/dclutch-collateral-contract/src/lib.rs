@@ -39,6 +39,7 @@ pub use instruction::{
     OpenCollateralVaultV1, REDEEM_RESOLVED_OUTCOME_BYTES, RETIRE_EMPTY_VAULT_BYTES,
     RedeemResolvedOutcomeV1, RetireEmptyVaultV1, SPLIT_COMPLETE_SET_BYTES, SWEEP_SURPLUS_BYTES,
     SplitCompleteSetV1, SweepSurplusV1, TRANSFER_CLAIMS_BYTES, TransferClaimsV1,
+    decode_instruction_tag,
 };
 
 /// Explicit refusal returned by instruction or account-frame decoding.
