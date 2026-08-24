@@ -12,6 +12,11 @@
 
 use core::convert::{TryFrom, TryInto};
 
+use dclutch_capability_contract::{
+    CapabilityEntryV1, CapabilityManifestV1, FundingCompartment as CapabilityFundingCompartment,
+    FundingStateV1,
+};
+
 /// Exact width of an opaque content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
 /// Provisional program-profile bound on claim-basis cells.
@@ -26,7 +31,7 @@ pub const MAX_OUTCOMES_V1: usize = 16;
 /// candidate objective or complete-set conservation law.
 pub const MAX_EXECUTIONS_PER_PAGE_V1: usize = 4;
 /// Exact canonical byte width of [`GeneralConfigV1`].
-pub const GENERAL_CONFIG_BYTES: usize = 232;
+pub const GENERAL_CONFIG_BYTES: usize = 200;
 /// Exact canonical byte width of [`GeneralRootV1`].
 pub const GENERAL_ROOT_BYTES: usize = 72;
 /// Exact canonical byte width of [`GeneralFundingV1`].
@@ -35,6 +40,8 @@ pub const GENERAL_FUNDING_BYTES: usize = 144;
 pub const BATCH_ROOT_BYTES: usize = 136;
 /// Exact canonical byte width of [`OrderStateV1`].
 pub const ORDER_STATE_BYTES: usize = 96;
+/// Fixed byte prefix of [`GeneralOrderCustodyV1`] before its exact `N` claim reserves.
+pub const GENERAL_ORDER_CUSTODY_BASE_BYTES: usize = 192;
 /// Fixed byte prefix of a [`PortfolioOrderV1`] before its exact `N` coefficients.
 pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
 /// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
@@ -45,10 +52,36 @@ const GENERAL_ROOT_MAGIC: [u8; 8] = *b"DCLTGRR1";
 const GENERAL_FUNDING_MAGIC: [u8; 8] = *b"DCLTGFN1";
 const BATCH_ROOT_MAGIC: [u8; 8] = *b"DCLTGBR1";
 const ORDER_STATE_MAGIC: [u8; 8] = *b"DCLTGOS1";
+const ORDER_CUSTODY_MAGIC: [u8; 8] = *b"DCLTGOC1";
 const ORDER_MAGIC: [u8; 8] = *b"DCLTGOR1";
 const RECEIPT_MAGIC: [u8; 8] = *b"DCLTGSR1";
 const SCHEMA_V1: u16 = 1;
 const ARTIFACT_PROFILE_V1: u16 = 1;
+
+/// Domain-separated preimage of the General capability-kind identity.
+pub const GENERAL_CAPABILITY_KIND_PREIMAGE_V1: &[u8] = b"dclutch/general/capability-kind/v1";
+/// Domain-separated preimage of the reviewed frequent-batch release identity.
+pub const GENERAL_CAPABILITY_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/general/frequent-batch-release/v1";
+/// Domain-separated preimage of the General child-layout schema identity.
+pub const GENERAL_CHILD_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/general/child-schema/v1";
+/// Domain-separated preimage of the General child-derivation policy identity.
+pub const GENERAL_CHILD_DERIVATION_PREIMAGE_V1: &[u8] = b"dclutch/general/child-derivation/v1";
+
+/// PDA seed domain for one immutable General config child.
+pub const GENERAL_CONFIG_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-config/v1";
+/// PDA seed domain for one capability-bound General funding child.
+pub const GENERAL_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-funding/v1";
+/// PDA seed domain for one General capability root.
+pub const GENERAL_ROOT_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-root/v1";
+/// PDA seed domain for one General batch root.
+pub const GENERAL_BATCH_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-batch/v1";
+/// PDA seed domain for one signed-order replay state.
+pub const GENERAL_ORDER_STATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-order-state/v1";
+/// PDA seed domain for one exact-N order custody state.
+pub const GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-order-custody/v1";
+/// PDA seed domain for one token-program-owned order quote escrow.
+pub const GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-quote-escrow/v1";
 
 /// Refusal returned by the General venue contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +162,18 @@ pub enum Error {
     ZeroFundingDebit,
     /// Immutable funding did not equal remaining, spent, and refunded amounts.
     FundingConservationMismatch,
+    /// A manifest entry did not select the closed reviewed General release facts.
+    UnrecognizedCapability,
+    /// Capability funding did not bind or transition canonically into General funding.
+    CapabilityFundingMismatch,
+    /// A General capability quote carried provider or liquidity principal.
+    ExtraneousCapabilityFunding,
+    /// Persisted order custody did not bind the signed order or settlement receipt.
+    CustodyMismatch,
+    /// Locked quote or claim principal was insufficient for an authenticated receipt.
+    InsufficientCustody,
+    /// Order custody was closed before replay state became unavailable.
+    CustodyNotReleasable,
     /// Retirement was attempted before all owned state was quiescent.
     NotQuiescent,
 }
@@ -161,6 +206,53 @@ impl ContentId {
     }
 }
 
+/// Exact nonzero Ed25519/SVM public key whose signature owns an order.
+///
+/// This is not an opaque content digest. An SVM adapter compares these bytes
+/// directly to the authenticated signing public key.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct OwnerKeyV1([u8; 32]);
+
+impl OwnerKeyV1 {
+    /// Construct one nonzero signed-owner public key.
+    pub fn new(bytes: [u8; 32]) -> Result<Self> {
+        require_nonzero_key(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// Return the exact Ed25519/SVM public-key bytes.
+    pub const fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
+    /// Borrow the exact Ed25519/SVM public-key bytes.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// SHA-256 identity of [`GENERAL_CAPABILITY_KIND_PREIMAGE_V1`].
+pub const GENERAL_CAPABILITY_KIND_ID_V1: ContentId = ContentId([
+    0xcb, 0x8b, 0xc8, 0x7d, 0xbb, 0xf9, 0xee, 0x58, 0xfc, 0xe8, 0x60, 0x01, 0xa1, 0xbb, 0x5d, 0x1f,
+    0x2a, 0xf5, 0x7c, 0xec, 0x1d, 0xee, 0xff, 0x86, 0x66, 0x10, 0xca, 0x7f, 0xc4, 0x27, 0x4c, 0xb5,
+]);
+/// SHA-256 identity of [`GENERAL_CAPABILITY_RELEASE_PREIMAGE_V1`].
+pub const GENERAL_CAPABILITY_RELEASE_ID_V1: ContentId = ContentId([
+    0x6a, 0xd3, 0x9a, 0xd8, 0xd4, 0x99, 0xbf, 0xa9, 0x46, 0x87, 0xc9, 0x10, 0x54, 0x38, 0x8a, 0x61,
+    0xe3, 0x58, 0xbd, 0x95, 0x2e, 0x00, 0xac, 0x35, 0x02, 0xa4, 0x42, 0xbd, 0xe2, 0x76, 0xdc, 0x2f,
+]);
+/// SHA-256 identity of [`GENERAL_CHILD_SCHEMA_PREIMAGE_V1`].
+pub const GENERAL_CHILD_SCHEMA_ID_V1: ContentId = ContentId([
+    0xa8, 0x3f, 0xbe, 0xbd, 0x0b, 0x10, 0x56, 0x7a, 0x25, 0xd5, 0xb1, 0xf2, 0xdb, 0x16, 0x18, 0x1b,
+    0x88, 0xba, 0x28, 0xf5, 0x54, 0x9d, 0x61, 0xc3, 0xce, 0x02, 0xd6, 0x00, 0xc3, 0x09, 0x60, 0xb9,
+]);
+/// SHA-256 identity of [`GENERAL_CHILD_DERIVATION_PREIMAGE_V1`].
+pub const GENERAL_CHILD_DERIVATION_ID_V1: ContentId = ContentId([
+    0x56, 0xd5, 0xff, 0xe7, 0xce, 0x62, 0x82, 0x2c, 0x62, 0x32, 0x11, 0xea, 0x3e, 0x4a, 0x53, 0x3c,
+    0xfb, 0x5c, 0xd9, 0xa5, 0x84, 0x60, 0xf7, 0x85, 0xea, 0x52, 0x01, 0x69, 0x97, 0x18, 0x8b, 0xb0,
+]);
+
 /// Immutable capacity and authority contract for one General venue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralConfigV1 {
@@ -168,7 +260,6 @@ pub struct GeneralConfigV1 {
     market_identity_id: ContentId,
     claim_basis_id: ContentId,
     capability_release_id: ContentId,
-    settlement_asset_id: ContentId,
     generation: u64,
     price_scale: u64,
     collection_slots: u64,
@@ -190,8 +281,6 @@ pub struct GeneralConfigV1Input {
     pub claim_basis_id: ContentId,
     /// Reviewed General capability release selected by the manifest.
     pub capability_release_id: ContentId,
-    /// Realm-selected settlement asset profile identity.
-    pub settlement_asset_id: ContentId,
     /// Immutable occurrence generation.
     pub generation: u64,
     /// Positive integer scale whose simplex coordinates sum exactly.
@@ -216,6 +305,9 @@ impl GeneralConfigV1 {
         let outcome_count = usize::from(input.outcome_count);
         if !(2..=MAX_OUTCOMES_V1).contains(&outcome_count) {
             return Err(Error::InvalidOutcomeCount);
+        }
+        if input.capability_release_id != GENERAL_CAPABILITY_RELEASE_ID_V1 {
+            return Err(Error::UnrecognizedCapability);
         }
         if input.price_scale == 0 {
             return Err(Error::ZeroPriceScale);
@@ -242,7 +334,6 @@ impl GeneralConfigV1 {
             market_identity_id: input.market_identity_id,
             claim_basis_id: input.claim_basis_id,
             capability_release_id: input.capability_release_id,
-            settlement_asset_id: input.settlement_asset_id,
             generation: input.generation,
             price_scale: input.price_scale,
             collection_slots: input.collection_slots,
@@ -264,21 +355,20 @@ impl GeneralConfigV1 {
             return Err(Error::UnsupportedSchema);
         }
         require_zero(bytes, 14, 2)?;
-        require_zero(bytes, 224, 8)?;
+        require_zero(bytes, 192, 8)?;
         Self::new(GeneralConfigV1Input {
             outcome_count: read_u16(bytes, 12)?,
             capacity_profile_id: read_id(bytes, 16)?,
             market_identity_id: read_id(bytes, 48)?,
             claim_basis_id: read_id(bytes, 80)?,
             capability_release_id: read_id(bytes, 112)?,
-            settlement_asset_id: read_id(bytes, 144)?,
-            generation: read_u64(bytes, 176)?,
-            price_scale: read_u64(bytes, 184)?,
-            collection_slots: read_u64(bytes, 192)?,
-            selection_slots: read_u64(bytes, 200)?,
-            settlement_slots: read_u64(bytes, 208)?,
-            max_orders_per_candidate: read_u32(bytes, 216)?,
-            max_pages_per_candidate: read_u32(bytes, 220)?,
+            generation: read_u64(bytes, 144)?,
+            price_scale: read_u64(bytes, 152)?,
+            collection_slots: read_u64(bytes, 160)?,
+            selection_slots: read_u64(bytes, 168)?,
+            settlement_slots: read_u64(bytes, 176)?,
+            max_orders_per_candidate: read_u32(bytes, 184)?,
+            max_pages_per_candidate: read_u32(bytes, 188)?,
         })
     }
 
@@ -293,14 +383,13 @@ impl GeneralConfigV1 {
         put(&mut out, 48, self.market_identity_id.as_bytes());
         put(&mut out, 80, self.claim_basis_id.as_bytes());
         put(&mut out, 112, self.capability_release_id.as_bytes());
-        put(&mut out, 144, self.settlement_asset_id.as_bytes());
-        put(&mut out, 176, &self.generation.to_le_bytes());
-        put(&mut out, 184, &self.price_scale.to_le_bytes());
-        put(&mut out, 192, &self.collection_slots.to_le_bytes());
-        put(&mut out, 200, &self.selection_slots.to_le_bytes());
-        put(&mut out, 208, &self.settlement_slots.to_le_bytes());
-        put(&mut out, 216, &self.max_orders_per_candidate.to_le_bytes());
-        put(&mut out, 220, &self.max_pages_per_candidate.to_le_bytes());
+        put(&mut out, 144, &self.generation.to_le_bytes());
+        put(&mut out, 152, &self.price_scale.to_le_bytes());
+        put(&mut out, 160, &self.collection_slots.to_le_bytes());
+        put(&mut out, 168, &self.selection_slots.to_le_bytes());
+        put(&mut out, 176, &self.settlement_slots.to_le_bytes());
+        put(&mut out, 184, &self.max_orders_per_candidate.to_le_bytes());
+        put(&mut out, 188, &self.max_pages_per_candidate.to_le_bytes());
         out
     }
 
@@ -322,11 +411,6 @@ impl GeneralConfigV1 {
     /// Return the selected capability release identity.
     pub const fn capability_release_id(self) -> ContentId {
         self.capability_release_id
-    }
-
-    /// Return the Realm-selected settlement-asset identity.
-    pub const fn settlement_asset_id(self) -> ContentId {
-        self.settlement_asset_id
     }
 
     /// Return the immutable occurrence generation.
@@ -516,7 +600,7 @@ impl GeneralRootV1 {
 pub struct PortfolioOrderV1<const N: usize> {
     market_identity_id: ContentId,
     claim_basis_id: ContentId,
-    owner: ContentId,
+    owner: OwnerKeyV1,
     order_id: ContentId,
     generation: u64,
     batch_sequence: u64,
@@ -535,8 +619,8 @@ pub struct PortfolioOrderV1Input<const N: usize> {
     pub market_identity_id: ContentId,
     /// Exact ClaimBasis identity.
     pub claim_basis_id: ContentId,
-    /// Signing owner's adapter-authenticated identity.
-    pub owner: ContentId,
+    /// Exact Ed25519/SVM public key whose signature authorizes this order.
+    pub owner: OwnerKeyV1,
     /// Unique content identity of the signed order preimage.
     pub order_id: ContentId,
     /// Immutable Market generation.
@@ -612,7 +696,7 @@ impl<const N: usize> PortfolioOrderV1<N> {
             outcome_count: read_u16(bytes, 12)?,
             market_identity_id: read_id(bytes, 16)?,
             claim_basis_id: read_id(bytes, 48)?,
-            owner: read_id(bytes, 80)?,
+            owner: read_owner_key(bytes, 80)?,
             order_id: read_id(bytes, 112)?,
             generation: read_u64(bytes, 144)?,
             batch_sequence: read_u64(bytes, 152)?,
@@ -663,8 +747,8 @@ impl<const N: usize> PortfolioOrderV1<N> {
         self.order_id
     }
 
-    /// Return the owner identity.
-    pub const fn owner(self) -> ContentId {
+    /// Return the exact signing owner key.
+    pub const fn owner(self) -> OwnerKeyV1 {
         self.owner
     }
 
@@ -698,9 +782,57 @@ impl<const N: usize> PortfolioOrderV1<N> {
         self.valid_until_slot
     }
 
+    /// Return the maximum scalar lots authorized by the signed order.
+    pub const fn max_lots(self) -> u64 {
+        self.max_lots
+    }
+
+    /// Return the maximum quote debit numerator authorized for one lot.
+    pub const fn max_quote_debit_per_lot_numerator(self) -> i128 {
+        self.max_quote_debit_per_lot_numerator
+    }
+
     /// Return one atomic-lot coefficient vector.
     pub const fn coefficients(self) -> [i64; N] {
         self.coefficients
+    }
+
+    /// Compute the exact worst-case quote and native-claim custody required
+    /// before this signed order may become live.
+    pub fn worst_case_reserve(self, config: GeneralConfigV1) -> Result<GeneralOrderReserveV1<N>> {
+        validate_authority(
+            self.market_identity_id,
+            self.claim_basis_id,
+            self.generation,
+            config,
+        )?;
+        Ok(GeneralOrderReserveV1 {
+            quote_atoms: quote_reserve(
+                self.max_quote_debit_per_lot_numerator,
+                self.max_lots,
+                config.price_scale,
+            )?,
+            claim_atoms: claim_reserve(&self.coefficients, self.max_lots)?,
+        })
+    }
+}
+
+/// Exact present principal that must be locked before order admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderReserveV1<const N: usize> {
+    quote_atoms: u64,
+    claim_atoms: [u64; N],
+}
+
+impl<const N: usize> GeneralOrderReserveV1<N> {
+    /// Return the ceil-rounded settlement-asset reserve.
+    pub const fn quote_atoms(self) -> u64 {
+        self.quote_atoms
+    }
+
+    /// Borrow exact per-outcome native-claim reserves.
+    pub const fn claim_atoms(&self) -> &[u64; N] {
+        &self.claim_atoms
     }
 }
 
@@ -714,13 +846,15 @@ pub enum OrderPhase {
     Cancelled = 1,
     /// Every lot was consumed by one or more settlement receipts.
     Consumed = 2,
+    /// An unfilled remainder became unavailable when its batch quiesced.
+    Released = 3,
 }
 
 /// Replay and partial-fill state for one unique signed order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrderStateV1 {
     order_id: ContentId,
-    owner: ContentId,
+    owner: OwnerKeyV1,
     nonce: u64,
     remaining_lots: u64,
     phase: OrderPhase,
@@ -738,7 +872,7 @@ impl OrderStateV1 {
         let state = Self {
             phase: decode_order_phase(read_u8(bytes, 12)?)?,
             order_id: read_id(bytes, 16)?,
-            owner: read_id(bytes, 48)?,
+            owner: read_owner_key(bytes, 48)?,
             nonce: read_u64(bytes, 80)?,
             remaining_lots: read_u64(bytes, 88)?,
         };
@@ -778,7 +912,9 @@ impl OrderStateV1 {
 
     fn validate(self) -> Result<()> {
         match self.phase {
-            OrderPhase::Open | OrderPhase::Cancelled if self.remaining_lots == 0 => {
+            OrderPhase::Open | OrderPhase::Cancelled | OrderPhase::Released
+                if self.remaining_lots == 0 =>
+            {
                 Err(Error::NonCanonicalState)
             }
             OrderPhase::Consumed if self.remaining_lots != 0 => Err(Error::NonCanonicalState),
@@ -799,7 +935,12 @@ impl OrderStateV1 {
     }
 
     /// Cancel before the batch's immutable collection close.
-    pub fn cancel(&mut self, owner: ContentId, now_slot: u64, collection_close: u64) -> Result<()> {
+    pub fn cancel(
+        &mut self,
+        owner: OwnerKeyV1,
+        now_slot: u64,
+        collection_close: u64,
+    ) -> Result<()> {
         if owner != self.owner {
             return Err(Error::AuthorityMismatch);
         }
@@ -810,6 +951,25 @@ impl OrderStateV1 {
             return Err(Error::OutsideWindow);
         }
         self.phase = OrderPhase::Cancelled;
+        Ok(())
+    }
+
+    /// Make an unfilled remainder unavailable after its immutable batch has
+    /// become quiescent. This is not owner cancellation and cannot run while
+    /// candidate selection or application remains possible.
+    pub fn release_after_batch<const N: usize>(
+        &mut self,
+        order: PortfolioOrderV1<N>,
+        batch: BatchRootV1,
+    ) -> Result<()> {
+        self.authenticate(order)?;
+        if self.phase != OrderPhase::Open
+            || batch.phase != BatchPhase::Quiescent
+            || batch.sequence != order.batch_sequence
+        {
+            return Err(Error::InvalidPhase);
+        }
+        self.phase = OrderPhase::Released;
         Ok(())
     }
 
@@ -857,6 +1017,377 @@ impl OrderStateV1 {
     /// Return the signed-order commitment.
     pub const fn order_id(self) -> ContentId {
         self.order_id
+    }
+}
+
+/// Exact-N semantic custody for one admitted General order.
+///
+/// Reserved native claims are owned directly by this record after the adapter
+/// debits the signed owner's Position. Reserved quote atoms are physically
+/// held by the bound token escrow. Replay availability remains owned solely by
+/// [`OrderStateV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderCustodyV1<const N: usize> {
+    order_id: ContentId,
+    market_identity_id: ContentId,
+    owner: OwnerKeyV1,
+    rent_beneficiary: [u8; 32],
+    quote_escrow: [u8; 32],
+    generation: u64,
+    reserved_quote_atoms: u64,
+    reserved_claim_atoms: [u64; N],
+    outcome_count: u16,
+}
+
+/// Atomic semantic effects of admitting one signed order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderAdmissionV1<const N: usize> {
+    /// Newly opened sole replay state.
+    pub order_state: OrderStateV1,
+    /// Newly funded exact-N order custody.
+    pub custody: GeneralOrderCustodyV1<N>,
+    /// Exact quote and Position debits the adapter must commit atomically.
+    pub reserve: GeneralOrderReserveV1<N>,
+}
+
+/// Exact physical effects of applying one authenticated settlement receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCustodyConsumptionV1<const N: usize> {
+    quote_debit_from_escrow: u64,
+    quote_credit_to_owner: u64,
+    claim_debits_from_custody: [u64; N],
+    claim_credits_to_owner: [u64; N],
+}
+
+impl<const N: usize> GeneralCustodyConsumptionV1<N> {
+    /// Return settlement atoms consumed from the order's quote escrow.
+    pub const fn quote_debit_from_escrow(self) -> u64 {
+        self.quote_debit_from_escrow
+    }
+
+    /// Return settlement atoms credited to the signed owner.
+    pub const fn quote_credit_to_owner(self) -> u64 {
+        self.quote_credit_to_owner
+    }
+
+    /// Borrow exact native claims consumed from semantic custody.
+    pub const fn claim_debits_from_custody(&self) -> &[u64; N] {
+        &self.claim_debits_from_custody
+    }
+
+    /// Borrow exact native claims credited to the signed owner's Position.
+    pub const fn claim_credits_to_owner(&self) -> &[u64; N] {
+        &self.claim_credits_to_owner
+    }
+}
+
+/// Exact residual principal and rent authority emitted when custody closes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCustodyReleaseV1<const N: usize> {
+    /// Signed owner receiving every residual reserve.
+    pub owner: OwnerKeyV1,
+    /// Persisted account receiving custody-record rent.
+    pub rent_beneficiary: [u8; 32],
+    /// Bound token escrow returning residual settlement atoms and its rent.
+    pub quote_escrow: [u8; 32],
+    /// Exact residual settlement atoms returned to the owner.
+    pub quote_atoms: u64,
+    /// Exact residual native claims returned to the owner's Position.
+    pub claim_atoms: [u64; N],
+}
+
+impl<const N: usize> GeneralOrderCustodyV1<N> {
+    /// Return the exact checked encoded length, with no maximum-width padding.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        GENERAL_ORDER_CUSTODY_BASE_BYTES
+            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Atomically plan replay reservation and worst-case custody admission.
+    pub fn admit(
+        order: PortfolioOrderV1<N>,
+        config: GeneralConfigV1,
+        rent_beneficiary: [u8; 32],
+        quote_escrow: [u8; 32],
+    ) -> Result<GeneralOrderAdmissionV1<N>> {
+        require_nonzero_key(&rent_beneficiary)?;
+        require_nonzero_key(&quote_escrow)?;
+        let reserve = order.worst_case_reserve(config)?;
+        let custody = Self {
+            order_id: order.order_id,
+            market_identity_id: order.market_identity_id,
+            owner: order.owner,
+            rent_beneficiary,
+            quote_escrow,
+            generation: order.generation,
+            reserved_quote_atoms: reserve.quote_atoms,
+            reserved_claim_atoms: reserve.claim_atoms,
+            outcome_count: order.outcome_count,
+        };
+        Ok(GeneralOrderAdmissionV1 {
+            order_state: OrderStateV1::open(order),
+            custody,
+            reserve,
+        })
+    }
+
+    /// Decode one exact-width canonical order-custody record.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, Self::encoded_len()?)?;
+        if array::<8>(bytes, 0)? != ORDER_CUSTODY_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 14, 2)?;
+        let outcome_count = read_u16(bytes, 12)?;
+        if usize::from(outcome_count) != N {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        let rent_beneficiary = array::<32>(bytes, 112)?;
+        let quote_escrow = array::<32>(bytes, 144)?;
+        require_nonzero_key(&rent_beneficiary)?;
+        require_nonzero_key(&quote_escrow)?;
+        let mut reserved_claim_atoms = [0u64; N];
+        for (index, target) in reserved_claim_atoms.iter_mut().enumerate() {
+            let offset = index
+                .checked_mul(8)
+                .and_then(|part| GENERAL_ORDER_CUSTODY_BASE_BYTES.checked_add(part))
+                .ok_or(Error::ArithmeticOverflow)?;
+            *target = read_u64(bytes, offset)?;
+        }
+        Ok(Self {
+            order_id: read_id(bytes, 16)?,
+            market_identity_id: read_id(bytes, 48)?,
+            owner: read_owner_key(bytes, 80)?,
+            rent_beneficiary,
+            quote_escrow,
+            generation: read_u64(bytes, 176)?,
+            reserved_quote_atoms: read_u64(bytes, 184)?,
+            reserved_claim_atoms,
+            outcome_count,
+        })
+    }
+
+    /// Encode one exact-width canonical order-custody record.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        self.validate_shape()?;
+        out.fill(0);
+        put(out, 0, &ORDER_CUSTODY_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 12, &self.outcome_count.to_le_bytes());
+        put(out, 16, self.order_id.as_bytes());
+        put(out, 48, self.market_identity_id.as_bytes());
+        put(out, 80, self.owner.as_bytes());
+        put(out, 112, &self.rent_beneficiary);
+        put(out, 144, &self.quote_escrow);
+        put(out, 176, &self.generation.to_le_bytes());
+        put(out, 184, &self.reserved_quote_atoms.to_le_bytes());
+        for (index, amount) in self.reserved_claim_atoms.iter().enumerate() {
+            let offset = index
+                .checked_mul(8)
+                .and_then(|part| GENERAL_ORDER_CUSTODY_BASE_BYTES.checked_add(part))
+                .ok_or(Error::ArithmeticOverflow)?;
+            put(out, offset, &amount.to_le_bytes());
+        }
+        Ok(())
+    }
+
+    /// Authenticate immutable bindings and prove reserves never exceed the
+    /// signed order's admission ceiling.
+    pub fn authenticate(&self, order: PortfolioOrderV1<N>, config: GeneralConfigV1) -> Result<()> {
+        self.validate_shape()?;
+        if self.order_id != order.order_id
+            || self.market_identity_id != order.market_identity_id
+            || self.owner != order.owner
+            || self.generation != order.generation
+            || self.outcome_count != order.outcome_count
+        {
+            return Err(Error::CustodyMismatch);
+        }
+        let ceiling = order.worst_case_reserve(config)?;
+        if self.reserved_quote_atoms > ceiling.quote_atoms
+            || self
+                .reserved_claim_atoms
+                .iter()
+                .zip(ceiling.claim_atoms.iter())
+                .any(|(remaining, initial)| remaining > initial)
+        {
+            return Err(Error::CustodyMismatch);
+        }
+        Ok(())
+    }
+
+    /// Consume one authenticated receipt and advance replay plus custody
+    /// atomically. Any refusal leaves both inputs unchanged.
+    pub fn apply_receipt(
+        &mut self,
+        state: &mut OrderStateV1,
+        order: PortfolioOrderV1<N>,
+        receipt: SettlementReceiptV1<N>,
+        config: GeneralConfigV1,
+    ) -> Result<GeneralCustodyConsumptionV1<N>> {
+        self.authenticate(order, config)?;
+        state.authenticate(order)?;
+        if receipt.order_id != order.order_id
+            || receipt.owner != order.owner
+            || receipt.generation != order.generation
+            || receipt.batch_sequence != order.batch_sequence
+            || receipt.nonce != order.nonce
+            || receipt.outcome_count != config.outcome_count
+            || receipt.fill_lots == 0
+            || receipt.carry_before >= config.price_scale
+            || receipt.carry_after >= config.price_scale
+        {
+            return Err(Error::CustodyMismatch);
+        }
+
+        let mut next_state = *state;
+        next_state.consume(order, receipt.fill_lots)?;
+        if receipt.remaining_lots != next_state.remaining_lots {
+            return Err(Error::CustodyMismatch);
+        }
+        let mut next_custody = *self;
+        let (quote_debit_from_escrow, quote_credit_to_owner) =
+            split_signed_amount(receipt.quote_delta_atoms)?;
+        next_custody.reserved_quote_atoms = next_custody
+            .reserved_quote_atoms
+            .checked_sub(quote_debit_from_escrow)
+            .ok_or(Error::InsufficientCustody)?;
+
+        let mut claim_debits_from_custody = [0u64; N];
+        let mut claim_credits_to_owner = [0u64; N];
+        for (index, ((coefficient, receipt_delta), reserve)) in order
+            .coefficients
+            .iter()
+            .zip(receipt.outcome_deltas.iter())
+            .zip(next_custody.reserved_claim_atoms.iter_mut())
+            .enumerate()
+        {
+            let expected = i128::from(*coefficient)
+                .checked_mul(i128::from(receipt.fill_lots))
+                .ok_or(Error::ArithmeticOverflow)?;
+            let expected = i64::try_from(expected).map_err(|_| Error::TokenAmountOutOfRange)?;
+            if *receipt_delta != expected {
+                return Err(Error::CustodyMismatch);
+            }
+            let (debit, credit) = split_signed_amount(*receipt_delta)?;
+            *reserve = reserve
+                .checked_sub(debit)
+                .ok_or(Error::InsufficientCustody)?;
+            let debit_target = claim_debits_from_custody
+                .get_mut(index)
+                .ok_or(Error::ArithmeticOverflow)?;
+            *debit_target = debit;
+            let credit_target = claim_credits_to_owner
+                .get_mut(index)
+                .ok_or(Error::ArithmeticOverflow)?;
+            *credit_target = credit;
+        }
+
+        *state = next_state;
+        *self = next_custody;
+        Ok(GeneralCustodyConsumptionV1 {
+            quote_debit_from_escrow,
+            quote_credit_to_owner,
+            claim_debits_from_custody,
+            claim_credits_to_owner,
+        })
+    }
+
+    /// Cancel before collection lock and emit the complete residual release in
+    /// the same semantic transition.
+    pub fn cancel_and_release(
+        self,
+        state: &mut OrderStateV1,
+        order: PortfolioOrderV1<N>,
+        owner: OwnerKeyV1,
+        now_slot: u64,
+        collection_close: u64,
+        config: GeneralConfigV1,
+    ) -> Result<GeneralCustodyReleaseV1<N>> {
+        self.authenticate(order, config)?;
+        let mut next_state = *state;
+        next_state.authenticate(order)?;
+        next_state.cancel(owner, now_slot, collection_close)?;
+        let release = self.release(next_state)?;
+        *state = next_state;
+        Ok(release)
+    }
+
+    /// Close after batch convergence, releasing any unfilled or limit-price
+    /// surplus. A partially filled replay state becomes permanently Released.
+    pub fn close_after_batch(
+        self,
+        state: &mut OrderStateV1,
+        order: PortfolioOrderV1<N>,
+        batch: BatchRootV1,
+        config: GeneralConfigV1,
+    ) -> Result<GeneralCustodyReleaseV1<N>> {
+        self.authenticate(order, config)?;
+        if batch.phase != BatchPhase::Quiescent || batch.sequence != order.batch_sequence {
+            return Err(Error::InvalidPhase);
+        }
+        let mut next_state = *state;
+        next_state.authenticate(order)?;
+        if next_state.phase == OrderPhase::Open {
+            next_state.release_after_batch(order, batch)?;
+        }
+        let release = self.release(next_state)?;
+        *state = next_state;
+        Ok(release)
+    }
+
+    /// Return the signed owner key.
+    pub const fn owner(self) -> OwnerKeyV1 {
+        self.owner
+    }
+
+    /// Return the persisted rent beneficiary account key.
+    pub const fn rent_beneficiary(self) -> [u8; 32] {
+        self.rent_beneficiary
+    }
+
+    /// Return the bound quote-escrow account key.
+    pub const fn quote_escrow(self) -> [u8; 32] {
+        self.quote_escrow
+    }
+
+    /// Return exact settlement atoms still locked.
+    pub const fn reserved_quote_atoms(self) -> u64 {
+        self.reserved_quote_atoms
+    }
+
+    /// Borrow exact native claims still semantically locked.
+    pub const fn reserved_claim_atoms(&self) -> &[u64; N] {
+        &self.reserved_claim_atoms
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if usize::from(self.outcome_count) != N {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        require_nonzero_key(&self.rent_beneficiary)?;
+        require_nonzero_key(&self.quote_escrow)
+    }
+
+    fn release(self, state: OrderStateV1) -> Result<GeneralCustodyReleaseV1<N>> {
+        if !matches!(
+            state.phase,
+            OrderPhase::Cancelled | OrderPhase::Consumed | OrderPhase::Released
+        ) {
+            return Err(Error::CustodyNotReleasable);
+        }
+        Ok(GeneralCustodyReleaseV1 {
+            owner: self.owner,
+            rent_beneficiary: self.rent_beneficiary,
+            quote_escrow: self.quote_escrow,
+            quote_atoms: self.reserved_quote_atoms,
+            claim_atoms: self.reserved_claim_atoms,
+        })
     }
 }
 
@@ -1544,8 +2075,8 @@ pub struct SettlementReceiptV1<const N: usize> {
     pub candidate_id: ContentId,
     /// Signed order commitment.
     pub order_id: ContentId,
-    /// Owner receiving the signed outcome and quote deltas.
-    pub owner: ContentId,
+    /// Exact signed owner receiving the outcome and quote deltas.
+    pub owner: OwnerKeyV1,
     /// Market occurrence generation.
     pub generation: u64,
     /// Batch sequence.
@@ -1632,7 +2163,7 @@ impl<const N: usize> SettlementReceiptV1<N> {
         Ok(Self {
             candidate_id: read_id(bytes, 16)?,
             order_id: read_id(bytes, 48)?,
-            owner: read_id(bytes, 80)?,
+            owner: read_owner_key(bytes, 80)?,
             generation: read_u64(bytes, 112)?,
             batch_sequence: read_u64(bytes, 120)?,
             nonce: read_u64(bytes, 128)?,
@@ -1926,7 +2457,160 @@ pub struct FundingDebitV1 {
     pub recipient: ContentId,
 }
 
+/// Exact one-shot transfer plan from generic capability funding into an
+/// activated General child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralFundingActivationV1 {
+    capability_funding_after: FundingStateV1,
+    general_funding: GeneralFundingV1,
+    rent_principal: u64,
+    creation_principal: u64,
+    general_principal: u64,
+}
+
+impl GeneralFundingActivationV1 {
+    /// Return the capability ledger after every quoted compartment was released.
+    pub const fn capability_funding_after(self) -> FundingStateV1 {
+        self.capability_funding_after
+    }
+
+    /// Return newly founded General-owned liveness/work/bounty funding.
+    pub const fn general_funding(self) -> GeneralFundingV1 {
+        self.general_funding
+    }
+
+    /// Return exact child-rent principal released during activation.
+    pub const fn rent_principal(self) -> u64 {
+        self.rent_principal
+    }
+
+    /// Return exact physical-creation principal released during activation.
+    pub const fn creation_principal(self) -> u64 {
+        self.creation_principal
+    }
+
+    /// Return exact principal transferred into the General funding child.
+    pub const fn general_principal(self) -> u64 {
+        self.general_principal
+    }
+}
+
+/// Authenticate one manifest entry as the closed reviewed General V1 release.
+pub fn validate_general_capability_entry_v1(
+    entry: CapabilityEntryV1,
+    config_id: ContentId,
+    config: GeneralConfigV1,
+) -> Result<()> {
+    if entry.kind_id().to_bytes() != GENERAL_CAPABILITY_KIND_ID_V1.to_bytes()
+        || entry.release_id().to_bytes() != GENERAL_CAPABILITY_RELEASE_ID_V1.to_bytes()
+        || entry.child_schema_id().to_bytes() != GENERAL_CHILD_SCHEMA_ID_V1.to_bytes()
+        || entry.child_derivation_id().to_bytes() != GENERAL_CHILD_DERIVATION_ID_V1.to_bytes()
+        || entry.config_id().to_bytes() != config_id.to_bytes()
+        || entry.capacity_profile_id().to_bytes() != config.capacity_profile_id.to_bytes()
+        || config.capability_release_id != GENERAL_CAPABILITY_RELEASE_ID_V1
+    {
+        return Err(Error::UnrecognizedCapability);
+    }
+    Ok(())
+}
+
 impl GeneralFundingV1 {
+    /// Activate the exact manifest-selected General entry and move all mapped
+    /// principal out of the generic capability ledger in one atomic plan.
+    ///
+    /// The immutable quote is the only amount authority: service becomes
+    /// General liveness, work remains work, and bounty remains bounty.
+    /// Provider and liquidity principal are forbidden. No compartment amount
+    /// is accepted from the caller.
+    #[allow(clippy::too_many_arguments)]
+    pub fn activate_from_capability(
+        config_id: ContentId,
+        config: GeneralConfigV1,
+        manifest_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        mut capability_funding: FundingStateV1,
+        observed_present_principal: u64,
+        current_slot: u64,
+    ) -> Result<GeneralFundingActivationV1> {
+        let capability_manifest_id =
+            dclutch_capability_contract::ContentId::new(manifest_id.to_bytes())
+                .map_err(|_| Error::CapabilityFundingMismatch)?;
+        capability_funding
+            .validate_against(capability_manifest_id, manifest, observed_present_principal)
+            .map_err(|_| Error::CapabilityFundingMismatch)?;
+        let entry = manifest
+            .entry(capability_funding.entry_index())
+            .map_err(|_| Error::CapabilityFundingMismatch)?;
+        validate_general_capability_entry_v1(entry, config_id, config)?;
+        let quote = entry.funding_quote();
+        if quote.provider_principal() != 0 || quote.liquidity_principal() != 0 {
+            return Err(Error::ExtraneousCapabilityFunding);
+        }
+
+        let activation = capability_funding
+            .activate(
+                capability_manifest_id,
+                manifest,
+                observed_present_principal,
+                current_slot,
+            )
+            .map_err(|_| Error::CapabilityFundingMismatch)?;
+        let remaining = capability_funding.remaining();
+        let released = capability_funding.released();
+        if remaining.service_principal() != quote.service_principal()
+            || remaining.work_principal() != quote.work_principal()
+            || remaining.bounty_principal() != quote.bounty_principal()
+            || released.service_principal() != 0
+            || released.work_principal() != 0
+            || released.bounty_principal() != 0
+        {
+            return Err(Error::CapabilityFundingMismatch);
+        }
+
+        release_capability_compartment(
+            &mut capability_funding,
+            capability_manifest_id,
+            manifest,
+            CapabilityFundingCompartment::Service,
+            quote.service_principal(),
+        )?;
+        release_capability_compartment(
+            &mut capability_funding,
+            capability_manifest_id,
+            manifest,
+            CapabilityFundingCompartment::Work,
+            quote.work_principal(),
+        )?;
+        release_capability_compartment(
+            &mut capability_funding,
+            capability_manifest_id,
+            manifest,
+            CapabilityFundingCompartment::Bounty,
+            quote.bounty_principal(),
+        )?;
+        capability_funding
+            .validate_against(capability_manifest_id, manifest, 0)
+            .map_err(|_| Error::CapabilityFundingMismatch)?;
+
+        let general_principal = quote
+            .service_principal()
+            .checked_add(quote.work_principal())
+            .and_then(|value| value.checked_add(quote.bounty_principal()))
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(GeneralFundingActivationV1 {
+            capability_funding_after: capability_funding,
+            general_funding: Self::founding(
+                GENERAL_CAPABILITY_RELEASE_ID_V1,
+                quote.service_principal(),
+                quote.work_principal(),
+                quote.bounty_principal(),
+            ),
+            rent_principal: activation.rent_principal(),
+            creation_principal: activation.creation_principal(),
+            general_principal,
+        })
+    }
+
     /// Decode one exact-width canonical segregated General funding state.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         exact_len(bytes, GENERAL_FUNDING_BYTES)?;
@@ -2162,6 +2846,82 @@ fn validate_portfolio<const N: usize>(
     Ok(())
 }
 
+fn quote_reserve(max_debit_per_lot: i128, max_lots: u64, price_scale: u64) -> Result<u64> {
+    if price_scale == 0 {
+        return Err(Error::ZeroPriceScale);
+    }
+    if max_debit_per_lot <= 0 {
+        return Ok(0);
+    }
+    let debit = u128::try_from(max_debit_per_lot).map_err(|_| Error::ArithmeticOverflow)?;
+    let numerator = debit
+        .checked_mul(u128::from(max_lots))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let scale = u128::from(price_scale);
+    let quotient = numerator / scale;
+    let rounded = if numerator % scale == 0 {
+        quotient
+    } else {
+        quotient.checked_add(1).ok_or(Error::ArithmeticOverflow)?
+    };
+    u64::try_from(rounded).map_err(|_| Error::TokenAmountOutOfRange)
+}
+
+fn claim_reserve<const N: usize>(coefficients: &[i64; N], max_lots: u64) -> Result<[u64; N]> {
+    let mut reserve = [0u64; N];
+    for (coefficient, target) in coefficients.iter().zip(reserve.iter_mut()) {
+        if *coefficient < 0 {
+            let magnitude = i128::from(*coefficient)
+                .checked_neg()
+                .ok_or(Error::ArithmeticOverflow)?;
+            let amount = magnitude
+                .checked_mul(i128::from(max_lots))
+                .ok_or(Error::ArithmeticOverflow)?;
+            *target = u64::try_from(amount).map_err(|_| Error::TokenAmountOutOfRange)?;
+        }
+    }
+    Ok(reserve)
+}
+
+fn split_signed_amount(delta: i64) -> Result<(u64, u64)> {
+    if delta < 0 {
+        let debit = i128::from(delta)
+            .checked_neg()
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok((
+            u64::try_from(debit).map_err(|_| Error::TokenAmountOutOfRange)?,
+            0,
+        ))
+    } else {
+        Ok((
+            0,
+            u64::try_from(delta).map_err(|_| Error::TokenAmountOutOfRange)?,
+        ))
+    }
+}
+
+fn release_capability_compartment(
+    funding: &mut FundingStateV1,
+    manifest_id: dclutch_capability_contract::ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    compartment: CapabilityFundingCompartment,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let observed_present_principal = funding.remaining().total_principal();
+    funding
+        .release(
+            manifest_id,
+            manifest,
+            observed_present_principal,
+            compartment,
+            amount,
+        )
+        .map_err(|_| Error::CapabilityFundingMismatch)
+}
+
 fn portfolio_dot<const N: usize>(
     coefficients: &[i64; N],
     prices: &[u64; N],
@@ -2218,6 +2978,7 @@ const fn order_phase_tag(phase: OrderPhase) -> u8 {
         OrderPhase::Open => 0,
         OrderPhase::Cancelled => 1,
         OrderPhase::Consumed => 2,
+        OrderPhase::Released => 3,
     }
 }
 
@@ -2226,6 +2987,7 @@ fn decode_order_phase(tag: u8) -> Result<OrderPhase> {
         0 => Ok(OrderPhase::Open),
         1 => Ok(OrderPhase::Cancelled),
         2 => Ok(OrderPhase::Consumed),
+        3 => Ok(OrderPhase::Released),
         _ => Err(Error::InvalidPhase),
     }
 }
@@ -2279,6 +3041,18 @@ fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
 
 fn read_id(bytes: &[u8], offset: usize) -> Result<ContentId> {
     ContentId::new(array(bytes, offset)?)
+}
+
+fn read_owner_key(bytes: &[u8], offset: usize) -> Result<OwnerKeyV1> {
+    OwnerKeyV1::new(array(bytes, offset)?)
+}
+
+fn require_nonzero_key(bytes: &[u8; 32]) -> Result<()> {
+    if bytes.iter().all(|byte| *byte == 0) {
+        Err(Error::ZeroIdentifier)
+    } else {
+        Ok(())
+    }
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {

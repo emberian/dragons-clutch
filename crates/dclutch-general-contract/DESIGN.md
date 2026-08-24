@@ -13,20 +13,37 @@ One `GeneralConfigV1` binds all venue activity to:
 - the Market's exact ClaimBasis content identity and finite width;
 - one immutable General capability release selected by the capability
   manifest;
-- one Realm-selected settlement asset; and
 - one liftable capacity-profile identity.
 
 The adapter must authenticate those content identities against the Market and
-capability manifest. There is no second feature bitmap, admin switch, or static
-client authority.
+capability manifest. The General config deliberately does not repeat a
+settlement-asset identity: Market -> Realm -> Mint/token release is the sole
+authority for that fact. There is no second feature bitmap, admin switch, or
+static client authority.
+
+The recognized V1 release is closed by four domain-separated SHA-256 preimages
+and their exported content identities:
+
+- `dclutch/general/capability-kind/v1`;
+- `dclutch/general/frequent-batch-release/v1`;
+- `dclutch/general/child-schema/v1`; and
+- `dclutch/general/child-derivation/v1`.
+
+`validate_general_capability_entry_v1` requires those exact kind, release,
+schema, and derivation identities plus the exact config and capacity-profile
+identities. The contract also exports distinct, at-most-32-byte PDA domains for
+config, funding, root, batch, order replay, order custody, and quote escrow.
+Their hashes and domain separation have derivation tests; an adapter verifies
+the resulting account addresses without inventing release constants.
 
 ## Canonical mutable-state records
 
-The contract is the sole codec and invariant owner for its four persisted
-mutable records. `GeneralRootV1` is exactly 72 bytes, `GeneralFundingV1` is
-exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and `OrderStateV1` is
-exactly 96 bytes. Each record has a distinct eight-byte type magic plus the V1
-schema and artifact-profile tags, and decoders reject short, trailing,
+The contract is the sole codec and invariant owner for its persisted records.
+`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 72 bytes,
+`GeneralFundingV1` is exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and
+`OrderStateV1` is exactly 96 bytes. Exact-N `GeneralOrderCustodyV1<N>` is
+`192 + 8N` bytes. Each state record has a distinct eight-byte type magic plus
+the V1 schema and artifact-profile tags, and decoders reject short, trailing,
 reserved, unknown-tag, zero-identity, arithmetically invalid, and unreachable
 state encodings.
 
@@ -36,8 +53,11 @@ payload when absent. Batch deadlines are strictly increasing, batch winner
 shape agrees with candidate count and phase, root child counts cannot exceed
 reserved sequences or survive terminalization, and order replay phase agrees
 with remaining lots. Replay authentication additionally binds the persisted
-order identity, owner, nonce, and remaining lots to the immutable signed order
-and its original lot ceiling. Funding persists committed, remaining, spent, and
+order identity, exact nonzero signing key, nonce, and remaining lots to the
+immutable signed order and its original lot ceiling. Custody binds that order,
+Market, generation, signing key, rent beneficiary, and quote escrow, and owns
+only remaining quote and native-claim principal; replay availability remains
+solely in `OrderStateV1`. Funding persists committed, remaining, spent, and
 refunded amounts independently for all three compartments; checked conservation
 and the one atomic terminal-refund shape are revalidated on every decode and
 encode. An SVM adapter must use these codecs directly rather than define a
@@ -72,14 +92,29 @@ cannot honestly claim whole-batch transaction atomicity.
 An order is one signed coefficient vector in the canonical ClaimBasis order.
 One scalar `fill_lots` applies to every coefficient, so a solver cannot cherry
 pick legs of a portfolio. The order binds Market, ClaimBasis, generation, batch,
-owner, nonce, expiry, lot cap, and one exact upper quote-debit limit.
+the exact nonzero Ed25519/SVM `OwnerKeyV1`, nonce, expiry, lot cap, and one exact
+upper quote-debit limit. `OwnerKeyV1` has the same physical width as a content
+identity but is not one: the adapter compares its bytes directly with the
+authenticated signer key.
 
-The adapter reserves a unique `(owner, nonce, order_id)` replay record and locks
-the order's worst-case required quote/outcome custody. `OrderStateV1` tracks
-remaining lots and admits only `Open -> Cancelled` before collection close or
-`Open -> Open/Consumed` through the winning settlement. Orders must remain valid
-through the entire pre-application settlement window. Once collection closes,
-cancellation is refused.
+Admission atomically creates a unique `(owner, nonce, order_id)` replay record
+and exact-N custody. Worst-case quote reserve is
+`ceil(max(0, max_quote_debit_per_lot_numerator) * max_lots / price_scale)`;
+native reserve for outcome `i` is
+`max(0, -coefficient[i]) * max_lots`. Both use checked exact arithmetic and
+there is no maximum-width padding. The adapter must couple the returned quote
+escrow and Position debits to persistence in the same transaction.
+
+`OrderStateV1` tracks remaining lots and admits only `Open -> Cancelled` before
+collection close, `Open -> Open/Consumed` through winning receipts, or
+`Open -> Released` after its batch is quiescent. Receipt consumption binds the
+order, owner, nonce, Market generation, batch, exact width, remaining lots, and
+per-outcome coefficient products before it atomically advances replay and
+custody. Cancellation returns every reserve only with the cancellation state
+change. Batch closure returns all residual quote/claims for either a fully
+consumed order or an unfilled remainder, making that remainder permanently
+unavailable. Orders must remain valid through the entire pre-application
+settlement window. Once collection closes, cancellation is refused.
 
 Candidates are checked against immutable order-state snapshots without
 consuming them. Only the selected candidate's applying pages consume replay
@@ -169,10 +204,18 @@ authority.
 ## Funding
 
 `GeneralFundingV1` contains three immutable, prepaid, independently conserved
-compartments: liveness, work, and bounty. A debit consumes present principal
-from exactly one compartment. Remaining plus spent plus refunded must always
-equal the founding quote for that same compartment. Terminal refund cannot
-borrow across compartments.
+compartments: liveness, work, and bounty. Its only capability activation
+constructor authenticates the exact manifest funding state and closed General
+release, invokes the capability ledger's activation transition, and maps the
+immutable quote exactly: service -> General liveness, work -> work, and bounty
+-> bounty. Provider and liquidity must both be zero. Rent and creation remain
+the capability activation outputs. No caller supplies compartment amounts, and
+the returned plan releases all quote principal from the generic ledger so one
+principal cannot remain owned twice.
+
+A General debit consumes present principal from exactly one compartment.
+Remaining plus spent plus refunded must always equal the founding quote for
+that same compartment. Terminal refund cannot borrow across compartments.
 
 No API accepts Hoard principal or prospective fee revenue as funding.
 
@@ -200,18 +243,20 @@ operator implement and test all of the following:
 
 1. Authenticate config, Market identity, ClaimBasis, capability release, and
    transcript hashes from canonical bytes.
-2. Verify owner signatures and unique replay PDA derivations.
-3. Lock worst-case order custody before an order is admitted; keep it immutable
-   after collection close.
+2. Verify `OwnerKeyV1` signatures and exact config/funding/root/batch/replay/
+   custody/escrow PDA derivations.
+3. Atomically execute the contract-returned admission reserve against the
+   owner's Position and quote escrow, then couple every receipt or release to
+   the corresponding token/Position movement.
 4. Atomically couple `Applying` entry to exact complete-set custody/Hoard token
    movements, then atomically couple each page to its returned replay states,
    receipts, token movements, cursor, and funded work debit.
 5. Make applying pages permissionless and non-expiring, with liveness payments
    drawn only from the segregated compartment.
 6. Add canonical contract-owned account encodings for candidate and settlement
-   cursors. Config, roots, funding, batch roots, order replay state, signed
-   orders, and settlement receipts already expose hostile exact-width codecs
-   here.
+   cursors. Config, roots, funding, batch roots, order replay state, exact-N
+   custody, signed orders, and settlement receipts already expose hostile
+   exact-width codecs here.
 7. Measure account rent, transaction account counts, SBF stack, and compute units
    before replacing any provisional bound.
 
@@ -221,15 +266,17 @@ an untrusted projection of the onchain records above.
 ## Exact physical vector geometry
 
 Every persisted outcome-bearing semantic record is const-generic over its
-selected ClaimBasis width `N`: `PortfolioOrderV1<N>`, candidate state and
-cursor, settlement cursor, `SettlementReceiptV1<N>`, and the page result that
-carries receipts. Their constructors require the recorded outcome count to
-equal `N`. Orders and receipts expose checked exact `encoded_len`, decode only
-that length, and encode only into that length. Consequently an N=2 order is
-216 bytes rather than the former 328-byte max-width record (112 bytes saved);
-an N=2 receipt is 192 bytes rather than 312 bytes (120 bytes saved). N=16
-orders are 328 bytes and receipts are 304 bytes; the latter also removes the
-former unused eight-byte tail.
+selected ClaimBasis width `N`: `PortfolioOrderV1<N>`,
+`GeneralOrderCustodyV1<N>`, candidate state and cursor, settlement cursor,
+`SettlementReceiptV1<N>`, and the page result that carries receipts. Their
+constructors require the recorded outcome count to equal `N`. Orders, custody,
+and receipts expose checked exact `encoded_len`, decode only that length, and
+encode only into that length. Consequently an N=2 order is 216 bytes rather
+than the former 328-byte max-width record (112 bytes saved); an N=2 receipt is
+192 bytes rather than 312 bytes (120 bytes saved); and N=2 custody is 208
+bytes. At N=16, orders are 328 bytes, receipts are 304 bytes, and custody is
+320 bytes. The receipt geometry also removes the former unused eight-byte
+tail.
 
 `VerificationPageV1<N>` and `SettlementPageResultV1<N>` retain only the
 separate `MAX_EXECUTIONS_PER_PAGE_V1` fixed execution envelope. That bound is

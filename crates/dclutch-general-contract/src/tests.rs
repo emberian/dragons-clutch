@@ -1,7 +1,45 @@
 use super::*;
+use dclutch_capability_contract::{
+    ActivationPolicy, CapabilityEntryV1, CapabilityManifestV1, FundingAmountsV1, FundingStateV1,
+    FundingStatus, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+};
+use sha2::{Digest, Sha256};
 
 fn id(fill: u8) -> ContentId {
     ContentId::new([fill; CONTENT_ID_BYTES]).expect("nonzero test id")
+}
+
+fn owner(fill: u8) -> OwnerKeyV1 {
+    OwnerKeyV1::new([fill; 32]).expect("nonzero test owner")
+}
+
+fn capability_id(fill: u8) -> dclutch_capability_contract::ContentId {
+    dclutch_capability_contract::ContentId::new([fill; 32]).expect("capability ID")
+}
+
+fn capability_id_from(id: ContentId) -> dclutch_capability_contract::ContentId {
+    dclutch_capability_contract::ContentId::new(id.to_bytes()).expect("capability ID")
+}
+
+fn capability_entry(config_id: ContentId, quote: FundingAmountsV1) -> CapabilityEntryV1 {
+    CapabilityEntryV1::new(
+        capability_id_from(GENERAL_CAPABILITY_KIND_ID_V1),
+        capability_id_from(GENERAL_CAPABILITY_RELEASE_ID_V1),
+        capability_id_from(config_id),
+        capability_id_from(config().capacity_profile_id()),
+        capability_id_from(GENERAL_CHILD_SCHEMA_ID_V1),
+        capability_id_from(GENERAL_CHILD_DERIVATION_ID_V1),
+        ActivationPolicy::PrepaidLazy,
+        100,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("General capability entry")
+}
+
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 fn config() -> GeneralConfigV1 {
@@ -9,8 +47,7 @@ fn config() -> GeneralConfigV1 {
         capacity_profile_id: id(1),
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        capability_release_id: id(4),
-        settlement_asset_id: id(5),
+        capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V1,
         generation: 7,
         price_scale: 100,
         collection_slots: 10,
@@ -33,7 +70,7 @@ fn order(
     PortfolioOrderV1::new(PortfolioOrderV1Input {
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        owner: id(owner_fill),
+        owner: owner(owner_fill),
         order_id: id(order_fill),
         generation: 7,
         batch_sequence: 0,
@@ -159,11 +196,18 @@ fn golden_config_and_order_round_trip() {
 
 #[test]
 fn hostile_decoders_reject_reserved_and_unused_words() {
+    assert_eq!(GENERAL_CONFIG_BYTES, 200);
     let mut config_bytes = config().to_bytes();
-    config_bytes[231] = 1;
+    config_bytes[199] = 1;
     assert_eq!(
         GeneralConfigV1::decode(&config_bytes),
         Err(Error::NonCanonicalReservedBytes)
+    );
+    let mut substituted_release = config().to_bytes();
+    substituted_release[112] ^= 1;
+    assert_eq!(
+        GeneralConfigV1::decode(&substituted_release),
+        Err(Error::UnrecognizedCapability)
     );
 
     let mut encoded_order = [0; 216];
@@ -176,6 +220,13 @@ fn hostile_decoders_reject_reserved_and_unused_words() {
     assert_eq!(
         PortfolioOrderV1::<2>::decode(&order_bytes),
         Err(Error::InvalidLength)
+    );
+
+    let mut zero_owner = encoded_order;
+    zero_owner[80..112].fill(0);
+    assert_eq!(
+        PortfolioOrderV1::<2>::decode(&zero_owner),
+        Err(Error::ZeroIdentifier)
     );
 }
 
@@ -197,7 +248,7 @@ fn outcome_vector_codecs_scale_exactly_with_selected_width() {
     let bad_width = PortfolioOrderV1::<2>::new(PortfolioOrderV1Input {
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        owner: id(20),
+        owner: owner(20),
         order_id: id(10),
         generation: 7,
         batch_sequence: 0,
@@ -213,7 +264,7 @@ fn outcome_vector_codecs_scale_exactly_with_selected_width() {
     let receipt = SettlementReceiptV1::<2> {
         candidate_id: id(40),
         order_id: id(10),
-        owner: id(20),
+        owner: owner(20),
         generation: 7,
         batch_sequence: 0,
         nonce: 9,
@@ -263,19 +314,17 @@ fn simplex_is_exact_and_has_one_canonical_width() {
     );
 
     prices[1] = 60;
-    assert!(
-        CandidateStateV1::submit(
-            id(40),
-            CandidateSubmissionV1 {
-                prices,
-                ..submission
-            },
-            config(),
-            batch,
-            10
-        )
-        .is_ok()
-    );
+    assert!(CandidateStateV1::submit(
+        id(40),
+        CandidateSubmissionV1 {
+            prices,
+            ..submission
+        },
+        config(),
+        batch,
+        10
+    )
+    .is_ok());
 }
 
 #[test]
@@ -501,14 +550,14 @@ fn failed_complete_set_burn_leaves_batch_and_hoard_unchanged() {
 fn cancellation_replay_and_expiry_are_refused() {
     let order = order(10, 20, 5, [1, -1], 0);
     let mut state = OrderStateV1::open(order);
-    assert_eq!(state.cancel(id(20), 9, 10), Ok(()));
+    assert_eq!(state.cancel(owner(20), 9, 10), Ok(()));
     assert_eq!(
         state.validate_snapshot(order, 1),
         Err(Error::OrderUnavailable)
     );
 
     let mut locked = OrderStateV1::open(order);
-    assert_eq!(locked.cancel(id(20), 10, 10), Err(Error::OutsideWindow));
+    assert_eq!(locked.cancel(owner(20), 10, 10), Err(Error::OutsideWindow));
     assert_eq!(locked.phase(), OrderPhase::Open);
 
     let mut expired = order;
@@ -633,7 +682,7 @@ fn order_state_codec_round_trips_open_cancelled_partial_and_consumed() {
     let signed = PortfolioOrderV1::new(PortfolioOrderV1Input {
         market_identity_id: id(2),
         claim_basis_id: id(3),
-        owner: id(20),
+        owner: owner(20),
         order_id: id(10),
         generation: 7,
         batch_sequence: 0,
@@ -653,8 +702,17 @@ fn order_state_codec_round_trips_open_cancelled_partial_and_consumed() {
     round_trip_order_state(partial);
 
     let mut cancelled = OrderStateV1::open(signed);
-    cancelled.cancel(id(20), 9, 10).expect("owner cancels");
+    cancelled.cancel(owner(20), 9, 10).expect("owner cancels");
     round_trip_order_state(cancelled);
+
+    let mut batch = BatchRootV1::open(id(9), 0, 0, config()).expect("batch");
+    batch.open_selection(10).expect("selecting");
+    batch.close_selection(20).expect("empty quiescent");
+    let mut released = OrderStateV1::open(signed);
+    released
+        .release_after_batch(signed, batch)
+        .expect("remainder releases");
+    round_trip_order_state(released);
 }
 
 #[test]
@@ -866,4 +924,575 @@ fn funding_decoder_rejects_overflow_broken_conservation_and_partial_refund() {
         GeneralFundingV1::decode(&bytes),
         Err(Error::NonCanonicalState)
     );
+}
+
+#[test]
+fn recognized_general_release_ids_are_derived_and_pda_domains_are_distinct() {
+    assert_eq!(
+        digest(GENERAL_CAPABILITY_KIND_PREIMAGE_V1),
+        GENERAL_CAPABILITY_KIND_ID_V1.to_bytes()
+    );
+    assert_eq!(
+        digest(GENERAL_CAPABILITY_RELEASE_PREIMAGE_V1),
+        GENERAL_CAPABILITY_RELEASE_ID_V1.to_bytes()
+    );
+    assert_eq!(
+        digest(GENERAL_CHILD_SCHEMA_PREIMAGE_V1),
+        GENERAL_CHILD_SCHEMA_ID_V1.to_bytes()
+    );
+    assert_eq!(
+        digest(GENERAL_CHILD_DERIVATION_PREIMAGE_V1),
+        GENERAL_CHILD_DERIVATION_ID_V1.to_bytes()
+    );
+
+    let domains = [
+        GENERAL_CONFIG_PDA_DOMAIN_V1,
+        GENERAL_FUNDING_PDA_DOMAIN_V1,
+        GENERAL_ROOT_PDA_DOMAIN_V1,
+        GENERAL_BATCH_PDA_DOMAIN_V1,
+        GENERAL_ORDER_STATE_PDA_DOMAIN_V1,
+        GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1,
+        GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1,
+    ];
+    for (index, domain) in domains.iter().enumerate() {
+        assert!(!domain.is_empty());
+        assert!(domain.len() <= 32);
+        assert!(domains.iter().skip(index + 1).all(|other| other != domain));
+    }
+}
+
+#[test]
+fn capability_activation_maps_only_the_immutable_quote_into_general_funding() {
+    let config_id = id(70);
+    let manifest_id = id(71);
+    let quote = FundingAmountsV1::new(11, 13, 17, 0, 19, 0, 23).expect("quote");
+    let entry = capability_entry(config_id, quote);
+    let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes)
+        .expect("canonical manifest");
+    validate_general_capability_entry_v1(entry, config_id, config()).expect("recognized entry");
+    let capability_funding = FundingStateV1::new(
+        capability_id_from(manifest_id),
+        manifest,
+        0,
+        quote.total_principal(),
+    )
+    .expect("prepaid generic funding");
+
+    let activation = GeneralFundingV1::activate_from_capability(
+        config_id,
+        config(),
+        manifest_id,
+        manifest,
+        capability_funding,
+        quote.total_principal(),
+        10,
+    )
+    .expect("exact General activation");
+    assert_eq!(activation.rent_principal(), 11);
+    assert_eq!(activation.creation_principal(), 13);
+    assert_eq!(activation.general_principal(), 59);
+    assert_eq!(
+        activation.capability_funding_after().status(),
+        FundingStatus::Active
+    );
+    assert_eq!(
+        activation
+            .capability_funding_after()
+            .remaining()
+            .total_principal(),
+        0
+    );
+    assert_eq!(
+        activation
+            .capability_funding_after()
+            .released()
+            .total_principal(),
+        quote.total_principal()
+    );
+    let general = activation.general_funding();
+    assert_eq!(general.remaining(FundingCompartment::Liveness), Ok(23));
+    assert_eq!(general.remaining(FundingCompartment::Work), Ok(17));
+    assert_eq!(general.remaining(FundingCompartment::Bounty), Ok(19));
+    assert_eq!(
+        general.capability_release_id(),
+        GENERAL_CAPABILITY_RELEASE_ID_V1
+    );
+}
+
+#[test]
+fn capability_activation_rejects_extra_compartments_release_substitution_and_deadline() {
+    let config_id = id(70);
+    let manifest_id = id(71);
+    let extra = FundingAmountsV1::new(1, 1, 2, 1, 3, 0, 4).expect("quote");
+    let extra_entry = capability_entry(config_id, extra);
+    let mut extra_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let extra_manifest =
+        CapabilityManifestV1::encode_into(&[extra_entry], &mut extra_bytes).expect("manifest");
+    let extra_funding = FundingStateV1::new(
+        capability_id_from(manifest_id),
+        extra_manifest,
+        0,
+        extra.total_principal(),
+    )
+    .expect("funding");
+    assert_eq!(
+        GeneralFundingV1::activate_from_capability(
+            config_id,
+            config(),
+            manifest_id,
+            extra_manifest,
+            extra_funding,
+            extra.total_principal(),
+            10,
+        ),
+        Err(Error::ExtraneousCapabilityFunding)
+    );
+
+    let quote = FundingAmountsV1::new(1, 1, 2, 0, 3, 0, 4).expect("quote");
+    let wrong_release = CapabilityEntryV1::new(
+        capability_id_from(GENERAL_CAPABILITY_KIND_ID_V1),
+        capability_id(88),
+        capability_id_from(config_id),
+        capability_id_from(config().capacity_profile_id()),
+        capability_id_from(GENERAL_CHILD_SCHEMA_ID_V1),
+        capability_id_from(GENERAL_CHILD_DERIVATION_ID_V1),
+        ActivationPolicy::PrepaidLazy,
+        100,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("entry");
+    assert_eq!(
+        validate_general_capability_entry_v1(wrong_release, config_id, config()),
+        Err(Error::UnrecognizedCapability)
+    );
+
+    let entry = capability_entry(config_id, quote);
+    let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let manifest =
+        CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes).expect("manifest");
+    let funding = FundingStateV1::new(
+        capability_id_from(manifest_id),
+        manifest,
+        0,
+        quote.total_principal(),
+    )
+    .expect("funding");
+    assert_eq!(
+        GeneralFundingV1::activate_from_capability(
+            config_id,
+            config(),
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            101,
+        ),
+        Err(Error::CapabilityFundingMismatch)
+    );
+    assert_eq!(
+        GeneralFundingV1::activate_from_capability(
+            id(72),
+            config(),
+            manifest_id,
+            manifest,
+            funding,
+            quote.total_principal(),
+            10,
+        ),
+        Err(Error::UnrecognizedCapability)
+    );
+}
+
+#[test]
+fn order_reserve_uses_one_checked_ceiling_and_exact_negative_coefficients() {
+    let order = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 3,
+        max_quote_debit_per_lot_numerator: 101,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("order");
+    assert_eq!(order.max_lots(), 3);
+    assert_eq!(order.max_quote_debit_per_lot_numerator(), 101);
+    let reserve = order.worst_case_reserve(config()).expect("reserve");
+    assert_eq!(reserve.quote_atoms(), 4);
+    assert_eq!(reserve.claim_atoms(), &[6, 0]);
+
+    let zero_quote = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        max_quote_debit_per_lot_numerator: -1,
+        ..PortfolioOrderV1Input {
+            market_identity_id: id(2),
+            claim_basis_id: id(3),
+            owner: owner(20),
+            order_id: id(11),
+            generation: 7,
+            batch_sequence: 0,
+            nonce: 10,
+            valid_until_slot: 30,
+            max_lots: 3,
+            max_quote_debit_per_lot_numerator: 0,
+            coefficients: [-2, 3],
+            outcome_count: 2,
+        }
+    })
+    .expect("order");
+    assert_eq!(
+        zero_quote
+            .worst_case_reserve(config())
+            .expect("reserve")
+            .quote_atoms(),
+        0
+    );
+
+    let claim_overflow = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(12),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 11,
+        valid_until_slot: 30,
+        max_lots: 2,
+        max_quote_debit_per_lot_numerator: 0,
+        coefficients: [i64::MIN, 1],
+        outcome_count: 2,
+    })
+    .expect("order");
+    assert_eq!(
+        claim_overflow.worst_case_reserve(config()),
+        Err(Error::TokenAmountOutOfRange)
+    );
+
+    let quote_overflow = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        max_lots: u64::MAX,
+        max_quote_debit_per_lot_numerator: i128::MAX,
+        coefficients: [-1, 1],
+        order_id: id(13),
+        nonce: 12,
+        ..PortfolioOrderV1Input {
+            market_identity_id: id(2),
+            claim_basis_id: id(3),
+            owner: owner(20),
+            order_id: id(13),
+            generation: 7,
+            batch_sequence: 0,
+            nonce: 12,
+            valid_until_slot: 30,
+            max_lots: 1,
+            max_quote_debit_per_lot_numerator: 0,
+            coefficients: [-1, 1],
+            outcome_count: 2,
+        }
+    })
+    .expect("order");
+    assert_eq!(
+        quote_overflow.worst_case_reserve(config()),
+        Err(Error::ArithmeticOverflow)
+    );
+}
+
+#[test]
+fn exact_n_order_custody_round_trips_and_rejects_hostile_geometry() {
+    assert_eq!(GeneralOrderCustodyV1::<2>::encoded_len(), Ok(208));
+    assert_eq!(GeneralOrderCustodyV1::<16>::encoded_len(), Ok(320));
+    let order = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 3,
+        max_quote_debit_per_lot_numerator: 101,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("order");
+    let admission =
+        GeneralOrderCustodyV1::admit(order, config(), [70; 32], [71; 32]).expect("admission");
+    let mut bytes = [0; 208];
+    admission
+        .custody
+        .encode(&mut bytes)
+        .expect("custody encodes");
+    assert_eq!(&bytes[..8], b"DCLTGOC1");
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&bytes),
+        Ok(admission.custody)
+    );
+    assert_eq!(
+        GeneralOrderCustodyV1::<16>::decode(&bytes),
+        Err(Error::InvalidLength)
+    );
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&bytes[..207]),
+        Err(Error::InvalidLength)
+    );
+    let mut trailing = [0; 209];
+    trailing[..208].copy_from_slice(&bytes);
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&trailing),
+        Err(Error::InvalidLength)
+    );
+    let mut changed = bytes;
+    changed[14] = 1;
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&changed),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+    let mut changed = bytes;
+    changed[80..112].fill(0);
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&changed),
+        Err(Error::ZeroIdentifier)
+    );
+    let mut changed = bytes;
+    changed[12..14].copy_from_slice(&16_u16.to_le_bytes());
+    assert_eq!(
+        GeneralOrderCustodyV1::<2>::decode(&changed),
+        Err(Error::InvalidOutcomeCount)
+    );
+}
+
+#[test]
+fn custody_admission_receipt_cancel_and_post_batch_close_are_atomic() {
+    let order = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 3,
+        max_quote_debit_per_lot_numerator: 101,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("order");
+    let admission =
+        GeneralOrderCustodyV1::admit(order, config(), [70; 32], [71; 32]).expect("admission");
+    assert_eq!(admission.reserve.quote_atoms(), 4);
+    assert_eq!(admission.reserve.claim_atoms(), &[6, 0]);
+    assert_eq!(admission.order_state.phase(), OrderPhase::Open);
+
+    let mut state = admission.order_state;
+    let mut custody = admission.custody;
+    let receipt = SettlementReceiptV1 {
+        candidate_id: id(40),
+        order_id: order.order_id(),
+        owner: order.owner(),
+        generation: order.generation(),
+        batch_sequence: order.batch_sequence(),
+        nonce: order.nonce(),
+        fill_lots: 1,
+        remaining_lots: 2,
+        quote_delta_atoms: -1,
+        carry_before: 0,
+        carry_after: 0,
+        outcome_deltas: [-2, 3],
+        outcome_count: 2,
+    };
+    let effects = custody
+        .apply_receipt(&mut state, order, receipt, config())
+        .expect("receipt applies");
+    assert_eq!(effects.quote_debit_from_escrow(), 1);
+    assert_eq!(effects.quote_credit_to_owner(), 0);
+    assert_eq!(effects.claim_debits_from_custody(), &[2, 0]);
+    assert_eq!(effects.claim_credits_to_owner(), &[0, 3]);
+    assert_eq!(state.remaining_lots(), 2);
+    assert_eq!(custody.reserved_quote_atoms(), 3);
+    assert_eq!(custody.reserved_claim_atoms(), &[4, 0]);
+
+    let mut batch = BatchRootV1::open(id(9), 0, 0, config()).expect("batch");
+    batch.open_selection(10).expect("selecting");
+    batch.close_selection(20).expect("quiescent");
+    let release = custody
+        .close_after_batch(&mut state, order, batch, config())
+        .expect("partial remainder closes");
+    assert_eq!(state.phase(), OrderPhase::Released);
+    assert_eq!(release.quote_atoms, 3);
+    assert_eq!(release.claim_atoms, [4, 0]);
+    assert_eq!(release.owner, owner(20));
+    assert_eq!(release.rent_beneficiary, [70; 32]);
+    assert_eq!(release.quote_escrow, [71; 32]);
+
+    let cancelled_admission =
+        GeneralOrderCustodyV1::admit(order, config(), [70; 32], [71; 32]).expect("admission");
+    let mut cancelled_state = cancelled_admission.order_state;
+    let before = cancelled_state;
+    assert_eq!(
+        cancelled_admission.custody.cancel_and_release(
+            &mut cancelled_state,
+            order,
+            owner(21),
+            9,
+            10,
+            config(),
+        ),
+        Err(Error::AuthorityMismatch)
+    );
+    assert_eq!(cancelled_state, before);
+    let cancel_release = cancelled_admission
+        .custody
+        .cancel_and_release(&mut cancelled_state, order, owner(20), 9, 10, config())
+        .expect("cancel releases");
+    assert_eq!(cancelled_state.phase(), OrderPhase::Cancelled);
+    assert_eq!(cancel_release.quote_atoms, 4);
+    assert_eq!(cancel_release.claim_atoms, [6, 0]);
+
+    let consumed_order = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(11),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 10,
+        valid_until_slot: 30,
+        max_lots: 1,
+        max_quote_debit_per_lot_numerator: 101,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("one-lot order");
+    let consumed_admission =
+        GeneralOrderCustodyV1::admit(consumed_order, config(), [70; 32], [71; 32])
+            .expect("admission");
+    let mut consumed_state = consumed_admission.order_state;
+    let mut consumed_custody = consumed_admission.custody;
+    let consumed_receipt = SettlementReceiptV1 {
+        candidate_id: id(40),
+        order_id: consumed_order.order_id(),
+        owner: consumed_order.owner(),
+        generation: consumed_order.generation(),
+        batch_sequence: consumed_order.batch_sequence(),
+        nonce: consumed_order.nonce(),
+        fill_lots: 1,
+        remaining_lots: 0,
+        quote_delta_atoms: -1,
+        carry_before: 0,
+        carry_after: 0,
+        outcome_deltas: [-2, 3],
+        outcome_count: 2,
+    };
+    consumed_custody
+        .apply_receipt(
+            &mut consumed_state,
+            consumed_order,
+            consumed_receipt,
+            config(),
+        )
+        .expect("full receipt applies");
+    assert_eq!(consumed_state.phase(), OrderPhase::Consumed);
+    let consumed_release = consumed_custody
+        .close_after_batch(&mut consumed_state, consumed_order, batch, config())
+        .expect("fully consumed custody closes");
+    assert_eq!(consumed_state.phase(), OrderPhase::Consumed);
+    assert_eq!(consumed_release.quote_atoms, 1);
+    assert_eq!(consumed_release.claim_atoms, [0, 0]);
+}
+
+#[test]
+fn hostile_receipt_and_underfunded_custody_leave_replay_and_reserves_unchanged() {
+    let order = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: owner(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 3,
+        max_quote_debit_per_lot_numerator: 101,
+        coefficients: [-2, 3],
+        outcome_count: 2,
+    })
+    .expect("order");
+    let admission =
+        GeneralOrderCustodyV1::admit(order, config(), [70; 32], [71; 32]).expect("admission");
+    let receipt = SettlementReceiptV1 {
+        candidate_id: id(40),
+        order_id: order.order_id(),
+        owner: order.owner(),
+        generation: order.generation(),
+        batch_sequence: order.batch_sequence(),
+        nonce: order.nonce(),
+        fill_lots: 1,
+        remaining_lots: 2,
+        quote_delta_atoms: -5,
+        carry_before: 0,
+        carry_after: 0,
+        outcome_deltas: [-2, 3],
+        outcome_count: 2,
+    };
+    let mut state = admission.order_state;
+    let mut custody = admission.custody;
+    let before_state = state;
+    let before_custody = custody;
+    assert_eq!(
+        custody.apply_receipt(&mut state, order, receipt, config()),
+        Err(Error::InsufficientCustody)
+    );
+    assert_eq!(state, before_state);
+    assert_eq!(custody, before_custody);
+
+    let mut bytes = [0; 208];
+    admission
+        .custody
+        .encode(&mut bytes)
+        .expect("custody encodes");
+    bytes[192..200].copy_from_slice(&1_u64.to_le_bytes());
+    let mut underfunded = GeneralOrderCustodyV1::<2>::decode(&bytes).expect("shaped custody");
+    let mut state = admission.order_state;
+    let claim_receipt = SettlementReceiptV1 {
+        quote_delta_atoms: -1,
+        ..receipt
+    };
+    let before_state = state;
+    let before_custody = underfunded;
+    assert_eq!(
+        underfunded.apply_receipt(&mut state, order, claim_receipt, config()),
+        Err(Error::InsufficientCustody)
+    );
+    assert_eq!(state, before_state);
+    assert_eq!(underfunded, before_custody);
+
+    let mut substituted = receipt;
+    substituted.owner = owner(21);
+    let mut state = admission.order_state;
+    let mut custody = admission.custody;
+    assert_eq!(
+        custody.apply_receipt(&mut state, order, substituted, config()),
+        Err(Error::CustodyMismatch)
+    );
+    assert_eq!(state, admission.order_state);
+    assert_eq!(custody, admission.custody);
+
+    let mut wrong_width = receipt;
+    wrong_width.outcome_count = 16;
+    let mut state = admission.order_state;
+    let mut custody = admission.custody;
+    assert_eq!(
+        custody.apply_receipt(&mut state, order, wrong_width, config()),
+        Err(Error::CustodyMismatch)
+    );
+    assert_eq!(state, admission.order_state);
+    assert_eq!(custody, admission.custody);
 }
