@@ -43,7 +43,8 @@ use clutch_structured_claim_adapter::runtime_contract::{
     structured_owner_release_id_v2, DescriptorBasisV1, StructuredClaimActionV1,
     StructuredClaimDescriptorV2, StructuredClaimPayloadV1, StructuredClaimReplayExtensionV1,
     StructuredClaimRuntimeAddressesV1, StructuredMarketRootBindingV1, StructuredMarketRootV1,
-    StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1, WrapperRecipeV1,
+    StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1,
+    WrapperRecipeSetV1, WrapperRecipeV1,
     AuthenticatedVaultRetirementV1, StructuredClaimReplayTransitionV1,
     StructuredClaimTerminalReplayDeltaV1, StructuredProductWrapperTerminalProjectionV1,
     StructuredRootCloseDispositionV1,
@@ -307,11 +308,13 @@ const CV_STRUCTURED_ROOT: usize = 25;
 const CV_SERIES_LINK: usize = 26;
 const CV_COMPILER_BUNDLE: usize = 27;
 const CV_ATTACHMENT: usize = 28;
-const CV_SERIES_REGISTRY_V3: usize = 29;
-const CV_REGISTRY_RELEASE_V2: usize = 30;
-const CV_CAPABILITY_PROFILE_V4: usize = 31;
-const CV_WRAPPER_RELEASE_V2: usize = 32;
-const CV_TOKEN_RELEASE_V2: usize = 33;
+const CV_RECIPE_SET: usize = 29;
+const CV_SERIES_REGISTRY_V3: usize = 30;
+const CV_REGISTRY_RELEASE_V2: usize = 31;
+const CV_CAPABILITY_PROFILE_V4: usize = 32;
+const CV_WRAPPER_RELEASE_V2: usize = 33;
+const CV_TOKEN_RELEASE_V2: usize = 34;
+const _: () = assert!(CV_TOKEN_RELEASE_V2 + 1 == STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT);
 
 /// Private locus-aware deployment authority. Every field is derived from a
 /// hostile-decoded release artifact plus the complete current ProgramData
@@ -619,25 +622,24 @@ pub fn process_create(
 }
 
 fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Outcome<()> {
-    let signer = [
-        true, true, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false,
-    ];
-    let mut writable = [
-        false, true, false, false, false, false, false, false, false, false, false, true, true,
-        false, false, false, false, false, false, false, false, false, false, false, false, true,
-        false, false, false, false, false, false, false, false,
-    ];
+    let mut signer = [false; STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT];
+    signer[CV_VAULT_AUTHORITY] = true;
+    signer[CV_PAYER] = true;
+    let mut writable = [false; STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT];
+    writable[CV_PAYER] = true;
+    writable[CV_POSITION] = true;
+    writable[CV_REPLAY] = true;
+    writable[CV_STRUCTURED_ROOT] = true;
     writable[CV_SERIES_LINK] = structured_root_requires_product_write_v1(
         accounts[CV_STRUCTURED_ROOT].owner,
         accounts[CV_STRUCTURED_ROOT].data_len(),
     );
-    let executable = [
-        false, false, true, false, false, false, false, true, false, false, false, false, false,
-        false, false, true, false, true, false, true, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false,
-    ];
+    let mut executable = [false; STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT];
+    executable[CV_SYSTEM] = true;
+    executable[CV_COLLATERAL_TOKEN_PROGRAM] = true;
+    executable[CV_WRAPPER_PROGRAM] = true;
+    executable[CV_BASE_PROGRAM] = true;
+    executable[CV_TOKEN_PROGRAM] = true;
     let mut index = 0_usize;
     while index < accounts.len() {
         require(
@@ -725,6 +727,40 @@ fn admit_structured_descriptor_root_v1(
         &accounts[CV_COMPILER_BUNDLE],
         &accounts[CV_ATTACHMENT],
     )?;
+    require(
+        accounts[CV_RECIPE_SET].owner == accounts[CV_BASE_PROGRAM].key
+            && !accounts[CV_RECIPE_SET].is_signer
+            && !accounts[CV_RECIPE_SET].is_writable
+            && !accounts[CV_RECIPE_SET].executable,
+        ClutchError::MismatchedState,
+    )?;
+    let expected_recipe_set = seeds::product_artifact_pda(
+        program_id,
+        ArtifactKind::WrapperRecipeSetV1.byte(),
+        &authorization.wrapper_recipe_set_id().bytes(),
+    );
+    require(
+        *accounts[CV_RECIPE_SET].key == expected_recipe_set.0,
+        ClutchError::WrongPda,
+    )?;
+    let recipe_set_data = accounts[CV_RECIPE_SET]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let recipe_set = Box::new(
+        WrapperRecipeSetV1::decode(&recipe_set_data, &RuntimeSha256)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
+    );
+    drop(recipe_set_data);
+    let recipe_set_id = recipe_set
+        .id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let (published_recipe, published_recipe_id, published_membership) = recipe_set
+        .member(recipe_membership.leaf_index, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        recipe_set_id == authorization.wrapper_recipe_set_id().bytes(),
+        ClutchError::MismatchedState,
+    )?;
     let registry = authenticate_series_registry_account_v3(
         program_id,
         &accounts[CV_SERIES_REGISTRY_V3],
@@ -808,6 +844,12 @@ fn admit_structured_descriptor_root_v1(
         outcome_count: liabilities.market_binding.outcome_count,
         primitive: descriptor.primitive,
     };
+    require(
+        published_recipe == recipe
+            && published_recipe_id == descriptor.wrapper_recipe_id
+            && published_membership == recipe_membership,
+        ClutchError::MismatchedState,
+    )?;
     authenticate_wrapper_recipe_membership_v1(
         recipe,
         descriptor.wrapper_recipe_id,
