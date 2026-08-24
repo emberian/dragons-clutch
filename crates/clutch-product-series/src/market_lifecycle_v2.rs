@@ -1006,6 +1006,42 @@ impl SeriesMarketLinkV2 {
         rent_principal_lamports: u64,
         donation_floor_lamports: u64,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        Self::initialize_pending_into(
+            binding,
+            obligation_configuration,
+            rent_principal_lamports,
+            donation_floor_lamports,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Create one pending link in caller-owned storage.
+    pub fn initialize_pending_into(
+        binding: SeriesMarketLinkBindingV2,
+        obligation_configuration: SeriesLinkObligationConfigurationV2,
+        rent_principal_lamports: u64,
+        donation_floor_lamports: u64,
+        output: &mut Self,
+    ) -> Result<()> {
+        Self::initialize_pending_from_ref_into(
+            &binding,
+            obligation_configuration,
+            rent_principal_lamports,
+            donation_floor_lamports,
+            output,
+        )
+    }
+
+    /// Create one pending link from a borrowed binding into caller storage.
+    pub fn initialize_pending_from_ref_into(
+        binding: &SeriesMarketLinkBindingV2,
+        obligation_configuration: SeriesLinkObligationConfigurationV2,
+        rent_principal_lamports: u64,
+        donation_floor_lamports: u64,
+        output: &mut Self,
+    ) -> Result<()> {
         binding.validate()?;
         obligation_configuration.validate()?;
         if binding.attachment_plan_id.content_id() != obligation_configuration.attachment_plan_id
@@ -1020,8 +1056,8 @@ impl SeriesMarketLinkV2 {
         rent_principal_lamports
             .checked_add(donation_floor_lamports)
             .ok_or(Error::ArithmeticOverflow)?;
-        let value = Self {
-            binding,
+        *output = Self {
+            binding: *binding,
             phase: SeriesMarketLinkPhaseV2::PendingMarket,
             transition_sequence: 0,
             market_admission_sequence: 0,
@@ -1036,8 +1072,7 @@ impl SeriesMarketLinkV2 {
             failure_sessions_started: 0,
             failure_session_transcript_id: ContentId::ZERO,
         };
-        value.validate()?;
-        Ok(value)
+        output.validate()
     }
 
     /// Activate only after the shared root admitted this exact link and became Active.
@@ -1046,20 +1081,35 @@ impl SeriesMarketLinkV2 {
         market_admission_sequence: u64,
         market_admission_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.activate_into(
+            market_admission_sequence,
+            market_admission_receipt_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Activate one pending link into caller-owned storage.
+    pub fn activate_into(
+        &self,
+        market_admission_sequence: u64,
+        market_admission_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         market_admission_receipt_id.validate()?;
         if self.phase != SeriesMarketLinkPhaseV2::PendingMarket || market_admission_sequence == 0 {
             return Err(Error::WorkStateMismatch);
         }
-        let next = Self {
+        *output = Self {
             phase: SeriesMarketLinkPhaseV2::Active,
             transition_sequence: 1,
             market_admission_sequence,
             market_admission_receipt_id,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 }
 
@@ -1535,6 +1585,10 @@ impl MarketLifecycleRootV2 {
     /// Immutable Market binding.
     pub const fn binding(&self) -> MarketLifecycleBindingV2 {
         self.binding
+    }
+    /// Borrow the immutable Market binding without copying its full ID set.
+    pub const fn binding_ref(&self) -> &MarketLifecycleBindingV2 {
+        &self.binding
     }
     /// Lifecycle phase.
     pub const fn phase(&self) -> MarketLifecyclePhaseV2 {
@@ -2669,6 +2723,10 @@ impl SeriesMarketLinkV2 {
     pub const fn binding(self) -> SeriesMarketLinkBindingV2 {
         self.binding
     }
+    /// Borrow the immutable link binding without copying its full ID set.
+    pub const fn binding_ref(&self) -> &SeriesMarketLinkBindingV2 {
+        &self.binding
+    }
     /// Link phase.
     pub const fn phase(self) -> SeriesMarketLinkPhaseV2 {
         self.phase
@@ -2880,6 +2938,15 @@ impl SeriesMarketAdmissionProjectionV2 {
     pub fn new(
         market_binding: MarketLifecycleBindingV2,
         link: SeriesMarketLinkV2,
+        admission_sequence: u64,
+    ) -> Result<Self> {
+        Self::new_from_ref(&market_binding, &link, admission_sequence)
+    }
+
+    /// Construct the admission join without copying the full LinkV2 value.
+    pub fn new_from_ref(
+        market_binding: &MarketLifecycleBindingV2,
+        link: &SeriesMarketLinkV2,
         admission_sequence: u64,
     ) -> Result<Self> {
         market_binding.validate()?;
@@ -3148,10 +3215,55 @@ impl MarketLifecycleRootV2 {
         binding: MarketLifecycleBindingV2,
         schedule: &MarketFoundationScheduleV3,
         account_graph: &MarketFoundationAccountGraphV3,
-        mut capital: MarketFoundationCapitalV2,
+        capital: MarketFoundationCapitalV2,
         product_families: &MarketFamilyAggregatorV1,
         root_poststate_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        Self::initialize_founder_into(
+            binding,
+            schedule,
+            account_graph,
+            capital,
+            product_families,
+            root_poststate_receipt_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Create an inert root into caller-owned storage and consume only the
+    /// root-account slot principal.
+    pub fn initialize_founder_into(
+        binding: MarketLifecycleBindingV2,
+        schedule: &MarketFoundationScheduleV3,
+        account_graph: &MarketFoundationAccountGraphV3,
+        mut capital: MarketFoundationCapitalV2,
+        product_families: &MarketFamilyAggregatorV1,
+        root_poststate_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
+        Self::initialize_founder_from_ref_into(
+            &binding,
+            schedule,
+            account_graph,
+            capital,
+            product_families,
+            root_poststate_receipt_id,
+            output,
+        )
+    }
+
+    /// Create an inert root from a borrowed binding into caller storage.
+    pub fn initialize_founder_from_ref_into(
+        binding: &MarketLifecycleBindingV2,
+        schedule: &MarketFoundationScheduleV3,
+        account_graph: &MarketFoundationAccountGraphV3,
+        mut capital: MarketFoundationCapitalV2,
+        product_families: &MarketFamilyAggregatorV1,
+        root_poststate_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         binding.validate()?;
         schedule.validate()?;
         account_graph.validate(schedule)?;
@@ -3196,8 +3308,8 @@ impl MarketLifecycleRootV2 {
                 1,
             ),
         };
-        let value = Self {
-            binding,
+        *output = Self {
+            binding: *binding,
             phase: MarketLifecyclePhaseV2::Founding,
             transition_sequence: 1,
             capital,
@@ -3213,8 +3325,7 @@ impl MarketLifecycleRootV2 {
             resolution_data_id: ContentId::ZERO,
             resolution_activation_receipt_id: ContentId::ZERO,
         };
-        value.validate()?;
-        Ok(value)
+        output.validate()
     }
 
     /// Spend one itemized slot from FoundationVault and count its accepted postwrite.
@@ -3294,6 +3405,17 @@ impl MarketLifecycleRootV2 {
 
     /// Admit one pending `0xad` exactly once while Founding or Active.
     pub fn admit_series_link(self, admission: SeriesMarketAdmissionProjectionV2) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.admit_series_link_into(admission, &mut output)?;
+        Ok(output)
+    }
+
+    /// Admit one pending `0xad` into caller-owned storage.
+    pub fn admit_series_link_into(
+        &self,
+        admission: SeriesMarketAdmissionProjectionV2,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if !matches!(
             self.phase,
@@ -3322,7 +3444,7 @@ impl MarketLifecycleRootV2 {
             .transition_sequence
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
-        let next = Self {
+        *output = Self {
             transition_sequence: sequence,
             admitted_series_links: next_count,
             live_series_links: self
@@ -3335,10 +3457,9 @@ impl MarketLifecycleRootV2 {
                 admission.id,
                 sequence,
             ),
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Delegate one authenticated product-family child admission to the embedded owner.
@@ -3500,6 +3621,18 @@ impl MarketLifecycleRootV2 {
         schedule: &MarketFoundationScheduleV3,
         accepted_market_core_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.activate_into(schedule, accepted_market_core_receipt_id, &mut output)?;
+        Ok(output)
+    }
+
+    /// Activate trading into caller-owned storage.
+    pub fn activate_into(
+        &self,
+        schedule: &MarketFoundationScheduleV3,
+        accepted_market_core_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate_against_schedule(schedule)?;
         accepted_market_core_receipt_id.validate()?;
         if self.phase != MarketLifecyclePhaseV2::Founding
@@ -3524,13 +3657,12 @@ impl MarketLifecycleRootV2 {
             ),
             ..self.foundation
         };
-        let next = Self {
+        *output = Self {
             phase: MarketLifecyclePhaseV2::Active,
             transition_sequence: sequence,
             foundation,
-            ..self
+            ..*self
         };
-        next.validate_against_schedule(schedule)?;
-        Ok(next)
+        output.validate_against_schedule(schedule)
     }
 }

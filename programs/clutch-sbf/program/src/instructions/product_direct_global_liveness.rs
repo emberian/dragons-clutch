@@ -50,7 +50,6 @@ const PRODUCT_DIRECT_ROW_CAPITALIZATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-row-capitalization/v2";
 const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-account-authentication/v2";
-#[cfg(test)]
 const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-founder-activation/v2";
 
@@ -216,14 +215,12 @@ impl ProductDirectGlobalLivenessAuthorityV2 for ExactCapitalizationAuthorityV2 {
     }
 }
 
-#[cfg(test)]
 struct ExactFounderActivationAuthorityV2 {
     expected_state_semantic_id: ContentId,
     expected_founder_receipt_id: ContentId,
     expected_market_binding_id: ContentId,
 }
 
-#[cfg(test)]
 impl ProductDirectGlobalLivenessAuthorityV2 for ExactFounderActivationAuthorityV2 {
     fn authenticate_founder_activation(
         &self,
@@ -620,7 +617,7 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
         expected_preauthorization_id,
         capitalization,
     ) = completion.into_direct_activation_parts();
-    let root_binding_id = root.state().binding().id()
+    let root_binding_id = root.state().binding_ref().id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_semantic_id = root.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;

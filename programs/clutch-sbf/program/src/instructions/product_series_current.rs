@@ -8,15 +8,24 @@
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::genesis::{
+    allocate_data, assign_data, read_rent, transfer_data, SYSTEM_PROGRAM_ID,
+};
+use crate::instructions::product_market_foundation_current::{
+    AuthenticatedProductMarketFoundationStepPostwriteV3,
+    AuthenticatedProductMarketFounderCurrentCreationV3,
+};
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
 };
 use crate::instructions::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV6, AuthenticatedSeriesSourceArtifactsV5,
 };
-use crate::instructions::product_direct_global_liveness::
-    AuthenticatedProductDirectGlobalLivenessCapitalizationV2;
+use crate::instructions::product_direct_global_liveness::{
+    activate_product_direct_global_liveness_from_current_founder_v2,
+    AuthenticatedProductDirectGlobalLivenessActivationV2,
+    AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
+};
 use crate::instructions::source_occurrence_foundation_v1::
     AuthenticatedPreRootSourceOccurrencePostwriteV3;
 use crate::seeds;
@@ -55,6 +64,8 @@ use clutch_solana_layout::product_series::{
     SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
 };
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
@@ -73,6 +84,10 @@ const PRODUCT_CURRENT_LINK_ACTIVATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-current-link-activation/v4\0";
 const PRODUCT_CURRENT_ACTIVATION_COMPLETION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-current-activation-completion/v4\0";
+const PRODUCT_CURRENT_ROOT_SLOT_POSTWRITE_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-current-root-slot-postwrite/v4\0";
+const PRODUCT_CURRENT_FOUNDER_ACTIVATED_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-current-founder-activated/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -422,6 +437,7 @@ pub(crate) struct AuthenticatedProductSeriesActivationCompletionV4 {
     id: ContentId,
     founder_creation_receipt_id: ContentId,
     founder_preauthorization_id: ContentId,
+    foundation_complete_receipt_id: ContentId,
     series_plan_id: SeriesPlanV5Id,
     ordinal: u32,
     market_instance_id: MarketInstanceV2Id,
@@ -430,6 +446,9 @@ pub(crate) struct AuthenticatedProductSeriesActivationCompletionV4 {
     root_binding_id: ContentId,
     root_authentication_after: ContentId,
     root_semantic_after: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+    final_foundation_donation_lamports: u64,
     link_account: Pubkey,
     link_authentication_after: ContentId,
     link_semantic_after: SeriesMarketLinkV2Id,
@@ -452,6 +471,9 @@ impl AuthenticatedProductSeriesActivationCompletionV4 {
     pub(crate) const fn founder_preauthorization_id(&self) -> ContentId {
         self.founder_preauthorization_id
     }
+    pub(crate) const fn foundation_complete_receipt_id(&self) -> ContentId {
+        self.foundation_complete_receipt_id
+    }
     pub(crate) const fn funding_completion(
         &self,
     ) -> &AuthenticatedProductSeriesFundingCompletionV4 {
@@ -461,6 +483,15 @@ impl AuthenticatedProductSeriesActivationCompletionV4 {
         &self,
     ) -> &AuthenticatedPreRootSourceOccurrencePostwriteV3 {
         &self.source
+    }
+    pub(crate) const fn root_transition_sequence_before(&self) -> u64 {
+        self.root_transition_sequence_before
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+    pub(crate) const fn final_foundation_donation_lamports(&self) -> u64 {
+        self.final_foundation_donation_lamports
     }
 
     pub(super) fn into_direct_activation_parts(
@@ -2267,9 +2298,9 @@ fn write_market_lifecycle_root_v2<'next>(
     successor: &MarketLifecycleRootV2,
     rebound_output: &'next mut MarketLifecycleRootAccountV2,
 ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
-    let binding = authenticated.state().binding();
+    let binding = authenticated.state().binding_ref();
     require(account.is_writable && *account.key == authenticated.account()
-        && account.owner == program_id && successor.binding() == binding,
+        && account.owner == program_id && successor.binding_ref() == binding,
         ClutchError::MismatchedState)?;
     let live = authenticate_market_lifecycle_root_v2(
         program_id, account, binding.market_instance_id, binding.generation, true,
@@ -4379,9 +4410,9 @@ fn write_series_market_link_v2<'next>(
     successor: &SeriesMarketLinkV2,
     rebound_output: &'next mut SeriesMarketLinkAccountV2,
 ) -> Outcome<AuthenticatedSeriesMarketLinkV2<'next>> {
-    let binding = authenticated.state().binding();
+    let binding = authenticated.state().binding_ref();
     require(account.is_writable && *account.key == authenticated.account()
-        && account.owner == program_id && successor.binding() == binding,
+        && account.owner == program_id && successor.binding_ref() == binding,
         ClutchError::MismatchedState)?;
     let live = authenticate_series_market_link_v2(
         program_id, account, binding.series_plan_id, binding.ordinal,
@@ -4408,6 +4439,756 @@ fn write_series_market_link_v2<'next>(
     Ok(rebound)
 }
 
+const SERIES_ADMISSION_COMPONENT_SEED_V4: u8 = 1;
+
+/// Cursor which keeps the unique founder creation authority inside one SBF
+/// call while concrete family composers consume heterogeneous typed slot
+/// postwrites. A failed or incomplete closure cannot return the private final
+/// receipt, so every earlier CPI and RootV2 write rolls back.
+pub(crate) struct CurrentProductMarketFoundationCursorV4<'outer, 'info> {
+    program_id: &'outer Pubkey,
+    creation: AuthenticatedProductMarketFounderCurrentCreationV3,
+    schedule: &'outer MarketFoundationScheduleV3,
+    graph: &'outer MarketFoundationAccountGraphV3,
+    root_account: &'outer AccountInfo<'info>,
+}
+
+impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
+    /// Consume one exact family-private physical postwrite, advance RootV2,
+    /// persist it, and hostile-reopen it before another slot can be consumed.
+    pub(crate) fn record_foundation_step<'next, P>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        postwrite: P,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>>
+    where
+        P: AuthenticatedProductMarketFoundationStepPostwriteV3,
+    {
+        let step = self.creation.take_next_foundation_step_v3(
+            root,
+            self.schedule,
+            self.graph,
+            postwrite,
+        )?;
+        root.state()
+            .record_foundation_step_into(
+                self.schedule,
+                self.graph,
+                step,
+                successor_output,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        write_market_lifecycle_root_v2(
+            self.program_id,
+            self.root_account,
+            root,
+            successor_output,
+            rebound_output,
+        )
+    }
+
+    /// Consume the exhaustive cursor, physically create the founder LinkV2,
+    /// admit it into the complete RootV2, and run the sole Replay/Funding tail.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish(
+        self,
+        complete_root: AuthenticatedMarketLifecycleRootV2<'_>,
+        registry: &AuthenticatedRegistryCapabilityV4,
+        bundle: AuthenticatedCompiledProductSeriesBundleV6,
+        artifacts: &AuthenticatedSeriesSourceArtifactsV5,
+        series_admission_vault: &AccountInfo<'info>,
+        link_account: &AccountInfo<'info>,
+        funding_account: &AccountInfo<'info>,
+        replay_account: &AccountInfo<'info>,
+        authenticated_replay: AuthenticatedSeriesLifecycleReplayV2,
+        system_program: &AccountInfo<'info>,
+        rent_sysvar: &AccountInfo<'info>,
+        link_initial_output: &mut SeriesMarketLinkAccountV2,
+        root_admission_output: &mut MarketLifecycleRootV2,
+        root_admission_rebound: &mut MarketLifecycleRootAccountV2,
+        root_activation_output: &mut MarketLifecycleRootV2,
+        root_activation_rebound: &mut MarketLifecycleRootAccountV2,
+        link_activation_output: &mut SeriesMarketLinkV2,
+        link_activation_rebound: &mut SeriesMarketLinkAccountV2,
+    ) -> Outcome<AuthenticatedProductSeriesActivationCompletionV4> {
+        let preauthorization = self.creation.preauthorization();
+        let series = preauthorization.series_plan_id();
+        let ordinal = preauthorization.ordinal();
+        let market = preauthorization.market_instance_id();
+        let generation = preauthorization.generation();
+        let link_binding = self.creation.founder_link_binding();
+        let obligation_configuration = self.creation.obligation_configuration();
+        let expected_link_semantic_id = self.creation.founder_link_semantic_id();
+        let pending_funding = self.creation.funding_reservation().pending().state();
+        let component_index = SeriesFundingComponentV2::SeriesAdmission.index();
+        let link_principal = pending_funding.pending_debits[component_index];
+        let component = pending_funding.components[component_index];
+        let link_donation = link_account.lamports();
+        let rent = read_rent(rent_sysvar)?;
+        require(
+            complete_root.account() == *self.root_account.key
+                && complete_root.is_writable()
+                && *system_program.key == SYSTEM_PROGRAM_ID
+                && system_program.executable
+                && series_admission_vault.key != self.root_account.key
+                && series_admission_vault.key != link_account.key
+                && series_admission_vault.key != funding_account.key
+                && series_admission_vault.key != replay_account.key
+                && link_principal.lamports
+                    == rent.minimum_balance(SERIES_MARKET_LINK_ACCOUNT_BYTES_V2)?
+                && link_principal.collateral_atoms == 0
+                && component.remaining_principal.collateral_atoms == 0
+                && component.donations.collateral_atoms == 0,
+            ClutchError::MismatchedState,
+        )?;
+        require_unallocated_system_account(link_account)?;
+        require_system_vault(series_admission_vault)?;
+        let series_bytes = series.bytes();
+        let (expected_vault, vault_bump) = seeds::series_lamport_vault_pda(
+            self.program_id,
+            &series_bytes,
+            SERIES_ADMISSION_COMPONENT_SEED_V4,
+        );
+        let (expected_link, link_bump) = seeds::product_series_market_link_pda(
+            self.program_id,
+            &series_bytes,
+            ordinal,
+        );
+        require(
+            *series_admission_vault.key == expected_vault
+                && *link_account.key == expected_link
+                && *link_account.key == preauthorization.founder_link_account(),
+            ClutchError::MismatchedState,
+        )?;
+        let expected_vault_principal = component
+            .remaining_principal
+            .lamports
+            .checked_add(link_principal.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        let expected_vault_accounted = expected_vault_principal
+            .checked_add(component.donations.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        let vault_before = series_admission_vault.lamports();
+        let vault_after = vault_before
+            .checked_sub(link_principal.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            vault_before >= expected_vault_accounted,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        SeriesMarketLinkV2::initialize_pending_from_ref_into(
+            link_binding,
+            obligation_configuration,
+            link_principal.lamports,
+            link_donation,
+            &mut link_initial_output.state,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            link_initial_output.state.semantic_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == expected_link_semantic_id,
+            ClutchError::MismatchedState,
+        )?;
+        invoke_current_founder_transfer(
+            series_admission_vault,
+            link_account,
+            system_program,
+            link_principal.lamports,
+            &[
+                seeds::SEED_SERIES_LAMPORT_VAULT_V1,
+                &series_bytes,
+                &[SERIES_ADMISSION_COMPONENT_SEED_V4],
+                &[vault_bump],
+            ],
+        )?;
+        require(
+            series_admission_vault.lamports() == vault_after
+                && link_account.lamports()
+                    == link_principal.lamports
+                        .checked_add(link_donation).ok_or(ClutchError::Arithmetic)?,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        allocate_assign_current_founder_account(
+            self.program_id,
+            link_account,
+            system_program,
+            SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
+            &[
+                seeds::SEED_PRODUCT_SERIES_MARKET_LINK,
+                &series_bytes,
+                &ordinal.to_le_bytes(),
+                &[link_bump],
+            ],
+        )?;
+        {
+            let mut data = link_account.try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            require(data.iter().all(|byte| *byte == 0), ClutchError::AlreadyInitialized)?;
+            SeriesMarketLinkAccountV2::encode_parts(
+                &link_initial_output.state,
+                link_bump,
+                &mut data,
+            )?;
+        }
+        let authenticated_link = authenticate_series_market_link_v2(
+            self.program_id,
+            link_account,
+            series,
+            ordinal,
+            market,
+            generation,
+            *self.root_account.key,
+            true,
+            link_initial_output,
+        )?;
+        require(
+            authenticated_link.state().semantic_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == expected_link_semantic_id,
+            ClutchError::MismatchedState,
+        )?;
+
+        let activation_parts = self.creation.into_product_activation_parts_v3(
+            complete_root,
+            self.schedule,
+            self.graph,
+        )?;
+        let (
+            foundation_complete_receipt_id,
+            founder_creation_receipt_id,
+            founder_preauthorization_id,
+            expected_root_account,
+            expected_root_authentication_id,
+            expected_root_data_id,
+            expected_root_semantic_id,
+            reservation,
+            source,
+            direct_capitalization,
+            expected_market_binding,
+            expected_link_binding,
+            expected_obligation_configuration,
+            expected_founder_link_semantic_id,
+            accepted_market_core_receipt_id,
+        ) = activation_parts.into_components();
+        require(
+            expected_root_account == complete_root.account()
+                && expected_root_authentication_id == complete_root.authentication_id()
+                && expected_root_data_id == complete_root.data_id()
+                && expected_root_semantic_id
+                    == complete_root.state().semantic_id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                && expected_market_binding.as_ref() == complete_root.state().binding_ref()
+                && expected_link_binding.as_ref() == authenticated_link.state().binding_ref()
+                && expected_obligation_configuration == obligation_configuration
+                && expected_founder_link_semantic_id == expected_link_semantic_id,
+            ClutchError::MismatchedState,
+        )?;
+        let admission = SeriesMarketAdmissionProjectionV2::new_from_ref(
+            expected_market_binding.as_ref(),
+            authenticated_link.state(),
+            1,
+        ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        complete_root.state().admit_series_link_into(admission, root_admission_output)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let admitted_root = write_market_lifecycle_root_v2(
+            self.program_id,
+            self.root_account,
+            complete_root,
+            root_admission_output,
+            root_admission_rebound,
+        )?;
+        require(
+            admitted_root.state().transition_sequence()
+                == u64::from(admitted_root.state().foundation().sequence)
+                    .checked_add(1).ok_or(ClutchError::Arithmetic)?,
+            ClutchError::MismatchedState,
+        )?;
+        let completion = activate_record_and_complete_current_series_v4(
+            self.program_id,
+            registry,
+            bundle,
+            artifacts,
+            self.graph,
+            founder_creation_receipt_id,
+            founder_preauthorization_id,
+            foundation_complete_receipt_id,
+            accepted_market_core_receipt_id,
+            reservation,
+            source,
+            direct_capitalization,
+            self.root_account,
+            admitted_root,
+            link_account,
+            authenticated_link,
+            funding_account,
+            replay_account,
+            authenticated_replay,
+            root_activation_output,
+            root_activation_rebound,
+            link_activation_output,
+            link_activation_rebound,
+        )?;
+        Ok(completion)
+    }
+}
+
+/// Final callable founder receipt after RootV2, LinkV2, replayV2, FundingV4,
+/// and `0xba/v2` are all physically active. It retains no detachable raw
+/// capitalization or foundation-step capability.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductMarketFounderActivatedV4 {
+    id: ContentId,
+    direct_activation: AuthenticatedProductDirectGlobalLivenessActivationV2,
+    facts: Box<ProductMarketFounderActivatedFactsV4>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ProductMarketFounderActivatedFactsV4 {
+    activation_completion_id: ContentId,
+    foundation_complete_receipt_id: ContentId,
+    funding_completion_id: ContentId,
+    source_postwrite_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV2Id,
+    link_activation_receipt_id: ContentId,
+    market_admission_receipt_id: ContentId,
+    replay_account: Pubkey,
+    replay_authentication_id: ContentId,
+    replay_state_id: ContentId,
+    replay_admission_projection_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_id: SeriesFundingStateV4Id,
+    funding_authentication_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+    final_foundation_donation_lamports: u64,
+}
+
+impl AuthenticatedProductMarketFounderActivatedV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn activation_completion_id(&self) -> ContentId {
+        self.facts.activation_completion_id
+    }
+    pub(crate) const fn foundation_complete_receipt_id(&self) -> ContentId {
+        self.facts.foundation_complete_receipt_id
+    }
+    pub(crate) const fn direct_activation(
+        &self,
+    ) -> &AuthenticatedProductDirectGlobalLivenessActivationV2 {
+        &self.direct_activation
+    }
+    pub(crate) const fn funding_completion_id(&self) -> ContentId {
+        self.facts.funding_completion_id
+    }
+    pub(crate) const fn source_postwrite_id(&self) -> ContentId {
+        self.facts.source_postwrite_id
+    }
+    pub(crate) const fn root_transition_sequence_before(&self) -> u64 {
+        self.facts.root_transition_sequence_before
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.facts.root_transition_sequence_after
+    }
+    pub(crate) const fn final_foundation_donation_lamports(&self) -> u64 {
+        self.facts.final_foundation_donation_lamports
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.facts.series_plan_id }
+    pub(crate) const fn ordinal(&self) -> u32 { self.facts.ordinal }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.facts.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.facts.generation }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.facts.root_account }
+    pub(crate) const fn root_binding_id(&self) -> ContentId { self.facts.root_binding_id }
+    pub(crate) const fn root_authentication_id(&self) -> ContentId {
+        self.facts.root_authentication_id
+    }
+    pub(crate) const fn root_semantic_id(&self) -> ContentId { self.facts.root_semantic_id }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.facts.link_account }
+    pub(crate) const fn link_authentication_id(&self) -> ContentId {
+        self.facts.link_authentication_id
+    }
+    pub(crate) const fn link_semantic_id(&self) -> SeriesMarketLinkV2Id {
+        self.facts.link_semantic_id
+    }
+    pub(crate) const fn link_activation_receipt_id(&self) -> ContentId {
+        self.facts.link_activation_receipt_id
+    }
+    pub(crate) const fn market_admission_receipt_id(&self) -> ContentId {
+        self.facts.market_admission_receipt_id
+    }
+    pub(crate) const fn replay_account(&self) -> Pubkey { self.facts.replay_account }
+    pub(crate) const fn replay_authentication_id(&self) -> ContentId {
+        self.facts.replay_authentication_id
+    }
+    pub(crate) const fn replay_state_id(&self) -> ContentId { self.facts.replay_state_id }
+    pub(crate) const fn replay_admission_projection_id(&self) -> ContentId {
+        self.facts.replay_admission_projection_id
+    }
+    pub(crate) const fn funding_account(&self) -> Pubkey { self.facts.funding_account }
+    pub(crate) const fn funding_state_id(&self) -> SeriesFundingStateV4Id {
+        self.facts.funding_state_id
+    }
+    pub(crate) const fn funding_authentication_id(&self) -> ContentId {
+        self.facts.funding_authentication_id
+    }
+}
+
+/// Sole callable current Product founder outer. The closure can consume only
+/// the cursor's typed one-shot slot method and can return only the private
+/// completion minted by `finish`; returning an error rolls back every write.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn compose_current_product_market_founder_v4<'outer, 'info, 'root, F>(
+    program_id: &'outer Pubkey,
+    creation: AuthenticatedProductMarketFounderCurrentCreationV3,
+    schedule: &'outer MarketFoundationScheduleV3,
+    graph: &'outer MarketFoundationAccountGraphV3,
+    root_account: &'outer AccountInfo<'info>,
+    foundation_vault: &AccountInfo<'info>,
+    direct_global_liveness_account: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    rent_sysvar: &AccountInfo<'info>,
+    root_initial_output: &'root mut MarketLifecycleRootAccountV2,
+    root_final_output: &mut MarketLifecycleRootAccountV2,
+    compose_foundation: F,
+) -> Outcome<AuthenticatedProductMarketFounderActivatedV4>
+where
+    F: FnOnce(
+        CurrentProductMarketFoundationCursorV4<'outer, 'info>,
+        AuthenticatedMarketLifecycleRootV2<'root>,
+    ) -> Outcome<AuthenticatedProductSeriesActivationCompletionV4>,
+{
+    let expected_creation_id = creation.id();
+    let expected_root_account = creation.preauthorization().lifecycle_root_account();
+    let initial_root = initialize_current_founder_root_v4(
+        program_id,
+        &creation,
+        root_account,
+        foundation_vault,
+        system_program,
+        rent_sysvar,
+        schedule,
+        graph,
+        root_initial_output,
+    )?;
+    let cursor = CurrentProductMarketFoundationCursorV4 {
+        program_id,
+        creation,
+        root_account,
+        schedule,
+        graph,
+    };
+    let completion = compose_foundation(cursor, initial_root)?;
+    require(
+        completion.founder_creation_receipt_id() == expected_creation_id,
+        ClutchError::MismatchedState,
+    )?;
+    let activation_completion_id = completion.id();
+    let foundation_complete_receipt_id = completion.foundation_complete_receipt_id();
+    let funding_completion_id = completion.funding_completion().id();
+    let source_postwrite_id = completion.source().id();
+    let root_transition_sequence_before = completion.root_transition_sequence_before();
+    let root_transition_sequence_after = completion.root_transition_sequence_after();
+    let final_foundation_donation_lamports =
+        completion.final_foundation_donation_lamports();
+    let facts = Box::new(ProductMarketFounderActivatedFactsV4 {
+        activation_completion_id,
+        foundation_complete_receipt_id,
+        funding_completion_id,
+        source_postwrite_id,
+        series_plan_id: completion.series_plan_id,
+        ordinal: completion.ordinal,
+        market_instance_id: completion.market_instance_id,
+        generation: completion.generation,
+        root_account: completion.root_account,
+        root_binding_id: completion.root_binding_id,
+        root_authentication_id: completion.root_authentication_after,
+        root_semantic_id: completion.root_semantic_after,
+        link_account: completion.link_account,
+        link_authentication_id: completion.link_authentication_after,
+        link_semantic_id: completion.link_semantic_after,
+        link_activation_receipt_id: completion.link_activation_receipt_id,
+        market_admission_receipt_id: completion.market_admission_receipt_id,
+        replay_account: completion.replay_account,
+        replay_authentication_id: completion.replay_authentication_after,
+        replay_state_id: completion.replay_state_after_id,
+        replay_admission_projection_id: completion.replay_admission_projection_id,
+        funding_account: completion.funding_completion().funding_account,
+        funding_state_id: completion.funding_completion().funding_state_after_id(),
+        funding_authentication_id:
+            completion.funding_completion().funding_authentication_after_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after,
+        final_foundation_donation_lamports,
+    });
+    let final_root = authenticate_market_lifecycle_root_v2(
+        program_id,
+        root_account,
+        completion.market_instance_id,
+        completion.generation,
+        true,
+        root_final_output,
+    )?;
+    require(
+        final_root.account() == expected_root_account
+            && final_root.state().transition_sequence() == root_transition_sequence_after,
+        ClutchError::MismatchedState,
+    )?;
+    let direct_activation = activate_product_direct_global_liveness_from_current_founder_v2(
+        program_id,
+        completion,
+        direct_global_liveness_account,
+        final_root,
+    )?;
+    let id = hashv(&[
+        PRODUCT_CURRENT_FOUNDER_ACTIVATED_DOMAIN_V4,
+        program_id.as_ref(),
+        &expected_creation_id.bytes(),
+        root_account.key.as_ref(),
+        &activation_completion_id.bytes(),
+        &foundation_complete_receipt_id.bytes(),
+        &funding_completion_id.bytes(),
+        &source_postwrite_id.bytes(),
+        &direct_activation.id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &root_transition_sequence_after.to_le_bytes(),
+        &final_foundation_donation_lamports.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductMarketFounderActivatedV4 {
+        id,
+        direct_activation,
+        facts,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initialize_current_founder_root_v4<'next>(
+    program_id: &Pubkey,
+    creation: &AuthenticatedProductMarketFounderCurrentCreationV3,
+    root_account: &AccountInfo<'_>,
+    foundation_vault: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    output: &'next mut MarketLifecycleRootAccountV2,
+) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+    let preauthorization = creation.preauthorization();
+    let market = preauthorization.market_instance_id();
+    let generation = preauthorization.generation();
+    let market_bytes = market.bytes();
+    let (expected_root, root_bump) = seeds::product_market_lifecycle_root_pda(
+        program_id,
+        &market_bytes,
+        generation,
+    );
+    let (expected_vault, vault_bump) = seeds::product_market_foundation_vault_pda(
+        program_id,
+        &market_bytes,
+        generation,
+    );
+    let root_principal = schedule.slot_principal_lamports[
+        MarketFoundationSlotV3::LifecycleRoot
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+    ];
+    let rent = read_rent(rent_sysvar)?;
+    require_unallocated_system_account(root_account)?;
+    require_system_vault(foundation_vault)?;
+    require(
+        *system_program.key == SYSTEM_PROGRAM_ID
+            && system_program.executable
+            && *root_account.key == expected_root
+            && *root_account.key == preauthorization.lifecycle_root_account()
+            && *foundation_vault.key == expected_vault
+            && *foundation_vault.key == preauthorization.foundation_vault_account()
+            && graph.account(MarketFoundationSlotV3::LifecycleRoot)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes() == root_account.key.to_bytes()
+            && root_principal
+                == rent.minimum_balance(MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2)?,
+        ClutchError::MismatchedState,
+    )?;
+    let mut capital = *creation.foundation_capital();
+    let vault_before = foundation_vault.lamports();
+    let current_donation = vault_before
+        .checked_sub(capital.principal_total_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        capital.principal_remaining_lamports == capital.principal_total_lamports
+            && current_donation >= capital.vault_current_donation_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    capital.vault_current_donation_lamports = current_donation;
+    let root_donation = root_account.lamports();
+    let vault_after = vault_before
+        .checked_sub(root_principal)
+        .ok_or(ClutchError::Arithmetic)?;
+    let root_after = root_donation
+        .checked_add(root_principal)
+        .ok_or(ClutchError::Arithmetic)?;
+    let root_postwrite_receipt_id = hashv(&[
+        PRODUCT_CURRENT_ROOT_SLOT_POSTWRITE_DOMAIN_V4,
+        program_id.as_ref(),
+        &creation.id().bytes(),
+        &preauthorization.id().bytes(),
+        root_account.key.as_ref(),
+        foundation_vault.key.as_ref(),
+        &root_principal.to_le_bytes(),
+        &root_donation.to_le_bytes(),
+        &root_after.to_le_bytes(),
+        &vault_before.to_le_bytes(),
+        &vault_after.to_le_bytes(),
+        &current_donation.to_le_bytes(),
+    ]);
+    require_live(root_postwrite_receipt_id)?;
+    MarketLifecycleRootV2::initialize_founder_from_ref_into(
+        creation.market_binding(),
+        schedule,
+        graph,
+        capital,
+        creation.product_families(),
+        root_postwrite_receipt_id,
+        &mut output.state,
+    ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    invoke_current_founder_transfer(
+        foundation_vault,
+        root_account,
+        system_program,
+        root_principal,
+        &[
+            seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            &market_bytes,
+            &generation.to_le_bytes(),
+            &[vault_bump],
+        ],
+    )?;
+    require(
+        foundation_vault.lamports() == vault_after
+            && root_account.lamports() == root_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    allocate_assign_current_founder_account(
+        program_id,
+        root_account,
+        system_program,
+        MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
+        &[
+            seeds::SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            &market_bytes,
+            &generation.to_le_bytes(),
+            &[root_bump],
+        ],
+    )?;
+    {
+        let mut data = root_account.try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(data.iter().all(|byte| *byte == 0), ClutchError::AlreadyInitialized)?;
+        MarketLifecycleRootAccountV2::encode_parts(
+            &output.state,
+            root_principal,
+            root_bump,
+            &mut data,
+        )?;
+    }
+    let authenticated = authenticate_market_lifecycle_root_v2(
+        program_id,
+        root_account,
+        market,
+        generation,
+        true,
+        output,
+    )?;
+    require(
+        authenticated.observed_lamports() == root_after
+            && authenticated.value().rent_principal_lamports == root_principal
+            && authenticated.state().capital().vault_current_donation_lamports
+                == current_donation,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(authenticated)
+}
+
+fn require_unallocated_system_account(account: &AccountInfo<'_>) -> Outcome<()> {
+    require(
+        account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && *account.owner == SYSTEM_PROGRAM_ID
+            && account.data_len() == 0,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn require_system_vault(account: &AccountInfo<'_>) -> Outcome<()> {
+    require_unallocated_system_account(account)
+}
+
+fn invoke_current_founder_transfer<'info>(
+    source: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    lamports: u64,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    let transfer = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(lamports),
+        vec![
+            AccountMeta::new(*source.key, true),
+            AccountMeta::new(*destination.key, false),
+        ],
+    );
+    invoke_signed(
+        &transfer,
+        &[source.clone(), destination.clone(), system_program.clone()],
+        &[signer_seeds],
+    ).map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))
+}
+
+fn allocate_assign_current_founder_account<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    account_bytes: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(account_bytes),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[account.clone(), system_program.clone()],
+        &[signer_seeds],
+    ).map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[account.clone(), system_program.clone()],
+        &[signer_seeds],
+    ).map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))
+}
+
 /// Private current founder tail. The sole outer must obtain every move-only
 /// argument by consuming the exhaustive foundation-complete authority; none
 /// of these facts is a caller-facing DTO or an alternate raw writer.
@@ -4421,6 +5202,7 @@ fn activate_record_and_complete_current_series_v4(
     graph: &MarketFoundationAccountGraphV3,
     founder_creation_receipt_id: ContentId,
     founder_preauthorization_id: ContentId,
+    foundation_complete_receipt_id: ContentId,
     accepted_market_core_receipt_id: ContentId,
     reservation: AuthenticatedProductSeriesFundingReservationV4,
     source: AuthenticatedPreRootSourceOccurrencePostwriteV3,
@@ -4434,11 +5216,13 @@ fn activate_record_and_complete_current_series_v4(
     authenticated_replay: AuthenticatedSeriesLifecycleReplayV2,
     root_successor_output: &mut MarketLifecycleRootV2,
     root_rebound_output: &mut MarketLifecycleRootAccountV2,
+    link_successor_output: &mut SeriesMarketLinkV2,
     link_rebound_output: &mut SeriesMarketLinkAccountV2,
 ) -> Outcome<AuthenticatedProductSeriesActivationCompletionV4> {
     for id in [
         founder_creation_receipt_id,
         founder_preauthorization_id,
+        foundation_complete_receipt_id,
         accepted_market_core_receipt_id,
         source.id(),
         source.capitalization().id(),
@@ -4463,11 +5247,11 @@ fn activate_record_and_complete_current_series_v4(
     let graph_id = graph.id(&quote.foundation)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root = authenticated_root.state();
-    let root_binding = root.binding();
+    let root_binding = root.binding_ref();
     let root_binding_id = root_binding.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let link = authenticated_link.state();
-    let link_binding = link.binding();
+    let link_binding = link.binding_ref();
     let link_semantic_before = link.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let replay = authenticated_replay.state();
@@ -4481,14 +5265,16 @@ fn activate_record_and_complete_current_series_v4(
     let funding = reservation.pending();
     let source_occurrence = source.occurrence();
     let source_capitalization_id = source.capitalization().id();
-    let market_admission = SeriesMarketAdmissionProjectionV2::new(root_binding, *link, 1)
+    let market_admission = SeriesMarketAdmissionProjectionV2::new_from_ref(root_binding, link, 1)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let market_admission_receipt_id = market_admission.id();
+    let root_transition_sequence_before = root.transition_sequence();
+    let final_foundation_donation_lamports = root.capital().vault_current_donation_lamports;
     let expected_root_link_transcript = hashv(&[
         b"dragons-clutch/market-series-link-transcript/v2",
         &ContentId::ZERO.bytes(),
         &market_admission_receipt_id.bytes(),
-        &2_u64.to_le_bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
     ]);
     require(
         authenticated_root.is_writable()
@@ -4515,6 +5301,9 @@ fn activate_record_and_complete_current_series_v4(
             && root.admitted_series_links() == 1
             && root.live_series_links() == 1
             && root.retired_series_links() == 0
+            && root_transition_sequence_before
+                == u64::from(root.foundation().sequence)
+                    .checked_add(1).ok_or(ClutchError::Arithmetic)?
             && root.series_link_transcript_id() == expected_root_link_transcript
             && link.phase() == SeriesMarketLinkPhaseV2::PendingMarket
             && replay.phase() == SeriesLifecycleReplayPhaseV2::Open
@@ -4589,9 +5378,10 @@ fn activate_record_and_complete_current_series_v4(
     let root_semantic_before = root.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_authentication_before = authenticated_root.authentication_id();
-    *root_successor_output = (*root).activate(
+    root.activate_into(
         &quote.foundation,
         accepted_market_core_receipt_id,
+        root_successor_output,
     ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let rebound_root = write_market_lifecycle_root_v2(
         program_id,
@@ -4602,15 +5392,24 @@ fn activate_record_and_complete_current_series_v4(
     )?;
     let root_semantic_after = rebound_root.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_transition_sequence_after = rebound_root.state().transition_sequence();
+    require(
+        root_transition_sequence_after
+            == root_transition_sequence_before
+                .checked_add(1).ok_or(ClutchError::Arithmetic)?
+            && rebound_root.state().capital().vault_current_donation_lamports
+                == final_foundation_donation_lamports,
+        ClutchError::MismatchedState,
+    )?;
 
-    let link_successor = (*link).activate(1, market_admission_receipt_id)
+    link.activate_into(1, market_admission_receipt_id, link_successor_output)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let link_authentication_before = authenticated_link.authentication_id();
     let rebound_link = write_series_market_link_v2(
         program_id,
         link_account,
         authenticated_link,
-        &link_successor,
+        link_successor_output,
         link_rebound_output,
     )?;
     let link_semantic_after = rebound_link.state().semantic_id()
@@ -4627,6 +5426,9 @@ fn activate_record_and_complete_current_series_v4(
         &rebound_root.authentication_id().bytes(),
         &root_semantic_before.bytes(),
         &root_semantic_after.bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &root_transition_sequence_after.to_le_bytes(),
+        &final_foundation_donation_lamports.to_le_bytes(),
         link_account.key.as_ref(),
         &link_authentication_before.bytes(),
         &rebound_link.authentication_id().bytes(),
@@ -4737,6 +5539,7 @@ fn activate_record_and_complete_current_series_v4(
         program_id.as_ref(),
         &founder_creation_receipt_id.bytes(),
         &founder_preauthorization_id.bytes(),
+        &foundation_complete_receipt_id.bytes(),
         root_account.key.as_ref(),
         &root_binding_id.bytes(),
         &root_authentication_before.bytes(),
@@ -4767,6 +5570,7 @@ fn activate_record_and_complete_current_series_v4(
         id,
         founder_creation_receipt_id,
         founder_preauthorization_id,
+        foundation_complete_receipt_id,
         series_plan_id: series_id,
         ordinal: link_binding.ordinal,
         market_instance_id: link_binding.market_instance_id,
@@ -4775,6 +5579,9 @@ fn activate_record_and_complete_current_series_v4(
         root_binding_id,
         root_authentication_after: rebound_root.authentication_id(),
         root_semantic_after,
+        root_transition_sequence_before,
+        root_transition_sequence_after,
+        final_foundation_donation_lamports,
         link_account: rebound_link.account(),
         link_authentication_after: rebound_link.authentication_id(),
         link_semantic_after,
@@ -5591,6 +6398,22 @@ mod source_contract_tests {
         assert!(tail.contains("completion_authorization_id,"));
         assert!(source.contains("struct AuthenticatedProductSeriesActivationCompletionV4"));
         assert!(source.contains("pub(super) fn into_direct_activation_parts("));
+    }
+
+    #[test]
+    fn current_founder_outer_is_one_shot_and_uses_live_sequences_and_donations() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("pub(crate) fn compose_current_product_market_founder_v4<"));
+        assert!(source.contains("CurrentProductMarketFoundationCursorV4"));
+        assert!(source.contains("P: AuthenticatedProductMarketFoundationStepPostwriteV3"));
+        assert!(source.contains("self.creation.into_product_activation_parts_v3("));
+        assert!(source.contains("root_transition_sequence_before.to_le_bytes()"));
+        assert!(!source.contains("&2_u64.to_le_bytes()"));
+        assert!(source.contains("final_foundation_donation_lamports.to_le_bytes()"));
+        assert!(source.contains("capital.principal_remaining_lamports == capital.principal_total_lamports"));
+        assert!(source.contains("root_principal\n                == rent.minimum_balance(MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2)?"));
+        assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
+        assert!(!source.contains("pub(crate) fn write_series_market_link_v2<'next>("));
     }
 
     #[test]
