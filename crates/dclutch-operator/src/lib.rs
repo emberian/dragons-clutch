@@ -21,6 +21,9 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+/// Chain-derived unsigned Realm and Market foundation workflows.
+pub mod foundation;
+
 const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
 const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
@@ -56,6 +59,8 @@ pub struct Observation {
 /// Host-observed account metadata and bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedAccount {
+    /// Exact observation provenance for this account record.
+    pub observation: Observation,
     /// Account address at the recorded observation.
     pub key: Pubkey,
     /// Account owner at the recorded observation.
@@ -71,8 +76,6 @@ pub struct ObservedAccount {
 /// The two hostile account observations from which a resolution is constructed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolutionState {
-    /// Mandatory provenance for both state observations and the report.
-    pub observation: Observation,
     /// The hostile-decoded categorical Market account.
     pub market: ObservedAccount,
     /// The hostile-decoded prepaid resolution Fund account.
@@ -136,6 +139,8 @@ pub enum Error {
     InvalidOwner,
     /// Account observations not labeled finalized cannot construct an eligible instruction.
     ObservationNotFinalized,
+    /// Account records did not come from one exact observation.
+    ObservationMismatch,
     /// The Market key was not its canonical PDA.
     MarketPdaMismatch,
     /// The Fund key was not its canonical PDA.
@@ -168,13 +173,14 @@ pub fn build_price_resolution(
     state: &ResolutionState,
     plumbing: &PricePlumbing,
 ) -> Result<ResolutionReport, Error> {
+    let observation = same_observation(&[&state.market, &state.fund])?;
     let facts = decode_state(program_id, state)?;
-    if state.observation.unix_timestamp < facts.price_window_start
-        || state.observation.unix_timestamp > facts.price_window_end
+    if observation.unix_timestamp < facts.price_window_start
+        || observation.unix_timestamp > facts.price_window_end
     {
         return Err(Error::PriceWindowClosed);
     }
-    let release = select_release(facts.release_id, state.observation.unix_timestamp)?;
+    let release = select_release(facts.release_id, observation.unix_timestamp)?;
     let post = PostUpdateParamsView::parse(&plumbing.post_update_body)
         .map_err(|_| Error::InvalidPostUpdateBody)?;
     let receiver = Pubkey::new_from_array(release.receiver_program());
@@ -214,7 +220,7 @@ pub fn build_price_resolution(
             accounts,
             data,
         },
-        observation: state.observation,
+        observation,
         funding: facts.funding,
     })
 }
@@ -225,8 +231,9 @@ pub fn build_failure_resolution(
     state: &ResolutionState,
     plumbing: FailurePlumbing,
 ) -> Result<ResolutionReport, Error> {
+    let observation = same_observation(&[&state.market, &state.fund])?;
     let facts = decode_state(program_id, state)?;
-    if state.observation.unix_timestamp <= facts.price_window_end {
+    if observation.unix_timestamp <= facts.price_window_end {
         return Err(Error::FailureTooEarly);
     }
     let mut data = vec![0; dclutch_pyth_contract::instruction::RESOLVE_FAILURE_BYTES];
@@ -245,7 +252,7 @@ pub fn build_failure_resolution(
             accounts,
             data,
         },
-        observation: state.observation,
+        observation,
         funding: facts.funding,
     })
 }
@@ -271,9 +278,7 @@ fn encode_price(generation: u64, child_count: u64, body: &[u8]) -> Result<Vec<u8
 }
 
 fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Error> {
-    if state.observation.finality != Finality::Finalized {
-        return Err(Error::ObservationNotFinalized);
-    }
+    same_observation(&[&state.market, &state.fund])?;
     if state.market.owner != program_id || state.fund.owner != program_id {
         return Err(Error::InvalidOwner);
     }
@@ -300,6 +305,23 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
         },
         ..facts
     })
+}
+
+fn same_observation(accounts: &[&ObservedAccount]) -> Result<Observation, Error> {
+    let observation = accounts
+        .first()
+        .map(|account| account.observation)
+        .ok_or(Error::ObservationNotFinalized)?;
+    if observation.finality != Finality::Finalized {
+        return Err(Error::ObservationNotFinalized);
+    }
+    if accounts
+        .iter()
+        .any(|account| account.observation != observation)
+    {
+        return Err(Error::ObservationMismatch);
+    }
+    Ok(observation)
 }
 
 fn market_facts(program_id: Pubkey, market_key: Pubkey, bytes: &[u8]) -> Result<Facts, Error> {
@@ -452,13 +474,14 @@ mod tests {
         let sponsor = Pubkey::new_from_array([8; 32]);
         let (fund_key, _) =
             Pubkey::find_program_address(&[FUND_SEED, market_key.as_ref()], &program);
+        let observation = Observation {
+            slot: 123,
+            unix_timestamp: 21,
+            finality: Finality::Finalized,
+        };
         ResolutionState {
-            observation: Observation {
-                slot: 123,
-                unix_timestamp: 21,
-                finality: Finality::Finalized,
-            },
             market: ObservedAccount {
+                observation,
                 key: market_key,
                 owner: program,
                 lamports: 0,
@@ -471,6 +494,7 @@ mod tests {
                 },
             },
             fund: ObservedAccount {
+                observation,
                 key: fund_key,
                 owner: program,
                 lamports: 1,
@@ -513,7 +537,7 @@ mod tests {
             },
         )
         .expect("valid hostile-decoded state");
-        assert_eq!(report.observation, state.observation);
+        assert_eq!(report.observation, state.market.observation);
         assert_eq!(
             report.funding,
             FundingReport {
@@ -594,7 +618,8 @@ mod tests {
             Err(Error::FundMismatch)
         );
         let mut price_state = observed_state([7; 32]);
-        price_state.observation.unix_timestamp = 20;
+        price_state.market.observation.unix_timestamp = 20;
+        price_state.fund.observation.unix_timestamp = 20;
         assert_eq!(
             build_price_resolution(
                 program,
@@ -614,7 +639,8 @@ mod tests {
     fn nonfinalized_or_underfunded_observations_refuse() {
         let program = Pubkey::new_from_array([9; 32]);
         let mut state = observed_state([7; 32]);
-        state.observation.finality = Finality::Confirmed;
+        state.market.observation.finality = Finality::Confirmed;
+        state.fund.observation.finality = Finality::Confirmed;
         assert_eq!(
             build_failure_resolution(
                 program,
@@ -643,7 +669,8 @@ mod tests {
     fn failure_before_the_strict_deadline_refuses() {
         let program = Pubkey::new_from_array([9; 32]);
         let mut state = observed_state([7; 32]);
-        state.observation.unix_timestamp = 20;
+        state.market.observation.unix_timestamp = 20;
+        state.fund.observation.unix_timestamp = 20;
         assert_eq!(
             build_failure_resolution(
                 program,
@@ -668,7 +695,8 @@ mod tests {
         let release = dclutch_pyth_svm::synthetic_local_release_v1().expect("pinned local release");
         let release_id = hash(&release.release().to_bytes()).to_bytes();
         let mut state = observed_state(release_id);
-        state.observation.unix_timestamp = 20;
+        state.market.observation.unix_timestamp = 20;
+        state.fund.observation.unix_timestamp = 20;
         let sponsor = Pubkey::new_from_array([8; 32]);
         state.fund.data =
             ResolutionFundV1::new(state.market.key.to_bytes(), 7, sponsor.to_bytes(), 1, 1)

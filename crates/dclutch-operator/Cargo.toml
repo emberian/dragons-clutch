@@ -13,11 +13,17 @@ default = []
 non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.0.0"
 
 [lints]
 workspace = true
