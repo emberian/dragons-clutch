@@ -10,12 +10,28 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
+use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
+use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
+use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-/// Only paid advance accepts an operation parameter.
-pub const FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2: usize = 8;
+/// Exact padded operation prefix for the paid-advance coordinate request.
+pub const FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2: usize = 8;
+/// Canonical Product foundation account-graph preimage width.
+pub const FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2: usize = 1_544;
+/// Begin/archive carry only the two immutable Failure content preimages.
+pub const FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2: usize =
+    FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
+        + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
+/// Paid advance additionally carries one padded coordinate request.
+pub const FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2: usize =
+    FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2 + FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2;
+/// Resolve also reopens permanent replay and Product slot-10 graph authority.
+pub const FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2: usize = FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2
+    + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2
+    + FAILURE_MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2;
 
 /// Semantic account roles for the complete current action family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +182,12 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::RegistryReleaseArtifact, false, false, false),
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
+    meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::ProductTemplateArtifact, false, false, false),
+    meta(Role::NativeClaimBasisArtifact, false, false, false),
+    meta(Role::PriceMeasurePolicyArtifact, false, false, false),
+    meta(Role::MarketGenesisArtifact, false, false, false),
+    meta(Role::MarketInstanceArtifact, false, false, false),
     meta(Role::SourceRelease, false, false, false),
     meta(Role::SourceAdapterProgram, false, false, true),
     meta(Role::SourceAdapterProgramData, false, false, false),
@@ -205,6 +227,11 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::RegistryReleaseArtifact, false, false, false),
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
+    meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::ProductTemplateArtifact, false, false, false),
+    meta(Role::NativeClaimBasisArtifact, false, false, false),
+    meta(Role::PriceMeasurePolicyArtifact, false, false, false),
+    meta(Role::MarketGenesisArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
     meta(Role::SourceRelease, false, false, false),
     meta(Role::SourceAdapterProgram, false, false, true),
@@ -259,11 +286,26 @@ pub const ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
 
 /// Current caller-neutral payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailureMarketActionPayloadV2 {
-    Begin,
-    Advance { requested_coordinates: u16 },
-    Resolve,
-    Archive,
+pub enum FailureMarketActionPayloadV2<'a> {
+    Begin {
+        recovery_quote_schedule: &'a [u8],
+        interval_funding_preimage: &'a [u8],
+    },
+    Advance {
+        requested_coordinates: u16,
+        recovery_quote_schedule: &'a [u8],
+        interval_funding_preimage: &'a [u8],
+    },
+    Resolve {
+        recovery_quote_schedule: &'a [u8],
+        interval_funding_preimage: &'a [u8],
+        replay_funding_preimage: &'a [u8],
+        foundation_account_graph: &'a [u8],
+    },
+    Archive {
+        recovery_quote_schedule: &'a [u8],
+        interval_funding_preimage: &'a [u8],
+    },
 }
 
 /// Return the exact current account contract; legacy actions have none.
@@ -293,11 +335,19 @@ pub const fn account_metas_v2(
 pub fn decode_payload_v2(
     action: RecoveryAction,
     payload: &[u8],
-) -> Outcome<FailureMarketActionPayloadV2> {
+) -> Outcome<FailureMarketActionPayloadV2<'_>> {
+    let quote_end = FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
+    let interval_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
     match action {
         RecoveryAction::BeginIntervalConsensus => {
-            require(payload.is_empty(), ClutchError::NonCanonical)?;
-            Ok(FailureMarketActionPayloadV2::Begin)
+            require(
+                payload.len() == FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2,
+                ClutchError::NonCanonical,
+            )?;
+            Ok(FailureMarketActionPayloadV2::Begin {
+                recovery_quote_schedule: &payload[..quote_end],
+                interval_funding_preimage: &payload[quote_end..interval_end],
+            })
         }
         RecoveryAction::AdvanceIntervalConsensus => {
             require(
@@ -305,24 +355,44 @@ pub fn decode_payload_v2(
                 ClutchError::NonCanonical,
             )?;
             require(
-                payload[2..FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2]
+                payload[2..FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2]
                     .iter()
                     .all(|byte| *byte == 0),
                 ClutchError::NonCanonical,
             )?;
             let requested_coordinates = u16::from_le_bytes([payload[0], payload[1]]);
             require(requested_coordinates != 0, ClutchError::NonCanonical)?;
+            let quote_start = FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2;
+            let quote_end = quote_start + FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
+            let interval_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
             Ok(FailureMarketActionPayloadV2::Advance {
                 requested_coordinates,
+                recovery_quote_schedule: &payload[quote_start..quote_end],
+                interval_funding_preimage: &payload[quote_end..interval_end],
             })
         }
         RecoveryAction::ResolveIntervalConsensus => {
-            require(payload.is_empty(), ClutchError::NonCanonical)?;
-            Ok(FailureMarketActionPayloadV2::Resolve)
+            require(
+                payload.len() == FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2,
+                ClutchError::NonCanonical,
+            )?;
+            let replay_end = interval_end + FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
+            Ok(FailureMarketActionPayloadV2::Resolve {
+                recovery_quote_schedule: &payload[..quote_end],
+                interval_funding_preimage: &payload[quote_end..interval_end],
+                replay_funding_preimage: &payload[interval_end..replay_end],
+                foundation_account_graph: &payload[replay_end..],
+            })
         }
         RecoveryAction::CloseIntervalConsensusWork => {
-            require(payload.is_empty(), ClutchError::NonCanonical)?;
-            Ok(FailureMarketActionPayloadV2::Archive)
+            require(
+                payload.len() == FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2,
+                ClutchError::NonCanonical,
+            )?;
+            Ok(FailureMarketActionPayloadV2::Archive {
+                recovery_quote_schedule: &payload[..quote_end],
+                interval_funding_preimage: &payload[quote_end..interval_end],
+            })
         }
         RecoveryAction::InitializeFailureRoot
         | RecoveryAction::TriggerSourceFailure
@@ -430,41 +500,48 @@ mod adversarial_contract_tests {
     use super::*;
 
     #[test]
-    fn current_payloads_accept_no_caller_authority_ids() {
-        assert_eq!(
-            decode_payload_v2(RecoveryAction::BeginIntervalConsensus, &[]),
-            Ok(FailureMarketActionPayloadV2::Begin)
-        );
-        assert_eq!(
-            decode_payload_v2(RecoveryAction::ResolveIntervalConsensus, &[]),
-            Ok(FailureMarketActionPayloadV2::Resolve)
-        );
-        assert_eq!(
-            decode_payload_v2(RecoveryAction::CloseIntervalConsensusWork, &[]),
-            Ok(FailureMarketActionPayloadV2::Archive)
-        );
-        assert!(decode_payload_v2(RecoveryAction::BeginIntervalConsensus, &[1]).is_err());
-        assert!(decode_payload_v2(RecoveryAction::ResolveIntervalConsensus, &[1; 32]).is_err());
+    fn content_preimages_have_exact_action_specific_boundaries() {
+        let session = [1_u8; FAILURE_MARKET_SESSION_PAYLOAD_BYTES_V2];
+        assert!(matches!(
+            decode_payload_v2(RecoveryAction::BeginIntervalConsensus, &session),
+            Ok(FailureMarketActionPayloadV2::Begin { .. })
+        ));
+        assert!(matches!(
+            decode_payload_v2(RecoveryAction::CloseIntervalConsensusWork, &session),
+            Ok(FailureMarketActionPayloadV2::Archive { .. })
+        ));
+        let resolve = [1_u8; FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2];
+        assert!(matches!(
+            decode_payload_v2(RecoveryAction::ResolveIntervalConsensus, &resolve),
+            Ok(FailureMarketActionPayloadV2::Resolve { .. })
+        ));
+        assert!(decode_payload_v2(
+            RecoveryAction::BeginIntervalConsensus,
+            &session[..session.len() - 1]
+        )
+        .is_err());
+        assert!(decode_payload_v2(
+            RecoveryAction::ResolveIntervalConsensus,
+            &resolve[..resolve.len() - 1]
+        )
+        .is_err());
     }
 
     #[test]
     fn advance_rejects_zero_padding_and_authority_tail() {
+        let mut payload = [1_u8; FAILURE_MARKET_ADVANCE_PAYLOAD_BYTES_V2];
+        payload[1..FAILURE_MARKET_ADVANCE_PARAMETER_BYTES_V2].fill(0);
+        assert!(decode_payload_v2(RecoveryAction::AdvanceIntervalConsensus, &payload).is_ok());
+        payload[0] = 0;
+        assert!(decode_payload_v2(RecoveryAction::AdvanceIntervalConsensus, &payload).is_err());
+        payload[0] = 1;
+        payload[7] = 1;
+        assert!(decode_payload_v2(RecoveryAction::AdvanceIntervalConsensus, &payload).is_err());
         assert!(decode_payload_v2(
             RecoveryAction::AdvanceIntervalConsensus,
-            &[1, 0, 0, 0, 0, 0, 0, 0]
-        )
-        .is_ok());
-        assert!(decode_payload_v2(
-            RecoveryAction::AdvanceIntervalConsensus,
-            &[0, 0, 0, 0, 0, 0, 0, 0]
-        )
-        .is_err());
-        assert!(decode_payload_v2(
-            RecoveryAction::AdvanceIntervalConsensus,
-            &[1, 0, 0, 0, 0, 0, 0, 1]
+            &payload[..payload.len() - 1]
         )
         .is_err());
-        assert!(decode_payload_v2(RecoveryAction::AdvanceIntervalConsensus, &[1; 40]).is_err());
     }
 
     #[test]
