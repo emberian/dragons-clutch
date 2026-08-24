@@ -453,8 +453,10 @@ pub(crate) fn consume_direct_family_terminal_v5(
     })
 }
 
-/// Move-only Product postwrite proving that the exact hostile Failure owner
-/// was consumed into the current RootV3 Failure shared-core slot.
+/// Move-only Product preauthorization proving that the exact hostile Failure
+/// owner and Active RootV3/LinkV3 tuple may enter Source custody retirement.
+/// It deliberately does not latch the Failure shared-core slot: the later
+/// physical Failure close owns that Retiring-only transition.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductFailureCoreTerminalV5 {
     id: ContentId,
@@ -470,7 +472,7 @@ pub(crate) struct AuthenticatedProductFailureCoreTerminalV5 {
     root_semantic_after_id: ContentId,
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
-    shared_core_projection_id: ContentId,
+    source_retirement_preauthorization_id: ContentId,
     link_account: Pubkey,
     link_authentication_id: ContentId,
     link_data_id: ContentId,
@@ -494,7 +496,7 @@ pub(crate) struct ProductFailureCoreTerminalFactsV5 {
     pub(crate) root_semantic_after_id: ContentId,
     pub(crate) root_transition_sequence_before: u64,
     pub(crate) root_transition_sequence_after: u64,
-    pub(crate) shared_core_projection_id: ContentId,
+    pub(crate) source_retirement_preauthorization_id: ContentId,
     pub(crate) link_account: Pubkey,
     pub(crate) link_authentication_id: ContentId,
     pub(crate) link_data_id: ContentId,
@@ -513,8 +515,8 @@ impl AuthenticatedProductFailureCoreTerminalV5 {
     pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
         self.root_transition_sequence_after
     }
-    pub(crate) const fn shared_core_projection_id(&self) -> ContentId {
-        self.shared_core_projection_id
+    pub(crate) const fn source_retirement_preauthorization_id(&self) -> ContentId {
+        self.source_retirement_preauthorization_id
     }
     pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
     pub(crate) const fn link_authentication_id(&self) -> ContentId {
@@ -551,7 +553,8 @@ impl AuthenticatedProductFailureCoreTerminalV5 {
                 root_semantic_after_id: self.root_semantic_after_id,
                 root_transition_sequence_before: self.root_transition_sequence_before,
                 root_transition_sequence_after: self.root_transition_sequence_after,
-                shared_core_projection_id: self.shared_core_projection_id,
+                source_retirement_preauthorization_id:
+                    self.source_retirement_preauthorization_id,
                 link_account: self.link_account,
                 link_authentication_id: self.link_authentication_id,
                 link_data_id: self.link_data_id,
@@ -562,10 +565,10 @@ impl AuthenticatedProductFailureCoreTerminalV5 {
     }
 }
 
-/// Consume the durable Failure-family terminal into RootV3.  The writable
-/// LinkV3 is hostile-authenticated but not mutated: its exact account identity
-/// is required because Failure's persisted Source release binds that Series
-/// coordinate and no caller-supplied link ID is accepted.
+/// Bind the durable Failure-family terminal to the live Product/Source tuple.
+/// RootV3 and LinkV3 are hostile-authenticated but not mutated: Source consumes
+/// this move-only authority first, and only the later physical Failure receipt
+/// can latch the Retiring RootV3 shared-core slot.
 #[inline(never)]
 pub(crate) fn consume_failure_family_terminal_v5(
     program_id: &Pubkey,
@@ -613,23 +616,6 @@ pub(crate) fn consume_failure_family_terminal_v5(
             && link.binding().market_binding_id == root_binding_id,
         ClutchError::MismatchedState,
     )?;
-    let sequence_after = root
-        .state()
-        .transition_sequence()
-        .checked_add(1)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let projection = MarketSharedCoreTerminalProjectionV3::new(
-        binding,
-        MarketSharedCoreV3::Failure,
-        facts.owner_account_id,
-        facts.owner_release_id,
-        facts.owner_terminal_receipt_id,
-        sequence_after,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let next = (*root.state())
-        .consume_shared_core_terminal(projection)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root_data_before_id = root.data_id();
     let root_authentication_before_id = root.authentication_id();
     let root_semantic_before_id = root.semantic_id();
@@ -637,24 +623,25 @@ pub(crate) fn consume_failure_family_terminal_v5(
     let link_authentication_id = link.authentication_id();
     let link_data_id = link.data_id();
     let link_semantic_id = link.semantic_id();
+    let source_retirement_preauthorization_id = hashv(&[
+        PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5,
+        b"source-retirement-preauthorization",
+        program_id.as_ref(),
+        &failure_id.bytes(),
+        root_account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &root_data_before_id.bytes(),
+        &root_authentication_before_id.bytes(),
+        &root_semantic_before_id.bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_id.bytes(),
+        &link_data_id.bytes(),
+        &link_semantic_id.bytes(),
+    ]);
+    require_live(source_retirement_preauthorization_id)?;
     drop(link);
     drop(root);
-    write_market_lifecycle_root_v3(root_account, &root_value, &next)?;
-    let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let reopened = authenticate_market_lifecycle_root_v3(
-        program_id,
-        root_account,
-        facts.market_instance_id,
-        facts.generation,
-        true,
-        &mut reopened_value,
-    )?;
-    require(
-        reopened.state() == &next
-            && reopened.state().failure_terminal_receipt_id() == projection.id()
-            && reopened.state().transition_sequence() == sequence_after,
-        ClutchError::MismatchedState,
-    )?;
     let id = hashv(&[
         PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
@@ -662,14 +649,14 @@ pub(crate) fn consume_failure_family_terminal_v5(
         root_account.key.as_ref(),
         &root_binding_id.bytes(),
         &root_data_before_id.bytes(),
-        &reopened.data_id().bytes(),
+        &root_data_before_id.bytes(),
         &root_authentication_before_id.bytes(),
-        &reopened.authentication_id().bytes(),
+        &root_authentication_before_id.bytes(),
         &root_semantic_before_id.bytes(),
-        &reopened.semantic_id().bytes(),
+        &root_semantic_before_id.bytes(),
         &root_transition_sequence_before.to_le_bytes(),
-        &sequence_after.to_le_bytes(),
-        &projection.id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &source_retirement_preauthorization_id.bytes(),
         link_account.key.as_ref(),
         &link_authentication_id.bytes(),
         &link_data_id.bytes(),
@@ -683,14 +670,14 @@ pub(crate) fn consume_failure_family_terminal_v5(
         root_account: *root_account.key,
         root_binding_id,
         root_data_before_id,
-        root_data_after_id: reopened.data_id(),
+        root_data_after_id: root_data_before_id,
         root_authentication_before_id,
-        root_authentication_after_id: reopened.authentication_id(),
+        root_authentication_after_id: root_authentication_before_id,
         root_semantic_before_id,
-        root_semantic_after_id: reopened.semantic_id(),
+        root_semantic_after_id: root_semantic_before_id,
         root_transition_sequence_before,
-        root_transition_sequence_after: sequence_after,
-        shared_core_projection_id: projection.id(),
+        root_transition_sequence_after: root_transition_sequence_before,
+        source_retirement_preauthorization_id,
         link_account: *link_account.key,
         link_authentication_id,
         link_data_id,
