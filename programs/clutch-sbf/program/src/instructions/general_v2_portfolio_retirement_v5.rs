@@ -1,8 +1,7 @@
 //! Isolated General action 44: retire one complete portfolio archive set.
 //!
-//! The route remains deliberately unregistered. Once action 43 has been
-//! allocated, shared dispatch may pass the fresh action-44 enum value here.
-//! This handler authenticates the counted SettlementRoot, retained sealed
+//! The handler is registered under the successor profile's exhaustive General
+//! dispatcher. It authenticates the counted SettlementRoot, retained sealed
 //! Feed, MarketBinding neutral sink, both consumed Reservation V9 endpoints,
 //! both Position V3/GEN1 pairs, the complete committed Receipt V5 prefix, and
 //! the sorted unique persisted refund-owner suffix. It then applies the one
@@ -37,6 +36,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{require, Outcome};
+use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
@@ -234,10 +234,14 @@ pub fn process(
     payload: &[u8],
 ) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)?;
-    // The central enum intentionally remains capped at 42 until action 43 is
-    // allocated. This numeric comparison becomes reachable only after the
-    // shared registry adds the already-frozen action-44 variant.
-    require(action.tag() == 44, ClutchError::UnsupportedInstruction)?;
+    require(
+        capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    require(
+        action == GeneralV2Action::RetirePortfolioPairArchives,
+        ClutchError::UnsupportedInstruction,
+    )?;
     let PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(request) =
         decode_portfolio_settlement_payload_v1(action.tag(), payload)?
     else {
