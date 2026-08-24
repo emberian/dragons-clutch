@@ -30,6 +30,8 @@ use super::super::direct_market_v2::{
 use super::super::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
 };
+use super::super::product_market_foundation_graph_v4_current::
+    derive_current_market_foundation_graph_body_v4;
 use super::super::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
 };
@@ -4212,8 +4214,6 @@ pub(crate) fn finalize_current_product_series_retirement_v5(
     accounts: &[AccountInfo<'_>],
     terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
     position: AuthenticatedProductPositionPhysicalTerminalV5,
-    schedule: &clutch_product_series::MarketFoundationScheduleV4,
-    graph: &clutch_product_series::MarketFoundationAccountGraphV4,
     failure_inputs: ProductFailureRetirementInputsV5,
 ) -> Outcome<AuthenticatedProductSeriesRetirementV5> {
     require_product_retirement_account_frame_v5(accounts)?;
@@ -4225,6 +4225,53 @@ pub(crate) fn finalize_current_product_series_retirement_v5(
     let physical_accounts = &accounts[
         IX_PRODUCT_RETIRE_PHYSICAL_START_V5..IX_PRODUCT_RETIRE_PHYSICAL_END_V5
     ];
+
+    let authority = position.current_authority();
+    let schedule = terminal.artifacts().quote().foundation;
+    let source = terminal.source();
+    require(
+        source.root_account() == *root_account.key
+            && position.root_account() == *root_account.key
+            && position.market_instance_id().bytes()
+                == source.source_market_terminal_facts().market_instance_id.bytes()
+            && position.generation()
+                == source.source_market_terminal_facts().generation
+            && position.root_binding_id()
+                == source.source_market_terminal_facts().root_binding_id
+            && position.root_data_before_id() == source.root_data_after_id
+            && position.root_authentication_before_id()
+                == source.root_authentication_after_id()
+            && position.root_semantic_before_id() == source.root_semantic_after_id()
+            && position.root_transition_sequence_before()
+                == source.root_transition_sequence_after()
+            && authority.treasury_position_account().bytes()
+                == position.position_account().to_bytes()
+            && authority.treasury_service_ledger_account().bytes()
+                != position.replay_account().to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let graph = derive_current_market_foundation_graph_body_v4(
+        program_id,
+        position.market_instance_id(),
+        position.generation(),
+        &schedule,
+        position.position_account(),
+        position.replay_account(),
+        Pubkey::new_from_array(authority.treasury_service_ledger_account().bytes()),
+    )?;
+    require(
+        schedule
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes()
+            == authority.foundation_schedule_v4_id().bytes()
+            && graph
+                .id(&schedule)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == authority.foundation_account_graph_v4_id().bytes(),
+        ClutchError::MismatchedState,
+    )?;
 
     let mut liability_root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let liability_terminals = close_market_liability_shared_cores_v3(
@@ -4245,8 +4292,8 @@ pub(crate) fn finalize_current_product_series_retirement_v5(
         &accounts[IX_PRODUCT_RETIRE_TOKEN_PROGRAMDATA_V5],
         terminal.registry(),
         terminal.bundle(),
-        schedule,
-        graph,
+        &schedule,
+        &graph,
         &mut liability_root_decode,
     )?;
     let liabilities = consume_market_liability_physical_terminals_v5(
