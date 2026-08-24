@@ -1721,7 +1721,8 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
             && market_root.state().failure_terminal_receipt_id() == ContentId::ZERO
             && market_root.state().resolution_semantic_id() != ContentId::ZERO
             && market_root.state().resolution_data_id() != ContentId::ZERO
-            && market_root.state().resolution_activation_receipt_id() != ContentId::ZERO,
+            && market_root.state().resolution_activation_receipt_id() != ContentId::ZERO
+            && market_root.state().transition_sequence().checked_add(1).is_some(),
         ClutchError::MismatchedState,
     )?;
 
@@ -1894,7 +1895,15 @@ pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
         ])
         .to_bytes(),
     );
-    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    require(
+        !id.is_zero()
+            && id != failure_terminal.id()
+            && id != failure_terminal.facts().owner_account_id
+            && id != failure_terminal.facts().owner_release_id
+            && id != failure_terminal.facts().owner_terminal_receipt_id
+            && id != failure_terminal.family_seal_id(),
+        ClutchError::MismatchedState,
+    )?;
     Ok(AuthenticatedFailureMarketPhysicalTerminalV3 {
         id,
         market_root_data_before_id: market_root.data_id(),
@@ -2857,6 +2866,7 @@ mod adversarial_family_terminal_tests {
             "resolution_semantic_id() != ContentId::ZERO",
             "resolution_data_id() != ContentId::ZERO",
             "resolution_activation_receipt_id() != ContentId::ZERO",
+            "transition_sequence().checked_add(1).is_some()",
             "plan_close_failure_market_interval_accounts_v2",
             "project_root_balance_disposition",
             "runtime_donation >= runtime_funding.donation_floor_lamports",
@@ -2880,6 +2890,9 @@ mod adversarial_family_terminal_tests {
         assert!(!close.contains("AuthenticatedMarketLifecycleRootV2"));
         assert!(!close.contains("MarketLifecyclePhaseV3::Terminal"));
         assert!(!close.contains("terminal_projection"));
+        assert!(close.contains("id != failure_terminal.facts().owner_account_id"));
+        assert!(close.contains("id != failure_terminal.facts().owner_release_id"));
+        assert!(close.contains("id != failure_terminal.facts().owner_terminal_receipt_id"));
     }
 
     #[test]
