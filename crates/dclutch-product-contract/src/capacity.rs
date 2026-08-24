@@ -1,11 +1,11 @@
-//! Immutable, content-addressed capacity profiles.
+//! Immutable, content-addressed artifact and partition capacity profiles.
 
 use crate::{
     ContentId, Error, Result, array, byte, canonical_pages, content_id, put, require_zero,
 };
 
 /// Exact byte width of [`CapacityProfileV1`].
-pub const CAPACITY_PROFILE_BYTES: usize = 112;
+pub const CAPACITY_PROFILE_BYTES: usize = 96;
 /// Canonical capacity-profile magic.
 pub const CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTCAP1";
 /// Implemented capacity-profile schema version.
@@ -18,18 +18,14 @@ pub const CAPACITY_PROFILE_SCHEMA_VERSION: u16 = 1;
 pub const MIN_PARTITION_CELLS: u32 = 2;
 
 const ENVELOPE_OFFSET: usize = 10;
-const WORD_WIDTH_OFFSET: usize = 11;
-const HEADER_RESERVED_OFFSET: usize = 12;
-const HEADER_RESERVED_BYTES: usize = 4;
+const HEADER_RESERVED_OFFSET: usize = 11;
+const HEADER_RESERVED_BYTES: usize = 5;
 const VERIFIER_RELEASE_ID_OFFSET: usize = 16;
 const ENVELOPE_BASIS_ID_OFFSET: usize = 48;
 const MAX_ARTIFACT_BYTES_OFFSET: usize = 80;
 const PAGE_PAYLOAD_BYTES_OFFSET: usize = 84;
 const MAX_PAGES_OFFSET: usize = 88;
 const MAX_PARTITION_CELLS_OFFSET: usize = 92;
-const MAX_COEFFICIENT_ENTRIES_OFFSET: usize = 96;
-const BODY_RESERVED_OFFSET: usize = 100;
-const BODY_RESERVED_BYTES: usize = 12;
 
 /// Nature of the evidence behind a fixed capacity envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,46 +50,6 @@ impl CapacityEnvelope {
         match self {
             Self::Measured => 1,
             Self::Provisional => 2,
-        }
-    }
-}
-
-/// Exact byte width of one coefficient word in a finite payout artifact.
-///
-/// These are representation profiles, not floating-point types. The selected
-/// evaluator release assigns exact signed/range semantics. New widths require
-/// a new schema release; larger entry/page envelopes require only a new
-/// capacity-profile identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum ExactWordWidth {
-    /// Eight-byte exact integer word.
-    Eight = 8,
-    /// Sixteen-byte exact integer word.
-    Sixteen = 16,
-}
-
-impl ExactWordWidth {
-    const fn decode(value: u8) -> Result<Self> {
-        match value {
-            8 => Ok(Self::Eight),
-            16 => Ok(Self::Sixteen),
-            _ => Err(Error::UnsupportedWordWidth),
-        }
-    }
-
-    /// Return the exact width as `u32` for checked artifact arithmetic.
-    pub const fn bytes(self) -> u32 {
-        match self {
-            Self::Eight => 8,
-            Self::Sixteen => 16,
-        }
-    }
-
-    const fn byte(self) -> u8 {
-        match self {
-            Self::Eight => 8,
-            Self::Sixteen => 16,
         }
     }
 }
@@ -125,8 +81,6 @@ impl CapacityProfileId {
 pub struct CapacityProfileV1Input {
     /// Whether the envelope is measured or provisional.
     pub envelope: CapacityEnvelope,
-    /// Exact coefficient word width admitted by this profile.
-    pub word_width: ExactWordWidth,
     /// Release identity of the bounded artifact/partition verifier.
     pub verifier_release_id: ContentId,
     /// Measurement-manifest ID or, for provisional bounds, lifting-plan ID.
@@ -139,66 +93,46 @@ pub struct CapacityProfileV1Input {
     pub max_pages: u32,
     /// Maximum cells in an exhaustive canonical state partition.
     pub max_partition_cells: u32,
-    /// Maximum exact words in a coefficient artifact.
-    pub max_coefficient_entries: u32,
 }
 
-/// Immutable bounds and verifier semantics for paged Product artifacts.
+/// Immutable bounds and verifier semantics for Product artifacts and partitions.
 ///
-/// All size/count fields are explicitly either measured or provisional as
-/// selected by [`CapacityEnvelope`]. A provisional profile must name its
-/// lifting plan in `envelope_basis_id`; a measured profile must name its
-/// measurement manifest. Changing any bound produces a new content preimage
-/// and profile identity, so a historical Product never silently changes.
+/// All size/count fields are explicitly measured or provisional as selected by
+/// [`CapacityEnvelope`]. A provisional profile names its lifting plan in
+/// `envelope_basis_id`; a measured profile names its measurement manifest.
+/// Coefficient widths/counts do not exist here: user portfolio recipes are
+/// exact-width contract records, not native liability or paged artifact bounds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapacityProfileV1 {
     envelope: CapacityEnvelope,
-    word_width: ExactWordWidth,
     verifier_release_id: ContentId,
     envelope_basis_id: ContentId,
     max_artifact_bytes: u32,
     page_payload_bytes: u32,
     max_pages: u32,
     max_partition_cells: u32,
-    max_coefficient_entries: u32,
 }
 
 impl CapacityProfileV1 {
     /// Validate and construct one capacity profile.
     pub fn new(input: CapacityProfileV1Input) -> Result<Self> {
-        if input.max_artifact_bytes == 0
-            || input.page_payload_bytes == 0
-            || input.max_pages == 0
-            || input.max_coefficient_entries == 0
-        {
+        if input.max_artifact_bytes == 0 || input.page_payload_bytes == 0 || input.max_pages == 0 {
             return Err(Error::ZeroCapacity);
         }
         if input.max_partition_cells < MIN_PARTITION_CELLS {
             return Err(Error::PartitionTooSmall);
-        }
-        if input.max_coefficient_entries < input.max_partition_cells {
-            return Err(Error::CoefficientEntriesExceedCapacity);
-        }
-        let maximum_coefficient_bytes = input
-            .max_coefficient_entries
-            .checked_mul(input.word_width.bytes())
-            .ok_or(Error::ArithmeticOverflow)?;
-        if maximum_coefficient_bytes > input.max_artifact_bytes {
-            return Err(Error::ArtifactExceedsCapacity);
         }
         if canonical_pages(input.max_artifact_bytes, input.page_payload_bytes)? != input.max_pages {
             return Err(Error::NonCanonicalPaging);
         }
         Ok(Self {
             envelope: input.envelope,
-            word_width: input.word_width,
             verifier_release_id: input.verifier_release_id,
             envelope_basis_id: input.envelope_basis_id,
             max_artifact_bytes: input.max_artifact_bytes,
             page_payload_bytes: input.page_payload_bytes,
             max_pages: input.max_pages,
             max_partition_cells: input.max_partition_cells,
-            max_coefficient_entries: input.max_coefficient_entries,
         })
     }
 
@@ -214,20 +148,14 @@ impl CapacityProfileV1 {
             return Err(Error::UnsupportedSchema);
         }
         require_zero(bytes, HEADER_RESERVED_OFFSET, HEADER_RESERVED_BYTES)?;
-        require_zero(bytes, BODY_RESERVED_OFFSET, BODY_RESERVED_BYTES)?;
         Self::new(CapacityProfileV1Input {
             envelope: CapacityEnvelope::decode(byte(bytes, ENVELOPE_OFFSET)?)?,
-            word_width: ExactWordWidth::decode(byte(bytes, WORD_WIDTH_OFFSET)?)?,
             verifier_release_id: content_id(bytes, VERIFIER_RELEASE_ID_OFFSET)?,
             envelope_basis_id: content_id(bytes, ENVELOPE_BASIS_ID_OFFSET)?,
             max_artifact_bytes: u32::from_le_bytes(array(bytes, MAX_ARTIFACT_BYTES_OFFSET)?),
             page_payload_bytes: u32::from_le_bytes(array(bytes, PAGE_PAYLOAD_BYTES_OFFSET)?),
             max_pages: u32::from_le_bytes(array(bytes, MAX_PAGES_OFFSET)?),
             max_partition_cells: u32::from_le_bytes(array(bytes, MAX_PARTITION_CELLS_OFFSET)?),
-            max_coefficient_entries: u32::from_le_bytes(array(
-                bytes,
-                MAX_COEFFICIENT_ENTRIES_OFFSET,
-            )?),
         })
     }
 
@@ -241,7 +169,6 @@ impl CapacityProfileV1 {
             &CAPACITY_PROFILE_SCHEMA_VERSION.to_le_bytes(),
         );
         put(&mut output, ENVELOPE_OFFSET, &[self.envelope.byte()]);
-        put(&mut output, WORD_WIDTH_OFFSET, &[self.word_width.byte()]);
         put(
             &mut output,
             VERIFIER_RELEASE_ID_OFFSET,
@@ -267,11 +194,6 @@ impl CapacityProfileV1 {
             &mut output,
             MAX_PARTITION_CELLS_OFFSET,
             &self.max_partition_cells.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            MAX_COEFFICIENT_ENTRIES_OFFSET,
-            &self.max_coefficient_entries.to_le_bytes(),
         );
         output
     }
@@ -301,33 +223,9 @@ impl CapacityProfileV1 {
         Ok(())
     }
 
-    /// Check a coefficient artifact's entry count, exact width, and paging.
-    pub fn validate_coefficients(
-        self,
-        coefficient_entries: u32,
-        artifact_bytes: u32,
-        page_count: u32,
-    ) -> Result<()> {
-        if coefficient_entries == 0 || coefficient_entries > self.max_coefficient_entries {
-            return Err(Error::CoefficientEntriesExceedCapacity);
-        }
-        let expected_bytes = coefficient_entries
-            .checked_mul(self.word_width.bytes())
-            .ok_or(Error::ArithmeticOverflow)?;
-        if artifact_bytes != expected_bytes {
-            return Err(Error::ArtifactWidthMismatch);
-        }
-        self.validate_artifact(artifact_bytes, page_count)
-    }
-
     /// Return whether this is a measured or provisional envelope.
     pub const fn envelope(self) -> CapacityEnvelope {
         self.envelope
-    }
-
-    /// Return the exact coefficient word width.
-    pub const fn word_width(self) -> ExactWordWidth {
-        self.word_width
     }
 
     /// Return the bounded verifier release identity.
@@ -359,11 +257,6 @@ impl CapacityProfileV1 {
     pub const fn max_partition_cells(self) -> u32 {
         self.max_partition_cells
     }
-
-    /// Return the maximum coefficient entries.
-    pub const fn max_coefficient_entries(self) -> u32 {
-        self.max_coefficient_entries
-    }
 }
 
 #[cfg(test)]
@@ -371,89 +264,116 @@ mod tests {
     use super::*;
     use crate::id;
 
-    fn profile() -> CapacityProfileV1 {
-        CapacityProfileV1::new(CapacityProfileV1Input {
+    fn input() -> CapacityProfileV1Input {
+        CapacityProfileV1Input {
             envelope: CapacityEnvelope::Provisional,
-            word_width: ExactWordWidth::Eight,
             verifier_release_id: id(1),
             envelope_basis_id: id(2),
             max_artifact_bytes: 320,
             page_payload_bytes: 96,
             max_pages: 4,
             max_partition_cells: 16,
-            max_coefficient_entries: 40,
-        })
-        .expect("valid profile")
+        }
+    }
+
+    fn profile() -> CapacityProfileV1 {
+        CapacityProfileV1::new(input()).expect("valid profile")
     }
 
     #[test]
     fn exact_round_trip_and_offsets() {
         let value = profile();
         let bytes = value.to_bytes();
-        assert_eq!(bytes.len(), CAPACITY_PROFILE_BYTES);
+        assert_eq!(CAPACITY_PROFILE_BYTES, 96);
         assert_eq!(bytes.get(0..8), Some(CAPACITY_PROFILE_MAGIC.as_slice()));
         assert_eq!(bytes.get(10), Some(&2));
-        assert_eq!(bytes.get(11), Some(&8));
         assert_eq!(bytes.get(80..84), Some(320u32.to_le_bytes().as_slice()));
+        assert_eq!(bytes.get(92..96), Some(16u32.to_le_bytes().as_slice()));
         assert_eq!(CapacityProfileV1::decode(&bytes), Ok(value));
     }
 
     #[test]
-    fn refuses_zero_ids_unknown_width_and_reserved_bytes() {
-        let mut bytes = profile().to_bytes();
-        bytes[16..48].fill(0);
+    fn hostile_lengths_headers_identifiers_and_reserved_bytes_refuse() {
+        let bytes = profile().to_bytes();
+        for length in 0..CAPACITY_PROFILE_BYTES {
+            assert_eq!(
+                CapacityProfileV1::decode(bytes.get(..length).expect("prefix")),
+                Err(Error::InvalidLength)
+            );
+        }
+        let mut trailing = [0u8; CAPACITY_PROFILE_BYTES + 1];
+        trailing[..CAPACITY_PROFILE_BYTES].copy_from_slice(&bytes);
         assert_eq!(
-            CapacityProfileV1::decode(&bytes),
-            Err(Error::ZeroIdentifier)
+            CapacityProfileV1::decode(&trailing),
+            Err(Error::InvalidLength)
         );
 
-        let mut bytes = profile().to_bytes();
-        bytes[11] = 4;
+        let mut changed = bytes;
+        changed[0] = 0;
         assert_eq!(
-            CapacityProfileV1::decode(&bytes),
-            Err(Error::UnsupportedWordWidth)
+            CapacityProfileV1::decode(&changed),
+            Err(Error::InvalidMagic)
         );
-
-        let mut bytes = profile().to_bytes();
-        bytes[105] = 1;
+        let mut changed = bytes;
+        changed[8] = 2;
         assert_eq!(
-            CapacityProfileV1::decode(&bytes),
+            CapacityProfileV1::decode(&changed),
+            Err(Error::UnsupportedSchema)
+        );
+        let mut changed = bytes;
+        changed[10] = 3;
+        assert_eq!(
+            CapacityProfileV1::decode(&changed),
+            Err(Error::UnknownEnvelopeKind)
+        );
+        let mut changed = bytes;
+        changed[11] = 1;
+        assert_eq!(
+            CapacityProfileV1::decode(&changed),
             Err(Error::NonCanonicalReservedBytes)
+        );
+        let mut changed = bytes;
+        changed[16..48].fill(0);
+        assert_eq!(
+            CapacityProfileV1::decode(&changed),
+            Err(Error::ZeroIdentifier)
         );
     }
 
     #[test]
-    fn paging_is_unique_and_capacity_is_enforced() {
-        let input = CapacityProfileV1Input {
-            envelope: CapacityEnvelope::Measured,
-            word_width: ExactWordWidth::Eight,
-            verifier_release_id: id(1),
-            envelope_basis_id: id(2),
-            max_artifact_bytes: 320,
-            page_payload_bytes: 96,
-            max_pages: 5,
-            max_partition_cells: 16,
-            max_coefficient_entries: 40,
-        };
+    fn construction_and_use_refuse_noncanonical_bounds() {
+        let mut changed = input();
+        changed.max_artifact_bytes = 0;
+        assert_eq!(CapacityProfileV1::new(changed), Err(Error::ZeroCapacity));
+        let mut changed = input();
+        changed.max_partition_cells = 1;
         assert_eq!(
-            CapacityProfileV1::new(input),
+            CapacityProfileV1::new(changed),
+            Err(Error::PartitionTooSmall)
+        );
+        let mut changed = input();
+        changed.max_pages = 3;
+        assert_eq!(
+            CapacityProfileV1::new(changed),
             Err(Error::NonCanonicalPaging)
         );
+
+        let value = profile();
+        assert_eq!(value.validate_artifact(0, 1), Err(Error::ZeroCapacity));
         assert_eq!(
-            profile().validate_artifact(192, 3),
-            Err(Error::PageCountMismatch)
-        );
-        assert_eq!(
-            profile().validate_artifact(321, 4),
+            value.validate_artifact(321, 4),
             Err(Error::ArtifactExceedsCapacity)
         );
         assert_eq!(
-            profile().validate_partition(17),
+            value.validate_artifact(192, 1),
+            Err(Error::PageCountMismatch)
+        );
+        assert_eq!(value.validate_artifact(192, 2), Ok(()));
+        assert_eq!(value.validate_partition(1), Err(Error::PartitionTooSmall));
+        assert_eq!(
+            value.validate_partition(17),
             Err(Error::PartitionExceedsCapacity)
         );
-        assert_eq!(
-            profile().validate_coefficients(4, 31, 1),
-            Err(Error::ArtifactWidthMismatch)
-        );
+        assert_eq!(value.validate_partition(16), Ok(()));
     }
 }

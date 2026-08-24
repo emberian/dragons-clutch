@@ -7,22 +7,27 @@
 //! This crate commits Product truth without committing source transport. A
 //! [`product::TermsV1`] names the reusable semantics and canonical partition;
 //! an [`product::OccurrenceV1`] names one event under those terms; and a
-//! [`product::InstanceV1`] binds that event to one finite claim basis. Source
-//! accounts, oracle messages, resolver incentives, RPC observations, and SVM
-//! account policy deliberately do not appear in any preimage here.
+//! [`product::InstanceV1`] binds that event to its elementary categorical-unit
+//! native claim basis. A [`portfolio::PortfolioTemplateV1`] is a separate user
+//! recipe over those claims, never another liability basis. Source accounts,
+//! oracle messages, resolver incentives, RPC observations, and SVM account
+//! policy deliberately do not appear in any preimage here.
 //!
 //! Large finite artifacts are content-addressed and bounded by an immutable
-//! [`capacity::CapacityProfileV1`]. The crate does not execute an arbitrary VM:
-//! a nonzero verifier/evaluator release identity selects separately reviewed
-//! exact semantics. New capacity-profile identities can lift measured or
-//! provisional size envelopes without changing Product ontology.
+//! [`capacity::CapacityProfileV1`]. A nonzero verifier release identity selects
+//! separately reviewed partition semantics. New capacity-profile identities
+//! can lift measured or provisional size envelopes without changing Product
+//! ontology. There is no payout evaluator, polynomial native claim, or
+//! redemption rounding mode in Product V1.
 
 use core::convert::TryInto;
 
 /// Immutable capacity-envelope contracts.
 pub mod capacity;
-/// Finite exact claim-basis profile contracts.
+/// Elementary categorical-unit native claim-basis contract.
 pub mod claim;
+/// Exact rational user-portfolio recipe contracts.
+pub mod portfolio;
 /// Terms, occurrence, and Product-instance contracts.
 pub mod product;
 /// Compact provider-neutral terminal result contract.
@@ -36,6 +41,8 @@ pub const CONTENT_ID_BYTES: usize = 32;
 pub enum Error {
     /// An input did not have its one exact canonical length.
     InvalidLength,
+    /// A caller-provided output did not have its one exact canonical length.
+    OutputLength,
     /// A canonical record had the wrong magic.
     InvalidMagic,
     /// A record selected an unsupported schema release.
@@ -46,8 +53,6 @@ pub enum Error {
     ZeroIdentifier,
     /// A capacity envelope byte was not defined.
     UnknownEnvelopeKind,
-    /// An exact coefficient word width is not supported by this schema.
-    UnsupportedWordWidth,
     /// A capacity quantity that must be positive was zero.
     ZeroCapacity,
     /// Page capacity was not the unique minimal cover for the artifact bound.
@@ -62,24 +67,20 @@ pub enum Error {
     PartitionTooSmall,
     /// A state partition exceeded the selected capacity profile.
     PartitionExceedsCapacity,
-    /// A coefficient artifact exceeded the profile entry envelope.
-    CoefficientEntriesExceedCapacity,
     /// A partition requirement byte did not name the mandatory contract.
     UnknownPartitionRequirement,
-    /// A claim-basis kind byte was not defined.
-    UnknownClaimBasisKind,
-    /// A redemption-rounding byte was not defined.
-    UnknownRoundingMode,
-    /// A payout denominator was zero or incompatible with the selected profile.
-    InvalidPayoutDenominator,
-    /// A coefficient degree was outside the supported zero-through-three profile.
-    UnsupportedCoefficientDegree,
-    /// Fields selected a semantically unsupported profile combination.
-    UnsupportedProfileCombination,
-    /// A coefficient count was not canonical for partition width and degree.
-    NonCanonicalCoefficientCount,
-    /// An artifact byte length did not match coefficient count and word width.
-    ArtifactWidthMismatch,
+    /// An exact-N portfolio width was outside the current provisional profile.
+    UnsupportedPortfolioWidth,
+    /// A portfolio template's common denominator was zero.
+    ZeroPortfolioDenominator,
+    /// A portfolio template contained no nonzero native-claim quantity.
+    EmptyPortfolioTemplate,
+    /// A decoded portfolio rational vector was not in unique gcd-normalized form.
+    NonCanonicalPortfolioTemplate,
+    /// A requested native-claim index was outside the exact template width.
+    InvalidPortfolioIndex,
+    /// A user scale would require rounding a native-claim quantity.
+    NonIntegralPortfolioScale,
     /// Linked Product records did not share the required content identity.
     IdentityMismatch,
     /// A terminal payoff-state kind byte was not defined.

@@ -1,7 +1,7 @@
 //! Content preimages for Product terms, occurrences, and instances.
 
 use crate::capacity::{CapacityProfileId, CapacityProfileV1, MIN_PARTITION_CELLS};
-use crate::claim::ClaimBasisProfileV1;
+use crate::claim::CategoricalUnitV1;
 use crate::{ContentId, Error, Result, array, byte, content_id, put, require_zero};
 
 /// Exact byte width of [`TermsV1`].
@@ -315,7 +315,7 @@ pub struct InstanceV1Input {
     pub partition_cell_count: u32,
 }
 
-/// One finite claim family over one occurrence.
+/// One elementary categorical native-claim family over one occurrence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstanceV1 {
     terms_id: ContentId,
@@ -405,7 +405,7 @@ impl InstanceV1 {
     pub fn validate_claim_basis(
         self,
         claim_basis_id: ContentId,
-        claim_basis: ClaimBasisProfileV1,
+        claim_basis: CategoricalUnitV1,
     ) -> Result<()> {
         if self.claim_basis_id != claim_basis_id
             || self.capacity_profile_id != claim_basis.capacity_profile_id()
@@ -435,20 +435,19 @@ impl InstanceV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capacity::{CapacityEnvelope, CapacityProfileV1Input, ExactWordWidth};
+    use crate::capacity::{CapacityEnvelope, CapacityProfileV1Input};
+    use crate::claim::{CategoricalUnitV1, CategoricalUnitV1Input};
     use crate::id;
 
     fn capacity() -> (CapacityProfileId, CapacityProfileV1) {
         let profile = CapacityProfileV1::new(CapacityProfileV1Input {
             envelope: CapacityEnvelope::Measured,
-            word_width: ExactWordWidth::Eight,
             verifier_release_id: id(1),
             envelope_basis_id: id(2),
             max_artifact_bytes: 256,
             page_payload_bytes: 64,
             max_pages: 4,
             max_partition_cells: 16,
-            max_coefficient_entries: 32,
         })
         .expect("valid profile");
         (CapacityProfileId::new(id(3)), profile)
@@ -539,6 +538,41 @@ mod tests {
         .expect("valid occurrence");
         assert_eq!(
             occurrence.validate_terms(id(99), terms),
+            Err(Error::IdentityMismatch)
+        );
+
+        let claim_basis = CategoricalUnitV1::new(
+            CategoricalUnitV1Input {
+                capacity_profile_id: capacity_id,
+                outcome_count: 4,
+            },
+            profile,
+        )
+        .expect("claim basis");
+        let instance = InstanceV1::new(InstanceV1Input {
+            terms_id: id(7),
+            occurrence_id: id(9),
+            claim_basis_id: id(10),
+            capacity_profile_id: capacity_id,
+            partition_cell_count: 4,
+        })
+        .expect("instance");
+        assert_eq!(instance.validate_claim_basis(id(10), claim_basis), Ok(()));
+        assert_eq!(
+            instance.validate_claim_basis(id(11), claim_basis),
+            Err(Error::IdentityMismatch)
+        );
+
+        let wrong_width = CategoricalUnitV1::new(
+            CategoricalUnitV1Input {
+                capacity_profile_id: capacity_id,
+                outcome_count: 3,
+            },
+            profile,
+        )
+        .expect("claim basis");
+        assert_eq!(
+            instance.validate_claim_basis(id(10), wrong_width),
             Err(Error::IdentityMismatch)
         );
     }
