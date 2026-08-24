@@ -1629,17 +1629,26 @@ fn coordinate_description(
                 Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/3/redeem-bearer-exact"),
             ),
             Some(FractionalRedemptionActionV1::RedeemInternalCredit) => {
-                ("redeem-fractional-internal-credit", None)
+                (
+                    "redeem-fractional-internal-credit",
+                    Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/4/redeem-internal-credit"),
+                )
             }
             Some(FractionalRedemptionActionV1::RedeemBearerCredit) => (
                 "redeem-fractional-bearer-credit",
                 Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/5/redeem-bearer-credit"),
             ),
             Some(FractionalRedemptionActionV1::TransferCredit) => {
-                ("transfer-fractional-credit", None)
+                (
+                    "transfer-fractional-credit",
+                    Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/6/transfer-credit"),
+                )
             }
             Some(FractionalRedemptionActionV1::MergeCredit) => {
-                ("merge-fractional-credit", None)
+                (
+                    "merge-fractional-credit",
+                    Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/7/merge-credit"),
+                )
             }
             Some(FractionalRedemptionActionV1::CloseZeroCredit) => (
                 "close-fractional-zero-credit",

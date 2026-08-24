@@ -2713,7 +2713,7 @@ fn maximum_full_vector_quantity(
     position: PositionAccountV3,
     primitive: [u64; clutch_structured_claim::MAX_OUTCOMES],
     outcome_count: u8,
-) -> Result<u64> {
+) -> Result<(u64, PositionAccountV3)> {
     if position.outcome_count() != outcome_count {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
@@ -3219,6 +3219,15 @@ pub struct FractionalCreditAdmissionFrameV1<'account> {
     pub rent_sysvar: &'account ObservedRpcAccount,
     pub funding_payer: Option<&'account ObservedRpcAccount>,
     pub system_program: Option<&'account ObservedRpcAccount>,
+}
+
+/// Finalized internal Position/Replay plus owner-credit suffix for action 4.
+#[derive(Clone, Copy, Debug)]
+pub struct FractionalInternalCreditFrameV1<'account> {
+    pub core: FractionalHolderCoreFrameV1<'account>,
+    pub position: &'account ObservedRpcAccount,
+    pub replay: &'account ObservedRpcAccount,
+    pub credit: FractionalCreditAdmissionFrameV1<'account>,
 }
 
 /// Finalized payout-owner accounts selected by the destination holder for a
@@ -4377,7 +4386,7 @@ fn authenticate_fractional_payout_position_v1(
         || fields.controller.bytes() != claimant.to_bytes()
         || fields.market_instance_id.bytes() != core.market_instance_id.bytes()
         || fields.realm_id != core.realm.realm
-        || fields.collateral_policy_id.bytes() != core_frame.collateral_policy.address.to_bytes()
+        || fields.collateral_policy_id.bytes() != core.profile.collateral_policy_id.bytes()
         || fields.collateral_release_id.bytes() != core.policy.collateral_release.bytes()
         || fields.purpose_binding_id.bytes() != core_frame.market_runtime.address.to_bytes()
         || fields.replay_account.bytes() != replay_account.address.to_bytes()
@@ -4391,7 +4400,314 @@ fn authenticate_fractional_payout_position_v1(
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    Ok(header.next_sequence())
+    Ok((header.next_sequence(), position))
+}
+
+/// Construct action 4 from one holder's exact Position/outcome/quantity choice
+/// and the chain-derived live, fresh, or reopened credit namespace.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_fractional_internal_credit_material_v1(
+    release: &IndexedProgramRelease,
+    collateral: StructuredCollateralCatalogEntryV1<'_>,
+    builder: &ProtocolTransactionBuilder,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    intent: FractionalHolderIntentV1,
+    frame: FractionalInternalCreditFrameV1<'_>,
+) -> Result<CanonicalActionMaterialV1> {
+    use clutch_retirement::Identity32V1;
+
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    intent.validate()?;
+    let (claimant, position, outcome, quantity, payer) = match intent {
+        FractionalHolderIntentV1::RedeemInternalCredit {
+            claimant,
+            position,
+            outcome,
+            quantity,
+            funding_payer,
+        } => (claimant, position, outcome, quantity, funding_payer),
+        _ => return Err(CanonicalActionMaterialErrorV1::WrongSelection),
+    };
+    let action = FractionalRedemptionActionV1::RedeemInternalCredit;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: FRACTIONAL_REDEMPTION_FAMILY_TAG,
+        family_version: FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if workflow_id == [0; 32]
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || collateral.artifact_owner() != release.program_id
+        || collateral.program().capability_profile_id != release.capability_profile_id
+        || release.enabled_intents.binary_search(&coordinate).is_err()
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let core = authenticate_fractional_holder_core_v1(
+        release,
+        collateral,
+        freshness,
+        frame.core,
+        None,
+    )?;
+    if outcome >= core.policy.outcome_count || frame.position.address != position {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let (replay_sequence, position_state) = authenticate_fractional_payout_position_v1(
+        release,
+        freshness,
+        core,
+        frame.core,
+        claimant,
+        frame.position,
+        frame.replay,
+    )?;
+    let position_fields = position_state.fields();
+    if position_fields.outcome_count != core.policy.outcome_count
+        || position_fields.native_eggs[usize::from(outcome)] < quantity
+        || core.claim_ledger.aggregate_internal_supply[usize::from(outcome)] < quantity
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let (credit_mode, credit_sequence, prior_credit_numerator) =
+        derive_fractional_credit_admission_v1(
+            release,
+            freshness,
+            core,
+            frame.core,
+            claimant,
+            payer,
+            frame.credit,
+        )?;
+    let claim_numerator = u128::from(quantity)
+        .checked_mul(u128::from(
+            core.resolution.facts.payout_weights[usize::from(outcome)],
+        ))
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let total_numerator = claim_numerator
+        .checked_add(u128::from(prior_credit_numerator))
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let denominator = u128::from(core.resolution.facts.payout_denominator);
+    let paid_atoms = u64::try_from(total_numerator / denominator)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let remainder = total_numerator % denominator;
+    let payload = FractionalRedeemIntentV1 {
+        expected_ledger_sequence: core.ledger.next_sequence,
+        expected_credit_sequence: credit_sequence,
+        expected_position_replay_sequence: replay_sequence,
+        quantity,
+        claimant: Identity32V1::new(claimant.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
+        claim_source: Identity32V1::new(frame.position.address.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
+        payout_target: Identity32V1::new(frame.position.address.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
+        credit_or_policy: Identity32V1::new(frame.credit.credit.address.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
+        outcome,
+        credit_mode,
+    }
+    .encode()
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let mut addresses = vec![
+        claimant,
+        frame.core.realm.address,
+        frame.core.profile.address,
+        frame.core.collateral_policy.address,
+        frame.core.collateral_token_program.address,
+        frame.core.market_binding.address,
+        frame.core.market_runtime.address,
+        frame.core.market_instance.address,
+        frame.core.hoard.address,
+        frame.core.claim_ledger.address,
+        frame.core.resolution.address,
+        frame.core.fractional_policy.address,
+        frame.core.fractional_ledger.address,
+        frame.position.address,
+        frame.replay.address,
+        frame.credit.credit.address,
+        frame.credit.market_root.address,
+        frame.credit.neutral_sink.address,
+        frame.credit.rent_sysvar.address,
+    ];
+    if credit_mode > 1 {
+        addresses.extend([
+            frame
+                .credit
+                .funding_payer
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?
+                .address,
+            frame
+                .credit
+                .system_program
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?
+                .address,
+        ]);
+    }
+    let payer_alias = credit_mode > 1 && addresses[19] == claimant;
+    let mut metas = Vec::with_capacity(addresses.len());
+    let mut account_roles = Vec::with_capacity(addresses.len());
+    for (index, address) in addresses.iter().copied().enumerate() {
+        let writable = matches!(index, 8 | 9 | 12 | 13 | 14 | 15)
+            || (credit_mode > 1 && index == 19)
+            || (index == 0 && payer_alias);
+        let signer = index == 0 || (credit_mode > 1 && index == 19);
+        metas.push(if writable {
+            AccountMeta::new(address, signer)
+        } else {
+            AccountMeta::new_readonly(address, signer)
+        });
+        let label = match index {
+            0 => "claimant",
+            1 => "realm",
+            2 => "profile",
+            3 => "collateral-policy",
+            4 => "collateral-token-program",
+            5 => "market-binding-v2",
+            6 => "market-runtime-v3",
+            7 => "market-instance-preimage-v2",
+            8 => "hoard-v2",
+            9 => "claim-ledger-v3",
+            10 => "resolution-v5",
+            11 => "fractional-policy-v3",
+            12 => "fractional-ledger-v1",
+            13 => "position-v3",
+            14 => "general-replay-v3",
+            15 => "fractional-credit-v2",
+            16 => "market-lifecycle-root-v2",
+            17 => "neutral-lamport-sink",
+            18 => "rent-sysvar",
+            19 => "credit-funding-payer",
+            _ => "system-program",
+        };
+        account_roles.push(CanonicalAccountRoleV1 {
+            label,
+            address,
+            writable,
+            signer,
+        });
+    }
+    let equations = vec![
+        ExactEquation {
+            name: "holder-approved internal Eggs retired".into(),
+            unit: IntegerUnit::EggAtoms {
+                market: core.market_instance_id.bytes(),
+                outcome,
+            },
+            left: u128::from(quantity),
+            right: u128::from(quantity),
+        },
+        ExactEquation {
+            name: "chain-derived whole collateral payout".into(),
+            unit: IntegerUnit::CollateralAtoms {
+                mint: Address::new_from_array(core.collateral_policy.mint.bytes()),
+            },
+            left: u128::from(paid_atoms),
+            right: u128::from(paid_atoms),
+        },
+        ExactEquation {
+            name: "chain-derived retained payout numerator".into(),
+            unit: IntegerUnit::PriceUnits {
+                scale: core.resolution.facts.payout_denominator,
+            },
+            left: remainder,
+            right: remainder,
+        },
+    ];
+    let draft = crate::transaction_builder::OwnedInstructionDraft::enabled_fractional_redeem_internal_credit_v1(
+        crate::transaction_builder::SemanticOwner {
+            package: "clutch-fractional-redemption-runtime".into(),
+            schema: "fractional-redemption/79/1/4/redeem-internal-credit".into(),
+            release_sha256: release.elf_sha256,
+        },
+        release.program_id,
+        metas,
+        equations,
+        core.ledger.next_sequence,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let mut authority = Sha256::new();
+    authority.update(fractional_authority_state_id_v1(
+        &frame.core.ordered(),
+        release,
+    ));
+    for account in [
+        frame.position,
+        frame.replay,
+        frame.credit.market_root,
+        frame.credit.neutral_sink,
+        frame.credit.rent_sysvar,
+    ] {
+        authority.update(account.address.to_bytes());
+        authority.update(account.provenance.slot.to_le_bytes());
+        authority.update(Sha256::digest(&account.data));
+    }
+    authority.update(frame.credit.credit.address.to_bytes());
+    authority.update(frame.credit.credit.observed_slot.to_le_bytes());
+    if let Some(account) = frame.credit.credit.present {
+        authority.update(Sha256::digest(&account.data));
+    }
+    let authority_state_sha256 = authority.finalize().into();
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: WorkflowLane::FractionalRedemption,
+        generation: core.policy.domain_generation,
+        position: WorkflowPosition {
+            phase: u16::from(action.tag()),
+            item: core.ledger.next_sequence,
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::FractionalRedemption(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_fractional_plan(coordinate, builder.payer(), &account_roles, &planned)?;
+    let release_key = release.key();
+    let driver_account_slot = frame.core.fractional_ledger.provenance.slot;
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        frame.core.fractional_ledger.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: frame.core.fractional_ledger.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
 }
 
 /// Construct action 6 or 7 from two holder consents and finalized credit
@@ -4547,15 +4863,18 @@ pub fn construct_fractional_credit_move_material_v1(
                 position: observed,
                 replay,
             },
-        ) if position == observed.address => authenticate_fractional_payout_position_v1(
-            release,
-            freshness,
-            core,
-            frame.core,
-            destination_claimant,
-            observed,
-            replay,
-        )?,
+        ) if position == observed.address => {
+            authenticate_fractional_payout_position_v1(
+                release,
+                freshness,
+                core,
+                frame.core,
+                destination_claimant,
+                observed,
+                replay,
+            )?
+            .0
+        }
         (
             FractionalHolderPayoutV1::ExternalCollateral { token_account },
             FractionalCreditPayoutFrameV1::External {
