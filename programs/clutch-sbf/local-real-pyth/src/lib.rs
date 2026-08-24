@@ -22,6 +22,8 @@ pub mod provider;
 pub mod rpc_index;
 #[cfg(feature = "operator")]
 pub mod source_action12_material;
+#[cfg(feature = "operator")]
+pub mod source_custody_retirement_material;
 #[cfg(feature = "builder")]
 pub mod session;
 #[cfg(feature = "campaign")]
