@@ -31,7 +31,16 @@ use crate::instructions::product_market::{
     AuthenticatedSeriesMarketLinkV1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
-use clutch_product_series::{CompiledProductSeriesBundleV5, ContentId, SeriesFundingQuoteV4};
+use clutch_product_series::{
+    CompiledProductSeriesBundleV5, ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusProfileV1,
+    SeriesFundingQuoteV4,
+};
+use clutch_source_plane_v3::{
+    CompiledSourceOccurrenceV3, StatisticKeyV3, StatisticResultV3, SummaryProgramV3, WindowSealV3,
+    WindowSpecV3,
+};
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
 };
@@ -78,6 +87,122 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     pub(crate) const fn quote(&self) -> FailureMarketRecoveryQuoteAdmissionReceiptV1 {
         self.quote
     }
+}
+
+/// Current immutable Product bodies and central work profile admitted for a
+/// caller-free interval context.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedFailureMarketProductContextV2 {
+    template: AuthenticatedProductArtifactV1<ProductTemplateV4>,
+    basis: AuthenticatedProductArtifactV1<NativeClaimBasisV1>,
+    price: AuthenticatedProductArtifactV1<PriceMeasurePolicyV1>,
+    genesis: AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
+    market: AuthenticatedProductArtifactV1<MarketInstancePreimageV2>,
+    work_profile: QuantizedIntervalConsensusProfileV1,
+    resolved_edge_policy: clutch_product_series::QuantizedEdgePolicyV1,
+}
+
+impl AuthenticatedFailureMarketProductContextV2 {
+    /// Borrow the exact authenticated Product/Source context without
+    /// persisting another copy of any body.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn context<'a>(
+        &'a self,
+        source_occurrence: &'a CompiledSourceOccurrenceV3,
+        source_interval: &'a StatisticResultV3,
+        statistic_key: &'a StatisticKeyV3,
+        summary_program: &'a SummaryProgramV3,
+        window_seal: &'a WindowSealV3,
+        window: &'a WindowSpecV3,
+    ) -> QuantizedIntervalConsensusContextV1<'a> {
+        QuantizedIntervalConsensusContextV1 {
+            market: self.market.value(),
+            product_template: self.template.value(),
+            native_claim_basis: self.basis.value(),
+            price_measure_policy: self.price.value(),
+            market_genesis: self.genesis.value(),
+            resolved_edge_policy: self.resolved_edge_policy,
+            source_occurrence,
+            source_interval,
+            statistic_key,
+            summary_program,
+            window_seal,
+            window,
+            work_profile: &self.work_profile,
+        }
+    }
+}
+
+/// Authenticate every immutable Product body used by Begin/Advance/Resolve
+/// against the current Bundle, Market root, Failure policy, and ProfileV4.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_product_context_v2(
+    program_id: &Pubkey,
+    execution: &AuthenticatedFailureMarketExecutionV2<'_, '_>,
+    product_template_account: &AccountInfo<'_>,
+    native_claim_basis_account: &AccountInfo<'_>,
+    price_measure_policy_account: &AccountInfo<'_>,
+    market_genesis_account: &AccountInfo<'_>,
+    market_instance_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFailureMarketProductContextV2> {
+    let bundle = execution.bundle().value();
+    let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
+        program_id,
+        product_template_account,
+        bundle.product_template_id.content_id(),
+    )?;
+    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        native_claim_basis_account,
+        bundle.native_claim_basis_id.content_id(),
+    )?;
+    let price = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        price_measure_policy_account,
+        bundle.price_measure_policy_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        market_genesis_account,
+        bundle.market_genesis_profile_id.content_id(),
+    )?;
+    let root_binding = execution.root().state().binding();
+    let market = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        root_binding.market_instance_id.content_id(),
+    )?;
+    let work_profile = execution
+        .registry()
+        .profile()
+        .interval_consensus_profile()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy = execution.admission().state().binding().facts();
+    let work_profile_id = work_profile
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        template.semantic_id() == bundle.product_template_id.content_id()
+            && basis.semantic_id() == bundle.native_claim_basis_id.content_id()
+            && price.semantic_id() == bundle.price_measure_policy_id.content_id()
+            && genesis.semantic_id() == bundle.market_genesis_profile_id.content_id()
+            && market.semantic_id() == root_binding.market_instance_id.content_id()
+            && template.semantic_id().bytes() == policy.product_template_id.bytes()
+            && basis.semantic_id().bytes() == policy.native_claim_basis_id.bytes()
+            && price.semantic_id().bytes() == policy.price_measure_policy_id.bytes()
+            && genesis.semantic_id().bytes() == policy.market_genesis_profile_id.bytes()
+            && work_profile_id.bytes() == policy.interval_consensus_profile_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedFailureMarketProductContextV2 {
+        template,
+        basis,
+        price,
+        genesis,
+        market,
+        work_profile,
+        resolved_edge_policy: execution.registry().resolved_edge_policy(),
+    })
 }
 
 /// Reopen the full shared authority prefix for one action.
