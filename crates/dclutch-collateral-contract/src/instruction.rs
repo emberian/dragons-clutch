@@ -248,11 +248,11 @@ impl FoundMarketAndFundV1 {
     /// protocol revenue, and the positive bounty is separately prepaid.
     /// Before creating accounts, the adapter must hash and match the Realm,
     /// resolution-policy, and capability-manifest records supplied by the
-    /// exact account frame. It must also reconstruct the canonical categorical
-    /// unit-claim basis from `outcome_count`, hash it, and match
-    /// `identity.claim_basis_id()`. The occurrence-specific Product Instance
-    /// remains a content commitment rather than universal mutable runtime
-    /// state and must be authenticated by the founding adapter.
+    /// exact account frame. It must decode and authenticate the explicit
+    /// Product Instance, categorical ClaimBasis, and CapacityProfile records,
+    /// validate their links and `outcome_count`, and match both Product IDs in
+    /// `identity`. These records remain content commitments rather than
+    /// universal mutable runtime state.
     pub fn new(
         identity: MarketIdentity,
         outcome_count: u8,

@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Canonical, SDK-free contracts for reusable collateral Realms, categorical
-//! unit claims, and compact native Positions.
+//! Canonical, SDK-free contracts for reusable collateral Realms and compact
+//! native Positions. Product claim semantics live in `dclutch-product-contract`.
 //!
 //! This crate deliberately owns no hashing or SVM account policy. An adapter
 //! computes a Realm content identity from [`RealmV1::to_bytes`], derives the
@@ -16,8 +16,6 @@ use core::convert::TryInto;
 
 /// Exact byte width of one immutable [`RealmV1`] record.
 pub const REALM_BYTES: usize = 144;
-/// Exact byte width of one [`CategoricalUnitClaimBasisV1`] preimage.
-pub const CATEGORICAL_UNIT_CLAIM_BASIS_BYTES: usize = 24;
 /// Fixed Position bytes before its `N` eight-byte outcome balances.
 pub const POSITION_BASE_BYTES: usize = 88;
 /// Exact byte width of a two-outcome Position.
@@ -36,15 +34,6 @@ pub const REALM_SCHEMA_VERSION: u16 = 1;
 /// Domain seed preceding a Realm content identity in its SVM PDA derivation.
 pub const REALM_PDA_DOMAIN: &[u8] = b"dclutch/realm/v1";
 
-/// Canonical categorical unit-claim basis magic.
-pub const CATEGORICAL_UNIT_CLAIM_BASIS_MAGIC: [u8; 8] = *b"DCLTCB01";
-/// Implemented categorical unit-claim basis schema version.
-pub const CATEGORICAL_UNIT_CLAIM_BASIS_SCHEMA_VERSION: u16 = 1;
-/// Fixed categorical unit-claim basis kind.
-pub const CATEGORICAL_UNIT_CLAIM_BASIS_KIND: u8 = 1;
-/// One winning claim atom pays exactly this many collateral atoms.
-pub const CATEGORICAL_UNIT_WINNER_PAYOUT: u64 = 1;
-
 /// Canonical native Position account magic.
 pub const POSITION_MAGIC: [u8; 8] = *b"DCLTPOS1";
 /// Implemented Position schema version.
@@ -61,12 +50,6 @@ const REALM_TOKEN_PROGRAM_OFFSET: usize = 48;
 const REALM_COLLATERAL_MINT_OFFSET: usize = 80;
 const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = 112;
 
-const CLAIM_BASIS_OUTCOME_COUNT_OFFSET: usize = 10;
-const CLAIM_BASIS_KIND_OFFSET: usize = 11;
-const CLAIM_BASIS_RESERVED_OFFSET: usize = 12;
-const CLAIM_BASIS_RESERVED_BYTES: usize = 4;
-const CLAIM_BASIS_PAYOUT_OFFSET: usize = 16;
-
 const POSITION_OUTCOME_COUNT_OFFSET: usize = 10;
 const POSITION_RESERVED_OFFSET: usize = 11;
 const POSITION_RESERVED_BYTES: usize = 5;
@@ -75,7 +58,7 @@ const POSITION_OWNER_OFFSET: usize = 48;
 const POSITION_GENERATION_OFFSET: usize = 80;
 const POSITION_BALANCES_OFFSET: usize = 88;
 
-/// Explicit refusal returned by a Realm, claim-basis, or Position contract.
+/// Explicit refusal returned by a Realm or Position contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     /// An input or account did not have its one exact canonical width.
@@ -94,10 +77,6 @@ pub enum Error {
     ZeroIdentifier,
     /// A categorical outcome width was outside the measured profile.
     InvalidOutcomeCount,
-    /// A claim-basis record did not name unit categorical claims.
-    InvalidClaimBasisKind,
-    /// A claim-basis record did not name the exact one-atom winning payout.
-    InvalidWinnerPayout,
     /// A quantity that must move claims was zero.
     ZeroQuantity,
     /// An outcome index was outside the active Position width.
@@ -316,98 +295,6 @@ impl RealmV1 {
     /// Return the immutable freeze-authority admission policy.
     pub const fn freeze_authority_policy(&self) -> FreezeAuthorityPolicy {
         self.freeze_authority_policy
-    }
-}
-
-/// Canonical preimage for unit-payout categorical claims.
-///
-/// This record is intended to be reconstructed from the active outcome count,
-/// hashed by a composing adapter, and compared with a Market's immutable claim
-/// basis identity. It requires no persistent account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CategoricalUnitClaimBasisV1 {
-    outcome_count: u8,
-}
-
-impl CategoricalUnitClaimBasisV1 {
-    /// Construct the unit claim basis for one supported categorical width.
-    pub fn new(outcome_count: u8) -> Result<Self> {
-        validate_outcome_count(usize::from(outcome_count))?;
-        Ok(Self { outcome_count })
-    }
-
-    /// Decode one exact canonical unit claim-basis preimage.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != CATEGORICAL_UNIT_CLAIM_BASIS_BYTES {
-            return Err(Error::InvalidLength);
-        }
-        if read_array::<8>(bytes, 0)? != CATEGORICAL_UNIT_CLAIM_BASIS_MAGIC {
-            return Err(Error::InvalidMagic);
-        }
-        if u16::from_le_bytes(read_array(bytes, 8)?) != CATEGORICAL_UNIT_CLAIM_BASIS_SCHEMA_VERSION
-        {
-            return Err(Error::UnsupportedSchema);
-        }
-        if read_byte(bytes, CLAIM_BASIS_KIND_OFFSET)? != CATEGORICAL_UNIT_CLAIM_BASIS_KIND {
-            return Err(Error::InvalidClaimBasisKind);
-        }
-        require_zero(
-            bytes,
-            CLAIM_BASIS_RESERVED_OFFSET,
-            CLAIM_BASIS_RESERVED_BYTES,
-        )?;
-        if u64::from_le_bytes(read_array(bytes, CLAIM_BASIS_PAYOUT_OFFSET)?)
-            != CATEGORICAL_UNIT_WINNER_PAYOUT
-        {
-            return Err(Error::InvalidWinnerPayout);
-        }
-        Self::new(read_byte(bytes, CLAIM_BASIS_OUTCOME_COUNT_OFFSET)?)
-    }
-
-    /// Return the exact fixed-width claim-basis identity preimage.
-    pub fn to_bytes(self) -> [u8; CATEGORICAL_UNIT_CLAIM_BASIS_BYTES] {
-        let mut output = [0; CATEGORICAL_UNIT_CLAIM_BASIS_BYTES];
-        put(&mut output, 0, &CATEGORICAL_UNIT_CLAIM_BASIS_MAGIC);
-        put(
-            &mut output,
-            8,
-            &CATEGORICAL_UNIT_CLAIM_BASIS_SCHEMA_VERSION.to_le_bytes(),
-        );
-        put(
-            &mut output,
-            CLAIM_BASIS_OUTCOME_COUNT_OFFSET,
-            &[self.outcome_count],
-        );
-        put(
-            &mut output,
-            CLAIM_BASIS_KIND_OFFSET,
-            &[CATEGORICAL_UNIT_CLAIM_BASIS_KIND],
-        );
-        put(
-            &mut output,
-            CLAIM_BASIS_PAYOUT_OFFSET,
-            &CATEGORICAL_UNIT_WINNER_PAYOUT.to_le_bytes(),
-        );
-        output
-    }
-
-    /// Encode into one exact-width caller-owned buffer.
-    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
-        if output.len() != CATEGORICAL_UNIT_CLAIM_BASIS_BYTES {
-            return Err(Error::OutputLength);
-        }
-        output.copy_from_slice(&self.to_bytes());
-        Ok(())
-    }
-
-    /// Return the number of exhaustive ordered outcomes.
-    pub const fn outcome_count(&self) -> u8 {
-        self.outcome_count
-    }
-
-    /// Return the exact winning payout in collateral atoms per claim atom.
-    pub const fn winner_payout(&self) -> u64 {
-        CATEGORICAL_UNIT_WINNER_PAYOUT
     }
 }
 
@@ -762,89 +649,6 @@ mod tests {
         let before = [0x5a; REALM_BYTES - 1];
         let mut output = before;
         assert_eq!(value.encode(&mut output), Err(Error::OutputLength));
-        assert_eq!(output, before);
-        Ok(())
-    }
-
-    #[test]
-    fn claim_basis_exact_preimage_and_round_trip() -> Result<()> {
-        let basis = CategoricalUnitClaimBasisV1::new(7)?;
-        let bytes = basis.to_bytes();
-        assert_eq!(bytes.len(), CATEGORICAL_UNIT_CLAIM_BASIS_BYTES);
-        assert_eq!(
-            bytes.get(0..8),
-            Some(&CATEGORICAL_UNIT_CLAIM_BASIS_MAGIC[..])
-        );
-        assert_eq!(bytes.get(8..10), Some(&1_u16.to_le_bytes()[..]));
-        assert_eq!(bytes.get(10), Some(&7));
-        assert_eq!(bytes.get(11), Some(&CATEGORICAL_UNIT_CLAIM_BASIS_KIND));
-        assert_eq!(bytes.get(12..16), Some(&[0; 4][..]));
-        assert_eq!(bytes.get(16..24), Some(&1_u64.to_le_bytes()[..]));
-        assert_eq!(CategoricalUnitClaimBasisV1::decode(&bytes), Ok(basis));
-        assert_eq!(basis.outcome_count(), 7);
-        assert_eq!(basis.winner_payout(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn hostile_claim_basis_lengths_headers_count_kind_and_payout_refuse() -> Result<()> {
-        let canonical = CategoricalUnitClaimBasisV1::new(2)?.to_bytes();
-        for length in 0..CATEGORICAL_UNIT_CLAIM_BASIS_BYTES {
-            let short = canonical.get(..length).ok_or(Error::InvalidLength)?;
-            assert_eq!(
-                CategoricalUnitClaimBasisV1::decode(short),
-                Err(Error::InvalidLength)
-            );
-        }
-        let mut long = [0; CATEGORICAL_UNIT_CLAIM_BASIS_BYTES + 1];
-        put(&mut long, 0, &canonical);
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&long),
-            Err(Error::InvalidLength)
-        );
-        let mut changed = canonical;
-        *changed.get_mut(0).ok_or(Error::InvalidLength)? ^= 1;
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&changed),
-            Err(Error::InvalidMagic)
-        );
-        let mut changed = canonical;
-        put(&mut changed, 8, &2_u16.to_le_bytes());
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&changed),
-            Err(Error::UnsupportedSchema)
-        );
-        for count in [0, 1, 17, u8::MAX] {
-            let mut changed = canonical;
-            *changed.get_mut(10).ok_or(Error::InvalidLength)? = count;
-            assert_eq!(
-                CategoricalUnitClaimBasisV1::decode(&changed),
-                Err(Error::InvalidOutcomeCount)
-            );
-        }
-        let mut changed = canonical;
-        *changed.get_mut(11).ok_or(Error::InvalidLength)? = 2;
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&changed),
-            Err(Error::InvalidClaimBasisKind)
-        );
-        let mut changed = canonical;
-        *changed.get_mut(12).ok_or(Error::InvalidLength)? = 1;
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&changed),
-            Err(Error::NonCanonicalReservedBytes)
-        );
-        let mut changed = canonical;
-        put(&mut changed, 16, &2_u64.to_le_bytes());
-        assert_eq!(
-            CategoricalUnitClaimBasisV1::decode(&changed),
-            Err(Error::InvalidWinnerPayout)
-        );
-
-        let basis = CategoricalUnitClaimBasisV1::new(2)?;
-        let before = [0x5a; CATEGORICAL_UNIT_CLAIM_BASIS_BYTES - 1];
-        let mut output = before;
-        assert_eq!(basis.encode(&mut output), Err(Error::OutputLength));
         assert_eq!(output, before);
         Ok(())
     }

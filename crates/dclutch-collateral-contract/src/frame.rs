@@ -36,6 +36,10 @@ pub enum Role {
     Realm,
     /// Immutable occurrence-specific Product Instance committed by Market identity.
     ProductInstance,
+    /// Immutable Product ClaimBasis committed by Market and Product Instance.
+    ClaimBasis,
+    /// Immutable Product CapacityProfile governing the admitted ClaimBasis.
+    CapacityProfile,
     /// Mutable Market root and collateral-liability state.
     Market,
     /// Prepaid one-shot resolution Fund direct child.
@@ -236,12 +240,14 @@ pub const CREATE_REALM_FRAME: [AccountRole; 6] = [
 ];
 
 /// Exact atomic Market and resolution-Fund founding frame.
-pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 9] = [
+pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::ResolutionFund, true),
     immutable(Role::Realm),
     immutable(Role::ProductInstance),
+    immutable(Role::ClaimBasis),
+    immutable(Role::CapacityProfile),
     immutable(Role::ResolutionPolicy),
     immutable(Role::CapabilityManifest),
     SYSTEM_PROGRAM,
@@ -395,12 +401,12 @@ pub fn validate_account_frame(tag: InstructionTag, accounts: &[AccountPrivilege]
 mod tests {
     use super::*;
 
-    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 10] {
+    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 11] {
         let mut output = [AccountPrivilege {
             is_signer: false,
             is_writable: false,
             is_executable: false,
-        }; 10];
+        }; 11];
         for (destination, role) in output.iter_mut().zip(instruction_frame(tag).roles()) {
             *destination = AccountPrivilege {
                 is_signer: role.is_signer(),
@@ -461,8 +467,9 @@ mod tests {
         let tag = InstructionTag::CreatePositionAndSplit;
         let frame = instruction_frame(tag);
         let privileges = exact_privileges(tag);
-        assert_eq!(frame.roles().len(), privileges.len());
-        let exact = &privileges;
+        let exact = privileges
+            .get(..frame.roles().len())
+            .expect("largest exact frame fits test buffer");
         assert_eq!(
             exact
                 .get(..9)
@@ -506,7 +513,9 @@ mod tests {
             );
         }
 
-        let mut escalated = *exact;
+        let mut escalated: [AccountPrivilege; 10] = exact
+            .try_into()
+            .expect("CreatePositionAndSplit has ten roles");
         for (actual, required) in escalated.iter_mut().zip(frame.roles()) {
             if !required.is_signer() {
                 actual.is_signer = true;
