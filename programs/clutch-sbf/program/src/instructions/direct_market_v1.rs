@@ -878,8 +878,10 @@ pub(crate) fn authenticate_direct_price_precondition_v1(
 /// b2 Selection, and read-only Clock. Action 5 appends the writable submitter,
 /// System program, and exactly one evicted refund owner only when replacement
 /// occurs. Action 8 appends the complete sorted unique refund-owner vector
-/// derived from b2. No caller index chooses verification, selection, or refund
-/// membership; b2's canonical state fixes every suffix coordinate.
+/// derived from b2. Actions 6..=8 then append immutable liveness policy,
+/// writable Candidate, writable keeper signer, and immutable writable payer.
+/// No caller index, work amount, work ordinal, or refund membership exists;
+/// b2 and b3 fix every suffix coordinate.
 pub(crate) fn process_direct_selection_lifecycle_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -929,8 +931,12 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
                 index += 1;
             }
         }
-        DirectMarketAction::FinalizeSelection => {
-            require(accounts.len() <= 7, ClutchError::AccountCount)?;
+        DirectMarketAction::FinalizeSelection => require(
+            accounts.len() >= 8 && accounts.len() <= 11,
+            ClutchError::AccountCount,
+        )?,
+        DirectMarketAction::BeginVerification | DirectMarketAction::VerifyCandidate => {
+            require_count(accounts, 8)?
         }
         _ => require_count(accounts, 4)?,
     }
@@ -1089,8 +1095,11 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
                 refunds.total_lamports == bond_principal_before,
                 ClutchError::MismatchedState,
             )?;
-            let expected_count = 4usize
+            let refund_end = 4usize
                 .checked_add(usize::from(refunds.refund_count))
+                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+            let expected_count = refund_end
+                .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1)
                 .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
             require_count(accounts, expected_count)?;
             let mut index = 0usize;
@@ -1150,14 +1159,64 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
         ClutchError::MismatchedState,
     )?;
 
-    // All hostile account/meta checks and pure checks precede the first
-    // mutation. SVM transaction atomicity joins the principal movement and
-    // these three semantic postimages into one transition.
+    let liveness_start = match action {
+        DirectMarketAction::BeginVerification | DirectMarketAction::VerifyCandidate => 4usize,
+        DirectMarketAction::FinalizeSelection => {
+            let refunds = plan
+                .candidate_bond_refunds
+                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+            4usize
+                .checked_add(usize::from(refunds.refund_count))
+                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+        }
+        DirectMarketAction::SubmitCandidate => 0usize,
+        _ => return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+    };
+    let bound_replay = match action {
+        DirectMarketAction::BeginVerification
+        | DirectMarketAction::VerifyCandidate
+        | DirectMarketAction::FinalizeSelection => {
+            require_direct_candidate_liveness_aliases_v1(
+                accounts,
+                liveness_start,
+                if action == DirectMarketAction::FinalizeSelection {
+                    4
+                } else {
+                    liveness_start
+                },
+            )?;
+            let runtime_action = match action {
+                DirectMarketAction::BeginVerification => {
+                    clutch_direct_market_runtime::DirectMarketActionV1::BeginVerification
+                }
+                DirectMarketAction::VerifyCandidate => {
+                    clutch_direct_market_runtime::DirectMarketActionV1::VerifyCandidate
+                }
+                DirectMarketAction::FinalizeSelection => {
+                    clutch_direct_market_runtime::DirectMarketActionV1::FinalizeSelection
+                }
+                _ => return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+            };
+            Some(apply_direct_candidate_work_v1(
+                program_id,
+                &accounts[liveness_start..],
+                &accounts[1],
+                &plan.state,
+                &plan.selection,
+                runtime_action,
+            )?)
+        }
+        DirectMarketAction::SubmitCandidate => None,
+        _ => return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+    };
+
+    // SVM transaction atomicity joins any candidate-bond movement, the shared
+    // Candidate work transition, and these three semantic postimages.
     write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
     write_direct_action_replay_v1(
         &accounts[1],
         replay.bump(),
-        plan.state.replay,
+        bound_replay.unwrap_or(plan.state.replay),
         plan.state.root,
     )?;
     write_direct_selection_v1(
@@ -1166,6 +1225,41 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
         plan.selection,
         plan.state.root,
     )
+}
+
+/// Require the canonical liveness suffix to be disjoint from semantic state.
+/// Keeper and immutable payer may alias each other and may alias only the
+/// already-derived native-lamport recipient suffix beginning at
+/// `recipient_start`; they can never alias b1/b2/b3, policy, or Candidate.
+fn require_direct_candidate_liveness_aliases_v1(
+    accounts: &[AccountInfo<'_>],
+    liveness_start: usize,
+    recipient_start: usize,
+) -> Outcome<()> {
+    require(
+        recipient_start <= liveness_start
+            && accounts.len()
+                == liveness_start
+                    .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::AccountCount,
+    )?;
+    let policy = &accounts[liveness_start];
+    let candidate = &accounts[liveness_start + 1];
+    let keeper = &accounts[liveness_start + 2];
+    let payer = &accounts[liveness_start + 3];
+    let mut index = 0usize;
+    while index < liveness_start {
+        require(
+            policy.key != accounts[index].key
+                && candidate.key != accounts[index].key
+                && (keeper.key != accounts[index].key || index >= recipient_start)
+                && (payer.key != accounts[index].key || index >= recipient_start),
+            ClutchError::AccountAlias,
+        )?;
+        index += 1;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2858,7 +2952,10 @@ pub(crate) fn process_direct_retire_terminal_v1(
 /// requires the canonical batch preimage, Realm revenue record, and revenue
 /// preimage. When the immutable policy can credit treasury, its exact
 /// PositionV3/GEN1 pair is the final suffix and may alias an endpoint only as
-/// the complete pair. Lapse actions admit no fee suffix.
+/// the complete pair. Lapse actions admit no fee suffix. Action 8 alone
+/// appends the canonical four-account Candidate liveness suffix after every
+/// complete bond-refund owner; actions 9..=12 remain separately fail-closed
+/// until their exact work join is wired.
 pub(crate) fn process_direct_economic_terminal_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -2915,12 +3012,19 @@ pub(crate) fn process_direct_economic_terminal_v1(
     let base_count = endpoint_end
         .checked_add(fee_suffix_count)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let liveness_suffix_count = if action == DirectMarketAction::FinalizeSelection {
+        DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1
+    } else {
+        0usize
+    };
+    let minimum_count = base_count
+        .checked_add(liveness_suffix_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let maximum_count = minimum_count
+        .checked_add(3)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require(
-        accounts.len() >= base_count
-            && accounts.len()
-                <= base_count
-                    .checked_add(3)
-                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+        accounts.len() >= minimum_count && accounts.len() <= maximum_count,
         ClutchError::AccountCount,
     )?;
     require_distinct(&accounts[..12])?;
@@ -3055,8 +3159,11 @@ pub(crate) fn process_direct_economic_terminal_v1(
     let refund_count = plan
         .candidate_bond_refunds
         .map_or(0usize, |refunds| usize::from(refunds.refund_count));
-    let expected_count = base_count
+    let refund_end = base_count
         .checked_add(refund_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let expected_count = refund_end
+        .checked_add(liveness_suffix_count)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require_count(accounts, expected_count)?;
     if let Some(refunds) = plan.candidate_bond_refunds {
@@ -3112,6 +3219,24 @@ pub(crate) fn process_direct_economic_terminal_v1(
         )?;
     }
 
+    let bound_replay = if action == DirectMarketAction::FinalizeSelection {
+        require_direct_candidate_liveness_aliases_v1(
+            accounts,
+            refund_end,
+            base_count,
+        )?;
+        Some(apply_direct_candidate_work_v1(
+            program_id,
+            &accounts[refund_end..],
+            &accounts[1],
+            &plan.state,
+            &plan.selection,
+            clutch_direct_market_runtime::DirectMarketActionV1::FinalizeSelection,
+        )?)
+    } else {
+        None
+    };
+
     index = 0;
     while index < endpoint_count {
         let first = direct_endpoint_first_v1(index)?;
@@ -3147,7 +3272,7 @@ pub(crate) fn process_direct_economic_terminal_v1(
     write_direct_action_replay_v1(
         &accounts[1],
         direct_replay.bump(),
-        plan.state.replay,
+        bound_replay.unwrap_or(plan.state.replay),
         plan.state.root,
     )?;
     write_direct_selection_v1(
@@ -4122,6 +4247,9 @@ mod tests {
             18,
         );
         assert!(18 <= DIRECT_MARKET_V1_MAX_ACCOUNTS);
+        assert_eq!(4 + 3 + DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1, 11);
+        assert_eq!(12 + 2 * 3 + DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1, 22);
+        assert!(22 <= DIRECT_MARKET_V1_MAX_ACCOUNTS);
         assert_eq!(direct_endpoint_first_from_v1(12, 0).unwrap(), 12);
         assert_eq!(direct_endpoint_first_from_v1(12, 1).unwrap(), 15);
         assert_eq!(direct_endpoint_first_from_v1(19, 0).unwrap(), 19);
