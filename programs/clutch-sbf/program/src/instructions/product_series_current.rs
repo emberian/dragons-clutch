@@ -2393,8 +2393,8 @@ where
     }))
 }
 
-/// Consume the exact current a4/a5/ClaimLedger terminal postwrite and latch the
-/// Fractional terminal states in RootV2 before any family rent is disposed.
+/// Consume the exact move-only physical a4/a5 terminal receipt and latch its
+/// terminal states in RootV2 only after the family rent has been disposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_terminal_postwrite_v2<'next, A>(
     program_id: &Pubkey,

@@ -40,6 +40,8 @@ use super::fractional_redemption::{
     authenticate_fractional_runtime_release_v1,
     consume_fractional_family_admission_postwrite_v2,
     consume_fractional_family_terminal_postwrite_v2,
+    execute_fractional_family_physical_terminal_v2,
+    prepare_fractional_family_physical_terminal_v2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -628,15 +630,8 @@ pub(super) fn process_initialize(
     require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
 }
 
-fn set_lamports(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
-    let mut value = account
-        .try_borrow_mut_lamports()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    **value = amount;
-    Ok(())
-}
-
-/// Execute action 10, consuming Product terminality before either deletion.
+/// Execute action 10, physically closing Fractional before Product consumes
+/// the sole move-only terminal receipt.
 #[inline(never)]
 pub(super) fn process_close_empty_ledger(
     program_id: &Pubkey,
@@ -803,23 +798,8 @@ pub(super) fn process_close_empty_ledger(
         neutral,
     )
     .map_err(map_fractional)?;
-    let policy_funding = close.policy_funding();
-    let ledger_funding = close.ledger_funding();
     let refund = &accounts[aux + terminal_aux::REFUND_OWNER];
     let sink = &accounts[aux + terminal_aux::NEUTRAL_SINK];
-    require(
-        refund.key.to_bytes() == policy_funding.payer().bytes()
-            && refund.key.to_bytes() == ledger_funding.payer().bytes()
-            && sink.key.to_bytes() == policy_funding.neutral_sink().bytes()
-            && sink.key.to_bytes() == ledger_funding.neutral_sink().bytes()
-            && refund.owner == &SYSTEM_PROGRAM_ID
-            && sink.owner == &SYSTEM_PROGRAM_ID
-            && refund.data_is_empty()
-            && sink.data_is_empty()
-            && !refund.executable
-            && !sink.executable,
-        ClutchError::MismatchedState,
-    )?;
     close
         .claim_ledger_after()
         .claim_ledger_after()
@@ -838,70 +818,34 @@ pub(super) fn process_close_empty_ledger(
         &accounts[LEDGER],
         &accounts[CLAIM_LEDGER],
     )?;
+    let prepared = prepare_fractional_family_physical_terminal_v2(
+        postwrite,
+        &accounts[POLICY],
+        &accounts[LEDGER],
+        refund,
+        sink,
+    )?;
+    let physical = execute_fractional_family_physical_terminal_v2(
+        prepared,
+        &accounts[POLICY],
+        &accounts[LEDGER],
+        refund,
+        sink,
+    )?;
     let mut product_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
     let mut product_successor = Box::new(MarketLifecycleRootV2::decode_buffer());
     let mut product_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
     let accepted = consume_fractional_family_terminal_postwrite_v2(
         program_id,
         &accounts[ROOT],
-        postwrite,
+        physical,
         &schedule,
         &graph,
         &mut product_before,
         &mut product_successor,
         &mut product_after,
     )?;
-    require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)?;
-
-    let refund_amount = policy_funding
-        .payer_refund_lamports()
-        .checked_add(ledger_funding.payer_refund_lamports())
-        .ok_or(ClutchError::Arithmetic)?;
-    let neutral_amount = policy_funding
-        .neutral_lamports()
-        .checked_add(ledger_funding.neutral_lamports())
-        .ok_or(ClutchError::Arithmetic)?;
-    let refund_after = refund
-        .lamports()
-        .checked_add(refund_amount)
-        .ok_or(ClutchError::Arithmetic)?;
-    let sink_after = sink
-        .lamports()
-        .checked_add(neutral_amount)
-        .ok_or(ClutchError::Arithmetic)?;
-    require(
-        refund_amount
-            .checked_add(neutral_amount)
-            .ok_or(ClutchError::Arithmetic)?
-            == accounts[POLICY]
-                .lamports()
-                .checked_add(accounts[LEDGER].lamports())
-                .ok_or(ClutchError::Arithmetic)?,
-        ClutchError::MismatchedState,
-    )?;
-    set_lamports(&accounts[POLICY], 0)?;
-    set_lamports(&accounts[LEDGER], 0)?;
-    set_lamports(refund, refund_after)?;
-    set_lamports(sink, sink_after)?;
-    accounts[POLICY]
-        .resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    accounts[POLICY].assign(&SYSTEM_PROGRAM_ID);
-    accounts[LEDGER]
-        .resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    accounts[LEDGER].assign(&SYSTEM_PROGRAM_ID);
-    require(
-        accounts[POLICY].lamports() == 0
-            && accounts[LEDGER].lamports() == 0
-            && accounts[POLICY].data_is_empty()
-            && accounts[LEDGER].data_is_empty()
-            && accounts[POLICY].owner == &SYSTEM_PROGRAM_ID
-            && accounts[LEDGER].owner == &SYSTEM_PROGRAM_ID
-            && refund.lamports() == refund_after
-            && sink.lamports() == sink_after,
-        ClutchError::MismatchedState,
-    )
+    require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
 }
 
 #[cfg(test)]
@@ -955,5 +899,23 @@ mod adversarial_tests {
             graph + terminal_aux::COLLATERAL_TOKEN_PROGRAMDATA,
             graph + terminal_aux::CLAIM_TOKEN_PROGRAM,
         ));
+    }
+
+    #[test]
+    fn action_ten_closes_fractional_accounts_before_product_consumption() {
+        let source = include_str!("fractional_lifecycle.rs");
+        let start = source
+            .find("pub(super) fn process_close_empty_ledger")
+            .expect("action-10 handler");
+        let body = &source[start..];
+        let physical_close = body
+            .find("execute_fractional_family_physical_terminal_v2(")
+            .expect("physical terminal execution");
+        let product_consume = body
+            .find("consume_fractional_family_terminal_postwrite_v2(")
+            .expect("Product terminal consumption");
+        assert!(physical_close < product_consume);
+        assert!(body.contains("prepare_fractional_family_physical_terminal_v2("));
+        assert!(!body[..product_consume].contains("accepted.id()"));
     }
 }
