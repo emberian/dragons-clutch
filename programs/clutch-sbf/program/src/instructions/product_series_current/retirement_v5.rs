@@ -86,6 +86,8 @@ const PRODUCT_SERIES_LIFECYCLE_TERMINAL_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-lifecycle-terminal/v5\0";
 const PRODUCT_SOURCE_SHARED_CORE_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-source-shared-core-postwrite/v5\0";
+const PRODUCT_MARKET_BEGIN_RETIREMENT_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-market-begin-retirement/v5\0";
 
 fn hashv(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
@@ -2220,6 +2222,184 @@ pub(crate) fn retire_failed_source_and_count_series_link_v5(
     )
 }
 
+/// Exact private authority for sealing the hostile current family aggregator.
+/// It is derived only inside the RootV3 postwriter after the final Series link
+/// has physically retired; callers cannot provide an aggregate identity.
+struct ExactProductMarketBeginRetirementAuthorityV5 {
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    family_prestate_id: ContentId,
+}
+
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactProductMarketBeginRetirementAuthorityV5 {
+    fn authenticate_begin_retirement(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+    ) -> clutch_product_series::Result<()> {
+        let current_id = current.semantic_id()?.content_id();
+        if self.market_instance_id != current.binding().market_instance_id
+            || self.generation != current.binding().generation
+            || self.family_prestate_id != current_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Move-only Product authority proving the exact final-Series postwrite was
+/// consumed into the one-way RootV3 Active→Retiring transition.  It owns the
+/// unique Source Market terminal until that capability is latched next.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductMarketRetiringV5 {
+    id: ContentId,
+    source: AuthenticatedProductSourceSeriesRetirementV5,
+    family_prestate_id: ContentId,
+    root_account: Pubkey,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+}
+
+impl AuthenticatedProductMarketRetiringV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn source_series_retirement_id(&self) -> ContentId {
+        self.source.id
+    }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+}
+
+/// Seal new Series admissions after the final physically retired Source link.
+/// All dynamic link counts and the rolling link transcript come from the
+/// hostile RootV3 and the retained Source Market terminal; no caller count or
+/// identity participates.
+#[inline(never)]
+pub(crate) fn begin_current_product_market_retirement_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    source: AuthenticatedProductSourceSeriesRetirementV5,
+) -> Outcome<AuthenticatedProductMarketRetiringV5> {
+    let facts = source.source_market_terminal_facts;
+    require(
+        source.source_market_terminal.is_some()
+            && source.source_projection.is_none()
+            && source.source_shared_core_projection_id.is_zero()
+            && source.root_account == *root_account.key
+            && facts.root_account.bytes() == root_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let market_instance_id = MarketInstanceV2Id::from_bytes(facts.market_instance_id.bytes());
+    let mut root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        facts.generation,
+        true,
+        &mut root_value,
+    )?;
+    require(
+        root.state().phase() == MarketLifecyclePhaseV3::Active
+            && root.binding_id() == facts.root_binding_id
+            && root.state().live_series_links() == 0
+            && root.state().admitted_series_links() == facts.admitted_series_links
+            && root.state().retired_series_links() == facts.retired_series_links
+            && root.state().series_link_transcript_id() == facts.series_link_transcript_id
+            && root.state().transition_sequence() >= facts.root_transition_sequence_after
+            && root
+                .state()
+                .shared_core_terminal_receipts()
+                .iter()
+                .all(|id| id.is_zero()),
+        ClutchError::MismatchedState,
+    )?;
+    let family_prestate_id = root
+        .state()
+        .product_families()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let authority = ExactProductMarketBeginRetirementAuthorityV5 {
+        market_instance_id,
+        generation: facts.generation,
+        family_prestate_id,
+    };
+    let mut next = Box::new(clutch_product_series::MarketLifecycleRootV3::decode_buffer());
+    root.state()
+        .begin_retirement_into(&authority, &mut next)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data_before_id = root.data_id();
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    drop(root);
+    write_market_lifecycle_root_v3(root_account, &root_value, &next)?;
+    let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        facts.generation,
+        true,
+        &mut reopened_value,
+    )?;
+    require(
+        reopened.state() == next.as_ref()
+            && reopened.state().phase() == MarketLifecyclePhaseV3::Retiring
+            && reopened.state().transition_sequence()
+                == root_transition_sequence_before
+                    .checked_add(1)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_MARKET_BEGIN_RETIREMENT_DOMAIN_V5,
+        program_id.as_ref(),
+        &source.id.bytes(),
+        &source.source_market_terminal_id.bytes(),
+        &family_prestate_id.bytes(),
+        root_account.key.as_ref(),
+        &root_data_before_id.bytes(),
+        &reopened.data_id().bytes(),
+        &root_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &reopened.state().transition_sequence().to_le_bytes(),
+        &facts.series_link_transcript_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductMarketRetiringV5 {
+        id,
+        source,
+        family_prestate_id,
+        root_account: *root_account.key,
+        root_data_before_id,
+        root_data_after_id: reopened.data_id(),
+        root_authentication_before_id,
+        root_authentication_after_id: reopened.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: reopened.state().transition_sequence(),
+    })
+}
+
 /// Consume Source's sole move-only Market terminal into the current RootV3
 /// shared-core latch. The Product Source-series receipt is transformed in
 /// place: no second Product authority or detachable Source receipt is
@@ -2237,8 +2417,22 @@ pub(crate) fn consume_source_market_shared_core_v5(
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
     funding_account: &AccountInfo<'_>,
-    mut source: AuthenticatedProductSourceSeriesRetirementV5,
+    retiring: AuthenticatedProductMarketRetiringV5,
 ) -> Outcome<AuthenticatedProductSourceSeriesRetirementV5> {
+    let AuthenticatedProductMarketRetiringV5 {
+        id: retiring_id,
+        source: mut source,
+        family_prestate_id: _,
+        root_account: retiring_root_account,
+        root_data_before_id: _,
+        root_data_after_id: retiring_root_data_id,
+        root_authentication_before_id: _,
+        root_authentication_after_id: retiring_root_authentication_id,
+        root_semantic_before_id: _,
+        root_semantic_after_id: retiring_root_semantic_id,
+        root_transition_sequence_before: _,
+        root_transition_sequence_after: retiring_root_sequence,
+    } = retiring;
     let terminal = source
         .source_market_terminal
         .take()
@@ -2247,6 +2441,8 @@ pub(crate) fn consume_source_market_shared_core_v5(
     require(
         source.source_projection.is_none()
             && source.source_shared_core_projection_id.is_zero()
+            && !retiring_id.is_zero()
+            && retiring_root_account == *root_account.key
             && terminal.id() == source.source_market_terminal_id
             && facts == source.source_market_terminal_facts
             && source.failure.failure.market_instance_id.bytes()
@@ -2301,9 +2497,12 @@ pub(crate) fn consume_source_market_shared_core_v5(
     require(
         root.state().phase() == MarketLifecyclePhaseV3::Retiring
             && root.binding_id() == facts.root_binding_id
+            && root.data_id() == retiring_root_data_id
+            && root.authentication_id() == retiring_root_authentication_id
+            && root.semantic_id() == retiring_root_semantic_id
+            && root.state().transition_sequence() == retiring_root_sequence
             && root.state().live_series_links() == 0
             && root.state().admitted_series_links() == facts.admitted_series_links
-            && root.state().retired_series_links() == facts.retired_series_links
             && root.state().series_link_transcript_id() == facts.series_link_transcript_id
             && root.state().transition_sequence() > facts.root_transition_sequence_after
             && root
@@ -2378,6 +2577,7 @@ pub(crate) fn consume_source_market_shared_core_v5(
     let id = hashv(&[
         PRODUCT_SOURCE_SHARED_CORE_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
+        &retiring_id.bytes(),
         &prior_product_id.bytes(),
         &source_market_terminal_id.bytes(),
         &family_projection.id.bytes(),

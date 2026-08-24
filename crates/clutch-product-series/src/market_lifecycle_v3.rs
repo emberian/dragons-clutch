@@ -1335,6 +1335,21 @@ impl MarketLifecycleRootV3 {
         self,
         authority: &A,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.begin_retirement_into(authority, &mut output)?;
+        Ok(output)
+    }
+
+    /// Frame-bounded one-way retirement transition into caller-owned RootV3
+    /// storage.  The adapter uses this form so the complete 2,480-byte
+    /// successor is never retained as an additional instruction-frame local.
+    pub fn begin_retirement_into<
+        A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized,
+    >(
+        &self,
+        authority: &A,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV3::Active
             || self.live_series_links != 0
@@ -1345,17 +1360,16 @@ impl MarketLifecycleRootV3 {
             return Err(Error::WorkIncomplete);
         }
         let product_families = self.product_families.begin_retirement(authority)?;
-        let next = Self {
+        *output = Self {
             phase: MarketLifecyclePhaseV3::Retiring,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
             product_families,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Consume one mandatory shared-core terminal receipt exactly once.
