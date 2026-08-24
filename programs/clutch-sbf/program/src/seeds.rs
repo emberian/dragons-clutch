@@ -1824,6 +1824,8 @@ pub fn treasury_service_ledger_v1_pda(
 pub const SEED_OUTCOME_MINT: &[u8] = b"dragons-clutch:outcome-mint:v1";
 /// Full-width MarketInstanceV2 outcome-mint seed prefix.
 pub const SEED_OUTCOME_MINT_V2: &[u8] = b"dc:outcome-mint:v2";
+/// Current release-selected per-outcome collateral-custody seed prefix.
+pub const SEED_OUTCOME_CUSTODY_V1: &[u8] = b"dc:outcome-custody:v1";
 /// Hoard signing-authority seed prefix; 28 bytes.
 ///
 /// Shortened from the plan's `hoard-authority`, which does not fit a seed.
@@ -1861,6 +1863,27 @@ pub fn outcome_mint_v2_pda(
         &[
             SEED_OUTCOME_MINT_V2,
             market_instance_v2_id,
+            &[outcome_index],
+        ],
+    )
+}
+
+/// Canonical current collateral custody paired with one active OutcomeMintV2.
+///
+/// Generation is explicit so a retired MarketInstance identity cannot retain
+/// custody authority in a later Product lifecycle generation.
+pub fn outcome_custody_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+    outcome_index: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_OUTCOME_CUSTODY_V1,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
             &[outcome_index],
         ],
     )
@@ -1908,7 +1931,7 @@ mod tests {
     /// `hoard-authority` prefix was caught at 33 bytes.
     #[test]
     fn every_seed_prefix_fits_one_seed() {
-        const PREFIXES: [&[u8]; 47] = [
+        const PREFIXES: [&[u8]; 48] = [
             SEED_REVENUE_POLICY,
             SEED_EPOCH_WINDOW,
             SEED_REALM,
@@ -1954,6 +1977,7 @@ mod tests {
             SEED_RESOLUTION_WORK,
             SEED_RESOLUTION_RESERVE,
             SEED_OUTCOME_MINT,
+            SEED_OUTCOME_CUSTODY_V1,
             SEED_HOARD_AUTHORITY,
             SEED_HOARD_TOKEN,
         ];
@@ -1967,6 +1991,7 @@ mod tests {
         }
         assert_eq!(SEED_HOARD_AUTHORITY.len(), 28);
         assert_eq!(SEED_OUTCOME_MINT.len(), 30);
+        assert_eq!(SEED_OUTCOME_CUSTODY_V1.len(), 21);
         assert_eq!(SEED_HOARD_TOKEN.len(), 29);
         assert_eq!(SEED_BATCH_POLICY.len(), 30);
         assert_eq!(SEED_DIRECT_BATCH_POLICY_V3.len(), 19);
