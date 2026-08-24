@@ -222,6 +222,20 @@ struct CompactionTokenSnapshotV1 {
     identity_id: [u8; 32],
 }
 
+/// Exact current wrapper handlers physically present in this executable.
+pub(crate) const STRUCTURED_WRAPPER_HANDLER_ACTION_MASK_V1: u16 =
+    (1_u16 << StructuredClaimActionV1::CreateDescriptor.tag())
+        | (1_u16 << StructuredClaimActionV1::WrapFull.tag())
+        | (1_u16 << StructuredClaimActionV1::UnwrapFull.tag())
+        | (1_u16 << StructuredClaimActionV1::CompactDonation.tag())
+        | (1_u16 << StructuredClaimActionV1::RedeemTerminal.tag())
+        | (1_u16 << StructuredClaimActionV1::RetireDescriptor.tag());
+
+const _: () = assert!(
+    STRUCTURED_WRAPPER_HANDLER_ACTION_MASK_V1
+        == clutch_structured_claim_adapter::STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1
+);
+
 /// Process the exact enabled wrapper profile.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) -> Result<()> {
     let envelope = admit_runtime_envelope_v1(input).map_err(|_| WrapperError::Instruction)?;
