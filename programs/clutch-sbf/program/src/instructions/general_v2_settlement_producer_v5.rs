@@ -9,6 +9,7 @@
 //! expectation is read from payload.
 
 use core::cell::Ref;
+use std::boxed::Box;
 
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
@@ -48,7 +49,8 @@ use super::general_v2_fee_v5::{
     CandidateFeeCollectionExpectationV5,
 };
 use super::general_v2_settlement_traversal_v5::{
-    authenticate_settlement_traversal_v5, SettlementTraversalAccountFrameV5,
+    authenticate_settlement_traversal_v5, AuthenticatedSettlementTraversalV5,
+    SettlementTraversalAccountFrameV5,
 };
 
 /// Fixed action-39 roles before the optional fee suffix.
@@ -113,6 +115,36 @@ fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     Ok(Ref::map(data, |bytes| &**bytes))
+}
+
+#[inline(never)]
+fn decode_epoch_boxed(account: &AccountInfo<'_>) -> Outcome<Box<GeneralEpochV6AccountV1>> {
+    Ok(Box::new(GeneralEpochV6AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn decode_window_boxed(account: &AccountInfo<'_>) -> Outcome<Box<CandidateWindowV5AccountV1>> {
+    Ok(Box::new(CandidateWindowV5AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn decode_node_boxed(account: &AccountInfo<'_>) -> Outcome<Box<AdmissionNodeV4AccountV1>> {
+    Ok(Box::new(AdmissionNodeV4AccountV1::decode(&borrow_data(account)?)?))
+}
+
+#[inline(never)]
+fn authenticate_traversal_boxed<'a, 'info>(
+    program_id: &Pubkey,
+    frame: SettlementTraversalAccountFrameV5<'a, 'info>,
+) -> Outcome<Box<AuthenticatedSettlementTraversalV5<'info>>> {
+    Ok(Box::new(authenticate_settlement_traversal_v5(program_id, frame)?))
+}
+
+#[inline(never)]
+fn prepare_root_plan_boxed<'a>(
+    request: InitializeSettlementRootV1<'a>,
+) -> Outcome<Box<contract::StreamingSettlementRootInitializationV1<'a>>> {
+    Ok(Box::new(contract::prepare_streaming_settlement_root_v1(request)?))
 }
 
 fn require_program_state(
@@ -310,9 +342,9 @@ fn initialize_settlement_root(
         Some(contract::ADMISSION_NODE_ACCOUNT_BYTES_V2),
     )?;
 
-    let epoch = GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[IX_EPOCH])?)?;
-    let window = CandidateWindowV5AccountV1::decode(&borrow_data(&accounts[IX_WINDOW])?)?;
-    let node = AdmissionNodeV4AccountV1::decode(&borrow_data(&accounts[IX_NODE])?)?;
+    let epoch = decode_epoch_boxed(&accounts[IX_EPOCH])?;
+    let window = decode_window_boxed(&accounts[IX_WINDOW])?;
+    let node = decode_node_boxed(&accounts[IX_NODE])?;
 
     let selected_fee_pda = seeds::general_v2_selected_fee_record_pda(
         program_id,
@@ -357,7 +389,7 @@ fn initialize_settlement_root(
     require_system_program(&accounts[ix_system])?;
     let rent = read_rent(&accounts[ix_rent])?;
     let current_slot = read_clock_slot(&accounts[ix_clock])?;
-    let authenticated = authenticate_settlement_traversal_v5(
+    let authenticated = authenticate_traversal_boxed(
         program_id,
         SettlementTraversalAccountFrameV5 {
             retained_feed: &accounts[IX_FEED],
@@ -532,7 +564,7 @@ fn initialize_settlement_root(
         &rent,
         contract::FINAL_POT_ACCOUNT_BYTES,
     )?;
-    let plan = contract::initialize_settlement_root_v1(InitializeSettlementRootV1 {
+    let plan = prepare_root_plan_boxed(InitializeSettlementRootV1 {
         root_account: id(accounts[ix_root].key),
         root_bump: root_pda.1,
         epoch_account: request.epoch,
@@ -610,8 +642,8 @@ fn initialize_settlement_root(
         root_rent.refundable_principal,
         locator_rent.refundable_principal,
         adjacency_rent.refundable_principal,
-        plan.cash_pot().map(|_| cash_rent.refundable_principal),
-        plan.final_pot().map(|_| final_rent.refundable_principal),
+        plan.creates_cash_pot().then_some(cash_rent.refundable_principal),
+        plan.creates_final_pot().then_some(final_rent.refundable_principal),
     )
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     require(
@@ -671,7 +703,7 @@ fn initialize_settlement_root(
         adjacency_rent,
         &adjacency_seeds,
     )?;
-    if let Some(cash) = plan.cash_pot() {
+    if let Some(cash) = plan.cash_pot()? {
         let cash_bump = [cash_pda.1];
         let cash_seeds: [&[u8]; 4] = [
             seeds::SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
@@ -698,7 +730,7 @@ fn initialize_settlement_root(
             .encode(out)
         })?;
     }
-    if let Some(final_pot) = plan.final_pot() {
+    if let Some(final_pot) = plan.final_pot()? {
         let final_bump = [final_pda.1];
         let final_seeds: [&[u8]; 4] = [
             final_seed.domain(),
@@ -743,8 +775,8 @@ fn initialize_settlement_root(
             &mut adjacency_output,
         ))?;
     }
-    encode_account(&accounts[IX_EPOCH], |out| plan.epoch().encode(out))?;
-    encode_account(&accounts[IX_WINDOW], |out| plan.window().encode(out))
+    encode_account(&accounts[IX_EPOCH], |out| plan.encode_epoch_successor(out))?;
+    encode_account(&accounts[IX_WINDOW], |out| plan.encode_window_successor(out))
 }
 
 #[cfg(test)]

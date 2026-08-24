@@ -1496,6 +1496,115 @@ impl InitializeSettlementRootPlanV1 {
     }
 }
 
+/// Borrow-bound action-39 plan that retains only the base root value.
+///
+/// Epoch and Window prestates stay borrowed from the single validated request;
+/// cash-pot and FinalPot outputs are rederived from the root's canonical child
+/// partition. The SBF caller can therefore encode every non-root poststate
+/// directly into account memory without retaining the larger materialized
+/// [`InitializeSettlementRootPlanV1`].
+#[derive(Debug)]
+pub struct StreamingSettlementRootInitializationV1<'a> {
+    root_account: Id32,
+    epoch_before: &'a GeneralEpochV6AccountV1,
+    window_before: &'a CandidateWindowV5AccountV1,
+    root: SettlementRootV1AccountV1,
+}
+
+impl StreamingSettlementRootInitializationV1<'_> {
+    /// Canonical counted base root consumed by the indexed-root encoder.
+    pub const fn root(&self) -> &SettlementRootV1AccountV1 {
+        &self.root
+    }
+
+    /// Whether action 39 creates the cash pot now. Merge creates it later in
+    /// the inventory transition that also advances the root.
+    pub const fn creates_cash_pot(&self) -> bool {
+        self.root.cash_pot_state == SettlementRootChildStateV1::Live
+    }
+
+    /// Whether the selected relation has one live split/merge FinalPot.
+    pub const fn creates_final_pot(&self) -> bool {
+        self.root.final_pot_state == SettlementRootChildStateV1::Live
+    }
+
+    /// Encode the exact finalized Epoch successor into caller-owned storage.
+    pub fn encode_epoch_successor(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        finalize_epoch_for_settlement_root(self.epoch_before)?.encode(output)
+    }
+
+    /// Encode the exact finalized Window successor into caller-owned storage.
+    pub fn encode_window_successor(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        self.window_successor()?.encode(output)
+    }
+
+    /// Reproduce the opening cash-pot semantic only when the root marks it
+    /// live in this creation action.
+    pub fn cash_pot(&self) -> Result<Option<SettlementCashPotV1>, CodecError> {
+        if !self.creates_cash_pot() {
+            return Ok(None);
+        }
+        SettlementCashPotV1::new(self.root.cash_pot_expectation()?)
+            .map(Some)
+            .map_err(|_| CodecError::InvalidState)
+    }
+
+    /// Reproduce the one exact split/merge FinalPot initializer directly from
+    /// the root-owned virtual-inventory and rent facts.
+    pub fn final_pot(&self) -> Result<Option<SettlementFinalPotInitializationV1>, CodecError> {
+        let kind = match self.root.virtual_cash_direction {
+            VirtualCashDirectionV1::None => return Ok(None),
+            VirtualCashDirectionV1::Split => VirtualReceiptKindV1::Split,
+            VirtualCashDirectionV1::Merge => VirtualReceiptKindV1::Merge,
+        };
+        if !self.creates_final_pot() {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(Some(SettlementFinalPotInitializationV1 {
+            account: self.root.final_pot,
+            market: self.root.market,
+            epoch: self.root.epoch,
+            candidate: self.root.settlement_candidate_id,
+            owner_order_set_digest: self.root.owner_order_set_digest,
+            settlement_witness_digest: self.root.settlement_witness_digest,
+            kind,
+            authorized_complete_set_atoms: self.root.virtual_cash_atoms,
+            outcome_count: self.root.outcome_count,
+            rent: self
+                .root
+                .final_pot_rent
+                .get()?
+                .ok_or(CodecError::InvalidState)?,
+            stored_bump: self.root.final_pot_bump,
+        }))
+    }
+
+    fn window_successor(&self) -> Result<CandidateWindowV5AccountV1, CodecError> {
+        let mut successor = *self.window_before.base();
+        successor.finalized_slot = self.root.selected_slot;
+        successor.selected_candidate_artifact = self.root_account;
+        successor.best_candidate_node = Id32::ZERO;
+        successor.best_settlement_candidate_id = Id32::ZERO;
+        successor.best_rank_key = [0; SCORE_V2_Q_RANK_CAPACITY];
+        successor.best_ordinal = 0;
+        CandidateWindowV5AccountV1::new(successor)
+    }
+
+    fn materialize(self) -> Result<InitializeSettlementRootPlanV1, CodecError> {
+        let epoch = finalize_epoch_for_settlement_root(self.epoch_before)?;
+        let window = self.window_successor()?;
+        let cash_pot = self.cash_pot()?;
+        let final_pot = self.final_pot()?;
+        Ok(InitializeSettlementRootPlanV1 {
+            epoch,
+            root: self.root,
+            window,
+            cash_pot,
+            final_pot,
+        })
+    }
+}
+
 /// Exact action-39 FinalPot initialization. This is a creation poststate, not
 /// a caller-authenticated existing-account projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1651,6 +1760,14 @@ pub fn prepare_activate_merge_cash_pot_v1(
 pub fn initialize_settlement_root_v1(
     request: InitializeSettlementRootV1<'_>,
 ) -> Result<InitializeSettlementRootPlanV1, CodecError> {
+    prepare_streaming_settlement_root_v1(request)?.materialize()
+}
+
+/// Validate the complete action-39 semantic request once and retain only the
+/// base root plus borrow-bound Epoch/Window prestates for direct encoding.
+pub fn prepare_streaming_settlement_root_v1<'a>(
+    request: InitializeSettlementRootV1<'a>,
+) -> Result<StreamingSettlementRootInitializationV1<'a>, CodecError> {
     request.epoch.validate()?;
     request.market.validate()?;
     request.window.validate()?;
@@ -1761,12 +1878,11 @@ pub fn initialize_settlement_root_v1(
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let virtual_kind = match direction {
+    match direction {
         VirtualCashDirectionV1::None => {
             if request.feed.virtual_split != 0 || request.feed.virtual_merge != 0 {
                 return Err(CodecError::MismatchedBinding);
             }
-            None
         }
         VirtualCashDirectionV1::Split => {
             if request.feed.virtual_split == 0
@@ -1775,7 +1891,6 @@ pub fn initialize_settlement_root_v1(
             {
                 return Err(CodecError::MismatchedBinding);
             }
-            Some(VirtualReceiptKindV1::Split)
         }
         VirtualCashDirectionV1::Merge => {
             if request.feed.virtual_merge == 0
@@ -1784,9 +1899,8 @@ pub fn initialize_settlement_root_v1(
             {
                 return Err(CodecError::MismatchedBinding);
             }
-            Some(VirtualReceiptKindV1::Merge)
         }
-    };
+    }
     let fee_record = Id32::from_bytes(request.cash_expectation.fee_record);
     let root = SettlementRootV1AccountV1 {
         epoch: request.epoch_account,
@@ -1874,48 +1988,11 @@ pub fn initialize_settlement_root_v1(
         flags: 0,
     };
     root.validate()?;
-    let epoch = finalize_epoch_for_settlement_root(request.epoch)?;
-    let mut window_after = *window;
-    window_after.finalized_slot = request.current_slot;
-    window_after.selected_candidate_artifact = request.root_account;
-    window_after.best_candidate_node = Id32::ZERO;
-    window_after.best_settlement_candidate_id = Id32::ZERO;
-    window_after.best_rank_key = [0; SCORE_V2_Q_RANK_CAPACITY];
-    window_after.best_ordinal = 0;
-    let window = CandidateWindowV5AccountV1::new(window_after)?;
-    let cash_pot = if direction == VirtualCashDirectionV1::Merge {
-        None
-    } else {
-        Some(
-            SettlementCashPotV1::new(request.cash_expectation)
-                .map_err(|_| CodecError::InvalidState)?,
-        )
-    };
-    let final_pot = match virtual_kind {
-        None => None,
-        Some(kind) => Some(SettlementFinalPotInitializationV1 {
-            account: request.final_pot,
-            market: market.market,
-            epoch: request.epoch_account,
-            candidate: node.settlement_candidate_id,
-            owner_order_set_digest: request.owner_order_set_digest,
-            settlement_witness_digest: node.settlement_witness_digest,
-            kind,
-            authorized_complete_set_atoms: request.cash_expectation.virtual_cash_atoms,
-            outcome_count: request.feed.outcome_count,
-            rent: request
-                .final_pot_rent
-                .get()?
-                .ok_or(CodecError::InvalidState)?,
-            stored_bump: request.final_pot_bump,
-        }),
-    };
-    Ok(InitializeSettlementRootPlanV1 {
-        epoch,
+    Ok(StreamingSettlementRootInitializationV1 {
+        root_account: request.root_account,
+        epoch_before: request.epoch,
+        window_before: request.window,
         root,
-        window,
-        cash_pot,
-        final_pot,
     })
 }
 
@@ -2303,6 +2380,54 @@ pub(crate) mod tests {
         let mut hostile = epoch;
         hostile.phase = GeneralEpochPhaseV1::Finalized;
         assert!(finalize_epoch_for_settlement_root(&hostile).is_err());
+    }
+
+    #[test]
+    fn streaming_initialization_matches_materialized_epoch_window_and_singletons() {
+        let epoch = frozen_epoch();
+        let mut root = materializing_root();
+        root.selected_slot = 50;
+        root.validate().unwrap();
+        let mut window = *crate::candidate_rank_v2::tests::window().base();
+        window.verdict_count = 1;
+        window.valid_verdict_count = 1;
+        window.best_candidate_node = root.source_admission_node();
+        window.best_settlement_candidate_id = root.settlement_candidate_id();
+        window.best_rank_key = *root.rank_key();
+        window.best_ordinal = root.selected_ordinal();
+        let window = CandidateWindowV5AccountV1::new(window).unwrap();
+        let plan = StreamingSettlementRootInitializationV1 {
+            root_account: id(99),
+            epoch_before: &epoch,
+            window_before: &window,
+            root,
+        };
+        assert!(plan.creates_cash_pot());
+        assert!(!plan.creates_final_pot());
+        let cash_pot = plan.cash_pot().unwrap();
+        let final_pot = plan.final_pot().unwrap();
+        assert!(cash_pot.is_some());
+        assert_eq!(final_pot, None);
+
+        let mut epoch_bytes = [0u8; GENERAL_EPOCH_ACCOUNT_BYTES];
+        plan.encode_epoch_successor(&mut epoch_bytes).unwrap();
+        let epoch_after = GeneralEpochV6AccountV1::decode(&epoch_bytes).unwrap();
+        assert_eq!(epoch_after, finalize_epoch_for_settlement_root(&epoch).unwrap());
+
+        let mut window_bytes = [0u8; WINDOW_ACCOUNT_BYTES];
+        plan.encode_window_successor(&mut window_bytes).unwrap();
+        let window_after = CandidateWindowV5AccountV1::decode(&window_bytes).unwrap();
+        assert_eq!(window_after.base().finalized_slot, root.selected_slot());
+        assert_eq!(window_after.base().selected_candidate_artifact, id(99));
+        assert_eq!(window_after.base().best_candidate_node, Id32::ZERO);
+        assert_eq!(window_after.base().best_settlement_candidate_id, Id32::ZERO);
+
+        let materialized = plan.materialize().unwrap();
+        assert_eq!(materialized.epoch(), &epoch_after);
+        assert_eq!(materialized.window(), &window_after);
+        assert_eq!(materialized.root(), &root);
+        assert_eq!(materialized.cash_pot(), cash_pot);
+        assert_eq!(materialized.final_pot(), final_pot);
     }
 
     #[test]
