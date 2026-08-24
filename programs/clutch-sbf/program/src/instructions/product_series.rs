@@ -3020,6 +3020,16 @@ impl AuthenticatedSeriesArtifactsV1 {
 }
 
 impl AuthenticatedSeriesArtifactsV4 {
+    /// Product Genesis owner of retained-candidate bond semantics.
+    pub(crate) const fn candidate_lifecycle_policy_id(&self) -> ContentId {
+        self.genesis.candidate_lifecycle_policy_id
+    }
+
+    /// Product Genesis owner of Candidate keeper-work semantics.
+    pub(crate) const fn candidate_liveness_policy_id(&self) -> ContentId {
+        self.genesis.candidate_liveness_policy_id
+    }
+
     /// Apply the complete current registry join without accepting a caller DTO.
     pub fn validate_registry_projection(
         &self,

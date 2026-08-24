@@ -80,15 +80,16 @@ pub use compiler_output_v5::{
     COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
 };
 pub use direct_global_liveness::{
-    DirectGlobalLivenessAllocationV1, DirectGlobalLivenessCapitalizationV1,
-    DirectGlobalLivenessPhaseV1, DirectGlobalLivenessTerminalAccountingV1,
-    DirectGlobalLivenessTerminalProjectionV1, DirectGlobalLivenessV1,
-    ProductDirectGlobalLivenessAuthorityV1, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
-    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1, DIRECT_GLOBAL_LIVENESS_BYTES_V1,
-    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_COUNT_V1, DIRECT_GLOBAL_LIVENESS_DOMAIN_V1,
-    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V1,
+    DirectGlobalLivenessAllocationV2, DirectGlobalLivenessCapitalizationV2,
+    DirectGlobalLivenessPhaseV2, DirectGlobalLivenessTerminalAccountingV2,
+    DirectGlobalLivenessTerminalProjectionV2, DirectGlobalLivenessV2, DirectWorkQuoteV1,
+    ProductDirectGlobalLivenessAuthorityV2, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
+    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2, DIRECT_GLOBAL_LIVENESS_BYTES_V2,
+    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_COUNT_V2, DIRECT_GLOBAL_LIVENESS_DOMAIN_V2,
+    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V2,
+    DIRECT_WORK_QUOTE_BYTES_V1, DIRECT_WORK_QUOTE_DOMAIN_V1,
 };
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
