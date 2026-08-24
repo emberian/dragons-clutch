@@ -345,6 +345,7 @@ version = "0.1.0"
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-core-contract",
  "dclutch-kernel",
 ]
