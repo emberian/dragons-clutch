@@ -581,6 +581,80 @@ impl AuthenticatedPreRootSourceOccurrencePostwriteV3 {
         self.source_route
     }
 
+    pub(crate) const fn source_route_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.route_id().bytes())
+    }
+
+    pub(crate) const fn source_release_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.source_route.release_account()
+    }
+
+    pub(crate) const fn source_release_manifest_id(&self) -> ContentId {
+        ContentId::from_bytes(self.source_route.release_manifest_id().bytes())
+    }
+
+    pub(crate) const fn source_release_authentication_id(&self) -> ContentId {
+        ContentId::from_bytes(self.source_route.release_authentication_id().bytes())
+    }
+
+    pub(crate) const fn source_clock_policy_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.clock_policy_id().bytes())
+    }
+
+    pub(crate) const fn source_work_schedule_id(&self) -> ContentId {
+        self.capitalization.facts().source_work_schedule_id
+    }
+
+    pub(crate) const fn source_lifecycle_id(&self) -> ContentId {
+        self.capitalization.facts().lifecycle_id
+    }
+
+    pub(crate) const fn source_runtime_liveness_policy_id(&self) -> ContentId {
+        ContentId::from_bytes(self.source_route.liveness_policy_id().bytes())
+    }
+
+    pub(crate) const fn source_plane_contract_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.source_plane_contract_id().bytes())
+    }
+
+    pub(crate) const fn source_spec_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.source_spec_id().bytes())
+    }
+
+    pub(crate) const fn source_occurrence_receipt_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.id().bytes())
+    }
+
+    pub(crate) const fn source_occurrence_semantic_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.occurrence_record_id().bytes())
+    }
+
+    pub(crate) const fn source_occurrence_publication_id(&self) -> ContentId {
+        self.occurrence_publication.id()
+    }
+
+    pub(crate) const fn source_occurrence_account_authentication_id(&self) -> ContentId {
+        ContentId::from_bytes(
+            self.occurrence
+                .occurrence_account_authentication_id()
+                .bytes(),
+        )
+    }
+
+    pub(crate) const fn source_window_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.window_id().bytes())
+    }
+
+    pub(crate) const fn source_statistic_key_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.statistic_key_id().bytes())
+    }
+
+    pub(crate) const fn source_repair_generation(&self) -> u64 {
+        self.occurrence.repair_generation()
+    }
+
     pub(crate) const fn product_publication(&self) -> AuthenticatedSourceSemanticPublicationV2 {
         self.product_publication
     }
@@ -662,6 +736,58 @@ impl AuthenticatedPreRootSourceOccurrencePostwriteV3 {
 
     pub(crate) const fn generation_request_data_id(&self) -> ContentId {
         ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
+    }
+
+    pub(crate) const fn generation_request_receipt_id(&self) -> ContentId {
+        self.generation_request.id()
+    }
+
+    pub(crate) const fn funding_pending_account(&self) -> Pubkey {
+        self.capitalization.facts().funding_account
+    }
+
+    pub(crate) const fn funding_pending_state_id(&self) -> ContentId {
+        self.capitalization.facts().funding_state_id
+    }
+
+    pub(crate) const fn funding_pending_data_id(&self) -> ContentId {
+        self.capitalization.facts().funding_account_data_id
+    }
+
+    pub(crate) const fn funding_pending_authentication_id(&self) -> ContentId {
+        self.capitalization
+            .facts()
+            .funding_account_authentication_id
+    }
+
+    pub(crate) const fn funding_pending_transition_sequence(&self) -> u64 {
+        self.capitalization.facts().funding_transition_sequence
+    }
+
+    pub(crate) const fn funding_reservation_binding_id(&self) -> ContentId {
+        self.capitalization
+            .facts()
+            .pending_pre_source_reservation_binding_id
+    }
+
+    pub(crate) const fn funding_reservation_receipt_id(&self) -> ContentId {
+        self.capitalization
+            .facts()
+            .pending_reservation_receipt_id
+    }
+
+    pub(crate) const fn funding_reservation_postwrite_id(&self) -> ContentId {
+        self.capitalization
+            .facts()
+            .funding_reservation_postwrite_id
+    }
+
+    pub(crate) const fn funding_reservation_clock_receipt_id(&self) -> ContentId {
+        self.capitalization.facts().pending_clock_receipt_id
+    }
+
+    pub(crate) const fn funding_reservation_clock_bucket(&self) -> u64 {
+        self.capitalization.facts().pending_clock_bucket
     }
 }
 
