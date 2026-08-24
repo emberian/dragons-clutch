@@ -84,6 +84,44 @@ pub enum PdaFamilyV3 {
     SourceWorkReceipt = 14,
     /// Durable Source reopen lineage addressed by its semantic recipe identity.
     ReopenLineage = 15,
+    /// Immutable canonical WindowSpec content input.
+    WindowSpec = 16,
+    /// Immutable reviewed SummaryProgram content input.
+    SummaryProgram = 17,
+    /// Immutable predictable StatisticKey content input.
+    StatisticKey = 18,
+    /// Immutable persisted Source policy handoff authentication.
+    SourcePolicyHandoff = 19,
+    /// Immutable proof that one resolved Source lineage must never reopen.
+    SourceNoReopenTerminal = 20,
+}
+
+impl PdaFamilyV3 {
+    /// Canonical recipe-domain discriminator without an enum cast.
+    pub const fn wire_u16(self) -> u16 {
+        match self {
+            Self::V2SourceSpec => 1,
+            Self::SourceHead => 2,
+            Self::OpenRawPage => 3,
+            Self::RawPage => 4,
+            Self::WindowWork => 5,
+            Self::WindowSeal => 6,
+            Self::StatisticResult => 7,
+            Self::ProductTemplate => 8,
+            Self::SeriesPlan => 9,
+            Self::SeriesFunding => 10,
+            Self::Instance => 11,
+            Self::DrawdownWork => 12,
+            Self::SourceRelease => 13,
+            Self::SourceWorkReceipt => 14,
+            Self::ReopenLineage => 15,
+            Self::WindowSpec => 16,
+            Self::SummaryProgram => 17,
+            Self::StatisticKey => 18,
+            Self::SourcePolicyHandoff => 19,
+            Self::SourceNoReopenTerminal => 20,
+        }
+    }
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -181,6 +219,57 @@ impl PdaRecipeV3 {
             b"dc-sp3-page",
             &source_plane_contract_id.bytes(),
             &page_id.bytes(),
+        )
+    }
+
+    /// Immutable canonical WindowSpec addressed by its complete semantic identity.
+    pub fn window_spec(window_id: ContentId) -> Result<Self> {
+        live(window_id)?;
+        Self::two(
+            PdaFamilyV3::WindowSpec,
+            b"dc-sp3-window-spec",
+            &window_id.bytes(),
+        )
+    }
+
+    /// Reviewed SummaryProgram addressed by its complete semantic identity.
+    pub fn summary_program(summary_program_id: ContentId) -> Result<Self> {
+        live(summary_program_id)?;
+        Self::two(
+            PdaFamilyV3::SummaryProgram,
+            b"dc-sp3-summary",
+            &summary_program_id.bytes(),
+        )
+    }
+
+    /// Predictable StatisticKey addressed by its complete semantic identity.
+    pub fn statistic_key(statistic_key_id: ContentId) -> Result<Self> {
+        live(statistic_key_id)?;
+        Self::two(
+            PdaFamilyV3::StatisticKey,
+            b"dc-sp3-stat-key",
+            &statistic_key_id.bytes(),
+        )
+    }
+
+    /// Persisted Source policy handoff addressed by its exact private join.
+    pub fn source_policy_handoff(handoff_join_id: ContentId) -> Result<Self> {
+        live(handoff_join_id)?;
+        Self::two(
+            PdaFamilyV3::SourcePolicyHandoff,
+            b"dc-sp3-policy-handoff",
+            &handoff_join_id.bytes(),
+        )
+    }
+
+    /// Explicit no-reopen terminal selected only after the shared Product
+    /// ResolutionV5 and Failure resolved-cell postwrites both authenticate.
+    pub fn source_no_reopen_terminal(terminal_id: ContentId) -> Result<Self> {
+        live(terminal_id)?;
+        Self::two(
+            PdaFamilyV3::SourceNoReopenTerminal,
+            b"dc-sp3-no-reopen",
+            &terminal_id.bytes(),
         )
     }
 
@@ -282,7 +371,7 @@ impl PdaRecipeV3 {
         self.validate()?;
         let mut hasher = Sha256::new();
         hasher.update(RECIPE_DOMAIN);
-        hasher.update((self.family as u16).to_le_bytes());
+        hasher.update(self.family.wire_u16().to_le_bytes());
         hasher.update([self.count]);
         for seed in self.seeds {
             hasher.update([seed.length]);

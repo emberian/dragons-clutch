@@ -131,18 +131,30 @@ impl RegisterReleaseIntentV2 {
 }
 
 /// Closed handoff shape emitted by action 10.
+///
+/// Every admitted byte has one current Source-owned fact constructor. The
+/// downstream Failure runtime may consume these facts, but it cannot choose a
+/// branch or mint a Source handoff from caller-supplied identities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum SourceHandoffKindV2 {
-    /// Mature StatisticResult PDA was canonically absent.
+    /// Primary maturity passed while the content-addressed result slot remained absent.
     FailureAbsence = 1,
-    /// A persisted evaluator refusal produced the failure handoff.
+    /// The reviewed evaluator persisted a stable nonzero refusal result.
     FailureResult = 2,
     /// A persisted successful evaluation produced the downstream-review handoff.
     SuccessfulEvaluation = 3,
 }
 
 impl SourceHandoffKindV2 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::FailureAbsence => 1,
+            Self::FailureResult => 2,
+            Self::SuccessfulEvaluation => 3,
+        }
+    }
+
     fn decode(byte: u8) -> Result<Self> {
         match byte {
             1 => Ok(Self::FailureAbsence),
@@ -181,7 +193,7 @@ impl EmitFailureHandoffIntentV2 {
         require_output(output, EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.kind as u8;
+        output[0] = self.kind.wire_byte();
         output[8..40].copy_from_slice(&self.handoff_id);
         output[40..72].copy_from_slice(&self.source_work_receipt_id);
         output[72..80].copy_from_slice(&self.valid_before_slot.to_le_bytes());
@@ -218,6 +230,15 @@ pub enum SourceMutableFamilyV2 {
 }
 
 impl SourceMutableFamilyV2 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::SourceHead => 1,
+            Self::OpenRawPage => 2,
+            Self::WindowWork => 3,
+            Self::StatisticResult => 4,
+        }
+    }
+
     fn decode(byte: u8) -> Result<Self> {
         match byte {
             1 => Ok(Self::SourceHead),
@@ -267,7 +288,7 @@ impl ReopenGenerationIntentV2 {
         require_output(output, REOPEN_GENERATION_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.family as u8;
+        output[0] = self.family.wire_byte();
         output[8..40].copy_from_slice(&self.source_release_manifest_id);
         output[40..72].copy_from_slice(&self.expected_lineage_state_id);
         output[72..104].copy_from_slice(&self.semantic_binding_id);
@@ -328,7 +349,7 @@ impl CloseGenerationIntentV2 {
         require_output(output, CLOSE_GENERATION_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.family as u8;
+        output[0] = self.family.wire_byte();
         output[8..40].copy_from_slice(&self.source_release_manifest_id);
         output[40..72].copy_from_slice(&self.expected_lineage_state_id);
         output[72..104].copy_from_slice(&self.semantic_terminal_receipt_id);
@@ -562,8 +583,10 @@ pub enum SourceAccountRoleV2 {
     SourceCompartment,
     /// Permissionless work recipient and transaction submitter.
     Keeper,
-    /// Creation/rent payer.
-    Payer,
+    /// External signer which pays only the one-time release-registration rent.
+    ReleasePayer,
+    /// Program-derived, fully prepaid custody for every lifecycle rent debit/refund.
+    SourceFundingCustody,
     /// Stored payer-principal refund destination.
     PrincipalRefund,
     /// Frozen neutral donation and surplus sink.
@@ -574,6 +597,8 @@ pub enum SourceAccountRoleV2 {
     HandoffReceipt,
     /// Family-selected immutable authority used to recompute a reopened body.
     GenerationAuthority,
+    /// Persisted no-reopen or reconstructed reopen-request terminal policy.
+    SourceTerminalPolicy,
     /// Generic mutable Source target selected by the payload family.
     GenerationTarget,
     /// Generic durable lineage selected by the payload family.
@@ -673,7 +698,7 @@ pub const AUTHENTICATED_SOURCE_ROUTE_METAS_V2: &[SourceAccountMetaV2] = &[
 const REGISTER_RELEASE_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::SourceReleaseArtifact, false, false),
     meta(SourceAccountRoleV2::SourceRelease, true, false),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::ReleasePayer, true, true),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -686,7 +711,7 @@ const INITIALIZE_HEAD_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -700,7 +725,7 @@ const OPEN_RAW_PAGE_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -719,7 +744,7 @@ const INGEST_BOUNDARY_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -736,7 +761,7 @@ const SEAL_RAW_PAGE_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -750,7 +775,7 @@ const INITIALIZE_WINDOW_WORK_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -765,7 +790,7 @@ const FOLD_WINDOW_PAGE_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -784,7 +809,7 @@ const SEAL_WINDOW_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -804,7 +829,7 @@ const EVALUATE_STATISTIC_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::LivenessPolicy, false, false),
     meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -817,10 +842,13 @@ const EMIT_FAILURE_HANDOFF_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::WindowSeal, false, false),
     meta(SourceAccountRoleV2::StatisticResult, false, false),
     meta(SourceAccountRoleV2::ResultLineage, false, false),
-    meta(SourceAccountRoleV2::SourceWorkReceipt, false, false),
+    meta(SourceAccountRoleV2::SourceWorkReceipt, true, false),
     meta(SourceAccountRoleV2::FailurePolicy, false, false),
     meta(SourceAccountRoleV2::HandoffReceipt, true, false),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::LivenessPolicy, false, false),
+    meta(SourceAccountRoleV2::SourceCompartment, true, false),
+    meta(SourceAccountRoleV2::Keeper, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
@@ -830,41 +858,28 @@ const REOPEN_GENERATION_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::GenerationTarget, true, false),
     meta(SourceAccountRoleV2::GenerationLineage, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, true, false),
-    meta(SourceAccountRoleV2::LivenessPolicy, false, false),
-    meta(SourceAccountRoleV2::SourceCompartment, true, false),
     meta(SourceAccountRoleV2::Keeper, true, true),
-    meta(SourceAccountRoleV2::Payer, true, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
 
 const CLOSE_GENERATION_METAS_V2: &[SourceAccountMetaV2] = &[
+    meta(SourceAccountRoleV2::SourceTerminalPolicy, false, false),
     meta(SourceAccountRoleV2::GenerationTarget, true, false),
     meta(SourceAccountRoleV2::GenerationLineage, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, false, false),
+    meta(SourceAccountRoleV2::Keeper, false, true),
+    meta(SourceAccountRoleV2::SourceFundingCustody, true, false),
     meta(SourceAccountRoleV2::PrincipalRefund, true, false),
     meta(SourceAccountRoleV2::NeutralSink, true, false),
 ];
 
 const NO_ALIASES_V2: &[SourceAccountAliasV2] = &[];
-const PAYER_KEEPER_ALIASES_V2: &[SourceAccountAliasV2] = &[SourceAccountAliasV2 {
-    left: SourceAccountRoleV2::Payer,
-    right: SourceAccountRoleV2::Keeper,
+const CUSTODY_REFUND_ALIAS_V2: &[SourceAccountAliasV2] = &[SourceAccountAliasV2 {
+    left: SourceAccountRoleV2::SourceFundingCustody,
+    right: SourceAccountRoleV2::PrincipalRefund,
 }];
-const CREATION_REFUND_ALIASES_V2: &[SourceAccountAliasV2] = &[
-    SourceAccountAliasV2 {
-        left: SourceAccountRoleV2::Payer,
-        right: SourceAccountRoleV2::Keeper,
-    },
-    SourceAccountAliasV2 {
-        left: SourceAccountRoleV2::Payer,
-        right: SourceAccountRoleV2::PrincipalRefund,
-    },
-    SourceAccountAliasV2 {
-        left: SourceAccountRoleV2::Keeper,
-        right: SourceAccountRoleV2::PrincipalRefund,
-    },
-];
 
 /// Return the exact ordered account-role and alias contract for one action.
 pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> SourceAccountContractV2 {
@@ -875,36 +890,38 @@ pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> Source
     let (suffix, aliases) = match action {
         registry::SourceSeriesAction::RegisterRelease => (REGISTER_RELEASE_METAS_V2, NO_ALIASES_V2),
         registry::SourceSeriesAction::InitializeHead => {
-            (INITIALIZE_HEAD_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (INITIALIZE_HEAD_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::OpenRawPage => {
-            (OPEN_RAW_PAGE_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (OPEN_RAW_PAGE_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::IngestBoundaryBatch => {
-            (INGEST_BOUNDARY_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (INGEST_BOUNDARY_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::SealRawPage => {
-            (SEAL_RAW_PAGE_METAS_V2, CREATION_REFUND_ALIASES_V2)
+            (SEAL_RAW_PAGE_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
         }
         registry::SourceSeriesAction::InitializeWindowWork => {
-            (INITIALIZE_WINDOW_WORK_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (INITIALIZE_WINDOW_WORK_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::FoldWindowPages => {
-            (FOLD_WINDOW_PAGE_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (FOLD_WINDOW_PAGE_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::SealWindow => {
-            (SEAL_WINDOW_METAS_V2, CREATION_REFUND_ALIASES_V2)
+            (SEAL_WINDOW_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
         }
         registry::SourceSeriesAction::EvaluateStatistic => {
-            (EVALUATE_STATISTIC_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (EVALUATE_STATISTIC_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::EmitFailureHandoff => {
             (EMIT_FAILURE_HANDOFF_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::ReopenGeneration => {
-            (REOPEN_GENERATION_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (REOPEN_GENERATION_METAS_V2, NO_ALIASES_V2)
         }
-        registry::SourceSeriesAction::CloseGeneration => (CLOSE_GENERATION_METAS_V2, NO_ALIASES_V2),
+        registry::SourceSeriesAction::CloseGeneration => {
+            (CLOSE_GENERATION_METAS_V2, CUSTODY_REFUND_ALIAS_V2)
+        }
     };
     SourceAccountContractV2 {
         prefix,
@@ -1132,6 +1149,18 @@ mod tests {
             EmitFailureHandoffIntentV2::decode(&hostile),
             Err(CodecError::InvalidEnum)
         );
+        for kind in [
+            SourceHandoffKindV2::FailureAbsence,
+            SourceHandoffKindV2::FailureResult,
+            SourceHandoffKindV2::SuccessfulEvaluation,
+        ] {
+            hostile = handoff;
+            hostile[0] = kind.wire_byte();
+            assert_eq!(
+                EmitFailureHandoffIntentV2::decode(&hostile).unwrap().kind,
+                kind,
+            );
+        }
         hostile = handoff;
         hostile[8..40].fill(0);
         assert_eq!(
@@ -1158,7 +1187,8 @@ mod tests {
         for index in 0..contract.len() {
             let required = contract.meta(index).unwrap();
             let mut key = [0_u8; 32];
-            key[..8].copy_from_slice(&(index as u64 + 1).to_le_bytes());
+            let ordinal = u64::try_from(index).unwrap().checked_add(1).unwrap();
+            key[..8].copy_from_slice(&ordinal.to_le_bytes());
             accounts.push(ObservedSourceAccountMetaV2 {
                 key,
                 writable: required.writable,
@@ -1206,16 +1236,20 @@ mod tests {
     fn only_named_aliases_are_admitted_and_use_effective_union_privileges() {
         let action = registry::SourceSeriesAction::SealRawPage;
         let contract = account_contract_v2(action);
-        let payer = role_index(contract, SourceAccountRoleV2::Payer);
+        let custody = role_index(contract, SourceAccountRoleV2::SourceFundingCustody);
         let keeper = role_index(contract, SourceAccountRoleV2::Keeper);
         let refund = role_index(contract, SourceAccountRoleV2::PrincipalRefund);
         let mut accounts = observed(action);
-        let payer_key = accounts[payer].key;
-        accounts[keeper].key = payer_key;
+        let custody_key = accounts[custody].key;
+        accounts[refund].key = custody_key;
         assert_eq!(validate_account_metas_v2(action, &accounts), Ok(()));
-        accounts[refund].key = payer_key;
-        accounts[refund].signer = true;
-        assert_eq!(validate_account_metas_v2(action, &accounts), Ok(()));
+
+        let mut keeper_alias = observed(action);
+        keeper_alias[keeper].key = custody_key;
+        assert_eq!(
+            validate_account_metas_v2(action, &keeper_alias),
+            Err(CodecError::MismatchedBinding)
+        );
 
         let release = role_index(contract, SourceAccountRoleV2::SourceRelease);
         let adapter = role_index(contract, SourceAccountRoleV2::AdapterProgram);
@@ -1226,5 +1260,26 @@ mod tests {
             validate_account_metas_v2(action, &forbidden),
             Err(CodecError::MismatchedBinding)
         );
+    }
+
+    #[test]
+    fn postterminal_reopen_uses_only_prepaid_custody_and_keeper_signature() {
+        let contract = account_contract_v2(registry::SourceSeriesAction::ReopenGeneration);
+        assert!((0..contract.len()).all(|index| {
+            !matches!(
+                contract.meta(index).unwrap().role,
+                SourceAccountRoleV2::LivenessPolicy | SourceAccountRoleV2::SourceCompartment
+            )
+        }));
+        let custody = contract
+            .meta(role_index(contract, SourceAccountRoleV2::SourceFundingCustody))
+            .unwrap();
+        let keeper = contract
+            .meta(role_index(contract, SourceAccountRoleV2::Keeper))
+            .unwrap();
+        assert!(custody.writable);
+        assert!(!custody.signer);
+        assert!(keeper.writable);
+        assert!(keeper.signer);
     }
 }

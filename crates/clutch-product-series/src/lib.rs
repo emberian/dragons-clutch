@@ -28,6 +28,7 @@ mod foundation_funding;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
+mod failure_begin_schedule;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
@@ -110,6 +111,12 @@ pub use funding_state_v2::{
     SeriesFundingStateV2, SeriesFundingTerminalProjectionV2, SERIES_COMPONENT_CAPITAL_BYTES_V2,
     SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_V2_DOMAIN,
 };
+pub use failure_begin_schedule::{
+    derive_product_failure_begin_schedule_projection_v1,
+    ProductFailureBeginCompilerProvenanceV1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1,
+};
 pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
     quantized_interval_rounding_policy_id_v1,
@@ -139,8 +146,11 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use market_lifecycle::{
-    MarketFoundationAccountGraphV2, MarketFoundationCapitalV1, MarketFoundationProgressV1,
-    MarketFoundationSlotV2, MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
+    authenticate_market_foundation_account_graph_bytes_v2,
+    authenticate_market_foundation_account_graph_slot_v2,
+    AuthenticatedMarketFoundationAccountGraphBytesV2, MarketFoundationAccountGraphV2,
+    MarketFoundationCapitalV1, MarketFoundationProgressV1, MarketFoundationSlotV2,
+    MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
     MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
     MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
     MarketSharedCoreV1, SeriesLinkObligationAdmissionProjectionV1,
@@ -150,7 +160,8 @@ pub use market_lifecycle::{
     SeriesMarketAdmissionProjectionV1, SeriesMarketLinkBindingV1, SeriesMarketLinkPhaseV1,
     SeriesMarketLinkRetirementProjectionV1, SeriesMarketLinkV1,
     MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, MARKET_LIFECYCLE_BINDING_DOMAIN_V1,
-    MARKET_LIFECYCLE_ROOT_BYTES_V1, MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
@@ -172,8 +183,9 @@ pub use registry::{
 };
 pub use source_series::{
     compile_source_occurrence_v3, compile_source_occurrence_v4,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
-    SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
+    compile_source_semantic_inputs_v1, AuthenticatedSourceSeriesAuthorityV3,
+    CompiledSourceOccurrenceV3, CompiledSourceSemanticInputsV1, SOURCE_OCCURRENCE_RECORD_BYTES,
+    SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use series_lifecycle_replay::{
     SeriesLifecycleAdmissionProjectionV1, SeriesLifecycleLapseProjectionV1,
@@ -430,6 +442,10 @@ typed_id!(
 typed_id!(
     QuantizedIntervalConsensusWorkV1Id,
     "Typed identity of one complete structural interval-consensus work preimage."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV1Id,
+    "Typed identity of one exact current Product-compiled Failure Begin schedule and provenance."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.

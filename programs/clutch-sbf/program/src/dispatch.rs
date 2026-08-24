@@ -49,7 +49,8 @@ use crate::instructions::product_series;
 use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, source_ingest_v2,
+    failure_market_dispatch_v2, fractional_redemption, genesis, observe_resolve,
+    source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_market_v1, resolution_work, source_ingest};
@@ -276,6 +277,9 @@ pub fn process(
     if let Some(action) = disabled_dealer_facility_action(instruction_data) {
         return crate::instructions::dealer_runtime::process_reserved_disabled(action);
     }
+    if let Some(action) = recovery_v2_action(instruction_data) {
+        return process_recovery_v2(program_id, accounts, instruction_data, action);
+    }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
     }
@@ -306,6 +310,45 @@ pub fn process(
             process_structured_claim(program_id, accounts, instruction_data)
         }
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Identify one exact allocated Recovery78/v1 action without decoding its
+/// family payload. Current actions 10 through 13 enter the fresh V2 contract;
+/// withdrawn actions 1 through 9 enter its exhaustive account-free refusal.
+fn recovery_v2_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::RecoveryAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) => Some(action),
+        _ => None,
+    }
+}
+
+/// Decode the strict extension envelope and enter only the current checked,
+/// capability-disabled Failure contract. The module itself refuses before
+/// payload or account access while every Recovery capability remains false.
+#[inline(never)]
+fn process_recovery_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+    expected_action: clutch_solana_layout::registry::RecoveryAction,
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) if action == expected_action => {
+            failure_market_dispatch_v2::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
     }
 }
 

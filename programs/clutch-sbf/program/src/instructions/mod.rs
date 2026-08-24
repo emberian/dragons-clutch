@@ -63,19 +63,32 @@ pub(crate) mod direct_market_v1;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_v2;
+/// Concrete checked owners for current Market Failure actions 10-13.
+pub(crate) mod failure_market_actions_v2;
+/// Capability-disabled atomic paid Failure interval advance.
+pub(crate) mod failure_market_interval_advance_v2;
+/// Always-compiled checked-disabled current Failure action contract.
+pub mod failure_market_dispatch_v2;
+/// Shared hostile Product/Failure authentication for callable actions 10-13.
+pub(crate) mod failure_market_execution_v2;
+/// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
+pub(crate) mod failure_market_resolution_v5;
+/// Capability-disabled aggregate/replay/family-terminal composer.
+pub(crate) mod failure_market_family_terminal_v2;
 /// Capability-disabled permanent shared-Market Failure replay seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_replay_v2;
-#[cfg(feature = "non-production-failure-recovery-lab")]
+/// Capability-disabled atomic shared-Market Recovery close.
+pub(crate) mod failure_market_recovery_terminal_v2;
 pub mod failure_market_admission;
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_market_runtime;
+/// Withdrawn occurrence-scoped Recovery78/v1 adapter; no current route imports it.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 mod fractional_lifecycle;
 mod fractional_product_consumer;
+/// Capability-disabled current Product compiler authority for Failure Begin.
+pub(crate) mod product_failure_begin;
 pub mod fractional_redemption;
 pub(crate) mod full_principal_funding_v1;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
@@ -169,6 +182,12 @@ pub mod series_failure_funding;
 pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
+pub mod source_series_successor;
+pub(crate) mod source_occurrence_foundation_v1;
+/// Unrouted private Source terminal composer. It is always compiled so the
+/// current final Failure postwrite can implement its default-refusing bridge;
+/// no checked capability tuple enters it until the complete chain is admitted.
+pub(crate) mod source_terminal_resolution_v5;
 pub mod split;
 /// Wrapper-signed Structured custody and current full-vector lifecycle.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
