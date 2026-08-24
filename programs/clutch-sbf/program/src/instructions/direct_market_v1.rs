@@ -50,6 +50,10 @@ use clutch_direct_market_runtime::{
     DirectRootReplayPostV1, DirectScheduleV1, DirectTerminalReasonV1,
 };
 use clutch_direct_market_runtime::fee_v1::{DirectFeePolicyV1, DirectFeeTerminalV1};
+use clutch_direct_market_runtime::liveness_v1::{
+    AuthenticatedDirectCandidateLivenessV1, DirectCandidateLivenessBindingV1,
+    DirectCandidateWorkScheduleV1, DIRECT_CANDIDATE_RESERVED_CALLS_V1,
+};
 use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, BATCH_POLICY_BYTES,
 };
@@ -905,6 +909,7 @@ impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1<'_> {
         founder_link: &clutch_product_series::SeriesMarketLinkV1,
         compiler_bundle: &CompiledProductSeriesBundleV5,
         fee_policy: DirectFeePolicyV1,
+        _candidate_liveness: AuthenticatedDirectCandidateLivenessV1,
         binding: DirectMarketBindingV1,
         schedule: DirectScheduleV1,
         foundation_slot: u64,
@@ -1160,6 +1165,37 @@ pub(crate) fn process_direct_initialize_market_v1(
         fee_split_den: fee_policy.split_den,
         candidate_lifecycle_policy_id: genesis.value().candidate_lifecycle_policy_id.bytes(),
         candidate_liveness_policy_id: genesis.value().candidate_liveness_policy_id.bytes(),
+        // Product has not yet landed the global seven-account capitalization
+        // writer/allocation receipt. These padding facts cannot reach the pure
+        // foundation because this staged adapter passes `None` below.
+        candidate_liveness: DirectCandidateLivenessBindingV1 {
+            policy_account: [0; 32],
+            policy_data_id: [0; 32],
+            global_lifecycle_id: [0; 32],
+            global_bundle_binding_id: [0; 32],
+            global_capitalization_receipt_id: [0; 32],
+            global_bundle_commitment_id: [0; 32],
+            candidate_account: [0; 32],
+            candidate_data_id: [0; 32],
+            candidate_semantic_owner: [0; 32],
+            candidate_quote_schedule_id: [0; 32],
+            candidate_receipt_program_id: [0; 32],
+            candidate_generation: 0,
+            first_call_ordinal: 0,
+            reserved_calls: DIRECT_CANDIDATE_RESERVED_CALLS_V1,
+            reserved_work_lamports: 8,
+            allocation_receipt_id: [0; 32],
+            work_schedule: DirectCandidateWorkScheduleV1 {
+                freeze_book_lamports: 1,
+                begin_verification_lamports: 1,
+                verify_candidate_lamports: 1,
+                finalize_selection_lamports: 1,
+                economic_terminal_lamports: 1,
+                retire_terminal_lamports: 1,
+                retained_candidate_bond_lamports: 1,
+            },
+            work_schedule_id: [0; 32],
+        },
         direct_schedule_policy_id: [0; 32],
         product_root_account: accounts[0].key.to_bytes(),
         product_market_binding_id: product_market_binding_id.bytes(),
@@ -1221,6 +1257,7 @@ pub(crate) fn process_direct_initialize_market_v1(
         founder_link.state(),
         bundle.value(),
         fee_policy,
+        None,
         direct_binding,
         schedule,
         observed_slot,

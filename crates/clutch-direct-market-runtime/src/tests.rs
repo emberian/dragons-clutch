@@ -190,6 +190,34 @@ fn state() -> DirectRootReplayPostV1 {
         fee_split_den: fee_policy.split_den,
         candidate_lifecycle_policy_id: id(36),
         candidate_liveness_policy_id: id(37),
+        candidate_liveness: crate::liveness_v1::DirectCandidateLivenessBindingV1 {
+            policy_account: id(40),
+            policy_data_id: id(41),
+            global_lifecycle_id: id(42),
+            global_bundle_binding_id: id(43),
+            global_capitalization_receipt_id: id(44),
+            global_bundle_commitment_id: id(45),
+            candidate_account: id(46),
+            candidate_data_id: id(47),
+            candidate_semantic_owner: id(48),
+            candidate_quote_schedule_id: id(49),
+            candidate_receipt_program_id: id(50),
+            candidate_generation: 1,
+            first_call_ordinal: 1,
+            reserved_calls: crate::liveness_v1::DIRECT_CANDIDATE_RESERVED_CALLS_V1,
+            reserved_work_lamports: 8,
+            allocation_receipt_id: id(51),
+            work_schedule: crate::liveness_v1::DirectCandidateWorkScheduleV1 {
+                freeze_book_lamports: 1,
+                begin_verification_lamports: 1,
+                verify_candidate_lamports: 1,
+                finalize_selection_lamports: 1,
+                economic_terminal_lamports: 1,
+                retire_terminal_lamports: 1,
+                retained_candidate_bond_lamports: 5,
+            },
+            work_schedule_id: [0; 32],
+        },
         direct_schedule_policy_id: [0; 32],
         product_root_account: id(9),
         product_market_binding_id: id(38),
@@ -210,6 +238,19 @@ fn state() -> DirectRootReplayPostV1 {
         price_policy_id: id(15),
         price_scale: 1_000,
     };
+    binding.candidate_liveness.work_schedule_id = binding
+        .candidate_liveness
+        .work_schedule
+        .semantic_id(
+            binding.market_instance_id,
+            binding.generation,
+            binding.direct_root_account,
+            binding.family_admission_sequence,
+            binding.candidate_lifecycle_policy_id,
+            binding.candidate_liveness_policy_id,
+            &Sha,
+        )
+        .unwrap();
     binding.direct_schedule_policy_id = direct_schedule_policy_id_v1(binding, &Sha).unwrap();
     binding.direct_epoch_semantics_id =
         direct_epoch_semantics_id_v1(binding, schedule, &Sha).unwrap();

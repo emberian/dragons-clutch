@@ -18,6 +18,9 @@ use clutch_batch::{PartialPolicy, Side};
 
 use crate::reservation_v1::{DirectReservationPhaseV1, DirectReservationV1};
 use crate::selection_v1::{DirectSelectionPhaseV1, DirectSelectionV1};
+use crate::liveness_v1::{
+    DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1,
+};
 use crate::{
     DirectActionReplayV1, DirectMarketBindingV1, DirectMarketErrorV1, DirectMarketRootV1,
     DirectRentOwnerV1, DirectReplayPhaseV1, DirectRootPhaseV1, DirectScheduleV1,
@@ -25,7 +28,7 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_226;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_722;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
 /// Exact semantic bytes inside the `0xb3/1` frame.
@@ -404,6 +407,7 @@ fn write_binding(
     writer.u32(value.fee_split_den)?;
     writer.id(value.candidate_lifecycle_policy_id)?;
     writer.id(value.candidate_liveness_policy_id)?;
+    write_candidate_liveness(&mut *writer, value.candidate_liveness)?;
     writer.id(value.direct_schedule_policy_id)?;
     writer.id(value.product_root_account)?;
     writer.id(value.product_market_binding_id)?;
@@ -447,6 +451,7 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         fee_split_den: reader.u32()?,
         candidate_lifecycle_policy_id: reader.id()?,
         candidate_liveness_policy_id: reader.id()?,
+        candidate_liveness: read_candidate_liveness(&mut *reader)?,
         direct_schedule_policy_id: reader.id()?,
         product_root_account: reader.id()?,
         product_market_binding_id: reader.id()?,
@@ -467,6 +472,72 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         price_policy_id: reader.id()?,
         price_scale: reader.u64()?,
     })
+}
+
+fn write_candidate_liveness(
+    writer: &mut BodyWriter<'_>,
+    value: DirectCandidateLivenessBindingV1,
+) -> Result<(), DirectMarketErrorV1> {
+    value.validate()?;
+    writer.id(value.policy_account)?;
+    writer.id(value.policy_data_id)?;
+    writer.id(value.global_lifecycle_id)?;
+    writer.id(value.global_bundle_binding_id)?;
+    writer.id(value.global_capitalization_receipt_id)?;
+    writer.id(value.global_bundle_commitment_id)?;
+    writer.id(value.candidate_account)?;
+    writer.id(value.candidate_data_id)?;
+    writer.id(value.candidate_semantic_owner)?;
+    writer.id(value.candidate_quote_schedule_id)?;
+    writer.id(value.candidate_receipt_program_id)?;
+    writer.u64(value.candidate_generation)?;
+    writer.u32(value.first_call_ordinal)?;
+    writer.u32(value.reserved_calls)?;
+    writer.u64(value.reserved_work_lamports)?;
+    writer.id(value.allocation_receipt_id)?;
+    writer.u64(value.work_schedule.freeze_book_lamports)?;
+    writer.u64(value.work_schedule.begin_verification_lamports)?;
+    writer.u64(value.work_schedule.verify_candidate_lamports)?;
+    writer.u64(value.work_schedule.finalize_selection_lamports)?;
+    writer.u64(value.work_schedule.economic_terminal_lamports)?;
+    writer.u64(value.work_schedule.retire_terminal_lamports)?;
+    writer.u64(value.work_schedule.retained_candidate_bond_lamports)?;
+    writer.id(value.work_schedule_id)
+}
+
+fn read_candidate_liveness(
+    reader: &mut BodyReader<'_>,
+) -> Result<DirectCandidateLivenessBindingV1, DirectMarketErrorV1> {
+    let value = DirectCandidateLivenessBindingV1 {
+        policy_account: reader.id()?,
+        policy_data_id: reader.id()?,
+        global_lifecycle_id: reader.id()?,
+        global_bundle_binding_id: reader.id()?,
+        global_capitalization_receipt_id: reader.id()?,
+        global_bundle_commitment_id: reader.id()?,
+        candidate_account: reader.id()?,
+        candidate_data_id: reader.id()?,
+        candidate_semantic_owner: reader.id()?,
+        candidate_quote_schedule_id: reader.id()?,
+        candidate_receipt_program_id: reader.id()?,
+        candidate_generation: reader.u64()?,
+        first_call_ordinal: reader.u32()?,
+        reserved_calls: reader.u32()?,
+        reserved_work_lamports: reader.u64()?,
+        allocation_receipt_id: reader.id()?,
+        work_schedule: DirectCandidateWorkScheduleV1 {
+            freeze_book_lamports: reader.u64()?,
+            begin_verification_lamports: reader.u64()?,
+            verify_candidate_lamports: reader.u64()?,
+            finalize_selection_lamports: reader.u64()?,
+            economic_terminal_lamports: reader.u64()?,
+            retire_terminal_lamports: reader.u64()?,
+            retained_candidate_bond_lamports: reader.u64()?,
+        },
+        work_schedule_id: reader.id()?,
+    };
+    value.validate()?;
+    Ok(value)
 }
 
 fn write_schedule(
@@ -786,7 +857,7 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_226);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_722);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 469);

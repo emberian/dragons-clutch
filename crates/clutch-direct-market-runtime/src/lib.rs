@@ -22,6 +22,7 @@ pub mod selection_v1;
 pub mod settlement_v1;
 pub mod codec_v1;
 pub mod fee_v1;
+pub mod liveness_v1;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
@@ -88,6 +89,8 @@ pub enum DirectMarketErrorV1 {
     DirectPair(clutch_batch::direct_pair_v1::DirectPairErrorV1),
     /// General PositionV3/GEN1 structural projection refused.
     GeneralContract(clutch_general_v2_contract::CodecError),
+    /// The shared, present-funded runtime-liveness owner refused the join.
+    Liveness(clutch_liveness::runtime_v1::RuntimeLivenessErrorV1),
 }
 
 impl From<clutch_batch::relation_v2::EconomicErrorV2> for DirectMarketErrorV1 {
@@ -105,6 +108,12 @@ impl From<clutch_batch::direct_pair_v1::DirectPairErrorV1> for DirectMarketError
 impl From<clutch_general_v2_contract::CodecError> for DirectMarketErrorV1 {
     fn from(value: clutch_general_v2_contract::CodecError) -> Self {
         Self::GeneralContract(value)
+    }
+}
+
+impl From<clutch_liveness::runtime_v1::RuntimeLivenessErrorV1> for DirectMarketErrorV1 {
+    fn from(value: clutch_liveness::runtime_v1::RuntimeLivenessErrorV1) -> Self {
+        Self::Liveness(value)
     }
 }
 
@@ -450,6 +459,8 @@ pub struct DirectMarketBindingV1 {
     pub candidate_lifecycle_policy_id: [u8; 32],
     /// Product-selected present-funded candidate liveness policy.
     pub candidate_liveness_policy_id: [u8; 32],
+    /// Product-authenticated allocation from the complete global liveness bundle.
+    pub candidate_liveness: liveness_v1::DirectCandidateLivenessBindingV1,
     /// Direct release-owned timing projection over those two Product owners.
     pub direct_schedule_policy_id: [u8; 32],
     /// Product MarketLifecycleRoot account.
@@ -529,6 +540,7 @@ impl DirectMarketBindingV1 {
             index += 1;
         }
         self.fee_policy().validate()?;
+        self.candidate_liveness.validate()?;
         require_distinct(&[
             self.resolution_account,
             self.product_root_account,
@@ -538,6 +550,8 @@ impl DirectMarketBindingV1 {
             self.general_market_binding,
             self.general_market_runtime,
             self.neutral_lamport_sink,
+            self.candidate_liveness.policy_account,
+            self.candidate_liveness.candidate_account,
         ])
     }
 
@@ -684,6 +698,11 @@ pub fn direct_epoch_semantics_id_v1<B: DirectHashBackendV1>(
         &binding.family_admission_sequence.to_le_bytes(),
         &binding.general_market_binding,
         &binding.general_market_runtime,
+        &binding.candidate_liveness.global_lifecycle_id,
+        &binding.candidate_liveness.global_bundle_binding_id,
+        &binding.candidate_liveness.global_capitalization_receipt_id,
+        &binding.candidate_liveness.allocation_receipt_id,
+        &binding.candidate_liveness.work_schedule_id,
         &schedule.admission_opens_slot.to_le_bytes(),
         &schedule.admission_closes_slot.to_le_bytes(),
         &schedule.submission_closes_slot.to_le_bytes(),
@@ -703,6 +722,8 @@ pub fn direct_schedule_policy_id_v1<B: DirectHashBackendV1>(
         DIRECT_SCHEDULE_POLICY_DOMAIN_V1,
         &binding.candidate_lifecycle_policy_id,
         &binding.candidate_liveness_policy_id,
+        &binding.candidate_liveness.work_schedule_id,
+        &binding.candidate_liveness.allocation_receipt_id,
         &DIRECT_ADMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_SUBMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_VERIFICATION_SPAN_SLOTS_V1.to_le_bytes(),
@@ -972,6 +993,30 @@ impl DirectMarketRootV1 {
             &self.binding.fee_split_den.to_le_bytes(),
             &self.binding.candidate_lifecycle_policy_id,
             &self.binding.candidate_liveness_policy_id,
+            &self.binding.candidate_liveness.policy_account,
+            &self.binding.candidate_liveness.policy_data_id,
+            &self.binding.candidate_liveness.global_lifecycle_id,
+            &self.binding.candidate_liveness.global_bundle_binding_id,
+            &self.binding.candidate_liveness.global_capitalization_receipt_id,
+            &self.binding.candidate_liveness.global_bundle_commitment_id,
+            &self.binding.candidate_liveness.candidate_account,
+            &self.binding.candidate_liveness.candidate_data_id,
+            &self.binding.candidate_liveness.candidate_semantic_owner,
+            &self.binding.candidate_liveness.candidate_quote_schedule_id,
+            &self.binding.candidate_liveness.candidate_receipt_program_id,
+            &self.binding.candidate_liveness.candidate_generation.to_le_bytes(),
+            &self.binding.candidate_liveness.first_call_ordinal.to_le_bytes(),
+            &self.binding.candidate_liveness.reserved_calls.to_le_bytes(),
+            &self.binding.candidate_liveness.reserved_work_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.allocation_receipt_id,
+            &self.binding.candidate_liveness.work_schedule.freeze_book_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.begin_verification_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.verify_candidate_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.finalize_selection_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.economic_terminal_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.retire_terminal_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.retained_candidate_bond_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule_id,
             &self.binding.direct_schedule_policy_id,
             &self.binding.product_root_account, &self.binding.product_market_binding_id,
             &self.binding.product_family_prestate_id,
@@ -1525,6 +1570,7 @@ pub trait AuthenticatedDirectFoundationV1 {
         _founder_link: &SeriesMarketLinkV1,
         _compiler_bundle: &CompiledProductSeriesBundleV5,
         _fee_policy: fee_v1::DirectFeePolicyV1,
+        _candidate_liveness: liveness_v1::AuthenticatedDirectCandidateLivenessV1,
         _binding: DirectMarketBindingV1,
         _schedule: DirectScheduleV1, _foundation_slot: u64,
         _root_rent: DirectRentOwnerV1,
@@ -1574,6 +1620,8 @@ pub struct DirectFoundationPlanV1 {
     pub product_authority: DirectProductAdmissionAuthorityV1,
     /// Direct-owned admission receipt consumed by Product.
     pub admission_receipt_id: ContentId,
+    /// Product-owned allocation receipt consumed by this exact occurrence.
+    pub candidate_liveness_allocation_receipt_id: [u8; 32],
 }
 
 /// Prepare the unique Product-attached Direct root and permanent replay.
@@ -1585,11 +1633,14 @@ pub fn prepare_direct_foundation_v1<
     founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
     fee_policy: fee_v1::DirectFeePolicyV1,
+    candidate_liveness: Option<liveness_v1::AuthenticatedDirectCandidateLivenessV1>,
     binding: DirectMarketBindingV1,
     schedule: DirectScheduleV1, foundation_slot: u64,
     root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1, family_admission_sequence: u32, backend: &B,
 ) -> Result<DirectFoundationPlanV1, DirectMarketErrorV1> {
+    let candidate_liveness = candidate_liveness
+        .ok_or(DirectMarketErrorV1::UnauthenticatedAuthority)?;
     binding.validate()?;
     schedule.validate()?;
     if schedule != DirectScheduleV1::canonical_from_foundation_slot(foundation_slot)? {
@@ -1645,6 +1696,17 @@ pub fn prepare_direct_foundation_v1<
     }
     fee_policy.validate()?;
     if binding.fee_policy() != fee_policy
+        || binding.candidate_liveness != candidate_liveness.binding()
+        || binding.candidate_liveness.work_schedule_id
+            != binding.candidate_liveness.work_schedule.semantic_id(
+                binding.market_instance_id,
+                binding.generation,
+                binding.direct_root_account,
+                binding.family_admission_sequence,
+                binding.candidate_lifecycle_policy_id,
+                binding.candidate_liveness_policy_id,
+                backend,
+            )?
         || binding.direct_fee_shape_id != fee_policy.semantic_id(backend)?
         || binding.direct_schedule_policy_id != direct_schedule_policy_id_v1(binding, backend)?
         || binding.direct_epoch_semantics_id
@@ -1657,6 +1719,7 @@ pub fn prepare_direct_foundation_v1<
         founder_link,
         compiler_bundle,
         fee_policy,
+        candidate_liveness,
         binding,
         schedule,
         foundation_slot,
@@ -1678,6 +1741,23 @@ pub fn prepare_direct_foundation_v1<
         &binding.fee_treasury_num.to_le_bytes(),
         &binding.fee_split_den.to_le_bytes(),
         &binding.candidate_lifecycle_policy_id, &binding.candidate_liveness_policy_id,
+        &binding.candidate_liveness.policy_account,
+        &binding.candidate_liveness.policy_data_id,
+        &binding.candidate_liveness.global_lifecycle_id,
+        &binding.candidate_liveness.global_bundle_binding_id,
+        &binding.candidate_liveness.global_capitalization_receipt_id,
+        &binding.candidate_liveness.global_bundle_commitment_id,
+        &binding.candidate_liveness.candidate_account,
+        &binding.candidate_liveness.candidate_data_id,
+        &binding.candidate_liveness.candidate_semantic_owner,
+        &binding.candidate_liveness.candidate_quote_schedule_id,
+        &binding.candidate_liveness.candidate_receipt_program_id,
+        &binding.candidate_liveness.candidate_generation.to_le_bytes(),
+        &binding.candidate_liveness.first_call_ordinal.to_le_bytes(),
+        &binding.candidate_liveness.reserved_calls.to_le_bytes(),
+        &binding.candidate_liveness.reserved_work_lamports.to_le_bytes(),
+        &binding.candidate_liveness.allocation_receipt_id,
+        &binding.candidate_liveness.work_schedule_id,
         &binding.direct_schedule_policy_id,
         &binding.product_root_account, &binding.product_market_binding_id,
         &binding.product_family_prestate_id,
@@ -1734,6 +1814,8 @@ pub fn prepare_direct_foundation_v1<
             family_admission_sequence, admission_receipt_id,
         },
         admission_receipt_id,
+        candidate_liveness_allocation_receipt_id:
+            binding.candidate_liveness.allocation_receipt_id,
     })
 }
 
