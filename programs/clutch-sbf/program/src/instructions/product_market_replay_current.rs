@@ -14,6 +14,8 @@ use crate::instructions::genesis::{
 };
 use crate::instructions::product_market_family_capability_current::
     AuthenticatedMarketFamilyCapabilityPolicyArtifactV1;
+use crate::instructions::product_market_lifecycle_v3_current::
+    AuthenticatedProductMarketFoundationStepPostwriteV4;
 use crate::instructions::product_series::physical_v5::AuthenticatedSeriesPhysicalFounderV5;
 use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
 use crate::seeds;
@@ -129,7 +131,10 @@ impl AuthenticatedMarketLifecycleReplayFoundationAuthorityV2 for ExactFoundation
 pub(crate) struct AuthenticatedProductMarketReplayFoundationPostwriteV2 {
     id: ContentId,
     bootstrap_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
     replay_account: Pubkey,
+    replay_observed_lamports: u64,
     replay_authentication_before_id: ContentId,
     replay_authentication_after_id: ContentId,
     replay_semantic_before_id: ContentId,
@@ -149,24 +154,31 @@ pub(crate) struct AuthenticatedProductMarketReplayFoundationPostwriteV2 {
     foundation_graph_id: ContentId,
 }
 
-/* The consuming slot-postwrite implementation is attached to the fresh
- * RootV3/V4 cursor below; it must never implement the historical V3 cursor. */
-impl AuthenticatedProductMarketReplayFoundationPostwriteV2 {
+impl AuthenticatedProductMarketFoundationStepPostwriteV4
+    for AuthenticatedProductMarketReplayFoundationPostwriteV2
+{
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn consume_product_market_foundation_step_postwrite_v4(
+    fn consume_product_market_foundation_step_postwrite_v4(
         self,
+        debit_id: ContentId,
         founder_creation_receipt_id: ContentId,
         founder_preauthorization_id: ContentId,
         foundation_steps_id: ContentId,
         market_binding_id: ContentId,
         foundation_schedule_id: ContentId,
         foundation_graph_id: ContentId,
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
         slot: MarketFoundationSlotV4,
+        root_transition_sequence_after: u64,
         account_id: ContentId,
         principal_lamports: u64,
         principal_before_lamports: u64,
         principal_after_lamports: u64,
-        minimum_donation_lamports: u64,
+        destination_donation_floor_lamports: u64,
+        destination_balance_after_lamports: u64,
+        vault_donation_before_lamports: u64,
+        vault_donation_after_lamports: u64,
         foundation_vault_account: Pubkey,
         rent_refund_owner: Pubkey,
         neutral_lamport_sink: Pubkey,
@@ -179,7 +191,15 @@ impl AuthenticatedProductMarketReplayFoundationPostwriteV2 {
             .checked_add(observed_vault_donation_lamports)
             .ok_or(ClutchError::Arithmetic)?;
         require(
-            slot == MarketFoundationSlotV4::ProductReplayAnchor
+            !debit_id.is_zero()
+                && !founder_creation_receipt_id.is_zero()
+                && !founder_preauthorization_id.is_zero()
+                && !foundation_steps_id.is_zero()
+                && !market_binding_id.is_zero()
+                && market_instance_id == self.market_instance_id
+                && generation == self.generation
+                && root_transition_sequence_after != 0
+                && slot == MarketFoundationSlotV4::ProductReplayAnchor
                 && account_id.bytes() == self.replay_account.to_bytes()
                 && principal_lamports == self.principal_lamports
                 && self.foundation_schedule_id == foundation_schedule_id
@@ -188,7 +208,10 @@ impl AuthenticatedProductMarketReplayFoundationPostwriteV2 {
                 && self.bootstrap_payer == rent_refund_owner
                 && self.neutral_lamport_sink == neutral_lamport_sink
                 && self.vault_lamports_after == expected_vault_after
-                && observed_vault_donation_lamports >= minimum_donation_lamports
+                && observed_vault_donation_lamports == vault_donation_before_lamports
+                && observed_vault_donation_lamports == vault_donation_after_lamports
+                && destination_donation_floor_lamports == self.replay_observed_lamports
+                && destination_balance_after_lamports == self.replay_observed_lamports
                 && self.payer_lamports_after
                     == self.payer_lamports_before
                         .checked_add(self.principal_lamports)
@@ -198,6 +221,7 @@ impl AuthenticatedProductMarketReplayFoundationPostwriteV2 {
         let accepted = hashv(&[
             PRODUCT_MARKET_REPLAY_FOUNDATION_POSTWRITE_DOMAIN_V2,
             &self.id.bytes(),
+            &debit_id.bytes(),
             &self.bootstrap_id.bytes(),
             &founder_creation_receipt_id.bytes(),
             &founder_preauthorization_id.bytes(),
@@ -205,7 +229,10 @@ impl AuthenticatedProductMarketReplayFoundationPostwriteV2 {
             &market_binding_id.bytes(),
             &foundation_schedule_id.bytes(),
             &foundation_graph_id.bytes(),
+            &market_instance_id.bytes(),
+            &generation.to_le_bytes(),
             &[13],
+            &root_transition_sequence_after.to_le_bytes(),
             self.replay_account.as_ref(),
             &self.replay_authentication_before_id.bytes(),
             &self.replay_authentication_after_id.bytes(),
@@ -691,7 +718,10 @@ pub(crate) fn settle_current_product_market_replay_foundation_v2<'a>(
     Ok(AuthenticatedProductMarketReplayFoundationPostwriteV2 {
         id,
         bootstrap_id: authenticated.state().bootstrap_receipt_id(),
+        market_instance_id,
+        generation,
         replay_account: *replay_account.key,
+        replay_observed_lamports: live_after.observed_lamports(),
         replay_authentication_before_id: live_before.authentication_id(),
         replay_authentication_after_id: live_after.authentication_id(),
         replay_semantic_before_id,
