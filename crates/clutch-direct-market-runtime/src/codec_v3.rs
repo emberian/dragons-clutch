@@ -1,12 +1,12 @@
-//! Canonical fixed-width semantic body for current Direct `0xb1/2`.
+//! Canonical fixed-width semantic body for current Direct `0xb1/3`.
 //!
 //! The four-byte Solana frame remains owned by `clutch-solana-layout`.  This
 //! codec writes into caller storage so the adapter never needs a second 2.5KiB
 //! root array on its stack.
 
-use crate::current_v2::{
-    DirectCurrentGeneralAuthorityV2, DirectCurrentProductAuthorityV2,
-    DirectMarketBindingV2, DirectMarketRootV2,
+use crate::current_v3::{
+    DirectCurrentGeneralAuthorityV2, DirectCurrentProductAuthorityV3,
+    DirectMarketBindingV3, DirectMarketRootV3,
 };
 use crate::liveness_v1::{DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1};
 use crate::reservation_v1::DirectReservationV1;
@@ -17,20 +17,23 @@ use crate::{
     DirectRootPhaseV1, DirectScheduleV1, DirectTerminalReasonV1,
 };
 
-/// Exact current b1/v2 semantic-body width.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V2: usize = 2_498;
+/// Exact current b1/v3 semantic-body width.
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V3: usize = 2_530;
 /// Exact immutable binding prefix inside the current root body.
-pub const DIRECT_MARKET_BINDING_BODY_BYTES_V2: usize = 2_245;
+pub const DIRECT_MARKET_BINDING_BODY_BYTES_V3: usize = 2_277;
 
 /// Compact authenticated current root used at the SBF transition boundary.
 ///
 /// The historical-shaped root is private and exists only as the injective
 /// input to the sole reviewed transition arithmetic. Current account adapters
-/// can inspect only V2-named getters and semantic identities.
+/// can inspect only V3-named getters and semantic identities.
 #[derive(Debug, Eq, PartialEq)]
-pub struct AuthenticatedDirectRootTransitionV2 {
+pub struct AuthenticatedDirectRootTransitionV3 {
     projected_root: DirectMarketRootV1,
     fee_policy: crate::fee_v2::DirectFeePolicyV2,
+    current_general: DirectCurrentGeneralAuthorityV2,
+    product_global_liveness_account: [u8; 32],
+    series_plan_v5_id: [u8; 32],
     terminal_product_ids: [[u8; 32]; 7],
     binding_semantic_id: [u8; 32],
     binding_body_id: [u8; 32],
@@ -38,7 +41,7 @@ pub struct AuthenticatedDirectRootTransitionV2 {
     root_semantic_id: [u8; 32],
 }
 
-impl AuthenticatedDirectRootTransitionV2 {
+impl AuthenticatedDirectRootTransitionV3 {
     pub const fn market_instance_id(&self) -> [u8; 32] {
         self.projected_root.binding.market_instance_id
     }
@@ -83,11 +86,47 @@ impl AuthenticatedDirectRootTransitionV2 {
     pub const fn series_link_account(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_link_account
     }
-    /// Complete current Product authority identity retained by b1/v2.
+    /// Product-owned SeriesPlanV5 identity used for exact LinkV3 PDA auth.
+    pub const fn series_plan_v5_id(&self) -> [u8; 32] {
+        self.series_plan_v5_id
+    }
+    /// Product-owned immutable LinkV3 binding identity retained by b1/v3.
+    pub const fn series_link_binding_v3_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[1]
+    }
+    /// Exact Product Series ordinal retained by b1/v3.
+    pub const fn series_ordinal(&self) -> u32 {
+        self.projected_root.binding.founder_series_ordinal
+    }
+    /// Complete current Product authority identity retained by b1/v3.
     pub const fn current_product_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.compiler_bundle_v5_id
     }
-    /// Complete current General V4/Revenue authority identity retained by b1/v2.
+    /// Exact current Product BundleV7 identity retained by b1/v3.
+    pub const fn compiler_bundle_v7_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[2]
+    }
+    /// Product RootV3 immutable MarketLifecycleBindingV3 identity.
+    pub const fn product_market_binding_v3_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[0]
+    }
+    /// Exact Product-owned `0xba/v2` manifest retained by b1/v3.
+    pub const fn product_global_liveness_account(&self) -> [u8; 32] {
+        self.product_global_liveness_account
+    }
+    /// Product-owned immutable `0xba/v2` binding retained by b1/v3.
+    pub const fn product_global_liveness_binding_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[4]
+    }
+    /// Exact Product activation receipt for the live `0xba/v2` allocation.
+    pub const fn product_global_liveness_activation_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[5]
+    }
+    /// Exact Product-owned Direct work quote retained by b1/v3.
+    pub const fn direct_work_quote_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[6]
+    }
+    /// Complete current General V4/Revenue authority identity retained by b1/v3.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_plan_id
     }
@@ -107,6 +146,11 @@ impl AuthenticatedDirectRootTransitionV2 {
         self.projected_root.binding.price_policy_id
     }
     pub const fn price_scale(&self) -> u64 { self.projected_root.binding.price_scale }
+    /// One-based Direct occurrence coordinate authenticated by the current
+    /// Product family admission sequence.
+    pub fn direct_window_index(&self) -> Result<u64, DirectMarketErrorV1> {
+        self.projected_root.binding.direct_window_index()
+    }
     pub const fn phase(&self) -> DirectRootPhaseV1 { self.projected_root.phase }
     pub const fn terminal_reason(&self) -> Option<DirectTerminalReasonV1> {
         self.projected_root.terminal_reason
@@ -128,6 +172,12 @@ impl AuthenticatedDirectRootTransitionV2 {
     pub const fn root_semantic_id(&self) -> [u8; 32] { self.root_semantic_id }
     pub const fn fee_policy(&self) -> crate::fee_v2::DirectFeePolicyV2 {
         self.fee_policy
+    }
+    /// Complete current General V4/Revenue coordinates hostile-decoded from
+    /// b1/v3. This is a borrowed projection of the authenticated root body,
+    /// not a second persisted authority or a caller-shaped facts DTO.
+    pub const fn current_general(&self) -> &DirectCurrentGeneralAuthorityV2 {
+        &self.current_general
     }
     pub(crate) const fn terminal_product_id(&self, index: usize) -> [u8; 32] {
         self.terminal_product_ids[index]
@@ -207,15 +257,15 @@ impl AuthenticatedDirectRootTransitionV2 {
     }
 }
 
-/// Authenticate one borrowed b1/v2 body into a compact transition token.
+/// Authenticate one borrowed b1/v3 body into a compact transition token.
 /// Product/General successors are validated before their exact semantic IDs
 /// enter the private transition projection.
 #[inline(never)]
-pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
+pub fn authenticate_direct_root_transition_body_v3<B: DirectHashBackendV1>(
     input: &[u8],
     backend: &B,
-) -> Result<AuthenticatedDirectRootTransitionV2, DirectMarketErrorV1> {
-    if input.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+) -> Result<AuthenticatedDirectRootTransitionV3, DirectMarketErrorV1> {
+    if input.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
     let mut reader = BodyReader::new(input);
@@ -249,7 +299,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
     let relation_policy_id = reader.id()?;
     let price_policy_id = reader.id()?;
     let price_scale = reader.u64()?;
-    if reader.at != DIRECT_MARKET_BINDING_BODY_BYTES_V2 {
+    if reader.at != DIRECT_MARKET_BINDING_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
 
@@ -272,7 +322,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         split_den: fee_split_den,
     };
     let fee_policy_id = fee_policy.semantic_id(backend)?;
-    let candidate_id = crate::current_v2::candidate_liveness_id_v2(
+    let candidate_id = crate::current_v3::candidate_liveness_id_v2(
         candidate_liveness,
         backend,
     )?;
@@ -282,7 +332,8 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         || price_scale == 0
         || fee_treasury_owner != general.treasury_owner
         || revenue_policy_id != general.revenue_policy_v2_digest
-        || product.product_market_binding_id != product.activated_product_market_binding_id
+        || product.product_market_binding_v3_id
+            != product.activated_product_market_binding_id
         || candidate_liveness.policy_account == product.product_direct_global_liveness_account
         || candidate_liveness.work_schedule_id != product.direct_work_quote_id
         || fee_policy_id != direct_fee_shape_id
@@ -308,7 +359,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         candidate_liveness.candidate_account,
     ])?;
     let binding_semantic_id = backend.sha256_parts(&[
-        crate::current_v2::BINDING_DOMAIN_V2,
+        crate::current_v3::BINDING_DOMAIN_V3,
         &market_instance_id,
         &generation.to_le_bytes(),
         &[outcome_count],
@@ -342,8 +393,8 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
     ]);
     crate::require_live(binding_semantic_id)?;
     let binding_body_id = backend.sha256_parts(&[
-        b"dragons-clutch/direct/current-binding-body/v2\0",
-        &input[..DIRECT_MARKET_BINDING_BODY_BYTES_V2],
+        b"dragons-clutch/direct/current-binding-body/v3\0",
+        &input[..DIRECT_MARKET_BINDING_BODY_BYTES_V3],
     ]);
     crate::require_live(binding_body_id)?;
 
@@ -371,12 +422,12 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         candidate_liveness,
         direct_schedule_policy_id,
         product_root_account: product.product_root_account,
-        product_market_binding_id: product.product_market_binding_id,
+        product_market_binding_id: product.product_market_binding_v3_id,
         product_family_prestate_id: product.product_family_prestate_id,
         general_product_preauthorization_id: product.product_preauthorization_id,
         family_admission_sequence: product.family_admission_sequence,
         founder_series_link_account: product.series_link_account,
-        founder_series_link_binding_id: product.series_link_v2_id,
+        founder_series_link_binding_id: product.series_link_binding_v3_id,
         compiler_bundle_v5_id: product_id,
         founder_series_plan_id: general_id,
         founder_series_ordinal: product.series_ordinal,
@@ -399,16 +450,17 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         general.treasury_service_ledger_account,
     ];
     let terminal_product_ids = [
-        product.product_market_binding_id,
-        product.series_link_v2_id,
-        product.compiler_bundle_v6_id,
-        product.attachment_plan_v5_id,
+        product.product_market_binding_v3_id,
+        product.series_link_binding_v3_id,
+        product.compiler_bundle_v7_id,
+        product.attachment_plan_v6_id,
         product.product_direct_global_liveness_binding_id,
         product.product_direct_global_liveness_activation_id,
         product.direct_work_quote_id,
     ];
+    let product_global_liveness_account = product.product_direct_global_liveness_account;
+    let series_plan_v5_id = product.series_plan_v5_id;
     drop(product);
-    drop(general);
     let schedule = read_schedule(&mut reader)?;
     let root_rent = read_rent(&mut reader)?;
     let phase = decode_root_phase(reader.u8()?)?;
@@ -453,9 +505,12 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         &projected_root,
         backend,
     )?;
-    Ok(AuthenticatedDirectRootTransitionV2 {
+    Ok(AuthenticatedDirectRootTransitionV3 {
         projected_root,
         fee_policy,
+        current_general: general,
+        product_global_liveness_account,
+        series_plan_v5_id,
         terminal_product_ids,
         binding_semantic_id,
         binding_body_id,
@@ -464,20 +519,20 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
     })
 }
 
-/// Patch only the dynamic suffix of an already-authenticated b1/v2 body.
+/// Patch only the dynamic suffix of an already-authenticated b1/v3 body.
 /// The immutable binding prefix and exact prestate semantic ID are rechecked
 /// before any caller-owned bytes are changed.
-pub fn write_direct_root_transition_body_v2<B: DirectHashBackendV1>(
-    transition: &AuthenticatedDirectRootTransitionV2,
+pub fn write_direct_root_transition_body_v3<B: DirectHashBackendV1>(
+    transition: &AuthenticatedDirectRootTransitionV3,
     output: &mut [u8],
     backend: &B,
 ) -> Result<(), DirectMarketErrorV1> {
-    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
     let binding_body_id = backend.sha256_parts(&[
-        b"dragons-clutch/direct/current-binding-body/v2\0",
-        &output[..DIRECT_MARKET_BINDING_BODY_BYTES_V2],
+        b"dragons-clutch/direct/current-binding-body/v3\0",
+        &output[..DIRECT_MARKET_BINDING_BODY_BYTES_V3],
     ]);
     let source_root_semantic_id = current_root_semantic_id_from_body_suffix_v2(
         transition.binding_semantic_id,
@@ -490,7 +545,7 @@ pub fn write_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
     }
     let root = &transition.projected_root;
-    let mut writer = BodyWriter::new(&mut output[DIRECT_MARKET_BINDING_BODY_BYTES_V2..]);
+    let mut writer = BodyWriter::new(&mut output[DIRECT_MARKET_BINDING_BODY_BYTES_V3..]);
     write_schedule(&mut writer, root.schedule)?;
     write_rent(&mut writer, root.root_rent)?;
     writer.u8(root_phase_byte(root.phase))?;
@@ -507,9 +562,9 @@ pub fn write_direct_root_transition_body_v2<B: DirectHashBackendV1>(
 }
 
 /// Decode the permanent b3 body only through an authenticated current root.
-pub fn decode_direct_action_replay_body_for_transition_v2(
+pub fn decode_direct_action_replay_body_for_transition_v3(
     input: &[u8],
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<DirectActionReplayV1, DirectMarketErrorV1> {
     let input = <&[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1]>::try_from(input)
         .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
@@ -520,9 +575,9 @@ pub fn decode_direct_action_replay_body_for_transition_v2(
 }
 
 /// Encode the permanent b3 body only through an authenticated current root.
-pub fn encode_direct_action_replay_body_for_transition_v2(
+pub fn encode_direct_action_replay_body_for_transition_v3(
     value: DirectActionReplayV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_action_replay_body_v1(
         value,
@@ -530,10 +585,10 @@ pub fn encode_direct_action_replay_body_for_transition_v2(
     )
 }
 
-/// Encode permanent b3 directly into caller-owned storage through current b1/v2.
-pub fn encode_direct_action_replay_body_into_transition_v2(
+/// Encode permanent b3 directly into caller-owned storage through current b1/v3.
+pub fn encode_direct_action_replay_body_into_transition_v3(
     value: DirectActionReplayV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
     output: &mut [u8],
 ) -> Result<(), DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_action_replay_body_into_v1(
@@ -544,9 +599,9 @@ pub fn encode_direct_action_replay_body_into_transition_v2(
 }
 
 /// Decode unchanged b2 bytes only through an authenticated current root.
-pub fn decode_direct_selection_body_for_transition_v2(
+pub fn decode_direct_selection_body_for_transition_v3(
     input: &[u8],
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<DirectSelectionV1, DirectMarketErrorV1> {
     let input = <&[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1]>::try_from(input)
         .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
@@ -554,17 +609,17 @@ pub fn decode_direct_selection_body_for_transition_v2(
 }
 
 /// Encode unchanged b2 bytes only through an authenticated current root.
-pub fn encode_direct_selection_body_for_transition_v2(
+pub fn encode_direct_selection_body_for_transition_v3(
     value: DirectSelectionV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1], DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_selection_body_v1(value, transition.projected_root)
 }
 
-/// Encode unchanged b2 directly into caller-owned storage through current b1/v2.
-pub fn encode_direct_selection_body_into_transition_v2(
+/// Encode unchanged b2 directly into caller-owned storage through current b1/v3.
+pub fn encode_direct_selection_body_into_transition_v3(
     value: DirectSelectionV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
     output: &mut [u8],
 ) -> Result<(), DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_selection_body_into_v1(
@@ -575,9 +630,9 @@ pub fn encode_direct_selection_body_into_transition_v2(
 }
 
 /// Decode unchanged b4 bytes only through an authenticated current root.
-pub fn decode_direct_reservation_body_for_transition_v2(
+pub fn decode_direct_reservation_body_for_transition_v3(
     input: &[u8],
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<DirectReservationV1, DirectMarketErrorV1> {
     let input = <&[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1]>::try_from(input)
         .map_err(|_| DirectMarketErrorV1::InvalidCount)?;
@@ -585,17 +640,17 @@ pub fn decode_direct_reservation_body_for_transition_v2(
 }
 
 /// Encode unchanged b4 bytes only through an authenticated current root.
-pub fn encode_direct_reservation_body_for_transition_v2(
+pub fn encode_direct_reservation_body_for_transition_v3(
     value: DirectReservationV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_reservation_body_v1(value, transition.projected_root)
 }
 
-/// Encode unchanged b4 directly into caller-owned storage through current b1/v2.
-pub fn encode_direct_reservation_body_into_transition_v2(
+/// Encode unchanged b4 directly into caller-owned storage through current b1/v3.
+pub fn encode_direct_reservation_body_into_transition_v3(
     value: DirectReservationV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
     output: &mut [u8],
 ) -> Result<(), DirectMarketErrorV1> {
     crate::codec_v1::encode_direct_reservation_body_into_v1(
@@ -613,7 +668,7 @@ fn current_root_semantic_id_from_projection_v2<B: DirectHashBackendV1>(
     root.validate()?;
     let terminal = root.terminal_reason.map_or(0, DirectTerminalReasonV1::byte);
     let id = backend.sha256_parts(&[
-        crate::current_v2::ROOT_STATE_DOMAIN_V2,
+        crate::current_v3::ROOT_STATE_DOMAIN_V3,
         &binding_semantic_id,
         &root.schedule.admission_opens_slot.to_le_bytes(),
         &root.schedule.admission_closes_slot.to_le_bytes(),
@@ -643,7 +698,7 @@ fn current_root_semantic_id_from_body_suffix_v2<B: DirectHashBackendV1>(
     input: &[u8],
     backend: &B,
 ) -> Result<[u8; 32], DirectMarketErrorV1> {
-    let mut reader = BodyReader::new(&input[DIRECT_MARKET_BINDING_BODY_BYTES_V2..]);
+    let mut reader = BodyReader::new(&input[DIRECT_MARKET_BINDING_BODY_BYTES_V3..]);
     let schedule = read_schedule(&mut reader)?;
     let root_rent = read_rent(&mut reader)?;
     let phase = decode_root_phase(reader.u8()?)?;
@@ -657,7 +712,7 @@ fn current_root_semantic_id_from_body_suffix_v2<B: DirectHashBackendV1>(
     reader.finish()?;
     let terminal = terminal_reason.map_or(0, DirectTerminalReasonV1::byte);
     let id = backend.sha256_parts(&[
-        crate::current_v2::ROOT_STATE_DOMAIN_V2,
+        crate::current_v3::ROOT_STATE_DOMAIN_V3,
         &binding_semantic_id,
         &schedule.admission_opens_slot.to_le_bytes(),
         &schedule.admission_closes_slot.to_le_bytes(),
@@ -713,10 +768,10 @@ fn require_not_current_role_v2(
 }
 
 /// Stream the canonical fresh action-1 root directly into caller-owned
-/// storage. This is the live-SBF construction boundary: no `DirectMarketRootV2`
+/// storage. This is the live-SBF construction boundary: no `DirectMarketRootV3`
 /// or second 2.5KiB body is returned by value.
-pub fn encode_direct_market_foundation_body_v2(
-    binding: &DirectMarketBindingV2,
+pub fn encode_direct_market_foundation_body_v3(
+    binding: &DirectMarketBindingV3,
     schedule: DirectScheduleV1,
     root_rent: DirectRentOwnerV1,
     output: &mut [u8],
@@ -724,7 +779,7 @@ pub fn encode_direct_market_foundation_body_v2(
     binding.validate()?;
     schedule.validate()?;
     root_rent.validate()?;
-    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
     let mut writer = BodyWriter::new(output);
@@ -745,12 +800,12 @@ pub fn encode_direct_market_foundation_body_v2(
 }
 
 /// Encode the current root directly into exact caller-provided storage.
-pub fn encode_direct_market_root_body_v2(
-    value: &DirectMarketRootV2,
+pub fn encode_direct_market_root_body_v3(
+    value: &DirectMarketRootV3,
     output: &mut [u8],
 ) -> Result<(), DirectMarketErrorV1> {
     value.validate()?;
-    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
     let mut writer = BodyWriter::new(output);
@@ -785,14 +840,14 @@ pub fn encode_direct_market_root_body_v2(
 }
 
 /// Decode and validate one hostile current root semantic body.
-pub fn decode_direct_market_root_body_v2(
+pub fn decode_direct_market_root_body_v3(
     input: &[u8],
-) -> Result<DirectMarketRootV2, DirectMarketErrorV1> {
-    if input.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+) -> Result<DirectMarketRootV3, DirectMarketErrorV1> {
+    if input.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V3 {
         return Err(DirectMarketErrorV1::InvalidCount);
     }
     let mut reader = BodyReader::new(input);
-    let value = DirectMarketRootV2 {
+    let value = DirectMarketRootV3 {
         binding: read_binding(&mut reader)?,
         schedule: read_schedule(&mut reader)?,
         root_rent: read_rent(&mut reader)?,
@@ -810,60 +865,60 @@ pub fn decode_direct_market_root_body_v2(
     Ok(value)
 }
 
-/// Encode the unchanged permanent b3/v1 replay against current b1/v2.
-pub fn encode_direct_action_replay_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Encode the unchanged permanent b3/v1 replay against current b1/v3.
+pub fn encode_direct_action_replay_body_for_root_v3<B: crate::DirectHashBackendV1>(
     value: DirectActionReplayV1,
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
     crate::codec_v1::encode_direct_action_replay_body_v1(value, projection)
 }
 
-/// Hostile-decode the unchanged permanent b3/v1 replay against current b1/v2.
-pub fn decode_direct_action_replay_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Hostile-decode the unchanged permanent b3/v1 replay against current b1/v3.
+pub fn decode_direct_action_replay_body_for_root_v3<B: crate::DirectHashBackendV1>(
     input: &[u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1],
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<DirectActionReplayV1, DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
     crate::codec_v1::decode_direct_action_replay_body_v1(input, projection)
 }
 
-/// Encode the unchanged b4/v1 Reservation against current b1/v2.
-pub fn encode_direct_reservation_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Encode the unchanged b4/v1 Reservation against current b1/v3.
+pub fn encode_direct_reservation_body_for_root_v3<B: crate::DirectHashBackendV1>(
     value: DirectReservationV1,
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1], DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
     crate::codec_v1::encode_direct_reservation_body_v1(value, projection)
 }
 
-/// Hostile-decode the unchanged b4/v1 Reservation against current b1/v2.
-pub fn decode_direct_reservation_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Hostile-decode the unchanged b4/v1 Reservation against current b1/v3.
+pub fn decode_direct_reservation_body_for_root_v3<B: crate::DirectHashBackendV1>(
     input: &[u8; crate::codec_v1::DIRECT_RESERVATION_BODY_BYTES_V1],
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<DirectReservationV1, DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
     crate::codec_v1::decode_direct_reservation_body_v1(input, projection)
 }
 
-/// Encode the unchanged b2/v1 Selection against current b1/v2.
-pub fn encode_direct_selection_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Encode the unchanged b2/v1 Selection against current b1/v3.
+pub fn encode_direct_selection_body_for_root_v3<B: crate::DirectHashBackendV1>(
     value: DirectSelectionV1,
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1], DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
     crate::codec_v1::encode_direct_selection_body_v1(value, projection)
 }
 
-/// Hostile-decode the unchanged b2/v1 Selection against current b1/v2.
-pub fn decode_direct_selection_body_for_root_v2<B: crate::DirectHashBackendV1>(
+/// Hostile-decode the unchanged b2/v1 Selection against current b1/v3.
+pub fn decode_direct_selection_body_for_root_v3<B: crate::DirectHashBackendV1>(
     input: &[u8; crate::codec_v1::DIRECT_SELECTION_BODY_BYTES_V1],
-    root: &DirectMarketRootV2,
+    root: &DirectMarketRootV3,
     backend: &B,
 ) -> Result<DirectSelectionV1, DirectMarketErrorV1> {
     let projection = root.transition_projection(backend)?;
@@ -873,7 +928,7 @@ pub fn decode_direct_selection_body_for_root_v2<B: crate::DirectHashBackendV1>(
 
 fn write_binding(
     writer: &mut BodyWriter<'_>,
-    value: &DirectMarketBindingV2,
+    value: &DirectMarketBindingV3,
 ) -> Result<(), DirectMarketErrorV1> {
     writer.id(value.market_instance_id)?;
     writer.u64(value.generation)?;
@@ -915,8 +970,8 @@ fn write_binding(
     writer.u64(value.price_scale)
 }
 
-fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV2, DirectMarketErrorV1> {
-    Ok(DirectMarketBindingV2 {
+fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV3, DirectMarketErrorV1> {
+    Ok(DirectMarketBindingV3 {
         market_instance_id: reader.id()?,
         generation: reader.u64()?,
         outcome_count: reader.u8()?,
@@ -952,28 +1007,29 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV2, Di
 
 fn write_product(
     writer: &mut BodyWriter<'_>,
-    value: &DirectCurrentProductAuthorityV2,
+    value: &DirectCurrentProductAuthorityV3,
 ) -> Result<(), DirectMarketErrorV1> {
     writer.id(value.product_root_account)?;
-    writer.id(value.product_market_binding_id)?;
+    writer.id(value.product_market_binding_v3_id)?;
     writer.u64(value.product_generation)?;
     writer.id(value.product_family_prestate_id)?;
     writer.id(value.product_family_poststate_id)?;
     writer.id(value.product_family_admission_receipt_id)?;
     writer.u32(value.family_admission_sequence)?;
     writer.id(value.series_link_account)?;
-    writer.id(value.series_link_v2_id)?;
+    writer.id(value.series_plan_v5_id)?;
+    writer.id(value.series_link_binding_v3_id)?;
     writer.u32(value.series_ordinal)?;
     for id in [
-        value.compiler_bundle_v6_id,
-        value.funding_quote_v5_id,
-        value.attachment_plan_v5_id,
-        value.foundation_schedule_v3_id,
-        value.foundation_graph_v3_id,
+        value.compiler_bundle_v7_id,
+        value.funding_quote_v6_id,
+        value.attachment_plan_v6_id,
+        value.foundation_schedule_v4_id,
+        value.foundation_graph_v4_id,
         value.market_liability_founding_id,
         value.claim_mint_founding_plan_id,
         value.claim_issuance_binding_id,
-        value.general_founding_policy_id,
+        value.general_founding_capability_v3_id,
         value.product_preauthorization_id,
         value.product_direct_global_liveness_account,
         value.product_direct_global_liveness_binding_id,
@@ -988,27 +1044,28 @@ fn write_product(
 
 fn read_product(
     reader: &mut BodyReader<'_>,
-) -> Result<DirectCurrentProductAuthorityV2, DirectMarketErrorV1> {
-    Ok(DirectCurrentProductAuthorityV2 {
+) -> Result<DirectCurrentProductAuthorityV3, DirectMarketErrorV1> {
+    Ok(DirectCurrentProductAuthorityV3 {
         product_root_account: reader.id()?,
-        product_market_binding_id: reader.id()?,
+        product_market_binding_v3_id: reader.id()?,
         product_generation: reader.u64()?,
         product_family_prestate_id: reader.id()?,
         product_family_poststate_id: reader.id()?,
         product_family_admission_receipt_id: reader.id()?,
         family_admission_sequence: reader.u32()?,
         series_link_account: reader.id()?,
-        series_link_v2_id: reader.id()?,
+        series_plan_v5_id: reader.id()?,
+        series_link_binding_v3_id: reader.id()?,
         series_ordinal: reader.u32()?,
-        compiler_bundle_v6_id: reader.id()?,
-        funding_quote_v5_id: reader.id()?,
-        attachment_plan_v5_id: reader.id()?,
-        foundation_schedule_v3_id: reader.id()?,
-        foundation_graph_v3_id: reader.id()?,
+        compiler_bundle_v7_id: reader.id()?,
+        funding_quote_v6_id: reader.id()?,
+        attachment_plan_v6_id: reader.id()?,
+        foundation_schedule_v4_id: reader.id()?,
+        foundation_graph_v4_id: reader.id()?,
         market_liability_founding_id: reader.id()?,
         claim_mint_founding_plan_id: reader.id()?,
         claim_issuance_binding_id: reader.id()?,
-        general_founding_policy_id: reader.id()?,
+        general_founding_capability_v3_id: reader.id()?,
         product_preauthorization_id: reader.id()?,
         product_direct_global_liveness_account: reader.id()?,
         product_direct_global_liveness_binding_id: reader.id()?,
@@ -1263,7 +1320,7 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V2 == 2_498);
-const _: () = assert!(DIRECT_MARKET_BINDING_BODY_BYTES_V2 + 253
-    == DIRECT_MARKET_ROOT_BODY_BYTES_V2);
-const _: () = assert!(core::mem::size_of::<AuthenticatedDirectRootTransitionV2>() <= 2_304);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == 2_530);
+const _: () = assert!(DIRECT_MARKET_BINDING_BODY_BYTES_V3 + 253
+    == DIRECT_MARKET_ROOT_BODY_BYTES_V3);
+const _: () = assert!(core::mem::size_of::<AuthenticatedDirectRootTransitionV3>() <= 2_304);

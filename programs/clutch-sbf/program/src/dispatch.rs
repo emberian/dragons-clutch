@@ -57,7 +57,7 @@ use crate::instructions::{
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
-use crate::instructions::direct_market_v1;
+use crate::instructions::direct_market_v2;
 #[cfg(all(
     feature = "profile-full",
     not(feature = "profile-successor-chain-attached-dev")

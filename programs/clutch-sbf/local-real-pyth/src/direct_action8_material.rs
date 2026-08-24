@@ -2,7 +2,7 @@
 //!
 //! This module deliberately does not consume the generic Direct V1 material
 //! builder or a browser-supplied keeper cursor.  It hostile-decodes one
-//! finalized `0xb1/v2` root and every body reachable from that root, derives
+//! finalized `0xb1/v3` root and every body reachable from that root, derives
 //! the nonempty/NoCandidate branch, and emits only the physically routed
 //! `80/1/8` request.  The output remains an untrusted, blockhash-free operator
 //! projection; the SBF handler reloads and authenticates the same accounts.
@@ -34,22 +34,22 @@ use clutch_direct_market_runtime::codec_v1::{
     DIRECT_ACTION_REPLAY_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
     DIRECT_SELECTION_BODY_BYTES_V1,
 };
-use clutch_direct_market_runtime::codec_v2::{
-    authenticate_direct_root_transition_body_v2,
-    decode_direct_action_replay_body_for_transition_v2,
-    decode_direct_reservation_body_for_transition_v2,
-    decode_direct_selection_body_for_transition_v2,
-    encode_direct_action_replay_body_into_transition_v2,
-    encode_direct_reservation_body_into_transition_v2,
-    encode_direct_selection_body_into_transition_v2, write_direct_root_transition_body_v2,
-    AuthenticatedDirectRootTransitionV2,
+use clutch_direct_market_runtime::codec_v3::{
+    authenticate_direct_root_transition_body_v3,
+    decode_direct_action_replay_body_for_transition_v3,
+    decode_direct_reservation_body_for_transition_v3,
+    decode_direct_selection_body_for_transition_v3,
+    encode_direct_action_replay_body_into_transition_v3,
+    encode_direct_reservation_body_into_transition_v3,
+    encode_direct_selection_body_into_transition_v3, write_direct_root_transition_body_v3,
+    AuthenticatedDirectRootTransitionV3,
 };
 use clutch_direct_market_runtime::lifecycle_v2::{
     bind_direct_candidate_work_batch_v2, finalize_direct_selection_v2,
     prepare_direct_candidate_work_batch_v2, prepare_direct_economic_terminal_v2,
     AuthenticatedDirectEconomicTerminalV2, DirectRootReplayTransitionV2,
 };
-use clutch_direct_market_runtime::current_v2::DirectCurrentGeneralAuthorityV2;
+use clutch_direct_market_runtime::current_v3::DirectCurrentGeneralAuthorityV2;
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
 use clutch_direct_market_runtime::settlement_v1::DirectEndpointPrestateV1;
 use clutch_direct_market_runtime::{
@@ -83,10 +83,10 @@ use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectReservationAccountV1, DirectSelectionAccountV1,
 };
-use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
+use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
 use clutch_solana_layout::registry::{
     DirectMarketAction, DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, DIRECT_MARKET_FAMILY_TAG,
-    DIRECT_MARKET_FAMILY_VERSION, DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2,
+    DIRECT_MARKET_FAMILY_VERSION, DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3,
     DIRECT_RESERVATION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_BYTES,
 };
 use clutch_solana_layout::{account_len, ProfileAccount, RealmAccount};
@@ -118,7 +118,7 @@ const SEED_REALM_V1: &[u8] = b"dragons-clutch:realm:v1";
 const SEED_PROFILE_V1: &[u8] = b"dragons-clutch:profile:v1";
 const SEED_POLICY_V1: &[u8] = b"dragons-clutch:policy:v1";
 const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
-const SEED_DIRECT_ROOT_V2: &[u8] = b"dc:direct-market-root:v2";
+const SEED_DIRECT_ROOT_V3: &[u8] = b"dc:direct-market-root:v3";
 const SEED_DIRECT_REPLAY_V1: &[u8] = b"dc:direct-action-replay:v1";
 const SEED_DIRECT_SELECTION_V1: &[u8] = b"dc:direct-selection:v1";
 
@@ -341,9 +341,9 @@ pub fn plan_direct_action8_context_snapshot_v2(
     let accounts = program_scan.accounts();
     let mut addresses = BTreeSet::new();
     for root_account in current_ready_root_accounts(accounts, release)? {
-        let root_frame = DirectMarketRootAccountV2::decode(&root_account.data)
+        let root_frame = DirectMarketRootAccountV3::decode(&root_account.data)
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-        let root = authenticate_direct_root_transition_body_v2(
+        let root = authenticate_direct_root_transition_body_v3(
             root_frame.semantic_body(),
             &OperatorDirectSha256V2,
         )
@@ -354,7 +354,7 @@ pub fn plan_direct_action8_context_snapshot_v2(
         )?;
         require_program_state(selection_account, release, DIRECT_SELECTION_ACCOUNT_BYTES)?;
         let selection_frame = decode_selection_frame(selection_account)?;
-        let selection = decode_direct_selection_body_for_transition_v2(
+        let selection = decode_direct_selection_body_for_transition_v3(
             selection_frame.semantic_body(),
             &root,
         )
@@ -622,19 +622,19 @@ fn construct_direct_action8_material_at_execution_slot_v2(
         return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
     }
     let semantic_owner = unique_direct_action8_owner(manifest)?;
-    let root_frame = DirectMarketRootAccountV2::decode(&root_account.data)
+    let root_frame = DirectMarketRootAccountV3::decode(&root_account.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let root_transition = authenticate_direct_root_transition_body_v2(
+    let root_transition = authenticate_direct_root_transition_body_v3(
         root_frame.semantic_body(),
         &OperatorDirectSha256V2,
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    require_program_state(root_account, release, DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2)?;
+    require_program_state(root_account, release, DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3)?;
     require_pda(
         direct_root,
         root_frame.bump(),
         &[
-            SEED_DIRECT_ROOT_V2,
+            SEED_DIRECT_ROOT_V3,
             &root_transition.market_instance_id(),
             &root_transition.generation().to_le_bytes(),
         ],
@@ -667,12 +667,12 @@ fn construct_direct_action8_material_at_execution_slot_v2(
         &[SEED_DIRECT_SELECTION_V1, direct_root.as_ref()],
         release.program_id,
     )?;
-    let replay = decode_direct_action_replay_body_for_transition_v2(
+    let replay = decode_direct_action_replay_body_for_transition_v3(
         replay_frame.semantic_body(),
         &root_transition,
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let mut selection = decode_direct_selection_body_for_transition_v2(
+    let mut selection = decode_direct_selection_body_for_transition_v3(
         selection_frame.semantic_body(),
         &root_transition,
     )
@@ -869,9 +869,9 @@ pub fn enumerate_direct_action8_material_v2(
     let roots = current_ready_root_accounts(finalized_accounts, release)?;
     let mut output = Vec::new();
     for root_account in roots {
-        let root_frame = DirectMarketRootAccountV2::decode(&root_account.data)
+        let root_frame = DirectMarketRootAccountV3::decode(&root_account.data)
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-        let root = authenticate_direct_root_transition_body_v2(
+        let root = authenticate_direct_root_transition_body_v3(
             root_frame.semantic_body(),
             &OperatorDirectSha256V2,
         )
@@ -882,7 +882,7 @@ pub fn enumerate_direct_action8_material_v2(
         )?;
         require_program_state(selection_account, release, DIRECT_SELECTION_ACCOUNT_BYTES)?;
         let selection_frame = decode_selection_frame(selection_account)?;
-        let selection = decode_direct_selection_body_for_transition_v2(
+        let selection = decode_direct_selection_body_for_transition_v3(
             selection_frame.semantic_body(),
             &root,
         )
@@ -1031,12 +1031,12 @@ fn current_ready_root_accounts<'a>(
         .filter(|account| {
             account.owner == release.program_id
                 && account.provenance.release_key == release.key()
-                && account.data.len() == DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2
+                && account.data.len() == DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3
                 && account.data.first()
                     == Some(&clutch_solana_layout::registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG)
                 && account.data.get(1)
                     == Some(
-                        &clutch_solana_layout::registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
+                        &clutch_solana_layout::registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3,
                     )
         })
         .collect::<Vec<_>>();
@@ -1048,7 +1048,7 @@ fn current_ready_root_accounts<'a>(
 }
 
 fn direct_action8_ready(
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     selection: DirectSelectionV1,
     observed_slot: u64,
 ) -> bool {
@@ -1231,13 +1231,13 @@ fn write_current_direct_postimages(
     postimages: &mut Vec<DirectAction8PostimageV2>,
 ) -> Result<()> {
     let mut root_data = root_account.data.clone();
-    write_direct_root_transition_body_v2(
+    write_direct_root_transition_body_v3(
         state.root(),
         &mut root_data[4..],
         &OperatorDirectSha256V2,
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    if DirectMarketRootAccountV2::decode(&root_data)
+    if DirectMarketRootAccountV3::decode(&root_data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
         .bump()
         != root_bump
@@ -1246,7 +1246,7 @@ fn write_current_direct_postimages(
     }
     let mut replay_data = replay_account.data.clone();
     replay_data[2] = replay_bump;
-    encode_direct_action_replay_body_into_transition_v2(
+    encode_direct_action_replay_body_into_transition_v3(
         state.replay(),
         state.root(),
         &mut replay_data[4..],
@@ -1254,7 +1254,7 @@ fn write_current_direct_postimages(
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let mut selection_data = selection_account.data.clone();
     selection_data[2] = selection_bump;
-    encode_direct_selection_body_into_transition_v2(
+    encode_direct_selection_body_into_transition_v3(
         selection,
         state.root(),
         &mut selection_data[4..],
@@ -1763,7 +1763,7 @@ fn prepare_no_candidate(
         let post = plan.endpoints[index]
             .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
         let mut reservation_data = source.reservation_account.data.clone();
-        encode_direct_reservation_body_into_transition_v2(
+        encode_direct_reservation_body_into_transition_v3(
             post.reservation_post,
             state.root(),
             &mut reservation_data[4..],
@@ -1879,7 +1879,7 @@ struct CandidateWorkProjectionV2 {
 fn authenticate_candidate_plane<'a>(
     release: &IndexedProgramRelease,
     accounts: &'a [ObservedRpcAccount],
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<CandidatePlaneV2<'a>> {
     let binding = root.candidate_liveness();
     let policy_address = Address::new_from_array(binding.policy_account);
@@ -2143,7 +2143,7 @@ struct CurrentEndpointV2<'a> {
 fn authenticate_current_endpoint_v2<'a>(
     release: &IndexedProgramRelease,
     accounts: &'a [ObservedRpcAccount],
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     selection: DirectSelectionV1,
     graph: &CurrentGeneralGraphV2<'_>,
     index: u8,
@@ -2162,7 +2162,7 @@ fn authenticate_current_endpoint_v2<'a>(
         &[
             b"dc:direct-reservation:v1",
             &root.direct_root_account(),
-            &decode_direct_reservation_body_for_transition_v2(
+            &decode_direct_reservation_body_for_transition_v3(
                 reservation_frame.semantic_body(),
                 root,
             )
@@ -2171,7 +2171,7 @@ fn authenticate_current_endpoint_v2<'a>(
         ],
         release.program_id,
     )?;
-    let reservation = decode_direct_reservation_body_for_transition_v2(
+    let reservation = decode_direct_reservation_body_for_transition_v3(
         reservation_frame.semantic_body(),
         root,
     )
@@ -2323,7 +2323,7 @@ fn authenticate_current_general_graph_v2<'a>(
     collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     release: &IndexedProgramRelease,
     accounts: &'a [ObservedRpcAccount],
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<CurrentGeneralGraphV2<'a>> {
     const BINDING_DATA_DOMAIN: &[u8] =
         b"dragons-clutch/general-market/binding-data/v4\0";

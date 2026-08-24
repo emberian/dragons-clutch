@@ -557,6 +557,19 @@ impl OwnedInstructionDraft {
     ) -> Result<Self> {
         use clutch_client_contract::direct_market::DirectMarketClientRequestV1;
 
+        if matches!(
+            payload.action(),
+            clutch_solana_layout::registry::DirectMarketAction::SubmitCandidate
+                | clutch_solana_layout::registry::DirectMarketAction::BeginVerification
+                | clutch_solana_layout::registry::DirectMarketAction::VerifyCandidate
+        ) {
+            // Current actions 5..7 have a physically routed b1/v3+b2+b3
+            // contract. They may only be constructed from hostile chain state
+            // by `direct_candidate_material`; retaining a generic disabled DTO
+            // here would create a parallel payload/account authority.
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+
         let action = ExtensionAction::DirectMarket(payload.action());
         if (matches!(
             payload.action(),
@@ -3635,7 +3648,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_successor_request_stays_exact_and_runtime_disabled() {
+    fn direct_candidate_work_refuses_the_generic_disabled_builder() {
         use clutch_client_contract::direct_market::DirectMarketClientPayloadV1;
         use clutch_solana_layout::registry::DirectMarketAction;
 
@@ -3650,30 +3663,6 @@ mod tests {
             DirectMarketAction::BeginVerification,
         )
         .unwrap();
-        let draft = OwnedInstructionDraft::allocated_direct_market_request_v1(
-            "direct-begin-verification",
-            owner(),
-            program,
-            accounts.clone(),
-            vec![],
-            vec![ExactEquation {
-                name: "no collateral movement".into(),
-                unit: IntegerUnit::Lamports,
-                left: 0,
-                right: 0,
-            }],
-            9,
-            &payload,
-        )
-        .unwrap();
-        assert_eq!(draft.flow, ProtocolFlow::DirectMarketV1);
-        assert_eq!(draft.runtime_admission, RuntimeAdmission::ReservedDisabled);
-        let request = ExtensionRequest::decode(draft.data()).unwrap();
-        assert_eq!(request.sequence, 9);
-        assert_eq!(
-            request.envelope.action,
-            ExtensionAction::DirectMarket(DirectMarketAction::BeginVerification)
-        );
         assert_eq!(
             OwnedInstructionDraft::allocated_direct_market_request_v1(
                 "direct-begin-verification",
@@ -3687,10 +3676,10 @@ mod tests {
                     left: 0,
                     right: 0,
                 }],
-                0,
+                9,
                 &payload,
             ),
-            Err(ConstructionError::WrongWirePrefix)
+            Err(ConstructionError::InvalidAccountContract)
         );
     }
 
