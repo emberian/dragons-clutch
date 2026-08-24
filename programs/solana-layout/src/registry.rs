@@ -339,7 +339,7 @@ pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = 0xbd;
 /// Current Source lifecycle custody version.
 pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION: u8 = 1;
 /// Exact Source lifecycle custody width.
-pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 336;
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 400;
 /// Fixed global envelope preceding each Dealer runtime semantic body.
 pub const DEALER_RUNTIME_ACCOUNT_HEADER_BYTES: usize = 8;
 /// Immutable Dealer liveness-schedule account discriminator.

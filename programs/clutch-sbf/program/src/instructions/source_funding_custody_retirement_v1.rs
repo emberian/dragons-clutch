@@ -30,7 +30,6 @@ const SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2: &[u8] =
 pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
     pub(crate) funding_terms_id: ContentId,
     pub(crate) product_retirement_authority_id: ContentId,
-    pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) pre_root_source_occurrence_id: ContentId,
     pub(crate) source_terminal_receipt_id: ContentId,
     pub(crate) source_result_or_absence_close_receipt_id: ContentId,
@@ -52,6 +51,7 @@ pub(crate) struct SourceFundingCustodyRetirementFactsV2 {
     pub(crate) custody_authentication_id: ContentId,
     pub(crate) custody_account_data_before_id: ContentId,
     pub(crate) ledger_before: SourceFundingCustodyLedgerV1,
+    pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) custody_balance_before: u64,
     pub(crate) allocated_principal_lamports: u64,
     pub(crate) completed_principal_lamports: u64,
@@ -141,7 +141,6 @@ pub(crate) fn retire_source_funding_custody_v2<
     let terminal_ids = [
         accounting.funding_terms_id,
         accounting.product_retirement_authority_id,
-        accounting.capitalization_receipt_id,
         accounting.pre_root_source_occurrence_id,
         accounting.source_terminal_receipt_id,
         accounting.source_result_or_absence_close_receipt_id,
@@ -168,6 +167,16 @@ pub(crate) fn retire_source_funding_custody_v2<
             accounting.counted_retirement_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    require(
+        ledger_before.is_live()
+            && !ledger_before.capitalization_receipt_id.is_zero()
+            && ledger_before.capitalization_receipt_id
+                != ledger_before.capitalization_authority_id
+            && terminal_ids
+                .iter()
+                .all(|id| *id != ledger_before.capitalization_receipt_id),
+        ClutchError::MismatchedState,
+    )?;
     if ledger_before != custody.ledger() {
         let bytes = ledger_before
             .encode()
@@ -230,6 +239,7 @@ pub(crate) fn retire_source_funding_custody_v2<
         custody_authentication_id,
         custody_account_data_before_id,
         ledger_before,
+        capitalization_receipt_id: ledger_before.capitalization_receipt_id,
         custody_balance_before,
         allocated_principal_lamports: ledger_before.allocated_principal_lamports,
         completed_principal_lamports,
@@ -279,7 +289,7 @@ pub(crate) fn retire_source_funding_custody_v2<
             SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2,
             &product_retirement_authority_id.bytes(),
             &accounting.funding_terms_id.bytes(),
-            &accounting.capitalization_receipt_id.bytes(),
+            &ledger_before.capitalization_receipt_id.bytes(),
             &accounting.pre_root_source_occurrence_id.bytes(),
             &accounting.source_terminal_receipt_id.bytes(),
             &accounting.source_result_or_absence_close_receipt_id.bytes(),
@@ -347,6 +357,10 @@ mod adversarial_tests {
             .expect("private ledger retirement");
         assert!(!accounting.contains("allocated_principal_lamports"));
         assert!(!accounting.contains("completed_principal_lamports"));
+        assert!(!accounting.contains("capitalization_receipt_id"));
+        assert!(source.contains(
+            "capitalization_receipt_id: ledger_before.capitalization_receipt_id"
+        ));
         assert!(retire.contains(".checked_sub(ledger_before.remaining_principal_lamports)"));
         assert!(retire.contains("ledger_before.remaining_principal_lamports"));
         assert!(retire.contains("ledger_before.donation_lamports"));

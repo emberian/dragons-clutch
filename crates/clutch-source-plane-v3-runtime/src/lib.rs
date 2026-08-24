@@ -48,7 +48,8 @@ pub use auth::{
     SOURCE_RELEASE_MANIFEST_V1_BYTES,
 };
 pub use custody::{
-    SourceFundingCustodyLedgerV1, SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
+    SourceFundingCustodyLedgerV1, SourceFundingCustodyPhaseV1,
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
     SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG, SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION,
 };
 pub use failure_terminal::{

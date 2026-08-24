@@ -17,11 +17,39 @@ pub const SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = SOURCE_FUNDING_CUSTODY_MAGIC[
 /// Current Source lifecycle-custody account version.
 pub const SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION: u8 = SOURCE_FUNDING_CUSTODY_MAGIC[1];
 /// Exact fixed width of [`SourceFundingCustodyLedgerV1`].
-pub const SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 336;
+pub const SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 400;
+
+/// One-way initialization phase for the fresh current custody account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceFundingCustodyPhaseV1 {
+    /// Exact post-transfer body bound to Product's private preauthorization.
+    Bootstrap,
+    /// Live body immutably bound to its Source capitalization receipt.
+    Live,
+}
+
+impl SourceFundingCustodyPhaseV1 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::Bootstrap => 1,
+            Self::Live => 2,
+        }
+    }
+
+    fn from_wire_byte(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(Self::Bootstrap),
+            2 => Ok(Self::Live),
+            _ => Err(Error::InvalidCodec),
+        }
+    }
+}
 
 /// Sole persisted owner of prepaid Source principal and unsolicited lamports.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceFundingCustodyLedgerV1 {
+    /// One-way bootstrap or live phase.
+    pub phase: SourceFundingCustodyPhaseV1,
     /// Exact adapter program owning this body and its lamports.
     pub adapter_program: RuntimeKey,
     /// Immutable checked Source release.
@@ -46,6 +74,10 @@ pub struct SourceFundingCustodyLedgerV1 {
     pub donation_lamports: u64,
     /// Monotone ledger mutation sequence, beginning at one.
     pub transition_sequence: u64,
+    /// Immutable Product preauthorization that selected the transfer.
+    pub capitalization_authority_id: ContentId,
+    /// Immutable Source receipt minted over the exact bootstrap body.
+    pub capitalization_receipt_id: ContentId,
     /// Exact private semantic postwrite authorizing the last mutation.
     pub last_transition_id: ContentId,
 }
@@ -53,7 +85,7 @@ pub struct SourceFundingCustodyLedgerV1 {
 impl SourceFundingCustodyLedgerV1 {
     /// Initialize exact capitalized principal under Product's private preauth.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_bootstrap(
         adapter_program: RuntimeKey,
         release_manifest_id: ContentId,
         route_id: ContentId,
@@ -66,6 +98,7 @@ impl SourceFundingCustodyLedgerV1 {
         capitalization_authority_id: ContentId,
     ) -> Result<Self> {
         let value = Self {
+            phase: SourceFundingCustodyPhaseV1::Bootstrap,
             adapter_program,
             release_manifest_id,
             route_id,
@@ -78,10 +111,41 @@ impl SourceFundingCustodyLedgerV1 {
             remaining_principal_lamports: allocated_principal_lamports,
             donation_lamports: 0,
             transition_sequence: 1,
+            capitalization_authority_id,
+            capitalization_receipt_id: ContentId::ZERO,
             last_transition_id: capitalization_authority_id,
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Bind the exact receipt computed over this bootstrap body and enter the
+    /// only phase accepted by Source lifecycle consumers.
+    pub fn bind_capitalization_receipt(
+        self,
+        capitalization_receipt_id: ContentId,
+    ) -> Result<Self> {
+        self.validate()?;
+        if self.phase != SourceFundingCustodyPhaseV1::Bootstrap
+            || capitalization_receipt_id.is_zero()
+            || capitalization_receipt_id == self.capitalization_authority_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            phase: SourceFundingCustodyPhaseV1::Live,
+            capitalization_receipt_id,
+            transition_sequence: 2,
+            last_transition_id: capitalization_receipt_id,
+            ..self
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Whether this body has completed the one-way receipt binding.
+    pub const fn is_live(&self) -> bool {
+        matches!(self.phase, SourceFundingCustodyPhaseV1::Live)
     }
 
     /// Validate the canonical principal/donation partition.
@@ -95,6 +159,7 @@ impl SourceFundingCustodyLedgerV1 {
             self.route_id,
             self.source_work_schedule_id,
             self.lifecycle_id,
+            self.capitalization_authority_id,
             self.last_transition_id,
         ] {
             if id.is_zero() {
@@ -110,6 +175,14 @@ impl SourceFundingCustodyLedgerV1 {
             || self.custody_account == self.principal_refund
             || self.custody_account == self.neutral_sink
             || self.principal_refund == self.neutral_sink
+            || (self.phase == SourceFundingCustodyPhaseV1::Bootstrap
+                && (!self.capitalization_receipt_id.is_zero()
+                    || self.transition_sequence != 1
+                    || self.last_transition_id != self.capitalization_authority_id))
+            || (self.phase == SourceFundingCustodyPhaseV1::Live
+                && (self.capitalization_receipt_id.is_zero()
+                    || self.transition_sequence < 2
+                    || self.capitalization_receipt_id == self.capitalization_authority_id))
         {
             return Err(Error::MismatchedBinding);
         }
@@ -127,7 +200,8 @@ impl SourceFundingCustodyLedgerV1 {
         semantic_postwrite_id: ContentId,
     ) -> Result<Self> {
         self.validate()?;
-        if semantic_postwrite_id.is_zero()
+        if !self.is_live()
+            || semantic_postwrite_id.is_zero()
             || (principal_debit_lamports == 0 && principal_credit_lamports == 0)
         {
             return Err(Error::MismatchedBinding);
@@ -187,6 +261,9 @@ impl SourceFundingCustodyLedgerV1 {
         semantic_postwrite_id: ContentId,
     ) -> Result<Self> {
         self.validate()?;
+        if !self.is_live() {
+            return Err(Error::MismatchedBinding);
+        }
         if semantic_postwrite_id.is_zero() {
             return Err(Error::ZeroIdentity);
         }
@@ -236,6 +313,7 @@ impl SourceFundingCustodyLedgerV1 {
         self.validate()?;
         let mut out = [0_u8; SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES];
         out[..8].copy_from_slice(&SOURCE_FUNDING_CUSTODY_MAGIC);
+        out[8] = self.phase.wire_byte();
         out[16..48].copy_from_slice(&self.adapter_program.bytes());
         out[48..80].copy_from_slice(&self.release_manifest_id.bytes());
         out[80..112].copy_from_slice(&self.route_id.bytes());
@@ -248,7 +326,9 @@ impl SourceFundingCustodyLedgerV1 {
         out[280..288].copy_from_slice(&self.remaining_principal_lamports.to_le_bytes());
         out[288..296].copy_from_slice(&self.donation_lamports.to_le_bytes());
         out[296..304].copy_from_slice(&self.transition_sequence.to_le_bytes());
-        out[304..336].copy_from_slice(&self.last_transition_id.bytes());
+        out[304..336].copy_from_slice(&self.capitalization_authority_id.bytes());
+        out[336..368].copy_from_slice(&self.capitalization_receipt_id.bytes());
+        out[368..400].copy_from_slice(&self.last_transition_id.bytes());
         Ok(out)
     }
 
@@ -256,11 +336,12 @@ impl SourceFundingCustodyLedgerV1 {
     pub fn decode(input: &[u8]) -> Result<Self> {
         if input.len() != SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES
             || input[..8] != SOURCE_FUNDING_CUSTODY_MAGIC
-            || input[8..16].iter().any(|byte| *byte != 0)
+            || input[9..16].iter().any(|byte| *byte != 0)
         {
             return Err(Error::InvalidCodec);
         }
         let value = Self {
+            phase: SourceFundingCustodyPhaseV1::from_wire_byte(input[8])?,
             adapter_program: key_at(input, 16),
             release_manifest_id: id_at(input, 48),
             route_id: id_at(input, 80),
@@ -273,7 +354,9 @@ impl SourceFundingCustodyLedgerV1 {
             remaining_principal_lamports: le_u64(input, 280),
             donation_lamports: le_u64(input, 288),
             transition_sequence: le_u64(input, 296),
-            last_transition_id: id_at(input, 304),
+            capitalization_authority_id: id_at(input, 304),
+            capitalization_receipt_id: id_at(input, 336),
+            last_transition_id: id_at(input, 368),
         };
         value.validate()?;
         Ok(value)
@@ -335,11 +418,15 @@ mod adversarial_tests {
         ContentId::from_bytes([seed; 32])
     }
 
-    fn ledger() -> SourceFundingCustodyLedgerV1 {
-        SourceFundingCustodyLedgerV1::new(
+    fn bootstrap() -> SourceFundingCustodyLedgerV1 {
+        SourceFundingCustodyLedgerV1::new_bootstrap(
             key(1), id(2), id(3), id(4), id(5), key(6), key(7), key(8), 100, id(9),
         )
         .unwrap()
+    }
+
+    fn ledger() -> SourceFundingCustodyLedgerV1 {
+        bootstrap().bind_capitalization_receipt(id(10)).unwrap()
     }
 
     #[test]
@@ -367,7 +454,7 @@ mod adversarial_tests {
     #[test]
     fn codec_refuses_reserved_bytes() {
         let mut bytes = ledger().encode().unwrap();
-        bytes[8] = 1;
+        bytes[9] = 1;
         assert_eq!(
             SourceFundingCustodyLedgerV1::decode(&bytes),
             Err(Error::InvalidCodec)
@@ -386,5 +473,21 @@ mod adversarial_tests {
             SourceFundingCustodyLedgerV1::decode(&withdrawn),
             Err(Error::InvalidCodec)
         );
+    }
+
+    #[test]
+    fn bootstrap_cannot_spend_and_receipt_binding_is_one_way() {
+        let bootstrap = bootstrap();
+        assert!(bootstrap.transition(1, 0, 99, id(11)).is_err());
+        assert!(bootstrap.observe_terminal_balance(100, id(11)).is_err());
+        assert!(bootstrap.bind_capitalization_receipt(ContentId::ZERO).is_err());
+
+        let live = bootstrap.bind_capitalization_receipt(id(10)).unwrap();
+        assert_eq!(live.phase, SourceFundingCustodyPhaseV1::Live);
+        assert_eq!(live.capitalization_authority_id, id(9));
+        assert_eq!(live.capitalization_receipt_id, id(10));
+        assert_eq!(live.transition_sequence, 2);
+        assert_eq!(live.last_transition_id, id(10));
+        assert!(live.bind_capitalization_receipt(id(11)).is_err());
     }
 }

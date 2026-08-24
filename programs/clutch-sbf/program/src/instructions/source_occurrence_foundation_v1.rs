@@ -22,7 +22,8 @@ use crate::instructions::product_source_current::{
 use crate::seeds;
 use crate::source_plane_v3::{authenticate_occurrence, runtime_key};
 use crate::source_plane_v3_actions::{
-    admit_source_lifecycle_v1, initialize_source_funding_custody_v1,
+    admit_source_lifecycle_v1, bind_source_funding_custody_capitalization_v1,
+    initialize_source_funding_custody_bootstrap_v1,
     persist_source_generation_request_v1, preallocate_statistic_result_lineage_v1,
     publish_source_occurrence_v1, quote_source_lifecycle_capitalization_v1,
     AuthenticatedSourceFundingCustodyV1, AuthenticatedSourceLifecycleAdmissionV1,
@@ -370,7 +371,7 @@ pub(crate) fn capitalize_source_work_v1<
             && custody_account.lamports() == pending.lamports,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let custody = initialize_source_funding_custody_v1(
+    let bootstrap = initialize_source_funding_custody_bootstrap_v1(
         program_id,
         source_route,
         schedule,
@@ -391,9 +392,13 @@ pub(crate) fn capitalize_source_work_v1<
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
             &quote.id.bytes(),
-            &custody.id().bytes(),
-            &custody.account_data_id().bytes(),
-            &custody.ledger().id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes(),
+            &bootstrap.id().bytes(),
+            &bootstrap.account_data_id().bytes(),
+            &bootstrap
+                .ledger()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
             &source_principal_refund.bytes(),
             source_work_vault.key.as_ref(),
             custody_account.key.as_ref(),
@@ -404,6 +409,14 @@ pub(crate) fn capitalize_source_work_v1<
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
+    let custody = bind_source_funding_custody_capitalization_v1(
+        program_id,
+        source_route,
+        schedule,
+        bootstrap,
+        id,
+        custody_account,
+    )?;
     Ok(AuthenticatedSourceWorkCapitalizationV1 {
         id,
         product_preauthorization_id,
@@ -775,7 +788,7 @@ pub(crate) trait AuthenticatedSourceOccurrenceFoundationAuthorityV2 {
 
 /// Exact current transfer from the Series SourceWork vault into the
 /// program-owned Source lifecycle ledger.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceWorkCapitalizationV2 {
     id: ContentId,
     product_preauthorization_id: ContentId,
@@ -785,23 +798,23 @@ pub(crate) struct AuthenticatedSourceWorkCapitalizationV2 {
 }
 
 impl AuthenticatedSourceWorkCapitalizationV2 {
-    pub(crate) const fn id(self) -> ContentId {
+    pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn product_preauthorization_id(self) -> ContentId {
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
         self.product_preauthorization_id
     }
 
-    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV2 {
+    pub(crate) const fn facts(&self) -> SourceWorkCapitalizationFactsV2 {
         self.facts
     }
 
-    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+    pub(crate) const fn quote(&self) -> SourceLifecycleCapitalizationQuoteV1 {
         self.quote
     }
 
-    pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
+    pub(crate) const fn custody(&self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
     }
 }
@@ -1029,7 +1042,7 @@ pub(crate) fn capitalize_source_work_v2<
             && custody_account.lamports() == pending.lamports,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let custody = initialize_source_funding_custody_v1(
+    let bootstrap = initialize_source_funding_custody_bootstrap_v1(
         program_id,
         source_route,
         schedule,
@@ -1050,9 +1063,9 @@ pub(crate) fn capitalize_source_work_v2<
             &source_route.route_id().bytes(),
             &schedule.source_work_schedule_id().bytes(),
             &quote.id.bytes(),
-            &custody.id().bytes(),
-            &custody.account_data_id().bytes(),
-            &custody
+            &bootstrap.id().bytes(),
+            &bootstrap.account_data_id().bytes(),
+            &bootstrap
                 .ledger()
                 .id()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
@@ -1067,6 +1080,14 @@ pub(crate) fn capitalize_source_work_v2<
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
+    let custody = bind_source_funding_custody_capitalization_v1(
+        program_id,
+        source_route,
+        schedule,
+        bootstrap,
+        id,
+        custody_account,
+    )?;
     Ok(AuthenticatedSourceWorkCapitalizationV2 {
         id,
         product_preauthorization_id,
@@ -1101,8 +1122,8 @@ impl AuthenticatedPreRootSourceOccurrenceV2 {
         self.occurrence
     }
 
-    pub(crate) const fn capitalization(&self) -> AuthenticatedSourceWorkCapitalizationV2 {
-        self.capitalization
+    pub(crate) const fn capitalization(&self) -> &AuthenticatedSourceWorkCapitalizationV2 {
+        &self.capitalization
     }
 
     pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
@@ -1416,5 +1437,18 @@ mod current_adversarial_tests {
         assert!(current.contains("SERIES_FUNDING_ACCOUNT_BYTES_V3"));
         assert!(current.contains("SeriesFundingPhaseV3::Pending"));
         assert!(!current.contains("SeriesFundingPhaseV2::Pending"));
+        let bootstrap = current
+            .find("initialize_source_funding_custody_bootstrap_v1")
+            .expect("private bootstrap");
+        let receipt = current
+            .find("SOURCE_WORK_CAPITALIZATION_DOMAIN_V2")
+            .expect("capitalization receipt");
+        let bind = current
+            .find("bind_source_funding_custody_capitalization_v1")
+            .expect("one-way live binding");
+        assert!(bootstrap < receipt && receipt < bind);
+        assert!(current.contains("bootstrap.id()"));
+        assert!(current.contains("bootstrap.account_data_id()"));
+        assert!(current.contains("bootstrap\n                .ledger()"));
     }
 }
