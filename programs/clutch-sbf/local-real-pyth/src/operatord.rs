@@ -9,8 +9,8 @@ use crate::account_index::{
     CanonicalAccountIndex, CanonicalAccountKind, DecodeState, IndexedAccountVersion, IndexedBranch,
 };
 use crate::action_material::{
-    source_action_from_selection, source_role_label_v2, source_selection_action,
-    CanonicalActionMaterialV1,
+    direct_action_from_selection, direct_selection_action, source_action_from_selection,
+    source_role_label_v2, source_selection_action, CanonicalActionMaterialV1,
 };
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
@@ -18,7 +18,8 @@ use crate::rpc_index::{
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{IntegerUnit, ProtocolFlow, RuntimeAdmission};
 use clutch_solana_layout::registry::{
-    GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
+    DirectMarketAction, GeneralV2Action, RecurringSeriesAction, RecoveryAction,
+    SourceSeriesAction, DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION,
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
@@ -945,6 +946,13 @@ fn callable_action_verdict_json(
 }
 
 fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
+    if let Some(action) = direct_action_from_selection(action) {
+        return Some(CanonicalIntentCoordinate {
+            family_tag: DIRECT_MARKET_FAMILY_TAG,
+            family_version: DIRECT_MARKET_FAMILY_VERSION,
+            local_action: action.tag(),
+        });
+    }
     if let Some(action) = source_action_from_selection(action) {
         return Some(CanonicalIntentCoordinate {
             family_tag: SOURCE_SERIES_FAMILY_TAG,
@@ -1000,6 +1008,18 @@ fn source_action(coordinate: CanonicalIntentCoordinate) -> Option<SourceSeriesAc
 fn coordinate_description(
     coordinate: CanonicalIntentCoordinate,
 ) -> (&'static str, &'static str, Option<&'static str>) {
+    if coordinate.family_tag == DIRECT_MARKET_FAMILY_TAG
+        && coordinate.family_version == DIRECT_MARKET_FAMILY_VERSION
+    {
+        let Some(action) = DirectMarketAction::from_tag(coordinate.local_action) else {
+            return ("direct", "unknown-direct-action", None);
+        };
+        return (
+            "direct",
+            direct_selection_action(action),
+            Some("clutch-direct-market-runtime/current-v1"),
+        );
+    }
     if let Some(action) = source_action(coordinate) {
         let name = source_selection_action(action);
         let builder = matches!(
@@ -1398,6 +1418,26 @@ mod read_only_session_contract_tests {
 
     #[test]
     fn scheduling_names_cannot_promote_an_unrelated_release_coordinate() {
+        assert_eq!(
+            action_coordinate("settle-direct-pair"),
+            Some(CanonicalIntentCoordinate {
+                family_tag: DIRECT_MARKET_FAMILY_TAG,
+                family_version: DIRECT_MARKET_FAMILY_VERSION,
+                local_action: DirectMarketAction::SettlePair.tag(),
+            })
+        );
+        assert_eq!(
+            coordinate_description(CanonicalIntentCoordinate {
+                family_tag: DIRECT_MARKET_FAMILY_TAG,
+                family_version: DIRECT_MARKET_FAMILY_VERSION,
+                local_action: DirectMarketAction::SettlePair.tag(),
+            }),
+            (
+                "direct",
+                "settle-direct-pair",
+                Some("clutch-direct-market-runtime/current-v1"),
+            )
+        );
         assert_eq!(
             action_coordinate("open-raw-page"),
             Some(CanonicalIntentCoordinate {

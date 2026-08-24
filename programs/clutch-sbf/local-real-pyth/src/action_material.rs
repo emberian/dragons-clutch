@@ -981,6 +981,25 @@ pub(crate) const fn direct_selection_action(action: DirectMarketAction) -> &'sta
     }
 }
 
+pub(crate) fn direct_action_from_selection(selection: &str) -> Option<DirectMarketAction> {
+    match selection {
+        "initialize-direct-market" => Some(DirectMarketAction::InitializeMarket),
+        "admit-direct-order" => Some(DirectMarketAction::AdmitOrder),
+        "cancel-direct-order" => Some(DirectMarketAction::CancelOrder),
+        "freeze-direct-book" => Some(DirectMarketAction::FreezeBook),
+        "submit-direct-candidate" => Some(DirectMarketAction::SubmitCandidate),
+        "begin-direct-verification" => Some(DirectMarketAction::BeginVerification),
+        "verify-direct-candidate" => Some(DirectMarketAction::VerifyCandidate),
+        "finalize-direct-selection" => Some(DirectMarketAction::FinalizeSelection),
+        "settle-direct-pair" => Some(DirectMarketAction::SettlePair),
+        "lapse-empty-direct-market" => Some(DirectMarketAction::LapseEmpty),
+        "lapse-unselected-direct-market" => Some(DirectMarketAction::LapseUnselected),
+        "lapse-selected-direct-market" => Some(DirectMarketAction::LapseSelected),
+        "retire-direct-terminal" => Some(DirectMarketAction::RetireTerminal),
+        _ => None,
+    }
+}
+
 pub(crate) const fn source_selection_action(
     action: clutch_solana_layout::registry::SourceSeriesAction,
 ) -> &'static str {
