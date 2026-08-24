@@ -25,6 +25,8 @@
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
     "3": Object.freeze({ action: "redeem-fractional-bearer-exact", ownerSchema: "fractional-redemption/79/1/3/redeem-bearer-exact", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
     "5": Object.freeze({ action: "redeem-fractional-bearer-credit", ownerSchema: "fractional-redemption/79/1/5/redeem-bearer-credit", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
+    "6": Object.freeze({ action: "transfer-fractional-credit", ownerSchema: "fractional-redemption/79/1/6/transfer-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
+    "7": Object.freeze({ action: "merge-fractional-credit", ownerSchema: "fractional-redemption/79/1/7/merge-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
     "8": Object.freeze({ action: "close-fractional-zero-credit", ownerSchema: "fractional-redemption/79/1/8/close-zero-credit", driverRole: 13, equationNames: Object.freeze(["chain-derived zero-credit rent split"]) }),
     "9": Object.freeze({ action: "seal-fractional-claims-exhausted", ownerSchema: "fractional-redemption/79/1/9/seal-claims-exhausted", driverRole: 11, equationNames: Object.freeze(["chain-derived zero native claim supply"]) })
   });
@@ -1147,6 +1149,41 @@
         fundingPayer: payerIndex === null ? null : accountRoles[payerIndex].address,
         disposition: "holder-approved-choices-reauthenticated-against-finalized-chain-derived-material"
       });
+    } else if (coordinate.localAction === "6" || coordinate.localAction === "7") {
+      const internal = accountRoles.length >= 21 && accountRoles[16].role === "payout-and-lifecycle-role" && accountRoles[16].writable && accountRoles[17].writable;
+      const external = accountRoles.length >= 24 && accountRoles[16].role === "payout-and-lifecycle-role" && !accountRoles[16].writable && accountRoles[17].writable && accountRoles[19].writable;
+      const fixedCount = internal ? 21 : external ? 24 : 0;
+      const creation = fixedCount !== 0 && accountRoles.length === fixedCount + 2;
+      if (fixedCount === 0 || (!creation && accountRoles.length !== fixedCount)) throw new Error("Fractional credit movement has invalid internal/external payout geometry.");
+      payerIndex = creation ? fixedCount : null;
+      const payerAliasSource = payerIndex !== null && accountRoles[0].address === accountRoles[payerIndex].address;
+      const payerAliasDestination = payerIndex !== null && accountRoles[1].address === accountRoles[payerIndex].address;
+      const base = [
+        ["source-claimant", true, payerAliasSource], ["destination-claimant", true, payerAliasDestination], ["realm", false, false], ["profile", false, false],
+        ["collateral-policy", false, false], ["collateral-token-program", false, false], ["market-binding-v2", false, false], ["market-runtime-v3", false, false],
+        ["market-instance-preimage-v2", false, false], ["hoard-v2", false, true], ["claim-ledger-v3", false, true], ["resolution-v5", false, false],
+        ["fractional-policy-v3", false, false], ["fractional-ledger-v1", false, true], ["source-credit-v2", false, true], ["destination-credit-v2", false, true]
+      ];
+      const payoutRoles = Array.from({ length: internal ? 5 : 8 }, (_, payoutIndex) => {
+        const absolute = 16 + payoutIndex;
+        return ["payout-and-lifecycle-role", false, internal ? absolute === 16 || absolute === 17 : absolute === 17 || absolute === 19];
+      });
+      expected = [...base, ...payoutRoles, ...(creation ? [["credit-funding-payer", true, true], ["system-program", false, false]] : [])];
+      geometry = `${coordinate.localAction === "6" ? "transfer" : "merge"}-${internal ? "internal" : "external"}-${creation ? "credit-create-or-reopen" : "live-credit"}-${accountRoles.length}-roles`;
+      requirePlain(transactionDraft.exactEquations[0].unit, "Fractional moved numerator unit");
+      if (transactionDraft.exactEquations[0].unit.kind !== "price-units") throw new Error("Fractional credit movement is not expressed in exact scaled numerator units.");
+      const moved = positiveDecimal(transactionDraft.exactEquations[0].left, "Fractional moved numerator").toString();
+      holderChoice = Object.freeze({
+        schema: "dragons-clutch/browser/fractional-holder-intent/v1",
+        kind: coordinate.localAction === "6" ? "transfer-credit" : "merge-credit",
+        sourceClaimant: accountRoles[0].address,
+        sourceCredit: accountRoles[14].address,
+        destinationClaimant: accountRoles[1].address,
+        numerator: coordinate.localAction === "6" ? moved : null,
+        payout: Object.freeze({ kind: internal ? "internal-position" : "external-collateral", target: accountRoles[internal ? 16 : 17].address }),
+        fundingPayer: payerIndex === null ? null : accountRoles[payerIndex].address,
+        disposition: "holder-approved-choices-reauthenticated-against-finalized-chain-derived-material"
+      });
     } else {
       throw new Error("Fractional action lacks a landed exact browser material contract.");
     }
@@ -1158,7 +1195,8 @@
       for (let right = left + 1; right < accountRoles.length; right += 1) {
         const permitted = (coordinate.localAction === "8" && left === 0 && right === 14)
           || ((coordinate.localAction === "3" || coordinate.localAction === "5") && loaderAlias(left, right))
-          || (coordinate.localAction === "5" && payerIndex !== null && left === 0 && right === payerIndex);
+          || (coordinate.localAction === "5" && payerIndex !== null && left === 0 && right === payerIndex)
+          || ((coordinate.localAction === "6" || coordinate.localAction === "7") && payerIndex !== null && (left === 0 || left === 1) && right === payerIndex);
         if (accountRoles[left].address === accountRoles[right].address && !permitted) throw new Error("Fractional exact tuple contains an unowned account alias.");
       }
     }
