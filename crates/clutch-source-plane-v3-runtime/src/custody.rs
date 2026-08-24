@@ -6,7 +6,7 @@ use crate::auth::{domain_id, RuntimeKey};
 use crate::{Error, Result};
 
 const SOURCE_FUNDING_CUSTODY_MAGIC: [u8; 8] =
-    [0xaf, 1, b'D', b'C', b'S', b'C', b'V', b'1'];
+    [0xbd, 1, b'D', b'C', b'S', b'C', b'V', b'1'];
 const SOURCE_FUNDING_CUSTODY_DOMAIN: &[u8] =
     b"dragons-clutch/source-funding-custody-ledger/v1";
 const SOURCE_FUNDING_CUSTODY_TRANSITION_DOMAIN: &[u8] =
@@ -370,6 +370,20 @@ mod adversarial_tests {
         bytes[8] = 1;
         assert_eq!(
             SourceFundingCustodyLedgerV1::decode(&bytes),
+            Err(Error::InvalidCodec)
+        );
+    }
+
+    #[test]
+    fn codec_accepts_registered_bd_and_refuses_withdrawn_af_alias() {
+        let bytes = ledger().encode().unwrap();
+        assert_eq!(bytes[0], 0xbd);
+        assert_eq!(SourceFundingCustodyLedgerV1::decode(&bytes), Ok(ledger()));
+
+        let mut withdrawn = bytes;
+        withdrawn[0] = 0xaf;
+        assert_eq!(
+            SourceFundingCustodyLedgerV1::decode(&withdrawn),
             Err(Error::InvalidCodec)
         );
     }

@@ -468,6 +468,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xb5/1` | General V2 | reserved-disabled compact frozen-order locator (at most 528 bytes) |
 | `0xb6/1` | General V2 | reserved-disabled compact Feed-slice reference index (at most 2,448 bytes; CandidateFeed remains semantic owner) |
 | `0xb7/1` | StructuredClaim | 656-byte Series-scoped descriptor-family root |
+| `0xbd/1` | Source | exact-principal lifecycle custody (336 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

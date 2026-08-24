@@ -335,7 +335,7 @@ pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
 /// SourcePlane V3 liveness-work receipt account version.
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
 /// Mutable exact-principal Source lifecycle custody discriminator.
-pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = 0xaf;
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = 0xbd;
 /// Current Source lifecycle custody version.
 pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION: u8 = 1;
 /// Exact Source lifecycle custody width.
