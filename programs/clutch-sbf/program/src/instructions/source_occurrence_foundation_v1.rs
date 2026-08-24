@@ -18,7 +18,7 @@ use crate::instructions::product_series::{
 use crate::seeds;
 use crate::source_plane_v3::{authenticate_occurrence, runtime_key};
 use crate::source_plane_v3_actions::{
-    admit_source_lifecycle_v1, authenticate_source_funding_custody_v1,
+    admit_source_lifecycle_v1, initialize_source_funding_custody_v1,
     persist_source_generation_request_v1, preallocate_statistic_result_lineage_v1,
     publish_source_occurrence_v1, quote_source_lifecycle_capitalization_v1,
     AuthenticatedSourceFundingCustodyV1, AuthenticatedSourceLifecycleAdmissionV1,
@@ -81,6 +81,7 @@ pub(crate) struct SourceWorkCapitalizationFactsV1 {
     pub(crate) lifecycle_id: ContentId,
     pub(crate) source_work_vault: Pubkey,
     pub(crate) source_funding_custody: Pubkey,
+    pub(crate) source_principal_refund: clutch_source_plane_v3_runtime::RuntimeKey,
     pub(crate) source_vault_balance_before: u64,
     pub(crate) source_vault_balance_after: u64,
     pub(crate) custody_balance_before: u64,
@@ -151,6 +152,7 @@ pub(crate) fn capitalize_source_work_v1<
     funding_account: &AccountInfo<'_>,
     source_work_vault: &AccountInfo<'_>,
     custody_account: &AccountInfo<'_>,
+    source_principal_refund: clutch_source_plane_v3_runtime::RuntimeKey,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedSourceWorkCapitalizationV1> {
@@ -293,6 +295,7 @@ pub(crate) fn capitalize_source_work_v1<
         lifecycle_id: schedule.lifecycle_id(),
         source_work_vault: *source_work_vault.key,
         source_funding_custody: *custody_account.key,
+        source_principal_refund,
         source_vault_balance_before,
         source_vault_balance_after,
         custody_balance_before: 0,
@@ -336,11 +339,16 @@ pub(crate) fn capitalize_source_work_v1<
             && custody_account.lamports() == pending.lamports,
         ClutchError::SeriesCustodyDeltaMismatch,
     )?;
-    let custody = authenticate_source_funding_custody_v1(
+    let custody = initialize_source_funding_custody_v1(
         program_id,
         source_route,
         schedule,
+        product_preauthorization_id,
+        source_principal_refund,
+        pending.lamports,
         custody_account,
+        system_program,
+        &rent,
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -353,6 +361,9 @@ pub(crate) fn capitalize_source_work_v1<
             &schedule.source_work_schedule_id().bytes(),
             &quote.id.bytes(),
             &custody.id().bytes(),
+            &custody.account_data_id().bytes(),
+            &custody.ledger().id().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes(),
+            &source_principal_refund.bytes(),
             source_work_vault.key.as_ref(),
             custody_account.key.as_ref(),
             &source_vault_balance_before.to_le_bytes(),

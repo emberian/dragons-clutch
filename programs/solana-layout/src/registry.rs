@@ -332,6 +332,12 @@ pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION: u8 = 1;
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
 /// SourcePlane V3 liveness-work receipt account version.
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
+/// Mutable exact-principal Source lifecycle custody discriminator.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = 0xaf;
+/// Current Source lifecycle custody version.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION: u8 = 1;
+/// Exact Source lifecycle custody width.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 336;
 /// Fixed global envelope preceding each Dealer runtime semantic body.
 pub const DEALER_RUNTIME_ACCOUNT_HEADER_BYTES: usize = 8;
 /// Immutable Dealer liveness-schedule account discriminator.
@@ -1460,6 +1466,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "source-v3-work-receipt-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG,
+            version: SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-funding-custody-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3328,6 +3343,10 @@ mod tests {
             (
                 SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG,
                 SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG,
+                SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
