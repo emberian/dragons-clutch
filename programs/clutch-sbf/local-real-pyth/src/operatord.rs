@@ -865,7 +865,16 @@ fn action_variant_verdict_json(
     let coordinate = variant.coordinate();
     let matching_materials = action_materials
         .iter()
-        .filter(|material| material.matches_variant(release, variant))
+        .filter(|material| {
+            material.matches_variant(release, variant)
+                && material.dealer_terminal_observations().is_some_and(|observations| {
+                    observations.accounts().len()
+                        == match variant {
+                            CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => 48,
+                            CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => 45,
+                        }
+                })
+        })
         .collect::<Vec<_>>();
     let material = match matching_materials.as_slice() {
         [material] => Some(*material),
@@ -929,6 +938,58 @@ fn callable_action_variant_verdict_json(
             "identityDisposition": "semantic-owner-derived-and-bound-to-draft"
         }))
         .collect::<Vec<_>>();
+    let signer_requirements = transaction
+        .required_signers
+        .iter()
+        .map(|signer| {
+            let mut semantic_roles = material
+                .account_roles()
+                .iter()
+                .filter(|role| role.signer() && role.address() == *signer)
+                .map(|role| role.label())
+                .collect::<Vec<_>>();
+            if *signer == material.fee_payer() {
+                semantic_roles.push("transaction-fee-payer");
+            }
+            json!({
+                "address": signer.to_string(),
+                "semanticRoles": semantic_roles,
+                "signaturePresent": false,
+                "keyAccess": false
+            })
+        })
+        .collect::<Vec<_>>();
+    let Some(observations) = material.dealer_terminal_observations() else {
+        return json!({
+            "coordinate": {
+                "familyTag": coordinate.family_tag.to_string(),
+                "familyVersion": coordinate.family_version.to_string(),
+                "localAction": coordinate.local_action.to_string(),
+                "family": "dealer",
+                "action": "retire"
+            },
+            "payloadVariant": {
+                "discriminator": variant.payload_discriminator().to_string(),
+                "name": variant.name()
+            },
+            "releaseAdmission": {
+                "enabled": true,
+                "scope": "payload-discriminator-only",
+                "coarseCoordinateEnabled": false,
+                "releaseKey": release.key(),
+                "capabilityProfileId": hex32(release.capability_profile_id)
+            },
+            "stateSelection": null,
+            "semanticOwnerConstructor": "chain-derived-dealer-terminal-v1",
+            "accountRoles": [],
+            "callable": false,
+            "verdict": "unavailable",
+            "reason": "canonical Dealer material omitted its exact finalized observation set",
+            "transactionDraft": null,
+            "signerRequirements": [],
+            "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
+        });
+    };
     let freshness = material.freshness();
     json!({
         "coordinate": {
@@ -950,6 +1011,26 @@ fn callable_action_variant_verdict_json(
             "capabilityProfileId": hex32(release.capability_profile_id)
         },
         "stateSelection": null,
+        "observationSet": {
+            "schema": "dragons-clutch/operator/dealer-terminal-observation-set/v1",
+            "payloadDiscriminator": variant.payload_discriminator().to_string(),
+            "authorityStateSha256": hex32(material.authority_state_sha256()),
+            "chainStateSha256": hex32(observations.chain_state_sha256()),
+            "collateralCatalogReceiptId": hex32(observations.collateral_catalog_receipt_id()),
+            "lookupTableStateSha256": transaction.address_lookup_tables.first().map(|lookup| hex32(lookup.state_sha256)),
+            "accounts": observations.accounts().iter().enumerate().map(|(index, observation)| json!({
+                "index": index.to_string(),
+                "address": observation.address().to_string(),
+                "observedSlot": observation.observed_slot().to_string(),
+                "disposition": if observation.present() { "finalized-present" } else { "finalized-absent" },
+                "owner": observation.owner().map(|owner| owner.to_string()),
+                "lamports": observation.lamports().map(|value| value.to_string()),
+                "executable": observation.executable(),
+                "rentEpoch": observation.rent_epoch().map(|value| value.to_string()),
+                "dataSha256": observation.data_sha256().map(hex32),
+                "releaseKey": observation.release_key()
+            })).collect::<Vec<_>>()
+        },
         "semanticOwnerConstructor": "chain-derived-dealer-terminal-v1",
         "accountRoles": roles,
         "callable": true,
@@ -961,6 +1042,8 @@ fn callable_action_variant_verdict_json(
             "constructionSchema": transaction.schema,
             "driverAccount": material.driver_account().to_string(),
             "driverAccountSlot": material.driver_account_slot().to_string(),
+            "driverReleaseKey": material.driver_release_key(),
+            "executionReleaseKey": material.release_key(),
             "authorityStateSha256": hex32(material.authority_state_sha256()),
             "releaseManifestSha256": hex32(material.release_manifest_sha256()),
             "capabilityProfileId": hex32(material.capability_profile_id()),
@@ -969,21 +1052,50 @@ fn callable_action_variant_verdict_json(
                 TransactionMessageVersionV1::Legacy => "legacy",
                 TransactionMessageVersionV1::V0 => "v0",
             },
+            "addressLookupTables": transaction.address_lookup_tables.iter().map(|lookup| json!({
+                "account": lookup.account.to_string(),
+                "observedSlot": lookup.observed_slot.to_string(),
+                "stateSha256": hex32(lookup.state_sha256),
+                "writableAddresses": lookup.writable_addresses.to_string(),
+                "readonlyAddresses": lookup.readonly_addresses.to_string()
+            })).collect::<Vec<_>>(),
+            "recentBlockhash": null,
+            "hasRecentBlockhash": transaction.has_recent_blockhash,
             "serializedTransactionHex": hex_bytes(&transaction.serialized_transaction),
-            "recentBlockhashPresent": transaction.has_recent_blockhash,
+            "serializedBytes": transaction.serialized_transaction.len().to_string(),
+            "actions": transaction.actions.iter().cloned().collect::<Vec<_>>(),
+            "flows": transaction.flows.iter().map(|flow| protocol_flow_name(*flow)).collect::<Vec<_>>(),
+            "semanticOwners": transaction.semantic_owners.iter().map(|owner| json!({
+                "package": owner.package.as_str(),
+                "schema": owner.schema.as_str(),
+                "releaseSha256": hex32(owner.release_sha256)
+            })).collect::<Vec<_>>(),
+            "registryBindings": transaction.registry_bindings.iter().map(|binding| binding.map(|binding| json!({
+                "familyTag": binding.family.tag().to_string(),
+                "familyVersion": binding.family.version().to_string(),
+                "localAction": binding.local_action.to_string(),
+                "allocationStatus": allocation_status_name(binding.family_status),
+                "centralAction": binding.central_action.map(|action| action.local_tag().to_string())
+            }))).collect::<Vec<_>>(),
+            "runtimeAdmissions": transaction.runtime_admissions.iter().map(|admission| runtime_admission_name(*admission)).collect::<Vec<_>>(),
+            "exactEquations": transaction.exact_equations.iter().map(|equation| json!({
+                "name": equation.name.as_str(),
+                "unit": integer_unit_json(equation.unit),
+                "left": equation.left.to_string(),
+                "right": equation.right.to_string()
+            })).collect::<Vec<_>>(),
             "signed": transaction.signed,
-            "submitted": transaction.submitted
+            "submitted": transaction.submitted,
+            "reloadAuthoritativeAccounts": material.reload_authoritative_accounts()
         },
-        "signerRequirements": transaction.required_signers.iter().map(|signer| json!({
-            "address": signer.to_string(),
-            "signaturePresent": false,
-            "keyAccess": false
-        })).collect::<Vec<_>>(),
-        "freshness": {
+        "signerRequirements": signer_requirements,
+        "freshnessDisposition": {
             "observedSlot": freshness.observed_slot.to_string(),
             "validBeforeSlot": freshness.valid_before_slot.to_string(),
             "maximumValiditySlots": freshness.maximum_validity_slots.to_string(),
-            "recentBlockhash": "absent-by-contract"
+            "recentBlockhash": "absent; a launcher must reacquire state before adding one",
+            "beforeSigning": "reacquire the complete 48/45-role Dealer frame and reject any changed observation, lookup table, release, or authority digest",
+            "afterSubmission": "discard this draft regardless of outcome and reacquire the exact payload-variant verdict"
         }
     })
 }

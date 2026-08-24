@@ -549,6 +549,48 @@ impl CanonicalAccountRoleV1 {
     }
 }
 
+/// One exact finalized observation retained from the hostile Dealer terminal
+/// constructor. Bodies remain private; the projection exposes only the facts
+/// needed to bind the ordered role tuple and its digest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerTerminalAccountObservationV1 {
+    address: Address,
+    observed_slot: u64,
+    owner: Option<Address>,
+    lamports: Option<u64>,
+    executable: Option<bool>,
+    rent_epoch: Option<u64>,
+    data_sha256: Option<[u8; 32]>,
+    release_key: Option<String>,
+}
+
+impl DealerTerminalAccountObservationV1 {
+    #[must_use] pub const fn address(&self) -> Address { self.address }
+    #[must_use] pub const fn observed_slot(&self) -> u64 { self.observed_slot }
+    #[must_use] pub const fn owner(&self) -> Option<Address> { self.owner }
+    #[must_use] pub const fn lamports(&self) -> Option<u64> { self.lamports }
+    #[must_use] pub const fn executable(&self) -> Option<bool> { self.executable }
+    #[must_use] pub const fn rent_epoch(&self) -> Option<u64> { self.rent_epoch }
+    #[must_use] pub const fn data_sha256(&self) -> Option<[u8; 32]> { self.data_sha256 }
+    #[must_use] pub fn release_key(&self) -> Option<&str> { self.release_key.as_deref() }
+    #[must_use] pub const fn present(&self) -> bool { self.owner.is_some() }
+}
+
+/// Exact 48- or 45-account Dealer terminal frame retained by its closed
+/// target-8/target-9 constructor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerTerminalObservationSetV1 {
+    chain_state_sha256: [u8; 32],
+    collateral_catalog_receipt_id: [u8; 32],
+    accounts: Vec<DealerTerminalAccountObservationV1>,
+}
+
+impl DealerTerminalObservationSetV1 {
+    #[must_use] pub const fn chain_state_sha256(&self) -> [u8; 32] { self.chain_state_sha256 }
+    #[must_use] pub const fn collateral_catalog_receipt_id(&self) -> [u8; 32] { self.collateral_catalog_receipt_id }
+    #[must_use] pub fn accounts(&self) -> &[DealerTerminalAccountObservationV1] { &self.accounts }
+}
+
 impl ActionFreshnessBoundaryV1 {
     fn validate(self) -> Result<()> {
         let lifetime = self
@@ -584,6 +626,7 @@ pub struct CanonicalActionMaterialV1 {
     freshness: ActionFreshnessBoundaryV1,
     fee_payer: Address,
     account_roles: Vec<CanonicalAccountRoleV1>,
+    dealer_terminal_observations: Option<DealerTerminalObservationSetV1>,
     planned: PlannedWorkflowNode,
     draft_id: [u8; 32],
 }
@@ -652,6 +695,11 @@ impl CanonicalActionMaterialV1 {
     #[must_use]
     pub fn account_roles(&self) -> &[CanonicalAccountRoleV1] {
         &self.account_roles
+    }
+
+    #[must_use]
+    pub fn dealer_terminal_observations(&self) -> Option<&DealerTerminalObservationSetV1> {
+        self.dealer_terminal_observations.as_ref()
     }
 
     #[must_use]
@@ -981,6 +1029,7 @@ fn construct_detected_structured_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        dealer_terminal_observations: None,
         planned,
         draft_id,
     })
@@ -3176,6 +3225,27 @@ pub fn construct_dealer_terminal_action_material_v1(
         &planned,
     )?;
     let release_key = release.key();
+    let dealer_terminal_observations = DealerTerminalObservationSetV1 {
+        chain_state_sha256: structured_chain_state_id(accounts),
+        collateral_catalog_receipt_id: collateral.receipt_id,
+        accounts: accounts
+            .iter()
+            .map(|account| DealerTerminalAccountObservationV1 {
+                address: account.address,
+                observed_slot: account.observed_slot,
+                owner: account.present.map(|present| present.owner),
+                lamports: account.present.map(|present| present.lamports),
+                executable: account.present.map(|present| present.executable),
+                rent_epoch: account.present.map(|present| present.rent_epoch),
+                data_sha256: account
+                    .present
+                    .map(|present| Sha256::digest(&present.data).into()),
+                release_key: account
+                    .present
+                    .map(|present| present.provenance.release_key.clone()),
+            })
+            .collect(),
+    };
     let draft_id = action_material_id(
         &release_key,
         &release_key,
@@ -3205,6 +3275,7 @@ pub fn construct_dealer_terminal_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        dealer_terminal_observations: Some(dealer_terminal_observations),
         planned,
         draft_id,
     })
@@ -4534,6 +4605,7 @@ pub fn construct_source_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        dealer_terminal_observations: None,
         planned,
         draft_id,
     })
