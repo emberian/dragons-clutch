@@ -17,7 +17,8 @@ pub use clutch_fee_runtime_contract::weight_v2::{
     CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2,
 };
 use clutch_fee_runtime_contract::weight_v2::{
-    composite_fee_hamilton_share_v2, composite_fee_weight_transcript_v2,
+    composite_fee_hamilton_share_v2, composite_fee_weight_transcript_from_indexed_rows_v2,
+    composite_fee_weight_transcript_v2,
 };
 use clutch_fee_runtime_contract::{Error as FeeError, Id as FeeId};
 use clutch_general_v2_contract::Id32;
@@ -96,6 +97,8 @@ pub struct PortfolioFeeWeightVisitSummaryV2 {
     common_denominator: u128,
     traversed_owner_count: u16,
     nonzero_weight_row_count: u8,
+    total_weight: u128,
+    collected_fee_atoms: u64,
 }
 
 impl PortfolioFeeWeightVisitSummaryV2 {
@@ -115,6 +118,32 @@ impl PortfolioFeeWeightVisitSummaryV2 {
     pub const fn traversed_owner_count(self) -> u16 { self.traversed_owner_count }
     /// Exact number of nonzero callback rows requiring Position sorting.
     pub const fn nonzero_weight_row_count(self) -> u8 { self.nonzero_weight_row_count }
+    /// Exact sum of all nonzero unrounded numerators.
+    pub const fn total_weight(self) -> u128 { self.total_weight }
+    /// Sum of exact per-owner terminal fee ceilings.
+    pub const fn collected_fee_atoms(self) -> u64 { self.collected_fee_atoms }
+}
+
+/// One exact owner-netted row emitted by the traversal visitor.
+///
+/// Fields are private and there is no structural constructor: only the
+/// traversal-backed visitor can associate an owner with its ordinary Position,
+/// existing composite numerator, and terminal ceiling. The compact cache used
+/// for recipient allocation retains only [`Self::weight_row`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VisitedPortfolioFeeWeightRowV2 {
+    owner: Id32,
+    weight_row: CompositeFeeWeightRowV2,
+    terminal_fee_atoms: u64,
+}
+
+impl VisitedPortfolioFeeWeightRowV2 {
+    /// Traversal-authenticated order owner before Position projection.
+    pub const fn owner(self) -> Id32 { self.owner }
+    /// Exact nonzero `(Position, numerator)` row to cache and sort.
+    pub const fn weight_row(self) -> CompositeFeeWeightRowV2 { self.weight_row }
+    /// Exact terminal owner fee ceiling under the common denominator.
+    pub const fn terminal_fee_atoms(self) -> u64 { self.terminal_fee_atoms }
 }
 
 const _: () = assert!(
@@ -316,13 +345,15 @@ pub fn visit_portfolio_fee_weight_rows_v2<F>(
     mut visit: F,
 ) -> Result<PortfolioFeeWeightVisitSummaryV2, SettlementAdapterErrorV1>
 where
-    F: FnMut(CompositeFeeWeightRowV2) -> Result<(), SettlementAdapterErrorV1>,
+    F: FnMut(VisitedPortfolioFeeWeightRowV2) -> Result<(), SettlementAdapterErrorV1>,
 {
     let projection = traversal.projection();
     let feed = projection.feed();
     let (batch_policy_id, traversed_owner_count, prices, common_denominator) =
         portfolio_fee_weight_preflight_v2(traversal, positions, selected, batch_policy)?;
     let mut nonzero_weight_row_count = 0u8;
+    let mut total_weight = 0u128;
+    let mut collected_fee_atoms = 0u64;
     let mut prior_owner = None;
     while let Some(owner) = next_executed_owner_after(traversal, prior_owner)? {
         if let Some(row) = owner_weight_row(
@@ -333,14 +364,28 @@ where
             common_denominator,
             owner,
         )? {
-            visit(row)?;
+            let terminal_fee_atoms = terminal_fee_atoms_v2(row, common_denominator)?;
+            visit(VisitedPortfolioFeeWeightRowV2 {
+                owner,
+                weight_row: row,
+                terminal_fee_atoms,
+            })?;
             nonzero_weight_row_count = nonzero_weight_row_count
                 .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            total_weight = total_weight
+                .checked_add(row.exact_numerator())
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            collected_fee_atoms = collected_fee_atoms
+                .checked_add(terminal_fee_atoms)
                 .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
         }
         prior_owner = Some(owner);
     }
-    if usize::from(nonzero_weight_row_count) > MAX_ORDERS {
+    if usize::from(nonzero_weight_row_count) > MAX_ORDERS
+        || (nonzero_weight_row_count == 0) != (total_weight == 0)
+        || (nonzero_weight_row_count == 0) != (collected_fee_atoms == 0)
+    {
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
     Ok(PortfolioFeeWeightVisitSummaryV2 {
@@ -352,7 +397,72 @@ where
         common_denominator,
         traversed_owner_count,
         nonzero_weight_row_count,
+        total_weight,
+        collected_fee_atoms,
     })
+}
+
+/// Commit the private adapter's Position-sorted compact callback cache.
+///
+/// `summary` can only be produced by the one-pass traversal visitor. This
+/// helper equality-binds its exact row count, common denominator, and total
+/// unrounded weight to the canonical indexed transcript. A live SBF composer
+/// must call it over the same private heap entries populated directly by the
+/// visitor callback; packet rows or public implementations are not authority.
+pub fn commit_visited_portfolio_fee_weight_cache_v2<F>(
+    summary: PortfolioFeeWeightVisitSummaryV2,
+    selected: &SelectedCompositeFeeV2,
+    mut row_at: F,
+) -> Result<CompositeFeeWeightTranscriptV2, SettlementAdapterErrorV1>
+where
+    F: FnMut(u8) -> Result<Option<CompositeFeeWeightRowV2>, SettlementAdapterErrorV1>,
+{
+    if selected.carry_denominator() != summary.common_denominator {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let mut stream_error = None;
+    let transcript_result = composite_fee_weight_transcript_from_indexed_rows_v2(
+        selected.fee_record(),
+        summary.common_denominator,
+        summary.nonzero_weight_row_count,
+        |index| match row_at(index) {
+            Ok(row) => Ok(row),
+            Err(error) => {
+                stream_error = Some(error);
+                Err(FeeError::MismatchedBinding)
+            }
+        },
+    );
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    let transcript = transcript_result?;
+    if transcript.len() != summary.nonzero_weight_row_count
+        || transcript.total_weight() != summary.total_weight
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    Ok(transcript)
+}
+
+fn terminal_fee_atoms_v2(
+    row: CompositeFeeWeightRowV2,
+    common_denominator: u128,
+) -> Result<u64, SettlementAdapterErrorV1> {
+    if common_denominator == 0 {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let quotient = row.exact_numerator() / common_denominator;
+    let remainder = row.exact_numerator() % common_denominator;
+    let floor = u64::try_from(quotient)
+        .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if remainder == 0 {
+        Ok(floor)
+    } else {
+        floor
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)
+    }
 }
 
 fn portfolio_fee_weight_preflight_v2(

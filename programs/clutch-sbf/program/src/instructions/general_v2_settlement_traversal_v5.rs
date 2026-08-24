@@ -34,7 +34,7 @@ use clutch_general_v2_runtime::{
     authenticate_settlement_feed_view_v5, authenticate_settlement_order_book_view_v5,
     bind_settlement_root_traversal_v5, derive_settlement_traversal_projection_v5,
     project_owner_blind_book_stream_costed_v1, read_authenticated_feed_fill_v5,
-    read_authenticated_feed_slice_v5, derive_portfolio_fee_weight_stream_v2,
+    read_authenticated_feed_slice_v5,
     AuthenticatedSettlementPositionBookV3, CompositeFeeWeightRowV2,
     CompositeFeeWeightTranscriptV2, DerivedPortfolioFeeWeightStreamV2,
     GeneralOrderPageInputV5, SettlementAdapterErrorV1, SettlementOrderBookBindingV5,
@@ -239,29 +239,12 @@ pub fn authenticate_portfolio_fee_weight_stream_v2<'a, 'info>(
     positions: &'a AuthenticatedSettlementPositionBookV3,
     selected_fee: &'a AuthenticatedSelectedFeeWeightV2,
 ) -> Outcome<AuthenticatedPortfolioFeeWeightStreamV2<'a>> {
-    let batch_policy_id = traversal.market.batch_policy_id();
-    let derived = derive_portfolio_fee_weight_stream_v2(
-        traversal,
-        positions,
-        selected_fee.selected(),
-        selected_fee.batch_policy(),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        derived.market() == traversal.feed().market
-            && derived.epoch() == traversal.feed().epoch
-            && derived.settlement_candidate()
-                == traversal.feed().settlement_candidate_id
-            && derived.owner_order_set_digest()
-                == traversal.projection().owner_order_set_digest()
-            && derived.batch_policy_id() == batch_policy_id,
-        ClutchError::MismatchedState,
-    )?;
-    Ok(AuthenticatedPortfolioFeeWeightStreamV2 {
-        derived,
-        selected_fee_account: selected_fee.selected_fee_account(),
-        selected_fee_data_id: selected_fee.selected_fee_data_id(),
-    })
+    // The predecessor capability authenticates the decode-only V1 selected
+    // fee outer. It cannot be promoted into the current V2 weight stream.
+    // General action 39 must replace this bridge atomically with its hostile
+    // RevenuePolicyV2/SelectedCompositeFeeV2 authenticator and V3 writer.
+    let _ = (traversal, positions, selected_fee);
+    Err(Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 impl SettlementTraversalAccessV5 for AuthenticatedSettlementTraversalV5<'_> {
