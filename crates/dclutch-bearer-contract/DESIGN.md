@@ -22,7 +22,7 @@ This is a pure semantic contract, not an SBF adapter or a deployment claim.
 | Physical materialized supply | canonical Token-2022 Mint `supply`, required to equal `B[i]` |
 | Token ownership distribution | Token-2022 Accounts; it is deliberately not copied into program state |
 | Optional-capability selection and funding quote | immutable capability manifest |
-| Remaining/released activation principal | `FundingStateV1` (and its typed successor) |
+| Remaining/released activation principal by physical asset | typed `FundingStateV1` |
 | Bearer rent-refund identity | immutable `BearerConfigV1` selected by the manifest |
 
 `B[i]` is a representation subset, not another liability total. The Market's
@@ -165,19 +165,22 @@ entry must match these SHA-256 identities:
 | child derivation | `dclutch:bearer-contract:child-derivation:v1` |
 
 The entry's config identity must equal the composing hash of the exact 80-byte
-`BearerConfigV1`. Activation is admitted only while the Market is Founding or
-Open. `FundingStateV1::activate` is evaluated on a candidate state, and its
-rent/creation debit must equal the adapter's authenticated exact physical
-requirement for the capability state plus all `N` 238-byte Mints. The funding
-mutation, account/Mint creation, Market `register_child`, and bearer-state write
-must commit atomically.
+`BearerConfigV1`. Its typed funding quote must be native-only: Rent and Creation
+are `NativeLamports` (or canonical zero/NotApplicable), Work, Provider, Bounty,
+Liquidity, and Service are zero/NotApplicable, and no Realm-collateral binding
+or token vault may exist. Bearer activation therefore has no route which can
+reinterpret collateral atoms as lamports or silently accept an unrelated
+funding asset.
 
-The current implementation composes the repository's present untyped
-`FundingStateV1` API. A parallel capability-funding correction is replacing
-caller-shaped physical amounts with typed funding requirements. That future
-type remains the funding semantic owner. This crate will migrate directly to
-it after it lands; there will be no compatibility decoder or second funding
-authority.
+Activation is admitted only while the Market is Founding or Open. The adapter
+constructs `FundingCustodyObservationV1::native_only` from the actual
+program-owned funding-state lamports and the authenticated current Rent minimum.
+`FundingStateV1::activate` is evaluated on a candidate state. Its typed
+`rent_lamports` and `creation_lamports` debit must equal the adapter's exact
+physical requirement for the capability state plus all `N` 238-byte Mints.
+The typed funding mutation, payer reimbursement, account/Mint creation, Market
+`register_child`, and bearer-state write must commit atomically. There is no
+legacy scalar-present-principal path or compatibility decoder.
 
 `BearerConfigV1.rent_refund` receives recovered state/Mint rent through the
 repository's permanent RentCredit mechanism. Rent principal is sponsor
@@ -254,7 +257,7 @@ and out-of-range outcomes refuse.
 
 | Action | Data bytes | Payload after header |
 |---|---:|---|
-| Activate | 72 | generation, prior child count, entry index, slot, observed principal, exact rent, exact creation |
+| Activate | 32 | generation and prior child count; entry, Clock, Rent, custody, and physical requirements come from authenticated accounts/runtime |
 | Audit | 24 | generation |
 | Split/Merge native | 32 | generation, quantity |
 | Materialize/Dematerialize/Transfer | 40 | generation, quantity, outcome, zero[7] |
@@ -271,7 +274,7 @@ Token-2022/collateral-token program pair when the Realm itself uses Token-2022.
 
 | Action | Accounts | Shape summary |
 |---|---:|---|
-| Activate | `11 + N` | writable Market/state/funding/holding/refund/payer, manifest/config, Token-2022/System/Rent, `N` writable Mints |
+| Activate | `10 + N` | writable Market/state/typed funding/payer, manifest/config/refund, Token-2022/System/Rent, `N` writable Mints |
 | Audit | `3 + N` | Market, state, Token-2022, `N` read-only Mints |
 | Split/Merge native | 9 | Market, Position, Realm, custody, vault, collateral account, holder, token program, collateral Mint |
 | Materialize/Dematerialize | 7 | Market, writable state/Position/Mint/claim Account, holder, Token-2022 |
@@ -297,7 +300,7 @@ not change.
 
 At `N=16`, the largest persisted bearer root is 192 bytes. The largest account
 frames are complete-set split/merge at 42 accounts (`10 + 2N`) and activation
-at 27 accounts (`11 + N`), before invoked programs are counted by a transaction
+at 26 accounts (`10 + N`), before invoked programs are counted by a transaction
 message. These are semantic frame counts, not serialized packet measurements;
 the future adapter must measure actual v0 transactions before claiming an SBF
 route fits.
@@ -316,8 +319,9 @@ The future SBF adapter must, in one atomic instruction:
    duplicate, unknown, omitted, or extra extensions and wrong authorities;
 5. parse holder Accounts at exact 165-byte base width and validate authority,
    balance, initialization, Mint, and absence of native reserve;
-6. obtain `Clock` and `Rent` from runtime-authoritative access, compute exact
-   rent, and compose the capability funding semantic owner;
+6. obtain `Clock` and `Rent` from runtime-authoritative access, construct the
+   typed native-only `FundingCustodyObservationV1`, compute exact bearer
+   physical rent/creation requirements, and compose the funding semantic owner;
 7. use checked canonical CPI builders for initialize, mint, permissioned burn,
    transfer, close, and Realm-selected collateral movement;
 8. use holder signatures for debits and the capability PDA only for its narrow

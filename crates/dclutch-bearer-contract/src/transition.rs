@@ -1,7 +1,8 @@
 //! Total cross-representation transition plans.
 
 use dclutch_capability_contract::{
-    CapabilityEntryV1, CapabilityManifestV1, ContentId, FundingStateV1,
+    CapabilityEntryV1, CapabilityManifestV1, ContentId, FundingAssetClassV1,
+    FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_core_contract::Phase;
 use dclutch_market_contract::market::CategoricalMarketV1;
@@ -83,10 +84,10 @@ pub struct ActivationPlanV1<const N: usize> {
     pub controller: [u8; 32],
     /// Exact initializations for all outcomes in canonical order.
     pub mints: [MintInitializationV1; N],
-    /// Exact Rent principal released from capability funding.
-    pub rent_principal: u64,
-    /// Exact creation principal released from capability funding.
-    pub creation_principal: u64,
+    /// Exact Rent lamports released from capability funding.
+    pub rent_lamports: u64,
+    /// Exact creation lamports released from capability funding.
+    pub creation_lamports: u64,
     /// Immutable recipient of recovered capability Rent principal.
     pub rent_refund: [u8; 32],
 }
@@ -179,10 +180,10 @@ pub fn activate<const N: usize>(
     config_content_id: ContentId,
     config: BearerConfigV1,
     funding: &mut FundingStateV1,
-    observed_present_principal: u64,
+    funding_custody: FundingCustodyObservationV1,
     current_slot: u64,
-    exact_rent_principal: u64,
-    exact_creation_principal: u64,
+    exact_rent_lamports: u64,
+    exact_creation_lamports: u64,
     expected_prior_child_count: u64,
     controller: [u8; 32],
     mint_keys: [[u8; 32]; N],
@@ -208,15 +209,10 @@ pub fn activate<const N: usize>(
     let mut next_market = *market;
     let mut next_funding = *funding;
     let debit = next_funding
-        .activate(
-            manifest_content_id,
-            manifest,
-            observed_present_principal,
-            current_slot,
-        )
+        .activate(manifest_content_id, manifest, funding_custody, current_slot)
         .map_err(capability_error)?;
-    if debit.rent_principal() != exact_rent_principal
-        || debit.creation_principal() != exact_creation_principal
+    if debit.rent_lamports() != exact_rent_lamports
+        || debit.creation_lamports() != exact_creation_lamports
     {
         return Err(Error::ActivationFundingMismatch);
     }
@@ -249,8 +245,8 @@ pub fn activate<const N: usize>(
             capability_derivation,
             controller,
             mints,
-            rent_principal: exact_rent_principal,
-            creation_principal: exact_creation_principal,
+            rent_lamports: exact_rent_lamports,
+            creation_lamports: exact_creation_lamports,
             rent_refund: config.rent_refund(),
         },
     ))
@@ -743,6 +739,27 @@ fn validate_entry(entry: CapabilityEntryV1, config_content_id: ContentId) -> Res
     }
     if entry.child_derivation_id().to_bytes() != BEARER_CHILD_DERIVATION_ID {
         return Err(Error::ChildDerivationMismatch);
+    }
+    let quote = entry.funding_quote();
+    let amounts = quote.amounts();
+    let rent = amounts.rent();
+    let creation = amounts.creation();
+    if quote.realm_collateral().is_some()
+        || !matches!(
+            rent.asset_class(),
+            FundingAssetClassV1::NotApplicable | FundingAssetClassV1::NativeLamports
+        )
+        || !matches!(
+            creation.asset_class(),
+            FundingAssetClassV1::NotApplicable | FundingAssetClassV1::NativeLamports
+        )
+        || amounts.work().amount() != 0
+        || amounts.provider().amount() != 0
+        || amounts.bounty().amount() != 0
+        || amounts.liquidity().amount() != 0
+        || amounts.service().amount() != 0
+    {
+        return Err(Error::ActivationFundingMismatch);
     }
     Ok(())
 }

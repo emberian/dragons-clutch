@@ -30,8 +30,6 @@ pub enum AccountRoleV1 {
     BearerConfig,
     /// Mutable segregated capability funding state.
     FundingState,
-    /// Physical principal holding account for capability funding.
-    FundingHolding,
     /// Permanent RentCredit or equivalent refund account.
     RentRefund,
     /// Separate activation System payer.
@@ -68,7 +66,7 @@ pub enum AccountRoleV1 {
 pub fn expected_account_count<const N: usize>(action: ActionV1) -> Result<usize> {
     validate_width::<N>()?;
     let count = match action {
-        ActionV1::Activate => 11usize.checked_add(N),
+        ActionV1::Activate => 10usize.checked_add(N),
         ActionV1::Audit => 3usize.checked_add(N),
         ActionV1::SplitNative | ActionV1::MergeNative | ActionV1::RedeemNative => Some(9),
         ActionV1::Materialize | ActionV1::Dematerialize | ActionV1::Transfer => Some(7),
@@ -94,12 +92,11 @@ pub fn account_role<const N: usize>(action: ActionV1, index: usize) -> Result<Ac
             2 => AccountRoleV1::CapabilityManifest,
             3 => AccountRoleV1::BearerConfig,
             4 => AccountRoleV1::FundingState,
-            5 => AccountRoleV1::FundingHolding,
-            6 => AccountRoleV1::RentRefund,
-            7 => AccountRoleV1::CreationPayer,
-            8 => AccountRoleV1::Token2022Program,
-            9 => AccountRoleV1::SystemProgram,
-            10 => AccountRoleV1::RentSysvar,
+            5 => AccountRoleV1::RentRefund,
+            6 => AccountRoleV1::CreationPayer,
+            7 => AccountRoleV1::Token2022Program,
+            8 => AccountRoleV1::SystemProgram,
+            9 => AccountRoleV1::RentSysvar,
             _ => AccountRoleV1::ClaimMint,
         },
         ActionV1::Audit => match index {
@@ -243,8 +240,6 @@ fn exact_privileges(action: ActionV1, role: AccountRoleV1) -> (bool, bool, bool)
         ),
         AccountRoleV1::BearerState => !matches!(action, ActionV1::Audit | ActionV1::Transfer),
         AccountRoleV1::FundingState
-        | AccountRoleV1::FundingHolding
-        | AccountRoleV1::RentRefund
         | AccountRoleV1::CreationPayer
         | AccountRoleV1::Position
         | AccountRoleV1::CollateralVault
@@ -253,6 +248,7 @@ fn exact_privileges(action: ActionV1, role: AccountRoleV1) -> (bool, bool, bool)
         AccountRoleV1::ClaimMint => !matches!(action, ActionV1::Audit | ActionV1::Transfer),
         AccountRoleV1::CapabilityManifest
         | AccountRoleV1::BearerConfig
+        | AccountRoleV1::RentRefund
         | AccountRoleV1::Token2022Program
         | AccountRoleV1::SystemProgram
         | AccountRoleV1::RentSysvar

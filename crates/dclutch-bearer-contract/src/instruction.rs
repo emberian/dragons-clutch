@@ -12,7 +12,7 @@ pub const BEARER_INSTRUCTION_SCHEMA_VERSION: u16 = 1;
 /// Exact common instruction header width.
 pub const INSTRUCTION_HEADER_BYTES: usize = 16;
 /// Exact activation instruction width.
-pub const ACTIVATE_INSTRUCTION_BYTES: usize = 72;
+pub const ACTIVATE_INSTRUCTION_BYTES: usize = 32;
 /// Exact audit instruction width.
 pub const AUDIT_INSTRUCTION_BYTES: usize = 24;
 /// Exact split, merge, and retire instruction width.
@@ -29,13 +29,6 @@ const VALUE_OFFSET: usize = 24;
 const OUTCOME_OFFSET: usize = 32;
 const OUTCOME_RESERVED_OFFSET: usize = 33;
 const OUTCOME_RESERVED_BYTES: usize = 7;
-const ACTIVATE_ENTRY_INDEX_OFFSET: usize = 32;
-const ACTIVATE_RESERVED_OFFSET: usize = 34;
-const ACTIVATE_RESERVED_BYTES: usize = 6;
-const ACTIVATE_SLOT_OFFSET: usize = 40;
-const ACTIVATE_PRESENT_OFFSET: usize = 48;
-const ACTIVATE_RENT_OFFSET: usize = 56;
-const ACTIVATE_CREATION_OFFSET: usize = 64;
 
 /// Canonical public action discriminators.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,16 +91,6 @@ pub enum InstructionV1 {
         generation: u64,
         /// Market child-count replay guard.
         expected_prior_child_count: u64,
-        /// Canonical selected manifest entry.
-        manifest_entry_index: u16,
-        /// Trusted Clock slot projection.
-        current_slot: u64,
-        /// Observed funding-holding principal.
-        observed_present_principal: u64,
-        /// Exact authenticated Rent requirement.
-        exact_rent_principal: u64,
-        /// Exact physical creation requirement.
-        exact_creation_principal: u64,
     },
     /// Read-only full-Mint audit.
     Audit {
@@ -173,22 +156,11 @@ impl InstructionV1 {
         }
         let generation = read_u64(bytes, GENERATION_OFFSET)?;
         match action {
-            ActionV1::Activate => {
-                require_zero(bytes, ACTIVATE_RESERVED_OFFSET, ACTIVATE_RESERVED_BYTES)?;
-                Ok(Self::Activate {
-                    outcome_count,
-                    generation,
-                    expected_prior_child_count: read_u64(bytes, VALUE_OFFSET)?,
-                    manifest_entry_index: u16::from_le_bytes(array(
-                        bytes,
-                        ACTIVATE_ENTRY_INDEX_OFFSET,
-                    )?),
-                    current_slot: read_u64(bytes, ACTIVATE_SLOT_OFFSET)?,
-                    observed_present_principal: read_u64(bytes, ACTIVATE_PRESENT_OFFSET)?,
-                    exact_rent_principal: read_u64(bytes, ACTIVATE_RENT_OFFSET)?,
-                    exact_creation_principal: read_u64(bytes, ACTIVATE_CREATION_OFFSET)?,
-                })
-            }
+            ActionV1::Activate => Ok(Self::Activate {
+                outcome_count,
+                generation,
+                expected_prior_child_count: read_u64(bytes, VALUE_OFFSET)?,
+            }),
             ActionV1::Audit => Ok(Self::Audit {
                 outcome_count,
                 generation,
@@ -312,38 +284,12 @@ impl InstructionV1 {
         match self {
             Self::Activate {
                 expected_prior_child_count,
-                manifest_entry_index,
-                current_slot,
-                observed_present_principal,
-                exact_rent_principal,
-                exact_creation_principal,
                 ..
             } => {
                 put(
                     output,
                     VALUE_OFFSET,
                     &expected_prior_child_count.to_le_bytes(),
-                );
-                put(
-                    output,
-                    ACTIVATE_ENTRY_INDEX_OFFSET,
-                    &manifest_entry_index.to_le_bytes(),
-                );
-                put(output, ACTIVATE_SLOT_OFFSET, &current_slot.to_le_bytes());
-                put(
-                    output,
-                    ACTIVATE_PRESENT_OFFSET,
-                    &observed_present_principal.to_le_bytes(),
-                );
-                put(
-                    output,
-                    ACTIVATE_RENT_OFFSET,
-                    &exact_rent_principal.to_le_bytes(),
-                );
-                put(
-                    output,
-                    ACTIVATE_CREATION_OFFSET,
-                    &exact_creation_principal.to_le_bytes(),
                 );
             }
             Self::Audit { .. } => {}

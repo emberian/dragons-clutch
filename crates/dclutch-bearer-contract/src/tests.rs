@@ -1,7 +1,7 @@
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    FundingAmountsV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    CompartmentFundingV1, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
+    FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
@@ -593,7 +593,27 @@ fn wrong_mint_authority_extension_key_and_arithmetic_refuse_atomically() -> Resu
 }
 
 fn bearer_entry(config_id: ContentId) -> CapabilityEntryV1 {
-    let quote = match FundingAmountsV1::new(100, 20, 0, 0, 0, 0, 0) {
+    let rent = match CompartmentFundingV1::native_lamports(100) {
+        Ok(value) => value,
+        Err(_) => spin_forever(),
+    };
+    let creation = match CompartmentFundingV1::native_lamports(20) {
+        Ok(value) => value,
+        Err(_) => spin_forever(),
+    };
+    let amounts = match FundingAmountsV1::new(
+        rent,
+        creation,
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+    ) {
+        Ok(value) => value,
+        Err(_) => spin_forever(),
+    };
+    let quote = match FundingQuoteV1::new(amounts, None) {
         Ok(value) => value,
         Err(_) => spin_forever(),
     };
@@ -630,7 +650,9 @@ fn activation_and_retirement_are_manifest_funded_child_counted_and_replay_bound(
     let mut manifest_bytes = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes)
         .map_err(|error| Error::CapabilityContract { error })?;
-    let mut funding = FundingStateV1::new(id(MANIFEST_ID_BYTE), manifest, 0, 120)
+    let custody = FundingCustodyObservationV1::native_only(150, 30)
+        .map_err(|error| Error::CapabilityContract { error })?;
+    let mut funding = FundingStateV1::new(id(MANIFEST_ID_BYTE), manifest, 0, custody)
         .map_err(|error| Error::CapabilityContract { error })?;
     let mut market = founding_market::<2>();
     let keys = mint_keys::<2>();
@@ -642,7 +664,7 @@ fn activation_and_retirement_are_manifest_funded_child_counted_and_replay_bound(
         config_id,
         config,
         &mut funding,
-        120,
+        custody,
         7,
         100,
         20,
@@ -652,7 +674,7 @@ fn activation_and_retirement_are_manifest_funded_child_counted_and_replay_bound(
     )?;
     assert_eq!(market.root().outstanding_children(), 1);
     assert_eq!(funding.status(), FundingStatus::Active);
-    assert_eq!(plan.rent_principal, 100);
+    assert_eq!(plan.rent_lamports, 100);
     assert_eq!(plan.mints[1].derivation.outcome(), 1);
 
     let stale = BearerCapabilityV1::<2>::activated(MARKET_KEY, GENERATION + 1, 0)?;
@@ -709,17 +731,12 @@ fn instruction_codecs_refuse_trailing_reserved_and_out_of_range_data() -> Result
         outcome_count: 16,
         generation: GENERATION,
         expected_prior_child_count: 3,
-        manifest_entry_index: 4,
-        current_slot: 50,
-        observed_present_principal: 120,
-        exact_rent_principal: 100,
-        exact_creation_principal: 20,
     };
     let mut bytes = [0u8; ACTIVATE_INSTRUCTION_BYTES];
     activate.encode(&mut bytes)?;
     assert_eq!(InstructionV1::decode(&bytes), Ok(activate));
     let mut reserved = bytes;
-    reserved[34] = 1;
+    reserved[12] = 1;
     assert_eq!(
         InstructionV1::decode(&reserved),
         Err(Error::NonCanonicalReservedBytes)
@@ -753,7 +770,7 @@ fn frame_enforces_exact_privileges_and_aliases() -> Result<()> {
         is_signer: false,
         is_writable: false,
         is_executable: false,
-    }; 13];
+    }; 12];
     for (index, account) in accounts.iter_mut().enumerate() {
         let byte = match u8::try_from(index) {
             Ok(value) => value.saturating_add(1),
@@ -761,14 +778,14 @@ fn frame_enforces_exact_privileges_and_aliases() -> Result<()> {
         };
         account.key = [byte; 32];
     }
-    for index in [0usize, 1, 4, 5, 6, 7, 11, 12] {
+    for index in [0usize, 1, 4, 6, 10, 11] {
         if let Some(account) = accounts.get_mut(index) {
             account.is_writable = true;
         }
     }
-    accounts[7].is_signer = true;
+    accounts[6].is_signer = true;
+    accounts[7].is_executable = true;
     accounts[8].is_executable = true;
-    accounts[9].is_executable = true;
     assert_eq!(
         validate_account_frame::<2>(ActionV1::Activate, &accounts),
         Ok(())
@@ -780,7 +797,7 @@ fn frame_enforces_exact_privileges_and_aliases() -> Result<()> {
         Err(Error::InvalidAccountFrame)
     );
     accounts = exact;
-    accounts[12].key = accounts[11].key;
+    accounts[11].key = accounts[10].key;
     assert_eq!(
         validate_account_frame::<2>(ActionV1::Activate, &accounts),
         Err(Error::AccountAlias)
