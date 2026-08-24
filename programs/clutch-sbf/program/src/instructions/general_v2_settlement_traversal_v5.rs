@@ -10,22 +10,21 @@
 use core::cell::Ref;
 
 use clutch_batch::portfolio_execution_v2::{
-    authenticate_exact_portfolio_pair_v2,
+    authenticate_exact_portfolio_pair_streaming_v2,
     authenticate_portfolio_receipt_sibling_set_v2,
-    authenticate_selected_portfolio_order_for_materialization_v2,
+    authenticate_selected_portfolio_order_streaming_for_materialization_v2,
     AuthenticatedPortfolioReceiptSiblingSetV2, PortfolioAccountExpectationV2,
     PortfolioAccountRoleV2, PortfolioAdapterV2, PortfolioReceiptSiblingTraversalSetV2,
     PortfolioReceiptSiblingTraversalV2, PortfolioSelectionMembershipExpectationV2,
+    PortfolioSelectionStreamV2, PortfolioExecutionErrorV2,
     PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioSourceOrderKindV2,
     PortfolioTransitionExpectationV2, PortfolioValuationBoundaryV2,
     SelectedPortfolioOrderRecordV2, PORTFOLIO_EXECUTION_VERSION_V2,
     PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
 };
 use clutch_batch::relation_v1::MAX_OUTCOMES;
-use clutch_batch::relation_v2::{
-    EconomicBookV2, EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2,
-};
-use clutch_batch::{Side, MAX_ORDERS};
+use clutch_batch::relation_v2::{EconomicCandidateV2, EconomicOrderV2, PricePreconditionV2};
+use clutch_batch::Side;
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
@@ -67,20 +66,6 @@ use super::general_v2_settlement_root::{
     authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
 };
 use super::product_artifact::authenticate_product_artifact_v1;
-
-static EMPTY_PORTFOLIO_MATERIALIZATION_CANDIDATE_V5: EconomicCandidateV2 =
-    EconomicCandidateV2 {
-        fills: [0; MAX_ORDERS],
-        honored_aon_mask: 0,
-        virtual_split: 0,
-        virtual_merge: 0,
-    };
-static EMPTY_PORTFOLIO_MATERIALIZATION_BOOK_V5: EconomicBookV2 = EconomicBookV2::empty();
-static EMPTY_PORTFOLIO_MATERIALIZATION_SIBLINGS_V5:
-    [PortfolioReceiptSiblingTraversalV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2] = [
-    PortfolioReceiptSiblingTraversalV2::EMPTY;
-    PORTFOLIO_PAIR_MAX_RECEIPTS_V2
-];
 
 /// Named immutable account frame shared by settlement-root creation and every
 /// later action that must reproduce the candidate-wide V5 traversal.
@@ -660,6 +645,43 @@ struct AuthenticatedPortfolioMaterializationEndpointV5 {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct PortfolioMaterializationSelectionStreamV5<'a> {
+    traversal: &'a dyn SettlementTraversalAccessV5,
+}
+
+impl PortfolioSelectionStreamV2 for PortfolioMaterializationSelectionStreamV5<'_> {
+    fn order_count(&self) -> u8 {
+        self.traversal.projection().feed().order_count
+    }
+
+    fn order(&self, order_index: u8) -> Result<EconomicOrderV2, PortfolioExecutionErrorV2> {
+        self.traversal
+            .order(order_index)
+            .map_err(|_| PortfolioExecutionErrorV2::OrderMismatch)?
+            .map(|order| *order.economic_order())
+            .ok_or(PortfolioExecutionErrorV2::OrderMismatch)
+    }
+
+    fn selected_fill(&self, order_index: u8) -> Result<u64, PortfolioExecutionErrorV2> {
+        self.traversal
+            .selected_fill(order_index)
+            .map_err(|_| PortfolioExecutionErrorV2::CandidateMismatch)
+    }
+
+    fn honored_aon_mask(&self) -> u64 {
+        self.traversal.projection().feed().honored_aon_mask
+    }
+
+    fn virtual_split(&self) -> u64 {
+        self.traversal.projection().feed().virtual_split
+    }
+
+    fn virtual_merge(&self) -> u64 {
+        self.traversal.projection().feed().virtual_merge
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct PortfolioMaterializationSelectionAdapterV5 {
     program_id: [u8; 32],
     root_account: Id32,
@@ -733,6 +755,33 @@ impl PortfolioAdapterV2 for PortfolioMaterializationSelectionAdapterV5 {
             && relation_order.order_id == record.order_id
             && relation_order.side == record.side
             && candidate.fills.get(at).copied() == Some(record.selected_fill_units)
+    }
+
+    fn authenticate_streamed_selection_membership(
+        &self,
+        expected: &PortfolioSelectionMembershipExpectationV2,
+        relation_order: &EconomicOrderV2,
+        selected_fill: u64,
+    ) -> bool {
+        let record = expected.record;
+        let Some(endpoint) = self
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.membership.order_index == record.order_index)
+        else {
+            return false;
+        };
+        endpoint.membership.order_id == record.order_id
+            && endpoint.membership.owner == record.owner_id
+            && endpoint.placement.page_index == record.page_index
+            && endpoint.placement.page_slot == record.page_slot
+            && endpoint.placement.page_account.bytes() == record.order_page_account_id
+            && endpoint.placement.page_semantic_id.bytes() == record.order_page_semantic_id
+            && endpoint.position_account.bytes() == record.position_account_id
+            && endpoint.position_semantic_id.bytes() == record.position_pre_semantic_id
+            && relation_order.order_id == record.order_id
+            && relation_order.side == record.side
+            && selected_fill == record.selected_fill_units
     }
 
     fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
@@ -897,17 +946,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         ClutchError::MismatchedState,
     )?;
 
-    let mut candidate = super::orders_batch::boxed_copy_of(
-        &EMPTY_PORTFOLIO_MATERIALIZATION_CANDIDATE_V5,
-    )?;
-    candidate.honored_aon_mask = feed.honored_aon_mask;
-    let mut order = 0usize;
-    while order < usize::from(feed.order_count) {
-        let order_index = u8::try_from(order)
-            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        candidate.fills[order] = settlement_outcome(traversal.selected_fill(order_index))?;
-        order += 1;
-    }
+    let selection = PortfolioMaterializationSelectionStreamV5 { traversal };
     let mut prices = [0u64; MAX_OUTCOMES];
     let mut outcome = 0usize;
     while outcome < usize::from(feed.outcome_count) {
@@ -917,21 +956,6 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         outcome += 1;
     }
     let domain = *traversal.projection().domain();
-    let mut book = super::orders_batch::boxed_copy_of(
-        &EMPTY_PORTFOLIO_MATERIALIZATION_BOOK_V5,
-    )?;
-    order = 0;
-    while order < usize::from(feed.order_count) {
-        let order_index = u8::try_from(order)
-            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        book.orders[order] = *traversal
-            .order(order_index)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?
-            .economic_order();
-        order += 1;
-    }
-    book.len = feed.order_count;
     let price = PricePreconditionV2 {
         policy_digest: domain.price_policy_digest,
         semantic_price_digest: feed.candidate_price_digest.bytes(),
@@ -960,31 +984,30 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         feed_semantic_id,
         endpoints: [buyer, seller],
     };
-    let authenticated_buyer = authenticate_selected_portfolio_order_for_materialization_v2(
+    let authenticated_buyer =
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
         &adapter,
         program_id.to_bytes(),
         &domain,
-        &book,
-        &candidate,
+        &selection,
         feed.base_relation_candidate_id.bytes(),
         buyer_record,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let authenticated_seller = authenticate_selected_portfolio_order_for_materialization_v2(
+    let authenticated_seller =
+        authenticate_selected_portfolio_order_streaming_for_materialization_v2(
         &adapter,
         program_id.to_bytes(),
         &domain,
-        &book,
-        &candidate,
+        &selection,
         feed.base_relation_candidate_id.bytes(),
         seller_record,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let pair = authenticate_exact_portfolio_pair_v2(
+    let pair = authenticate_exact_portfolio_pair_streaming_v2(
         &domain,
-        &book,
+        &selection,
         &price,
-        &candidate,
         PortfolioValuationBoundaryV2::ExactReceiptDivisionV1,
         authenticated_buyer,
         authenticated_seller,
@@ -1006,9 +1029,8 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
             == counts.expected_receipts,
         ClutchError::MismatchedState,
     )?;
-    let mut sibling_set = super::orders_batch::boxed_copy_of(
-        &EMPTY_PORTFOLIO_MATERIALIZATION_SIBLINGS_V5,
-    )?;
+    let mut sibling_set =
+        [PortfolioReceiptSiblingTraversalV2::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
     let mut sibling_index = 0usize;
     while sibling_index < derived_count {
         let slice_index = u16::try_from(sibling_index)
@@ -1044,7 +1066,7 @@ pub fn authenticate_portfolio_materialization_sibling_set_v5(
         PortfolioReceiptSiblingTraversalSetV2 {
             sibling_count: u8::try_from(derived_count)
                 .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
-            siblings: *sibling_set,
+            siblings: sibling_set,
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))

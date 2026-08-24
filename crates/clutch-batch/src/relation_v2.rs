@@ -676,12 +676,32 @@ pub(crate) fn validate_live_order_fill_v2(
     }
     let fill = candidate.fills[at];
     let aon_bit = mask_bit(candidate.honored_aon_mask, at);
+    validate_live_order_fill_fields_v2(domain, price, order, order_index, fill, aon_bit)
+}
+
+/// Validate one streamed live fill under the exact bounded RelationV2 rules.
+///
+/// This is the no-allocation projection used by the bounded candidate
+/// verifier. It owns no alternate arithmetic: the bounded path extracts these
+/// two scalar fields and delegates here. Callers must separately authenticate
+/// the complete ordered fill stream and its inactive tail.
+pub fn validate_live_order_fill_fields_v2(
+    domain: &EconomicDomainV2,
+    price: &PricePreconditionV2,
+    order: &EconomicOrderV2,
+    order_index: u8,
+    fill: u64,
+    honored_aon: bool,
+) -> Result<[u64; MAX_OUTCOMES], EconomicErrorV2> {
+    if usize::from(order_index) >= MAX_ORDERS {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
     if fill > order.quantity {
         return Err(EconomicErrorV2::FillExceedsQuantity { order: order_index });
     }
     match order.partial_policy {
         PartialPolicy::Allow => {
-            if aon_bit {
+            if honored_aon {
                 return Err(EconomicErrorV2::AonMaskNotApplicable { order: order_index });
             }
             if fill != 0 && fill < order.minimum_fill {
@@ -692,7 +712,7 @@ pub(crate) fn validate_live_order_fill_v2(
             if fill != 0 && fill != order.quantity {
                 return Err(EconomicErrorV2::AllOrNoneViolation { order: order_index });
             }
-            if aon_bit != (fill != 0) {
+            if honored_aon != (fill != 0) {
                 return Err(EconomicErrorV2::AonMaskMismatch { order: order_index });
             }
         }
