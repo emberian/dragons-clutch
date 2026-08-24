@@ -25,6 +25,7 @@ use crate::instructions::product_market_foundation_current::{
 };
 use crate::instructions::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, AuthenticatedMarketLifecycleRootV3,
+    AuthenticatedSeriesMarketLinkV3,
 };
 use crate::instructions::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
 use crate::instructions::product_artifact::{
@@ -80,7 +81,7 @@ use clutch_product_series::{
     SeriesLinkObligationDispositionV2, SeriesLinkObligationStatusV2,
     SeriesLinkObligationTerminalProjectionV2, SeriesLinkObligationV2,
     SeriesMarketAdmissionProjectionV2, SeriesMarketDispositionV1,
-    SeriesMarketLinkPhaseV2, SeriesMarketLinkV2,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkPhaseV3, SeriesMarketLinkV2,
     SeriesMarketLinkV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
@@ -2286,6 +2287,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v2<'next, A>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     authenticated: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     owner: &A,
     schedule: &MarketFoundationScheduleV4,
     graph: &MarketFoundationAccountGraphV4,
@@ -2329,7 +2331,16 @@ where
         current.resolution_data_id(), current.resolution_activation_receipt_id()] {
         require_live(id)?;
     }
+    let link_binding = link.binding();
     require(authenticated.is_writable() && root_account.is_writable
+        && link.owner_program() == *program_id
+        && link.semantic_id() == current.capital().founder_link_id
+        && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+        && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+        && link_binding.market_instance_id == binding.market_instance_id
+        && link_binding.generation == binding.generation
+        && link_binding.rent_refund_owner == current.capital().rent_refund_owner
+        && link_binding.neutral_lamport_sink == current.capital().neutral_lamport_sink
         && current.phase() == MarketLifecyclePhaseV3::Active
         && binding.foundation_schedule_id == schedule_id
         && binding.foundation_account_graph_id == graph_id
@@ -2389,7 +2400,8 @@ where
         &ledger_state_id.bytes(), &claim_ledger_before_id.bytes(),
         &claim_ledger_after_id.bytes(), &claim_ledger_latch_transition_id.bytes(),
         &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
-        &schedule_id.bytes(), &graph_id.bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(), link.account().as_ref(),
+        &link.authentication_id().bytes(),
     ]);
     require_live(id)?;
     Ok((rebound, AuthenticatedProductFractionalFamilyAdmissionV2 {
@@ -2401,13 +2413,14 @@ where
     }))
 }
 
-/// Consume the exact current a4/a5/ClaimLedger terminal postwrite and latch the
-/// Fractional terminal states in RootV3 before any family rent is disposed.
+/// Consume the exact move-only physical a4/a5 terminal receipt and latch its
+/// terminal states in RootV3 only after the family rent has been disposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_terminal_postwrite_v2<'next, A>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     authenticated: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     owner: &A,
     schedule: &MarketFoundationScheduleV4,
     graph: &MarketFoundationAccountGraphV4,
@@ -2454,7 +2467,19 @@ where
         current.resolution_activation_receipt_id()] {
         require_live(id)?;
     }
+    let link_binding = link.binding();
     require(authenticated.is_writable() && root_account.is_writable
+        && link.owner_program() == *program_id
+        && link.semantic_id() == current.capital().founder_link_id
+        && matches!(
+            link.state().phase(),
+            SeriesMarketLinkPhaseV3::Active | SeriesMarketLinkPhaseV3::Retiring
+        )
+        && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+        && link_binding.market_instance_id == binding.market_instance_id
+        && link_binding.generation == binding.generation
+        && link_binding.rent_refund_owner == current.capital().rent_refund_owner
+        && link_binding.neutral_lamport_sink == current.capital().neutral_lamport_sink
         && matches!(current.phase(), MarketLifecyclePhaseV3::Active | MarketLifecyclePhaseV3::Retiring)
         && binding.foundation_schedule_id == schedule_id
         && binding.foundation_account_graph_id == graph_id
@@ -2517,7 +2542,8 @@ where
         &claim_ledger_transition_id.bytes(), &fractional_release_id.bytes(),
         &claim_release_receipt_id.bytes(), &rent_disposition_id.bytes(),
         &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
-        &schedule_id.bytes(), &graph_id.bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(), link.account().as_ref(),
+        &link.authentication_id().bytes(),
     ]);
     require_live(id)?;
     Ok((rebound, AuthenticatedProductFractionalFamilyTerminalV2 {

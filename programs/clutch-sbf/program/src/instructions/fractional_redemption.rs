@@ -71,7 +71,9 @@ use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
-use super::product_market_lifecycle_v3_current::authenticate_market_lifecycle_root_v3;
+use super::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, AuthenticatedSeriesMarketLinkV3,
+};
 use super::product_series_current::AuthenticatedRegistryCapabilityV5;
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -97,6 +99,8 @@ const FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/fractional/admission-postwrite-authentication/v1\0";
 const FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/fractional/terminal-postwrite-authentication/v1\0";
+const FRACTIONAL_PHYSICAL_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/fractional/physical-terminal-authentication/v2\0";
 const FRACTIONAL_COLLATERAL_EXECUTION_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/fractional/collateral-execution-receipt/v2\0";
 const DEALER_FACILITY_VECTOR_EXECUTION_RECEIPT_DOMAIN_V1: &[u8] =
@@ -1806,6 +1810,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     schedule: &MarketFoundationScheduleV4,
     graph: &MarketFoundationAccountGraphV4,
     root_before_output: &mut MarketLifecycleRootAccountV3,
@@ -1816,6 +1821,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v2(
         program_id,
         root_account,
         postwrite,
+        link,
         schedule,
         graph,
         root_before_output,
@@ -1825,52 +1831,53 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v2(
 }
 
 /// Adapter-authenticated terminal postwrite before a4/a5 deletion.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFractionalFamilyTerminalPostwriteV1 {
     verified: VerifiedFractionalFamilyTerminalPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
     claim_release_receipt_id: Identity32V1,
+    close: EmptyLedgerClosePlanV1,
     authentication_id: Identity32V1,
 }
 
 impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
-    pub(crate) const fn family_terminal(self) -> FractionalFamilyTerminalReceiptV1 {
+    pub(crate) const fn family_terminal(&self) -> FractionalFamilyTerminalReceiptV1 {
         self.verified.family_terminal()
     }
 
-    pub(crate) const fn verification_id(self) -> Identity32V1 {
+    pub(crate) const fn verification_id(&self) -> Identity32V1 {
         self.verified.verification_id()
     }
 
-    pub(crate) const fn resolution_account(self) -> Identity32V1 {
+    pub(crate) const fn resolution_account(&self) -> Identity32V1 {
         self.verified.terminal_requirement().resolution_account()
     }
 
-    pub(crate) const fn resolution_semantic_id(self) -> Identity32V1 {
+    pub(crate) const fn resolution_semantic_id(&self) -> Identity32V1 {
         self.verified
             .terminal_requirement()
             .resolution_semantic_id()
     }
 
-    pub(crate) const fn resolution_data_id(self) -> Identity32V1 {
+    pub(crate) const fn resolution_data_id(&self) -> Identity32V1 {
         self.verified.terminal_requirement().resolution_data_id()
     }
 
-    pub(crate) const fn native_claim_basis_id(self) -> Identity32V1 {
+    pub(crate) const fn native_claim_basis_id(&self) -> Identity32V1 {
         self.verified
             .terminal_requirement()
             .native_claim_basis_id()
     }
 
-    pub(crate) const fn runtime_release(self) -> AuthenticatedFractionalRuntimeReleaseV1 {
+    pub(crate) const fn runtime_release(&self) -> AuthenticatedFractionalRuntimeReleaseV1 {
         self.runtime_release
     }
 
-    pub(crate) const fn claim_release_receipt_id(self) -> Identity32V1 {
+    pub(crate) const fn claim_release_receipt_id(&self) -> Identity32V1 {
         self.claim_release_receipt_id
     }
 
-    pub(crate) const fn authentication_id(self) -> Identity32V1 {
+    pub(crate) const fn authentication_id(&self) -> Identity32V1 {
         self.authentication_id
     }
 }
@@ -1997,17 +2004,309 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
         verified,
         runtime_release,
         claim_release_receipt_id,
+        close,
         authentication_id,
     })
 }
 
-/// Atomically consume an exact hostile-authenticated Fractional terminal
-/// postwrite into Product before action 10 deletes a4/a5 or applies rent.
+/// Move-only prepared close retaining the sole hostile terminal postwrite and
+/// all exact pre-mutation lamport observations.
+#[derive(Debug)]
+pub(crate) struct PreparedFractionalFamilyPhysicalTerminalV2 {
+    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    policy_account: Pubkey,
+    ledger_account: Pubkey,
+    refund_owner: Pubkey,
+    neutral_sink: Pubkey,
+    policy_lamports_before: u64,
+    ledger_lamports_before: u64,
+    refund_lamports_before: u64,
+    neutral_sink_lamports_before: u64,
+    refund_lamports: u64,
+    neutral_lamports: u64,
+}
+
+/// Non-Copy Fractional family terminal receipt produced only after a4/v3 and
+/// a5/v1 are physically closed and their exact rent/donation destinations are
+/// hostile-reopened. Product RootV3/LinkV3 must consume this value by value.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedFractionalFamilyPhysicalTerminalV2 {
+    id: ContentId,
+    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    policy_account: Pubkey,
+    ledger_account: Pubkey,
+    refund_owner: Pubkey,
+    neutral_sink: Pubkey,
+    policy_lamports_before: u64,
+    ledger_lamports_before: u64,
+    refund_lamports_before: u64,
+    refund_lamports_after: u64,
+    neutral_sink_lamports_before: u64,
+    neutral_sink_lamports_after: u64,
+}
+
+impl AuthenticatedFractionalFamilyPhysicalTerminalV2 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn family_terminal(&self) -> FractionalFamilyTerminalReceiptV1 {
+        self.postwrite.family_terminal()
+    }
+    pub(crate) const fn verification_id(&self) -> Identity32V1 {
+        self.postwrite.verification_id()
+    }
+    pub(crate) const fn postwrite_authentication_id(&self) -> Identity32V1 {
+        self.postwrite.authentication_id()
+    }
+    pub(crate) const fn runtime_release(&self) -> AuthenticatedFractionalRuntimeReleaseV1 {
+        self.postwrite.runtime_release()
+    }
+    pub(crate) const fn claim_release_receipt_id(&self) -> Identity32V1 {
+        self.postwrite.claim_release_receipt_id()
+    }
+    pub(crate) const fn resolution_account(&self) -> Identity32V1 {
+        self.postwrite.resolution_account()
+    }
+    pub(crate) const fn resolution_semantic_id(&self) -> Identity32V1 {
+        self.postwrite.resolution_semantic_id()
+    }
+    pub(crate) const fn resolution_data_id(&self) -> Identity32V1 {
+        self.postwrite.resolution_data_id()
+    }
+    pub(crate) const fn native_claim_basis_id(&self) -> Identity32V1 {
+        self.postwrite.native_claim_basis_id()
+    }
+    pub(crate) const fn policy_account(&self) -> Pubkey {
+        self.policy_account
+    }
+
+    pub(crate) const fn ledger_account(&self) -> Pubkey {
+        self.ledger_account
+    }
+
+    pub(crate) const fn refund_owner(&self) -> Pubkey {
+        self.refund_owner
+    }
+
+    pub(crate) const fn neutral_sink(&self) -> Pubkey {
+        self.neutral_sink
+    }
+
+    pub(crate) const fn policy_lamports_before(&self) -> u64 {
+        self.policy_lamports_before
+    }
+
+    pub(crate) const fn ledger_lamports_before(&self) -> u64 {
+        self.ledger_lamports_before
+    }
+
+    pub(crate) const fn refund_lamports_before(&self) -> u64 {
+        self.refund_lamports_before
+    }
+
+    pub(crate) const fn refund_lamports_after(&self) -> u64 {
+        self.refund_lamports_after
+    }
+
+    pub(crate) const fn neutral_sink_lamports_before(&self) -> u64 {
+        self.neutral_sink_lamports_before
+    }
+
+    pub(crate) const fn neutral_sink_lamports_after(&self) -> u64 {
+        self.neutral_sink_lamports_after
+    }
+}
+
+/// Prepare the exact physical a4/a5 close without mutating any account.
+pub(crate) fn prepare_fractional_family_physical_terminal_v2(
+    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    policy_account: &AccountInfo<'_>,
+    ledger_account: &AccountInfo<'_>,
+    refund_owner: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<PreparedFractionalFamilyPhysicalTerminalV2> {
+    let terminal = postwrite.family_terminal();
+    let policy_funding = postwrite.close.policy_funding();
+    let ledger_funding = postwrite.close.ledger_funding();
+    require(
+        policy_account.key.to_bytes() == terminal.policy_account().bytes()
+            && ledger_account.key.to_bytes() == terminal.ledger_account().bytes()
+            && policy_funding.account().bytes() == policy_account.key.to_bytes()
+            && ledger_funding.account().bytes() == ledger_account.key.to_bytes()
+            && policy_funding.payer() == ledger_funding.payer()
+            && policy_funding.neutral_sink() == ledger_funding.neutral_sink()
+            && refund_owner.key.to_bytes() == policy_funding.payer().bytes()
+            && neutral_sink.key.to_bytes() == policy_funding.neutral_sink().bytes()
+            && policy_account.key != ledger_account.key
+            && policy_account.key != refund_owner.key
+            && policy_account.key != neutral_sink.key
+            && ledger_account.key != refund_owner.key
+            && ledger_account.key != neutral_sink.key
+            && refund_owner.key != neutral_sink.key
+            && policy_account.is_writable
+            && ledger_account.is_writable
+            && refund_owner.is_writable
+            && neutral_sink.is_writable
+            && !refund_owner.is_signer
+            && !neutral_sink.is_signer
+            && !refund_owner.executable
+            && !neutral_sink.executable
+            && refund_owner.owner == &SYSTEM_PROGRAM_ID
+            && neutral_sink.owner == &SYSTEM_PROGRAM_ID
+            && refund_owner.data_is_empty()
+            && neutral_sink.data_is_empty(),
+        ClutchError::MismatchedState,
+    )?;
+    let refund_lamports = policy_funding
+        .payer_refund_lamports()
+        .checked_add(ledger_funding.payer_refund_lamports())
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let neutral_lamports = policy_funding
+        .neutral_lamports()
+        .checked_add(ledger_funding.neutral_lamports())
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let policy_lamports_before = policy_account.lamports();
+    let ledger_lamports_before = ledger_account.lamports();
+    require(
+        refund_lamports
+            .checked_add(neutral_lamports)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            == policy_lamports_before
+                .checked_add(ledger_lamports_before)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(PreparedFractionalFamilyPhysicalTerminalV2 {
+        postwrite,
+        policy_account: *policy_account.key,
+        ledger_account: *ledger_account.key,
+        refund_owner: *refund_owner.key,
+        neutral_sink: *neutral_sink.key,
+        policy_lamports_before,
+        ledger_lamports_before,
+        refund_lamports_before: refund_owner.lamports(),
+        neutral_sink_lamports_before: neutral_sink.lamports(),
+        refund_lamports,
+        neutral_lamports,
+    })
+}
+
+fn set_fractional_lamports_v2(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
+    let mut value = account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    **value = amount;
+    Ok(())
+}
+
+/// Execute both exact rent dispositions, physically close a4/a5, hostile-open
+/// every postcondition, and return the sole move-only family terminal receipt.
+pub(crate) fn execute_fractional_family_physical_terminal_v2(
+    prepared: PreparedFractionalFamilyPhysicalTerminalV2,
+    policy_account: &AccountInfo<'_>,
+    ledger_account: &AccountInfo<'_>,
+    refund_owner: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFractionalFamilyPhysicalTerminalV2> {
+    require(
+        *policy_account.key == prepared.policy_account
+            && *ledger_account.key == prepared.ledger_account
+            && *refund_owner.key == prepared.refund_owner
+            && *neutral_sink.key == prepared.neutral_sink
+            && policy_account.lamports() == prepared.policy_lamports_before
+            && ledger_account.lamports() == prepared.ledger_lamports_before
+            && refund_owner.lamports() == prepared.refund_lamports_before
+            && neutral_sink.lamports() == prepared.neutral_sink_lamports_before
+            && refund_owner.owner == &SYSTEM_PROGRAM_ID
+            && neutral_sink.owner == &SYSTEM_PROGRAM_ID
+            && refund_owner.data_is_empty()
+            && neutral_sink.data_is_empty()
+            && !refund_owner.executable
+            && !neutral_sink.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let refund_lamports_after = prepared
+        .refund_lamports_before
+        .checked_add(prepared.refund_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let neutral_sink_lamports_after = prepared
+        .neutral_sink_lamports_before
+        .checked_add(prepared.neutral_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    set_fractional_lamports_v2(policy_account, 0)?;
+    set_fractional_lamports_v2(ledger_account, 0)?;
+    set_fractional_lamports_v2(refund_owner, refund_lamports_after)?;
+    set_fractional_lamports_v2(neutral_sink, neutral_sink_lamports_after)?;
+    policy_account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    policy_account.assign(&SYSTEM_PROGRAM_ID);
+    ledger_account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    ledger_account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        policy_account.lamports() == 0
+            && ledger_account.lamports() == 0
+            && policy_account.data_is_empty()
+            && ledger_account.data_is_empty()
+            && policy_account.owner == &SYSTEM_PROGRAM_ID
+            && ledger_account.owner == &SYSTEM_PROGRAM_ID
+            && refund_owner.lamports() == refund_lamports_after
+            && neutral_sink.lamports() == neutral_sink_lamports_after
+            && refund_owner.owner == &SYSTEM_PROGRAM_ID
+            && neutral_sink.owner == &SYSTEM_PROGRAM_ID
+            && refund_owner.data_is_empty()
+            && neutral_sink.data_is_empty()
+            && !refund_owner.executable
+            && !neutral_sink.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FRACTIONAL_PHYSICAL_TERMINAL_AUTHENTICATION_DOMAIN_V2,
+            &prepared.postwrite.authentication_id().bytes(),
+            policy_account.key.as_ref(),
+            &prepared.policy_lamports_before.to_le_bytes(),
+            &policy_account.lamports().to_le_bytes(),
+            ledger_account.key.as_ref(),
+            &prepared.ledger_lamports_before.to_le_bytes(),
+            &ledger_account.lamports().to_le_bytes(),
+            refund_owner.key.as_ref(),
+            &prepared.refund_lamports_before.to_le_bytes(),
+            &refund_lamports_after.to_le_bytes(),
+            neutral_sink.key.as_ref(),
+            &prepared.neutral_sink_lamports_before.to_le_bytes(),
+            &neutral_sink_lamports_after.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedFractionalFamilyPhysicalTerminalV2 {
+        id,
+        postwrite: prepared.postwrite,
+        policy_account: prepared.policy_account,
+        ledger_account: prepared.ledger_account,
+        refund_owner: prepared.refund_owner,
+        neutral_sink: prepared.neutral_sink,
+        policy_lamports_before: prepared.policy_lamports_before,
+        ledger_lamports_before: prepared.ledger_lamports_before,
+        refund_lamports_before: prepared.refund_lamports_before,
+        refund_lamports_after,
+        neutral_sink_lamports_before: prepared.neutral_sink_lamports_before,
+        neutral_sink_lamports_after,
+    })
+}
+
+/// Consume the exact move-only Fractional physical terminal into Product only
+/// after action 10 has closed a4/a5 and applied the exact rent disposition.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_terminal_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    terminal: AuthenticatedFractionalFamilyPhysicalTerminalV2,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     schedule: &MarketFoundationScheduleV4,
     graph: &MarketFoundationAccountGraphV4,
     root_before_output: &mut MarketLifecycleRootAccountV3,
@@ -2017,7 +2316,8 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v2(
     super::fractional_product_consumer::consume_fractional_terminal_v2(
         program_id,
         root_account,
-        postwrite,
+        terminal,
+        link,
         schedule,
         graph,
         root_before_output,
@@ -2510,6 +2810,40 @@ mod loader_alias_tests {
         assert!(!body.contains("require_signer"));
         assert!(!body.contains("invoke("));
         assert!(!body.contains("invoke_signed"));
+    }
+
+    #[test]
+    fn family_physical_terminal_is_minted_only_after_hostile_close_checks() {
+        let source = include_str!("fractional_redemption.rs");
+        let start = source
+            .find("pub(crate) fn execute_fractional_family_physical_terminal_v2")
+            .expect("physical terminal executor");
+        let end = source[start..]
+            .find("pub(crate) fn consume_fractional_family_terminal_postwrite_v2")
+            .map(|offset| start + offset)
+            .expect("physical terminal executor end");
+        let body = &source[start..end];
+        let policy_close = body
+            .find("policy_account.assign(&SYSTEM_PROGRAM_ID)")
+            .expect("policy physical close");
+        let ledger_close = body
+            .find("ledger_account.assign(&SYSTEM_PROGRAM_ID)")
+            .expect("ledger physical close");
+        let hostile_check = body
+            .find("policy_account.owner == &SYSTEM_PROGRAM_ID")
+            .expect("hostile close verification");
+        let receipt = body
+            .find("Ok(AuthenticatedFractionalFamilyPhysicalTerminalV2")
+            .expect("move-only terminal receipt");
+        assert!(policy_close < hostile_check);
+        assert!(ledger_close < hostile_check);
+        assert!(hostile_check < receipt);
+        assert!(source.contains(
+            "pub(crate) struct AuthenticatedFractionalFamilyPhysicalTerminalV2"
+        ));
+        assert!(!source.contains(
+            "#[derive(Clone, Copy, Debug)]\npub(crate) struct AuthenticatedFractionalFamilyPhysicalTerminalV2"
+        ));
     }
 }
 
