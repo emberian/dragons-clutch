@@ -129,6 +129,8 @@ use clutch_retirement_adapter::{
     authenticate_and_prepare_position_replay_close_v4,
     authenticate_position_v3_exact, authenticate_purpose_replay_v3_exact, AccountAccessV2,
     AccountViewV2 as RetirementAccountViewV2, CanonicalPdaV1,
+    execute_position_replay_close_v3, ExecutedPositionReplayCloseV3,
+    PositionReplayCloseRuntimeV3,
     PositionReplayCloseRuntimeRequestV4, PositionV3RetirementRealmV1,
     PreparedPositionReplayCloseV3, RetirementRecipientViewV1,
 };
@@ -218,10 +220,12 @@ use super::product_series_current::{
     admit_series_dealer_obligation_v2, authenticate_market_lifecycle_root_v2,
     authenticate_live_series_dealer_obligation_v2, authenticate_registry_capability_v4,
     authenticate_series_market_link_v2,
-    authenticate_series_registry_account_v3, AuthenticatedSeriesDealerAdmissionOwnerV2,
-    AuthenticatedLiveSeriesDealerObligationV2,
+    authenticate_series_registry_account_v3, terminalize_series_dealer_obligation_v2,
+    AuthenticatedSeriesDealerAdmissionOwnerV2, AuthenticatedSeriesDealerTerminalOwnerV2,
+    AuthenticatedSeriesDealerTerminalV2, AuthenticatedLiveSeriesDealerObligationV2,
     AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
-    AuthenticatedSeriesMarketLinkV2,
+    AuthenticatedSeriesMarketLinkV2, SeriesDealerTerminalAccountsV2,
+    SeriesDealerTerminalObservationV2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -332,10 +336,21 @@ struct AuthenticatedDealerSeriesAdmissionPrewriteV2 {
 struct AuthenticatedDealerProductResolutionV2 {
     root_account_id: Id,
     root_semantic_id: Id,
+    root_data_id: Id,
+    root_binding_id: Id,
+    root_authentication_id: Id,
     link_account_id: Id,
     link_semantic_id: Id,
+    link_data_id: Id,
+    link_binding_id: Id,
+    link_authentication_id: Id,
+    link_transition_sequence: u64,
+    dealer_admission_receipt_id: Id,
     resolution_semantic_id: Id,
     resolution_data_id: Id,
+    resolution_activation_receipt_id: Id,
+    collateral_profile_id: Id,
+    collateral_release_id: Id,
     authentication_id: Id,
 }
 
@@ -381,7 +396,8 @@ struct AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1 {
 /// any value-bearing child.
 pub(crate) struct AuthenticatedDealerSeriesTerminalPrewriteV2 {
     authentication_id: ContentId,
-    live_product: AuthenticatedLiveSeriesDealerObligationV2,
+    resolved_product: AuthenticatedDealerProductResolutionV2,
+    obligation: DealerSeriesObligationBindingV2,
     obligation_account: Pubkey,
     obligation_presemantic_id: ContentId,
     state_account: Pubkey,
@@ -398,15 +414,13 @@ pub(crate) struct AuthenticatedDealerSeriesTerminalPrewriteV2 {
 
 /// Exact prospective PositionV3 tombstone and Replay deletion retained until
 /// the same outer has accepted Product's LinkV2 terminal postwrite.
-#[derive(Clone, Copy)]
 struct PreparedDealerPositionReplayCloseV3 {
     plan: PreparedPositionReplayCloseV3,
     terminal_replay: DealerFacilityReplayV1,
+    program_id: Pubkey,
+    terminal_position_semantic_id: Id,
+    replay_pre_ordinal: u64,
     close_receipt_id: ContentId,
-}
-
-impl PreparedDealerPositionReplayCloseV3 {
-    const fn close_receipt_id(self) -> ContentId { self.close_receipt_id }
 }
 
 impl AuthenticatedDealerSeriesTerminalPrewriteV2 {
@@ -439,6 +453,101 @@ impl AuthenticatedDealerSeriesTerminalPrewriteV2 {
     }
     pub(crate) const fn rent_refund_owner(&self) -> Pubkey { self.rent_refund_owner }
     pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
+}
+
+impl AuthenticatedSeriesDealerTerminalOwnerV2
+    for AuthenticatedDealerSeriesTerminalPrewriteV2
+{
+    fn owner_authentication_id(&self) -> Outcome<ContentId> { Ok(self.authentication_id) }
+
+    fn dealer_obligation_account(&self) -> Outcome<Pubkey> { Ok(self.obligation_account) }
+
+    fn dealer_obligation_presemantic_id(&self) -> Outcome<ContentId> {
+        Ok(self.obligation_presemantic_id)
+    }
+
+    fn dealer_state_account(&self) -> Outcome<Pubkey> { Ok(self.state_account) }
+
+    fn dealer_state_presemantic_id(&self) -> Outcome<ContentId> {
+        Ok(self.state_presemantic_id)
+    }
+
+    fn terminal_state_receipt_id(&self) -> Outcome<ContentId> {
+        Ok(self.terminal_state_receipt_id)
+    }
+
+    fn replay_presemantic_id(&self) -> Outcome<ContentId> { Ok(self.replay_presemantic_id) }
+
+    fn replay_pre_ordinal(&self) -> Outcome<u64> { Ok(self.replay_pre_ordinal) }
+
+    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Ok(self.owner_terminal_receipt_id)
+    }
+
+    fn expected_link_transition_sequence(&self) -> Outcome<u64> {
+        Ok(self.expected_link_transition_sequence)
+    }
+
+    fn rent_refund_owner(&self) -> Outcome<Pubkey> { Ok(self.rent_refund_owner) }
+
+    fn neutral_lamport_sink(&self) -> Outcome<Pubkey> { Ok(self.neutral_lamport_sink) }
+
+    fn consume_series_dealer_terminal_owner_v2(
+        self,
+        observed: SeriesDealerTerminalObservationV2,
+    ) -> Outcome<()> {
+        let product = self.resolved_product;
+        let obligation = self.obligation;
+        require(
+            observed.owner_authentication_id() == self.authentication_id
+                && observed.dealer_obligation_account() == self.obligation_account
+                && observed.dealer_obligation_presemantic_id()
+                    == self.obligation_presemantic_id
+                && observed.dealer_state_account() == self.state_account
+                && observed.dealer_state_presemantic_id() == self.state_presemantic_id
+                && observed.terminal_state_receipt_id() == self.terminal_state_receipt_id
+                && observed.replay_presemantic_id() == self.replay_presemantic_id
+                && observed.replay_pre_ordinal() == self.replay_pre_ordinal
+                && observed.owner_terminal_receipt_id() == self.owner_terminal_receipt_id
+                && observed.link_transition_sequence_after()
+                    == self.expected_link_transition_sequence
+                && observed.rent_refund_owner() == self.rent_refund_owner
+                && observed.neutral_lamport_sink() == self.neutral_lamport_sink
+                && id(&observed.root_account()) == product.root_account_id
+                && id_from_content(observed.root_authentication_id())
+                    == product.root_authentication_id
+                && id_from_content(observed.root_data_id()) == product.root_data_id
+                && id_from_content(observed.root_semantic_id()) == product.root_semantic_id
+                && id_from_content(observed.root_binding_id()) == product.root_binding_id
+                && id_from_content(observed.resolution_semantic_id())
+                    == product.resolution_semantic_id
+                && id_from_content(observed.resolution_data_id()) == product.resolution_data_id
+                && id_from_content(observed.resolution_activation_receipt_id())
+                    == product.resolution_activation_receipt_id
+                && id(&observed.link_account()) == product.link_account_id
+                && id_from_content(observed.link_binding_id()) == product.link_binding_id
+                && id_from_content(observed.link_authentication_before())
+                    == product.link_authentication_id
+                && id_from_content(observed.link_data_before()) == product.link_data_id
+                && id_from_content(observed.link_semantic_before()) == product.link_semantic_id
+                && observed.link_transition_sequence_before()
+                    == product.link_transition_sequence
+                && id_from_content(observed.dealer_admission_receipt_id())
+                    == product.dealer_admission_receipt_id
+                && id_from_content(observed.compiler_bundle_id())
+                    == obligation.key.compiler_bundle_v6_id
+                && id_from_content(observed.attachment_plan_id())
+                    == obligation.key.attachment_plan_v5_id
+                && id_from_content(observed.liquidity_facility_plan_id())
+                    == obligation.key.policy_id
+                && observed.registry_capability_id() != ContentId::ZERO
+                && observed.registry_authentication_id() != ContentId::ZERO
+                && observed.registry_programdata_sha256() != ContentId::ZERO
+                && observed.compiler_bundle_semantic_id() != ContentId::ZERO
+                && observed.attachment_semantic_id() != ContentId::ZERO,
+            ClutchError::AuthorizationUnavailable,
+        )
+    }
 }
 
 /// Non-detachable physical receipt proving the unused `0xbc/v1` owner was
@@ -979,15 +1088,14 @@ fn authenticate_existing_dealer_series_admission_v2(
 #[inline(never)]
 fn authenticate_dealer_series_terminal_prewrite_v2(
     program_id: &Pubkey,
-    existing: AuthenticatedExistingDealerSeriesAdmissionV2,
+    state: DealerStateV3,
+    obligation: DealerSeriesObligationBindingV2,
+    product: AuthenticatedDealerProductResolutionV2,
     state_account: &AccountInfo<'_>,
     obligation_account: &AccountInfo<'_>,
     replay: &DealerFacilityReplayV1,
     terminal_state_receipt: DealerTerminalStateReceiptV2,
 ) -> Outcome<AuthenticatedDealerSeriesTerminalPrewriteV2> {
-    let state = existing.state;
-    let obligation = existing.obligation;
-    let product = existing.product;
     state.validate().map_err(dealer_fault)?;
     obligation.validate().map_err(dealer_fault)?;
     replay.validate().map_err(dealer_fault)?;
@@ -1001,13 +1109,13 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
         .receipt_id()
         .map_err(dealer_fault)?;
     let expected_link_transition_sequence = product
-        .link_transition_sequence()
+        .link_transition_sequence
         .checked_add(1)
         .ok_or(ClutchError::Arithmetic)?;
     let owner_terminal_receipt_id = obligation
         .terminal_owner_receipt_id(
             terminal_state_receipt_id,
-            Id::from_bytes(product.link_semantic_id().bytes()),
+            product.link_semantic_id,
             expected_link_transition_sequence,
         )
         .map_err(dealer_fault)?;
@@ -1018,10 +1126,14 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
         .ok_or(ClutchError::Arithmetic)?;
 
     require(
-        product.id() != ContentId::ZERO
-            && product.root_authentication_id() != ContentId::ZERO
-            && product.link_authentication_id() != ContentId::ZERO
-            && product.registry_capability_id() != ContentId::ZERO
+        product.authentication_id != Id::ZERO
+            && product.root_authentication_id != Id::ZERO
+            && product.link_authentication_id != Id::ZERO
+            && product.root_data_id != Id::ZERO
+            && product.link_data_id != Id::ZERO
+            && product.resolution_semantic_id != Id::ZERO
+            && product.resolution_data_id != Id::ZERO
+            && product.resolution_activation_receipt_id != Id::ZERO
             && state_account.owner == program_id
             && state_account.is_writable
             && !state_account.is_signer
@@ -1042,25 +1154,12 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
             && state.series_obligation_binding_id == obligation_presemantic_id
             && obligation.phase == DealerSeriesObligationPhaseV1::Live
             && obligation.admission_projection_id
-                == Id::from_bytes(product.dealer_admission_receipt_id().bytes())
-            && obligation.key.product_market_root_account_id == id(&product.root_account())
-            && obligation.key.product_market_binding_id
-                == Id::from_bytes(product.root_binding_id().bytes())
-            && obligation.key.series_market_link_account_id == id(&product.link_account())
-            && obligation.key.series_plan_v5_id.bytes() == product.series_plan_id().bytes()
-            && obligation.key.series_ordinal == product.ordinal()
-            && obligation.key.market_instance_v2_id.bytes()
-                == product.market_instance_id().bytes()
-            && obligation.key.product_generation == product.generation()
-            && obligation.key.compiler_bundle_v6_id.bytes()
-                == product.compiler_bundle_id().bytes()
-            && obligation.key.attachment_plan_v5_id.bytes()
-                == product.attachment_plan_id().bytes()
-            && obligation.key.policy_id.bytes()
-                == product.liquidity_facility_plan_id().bytes()
-            && obligation.rent.payer.bytes() == product.rent_refund_owner().bytes()
-            && obligation.rent.neutral_sink.bytes()
-                == product.neutral_lamport_sink().bytes()
+                == product.dealer_admission_receipt_id
+            && obligation.key.product_market_root_account_id == product.root_account_id
+            && obligation.key.product_market_binding_id == product.root_binding_id
+            && obligation.key.series_market_link_account_id == product.link_account_id
+            && obligation.key.product_market_binding_id == product.root_binding_id
+            && obligation.rent.neutral_sink == state.base.rent.neutral_sink
             && terminal_state_receipt.policy_id == state.base.policy_id
             && terminal_state_receipt.facility_id == state.base.facility_id
             && terminal_state_receipt.facility_position_binding_id
@@ -1075,6 +1174,8 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
             && replay.position_generation() == state.base.generation
             && replay.lifecycle() == clutch_retirement::ReplayV3Lifecycle::Live
             && replay.next_transition_ordinal() != 0
+            && product.link_transition_sequence
+                >= obligation.admission_link_transition_sequence
             && expected_link_transition_sequence > obligation.admission_link_transition_sequence,
         ClutchError::AuthorizationUnavailable,
     )?;
@@ -1083,11 +1184,22 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
         solana_sha256_hasher::hashv(&[
             DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2,
             program_id.as_ref(),
-            &product.id().bytes(),
-            &product.root_authentication_id().bytes(),
-            &product.link_authentication_id().bytes(),
-            &product.link_semantic_id().bytes(),
-            &product.link_transition_sequence().to_le_bytes(),
+            &product.authentication_id.bytes(),
+            &product.root_authentication_id.bytes(),
+            &product.root_data_id.bytes(),
+            &product.root_semantic_id.bytes(),
+            &product.root_binding_id.bytes(),
+            &product.link_authentication_id.bytes(),
+            &product.link_data_id.bytes(),
+            &product.link_semantic_id.bytes(),
+            &product.link_binding_id.bytes(),
+            &product.link_transition_sequence.to_le_bytes(),
+            &product.dealer_admission_receipt_id.bytes(),
+            &product.resolution_semantic_id.bytes(),
+            &product.resolution_data_id.bytes(),
+            &product.resolution_activation_receipt_id.bytes(),
+            &product.collateral_profile_id.bytes(),
+            &product.collateral_release_id.bytes(),
             state_account.key.as_ref(),
             &state_presemantic_id.bytes(),
             obligation_account.key.as_ref(),
@@ -1107,7 +1219,8 @@ fn authenticate_dealer_series_terminal_prewrite_v2(
     require(authentication_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
     Ok(AuthenticatedDealerSeriesTerminalPrewriteV2 {
         authentication_id,
-        live_product: product,
+        resolved_product: product,
+        obligation,
         obligation_account: *obligation_account.key,
         obligation_presemantic_id: ContentId::from_bytes(obligation_presemantic_id.bytes()),
         state_account: *state_account.key,
@@ -1626,10 +1739,13 @@ fn authenticate_current_product_resolution_v2(
 
     let (
         root_semantic_id,
+        root_data_id,
+        root_binding_id,
         root_authentication_id,
         root_capability_profile_id,
         resolution_semantic_id,
         resolution_data_id,
+        resolution_activation_receipt_id,
     ) = {
         let mut root_body = MarketLifecycleRootAccountV2::decode_buffer();
         let root = authenticate_market_lifecycle_root_v2(
@@ -1662,14 +1778,26 @@ fn authenticate_current_product_resolution_v2(
         )?;
         (
             id_from_content(semantic_id),
+            id_from_content(root.data_id()),
+            id_from_content(binding.id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?),
             id_from_content(root.authentication_id()),
             id_from_content(binding.capability_profile_id),
             id_from_content(root_state.resolution_semantic_id()),
             id_from_content(root_state.resolution_data_id()),
+            id_from_content(root_state.resolution_activation_receipt_id()),
         )
     };
 
-    let (link_semantic_id, link_authentication_id) = {
+    let (
+        link_semantic_id,
+        link_data_id,
+        link_binding_id,
+        link_authentication_id,
+        link_transition_sequence,
+        dealer_admission_receipt_id,
+    ) = {
         let mut link_body = SeriesMarketLinkAccountV2::decode_buffer();
         let link = authenticate_series_market_link_v2(
             program_id,
@@ -1712,7 +1840,15 @@ fn authenticate_current_product_resolution_v2(
         )?;
         (
             id_from_content(semantic_id.content_id()),
+            id_from_content(link.data_id()),
+            id_from_content(binding.id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?),
             id_from_content(link.authentication_id()),
+            link_state.transition_sequence(),
+            id_from_content(
+                link_state.obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer),
+            ),
         )
     };
 
@@ -1722,14 +1858,23 @@ fn authenticate_current_product_resolution_v2(
             root_account.key.as_ref(),
             link_account.key.as_ref(),
             &root_semantic_id.bytes(),
+            &root_data_id.bytes(),
+            &root_binding_id.bytes(),
             &root_authentication_id.bytes(),
             &link_semantic_id.bytes(),
+            &link_data_id.bytes(),
+            &link_binding_id.bytes(),
             &link_authentication_id.bytes(),
+            &link_transition_sequence.to_le_bytes(),
+            &dealer_admission_receipt_id.bytes(),
             &obligation.binding_id().map_err(dealer_fault)?.bytes(),
             &state.state_id().map_err(dealer_fault)?.bytes(),
             &value_authority.receipt_id.bytes(),
             &resolution_semantic_id.bytes(),
             &resolution_data_id.bytes(),
+            &resolution_activation_receipt_id.bytes(),
+            &realm_binding.profile.bytes(),
+            &release_id.bytes(),
         ])
         .to_bytes(),
     );
@@ -1737,10 +1882,21 @@ fn authenticate_current_product_resolution_v2(
     Ok(AuthenticatedDealerProductResolutionV2 {
         root_account_id: id(root_account.key),
         root_semantic_id,
+        root_data_id,
+        root_binding_id,
+        root_authentication_id,
         link_account_id: id(link_account.key),
         link_semantic_id,
+        link_data_id,
+        link_binding_id,
+        link_authentication_id,
+        link_transition_sequence,
+        dealer_admission_receipt_id,
         resolution_semantic_id,
         resolution_data_id,
+        resolution_activation_receipt_id,
+        collateral_profile_id: Id::from_bytes(realm_binding.profile.bytes()),
+        collateral_release_id: Id::from_bytes(release_id.bytes()),
         authentication_id,
     })
 }
@@ -4045,6 +4201,12 @@ fn credit_exact_dealer_terminal_lamports(
     Ok(())
 }
 
+fn checked_terminal_retirement_sequence_v3(replay_pre_ordinal: u64) -> Outcome<u64> {
+    replay_pre_ordinal
+        .checked_add(1)
+        .ok_or_else(|| ClutchError::Arithmetic.into())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_dealer_position_replay_close_v3(
     program_id: &Pubkey,
@@ -4062,9 +4224,7 @@ fn prepare_dealer_position_replay_close_v3(
     let position = terminal_position.projection.position();
     let runtime_program = retirement_id(id(program_id))?;
     let neutral_sink_id = retirement_id(id(neutral_sink.key))?;
-    let expected_terminal_ordinal = replay_pre_ordinal
-        .checked_add(1)
-        .ok_or(ClutchError::Arithmetic)?;
+    let expected_terminal_ordinal = checked_terminal_retirement_sequence_v3(replay_pre_ordinal)?;
     require(
         position_account.owner == program_id
             && replay_account.owner == program_id
@@ -4259,8 +4419,298 @@ fn prepare_dealer_position_replay_close_v3(
     Ok(PreparedDealerPositionReplayCloseV3 {
         plan,
         terminal_replay,
+        program_id: *program_id,
+        terminal_position_semantic_id: terminal_position.semantic_id,
+        replay_pre_ordinal,
         close_receipt_id,
     })
+}
+
+struct DealerPositionReplayCloseRuntimeV3<'account, 'info> {
+    program_id: &'account Pubkey,
+    position_account: &'account AccountInfo<'info>,
+    replay_account: &'account AccountInfo<'info>,
+    recipient_accounts:
+        [Option<&'account AccountInfo<'info>>; clutch_retirement::MAX_RETIREMENT_RECIPIENTS],
+    terminal_position_semantic_id: Id,
+    terminal_replay_bytes: &'account [u8],
+}
+
+impl<'account, 'info> DealerPositionReplayCloseRuntimeV3<'account, 'info> {
+    fn source_account(&self, identity: Identity32V1) -> Option<&'account AccountInfo<'info>> {
+        if identity.bytes() == self.position_account.key.to_bytes() {
+            Some(self.position_account)
+        } else if identity.bytes() == self.replay_account.key.to_bytes() {
+            Some(self.replay_account)
+        } else {
+            None
+        }
+    }
+
+    fn recipient_account(
+        &self,
+        identity: Identity32V1,
+    ) -> Option<&'account AccountInfo<'info>> {
+        let mut index = 0usize;
+        while index < self.recipient_accounts.len() {
+            if let Some(account) = self.recipient_accounts[index] {
+                if identity.bytes() == account.key.to_bytes() {
+                    return Some(account);
+                }
+            }
+            index += 1;
+        }
+        None
+    }
+}
+
+impl<'account, 'info> PositionReplayCloseRuntimeV3
+    for DealerPositionReplayCloseRuntimeV3<'account, 'info>
+{
+    type Error = Refusal;
+
+    fn preflight_position_replay_close_v3(
+        &mut self,
+        commit: &PreparedPositionReplayCloseV3,
+    ) -> Outcome<()> {
+        require(
+            commit.position_account().bytes() == self.position_account.key.to_bytes()
+                && commit.replay_account().bytes() == self.replay_account.key.to_bytes()
+                && self.position_account.key != self.replay_account.key
+                && self.position_account.owner == self.program_id
+                && self.replay_account.owner == self.program_id
+                && self.position_account.is_writable
+                && self.replay_account.is_writable
+                && !self.position_account.is_signer
+                && !self.replay_account.is_signer
+                && !self.position_account.executable
+                && !self.replay_account.executable
+                && self.position_account.data_len() == POSITION_V3_BYTES
+                && self.replay_account.data_len() == self.terminal_replay_bytes.len()
+                && self.position_account.lamports() == commit.position_lamports_before()
+                && self.replay_account.lamports() == commit.replay_lamports_before()
+                && commit.replay_lamports_after() == 0,
+            ClutchError::MismatchedState,
+        )?;
+
+        let position_data = self
+            .position_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let position = PositionAccountV3::decode(&position_data)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let position_semantic_id = Id::from_bytes(
+            position
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
+        );
+        require(
+            position_semantic_id == self.terminal_position_semantic_id,
+            ClutchError::MismatchedState,
+        )?;
+        drop(position_data);
+
+        let replay_data = self
+            .replay_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            replay_data.as_ref() == self.terminal_replay_bytes,
+            ClutchError::MismatchedState,
+        )?;
+        let replay = ReplayV3Envelope::decode(&replay_data, &RuntimeSha256)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            replay
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == commit.replay_terminal_semantic_id()
+                && replay.header().next_sequence() == commit.signed_sequence(),
+            ClutchError::MismatchedState,
+        )?;
+        drop(replay_data);
+
+        let credits = commit.recipient_credits();
+        let mut left = 0usize;
+        while left < self.recipient_accounts.len() {
+            if let Some(account) = self.recipient_accounts[left] {
+                let recipient = retirement_id(id(account.key))?;
+                require(
+                    credits.get(recipient).is_some()
+                        && account.key != self.position_account.key
+                        && account.key != self.replay_account.key,
+                    ClutchError::MismatchedState,
+                )?;
+                let mut right = left + 1;
+                while right < self.recipient_accounts.len() {
+                    if let Some(other) = self.recipient_accounts[right] {
+                        require(account.key != other.key, ClutchError::AccountAlias)?;
+                    }
+                    right += 1;
+                }
+            }
+            left += 1;
+        }
+        for credit in credits.entries.into_iter().flatten() {
+            let account = self
+                .recipient_account(credit.recipient)
+                .ok_or(ClutchError::MismatchedState)?;
+            let balance_before = credit
+                .balance_after
+                .checked_sub(credit.credit_lamports)
+                .ok_or(ClutchError::Arithmetic)?;
+            require(
+                account.owner == &SYSTEM_PROGRAM_ID
+                    && account.is_writable
+                    && !account.executable
+                    && account.data_is_empty()
+                    && account.lamports() == balance_before,
+                ClutchError::MismatchedState,
+            )?;
+        }
+
+        for account in [Some(self.position_account), Some(self.replay_account)]
+            .into_iter()
+            .chain(self.recipient_accounts)
+            .flatten()
+        {
+            let data = account
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            drop(data);
+            let lamports = account
+                .try_borrow_mut_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            drop(lamports);
+        }
+        Ok(())
+    }
+
+    fn resize_program_owned_v3(
+        &mut self,
+        account: Identity32V1,
+        new_len: usize,
+    ) -> Outcome<()> {
+        let account = self
+            .source_account(account)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            account.owner == self.program_id && account.is_writable && !account.executable,
+            ClutchError::MismatchedState,
+        )?;
+        account
+            .resize(new_len)
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))
+    }
+
+    fn write_exact_v3(&mut self, account: Identity32V1, bytes: &[u8]) -> Outcome<()> {
+        let account = self
+            .source_account(account)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(account.data_len() == bytes.len(), ClutchError::MismatchedState)?;
+        account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+            .copy_from_slice(bytes);
+        Ok(())
+    }
+
+    fn set_recipient_balance_v3(
+        &mut self,
+        recipient: Identity32V1,
+        balance_after: u64,
+    ) -> Outcome<()> {
+        let recipient = self
+            .recipient_account(recipient)
+            .ok_or(ClutchError::MismatchedState)?;
+        **recipient
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = balance_after;
+        Ok(())
+    }
+
+    fn set_source_balance_v3(
+        &mut self,
+        source: Identity32V1,
+        balance_after: u64,
+    ) -> Outcome<()> {
+        let source = self
+            .source_account(source)
+            .ok_or(ClutchError::MismatchedState)?;
+        **source
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = balance_after;
+        Ok(())
+    }
+
+    fn assign_replay_system_v3(&mut self, replay: Identity32V1) -> Outcome<()> {
+        require(
+            replay.bytes() == self.replay_account.key.to_bytes()
+                && self.replay_account.owner == self.program_id
+                && self.replay_account.data_is_empty()
+                && self.replay_account.lamports() == 0,
+            ClutchError::MismatchedState,
+        )?;
+        self.replay_account.assign(&SYSTEM_PROGRAM_ID);
+        Ok(())
+    }
+
+    fn authenticate_position_replay_close_v3_postwrite(
+        &mut self,
+        commit: &PreparedPositionReplayCloseV3,
+    ) -> Outcome<()> {
+        let expected_tombstone_bytes = commit.position_tombstone_bytes();
+        let position_data = self
+            .position_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_tombstone = PositionTombstoneV3::decode(&position_data)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let expected_tombstone = PositionTombstoneV3::decode(&expected_tombstone_bytes)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            observed_tombstone == expected_tombstone
+                && position_data.as_ref() == &expected_tombstone_bytes[..]
+                && self.position_account.owner == self.program_id
+                && self.position_account.data_len() == POSITION_TOMBSTONE_V3_BYTES
+                && self.position_account.lamports() == commit.position_lamports_after()
+                && self.replay_account.owner == &SYSTEM_PROGRAM_ID
+                && self.replay_account.data_is_empty()
+                && self.replay_account.lamports() == commit.replay_lamports_after(),
+            ClutchError::MismatchedState,
+        )?;
+        drop(position_data);
+        for credit in commit.recipient_credits().entries.into_iter().flatten() {
+            let account = self
+                .recipient_account(credit.recipient)
+                .ok_or(ClutchError::MismatchedState)?;
+            require(
+                account.lamports() == credit.balance_after,
+                ClutchError::MismatchedState,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn consume_dealer_position_replay_close_receipt_v3(
+    receipt: ExecutedPositionReplayCloseV3,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    replay_pre_ordinal: u64,
+    close_receipt_id: ContentId,
+) -> Outcome<ContentId> {
+    let expected_terminal_ordinal = checked_terminal_retirement_sequence_v3(replay_pre_ordinal)?;
+    require(
+        receipt.position_account().bytes() == position_account.key.to_bytes()
+            && receipt.replay_account().bytes() == replay_account.key.to_bytes()
+            && receipt.signed_sequence() == expected_terminal_ordinal
+            && receipt.position_lamports_after() == position_account.lamports()
+            && close_receipt_id != ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(close_receipt_id)
 }
 
 fn apply_dealer_position_replay_close_v3(
@@ -4271,83 +4721,43 @@ fn apply_dealer_position_replay_close_v3(
     neutral_sink: &AccountInfo<'_>,
     prepared: PreparedDealerPositionReplayCloseV3,
 ) -> Outcome<ContentId> {
-    let position_payer = retirement_id(id(position_refund_owner.key))?;
-    let replay_payer = retirement_id(id(replay_refund_owner.key))?;
-    let neutral_sink_id = retirement_id(id(neutral_sink.key))?;
-    let credits = prepared.plan.recipient_credits();
-    for (recipient, account) in [
-        (position_payer, position_refund_owner),
-        (replay_payer, replay_refund_owner),
-        (neutral_sink_id, neutral_sink),
-    ] {
-        let credit = credits
-            .get(recipient)
-            .ok_or(ClutchError::MismatchedState)?;
-        require(
-            account.lamports().checked_add(credit.credit_lamports)
-                == Some(credit.balance_after),
-            ClutchError::MismatchedState,
-        )?;
+    let PreparedDealerPositionReplayCloseV3 {
+        plan,
+        terminal_replay,
+        program_id,
+        terminal_position_semantic_id,
+        replay_pre_ordinal,
+        close_receipt_id,
+    } = prepared;
+    let mut terminal_replay_bytes =
+        [0u8; clutch_dealer_runtime_contract::DEALER_FACILITY_REPLAY_BYTES_V1];
+    terminal_replay
+        .encode_into(&mut terminal_replay_bytes)
+        .map_err(dealer_fault)?;
+    let mut recipient_accounts = [None; clutch_retirement::MAX_RETIREMENT_RECIPIENTS];
+    recipient_accounts[0] = Some(position_refund_owner);
+    let mut next_recipient = 1usize;
+    if replay_refund_owner.key != position_refund_owner.key {
+        recipient_accounts[next_recipient] = Some(replay_refund_owner);
+        next_recipient += 1;
     }
-
-    let tombstone = prepared.plan.position_tombstone_bytes();
-    **position_account
-        .try_borrow_mut_lamports()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? =
-        prepared.plan.position_lamports_after();
-    position_account
-        .resize(POSITION_TOMBSTONE_V3_BYTES)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    position_account
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
-        .copy_from_slice(&tombstone);
-    release_dealer_account(replay_account)?;
-    for (recipient, account) in [
-        (position_payer, position_refund_owner),
-        (replay_payer, replay_refund_owner),
-        (neutral_sink_id, neutral_sink),
-    ] {
-        let credit = credits
-            .get(recipient)
-            .ok_or(ClutchError::MismatchedState)?;
-        **account
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? =
-            credit.balance_after;
-    }
-
-    let observed_tombstone = PositionTombstoneV3::decode(
-        &position_account
-            .try_borrow_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    recipient_accounts[next_recipient] = Some(neutral_sink);
+    let mut runtime = DealerPositionReplayCloseRuntimeV3 {
+        program_id: &program_id,
+        position_account,
+        replay_account,
+        recipient_accounts,
+        terminal_position_semantic_id,
+        terminal_replay_bytes: &terminal_replay_bytes,
+    };
+    let receipt = execute_position_replay_close_v3(&mut runtime, plan)?;
+    consume_dealer_position_replay_close_receipt_v3(
+        receipt,
+        position_account,
+        replay_account,
+        replay_pre_ordinal,
+        close_receipt_id,
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        observed_tombstone
-            == PositionTombstoneV3::decode(&tombstone)
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            && position_account.data_len() == POSITION_TOMBSTONE_V3_BYTES
-            && position_account.lamports() == prepared.plan.position_lamports_after()
-            && replay_account.owner == &SYSTEM_PROGRAM_ID
-            && replay_account.data_is_empty()
-            && replay_account.lamports() == prepared.plan.replay_lamports_after(),
-        ClutchError::MismatchedState,
-    )?;
-    for (recipient, account) in [
-        (position_payer, position_refund_owner),
-        (replay_payer, replay_refund_owner),
-        (neutral_sink_id, neutral_sink),
-    ] {
-        require(
-            credits
-                .get(recipient)
-                .map(|credit| credit.balance_after)
-                == Some(account.lamports()),
-            ClutchError::MismatchedState,
-        )?;
-    }
-    Ok(prepared.close_receipt_id())
 }
 
 fn apply_epoch_close(
@@ -11595,7 +12005,8 @@ mod timed_close_adversarial_tests {
 #[cfg(test)]
 mod current_terminal_cut_adversarial_tests {
     use super::{
-        DealerRuntimePayloadV1, RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT,
+        checked_terminal_retirement_sequence_v3, DealerRuntimePayloadV1,
+        RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT,
         RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT,
     };
     use crate::instructions::dealer_runtime::{
@@ -11709,6 +12120,12 @@ mod current_terminal_cut_adversarial_tests {
     }
 
     #[test]
+    fn terminal_retirement_sequence_is_exactly_preordinal_plus_one() {
+        assert_eq!(checked_terminal_retirement_sequence_v3(41).unwrap(), 42);
+        assert!(checked_terminal_retirement_sequence_v3(u64::MAX).is_err());
+    }
+
+    #[test]
     fn terminal_cut_remains_unavailable_until_product_and_fractional_join() {
         assert!(!crate::capabilities::extension_intent_action_enabled(
             DEALER_FAMILY_TAG,
@@ -11763,7 +12180,7 @@ mod current_terminal_cut_adversarial_tests {
             .and_then(|value| value.split("fn apply_dealer_position_replay_close_v3").next())
             .expect("Dealer Position/Replay close preflight");
         for guard in [
-            "replay_pre_ordinal.checked_add(1)",
+            "checked_terminal_retirement_sequence_v3(replay_pre_ordinal)",
             "terminal_replay.next_transition_ordinal() == expected_terminal_ordinal",
             "authenticate_position_v3_exact",
             "authenticate_purpose_replay_v3_exact",
@@ -11778,22 +12195,34 @@ mod current_terminal_cut_adversarial_tests {
         }
         assert!(prepare.contains("if replay_payer == position_payer"));
 
-        let apply = source
-            .split("fn apply_dealer_position_replay_close_v3")
+        let runtime = source
+            .split("struct DealerPositionReplayCloseRuntimeV3")
             .nth(1)
-            .and_then(|value| value.split("fn apply_epoch_close").next())
-            .expect("Dealer Position/Replay close postwrite");
+            .and_then(|value| {
+                value
+                    .split("fn consume_dealer_position_replay_close_receipt_v3")
+                    .next()
+            })
+            .expect("Dealer Position/Replay runtime");
         for guard in [
-            "position_tombstone_bytes",
             "POSITION_TOMBSTONE_V3_BYTES",
-            "release_dealer_account(replay_account)",
             "PositionTombstoneV3::decode",
             "replay_account.owner == &SYSTEM_PROGRAM_ID",
             "replay_account.data_is_empty()",
             "credit.balance_after",
+            "position_lamports_before()",
+            "replay_lamports_before()",
+            "terminal_replay_bytes",
         ] {
-            assert!(apply.contains(guard), "missing close postwrite guard {guard}");
+            assert!(runtime.contains(guard), "missing close runtime guard {guard}");
         }
+        let apply = source
+            .split("fn apply_dealer_position_replay_close_v3")
+            .nth(1)
+            .and_then(|value| value.split("fn apply_epoch_close").next())
+            .expect("Dealer Position/Replay close application");
+        assert!(apply.contains("execute_position_replay_close_v3"));
+        assert!(apply.contains("consume_dealer_position_replay_close_receipt_v3"));
     }
 }
 
