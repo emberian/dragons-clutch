@@ -22,7 +22,7 @@ use crate::intent::RecipientAllocationIntentV1;
 use crate::projection::{
     AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
 };
-use crate::retirement::FeeRetirementHashV1;
+use crate::retirement::{CompletedFeeRetirementV1, FeeRetirementHashV1};
 use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
@@ -1768,6 +1768,82 @@ pub fn build_aborted_fee_terminal_receipt_v1(
     )
 }
 
+/// Build the settled terminal from the compact streaming retirement owner.
+///
+/// This is the callable large-book path: `CompletedFeeRetirementV1` proves the
+/// exact book commitment, every lexicographic owner row, every temporary owner
+/// close, and all three global closes. It is therefore not interchangeable
+/// with a caller-supplied count or aggregate amount.
+#[allow(clippy::too_many_arguments)]
+pub fn build_settled_fee_terminal_from_accumulator_v1(
+    terminal_receipt: Id,
+    closure_manifest_receipt: Id,
+    value_disposition_receipt: Id,
+    selected: &SelectedCompositeFeeV1,
+    certified: &crate::projection::CertifiedRecipientAllocationV2,
+    settlement: &CandidateFeeSettlementV1,
+    recipient_intent: &RecipientAllocationIntentV1,
+    treasury: &TreasuryLedgerV1,
+    completed: &CompletedFeeRetirementV1,
+) -> Result<FeeTerminalReceiptBundleV1> {
+    let accumulator = completed.accumulator();
+    let recipients = certified.allocation();
+    if accumulator.fee_record() != selected.fee_record()
+        || accumulator.settlement_candidate() != selected.selected_candidate()
+        || accumulator.owner_fee_book_data_id() != certified.owner_fee_book_data_id()
+        || accumulator.owner_order_set_digest() != certified.owner_order_set_digest()
+        || u16::from(accumulator.expected_owner_count()) != certified.owner_count()
+        || accumulator.expected_fee_atoms()
+            != u128::from(recipients.collected_fee_atoms())
+        || recipient_intent.fee_record().identity() != selected.fee_record()
+        || recipient_intent.recipient_allocation().identity()
+            != accumulator.recipient_allocation()
+        || recipient_intent.treasury_ledger().identity() != accumulator.treasury_ledger()
+        || recipient_intent.settlement_candidate() != selected.selected_candidate()
+        || recipient_intent.revenue_policy() != selected.revenue_policy()
+        || recipient_intent.treasury_position() != selected.treasury_position()
+        || settlement.fee_record != selected.fee_record()
+        || settlement.hoard_collateral_before != settlement.hoard_collateral_after
+        || settlement.selected_fee_debit_atoms != accumulator.expected_fee_atoms()
+        || settlement.maker_rebate_atoms != recipients.maker_rebate_total()
+        || settlement.executor_atoms != recipients.executor_atoms()
+        || settlement.treasury_credit_atoms != recipients.treasury_atoms()
+        || treasury.fee_record() != selected.fee_record()
+        || treasury.treasury_position() != selected.treasury_position()
+        || treasury.outstanding_epochs() != 0
+        || treasury.credited_atoms() != recipients.treasury_atoms()
+        || treasury.withdrawn_atoms() != 0
+        || treasury.available_atoms() != recipients.treasury_atoms()
+        || treasury.is_closed()
+        || u128::from(add(
+            add(recipients.maker_rebate_total(), recipients.executor_atoms())?,
+            recipients.treasury_atoms(),
+        )?) != accumulator.expected_fee_atoms()
+    {
+        return Err(Error::InvalidTerminalDisposition);
+    }
+    finish_terminal(
+        terminal_receipt,
+        closure_manifest_receipt,
+        completed.closure_set_data_id(),
+        accumulator.runtime_program(),
+        accumulator.runtime_release(),
+        value_disposition_receipt,
+        completed.terminal_authority_receipt(),
+        selected,
+        FeeTerminalOutcomeV1::Settled,
+        accumulator.expected_owner_count(),
+        accumulator.expected_fee_atoms(),
+        0,
+        recipients.maker_rebate_total(),
+        recipients.executor_atoms(),
+        recipients.treasury_atoms(),
+        completed.payer_refund_lamports(),
+        completed.neutral_credit_lamports(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn finish_terminal(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
