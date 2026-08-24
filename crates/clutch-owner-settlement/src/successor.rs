@@ -323,50 +323,62 @@ impl OwnerSettlementExpectationBasisV2 {
         })
     }
 
+    /// Market identity shared by every expectation in the book.
     pub const fn market(self) -> [u8; 32] {
         self.market
     }
 
+    /// Selected settlement epoch identity.
     pub const fn epoch(self) -> [u8; 32] {
         self.epoch
     }
 
+    /// Best valid submitted candidate identity.
     pub const fn candidate(self) -> [u8; 32] {
         self.candidate
     }
 
+    /// Owner whose complete filled-order set this basis summarizes.
     pub const fn owner(self) -> [u8; 32] {
         self.owner
     }
 
+    /// Digest of the owner's exhaustive canonical filled-order set.
     pub const fn owner_order_set_digest(self) -> [u8; 32] {
         self.owner_order_set_digest
     }
 
+    /// Exact integer price scale used by all consideration totals.
     pub const fn price_scale(self) -> Amount {
         self.price_scale
     }
 
+    /// Canonical mask of expected filled buy orders.
     pub const fn expected_buy_order_mask(self) -> u64 {
         self.expected_buy_order_mask
     }
 
+    /// Canonical mask of expected filled sell orders.
     pub const fn expected_sell_order_mask(self) -> u64 {
         self.expected_sell_order_mask
     }
 
+    /// Number of receipt slices expected across both sides.
     pub const fn expected_slice_count(self) -> u16 {
         self.expected_slice_count
     }
 
+    /// Exact aggregate buy-side consideration before fee selection.
     pub const fn expected_buy_price_units(self) -> PresentConsiderationV2 {
         self.expected_buy_price_units
     }
 
+    /// Exact aggregate sell-side consideration before fee selection.
     pub const fn expected_sell_price_units(self) -> PresentConsiderationV2 {
         self.expected_sell_price_units
     }
 
+    /// Cash atoms reserved for this owner's admitted buy obligations.
     pub const fn reserved_cash_atoms(self) -> Amount {
         self.reserved_cash_atoms
     }
@@ -407,10 +419,12 @@ pub struct OwnerSettlementExpectationBasisBookV2 {
 }
 
 impl OwnerSettlementExpectationBasisBookV2 {
+    /// Number of canonical owner rows in the active prefix.
     pub const fn owner_count(&self) -> u16 {
         self.owner_count
     }
 
+    /// Return one canonical row by active-prefix ordinal.
     pub fn row(&self, ordinal: u16) -> Option<OwnerSettlementExpectationBasisV2> {
         if ordinal < self.owner_count {
             self.rows[usize::from(ordinal)]
@@ -419,6 +433,7 @@ impl OwnerSettlementExpectationBasisBookV2 {
         }
     }
 
+    /// Return the unique canonical row for an owner, when present.
     pub fn row_for_owner(&self, owner: [u8; 32]) -> Option<OwnerSettlementExpectationBasisV2> {
         let mut index = 0usize;
         while index < usize::from(self.owner_count) {

@@ -744,6 +744,10 @@ typed_id!(
     ProductFailureBeginScheduleProjectionV3Id,
     "Typed identity of one current BundleV7/QuoteV6 Failure begin schedule projection."
 );
+typed_id!(
+    MarketLifecycleGenerationBindingV2Id,
+    "Typed identity binding one current Market lifecycle generation to its durable replay owner."
+);
 
 /// A deterministic refusal from a fixed codec or pure projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -803,6 +807,8 @@ pub enum Error {
     WorkStateMismatch,
     /// The pure contract exists, but no live runtime capability is activated.
     RuntimeCapabilityDisabled,
+    /// An exact fixed-width codec body was malformed or had the wrong width.
+    InvalidCodec,
 }
 
 /// Result alias for this allocation-free core.
