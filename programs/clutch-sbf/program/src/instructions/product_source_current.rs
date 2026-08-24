@@ -279,6 +279,10 @@ impl AuthenticatedSeriesSourceArtifactsV5 {
     pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV5 {
         &self.attachment
     }
+
+    pub(crate) fn genesis(&self) -> &MarketGenesisProfileV2 {
+        &self.genesis
+    }
 }
 
 /// Hostile-authenticated current BundleV6 reconstructed from all semantic
@@ -312,6 +316,7 @@ pub(crate) struct AuthenticatedSourceProductRouteV4 {
     receiver_route_id: ContentId,
     source_release_manifest_id: ContentId,
     source_release_authentication_id: ContentId,
+    clock_policy_id: ContentId,
     source_plane_contract_id: ContentId,
     source_spec_id: ContentId,
     registry_release_id: ContentId,
@@ -339,6 +344,10 @@ impl AuthenticatedSourceProductRouteV4 {
 
     pub(crate) const fn source_release_authentication_id(self) -> ContentId {
         self.source_release_authentication_id
+    }
+
+    pub(crate) const fn clock_policy_id(self) -> ContentId {
+        self.clock_policy_id
     }
 
     pub(crate) const fn source_plane_contract_id(self) -> ContentId {
@@ -626,6 +635,7 @@ pub(crate) fn authenticate_source_product_route_v4(
             &receiver.id().bytes(),
             &route.release_manifest_id().bytes(),
             &route.release_authentication_id().bytes(),
+            &route.clock_policy_id().bytes(),
             &route.source_plane_contract_id().bytes(),
             &route.source_spec_id().bytes(),
             &registry.registry_release_id().bytes(),
@@ -648,6 +658,7 @@ pub(crate) fn authenticate_source_product_route_v4(
         source_release_authentication_id: ContentId::from_bytes(
             route.release_authentication_id().bytes(),
         ),
+        clock_policy_id: ContentId::from_bytes(route.clock_policy_id().bytes()),
         source_plane_contract_id: ContentId::from_bytes(route.source_plane_contract_id().bytes()),
         source_spec_id: ContentId::from_bytes(route.source_spec_id().bytes()),
         registry_release_id: registry.registry_release_id(),
