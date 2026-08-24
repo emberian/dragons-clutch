@@ -385,8 +385,10 @@ pub struct TreasuryServiceLedgerV1 {
     pub treasury_owner: Hash32,
     /// Exact ordinary Market-scoped Position account guarded by this ledger.
     pub treasury_position_account: Hash32,
-    /// PositionV3 generation admitted at Market founding.
-    pub treasury_position_generation: u64,
+    /// PositionV3 generation proven at Market founding. Later treasury
+    /// mutations advance the live Position generation without rewriting this
+    /// immutable founding provenance.
+    pub treasury_position_founding_generation: u64,
     /// Fee-bearing epoch services begun.
     pub admitted_epoch_count: u64,
     /// Fee-bearing epoch services fully settled.
@@ -417,7 +419,7 @@ impl TreasuryServiceLedgerV1 {
         ] {
             check_hash(identity)?;
         }
-        if self.treasury_position_generation == 0 || self.refundable_rent_principal == 0 {
+        if self.treasury_position_founding_generation == 0 || self.refundable_rent_principal == 0 {
             return Err(CodecError::InvalidCount);
         }
         if self.settled_epoch_count > self.admitted_epoch_count {
@@ -483,7 +485,7 @@ impl TreasuryServiceLedgerV1 {
         ] {
             writer.hash(identity)?;
         }
-        writer.u64(self.treasury_position_generation)?;
+        writer.u64(self.treasury_position_founding_generation)?;
         writer.u64(self.admitted_epoch_count)?;
         writer.u64(self.settled_epoch_count)?;
         writer.hash(self.rent_payer)?;
@@ -513,7 +515,7 @@ impl TreasuryServiceLedgerV1 {
             market_instance_v2_id: reader.hash()?,
             treasury_owner: reader.hash()?,
             treasury_position_account: reader.hash()?,
-            treasury_position_generation: reader.u64()?,
+            treasury_position_founding_generation: reader.u64()?,
             admitted_epoch_count: reader.u64()?,
             settled_epoch_count: reader.u64()?,
             rent_payer: reader.hash()?,
@@ -690,7 +692,7 @@ mod tests {
             market_instance_v2_id: Hash32::from_bytes([4; 32]),
             treasury_owner: Hash32::from_bytes([5; 32]),
             treasury_position_account: Hash32::from_bytes([6; 32]),
-            treasury_position_generation: 1,
+            treasury_position_founding_generation: 1,
             admitted_epoch_count: 0,
             settled_epoch_count: 0,
             rent_payer: Hash32::from_bytes([7; 32]),
@@ -793,7 +795,7 @@ mod tests {
                 ..value
             },
             TreasuryServiceLedgerV1 {
-                treasury_position_generation: 0,
+                treasury_position_founding_generation: 0,
                 ..value
             },
             TreasuryServiceLedgerV1 {
