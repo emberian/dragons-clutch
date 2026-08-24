@@ -773,6 +773,27 @@ fn validate_owner_row_binding(
     Ok(())
 }
 
+fn aliases_accounting_accounts(
+    receipt: [u8; 32],
+    position: [u8; 32],
+    reservation: [u8; 32],
+    owner_row: [u8; 32],
+) -> bool {
+    let accounts = [receipt, position, reservation, owner_row];
+    let mut left = 0_usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            if accounts[left] == accounts[right] {
+                return true;
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    false
+}
+
 fn aliases_direct_accounts(
     receipt: [u8; 32],
     buyer_position: [u8; 32],

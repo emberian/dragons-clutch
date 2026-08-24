@@ -42,16 +42,24 @@ pub struct AcceptedMarketCoreFoundingV3 {
 }
 
 impl AcceptedMarketCoreFoundingV3 {
+    /// Earlier authenticated founding plan retained for decode compatibility.
     pub const fn plan(self) -> MarketCoreFoundingPlanV3 { self.plan }
+    /// Receipt authenticating the liability foundation step.
     pub const fn liability_receipt_id(self) -> Id { self.liability_receipt_id }
+    /// Per-outcome claim-mint receipt identities.
     pub const fn mint_receipt_ids(self) -> [Id; MAX_OUTCOMES] { self.mint_receipt_ids }
+    /// Aggregate accepted founding receipt identity.
     pub const fn receipt_id(self) -> Id { self.receipt_id }
 }
 
 impl MarketCoreFoundingPlanV3 {
+    /// Earlier liability founding plan.
     pub const fn liabilities(self) -> MarketLiabilityFoundingPlanV3 { self.liabilities }
+    /// Earlier custody creation plan.
     pub const fn custody(self) -> CustodyCreationPlanV2 { self.custody }
+    /// Earlier claim-mint founding plan.
     pub const fn claim_mints(self) -> ClaimMintFoundingPlanV2 { self.claim_mints }
+    /// Content identity of the complete earlier core plan.
     pub const fn core_id(self) -> Id { self.core_id }
 }
 

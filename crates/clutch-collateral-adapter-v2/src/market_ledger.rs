@@ -759,13 +759,21 @@ pub enum FractionalClaimSupplyMutationV3 {
     /// Credit transfer/claim/close changes only K/count in 0xa5.
     Unchanged,
     /// Burn Position-owned native claims at one outcome.
-    BurnInternal { outcome: u8, amount: u64 },
+    BurnInternal {
+        /// Selected native outcome.
+        outcome: u8,
+        /// Exact internal claim atoms burned.
+        amount: u64,
+    },
     /// Burn one canonical fixed-width vector from a single internal owner.
     ///
     /// Active entries are applied together under one fractional sequence;
     /// inactive tail entries must be zero and at least one active entry must
     /// be nonzero. This is not equivalent to a sequence of scalar burns.
-    BurnInternalVector { amounts: [u64; MAX_OUTCOMES] },
+    BurnInternalVector {
+        /// Exact fixed-width vector of internal claim atoms burned.
+        amounts: [u64; MAX_OUTCOMES],
+    },
     /// Burn materialized bearer claims after synchronizing the canonical
     /// aggregate to exact Token-2022 mint supplies observed before the burn.
     BurnMaterialized {

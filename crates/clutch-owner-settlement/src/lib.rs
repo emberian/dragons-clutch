@@ -129,7 +129,7 @@ pub use virtual_claim::{
     VirtualInventoryStateV1, VirtualMergeCashPotPostV1,
     VirtualMergeCompositeInputV1, VirtualMergeCompositePlanV1, VirtualMergeReceiptInputV1,
     VirtualMergeReceiptAccountingInputV1, VirtualMergeReceiptAccountingPlanV1,
-    VirtualMergeReceiptInputV1, VirtualMergeReceiptPlanV1, VirtualReceiptKindV1,
+    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1,
     VirtualSplitCompositeInputV1, VirtualSplitCompositePlanV1,
     VirtualSplitReceiptAccountingInputV1, VirtualSplitReceiptAccountingPlanV1,
     VirtualSplitReceiptInputV1, VirtualSplitReceiptPlanV1, FINAL_POT_BODY_V1_BYTES,
