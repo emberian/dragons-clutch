@@ -698,6 +698,42 @@ impl DirectRootReplayPostV2 {
         self.root.validate()?;
         self.replay.validate_against(self.root.transition_projection(backend)?)
     }
+
+    /// Private input to the reviewed lifecycle arithmetic. No projected V1
+    /// root is returned across the crate boundary.
+    pub(crate) fn transition_projection<B: DirectHashBackendV1>(
+        &self,
+        backend: &B,
+    ) -> Result<crate::DirectRootReplayPostV1, DirectMarketErrorV1> {
+        self.validate(backend)?;
+        Ok(crate::DirectRootReplayPostV1 {
+            root: self.root.transition_projection(backend)?,
+            replay: self.replay,
+        })
+    }
+
+    /// Reconstruct one current successor and prove that the private V1 call
+    /// changed only the lifecycle fields owned by that arithmetic.
+    pub(crate) fn accept_transition_projection<B: DirectHashBackendV1>(
+        self,
+        before: crate::DirectRootReplayPostV1,
+        after: crate::DirectRootReplayPostV1,
+        backend: &B,
+    ) -> Result<Self, DirectMarketErrorV1> {
+        if before != self.transition_projection(backend)? {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        let root = self.root.accept_transition_projection(
+            before.root,
+            after.root,
+            backend,
+        )?;
+        after.replay.validate_against(root.transition_projection(backend)?)?;
+        Ok(Self {
+            root,
+            replay: after.replay,
+        })
+    }
 }
 
 fn candidate_liveness_id_v2<B: DirectHashBackendV1>(

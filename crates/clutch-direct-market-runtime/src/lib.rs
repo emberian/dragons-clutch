@@ -26,6 +26,7 @@ pub mod current_v2;
 pub mod fee_v1;
 pub mod fee_v2;
 pub mod liveness_v1;
+pub mod lifecycle_v2;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
