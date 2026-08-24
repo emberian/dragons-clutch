@@ -14,14 +14,20 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_dealer_contract::{
-    LiquidityAmounts, LiquidityConfigV1, LpPosition, PoolState, RentCreditTerms, TradeSide,
-    activation::{activate_pool, retire_pool},
+    LiquidityAmounts, LpPosition, RentCreditTerms, TradeSide,
+    activation::{activate_pool_into, retire_pool_in_place},
     frame::{
         ConfigPdaSeedsV1, DealerAccountMetaV1, DealerCollateralCompartmentV1,
         DealerCollateralVaultPdaSeedsV1, DealerFrameV1, LpPositionPdaSeedsV1, PoolPdaSeedsV1,
         PoolPositionPdaSeedsV1, validate_market_phase,
     },
     instruction::{DEALER_INSTRUCTION_MAGIC, DealerActionV1, DealerInstructionV1},
+    runtime::{
+        LiquidityConfigViewV1, LiquidityProfileV1, PoolViewV1,
+        add_liquidity as runtime_add_liquidity, close_position as runtime_close_position,
+        create_position as runtime_create_position, execute as runtime_execute,
+        remove_liquidity as runtime_remove_liquidity, reset_ladder as runtime_reset_ladder,
+    },
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_realm_contract::{POSITION_PDA_DOMAIN, PositionV1, REALM_PDA_DOMAIN, RealmV1};
@@ -66,7 +72,6 @@ const MAX_ACTION: u8 = DealerActionV1::RetirePool as u8;
 struct Route {
     action: DealerActionV1,
     market_index: usize,
-    config_index: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -86,12 +91,25 @@ struct TransferFacts {
     mint_lamports: u64,
 }
 
-#[derive(Clone, Copy)]
-struct PoolFacts<const N: usize, const B: usize> {
+struct PoolFacts<const N: usize> {
     market: CategoricalMarketV1<N>,
-    pool: PoolState<N, B>,
-    config: LiquidityConfigV1<N, B>,
+    pool_bytes: Vec<u8>,
+    config_bytes: Vec<u8>,
+    config_id: ContentId,
+    profile: LiquidityProfileV1,
     pool_bump: u8,
+}
+
+impl<const N: usize> PoolFacts<N> {
+    fn config(&self) -> Result<LiquidityConfigViewV1<'_>, ProgramError> {
+        LiquidityConfigViewV1::new(self.config_id, self.profile, &self.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication.into())
+    }
+
+    fn pool(&self, address: [u8; 32]) -> Result<PoolViewV1<'_>, ProgramError> {
+        PoolViewV1::new(self.profile, &self.pool_bytes, address, self.config()?)
+            .map_err(|_| AdapterError::PositionAuthentication.into())
+    }
 }
 
 /// Route one Dealer instruction after matching [`DEALER_INSTRUCTION_MAGIC`].
@@ -112,21 +130,21 @@ pub(crate) fn dispatch(
         .map_err(|_| AdapterError::PositionAuthentication)?;
     drop(market_data);
     match outcomes {
-        2 => dispatch_bins::<2>(program_id, accounts, instruction_data, route),
-        3 => dispatch_bins::<3>(program_id, accounts, instruction_data, route),
-        4 => dispatch_bins::<4>(program_id, accounts, instruction_data, route),
-        5 => dispatch_bins::<5>(program_id, accounts, instruction_data, route),
-        6 => dispatch_bins::<6>(program_id, accounts, instruction_data, route),
-        7 => dispatch_bins::<7>(program_id, accounts, instruction_data, route),
-        8 => dispatch_bins::<8>(program_id, accounts, instruction_data, route),
-        9 => dispatch_bins::<9>(program_id, accounts, instruction_data, route),
-        10 => dispatch_bins::<10>(program_id, accounts, instruction_data, route),
-        11 => dispatch_bins::<11>(program_id, accounts, instruction_data, route),
-        12 => dispatch_bins::<12>(program_id, accounts, instruction_data, route),
-        13 => dispatch_bins::<13>(program_id, accounts, instruction_data, route),
-        14 => dispatch_bins::<14>(program_id, accounts, instruction_data, route),
-        15 => dispatch_bins::<15>(program_id, accounts, instruction_data, route),
-        16 => dispatch_bins::<16>(program_id, accounts, instruction_data, route),
+        2 => process::<2>(program_id, accounts, instruction_data, route),
+        3 => process::<3>(program_id, accounts, instruction_data, route),
+        4 => process::<4>(program_id, accounts, instruction_data, route),
+        5 => process::<5>(program_id, accounts, instruction_data, route),
+        6 => process::<6>(program_id, accounts, instruction_data, route),
+        7 => process::<7>(program_id, accounts, instruction_data, route),
+        8 => process::<8>(program_id, accounts, instruction_data, route),
+        9 => process::<9>(program_id, accounts, instruction_data, route),
+        10 => process::<10>(program_id, accounts, instruction_data, route),
+        11 => process::<11>(program_id, accounts, instruction_data, route),
+        12 => process::<12>(program_id, accounts, instruction_data, route),
+        13 => process::<13>(program_id, accounts, instruction_data, route),
+        14 => process::<14>(program_id, accounts, instruction_data, route),
+        15 => process::<15>(program_id, accounts, instruction_data, route),
+        16 => process::<16>(program_id, accounts, instruction_data, route),
         _ => Err(AdapterError::PositionAuthentication.into()),
     }
 }
@@ -138,46 +156,24 @@ fn select_route(data: &[u8]) -> Result<Route, ProgramError> {
     if !(MIN_ACTION..=MAX_ACTION).contains(&action) {
         return Err(AdapterError::InvalidInstruction.into());
     }
-    let (action, market_index, config_index) = match action {
-        1 => (DealerActionV1::ActivatePool, 3, 8),
-        2 => (DealerActionV1::CreateLpPosition, 2, 4),
-        3 => (DealerActionV1::AddLiquidity, 2, 4),
-        4 => (DealerActionV1::RemoveLiquidity, 2, 4),
-        5 => (DealerActionV1::Trade, 2, 4),
-        6 => (DealerActionV1::ResetLadder, 0, 2),
-        7 => (DealerActionV1::CloseLpPosition, 1, 3),
-        8 => (DealerActionV1::RetirePool, 0, 3),
+    let (action, market_index) = match action {
+        1 => (DealerActionV1::ActivatePool, 3),
+        2 => (DealerActionV1::CreateLpPosition, 2),
+        3 => (DealerActionV1::AddLiquidity, 2),
+        4 => (DealerActionV1::RemoveLiquidity, 2),
+        5 => (DealerActionV1::Trade, 2),
+        6 => (DealerActionV1::ResetLadder, 0),
+        7 => (DealerActionV1::CloseLpPosition, 1),
+        8 => (DealerActionV1::RetirePool, 0),
         _ => return Err(AdapterError::InvalidInstruction.into()),
     };
     Ok(Route {
         action,
         market_index,
-        config_index,
     })
 }
 
-fn dispatch_bins<const N: usize>(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    data: &[u8],
-    route: Route,
-) -> Result<(), ProgramError> {
-    let config = account(accounts, route.config_index)?;
-    let width = config.data_len();
-    macro_rules! choose {
-        ($($b:literal),+ $(,)?) => {$({
-            if width == LiquidityConfigV1::<N, $b>::encoded_len()
-                .map_err(|_| AdapterError::Arithmetic)?
-            {
-                return process::<N, $b>(program_id, accounts, data, route);
-            }
-        })+};
-    }
-    choose!(1, 2, 3, 4, 5, 6, 7, 8);
-    Err(AdapterError::AccountData.into())
-}
-
-fn process<const N: usize, const B: usize>(
+fn process<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     data: &[u8],
@@ -190,37 +186,35 @@ fn process<const N: usize, const B: usize>(
     }
     validate_frame::<N>(route.action, accounts)?;
     match instruction {
-        DealerInstructionV1::ActivatePool(request) => {
-            activate::<N, B>(program_id, accounts, request)
-        }
+        DealerInstructionV1::ActivatePool(request) => activate::<N>(program_id, accounts, request),
         DealerInstructionV1::CreateLpPosition(request) => {
-            create_lp_position::<N, B>(program_id, accounts, request)
+            create_lp_position::<N>(program_id, accounts, request)
         }
-        DealerInstructionV1::AddLiquidity(request) => change_liquidity::<N, B, _>(
+        DealerInstructionV1::AddLiquidity(request) => change_liquidity::<N, _>(
             program_id,
             accounts,
             request.lp_id(),
             request.request(),
             true,
         ),
-        DealerInstructionV1::RemoveLiquidity(request) => change_liquidity::<N, B, _>(
+        DealerInstructionV1::RemoveLiquidity(request) => change_liquidity::<N, _>(
             program_id,
             accounts,
             request.lp_id(),
             request.request(),
             false,
         ),
-        DealerInstructionV1::Trade(request) => trade::<N, B>(program_id, accounts, request),
+        DealerInstructionV1::Trade(request) => trade::<N>(program_id, accounts, request),
         DealerInstructionV1::ResetLadder {
             expected_pool_sequence,
-        } => reset_ladder::<N, B>(program_id, accounts, expected_pool_sequence),
+        } => reset_ladder::<N>(program_id, accounts, expected_pool_sequence),
         DealerInstructionV1::CloseLpPosition(request) => {
-            close_lp_position::<N, B>(program_id, accounts, request)
+            close_lp_position::<N>(program_id, accounts, request)
         }
         DealerInstructionV1::RetirePool {
             expected_pool_sequence,
             expected_market_child_count,
-        } => retire::<N, B>(
+        } => retire::<N>(
             program_id,
             accounts,
             expected_pool_sequence,
@@ -250,7 +244,7 @@ fn validate_frame<const N: usize>(
 }
 
 #[allow(clippy::too_many_lines)]
-fn activate<const N: usize, const B: usize>(
+fn activate<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: dclutch_dealer_contract::instruction::ActivatePoolV1,
@@ -299,8 +293,10 @@ fn activate<const N: usize, const B: usize>(
 
     let market = authenticate_market::<N>(program_id, market_account, request.generation())?;
     let realm = authenticate_realm(program_id, realm_account, mint, token_program, market)?;
-    let (config, config_id) =
-        authenticate_config::<N, B>(program_id, config_account, config_staging)?;
+    let (config_bytes, profile, config_id) =
+        authenticate_config::<N>(program_id, config_account, config_staging)?;
+    let config = LiquidityConfigViewV1::new(config_id, profile, &config_bytes)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     let manifest_data = manifest_account
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -468,8 +464,8 @@ fn activate<const N: usize, const B: usize>(
         .credit_complete_set(request.initial_claim_quantity())
         .map_err(|_| AdapterError::MarketTransition)?;
 
-    let pool_account_rent = rent
-        .minimum_balance(PoolState::<N, B>::encoded_len().map_err(|_| AdapterError::Arithmetic)?);
+    let pool_account_rent =
+        rent.minimum_balance(profile.pool_len().map_err(|_| AdapterError::Arithmetic)?);
     let lp_rent = rent.minimum_balance(dclutch_dealer_contract::LP_POSITION_BYTES);
     let position_rent =
         rent.minimum_balance(PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?);
@@ -481,7 +477,11 @@ fn activate<const N: usize, const B: usize>(
     let lp_credit_state = authenticate_rent_credit(program_id, lp_credit, owner.key)?;
     let pool_position_credit_state =
         authenticate_rent_credit(program_id, pool_position_credit, pool_account.key)?;
-    if config.liquidity_owner() != owner.key.to_bytes() {
+    if config
+        .liquidity_owner()
+        .map_err(|_| AdapterError::PositionAuthentication)?
+        != owner.key.to_bytes()
+    {
         return Err(AdapterError::PositionAuthentication.into());
     }
     let now_slot = Clock::get()
@@ -494,7 +494,8 @@ fn activate<const N: usize, const B: usize>(
         owner.key.to_bytes(),
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
-    let plan = activate_pool(
+    let mut pool_bytes = exact_zeroed(profile.pool_len().map_err(|_| AdapterError::Arithmetic)?)?;
+    let plan = activate_pool_into::<N>(
         market.root(),
         market_account.key.to_bytes(),
         manifest,
@@ -503,7 +504,9 @@ fn activate<const N: usize, const B: usize>(
         funding_authority.key.to_bytes(),
         funding_custody,
         attachment,
-        &config,
+        config,
+        profile,
+        &mut pool_bytes,
         pool_account.key.to_bytes(),
         lp_account.key.to_bytes(),
         owner.key.to_bytes(),
@@ -535,7 +538,6 @@ fn activate<const N: usize, const B: usize>(
     }
     let market_bytes = encode_market(market_after)?;
     let funding_bytes = plan.funding().to_bytes();
-    let pool_bytes = encode_pool(plan.pool())?;
     let lp_bytes = plan
         .initial_position()
         .to_bytes()
@@ -660,7 +662,13 @@ fn activate<const N: usize, const B: usize>(
     }
     persist_market(market_account, &market_bytes, market_after)?;
     persist_bytes(funding_account, &funding_bytes)?;
-    persist_pool(pool_account, &pool_bytes, plan.pool())?;
+    persist_pool(
+        pool_account,
+        &pool_bytes,
+        profile,
+        pool_account.key.to_bytes(),
+        config,
+    )?;
     persist_lp(lp_account, &lp_bytes, plan.initial_position())?;
     persist_position(
         participant_account,
@@ -676,7 +684,7 @@ fn activate<const N: usize, const B: usize>(
     require_unchanged_rent_credit(program_id, pool_position_credit, pool_position_credit_state)
 }
 
-fn create_lp_position<const N: usize, const B: usize>(
+fn create_lp_position<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: dclutch_dealer_contract::instruction::CreateLpPositionV1,
@@ -693,7 +701,7 @@ fn create_lp_position<const N: usize, const B: usize>(
     let rent_sysvar = account(accounts, 9)?;
     authenticate_system_and_rent(system, rent_sysvar)?;
     require_vacant(lp_account)?;
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market_account,
         pool_account,
@@ -705,7 +713,7 @@ fn create_lp_position<const N: usize, const B: usize>(
     let lp_seeds = LpPositionPdaSeedsV1::new(
         market_account.key.to_bytes(),
         generation,
-        facts.config.content_id(),
+        facts.config_id,
         request.lp_id(),
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -719,18 +727,19 @@ fn create_lp_position<const N: usize, const B: usize>(
     let funded_rent = rent.minimum_balance(dclutch_dealer_contract::LP_POSITION_BYTES);
     let rent_terms = RentCreditTerms::new(owner.key.to_bytes(), funded_rent)
         .map_err(|_| AdapterError::PositionAuthentication)?;
-    let (lp, _) = facts
-        .pool
-        .create_position(
-            pool_account.key.to_bytes(),
-            &facts.config,
-            request.expected_pool_sequence(),
-            lp_account.key.to_bytes(),
-            owner.key.to_bytes(),
-            rent_terms,
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
-    let pool_bytes = encode_pool(facts.pool)?;
+    let config = LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (lp, _) = runtime_create_position(
+        &mut facts.pool_bytes,
+        facts.profile,
+        pool_account.key.to_bytes(),
+        config,
+        request.expected_pool_sequence(),
+        lp_account.key.to_bytes(),
+        owner.key.to_bytes(),
+        rent_terms,
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
     let lp_bytes = lp
         .to_bytes()
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -762,13 +771,19 @@ fn create_lp_position<const N: usize, const B: usize>(
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    persist_pool(pool_account, &pool_bytes, facts.pool)?;
+    persist_pool(
+        pool_account,
+        &facts.pool_bytes,
+        facts.profile,
+        pool_account.key.to_bytes(),
+        config,
+    )?;
     persist_lp(lp_account, &lp_bytes, lp)?;
     require_unchanged_rent_credit(program_id, rent_credit_account, rent_credit)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn change_liquidity<const N: usize, const B: usize, R>(
+fn change_liquidity<const N: usize, R>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     lp_id: [u8; 32],
@@ -776,7 +791,7 @@ fn change_liquidity<const N: usize, const B: usize, R>(
     is_add: bool,
 ) -> Result<(), ProgramError>
 where
-    R: Copy + LiquidityRequest<N, B>,
+    R: Copy + LiquidityRequest<N>,
 {
     let actor = account(accounts, 0)?;
     let realm_account = account(accounts, 1)?;
@@ -797,7 +812,7 @@ where
     } else {
         DealerActionV1::RemoveLiquidity
     };
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market_account,
         pool_account,
@@ -811,7 +826,7 @@ where
         lp_account,
         market_account,
         pool_account,
-        facts.config.content_id(),
+        facts.config_id,
         lp_id,
         actor.key,
         facts.market.root().identity().generation(),
@@ -838,7 +853,10 @@ where
         token_program,
         realm,
         DealerCollateralCompartmentV1::Principal,
-        facts.pool.liquidity().principal_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .principal_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
     let fee_before = authenticate_pool_vault(
         program_id,
@@ -848,14 +866,25 @@ where
         token_program,
         realm,
         DealerCollateralCompartmentV1::RealizedFees,
-        facts.pool.liquidity().realized_fee_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .realized_fee_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
-    require_claim_coverage(facts.pool.liquidity(), pool_position)?;
+    require_claim_coverage(
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .liquidity::<N>()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+        pool_position,
+    )?;
 
     let receipt = request.apply(
-        &mut facts.pool,
+        &mut facts.pool_bytes,
+        facts.profile,
         pool_account.key.to_bytes(),
-        &facts.config,
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
         lp_account.key.to_bytes(),
         &mut lp,
     )?;
@@ -878,7 +907,6 @@ where
     }
     let principal = amounts.principal_collateral();
     let fees = amounts.realized_fee_collateral();
-    let pool_bytes = encode_pool(facts.pool)?;
     let lp_bytes = lp
         .to_bytes()
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -937,7 +965,14 @@ where
             Some(pool_signer.as_slice()),
         )?;
     }
-    persist_pool(pool_account, &pool_bytes, facts.pool)?;
+    persist_pool(
+        pool_account,
+        &facts.pool_bytes,
+        facts.profile,
+        pool_account.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+    )?;
     persist_lp(lp_account, &lp_bytes, lp)?;
     persist_position(participant_account, &participant_bytes, participant)?;
     persist_position(pool_position_account, &pool_position_bytes, pool_position)?;
@@ -960,52 +995,51 @@ where
     Ok(())
 }
 
-trait LiquidityRequest<const N: usize, const B: usize>: Copy {
+trait LiquidityRequest<const N: usize>: Copy {
     fn apply(
         self,
-        pool: &mut PoolState<N, B>,
+        pool_bytes: &mut [u8],
+        profile: LiquidityProfileV1,
         pool_key: [u8; 32],
-        config: &LiquidityConfigV1<N, B>,
+        config: LiquidityConfigViewV1<'_>,
         lp_key: [u8; 32],
         lp: &mut LpPosition,
     ) -> Result<LiquidityAmounts<N>, ProgramError>;
 }
 
-impl<const N: usize, const B: usize> LiquidityRequest<N, B>
-    for dclutch_dealer_contract::AddLiquidityRequest<N>
-{
+impl<const N: usize> LiquidityRequest<N> for dclutch_dealer_contract::AddLiquidityRequest<N> {
     fn apply(
         self,
-        pool: &mut PoolState<N, B>,
+        pool_bytes: &mut [u8],
+        profile: LiquidityProfileV1,
         pool_key: [u8; 32],
-        config: &LiquidityConfigV1<N, B>,
+        config: LiquidityConfigViewV1<'_>,
         lp_key: [u8; 32],
         lp: &mut LpPosition,
     ) -> Result<LiquidityAmounts<N>, ProgramError> {
-        pool.add_liquidity(pool_key, config, lp_key, lp, self)
+        runtime_add_liquidity(pool_bytes, profile, pool_key, config, lp_key, lp, self)
             .map(|receipt| receipt.amounts_transferred())
             .map_err(|_| AdapterError::MarketTransition.into())
     }
 }
 
-impl<const N: usize, const B: usize> LiquidityRequest<N, B>
-    for dclutch_dealer_contract::RemoveLiquidityRequest<N>
-{
+impl<const N: usize> LiquidityRequest<N> for dclutch_dealer_contract::RemoveLiquidityRequest<N> {
     fn apply(
         self,
-        pool: &mut PoolState<N, B>,
+        pool_bytes: &mut [u8],
+        profile: LiquidityProfileV1,
         pool_key: [u8; 32],
-        config: &LiquidityConfigV1<N, B>,
+        config: LiquidityConfigViewV1<'_>,
         lp_key: [u8; 32],
         lp: &mut LpPosition,
     ) -> Result<LiquidityAmounts<N>, ProgramError> {
-        pool.remove_liquidity(pool_key, config, lp_key, lp, self)
+        runtime_remove_liquidity(pool_bytes, profile, pool_key, config, lp_key, lp, self)
             .map(|receipt| receipt.amounts_transferred())
             .map_err(|_| AdapterError::MarketTransition.into())
     }
 }
 
-fn trade<const N: usize, const B: usize>(
+fn trade<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: dclutch_dealer_contract::TradeRequest,
@@ -1023,7 +1057,7 @@ fn trade<const N: usize, const B: usize>(
     let fee_vault = account(accounts, 10)?;
     let mint = account(accounts, 11)?;
     let token_program = account(accounts, 12)?;
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market_account,
         pool_account,
@@ -1055,7 +1089,10 @@ fn trade<const N: usize, const B: usize>(
         token_program,
         realm,
         DealerCollateralCompartmentV1::Principal,
-        facts.pool.liquidity().principal_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .principal_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
     authenticate_pool_vault(
         program_id,
@@ -1065,13 +1102,27 @@ fn trade<const N: usize, const B: usize>(
         token_program,
         realm,
         DealerCollateralCompartmentV1::RealizedFees,
-        facts.pool.liquidity().realized_fee_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .realized_fee_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
-    require_claim_coverage(facts.pool.liquidity(), pool_position)?;
-    let receipt = facts
-        .pool
-        .execute(pool_account.key.to_bytes(), &facts.config, request)
-        .map_err(|_| AdapterError::MarketTransition)?;
+    require_claim_coverage(
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .liquidity::<N>()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+        pool_position,
+    )?;
+    let receipt = runtime_execute(
+        &mut facts.pool_bytes,
+        facts.profile,
+        pool_account.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+        request,
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
     let claim = usize::from(receipt.claim_index());
     match receipt.side() {
         TradeSide::BuyClaimFromPool => pool_position
@@ -1083,7 +1134,6 @@ fn trade<const N: usize, const B: usize>(
             .and_then(|()| pool_position.credit_outcome(claim, receipt.quantity()))
             .map_err(|_| AdapterError::MarketTransition)?,
     }
-    let pool_bytes = encode_pool(facts.pool)?;
     let trader_position_bytes = encode_position(trader_position)?;
     let pool_position_bytes = encode_position(pool_position)?;
     let pool_signer = pool_signer(&facts, market_account, pool_account)?;
@@ -1141,11 +1191,19 @@ fn trade<const N: usize, const B: usize>(
             )?;
         }
     }
-    persist_pool(pool_account, &pool_bytes, facts.pool)?;
+    persist_pool(
+        pool_account,
+        &facts.pool_bytes,
+        facts.profile,
+        pool_account.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+    )?;
     persist_position(participant_account, &trader_position_bytes, trader_position)?;
     persist_position(pool_position_account, &pool_position_bytes, pool_position)?;
     let mut return_data = exact_zeroed(
-        dclutch_dealer_contract::ExecutionReceipt::<B>::encoded_len()
+        receipt
+            .encoded_len()
             .map_err(|_| AdapterError::Arithmetic)?,
     )?;
     receipt
@@ -1155,7 +1213,7 @@ fn trade<const N: usize, const B: usize>(
     Ok(())
 }
 
-fn reset_ladder<const N: usize, const B: usize>(
+fn reset_ladder<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     expected_pool_sequence: u64,
@@ -1164,7 +1222,7 @@ fn reset_ladder<const N: usize, const B: usize>(
     let pool = account(accounts, 1)?;
     let config = account(accounts, 2)?;
     let config_staging = account(accounts, 3)?;
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market,
         pool,
@@ -1175,21 +1233,28 @@ fn reset_ladder<const N: usize, const B: usize>(
     let slot = Clock::get()
         .map_err(|_| AdapterError::PositionAuthentication)?
         .slot;
-    facts
-        .pool
-        .reset_ladder(
-            pool.key.to_bytes(),
-            &facts.config,
-            expected_pool_sequence,
-            slot,
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
-    let bytes = encode_pool(facts.pool)?;
+    runtime_reset_ladder(
+        &mut facts.pool_bytes,
+        facts.profile,
+        pool.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+        expected_pool_sequence,
+        slot,
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
     preflight_mutable(&[pool])?;
-    persist_pool(pool, &bytes, facts.pool)
+    persist_pool(
+        pool,
+        &facts.pool_bytes,
+        facts.profile,
+        pool.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+    )
 }
 
-fn close_lp_position<const N: usize, const B: usize>(
+fn close_lp_position<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: dclutch_dealer_contract::instruction::CloseLpPositionV1,
@@ -1202,7 +1267,7 @@ fn close_lp_position<const N: usize, const B: usize>(
     let lp_account = account(accounts, 5)?;
     let rent_credit_account = account(accounts, 6)?;
     authenticate_system(account(accounts, 7)?)?;
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market,
         pool,
@@ -1215,26 +1280,27 @@ fn close_lp_position<const N: usize, const B: usize>(
         lp_account,
         market,
         pool,
-        facts.config.content_id(),
+        facts.config_id,
         request.lp_id(),
         owner.key,
         facts.market.root().identity().generation(),
     )?;
     let credit = authenticate_rent_credit(program_id, rent_credit_account, owner.key)?;
-    let receipt = facts
-        .pool
-        .close_position(
-            pool.key.to_bytes(),
-            lp_account.key.to_bytes(),
-            &mut lp,
-            request.expected_pool_sequence(),
-            request.expected_position_sequence(),
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
+    let receipt = runtime_close_position(
+        &mut facts.pool_bytes,
+        facts.profile,
+        pool.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+        lp_account.key.to_bytes(),
+        &mut lp,
+        request.expected_pool_sequence(),
+        request.expected_position_sequence(),
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
     if receipt.rent_credit() != lp.rent_credit() {
         return Err(AdapterError::PositionAuthentication.into());
     }
-    let pool_bytes = encode_pool(facts.pool)?;
     let source_lamports = lp_account.lamports();
     if source_lamports < receipt.rent_credit().funded_rent_principal() {
         return Err(AdapterError::PositionRentUnderfunded.into());
@@ -1246,12 +1312,19 @@ fn close_lp_position<const N: usize, const B: usize>(
     )
     .map_err(|_| AdapterError::Arithmetic)?;
     preflight_mutable(&[pool, lp_account, rent_credit_account])?;
-    persist_pool(pool, &pool_bytes, facts.pool)?;
+    persist_pool(
+        pool,
+        &facts.pool_bytes,
+        facts.profile,
+        pool.key.to_bytes(),
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+    )?;
     close_program_account(lp_account, rent_credit_account, plan)?;
     require_unchanged_rent_credit(program_id, rent_credit_account, credit)
 }
 
-fn retire<const N: usize, const B: usize>(
+fn retire<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     expected_pool_sequence: u64,
@@ -1273,7 +1346,7 @@ fn retire<const N: usize, const B: usize>(
     let mint = account(accounts, 13)?;
     let token_program = account(accounts, 14)?;
     authenticate_system(account(accounts, 15)?)?;
-    let mut facts = authenticate_pool::<N, B>(
+    let mut facts = authenticate_pool::<N>(
         program_id,
         market_account,
         pool_account,
@@ -1283,7 +1356,13 @@ fn retire<const N: usize, const B: usize>(
     )?;
     let realm = authenticate_realm(program_id, realm_account, mint, token_program, facts.market)?;
     let generation = facts.market.root().identity().generation();
-    let beneficiary = Pubkey::new_from_array(facts.pool.attachment().service_refund_beneficiary());
+    let beneficiary = Pubkey::new_from_array(
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .attachment()
+            .map_err(|_| AdapterError::PositionAuthentication)?
+            .service_refund_beneficiary(),
+    );
     let mut pool_position = authenticate_position::<N>(
         program_id,
         pool_position_account,
@@ -1306,7 +1385,10 @@ fn retire<const N: usize, const B: usize>(
         token_program,
         realm,
         DealerCollateralCompartmentV1::Principal,
-        facts.pool.liquidity().principal_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .principal_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
     let fees = authenticate_pool_vault(
         program_id,
@@ -1316,7 +1398,10 @@ fn retire<const N: usize, const B: usize>(
         token_program,
         realm,
         DealerCollateralCompartmentV1::RealizedFees,
-        facts.pool.liquidity().realized_fee_collateral(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .realized_fee_collateral()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
     let service = authenticate_pool_vault(
         program_id,
@@ -1326,7 +1411,10 @@ fn retire<const N: usize, const B: usize>(
         token_program,
         realm,
         DealerCollateralCompartmentV1::Service,
-        facts.pool.service_funding(),
+        facts
+            .pool(pool_account.key.to_bytes())?
+            .service_funding()
+            .map_err(|_| AdapterError::PositionAuthentication)?,
     )?;
     authenticate_destination_vault(refund_vault, mint, token_program, realm, &beneficiary)?;
     let pool_position_rent =
@@ -1334,18 +1422,25 @@ fn retire<const N: usize, const B: usize>(
     let pool_rent = authenticate_rent_credit(
         program_id,
         pool_credit,
-        &Pubkey::new_from_array(facts.pool.rent_credit().beneficiary()),
+        &Pubkey::new_from_array(
+            facts
+                .pool(pool_account.key.to_bytes())?
+                .rent_credit()
+                .map_err(|_| AdapterError::PositionAuthentication)?
+                .beneficiary(),
+        ),
     )?;
-    let plan = retire_pool(
+    let plan = retire_pool_in_place(
         facts.market.root(),
-        facts.pool,
+        &mut facts.pool_bytes,
+        facts.profile,
         pool_account.key.to_bytes(),
-        &facts.config,
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &facts.config_bytes)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
         expected_pool_sequence,
         expected_market_child_count,
     )
     .map_err(|_| AdapterError::MarketTransition)?;
-    facts.pool = plan.pool();
     let mut market_after = facts.market;
     market_after
         .retire_child(generation, expected_market_child_count)
@@ -1437,11 +1532,11 @@ fn authenticate_market<const N: usize>(
     Ok(market)
 }
 
-fn authenticate_config<const N: usize, const B: usize>(
+fn authenticate_config<const N: usize>(
     program_id: &Pubkey,
     config_account: &AccountInfo<'_>,
     config_staging: &AccountInfo<'_>,
-) -> Result<(LiquidityConfigV1<N, B>, ContentId), ProgramError> {
+) -> Result<(Vec<u8>, LiquidityProfileV1, ContentId), ProgramError> {
     if config_account.owner != program_id || config_account.executable {
         return Err(AdapterError::AccountIdentity.into());
     }
@@ -1450,18 +1545,18 @@ fn authenticate_config<const N: usize, const B: usize>(
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let content_id =
         ContentId::new(hash(&data).to_bytes()).map_err(|_| AdapterError::ContentIdentity)?;
-    let config = LiquidityConfigV1::<N, B>::decode(content_id, &data)
+    let profile = LiquidityProfileV1::from_config_len(N, data.len())
         .map_err(|_| AdapterError::PositionAuthentication)?;
-    if encode_config(config)?.as_slice() != &data[..] {
-        return Err(AdapterError::ContentIdentity.into());
-    }
+    LiquidityConfigViewV1::new(content_id, profile, &data)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     let seeds = ConfigPdaSeedsV1::new(content_id);
     let (expected, _) = find_pda(program_id, &seeds.seed_components());
     if config_account.key != &expected {
         return Err(AdapterError::AccountIdentity.into());
     }
     authenticate_config_staging(program_id, config_staging, content_id)?;
-    Ok((config, content_id))
+    let bytes = copy_bytes(&data)?;
+    Ok((bytes, profile, content_id))
 }
 
 fn authenticate_config_staging(
@@ -1488,14 +1583,14 @@ fn authenticate_config_staging(
     Ok(())
 }
 
-fn authenticate_pool<const N: usize, const B: usize>(
+fn authenticate_pool<const N: usize>(
     program_id: &Pubkey,
     market_account: &AccountInfo<'_>,
     pool_account: &AccountInfo<'_>,
     config_account: &AccountInfo<'_>,
     config_staging: &AccountInfo<'_>,
     action: DealerActionV1,
-) -> Result<PoolFacts<N, B>, ProgramError> {
+) -> Result<PoolFacts<N>, ProgramError> {
     if market_account.owner != program_id
         || pool_account.owner != program_id
         || config_account.owner != program_id
@@ -1526,9 +1621,23 @@ fn authenticate_pool<const N: usize, const B: usize>(
     let pool_data = pool_account
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionAuthentication)?;
-    let pool =
-        PoolState::<N, B>::decode(&pool_data).map_err(|_| AdapterError::PositionAuthentication)?;
-    let attachment = pool.attachment();
+    let pool_bytes = copy_bytes(&pool_data)?;
+    drop(pool_data);
+
+    let config_data = config_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let content_id =
+        ContentId::new(hash(&config_data).to_bytes()).map_err(|_| AdapterError::ContentIdentity)?;
+    let profile = LiquidityProfileV1::from_config_len(N, config_data.len())
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let config = LiquidityConfigViewV1::new(content_id, profile, &config_data)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let pool = PoolViewV1::new(profile, &pool_bytes, pool_account.key.to_bytes(), config)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let attachment = pool
+        .attachment()
+        .map_err(|_| AdapterError::PositionAuthentication)?;
     if attachment.market() != market.root().identity() {
         return Err(AdapterError::ContentIdentity.into());
     }
@@ -1539,37 +1648,25 @@ fn authenticate_pool<const N: usize, const B: usize>(
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
     let (expected_pool, pool_bump) = find_pda(program_id, &pool_seeds.seed_components());
-    if pool_account.key != &expected_pool || encode_pool(pool)?.as_slice() != &pool_data[..] {
+    if pool_account.key != &expected_pool {
         return Err(AdapterError::ContentIdentity.into());
     }
-    drop(pool_data);
-
-    let config_data = config_account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::PositionAuthentication)?;
-    let content_id =
-        ContentId::new(hash(&config_data).to_bytes()).map_err(|_| AdapterError::ContentIdentity)?;
     if content_id != attachment.liquidity_config_id() {
         return Err(AdapterError::ContentIdentity.into());
     }
-    let config = LiquidityConfigV1::<N, B>::decode(content_id, &config_data)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
     let config_seeds = ConfigPdaSeedsV1::new(content_id);
     let (expected_config, _) = find_pda(program_id, &config_seeds.seed_components());
     if config_account.key != &expected_config {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let encoded_config = encode_config(config)?;
-    if encoded_config.as_slice() != &config_data[..] {
-        return Err(AdapterError::ContentIdentity.into());
-    }
     authenticate_config_staging(program_id, config_staging, content_id)?;
-    pool.validate_against(pool_account.key.to_bytes(), &config)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let config_bytes = copy_bytes(&config_data)?;
     Ok(PoolFacts {
         market,
-        pool,
-        config,
+        pool_bytes,
+        config_bytes,
+        config_id: content_id,
+        profile,
         pool_bump,
     })
 }
@@ -1823,15 +1920,15 @@ fn require_unchanged_rent_credit(
     Ok(())
 }
 
-fn pool_signer<const N: usize, const B: usize>(
-    facts: &PoolFacts<N, B>,
+fn pool_signer<const N: usize>(
+    facts: &PoolFacts<N>,
     market: &AccountInfo<'_>,
     pool: &AccountInfo<'_>,
 ) -> Result<Vec<Vec<u8>>, ProgramError> {
     let seeds = PoolPdaSeedsV1::new(
         market.key.to_bytes(),
         facts.market.root().identity().generation(),
-        facts.config.content_id(),
+        facts.config_id,
     )
     .map_err(|_| AdapterError::PositionAuthentication)?;
     let mut output = Vec::new();
@@ -2280,16 +2377,18 @@ fn close_with_all_lamports(
     close_program_account(source, destination, plan)
 }
 
-fn persist_pool<const N: usize, const B: usize>(
+fn persist_pool(
     account: &AccountInfo<'_>,
     bytes: &[u8],
-    expected: PoolState<N, B>,
+    profile: LiquidityProfileV1,
+    pool_address: [u8; 32],
+    config: LiquidityConfigViewV1<'_>,
 ) -> Result<(), ProgramError> {
     persist_bytes(account, bytes)?;
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::PositionPostcondition)?;
-    if PoolState::<N, B>::decode(&data) != Ok(expected) || &data[..] != bytes {
+    if &data[..] != bytes || PoolViewV1::new(profile, &data, pool_address, config).is_err() {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
@@ -2351,29 +2450,6 @@ fn persist_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramE
     Ok(())
 }
 
-fn encode_pool<const N: usize, const B: usize>(
-    value: PoolState<N, B>,
-) -> Result<Vec<u8>, ProgramError> {
-    let mut bytes =
-        exact_zeroed(PoolState::<N, B>::encoded_len().map_err(|_| AdapterError::Arithmetic)?)?;
-    value
-        .encode_into(&mut bytes)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
-    Ok(bytes)
-}
-
-fn encode_config<const N: usize, const B: usize>(
-    value: LiquidityConfigV1<N, B>,
-) -> Result<Vec<u8>, ProgramError> {
-    let mut bytes = exact_zeroed(
-        LiquidityConfigV1::<N, B>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
-    )?;
-    value
-        .encode_into(&mut bytes)
-        .map_err(|_| AdapterError::PositionAuthentication)?;
-    Ok(bytes)
-}
-
 fn encode_position<const N: usize>(value: PositionV1<N>) -> Result<Vec<u8>, ProgramError> {
     let mut bytes =
         exact_zeroed(PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?)?;
@@ -2399,6 +2475,15 @@ fn exact_zeroed(length: usize) -> Result<Vec<u8>, ProgramError> {
         .try_reserve_exact(length)
         .map_err(|_| AdapterError::Arithmetic)?;
     output.resize(length, 0);
+    Ok(output)
+}
+
+fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, ProgramError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| AdapterError::Arithmetic)?;
+    output.extend_from_slice(bytes);
     Ok(output)
 }
 
@@ -2448,12 +2533,24 @@ mod tests {
         bytes
     }
 
+    fn config_index(action: DealerActionV1) -> usize {
+        match action {
+            DealerActionV1::ActivatePool => 8,
+            DealerActionV1::CreateLpPosition
+            | DealerActionV1::AddLiquidity
+            | DealerActionV1::RemoveLiquidity
+            | DealerActionV1::Trade => 4,
+            DealerActionV1::ResetLadder => 2,
+            DealerActionV1::CloseLpPosition | DealerActionV1::RetirePool => 3,
+        }
+    }
+
     #[test]
     fn activation_uses_the_typed_funding_frame() {
         let route = select_route(&header(DealerActionV1::ActivatePool as u8)).expect("route");
         assert_eq!(route.action, DealerActionV1::ActivatePool);
         assert_eq!(route.market_index, 3);
-        assert_eq!(route.config_index, 8);
+        assert_eq!(config_index(route.action), 8);
     }
 
     #[test]
@@ -2472,7 +2569,7 @@ mod tests {
             let route = select_route(&header(tag)).expect("route");
             assert_eq!(route.action, action);
             assert_eq!(route.market_index, market);
-            assert_eq!(route.config_index, config);
+            assert_eq!(config_index(route.action), config);
         }
     }
 
@@ -2502,11 +2599,11 @@ mod tests {
                 Ok(DealerAccountRoleV1::Market)
             );
             assert_eq!(
-                dealer_account_role::<16>(action, route.config_index),
+                dealer_account_role::<16>(action, config_index(action)),
                 Ok(DealerAccountRoleV1::LiquidityConfig)
             );
             assert_eq!(
-                dealer_account_role::<16>(action, route.config_index + 1),
+                dealer_account_role::<16>(action, config_index(action) + 1),
                 Ok(DealerAccountRoleV1::LiquidityConfigStaging)
             );
         }

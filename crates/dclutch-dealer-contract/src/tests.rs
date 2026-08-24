@@ -52,11 +52,49 @@ fn config_with_identity<const N: usize, const B: usize>(
     .expect("fixture config")
 }
 
+#[allow(clippy::too_many_arguments)]
+fn open_for_test<const N: usize, const B: usize>(
+    attachment: LiquidityAttachment,
+    pool_address: [u8; 32],
+    config: &LiquidityConfigV1<N, B>,
+    pool_rent: RentCreditTerms,
+    opened_at_slot: u64,
+    liquidity: LiquidityAmounts<N>,
+    service_funding: u64,
+    position_id: [u8; 32],
+    owner: [u8; 32],
+    position_rent: RentCreditTerms,
+    shares: u64,
+) -> Result<(PoolState<N, B>, LpPosition, LiquidityChangeReceipt<N>)> {
+    let profile = runtime::LiquidityProfileV1::new(N, B)?;
+    let mut config_bytes = vec![0; LiquidityConfigV1::<N, B>::encoded_len()?];
+    config.encode_into(&mut config_bytes)?;
+    let config_view =
+        runtime::LiquidityConfigViewV1::new(config.content_id(), profile, &config_bytes)?;
+    let mut pool_bytes = vec![0; profile.pool_len()?];
+    let (position, receipt) = runtime::initialize_pool(
+        &mut pool_bytes,
+        profile,
+        attachment,
+        pool_address,
+        config_view,
+        pool_rent,
+        opened_at_slot,
+        liquidity,
+        service_funding,
+        position_id,
+        owner,
+        position_rent,
+        shares,
+    )?;
+    Ok((PoolState::decode(&pool_bytes)?, position, receipt))
+}
+
 fn opened<const N: usize, const B: usize>() -> (LiquidityConfigV1<N, B>, PoolState<N, B>, LpPosition)
 {
     let config = config();
     let liquidity = LiquidityAmounts::new(100_000, 0, [10_000; N]).expect("liquidity");
-    let (pool, position, receipt) = PoolState::open(
+    let (pool, position, receipt) = open_for_test(
         attachment(),
         POOL_ADDRESS,
         &config,
@@ -219,7 +257,7 @@ fn quote_refuses_inventory_cash_depth_limits_and_zero_rounding() {
         [[10], [10]],
     )
     .expect("tiny config");
-    let (tiny_pool, _, _) = PoolState::open(
+    let (tiny_pool, _, _) = open_for_test(
         attachment(),
         POOL_ADDRESS,
         &tiny_config,
@@ -313,7 +351,7 @@ fn timed_reset_preserves_depth_and_only_reopens_identical_config() {
     )
     .expect("config");
     assert_eq!(
-        PoolState::open(
+        open_for_test(
             attachment(),
             POOL_ADDRESS,
             &overflowing_interval,
@@ -384,7 +422,19 @@ fn last_lp_exact_sweep_then_rentcredit_and_service_retirement() {
         .close_position(POOL_ADDRESS, INITIAL_POSITION_ID, &mut position, 2, 2)
         .expect("close last position");
     assert_eq!(close.rent_credit(), rent(42));
-    let retired = pool.retire(POOL_ADDRESS, &config, 3).expect("retire Pool");
+    let mut pool_bytes = vec![0; PoolState::<2, 2>::encoded_len().expect("Pool width")];
+    pool.encode_into(&mut pool_bytes).expect("encode Pool");
+    let mut config_bytes = vec![0; LiquidityConfigV1::<2, 2>::encoded_len().expect("config width")];
+    config
+        .encode_into(&mut config_bytes)
+        .expect("encode config");
+    let profile = runtime::LiquidityProfileV1::new(2, 2).expect("profile");
+    let config_view =
+        runtime::LiquidityConfigViewV1::new(config.content_id(), profile, &config_bytes)
+            .expect("config view");
+    let retired = runtime::retire_pool(&mut pool_bytes, profile, POOL_ADDRESS, config_view, 3)
+        .expect("retire Pool");
+    pool = PoolState::decode(&pool_bytes).expect("decode retired Pool");
     assert_eq!(retired.service_refund_collateral(), service);
     assert_eq!(retired.service_refund_beneficiary(), [9; 32]);
     assert_eq!(retired.pool_rent_credit(), rent(30));
@@ -394,7 +444,7 @@ fn last_lp_exact_sweep_then_rentcredit_and_service_retirement() {
 #[test]
 fn dust_share_burn_and_limits_refuse_without_mutation() {
     let tiny_config = config::<2, 1>();
-    let (mut pool, mut position, _) = PoolState::open(
+    let (mut pool, mut position, _) = open_for_test(
         attachment(),
         POOL_ADDRESS,
         &tiny_config,

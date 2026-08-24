@@ -12,7 +12,7 @@ use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 
 use crate::{
     LiquidityAttachment, LiquidityConfigV1, RentCreditTerms,
-    activation::{ActivationError, activate_pool},
+    activation::{ActivationError, activate_pool_into},
     frame::{
         ConfigPdaSeedsV1, DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, DEALER_LP_PDA_DOMAIN_V1,
         DEALER_POOL_PDA_DOMAIN_V1, DEALER_RENT_SYSVAR_ID, DEALER_SYSTEM_PROGRAM_ID,
@@ -25,6 +25,7 @@ use crate::{
         ActivatePoolV1, AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1,
         DealerInstructionV1, InstructionError, RemoveLiquidityV1, instruction_len,
     },
+    runtime::{LiquidityConfigViewV1, LiquidityProfileV1, PoolViewV1},
 };
 
 const MARKET_ADDRESS: [u8; 32] = [90; 32];
@@ -404,7 +405,15 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         LiquidityAttachment::new(market_identity, id(21), id(7), OWNER).expect("attachment");
     let request = ActivatePoolV1::new(9, 0, [44; 32], 1_000, 1_000).expect("open wire");
     let config = config::<2, 2>();
-    let plan = activate_pool(
+    let profile = LiquidityProfileV1::new(2, 2).expect("profile");
+    let mut config_bytes = vec![0; LiquidityConfigV1::<2, 2>::encoded_len().expect("width")];
+    config
+        .encode_into(&mut config_bytes)
+        .expect("config encode");
+    let config_view = LiquidityConfigViewV1::new(config.content_id(), profile, &config_bytes)
+        .expect("config view");
+    let mut pool_bytes = vec![0; profile.pool_len().expect("Pool width")];
+    let plan = activate_pool_into::<2>(
         market,
         MARKET_ADDRESS,
         manifest,
@@ -413,7 +422,9 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         funding_authority,
         funding_custody,
         attachment,
-        &config,
+        config_view,
+        profile,
+        &mut pool_bytes,
         POOL_ADDRESS,
         LP_ADDRESS,
         OWNER,
@@ -435,7 +446,14 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             .amount(),
         5_000
     );
-    assert_eq!(plan.pool().liquidity().claim_reserves(), [1_000; 2]);
+    assert_eq!(
+        PoolViewV1::new(profile, &pool_bytes, POOL_ADDRESS, config_view)
+            .expect("Pool view")
+            .liquidity::<2>()
+            .expect("liquidity")
+            .claim_reserves(),
+        [1_000; 2]
+    );
     assert_eq!(plan.capability_funding_seeds().config_id(), [7; 32]);
     assert_eq!(
         plan.capability_funding_authority_seeds().seed_components()[1],
@@ -452,7 +470,7 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
     );
 
     assert_eq!(
-        activate_pool(
+        activate_pool_into::<2>(
             market,
             MARKET_ADDRESS,
             manifest,
@@ -461,7 +479,9 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             funding_authority,
             funding_custody,
             attachment,
-            &config,
+            config_view,
+            profile,
+            &mut pool_bytes,
             POOL_ADDRESS,
             LP_ADDRESS,
             [94; 32],

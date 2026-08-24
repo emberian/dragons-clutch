@@ -14,6 +14,7 @@
 pub mod activation;
 pub mod frame;
 pub mod instruction;
+pub mod runtime;
 
 use core::convert::TryFrom;
 
@@ -652,77 +653,6 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
             .ok_or(Error::ArithmeticOverflow)
     }
 
-    /// Open a Pool with complete exact-N inventory and its first LP position.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn open(
-        attachment: LiquidityAttachment,
-        pool_address: [u8; 32],
-        config: &LiquidityConfigV1<N, B>,
-        pool_rent_credit: RentCreditTerms,
-        opened_at_slot: u64,
-        initial_liquidity: LiquidityAmounts<N>,
-        service_funding: u64,
-        initial_position_id: [u8; 32],
-        initial_owner: [u8; 32],
-        initial_position_rent: RentCreditTerms,
-        initial_shares: u64,
-    ) -> Result<(Self, LpPosition, LiquidityChangeReceipt<N>)> {
-        let parent = parent_for(attachment, pool_address)?;
-        require_selected_config(attachment, config)?;
-        if !initial_liquidity.is_initially_complete() {
-            return Err(Error::IncompleteInitialLiquidity);
-        }
-        if initial_shares == 0 {
-            return Err(Error::InvalidQuantity);
-        }
-        validate_position_identity(initial_position_id, parent, initial_owner)?;
-        let next_reset_slot = opened_at_slot
-            .checked_add(config.reset_interval_slots)
-            .ok_or(Error::InvalidResetInterval)?;
-        let state = Self {
-            attachment,
-            rent_credit: pool_rent_credit,
-            reset_number: 0,
-            next_sequence: 1,
-            next_reset_slot,
-            status: PoolStatus::Active,
-            live_positions: 1,
-            total_shares: initial_shares,
-            principal_collateral: initial_liquidity.principal_collateral,
-            realized_fee_collateral: 0,
-            service_funding,
-            claim_reserves: initial_liquidity.claim_reserves,
-            bid_filled: [[0u64; B]; N],
-            ask_filled: [[0u64; B]; N],
-        };
-        state.validate_against(pool_address, config)?;
-        let position = LpPosition::new(
-            parent,
-            initial_owner,
-            initial_position_rent,
-            initial_shares,
-            PositionStatus::Active,
-        )?;
-        let zero = LiquidityAmounts::new(0, 0, [0u64; N])?;
-        let receipt = LiquidityChangeReceipt {
-            kind: LiquidityChangeKind::Open,
-            parent,
-            pool_sequence: 0,
-            position_id: initial_position_id,
-            owner: initial_owner,
-            amounts_before: zero,
-            amounts_transferred: initial_liquidity,
-            amounts_after: initial_liquidity,
-            total_shares_before: 0,
-            shares_changed: initial_shares,
-            total_shares_after: initial_shares,
-            position_shares_before: 0,
-            position_shares_after: initial_shares,
-        };
-        receipt.validate()?;
-        Ok((state, position, receipt))
-    }
-
     /// Decode and validate one exact selected-profile Pool account.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::encoded_len()? {
@@ -1195,39 +1125,6 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
             after: next.service_funding,
         };
         receipt.validate()?;
-        next.validate()?;
-        *self = next;
-        Ok(receipt)
-    }
-
-    /// Retire a quiescent Pool and route service and all close lamports exactly.
-    pub(crate) fn retire(
-        &mut self,
-        pool_address: [u8; 32],
-        config: &LiquidityConfigV1<N, B>,
-        expected_pool_sequence: u64,
-    ) -> Result<PoolRetirementReceipt> {
-        self.validate_against(pool_address, config)?;
-        self.require_sequence(expected_pool_sequence)?;
-        if self.status != PoolStatus::Retiring
-            || self.total_shares != 0
-            || self.live_positions != 0
-            || !self.liquidity().is_zero()
-        {
-            return Err(Error::PoolNotQuiescent);
-        }
-        let mut next = *self;
-        let service_refund = next.service_funding;
-        next.service_funding = 0;
-        next.status = PoolStatus::Retired;
-        let sequence = next.bump_sequence()?;
-        let receipt = PoolRetirementReceipt {
-            parent: parent_for(self.attachment, pool_address)?,
-            pool_sequence: sequence,
-            service_refund_beneficiary: next.attachment.service_refund_beneficiary,
-            service_refund_collateral: service_refund,
-            pool_rent_credit: next.rent_credit,
-        };
         next.validate()?;
         *self = next;
         Ok(receipt)

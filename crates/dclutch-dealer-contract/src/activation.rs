@@ -16,11 +16,15 @@ use dclutch_core_contract::{MarketRoot, Phase};
 
 use crate::{
     Error as DealerError, LiquidityAmounts, LiquidityAttachment, LiquidityChangeReceipt,
-    LiquidityConfigV1, LpPosition, PoolRetirementReceipt, PoolState, RentCreditTerms,
+    LpPosition, PoolRetirementReceipt, RentCreditTerms,
     frame::{
         ConfigPdaSeedsV1, FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1,
     },
     instruction::ActivatePoolV1,
+    runtime::{
+        LiquidityConfigViewV1, LiquidityProfileV1, initialize_pool,
+        retire_pool as retire_pool_bytes,
+    },
 };
 
 /// Refusal from an atomic Dealer activation or terminal Market plan.
@@ -72,10 +76,9 @@ impl DealerFundingDebitV1 {
 
 /// Successful atomic Activate/Open state and custody plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ActivatePoolPlanV1<const N: usize, const B: usize> {
+pub struct ActivatePoolPlanV1<const N: usize> {
     market: MarketRoot,
     funding: FundingStateV1,
-    pool: PoolState<N, B>,
     initial_position: LpPosition,
     funding_debit: DealerFundingDebitV1,
     liquidity_receipt: LiquidityChangeReceipt<N>,
@@ -88,7 +91,7 @@ pub struct ActivatePoolPlanV1<const N: usize, const B: usize> {
     pool_position_seeds: PoolPositionPdaSeedsV1,
 }
 
-impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
+impl<const N: usize> ActivatePoolPlanV1<N> {
     /// Return Market after registering the Pool direct child.
     pub const fn market(self) -> MarketRoot {
         self.market
@@ -96,10 +99,6 @@ impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
     /// Return FundingState after exact activation/liquidity/service releases.
     pub const fn funding(self) -> FundingStateV1 {
         self.funding
-    }
-    /// Return Pool state to persist at the canonical Pool PDA.
-    pub const fn pool(self) -> PoolState<N, B> {
-        self.pool
     }
     /// Return initial LP position to persist at the canonical compact-ID PDA.
     pub const fn initial_position(self) -> LpPosition {
@@ -147,20 +146,15 @@ impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
 
 /// Successful quiescent Pool retirement joined to Market child replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RetirePoolPlanV1<const N: usize, const B: usize> {
+pub struct RetirePoolPlanV1 {
     market: MarketRoot,
-    pool: PoolState<N, B>,
     receipt: PoolRetirementReceipt,
 }
 
-impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
+impl RetirePoolPlanV1 {
     /// Return Market after decrementing its direct-child count.
     pub const fn market(self) -> MarketRoot {
         self.market
-    }
-    /// Return terminal Pool state before physical close.
-    pub const fn pool(self) -> PoolState<N, B> {
-        self.pool
     }
     /// Return exact service refund and Pool RentCredit destination.
     pub const fn receipt(self) -> PoolRetirementReceipt {
@@ -178,7 +172,7 @@ impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
 /// immutable config liquidity owner. `pool_position_rent` is the Rent
 /// minimum of the shared native Position owned by the Pool PDA.
 #[allow(clippy::too_many_arguments)]
-pub fn activate_pool<const N: usize, const B: usize>(
+pub fn activate_pool_into<const N: usize>(
     market: MarketRoot,
     market_address: [u8; 32],
     manifest: CapabilityManifestV1<'_>,
@@ -187,7 +181,9 @@ pub fn activate_pool<const N: usize, const B: usize>(
     funding_authority_address: [u8; 32],
     funding_custody: FundingCustodyObservationV1,
     attachment: LiquidityAttachment,
-    config: &LiquidityConfigV1<N, B>,
+    config: LiquidityConfigViewV1<'_>,
+    profile: LiquidityProfileV1,
+    pool_out: &mut [u8],
     pool_address: [u8; 32],
     initial_position_address: [u8; 32],
     initial_owner: [u8; 32],
@@ -196,7 +192,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
     pool_position_rent: RentCreditTerms,
     request: ActivatePoolV1,
     authenticated_now_slot: u64,
-) -> Result<ActivatePoolPlanV1<N, B>> {
+) -> Result<ActivatePoolPlanV1<N>> {
     if !matches!(market.phase(), Phase::Founding | Phase::Open) {
         return Err(ActivationError::InvalidMarketPhase);
     }
@@ -244,7 +240,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
     // V1 uses the content-bound config liquidity owner as the immutable
     // bootstrap LP and service-refund authority. This avoids any caller-chosen
     // owner for prepaid liquidity without adding a parallel authority record.
-    let immutable_owner = config.liquidity_owner();
+    let immutable_owner = config.liquidity_owner().map_err(ActivationError::Dealer)?;
     if initial_owner != immutable_owner
         || attachment.service_refund_beneficiary() != immutable_owner
         || pool_rent.beneficiary() != immutable_owner
@@ -356,7 +352,9 @@ pub fn activate_pool<const N: usize, const B: usize>(
         [request.initial_claim_quantity(); N],
     )
     .map_err(ActivationError::Dealer)?;
-    let (pool, initial_position, liquidity_receipt) = PoolState::open(
+    let (initial_position, liquidity_receipt) = initialize_pool(
+        pool_out,
+        profile,
         attachment,
         pool_address,
         config,
@@ -377,7 +375,6 @@ pub fn activate_pool<const N: usize, const B: usize>(
     Ok(ActivatePoolPlanV1 {
         market: next_market,
         funding: next_funding,
-        pool,
         initial_position,
         funding_debit: DealerFundingDebitV1 {
             activation,
@@ -446,21 +443,29 @@ fn custody_after(
 }
 
 /// Retire a quiescent Pool and decrement Market direct-child replay.
-pub fn retire_pool<const N: usize, const B: usize>(
+pub fn retire_pool_in_place(
     market: MarketRoot,
-    pool: PoolState<N, B>,
+    pool_bytes: &mut [u8],
+    profile: LiquidityProfileV1,
     pool_address: [u8; 32],
-    config: &LiquidityConfigV1<N, B>,
+    config: LiquidityConfigViewV1<'_>,
     expected_pool_sequence: u64,
     expected_market_child_count: u64,
-) -> Result<RetirePoolPlanV1<N, B>> {
-    if market.phase() != Phase::Retiring || market.identity() != pool.attachment().market() {
+) -> Result<RetirePoolPlanV1> {
+    let attachment = crate::runtime::PoolViewV1::new(profile, pool_bytes, pool_address, config)
+        .and_then(crate::runtime::PoolViewV1::attachment)
+        .map_err(ActivationError::Dealer)?;
+    if market.phase() != Phase::Retiring || market.identity() != attachment.market() {
         return Err(ActivationError::InvalidMarketPhase);
     }
-    let mut next_pool = pool;
-    let receipt = next_pool
-        .retire(pool_address, config, expected_pool_sequence)
-        .map_err(ActivationError::Dealer)?;
+    let receipt = retire_pool_bytes(
+        pool_bytes,
+        profile,
+        pool_address,
+        config,
+        expected_pool_sequence,
+    )
+    .map_err(ActivationError::Dealer)?;
     let mut next_market = market;
     next_market
         .retire_child(
@@ -470,7 +475,6 @@ pub fn retire_pool<const N: usize, const B: usize>(
         .map_err(ActivationError::Market)?;
     Ok(RetirePoolPlanV1 {
         market: next_market,
-        pool: next_pool,
         receipt,
     })
 }
