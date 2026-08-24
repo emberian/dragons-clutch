@@ -19,7 +19,7 @@ pub const CONTENT_ID_BYTES: usize = 32;
 pub const MARKET_IDENTITY_BYTES: usize = 168;
 
 /// Canonical byte width of [`MarketRoot`].
-pub const MARKET_ROOT_BYTES: usize = 200;
+pub const MARKET_ROOT_BYTES: usize = 232;
 
 /// Byte width of the versioned Market root header.
 pub const MARKET_ROOT_HEADER_BYTES: usize = 16;
@@ -46,6 +46,7 @@ const ROOT_PHASE_OFFSET: usize = 184;
 const ROOT_BODY_RESERVED_OFFSET: usize = 185;
 const ROOT_BODY_RESERVED_BYTES: usize = 7;
 const ROOT_CHILD_COUNT_OFFSET: usize = 192;
+const ROOT_RENT_REFUND_OFFSET: usize = 200;
 
 /// Refusal returned while decoding or changing the persistent root contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +55,8 @@ pub enum Error {
     InvalidLength,
     /// A content identity was the reserved all-zero value.
     ZeroContentId,
+    /// The immutable owner of Market-account rent principal was all zero.
+    ZeroRentRefund,
     /// Root magic did not identify this account contract.
     InvalidMagic,
     /// The root schema version is not implemented by this crate.
@@ -280,19 +283,23 @@ pub struct MarketRoot {
     identity: MarketIdentity,
     phase: Phase,
     outstanding_children: u64,
+    rent_refund: [u8; 32],
 }
 
 impl MarketRoot {
     /// Create a root in `Founding` with exactly zero live direct children.
-    pub const fn founding(identity: MarketIdentity) -> Self {
-        Self {
+    pub fn founding(identity: MarketIdentity, rent_refund: [u8; 32]) -> Result<Self> {
+        let root = Self {
             identity,
             phase: Phase::Founding,
             outstanding_children: 0,
-        }
+            rent_refund,
+        };
+        root.validate()?;
+        Ok(root)
     }
 
-    /// Decode and validate the exact 168-byte canonical Market root.
+    /// Decode and validate the exact 232-byte canonical Market root.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != MARKET_ROOT_BYTES {
             return Err(Error::InvalidLength);
@@ -324,12 +331,13 @@ impl MarketRoot {
                 bytes,
                 ROOT_CHILD_COUNT_OFFSET,
             )?),
+            rent_refund: read_array(bytes, ROOT_RENT_REFUND_OFFSET)?,
         };
         root.validate()?;
         Ok(root)
     }
 
-    /// Encode the exact 168-byte canonical Market root.
+    /// Encode the exact 232-byte canonical Market root.
     pub fn to_bytes(self) -> [u8; MARKET_ROOT_BYTES] {
         let mut output = [0u8; MARKET_ROOT_BYTES];
         copy_at(&mut output, ROOT_MAGIC_OFFSET, &MARKET_ROOT_MAGIC);
@@ -345,11 +353,15 @@ impl MarketRoot {
             ROOT_CHILD_COUNT_OFFSET,
             &self.outstanding_children.to_le_bytes(),
         );
+        copy_at(&mut output, ROOT_RENT_REFUND_OFFSET, &self.rent_refund);
         output
     }
 
     /// Validate cross-field canonical constraints.
-    pub const fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
+        if all_zero(&self.rent_refund) {
+            return Err(Error::ZeroRentRefund);
+        }
         if matches!(self.phase, Phase::Retired) && self.outstanding_children != 0 {
             return Err(Error::OutstandingChildren);
         }
@@ -369,6 +381,11 @@ impl MarketRoot {
     /// Return the exact number of live direct physical children or obligations.
     pub const fn outstanding_children(self) -> u64 {
         self.outstanding_children
+    }
+
+    /// Return the immutable owner of Market-account rent principal and excess.
+    pub const fn rent_refund(self) -> [u8; 32] {
+        self.rent_refund
     }
 
     /// Advance along one admitted lifecycle edge after checking generation.
@@ -487,6 +504,10 @@ fn copy_at<const N: usize>(output: &mut [u8; N], offset: usize, input: &[u8]) {
     }
 }
 
+fn all_zero(bytes: &[u8; 32]) -> bool {
+    bytes.iter().all(|byte| *byte == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,11 +530,11 @@ mod tests {
     #[test]
     fn exact_width_round_trip_preserves_identity_and_root() -> Result<()> {
         assert_eq!(MARKET_IDENTITY_BYTES, 168);
-        assert_eq!(MARKET_ROOT_BYTES, 200);
+        assert_eq!(MARKET_ROOT_BYTES, 232);
         let identity = identity(0x0102_0304_0506_0708)?;
         assert_eq!(MarketIdentity::decode(&identity.to_bytes()), Ok(identity));
 
-        let root = MarketRoot::founding(identity);
+        let root = MarketRoot::founding(identity, [9; 32])?;
         let bytes = root.to_bytes();
         assert_eq!(
             read_array::<8>(&bytes, ROOT_MAGIC_OFFSET)?,
@@ -523,6 +544,8 @@ mod tests {
             read_array::<8>(&bytes, GENERATION_OFFSET + ROOT_IDENTITY_OFFSET)?,
             0x0102_0304_0506_0708u64.to_le_bytes()
         );
+        assert_eq!(read_array::<32>(&bytes, ROOT_RENT_REFUND_OFFSET)?, [9; 32]);
+        assert_eq!(root.rent_refund(), [9; 32]);
         assert_eq!(MarketRoot::decode(&bytes), Ok(root));
         Ok(())
     }
@@ -552,7 +575,7 @@ mod tests {
 
     #[test]
     fn noncanonical_root_encodings_refuse() -> Result<()> {
-        let canonical = MarketRoot::founding(identity(9)?).to_bytes();
+        let canonical = MarketRoot::founding(identity(9)?, [9; 32])?.to_bytes();
         let short = canonical
             .get(..MARKET_ROOT_BYTES - 1)
             .ok_or(Error::InvalidLength)?;
@@ -595,6 +618,20 @@ mod tests {
             .ok_or(Error::InvalidLength)? = 5;
         assert_eq!(MarketRoot::decode(&unknown_phase), Err(Error::UnknownPhase));
 
+        let mut zero_rent_refund = canonical;
+        zero_rent_refund
+            .get_mut(ROOT_RENT_REFUND_OFFSET..MARKET_ROOT_BYTES)
+            .ok_or(Error::InvalidLength)?
+            .fill(0);
+        assert_eq!(
+            MarketRoot::decode(&zero_rent_refund),
+            Err(Error::ZeroRentRefund)
+        );
+        assert_eq!(
+            MarketRoot::founding(identity(9)?, [0; 32]),
+            Err(Error::ZeroRentRefund)
+        );
+
         let mut impossible_terminal = canonical;
         *impossible_terminal
             .get_mut(ROOT_PHASE_OFFSET)
@@ -613,7 +650,7 @@ mod tests {
 
     #[test]
     fn phase_graph_is_ordered_and_retired_is_terminal() -> Result<()> {
-        let mut root = MarketRoot::founding(identity(12)?);
+        let mut root = MarketRoot::founding(identity(12)?, [9; 32])?;
         let before = root;
         assert_eq!(
             root.transition_phase(12, Phase::Resolved),
@@ -630,9 +667,9 @@ mod tests {
             Err(Error::InvalidPhaseTransition)
         );
 
-        let mut founding_retirement = MarketRoot::founding(identity(13)?);
+        let mut founding_retirement = MarketRoot::founding(identity(13)?, [9; 32])?;
         founding_retirement.transition_phase(13, Phase::Retiring)?;
-        let mut open_retirement = MarketRoot::founding(identity(14)?);
+        let mut open_retirement = MarketRoot::founding(identity(14)?, [9; 32])?;
         open_retirement.transition_phase(14, Phase::Open)?;
         open_retirement.transition_phase(14, Phase::Retiring)?;
         Ok(())
@@ -640,7 +677,7 @@ mod tests {
 
     #[test]
     fn child_count_guards_refuse_stale_generation_and_replay_atomically() -> Result<()> {
-        let mut root = MarketRoot::founding(identity(21)?);
+        let mut root = MarketRoot::founding(identity(21)?, [9; 32])?;
         let initial = root;
         assert_eq!(root.register_child(20, 0), Err(Error::GenerationMismatch));
         assert_eq!(root, initial);
@@ -665,7 +702,7 @@ mod tests {
 
     #[test]
     fn retirement_requires_all_direct_children_closed() -> Result<()> {
-        let mut root = MarketRoot::founding(identity(34)?);
+        let mut root = MarketRoot::founding(identity(34)?, [9; 32])?;
         root.register_child(34, 0)?;
         root.transition_phase(34, Phase::Retiring)?;
         let retiring = root;
@@ -682,7 +719,7 @@ mod tests {
 
     #[test]
     fn child_count_overflow_refuses_without_mutation() -> Result<()> {
-        let mut bytes = MarketRoot::founding(identity(55)?).to_bytes();
+        let mut bytes = MarketRoot::founding(identity(55)?, [9; 32])?.to_bytes();
         copy_at(&mut bytes, ROOT_CHILD_COUNT_OFFSET, &u64::MAX.to_le_bytes());
         let mut root = MarketRoot::decode(&bytes)?;
         let before = root;

@@ -486,7 +486,8 @@ mod tests {
             content(5)?,
             7,
         );
-        let mut root = MarketRoot::founding(identity);
+        let mut root = MarketRoot::founding(identity, [9; 32])
+            .map_err(|error| Error::InvalidMarketRoot { error })?;
         match phase {
             RootPhase::Founding => {}
             RootPhase::Open => root

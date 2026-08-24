@@ -432,7 +432,7 @@ mod tests {
             ContentId::new([7; 32]).expect("capability manifest"),
             7,
         );
-        let mut root = MarketRoot::founding(identity);
+        let mut root = MarketRoot::founding(identity, [8; 32]).expect("founding root");
         root.transition_phase(7, Phase::Open).expect("open");
         root.register_child(7, 0).expect("child");
         let market = MarketStateV1::<2>::new(

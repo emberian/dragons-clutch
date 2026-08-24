@@ -105,7 +105,7 @@ fn fixture(target_time: i64, window: u32) -> Fixture {
     let bounty = Pubkey::new_from_array([81; 32]);
     let sponsor = Pubkey::new_from_array([82; 32]);
 
-    let mut root = MarketRoot::founding(identity);
+    let mut root = MarketRoot::founding(identity, [15; 32]).expect("founding root");
     root.transition_phase(GENERATION, Phase::Open)
         .expect("open");
     root.register_child(GENERATION, 0).expect("fund child");
