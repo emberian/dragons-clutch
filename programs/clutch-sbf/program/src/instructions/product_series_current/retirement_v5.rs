@@ -12,8 +12,10 @@ use super::{AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccount
 
 use super::super::failure_market_family_terminal_v2::{
     authenticate_failure_market_source_failure_lifecycle_terminal_v3,
+    AuthenticatedFailureMarketPhysicalTerminalAuthorityV3,
     AuthenticatedFailureMarketFamilyTerminalReceiptV3,
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
+    FailureMarketPhysicalTerminalConsumerFactsV3,
 };
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
 use super::super::direct_market_v2::{
@@ -60,6 +62,8 @@ use solana_pubkey::Pubkey;
 
 const PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-failure-core-terminal-postwrite/v5\0";
+const PRODUCT_FAILURE_PHYSICAL_TERMINAL_LATCH_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-failure-physical-terminal-latch/v5\0";
 const PRODUCT_DIRECT_FAMILY_PRETERMINAL_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-direct-family-preterminal/v5\0";
 const PRODUCT_DIRECT_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
@@ -682,6 +686,158 @@ pub(crate) fn consume_failure_family_terminal_v5(
         link_authentication_id,
         link_data_id,
         link_semantic_id,
+    })
+}
+
+/// Move-only RootV3 postwrite proving that Failure's four deletable accounts
+/// were physically closed before the Retiring shared-core slot was latched.
+/// RootV3 stores the projection identity, never the physical receipt ID.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductFailurePhysicalTerminalV5 {
+    id: ContentId,
+    physical: FailureMarketPhysicalTerminalConsumerFactsV3,
+    shared_core_projection_id: ContentId,
+    root_account: Pubkey,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+}
+
+impl AuthenticatedProductFailurePhysicalTerminalV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn physical_id(&self) -> ContentId { self.physical.id }
+    pub(crate) const fn shared_core_projection_id(&self) -> ContentId {
+        self.shared_core_projection_id
+    }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+}
+
+/// Consume Failure's final physical receipt and latch exactly one shared-core
+/// projection into the already-Retiring Product RootV3.
+#[inline(never)]
+pub(crate) fn consume_failure_market_physical_terminal_v5<'root, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    terminal: A,
+) -> Outcome<AuthenticatedProductFailurePhysicalTerminalV5>
+where
+    A: AuthenticatedFailureMarketPhysicalTerminalAuthorityV3<'root>,
+{
+    let (root, physical) =
+        terminal.into_authenticated_failure_market_physical_terminal_v3()?;
+    let failure = physical.failure_terminal_facts;
+    require(
+        root.account() == *root_account.key
+            && root.is_writable()
+            && root.state().phase() == MarketLifecyclePhaseV3::Retiring
+            && root.state().failure_terminal_receipt_id().is_zero()
+            && root.data_id() == physical.market_root_data_before_id
+            && root.semantic_id() == physical.market_root_semantic_before_id
+            && root.binding_id() == physical.market_root_binding_id
+            && root.authentication_id() == physical.market_root_authentication_before_id
+            && root.state().transition_sequence() == physical.market_root_transition_sequence
+            && physical.refunded_principal_lamports != 0
+            && physical.rent_refund_balance_after_lamports
+                == physical
+                    .rent_refund_balance_before_lamports
+                    .checked_add(physical.refunded_principal_lamports)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && physical.neutral_sink_balance_after_lamports
+                == physical
+                    .neutral_sink_balance_before_lamports
+                    .checked_add(physical.neutralized_donation_lamports)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    let sequence_after = root
+        .state()
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let projection = MarketSharedCoreTerminalProjectionV3::new(
+        *root.binding(),
+        MarketSharedCoreV3::Failure,
+        failure.owner_account_id,
+        failure.owner_release_id,
+        physical.id,
+        sequence_after,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let next = (*root.state())
+        .consume_shared_core_terminal(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data_before_id = root.data_id();
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    write_market_lifecycle_root_v3(root_account, root.value(), &next)?;
+    drop(root);
+    let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        failure.market_instance_id,
+        failure.generation,
+        true,
+        &mut reopened_value,
+    )?;
+    require(
+        reopened.state() == &next
+            && reopened.state().failure_terminal_receipt_id() == projection.id()
+            && reopened.state().transition_sequence() == sequence_after,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_FAILURE_PHYSICAL_TERMINAL_LATCH_DOMAIN_V5,
+        program_id.as_ref(),
+        &physical.id.bytes(),
+        &physical.family_seal_id.bytes(),
+        &physical.interval_close_authorization_id.bytes(),
+        &projection.id().bytes(),
+        root_account.key.as_ref(),
+        &root_data_before_id.bytes(),
+        &reopened.data_id().bytes(),
+        &root_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &sequence_after.to_le_bytes(),
+        physical.rent_refund_owner.as_ref(),
+        &physical.rent_refund_balance_before_lamports.to_le_bytes(),
+        &physical.rent_refund_balance_after_lamports.to_le_bytes(),
+        physical.neutral_sink.as_ref(),
+        &physical.neutral_sink_balance_before_lamports.to_le_bytes(),
+        &physical.neutral_sink_balance_after_lamports.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductFailurePhysicalTerminalV5 {
+        id,
+        physical,
+        shared_core_projection_id: projection.id(),
+        root_account: *root_account.key,
+        root_data_before_id,
+        root_data_after_id: reopened.data_id(),
+        root_authentication_before_id,
+        root_authentication_after_id: reopened.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: sequence_after,
     })
 }
 
