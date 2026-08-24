@@ -37,7 +37,9 @@ pub use custody::{
     STRUCTURED_CUSTODY_ACCOUNT_COUNT, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
 };
 pub use current_account_contract::{
-    current_structured_action_contract_v1, CurrentStructuredActionContractV1,
+    current_structured_account_meta_v1, current_structured_action_contract_v1,
+    current_structured_alias_allowed_v1, CurrentStructuredAccountMetaV1,
+    CurrentStructuredActionContractV1,
     CurrentStructuredTokenEffectV1, CURRENT_STRUCTURED_ACTION_CONTRACTS_V1,
     IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1, STRUCTURED_COMPACTION_ACCOUNT_COUNT_V1,
     STRUCTURED_CREATE_ACCOUNT_COUNT_V1, STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1,

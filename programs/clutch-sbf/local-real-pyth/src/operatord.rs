@@ -10,17 +10,21 @@ use crate::account_index::{
 };
 use crate::action_material::{
     source_action_from_selection, source_role_label_v2, source_selection_action,
+    structured_action_from_selection, structured_selection_action,
     CanonicalActionMaterialV1,
 };
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
 };
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
-use crate::transaction_builder::{IntegerUnit, ProtocolFlow, RuntimeAdmission};
+use crate::transaction_builder::{
+    IntegerUnit, ProtocolFlow, RuntimeAdmission, TransactionMessageVersionV1,
+};
 use clutch_solana_layout::registry::{
     GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
+    STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
 };
 use clutch_solana_layout::source_series::account_contract_v2;
 use serde_json::{json, Value};
@@ -899,9 +903,22 @@ fn callable_action_verdict_json(
             "constructionSchema": transaction.schema,
             "driverAccount": material.driver_account().to_string(),
             "driverAccountSlot": material.driver_account_slot().to_string(),
+            "driverReleaseKey": material.driver_release_key(),
+            "authorityStateSha256": hex32(material.authority_state_sha256()),
             "releaseManifestSha256": hex32(material.release_manifest_sha256()),
             "capabilityProfileId": hex32(material.capability_profile_id()),
             "feePayer": material.fee_payer().to_string(),
+            "messageVersion": match transaction.message_version {
+                TransactionMessageVersionV1::Legacy => "legacy",
+                TransactionMessageVersionV1::V0 => "v0",
+            },
+            "addressLookupTables": transaction.address_lookup_tables.iter().map(|lookup| json!({
+                "account": lookup.account.to_string(),
+                "observedSlot": lookup.observed_slot.to_string(),
+                "stateSha256": hex32(lookup.state_sha256),
+                "writableAddresses": lookup.writable_addresses.to_string(),
+                "readonlyAddresses": lookup.readonly_addresses.to_string()
+            })).collect::<Vec<_>>(),
             "recentBlockhash": null,
             "hasRecentBlockhash": transaction.has_recent_blockhash,
             "signed": transaction.signed,
@@ -949,6 +966,13 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
         return Some(CanonicalIntentCoordinate {
             family_tag: SOURCE_SERIES_FAMILY_TAG,
             family_version: SOURCE_SERIES_FAMILY_VERSION,
+            local_action: action.tag(),
+        });
+    }
+    if let Some(action) = structured_action_from_selection(action) {
+        return Some(CanonicalIntentCoordinate {
+            family_tag: STRUCTURED_CLAIM_FAMILY_TAG,
+            family_version: STRUCTURED_CLAIM_FAMILY_VERSION,
             local_action: action.tag(),
         });
     }
@@ -1029,6 +1053,21 @@ fn coordinate_description(
         && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
     {
         return ("general", "general-v2-action", None);
+    }
+    if coordinate.family_tag == STRUCTURED_CLAIM_FAMILY_TAG
+        && coordinate.family_version == STRUCTURED_CLAIM_FAMILY_VERSION
+    {
+        let action = clutch_structured_claim_runtime_contract::StructuredClaimActionV1::from_tag(
+            coordinate.local_action,
+        )
+        .ok();
+        return (
+            "structured-claim",
+            action
+                .map(structured_selection_action)
+                .unwrap_or("unknown-structured-action"),
+            action.map(|_| "clutch-structured-claim-adapter/current-account-contract-v1"),
+        );
     }
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION

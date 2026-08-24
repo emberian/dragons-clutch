@@ -61,6 +61,9 @@ use clutch_liveness::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_ACCOUNT_MAGIC_V1,
     RUNTIME_LIVENESS_POLICY_BYTES_V1, RUNTIME_LIVENESS_POLICY_MAGIC_V1,
 };
+use clutch_product_series::{
+    SeriesLinkObligationStatusV2, SeriesLinkObligationV2, SeriesMarketLinkPhaseV2,
+};
 use clutch_retirement::{
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
     ReplayV3HashBackend, ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
@@ -82,7 +85,10 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
-use clutch_solana_layout::product_series::{SeriesFundingAccountV1, SeriesRegistryAccountV1};
+use clutch_solana_layout::product_series::{
+    SeriesFundingAccountV1, SeriesMarketLinkAccountV2, SeriesRegistryAccountV1,
+    SeriesRegistryAccountV3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
+};
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
@@ -100,7 +106,7 @@ use clutch_source_plane_v3_runtime::{
     WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
-    DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
+    StructuredClaimDescriptorV2, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
 };
 use sha2::{Digest, Sha256};
@@ -180,7 +186,9 @@ pub enum CanonicalAccountKind {
     GeneralSettlementCashPot,
     GeneralFinalPot,
     SeriesRegistry,
+    SeriesRegistryV3,
     SeriesFunding,
+    SeriesMarketLinkV2,
     SourceRelease,
     SourceWorkSchedule,
     SourceHead,
@@ -258,7 +266,9 @@ impl CanonicalAccountKind {
             Self::GeneralSettlementCashPot => "general-settlement-cash-pot",
             Self::GeneralFinalPot => "general-final-pot",
             Self::SeriesRegistry => "series-registry",
+            Self::SeriesRegistryV3 => "series-registry-v3",
             Self::SeriesFunding => "series-funding",
+            Self::SeriesMarketLinkV2 => "series-market-link-v2",
             Self::SourceRelease => "source-release",
             Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
@@ -877,6 +887,50 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
 fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
         data,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2,
+    ) && data.len() == SERIES_MARKET_LINK_ACCOUNT_BYTES_V2
+    {
+        let value = SeriesMarketLinkAccountV2::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::SeriesMarketLinkV2,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.series_plan_id.bytes());
+        projection.secondary_binding = Some(binding.compiler_bundle_id.bytes());
+        if value.state.phase() == SeriesMarketLinkPhaseV2::Active
+            && value
+                .state
+                .obligation_status(SeriesLinkObligationV2::Wrapper)
+                == SeriesLinkObligationStatusV2::EnabledNeverFounded
+        {
+            projection.keeper_hint = Some(KeeperHint {
+                lane: Some(WorkflowLane::Creation),
+                position: WorkflowPosition { phase: 5, item: 0 },
+                action: "create-structured-descriptor",
+            });
+        }
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
+    ) {
+        let value = SeriesRegistryAccountV3::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::SeriesRegistryV3,
+        );
+        projection.generation = Some(1);
+        projection.primary_binding = Some(value.series_plan_id.bytes());
+        projection.secondary_binding = Some(value.compiler_bundle_id.bytes());
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
     ) {
@@ -1277,20 +1331,15 @@ fn decode_structured(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
     {
         return Ok(None);
     }
-    let value = StructuredClaimDescriptorV1::decode(data)
+    let value = StructuredClaimDescriptorV2::decode(data)
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
     let mut projection = CanonicalAccountProjection::canonical(
         CanonicalFamily::StructuredClaim,
         CanonicalAccountKind::StructuredClaimDescriptor,
     );
     projection.primary_binding = Some(value.market);
-    if value.state == DescriptorStateV1::Active {
-        projection.keeper_hint = Some(KeeperHint {
-            lane: None,
-            position: WorkflowPosition { phase: 10, item: 0 },
-            action: "inspect-structured-claim-retirement",
-        });
-    }
+    projection.secondary_binding = Some(value.structured_root_id);
+    projection.generation = Some(1);
     Ok(Some(projection))
 }
 

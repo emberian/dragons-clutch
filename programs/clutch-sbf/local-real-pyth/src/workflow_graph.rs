@@ -60,10 +60,7 @@ use clutch_source_plane_v3_runtime::{
     LineageFamilyV1, ReopenLineageV1, SourceReleaseManifestV2, SourceWorkKindV1,
     SourceWorkScheduleBindingV1,
 };
-use clutch_structured_claim_runtime_contract::{
-    decode_structured_claim_payload_v1, DescriptorStateV1, StructuredClaimActionV1,
-    StructuredClaimDescriptorV1,
-};
+use clutch_structured_claim_runtime_contract::StructuredClaimActionV1;
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use sha2::{Digest, Sha256};
@@ -1153,32 +1150,6 @@ pub fn plan_series_occurrence(
     )
 }
 
-/// Create one immutable structured-claim descriptor through its canonical
-/// semantic-owner action codec.
-pub fn plan_descriptor_creation(
-    manifest: &ExplicitOperatorReleaseManifest,
-    builder: &ProtocolTransactionBuilder,
-    absence: AbsentAccountObservation,
-    cursor: ResumableWorkflowCursor,
-    material: WorkflowActionMaterial,
-) -> Result<PlannedWorkflowNode> {
-    absence.validate()?;
-    cursor.require(
-        WorkflowLane::Creation,
-        1,
-        WorkflowPosition { phase: 5, item: 0 },
-        absence.observed_state_sha256,
-    )?;
-    construct(
-        manifest,
-        builder,
-        cursor,
-        ProtocolFlow::StructuredClaim,
-        CanonicalActionCoordinate::StructuredClaim(StructuredClaimActionV1::CreateDescriptor),
-        material,
-    )
-}
-
 /// Exhaustive Source ingest/window/evaluation stages. The stage is equality-
 /// checked against the exact canonical `IntentPreimageV3` action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2102,10 +2073,6 @@ pub enum RecoveryObservation<'a> {
         quote: &'a SeriesFundingQuoteV1,
     },
     CloseSourceGeneration(&'a ReopenLineageV1),
-    RetireStructuredClaim {
-        descriptor: &'a StructuredClaimDescriptorV1,
-        vault_generation: u64,
-    },
 }
 
 impl RecoveryObservation<'_> {
@@ -2272,23 +2239,6 @@ impl RecoveryObservation<'_> {
                     ProtocolFlow::SourcePlaneV3,
                 ))
             }
-            Self::RetireStructuredClaim {
-                descriptor,
-                vault_generation,
-            } => {
-                descriptor
-                    .validate_persisted()
-                    .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
-                if descriptor.state != DescriptorStateV1::Active || vault_generation == 0 {
-                    return Err(WorkflowGraphError::InvalidCanonicalState);
-                }
-                Ok((
-                    vault_generation,
-                    WorkflowPosition { phase: 10, item: 0 },
-                    CanonicalActionCoordinate::StructuredClaim(StructuredClaimActionV1::Retire),
-                    ProtocolFlow::StructuredClaim,
-                ))
-            }
         }
     }
 }
@@ -2359,21 +2309,6 @@ pub fn plan_recovery_or_retirement(
                 return Err(WorkflowGraphError::WrongProgramRelease);
             }
         }
-        RecoveryObservation::RetireStructuredClaim {
-            vault_generation, ..
-        } => {
-            let decoded = decode_structured_claim_payload_v1(
-                StructuredClaimActionV1::Retire.tag(),
-                &material.payload,
-            )
-            .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
-            match decoded {
-                clutch_structured_claim_runtime_contract::StructuredClaimPayloadV1::Retire(
-                    intent,
-                ) if intent.vault_generation == vault_generation => {}
-                _ => return Err(WorkflowGraphError::ActionStateMismatch),
-            }
-        }
         _ => {}
     }
     let (generation, position, coordinate, flow) = observation.next()?;
@@ -2441,21 +2376,8 @@ fn construct(
             )
         }
         CanonicalActionCoordinate::StructuredClaim(action) => {
-            let decoded = decode_structured_claim_payload_v1(action.tag(), &material.payload)
-                .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
-            let _ = decoded;
-            OwnedInstructionDraft::semantic_reserved_successor(
-                flow,
-                material.action_name,
-                material.semantic_owner,
-                manifest.clutch.program_id,
-                material.accounts,
-                material.required_signers,
-                material.exact_equations,
-                clutch_solana_layout::registry::ExtensionFamily::StructuredClaim,
-                action.tag(),
-                &material.payload,
-            )
+            let _ = action;
+            return Err(WorkflowGraphError::InvalidCanonicalPayload);
         }
         CanonicalActionCoordinate::SourceTransition {
             registry,
