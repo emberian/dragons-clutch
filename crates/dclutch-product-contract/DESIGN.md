@@ -22,6 +22,21 @@ redemption rounding, fractional credit, or payout denominator in its native
 basis. Those concepts previously conflated user payoff construction with the
 protocol's elementary liabilities.
 
+## Result-domain authority
+
+`FiniteResultDomainV1` is the sole persisted owner of how an exact Source
+statistic becomes a categorical result. Its 352-byte fixed layout binds the
+coordinate-domain and result-unit identities, a closed semantic release, one
+positive common denominator, up to fourteen ordered rational cuts, up to
+fifteen identity-ordered ordinary selectors, and one explicit distinct final
+failure selector. With `R` ordinary regions it always has exactly `R+1`
+native outcomes. Numeric Source evidence can never select failure.
+
+The ordinary regions cover the full rational line: `(-inf, cut_0)`, each
+half-open interior range, and `[last_cut, +inf)`. V1's sixteen-outcome maximum
+is a provisional fixed-layout bound with a wider or paged release as its
+lifting path. It is not mathematical.
+
 `CategoricalUnitV1` is 56 bytes:
 
 | Field | Bytes |
@@ -35,12 +50,13 @@ protocol's elementary liabilities.
 
 `PortfolioTemplateV1<N>` is a content-addressable user/execution recipe, not a
 Product instance or liability basis. It binds one authenticated categorical
-ClaimBasis content ID and contains `N` nonnegative `u64` numerators with one
-positive common `u64` denominator. At least one numerator is nonzero, and the
+ClaimBasis content ID and the exact result-domain content ID, and contains `N`
+nonnegative `u64` numerators with one positive common `u64` denominator. At
+least one numerator is nonzero, and the
 gcd of the denominator and every numerator is one. This gives every rational
 vector a unique canonical preimage.
 
-The exact width is `56 + 8N`: 72 bytes for a binary template and 184 bytes at
+The exact width is `88 + 8N`: 104 bytes for a two-outcome template and 216 bytes at
 the current maximum profile. The selected decoder knows `N`, requires that one
 exact physical width, and checks the encoded width byte. The constructor
 gcd-normalizes; the hostile decoder refuses a reducible wire form.
@@ -92,11 +108,11 @@ template. Downstream Found/operator code must:
 
 1. create and authenticate only `CategoricalUnitV1` for native liabilities;
 2. validate `InstanceV1` directly against that basis;
-3. treat portfolio templates as optional content-addressed recipes; and
-4. refuse within-cell graded products until a separately versioned
-   nonnegative partition-of-unity basis, liability theorem, and evaluator are
-   implemented.
+3. authenticate the Product result domain and keep its failure selector
+   distinct from every ordinary Source region; and
+4. treat portfolio templates as optional content-addressed recipes.
 
-Capped ramps and tents cannot be approximated by silently treating polynomial
-coefficients as native claims. A compiler must return
-`UnsupportedWithinCellGradedShape` for those shapes in this release.
+Capped ramps and tents cannot be smuggled in as polynomial native claims. The
+host compiler may expose a separately named midpoint-sampled categorical
+portfolio, but the categorical result domain remains the only native payout
+authority and the approximation boundary must be explicit.

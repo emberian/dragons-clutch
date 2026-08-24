@@ -30,6 +30,8 @@ pub mod claim;
 pub mod portfolio;
 /// Terms, occurrence, and Product-instance contracts.
 pub mod product;
+/// Product-owned finite source-result partition and failure coordinate.
+pub mod result_domain;
 /// Compact provider-neutral terminal result contract.
 pub mod terminal;
 
@@ -89,6 +91,10 @@ pub enum Error {
     UnknownResolutionKind,
     /// A finite terminal selector was outside its committed partition.
     InvalidFiniteSelector,
+    /// A result-domain common denominator was zero.
+    ZeroResultDenominator,
+    /// A result domain was unordered or aliased failure with an ordinary region.
+    InvalidResultDomain,
     /// Tagged terminal-result fields were not in their unique canonical form.
     NonCanonicalTerminalResult,
 }

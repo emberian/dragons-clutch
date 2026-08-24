@@ -9,7 +9,7 @@ pub const TERMS_BYTES: usize = 160;
 /// Exact byte width of [`OccurrenceV1`].
 pub const OCCURRENCE_BYTES: usize = 128;
 /// Exact byte width of [`InstanceV1`].
-pub const INSTANCE_BYTES: usize = 160;
+pub const INSTANCE_BYTES: usize = 192;
 /// Canonical Terms magic.
 pub const TERMS_MAGIC: [u8; 8] = *b"DCLTTRM1";
 /// Canonical Occurrence magic.
@@ -334,6 +334,8 @@ pub struct InstanceV1Input {
     pub occurrence_id: ContentId,
     /// Elementary categorical claim-basis content identity.
     pub claim_basis_id: ContentId,
+    /// Content identity of the exact Product-owned finite result domain.
+    pub result_domain_id: ContentId,
     /// Capacity-profile identity shared by all linked records.
     pub capacity_profile_id: CapacityProfileId,
     /// Exact partition width repeated for local redemption checks.
@@ -346,6 +348,7 @@ pub struct InstanceV1 {
     terms_id: ContentId,
     occurrence_id: ContentId,
     claim_basis_id: ContentId,
+    result_domain_id: ContentId,
     capacity_profile_id: CapacityProfileId,
     partition_cell_count: u32,
 }
@@ -360,6 +363,7 @@ impl InstanceV1 {
             terms_id: input.terms_id,
             occurrence_id: input.occurrence_id,
             claim_basis_id: input.claim_basis_id,
+            result_domain_id: input.result_domain_id,
             capacity_profile_id: input.capacity_profile_id,
             partition_cell_count: input.partition_cell_count,
         })
@@ -382,6 +386,7 @@ impl InstanceV1 {
             terms_id: content_id(bytes, 16)?,
             occurrence_id: content_id(bytes, 48)?,
             claim_basis_id: content_id(bytes, 80)?,
+            result_domain_id: content_id(bytes, 160)?,
             capacity_profile_id: CapacityProfileId::new(content_id(bytes, 112)?),
             partition_cell_count: u32::from_le_bytes(array(bytes, 144)?),
         })
@@ -401,6 +406,7 @@ impl InstanceV1 {
             self.capacity_profile_id.content_id().as_bytes(),
         );
         put(&mut output, 144, &self.partition_cell_count.to_le_bytes());
+        put(&mut output, 160, self.result_domain_id.as_bytes());
         output
     }
 
@@ -454,6 +460,11 @@ impl InstanceV1 {
     /// Return the bound claim-basis identity.
     pub const fn claim_basis_id(self) -> ContentId {
         self.claim_basis_id
+    }
+
+    /// Return the exact Product-owned finite result-domain identity.
+    pub const fn result_domain_id(self) -> ContentId {
+        self.result_domain_id
     }
 
     /// Return the shared capacity-profile identity.
@@ -531,6 +542,7 @@ mod tests {
             terms_id: id(7),
             occurrence_id: id(9),
             claim_basis_id: id(10),
+            result_domain_id: id(11),
             capacity_profile_id: capacity_id,
             partition_cell_count: 4,
         })
@@ -588,6 +600,7 @@ mod tests {
             terms_id: id(7),
             occurrence_id: id(9),
             claim_basis_id: id(10),
+            result_domain_id: id(12),
             capacity_profile_id: capacity_id,
             partition_cell_count: 4,
         })
