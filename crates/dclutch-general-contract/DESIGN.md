@@ -79,9 +79,10 @@ there is no implicit alias exception. System, Rent, and Clock roles bind their
 canonical keys. Every raw Realm, ClaimBasis, manifest, or General-config consumer
 also supplies its canonical readonly staging-cursor vacancy; one shared Rent
 sysvar proves the raw record is currently rent-exempt and the exact cursor is a
-system-owned, empty, zero-lamport vacancy. The activation frame orders its four
-raw records first and then their four matching vacancies, so no record or Rent
-fact is duplicated. Signed-order raw records are absent: the canonical signed
+system-owned, nonexecuting, empty-data vacancy. Precreation lamport dust is
+deliberately non-semantic and cannot revive a finalized cursor. The activation
+frame orders its four raw records first and then their four matching vacancies,
+so no record or Rent fact is duplicated. Signed-order raw records are absent: the canonical signed
 message is already embedded in the instruction or page and replay binds its
 derived identity. Verification frames contain exactly `6 + M` accounts and
 settlement frames exactly `10 + 5M` accounts for the instruction's leading
@@ -290,7 +291,11 @@ General root's permanent RentCredit beneficiary, and fixes the frame's activator
 only as the physical-creation recipient. Current Rent minima and actual account
 balances remain adapter-observed facts, never wire amounts. Root plus
 General-funding Rent must equal the immutable activation-rent quote; finalized
-config Rent is owned permanently by the generic-record lifecycle.
+config Rent is owned permanently by the generic-record lifecycle. Activation,
+batch opening, and order admission make the immutable RentCredit writable:
+their adapters fund only missing Rent into precreated PDAs and route every
+preexisting lamport to that credit, so dust neither DoSes creation nor becomes
+an actor reward or untracked capitalization.
 
 Permissionless batch opening consumes exactly the current batch-account Rent
 from General liveness, reimburses the work actor that creates the PDA, and

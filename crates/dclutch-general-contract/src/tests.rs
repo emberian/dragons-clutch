@@ -2375,6 +2375,26 @@ fn ordered_general_frames_reject_privilege_alias_count_and_page_substitution() {
         );
     }
     assert_eq!(
+        activation_frame.role(15),
+        Ok(GeneralAccountRoleV1::WritableRentCredit)
+    );
+    let open_batch = valid_frame_accounts(GeneralInstructionTagV1::OpenBatch, 0);
+    let open_batch_frame =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &open_batch)
+            .expect("open-batch frame");
+    assert_eq!(
+        open_batch_frame.role(6),
+        Ok(GeneralAccountRoleV1::WritableRentCredit)
+    );
+    let admission = valid_frame_accounts(GeneralInstructionTagV1::AdmitOrder, 0);
+    let admission_frame =
+        GeneralAccountFrameV1::new(GeneralInstructionTagV1::AdmitOrder, 0, &admission)
+            .expect("admission frame");
+    assert_eq!(
+        admission_frame.role(15),
+        Ok(GeneralAccountRoleV1::WritableRentCredit)
+    );
+    assert_eq!(
         valid_frame_accounts(GeneralInstructionTagV1::AdmitOrder, 0).len(),
         19
     );
