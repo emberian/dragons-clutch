@@ -39,8 +39,8 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::product_market_foundation_current::
-    {AuthenticatedProductMarketFounderCurrentCreationV2,
-    AuthenticatedProductMarketFounderFoundationPreauthorizationV2};
+    {AuthenticatedProductMarketFounderCurrentCreationV3,
+    AuthenticatedProductMarketFounderFoundationPreauthorizationV3};
 use super::product_series_current::AuthenticatedMarketLifecycleRootV2;
 
 const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
@@ -80,6 +80,7 @@ struct AuthenticatedRuntimeLivenessPolicyFactsV1 {
 pub(crate) struct AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
     state_semantic_id: ContentId,
     global_bundle_binding_id: ContentId,
+    global_capitalization_receipt_id: ContentId,
     work_quote: DirectWorkQuoteV1,
     account_data_id: ContentId,
     account_authentication_id: ContentId,
@@ -102,6 +103,9 @@ impl AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
     }
     pub(crate) const fn global_bundle_binding_id(&self) -> ContentId {
         self.global_bundle_binding_id
+    }
+    pub(crate) const fn global_capitalization_receipt_id(&self) -> ContentId {
+        self.global_capitalization_receipt_id
     }
     pub(crate) const fn work_quote(&self) -> DirectWorkQuoteV1 {
         self.work_quote
@@ -261,7 +265,7 @@ fn require_direct_work_quote_authority_v1(
 #[inline(never)]
 pub(super) fn capitalize_product_direct_global_liveness_v2<'a>(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV2,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
     work_quote_bytes: &[u8],
     policy_account: &AccountInfo<'a>,
     manifest_account: &AccountInfo<'a>,
@@ -496,6 +500,7 @@ pub(super) fn capitalize_product_direct_global_liveness_v2<'a>(
     Ok(AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
         state_semantic_id,
         global_bundle_binding_id,
+        global_capitalization_receipt_id,
         work_quote,
         account_data_id: reopened.data_id,
         account_authentication_id: reopened.authentication_id,
@@ -594,11 +599,11 @@ fn authenticate_expected_product_direct_global_liveness_postwrite_v2(
 
 /// Final current Founding-to-Active write. The caller must first consume the
 /// same non-copy creation authority in Product's concrete RootV2/LinkV2/
-/// FundingV3/replayV2 tail, then hostile-reopen the resulting Active RootV2.
+/// FundingV4/replayV2 tail, then hostile-reopen the resulting Active RootV2.
 #[inline(never)]
 pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
     program_id: &Pubkey,
-    creation: AuthenticatedProductMarketFounderCurrentCreationV2,
+    creation: AuthenticatedProductMarketFounderCurrentCreationV3,
     manifest_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
 ) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV2> {
@@ -682,7 +687,7 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
 #[inline(never)]
 fn authenticate_policy_v1(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV2,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
     policy_account: &AccountInfo<'_>,
     rent: &RentParameters,
 ) -> Outcome<AuthenticatedRuntimeLivenessPolicyFactsV1> {
@@ -882,7 +887,7 @@ fn capitalize_row_v1<'a>(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_fixed_roles_v1(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV2,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
     policy_account: &AccountInfo<'_>,
     manifest_account: &AccountInfo<'_>,
     payer: &AccountInfo<'_>,

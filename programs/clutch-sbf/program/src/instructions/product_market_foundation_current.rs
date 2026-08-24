@@ -4,34 +4,37 @@
 //!
 //! The dependency order is part of the protocol, not an implementation detail:
 //!
-//! 1. hostile-reopen RegistryV3 and **Active** FundingV3 and authenticate the
+//! 1. hostile-reopen RegistryV3 and **Active** FundingV4 and authenticate the
 //!    exact BundleV6/QuoteV5/AttachmentV5/Genesis/FoundationV3 graph;
 //! 2. mint this module's non-copy preauthorization for the exact next ordinal
 //!    and deterministic future Source coordinates;
 //! 3. capitalize `0xba/v2`, whose immutable binding commits that preauthorization;
-//! 4. use the resulting immutable `0xba` binding to finish RootV2 and LinkV2,
-//!    then reserve FundingV3 against that exact LinkV2 semantic ID;
-//! 5. create the Source postwrite, join it and the `0xba` postwrite here, and
-//!    pass the resulting non-copy creation authority to Product's sole concrete
-//!    RootV2/LinkV2/FundingV3/replayV2 compositor;
+//! 4. derive the final RootV2 binding and reserve FundingV4 against the exact
+//!    acyclic pre-Source reservation binding and hostile Clock receipt;
+//! 5. create the Source postwrite, derive LinkV2, and join it with the `0xba`
+//!    postwrite here before handing the unique FundingV4 reservation to the
+//!    sole concrete RootV2/LinkV2/FundingV4/replayV2 compositor;
 //! 6. hostile-reopen RootV2 and only then change `0xba` Founding to Active with
 //!    `activated_market_binding_id == MarketLifecycleBindingV2::id()`.
 //!
-//! Preauthorizing a Pending FundingV3 state would be circular: Pending commits
-//! LinkV2, LinkV2 commits RootV2, RootV2 commits `0xba`, and `0xba` commits the
-//! preauthorization.  No historical RootV1 capability is accepted here.
+//! FundingV4 breaks the historical FundingV3 cycle: Pending commits an acyclic
+//! reservation binding, while completion joins the later Source and LinkV2
+//! postwrites. No historical RootV1/FundingV3 capability is accepted here.
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
+use crate::source_plane_v3::authenticate_route_clock_bucket;
 use clutch_product_series::{
     ComponentDebitV1, ContentId, MarketFamilyAggregatorV1,
     MarketFoundationAccountGraphV3, MarketFoundationCapitalV2, MarketFoundationScheduleV3,
     MarketFoundationSlotV3, MarketInstanceV2Id, MarketLifecycleBindingV2,
-    SeriesFundingPhaseV3, SeriesLinkObligationConfigurationV2, SeriesMarketDispositionV1,
+    SeriesFundingPhaseV4, SeriesLinkObligationConfigurationV2, SeriesMarketDispositionV1,
     SeriesMarketLinkBindingV2, SeriesMarketLinkV2, SeriesMarketLinkV2Id, SeriesPlanV5Id,
+    SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
+use clutch_source_plane_v3_runtime::AuthenticatedSourceRouteV1;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -39,8 +42,9 @@ use super::product_direct_global_liveness::{
     AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
 };
 use super::product_series_current::{
-    authenticate_series_funding_account_v3, authenticate_series_registry_account_v3,
-    AuthenticatedRegistryCapabilityV4, AuthenticatedSeriesFundingAccountV3,
+    authenticate_series_funding_account_v4, authenticate_series_registry_account_v3,
+    AuthenticatedProductSeriesFundingReservationV4, AuthenticatedRegistryCapabilityV4,
+    AuthenticatedSeriesFundingAccountV4,
     AuthenticatedSeriesRegistryAccountV3,
 };
 use super::product_source_current::{
@@ -48,14 +52,14 @@ use super::product_source_current::{
     AuthenticatedSourceSemanticPublicationV2,
 };
 use super::source_occurrence_foundation_v1::{
-    AuthenticatedPreRootSourceOccurrenceV2, AuthenticatedSourceOccurrenceFoundationAuthorityV2,
-    SourceWorkCapitalizationFactsV2,
+    AuthenticatedPreRootSourceOccurrencePostwriteV3, AuthenticatedPreRootSourceOccurrenceV3,
+    AuthenticatedSourceOccurrenceFoundationAuthorityV3, SourceWorkCapitalizationFactsV3,
 };
 
-const PRODUCT_CURRENT_FOUNDER_PREAUTH_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/product-current-founder-preauthorization/v2\0";
-const PRODUCT_CURRENT_FOUNDER_CREATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/product-current-founder-creation/v2\0";
+const PRODUCT_CURRENT_FOUNDER_PREAUTH_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-current-founder-preauthorization/v3\0";
+const PRODUCT_CURRENT_FOUNDER_CREATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-current-founder-creation/v3\0";
 
 /// Concrete Foundation/Collateral owner consumed by the current Product join.
 ///
@@ -95,7 +99,7 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn authenticate_product_market_founder_preauthorization_v2(
+    fn authenticate_product_market_founder_preauthorization_v3(
         &self,
         _program_id: &Pubkey,
         _registry_authentication_id: ContentId,
@@ -103,6 +107,8 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
         _funding_state_id: ContentId,
         _compiler_bundle_id: ContentId,
         _source_publication_id: ContentId,
+        _clock_receipt_id: ContentId,
+        _clock_bucket: u64,
         _foundation_schedule_id: ContentId,
         _foundation_graph_id: ContentId,
         _root_account: Pubkey,
@@ -114,7 +120,7 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn authenticate_product_market_founder_completion_v2(
+    fn authenticate_product_market_founder_completion_v3(
         &self,
         _preauthorization_id: ContentId,
         _direct_global_liveness_binding_id: ContentId,
@@ -127,10 +133,10 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
     }
 }
 
-/// Acyclic stage-one authority. It commits Active FundingV3 and deterministic
+/// Acyclic stage-one authority. It commits Active FundingV4 and deterministic
 /// future Source coordinates, never Pending Funding or an `0xba` postwrite.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV2 {
+pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     id: ContentId,
     foundation_owner_authentication_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
@@ -178,12 +184,17 @@ pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV2 
     source_route_id: ContentId,
     source_release_id: ContentId,
     clock_policy_id: ContentId,
+    clock_receipt_id: ContentId,
+    clock_slot: u64,
+    clock_unix_timestamp: u64,
+    clock_bucket: u64,
     source_plane_contract_id: ContentId,
     source_spec_id: ContentId,
     source_work_funding: ComponentDebitV1,
+    funding_debits: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
 }
 
-impl AuthenticatedProductMarketFounderFoundationPreauthorizationV2 {
+impl AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
     pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
         self.market_instance_id
@@ -223,21 +234,37 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV2 {
     pub(crate) const fn funding_authentication_id(&self) -> ContentId {
         self.funding_authentication_id
     }
+    pub(crate) const fn funding_data_id(&self) -> ContentId { self.funding_data_id }
+    pub(crate) const fn funding_state_id(&self) -> ContentId { self.funding_state_id }
     pub(crate) const fn funding_transition_sequence(&self) -> u64 {
         self.funding_transition_sequence
     }
     pub(crate) const fn source_occurrence_id(&self) -> ContentId { self.source_occurrence_id }
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
     pub(crate) const fn funding_quote_id(&self) -> ContentId { self.funding_quote_id }
+    pub(crate) const fn funding_terms_id(&self) -> ContentId { self.funding_terms_id }
     pub(crate) const fn attachment_plan_id(&self) -> ContentId { self.attachment_plan_id }
+    pub(crate) const fn source_publication_id(&self) -> ContentId {
+        self.source_publication_id
+    }
+    pub(crate) const fn funding_debits(
+        &self,
+    ) -> &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2] {
+        &self.funding_debits
+    }
+    pub(crate) const fn clock_policy_id(&self) -> ContentId { self.clock_policy_id }
+    pub(crate) const fn clock_receipt_id(&self) -> ContentId { self.clock_receipt_id }
+    pub(crate) const fn clock_slot(&self) -> u64 { self.clock_slot }
+    pub(crate) const fn clock_unix_timestamp(&self) -> u64 { self.clock_unix_timestamp }
+    pub(crate) const fn clock_bucket(&self) -> u64 { self.clock_bucket }
 }
 
-impl AuthenticatedSourceOccurrenceFoundationAuthorityV2
-    for AuthenticatedProductMarketFounderFoundationPreauthorizationV2
+impl AuthenticatedSourceOccurrenceFoundationAuthorityV3
+    for AuthenticatedProductMarketFounderFoundationPreauthorizationV3
 {
-    fn authenticate_source_occurrence_foundation_v2(
+    fn authenticate_source_occurrence_foundation_v3(
         &self,
-        facts: &SourceWorkCapitalizationFactsV2,
+        facts: &SourceWorkCapitalizationFactsV3,
     ) -> Outcome<ContentId> {
         require(
             facts.series_plan_id == self.series_plan_id.content_id()
@@ -245,18 +272,29 @@ impl AuthenticatedSourceOccurrenceFoundationAuthorityV2
                 && facts.ordinal == self.ordinal
                 && facts.market_instance_id == self.market_instance_id.content_id()
                 && facts.generation == self.generation
+                && facts.registry_release_id == self.registry_release_id
+                && facts.capability_profile_id == self.capability_profile_id
                 && facts.compiler_bundle_id == self.compiler_bundle_id
                 && facts.funding_terms_id == self.funding_terms_id
                 && facts.attachment_plan_id == self.attachment_plan_id
                 && facts.funding_account == self.funding_account
+                && facts.funding_state_id != self.funding_state_id
+                && facts.funding_account_data_id != self.funding_data_id
+                && facts.funding_account_authentication_id != self.funding_authentication_id
                 && facts.funding_transition_sequence
                     == self.funding_transition_sequence
                         .checked_add(1).ok_or(ClutchError::Arithmetic)?
+                && !facts.funding_reservation_postwrite_id.is_zero()
+                && !facts.pending_pre_source_reservation_binding_id.is_zero()
                 && !facts.pending_reservation_receipt_id.is_zero()
+                && facts.pending_clock_receipt_id == self.clock_receipt_id
+                && facts.pending_clock_bucket == self.clock_bucket
                 && facts.source_route_id == self.source_route_id
                 && facts.source_release_manifest_id == self.source_release_id
                 && facts.source_plane_contract_id == self.source_plane_contract_id
                 && facts.source_spec_id == self.source_spec_id
+                && facts.source_principal_refund.bytes()
+                    == self.principal_refund_owner.to_bytes()
                 && facts.pending_source_work == self.source_work_funding,
             ClutchError::MismatchedState,
         )?;
@@ -266,10 +304,11 @@ impl AuthenticatedSourceOccurrenceFoundationAuthorityV2
 
 /// Final non-copy authority handed to the sole current Product physical writer.
 #[derive(Debug)]
-pub(crate) struct AuthenticatedProductMarketFounderCurrentCreationV2 {
+pub(crate) struct AuthenticatedProductMarketFounderCurrentCreationV3 {
     id: ContentId,
-    preauthorization: AuthenticatedProductMarketFounderFoundationPreauthorizationV2,
-    source: AuthenticatedPreRootSourceOccurrenceV2,
+    preauthorization: AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
+    source: AuthenticatedPreRootSourceOccurrencePostwriteV3,
     direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
     market_binding: Box<MarketLifecycleBindingV2>,
     founder_link_binding: Box<SeriesMarketLinkBindingV2>,
@@ -280,12 +319,12 @@ pub(crate) struct AuthenticatedProductMarketFounderCurrentCreationV2 {
     accepted_market_core_receipt_id: ContentId,
 }
 
-impl AuthenticatedProductMarketFounderCurrentCreationV2 {
+impl AuthenticatedProductMarketFounderCurrentCreationV3 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
     pub(crate) const fn preauthorization_id(&self) -> ContentId { self.preauthorization.id }
     pub(crate) const fn preauthorization(
         &self,
-    ) -> &AuthenticatedProductMarketFounderFoundationPreauthorizationV2 {
+    ) -> &AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
         &self.preauthorization
     }
     pub(crate) fn market_binding(&self) -> &MarketLifecycleBindingV2 { &self.market_binding }
@@ -319,6 +358,16 @@ impl AuthenticatedProductMarketFounderCurrentCreationV2 {
         self.direct_capitalization.account_authentication_id()
     }
     pub(crate) const fn source_receipt_id(&self) -> ContentId { self.source.id() }
+    pub(crate) const fn funding_reservation(
+        &self,
+    ) -> &AuthenticatedProductSeriesFundingReservationV4 {
+        &self.funding_reservation
+    }
+    pub(crate) const fn source_postwrite(
+        &self,
+    ) -> &AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+        &self.source
+    }
 
     pub(super) fn into_direct_activation_parts(
         self,
@@ -356,20 +405,22 @@ fn require_distinct_pubkeys(accounts: &[Pubkey]) -> Outcome<()> {
 }
 
 /// Mint the acyclic current preauthorization from a hostile-reopened Active
-/// FundingV3 account and one exact deterministic Source publication.
+/// FundingV4 account and one exact deterministic Source publication.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v2<O>(
+pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v3<O>(
     program_id: &Pubkey,
     owner: &O,
     registry: AuthenticatedSeriesRegistryAccountV3,
     registry_account: &AccountInfo<'_>,
     capability: &AuthenticatedRegistryCapabilityV4,
-    funding: AuthenticatedSeriesFundingAccountV3,
+    funding: AuthenticatedSeriesFundingAccountV4,
     funding_account: &AccountInfo<'_>,
     bundle: AuthenticatedCompiledProductSeriesBundleV6,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
     publication: AuthenticatedSourceSemanticPublicationV2,
+    source_route: AuthenticatedSourceRouteV1,
+    clock_account: &AccountInfo<'_>,
     schedule: &MarketFoundationScheduleV3,
     graph: &MarketFoundationAccountGraphV3,
     lifecycle_root_account: Pubkey,
@@ -380,7 +431,7 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v2
     foundation_vault_account: Pubkey,
     principal_refund_owner: Pubkey,
     neutral_lamport_sink: Pubkey,
-) -> Outcome<AuthenticatedProductMarketFounderFoundationPreauthorizationV2>
+) -> Outcome<AuthenticatedProductMarketFounderFoundationPreauthorizationV3>
 where
     O: AuthenticatedProductMarketFoundationCurrentOwnerV2 + ?Sized,
 {
@@ -412,21 +463,33 @@ where
     let occurrence_id = occurrence.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let route = publication.route();
+    let clock = authenticate_route_clock_bucket(source_route, clock_account)
+        .map_err(Refusal::from)?;
+    let clock_snapshot = clock.snapshot();
 
     let live_registry = authenticate_series_registry_account_v3(
         program_id, registry_account, series_id, false)?;
-    let live_funding = authenticate_series_funding_account_v3(
+    let live_funding = authenticate_series_funding_account_v4(
         program_id, funding_account, series_id, true)?;
     require(
         live_registry == registry
-            && live_funding == funding
+            && live_funding.account() == funding.account()
+            && live_funding.value() == funding.value()
+            && live_funding.observed_lamports() == funding.observed_lamports()
+            && live_funding.is_writable() == funding.is_writable()
+            && live_funding.data_id() == funding.data_id()
+            && live_funding.authentication_id() == funding.authentication_id()
             && registry.value().activation_consumed
-            && state.phase == SeriesFundingPhaseV3::Active
+            && state.phase == SeriesFundingPhaseV4::Active
             && state.next_ordinal < state.instance_count
             && state.pending_market_instance_id == ContentId::ZERO
             && state.pending_source_occurrence_id == ContentId::ZERO
-            && state.pending_series_market_link_id == ContentId::ZERO
+            && state.pending_pre_source_reservation_binding_id == ContentId::ZERO
             && state.pending_reservation_receipt_id == ContentId::ZERO
+            && state.pending_clock_receipt_id == ContentId::ZERO
+            && state.pending_clock_bucket == 0
+            && state.pending_debits
+                == [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2]
             && state.series_plan_id == series_id
             && state.funding_terms_id == funding_terms_id
             && state.funding_quote_id == quote_id
@@ -453,6 +516,16 @@ where
             && route.registry_release_id() == capability.registry_release_id()
             && route.capability_profile_id() == capability.capability_profile_id()
             && route.source_release_manifest_id() == bundle.bundle().source_release_manifest_id
+            && route.source_route_id().bytes() == source_route.route_id().bytes()
+            && route.source_release_manifest_id().bytes()
+                == source_route.release_manifest_id().bytes()
+            && route.source_release_authentication_id().bytes()
+                == source_route.release_authentication_id().bytes()
+            && route.clock_policy_id().bytes() == source_route.clock_policy_id().bytes()
+            && clock.policy_id().bytes() == route.clock_policy_id().bytes()
+            && series
+                .is_creation_eligible(state.next_ordinal, clock.bucket())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
             && route.source_plane_contract_id() == bundle.bundle().source_plane_contract_id
             && route.source_spec_id() == bundle.bundle().source_spec_id
             && graph.market_instance_id == owner.market_instance_id()
@@ -493,9 +566,10 @@ where
 
     let foundation_owner_authentication_id = owner.authentication_id();
     let compiler_bundle_id = bundle.bundle_id().content_id();
-    owner.authenticate_product_market_founder_preauthorization_v2(
+    owner.authenticate_product_market_founder_preauthorization_v3(
         program_id, registry.authentication_id(), funding.authentication_id(), funding_state_id,
-        compiler_bundle_id, publication.id(), schedule_id.content_id(), graph_id.content_id(),
+        compiler_bundle_id, publication.id(), ContentId::from_bytes(clock.id().bytes()),
+        clock.bucket(), schedule_id.content_id(), graph_id.content_id(),
         lifecycle_root_account, founder_link_account, lifecycle_replay_account,
         direct_global_liveness_account,
     )?;
@@ -508,7 +582,7 @@ where
     }
 
     let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
-        PRODUCT_CURRENT_FOUNDER_PREAUTH_DOMAIN_V2,
+        PRODUCT_CURRENT_FOUNDER_PREAUTH_DOMAIN_V3,
         program_id.as_ref(),
         &foundation_owner_authentication_id.bytes(),
         &owner.market_instance_id().bytes(),
@@ -528,6 +602,10 @@ where
         &attachment_id.bytes(),
         &genesis_id.bytes(),
         &publication.id().bytes(),
+        &clock.id().bytes(),
+        &clock_snapshot.slot.to_le_bytes(),
+        &clock_snapshot.unix_timestamp.to_le_bytes(),
+        &clock.bucket().to_le_bytes(),
         &occurrence_id.bytes(),
         &occurrence.source_window_id.bytes(),
         &occurrence.statistic_key_id.bytes(),
@@ -545,7 +623,7 @@ where
         &owner.claim_issuance_binding_id().bytes(),
     ]).to_bytes());
     require_live(id)?;
-    Ok(AuthenticatedProductMarketFounderFoundationPreauthorizationV2 {
+    Ok(AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
         id, foundation_owner_authentication_id,
         market_instance_id: owner.market_instance_id(), generation: owner.generation(),
         series_plan_id: series_id, ordinal: state.next_ordinal,
@@ -575,8 +653,13 @@ where
         source_window_id: occurrence.source_window_id, statistic_key_id: occurrence.statistic_key_id,
         source_route_id: route.source_route_id(), source_release_id: route.source_release_manifest_id(),
         clock_policy_id: route.clock_policy_id(),
+        clock_receipt_id: ContentId::from_bytes(clock.id().bytes()),
+        clock_slot: clock_snapshot.slot,
+        clock_unix_timestamp: clock_snapshot.unix_timestamp,
+        clock_bucket: clock.bucket(),
         source_plane_contract_id: route.source_plane_contract_id(), source_spec_id: route.source_spec_id(),
         source_work_funding: publication.source_work_funding(),
+        funding_debits: quote.components,
     })
 }
 
@@ -585,22 +668,31 @@ where
 /// have occurred earlier in the same instruction from this preauthorization.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn complete_product_market_founder_current_creation_v2<O>(
+pub(crate) fn complete_product_market_founder_current_creation_v3<O>(
     owner: &O,
-    preauthorization: AuthenticatedProductMarketFounderFoundationPreauthorizationV2,
-    funding: AuthenticatedSeriesFundingAccountV3,
-    source: AuthenticatedPreRootSourceOccurrenceV2,
+    preauthorization: AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    source: AuthenticatedPreRootSourceOccurrenceV3,
     direct_capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
-) -> Outcome<AuthenticatedProductMarketFounderCurrentCreationV2>
+) -> Outcome<AuthenticatedProductMarketFounderCurrentCreationV3>
 where
     O: AuthenticatedProductMarketFoundationCurrentOwnerV2 + ?Sized,
 {
-    let state = funding.state();
+    let source_id = source.id();
+    let source_preauthorization_id = source.product_preauthorization_id();
     let occurrence = source.occurrence();
+    let (funding_reservation, source) = source.into_product_founder_parts();
+    let funding = funding_reservation.pending();
+    let state = funding.state();
+    let reservation_binding = funding_reservation.binding();
+    let reservation_binding_id = reservation_binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let source_facts = source.capitalization().facts();
+    let funding_state_pending_id = funding.state().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         owner.authentication_id() == preauthorization.foundation_owner_authentication_id
             && funding.account() == preauthorization.funding_account
-            && state.phase == SeriesFundingPhaseV3::Pending
+            && state.phase == SeriesFundingPhaseV4::Pending
             && state.series_plan_id == preauthorization.series_plan_id
             && state.pending_ordinal == preauthorization.ordinal
             && state.pending_market_instance_id == preauthorization.market_instance_id.content_id()
@@ -609,7 +701,45 @@ where
             && state.transition_sequence
                 == preauthorization.funding_transition_sequence
                     .checked_add(1).ok_or(ClutchError::Arithmetic)?
+            && state.pending_pre_source_reservation_binding_id
+                == reservation_binding_id.content_id()
+            && state.pending_clock_receipt_id == preauthorization.clock_receipt_id
+            && state.pending_clock_bucket == preauthorization.clock_bucket
+            && state.pending_debits == preauthorization.funding_debits
+            && funding_reservation.funding_state_before_id().content_id()
+                == preauthorization.funding_state_id
+            && funding_reservation.funding_data_before_id()
+                == preauthorization.funding_data_id
+            && funding_reservation.funding_authentication_before_id()
+                == preauthorization.funding_authentication_id
+            && source_preauthorization_id == preauthorization.id
             && source.product_preauthorization_id() == preauthorization.id
+            && source_facts.funding_reservation_postwrite_id == funding_reservation.id()
+            && source_facts.series_plan_id == preauthorization.series_plan_id.content_id()
+            && source_facts.funding_terms_id == preauthorization.funding_terms_id
+            && source_facts.funding_quote_id == preauthorization.funding_quote_id
+            && source_facts.attachment_plan_id == preauthorization.attachment_plan_id
+            && source_facts.compiler_bundle_id == preauthorization.compiler_bundle_id
+            && source_facts.registry_release_id == preauthorization.registry_release_id
+            && source_facts.capability_profile_id == preauthorization.capability_profile_id
+            && source_facts.funding_account == preauthorization.funding_account
+            && source_facts.funding_state_id == funding_state_pending_id.content_id()
+            && source_facts.funding_account_data_id == funding.data_id()
+            && source_facts.funding_account_authentication_id == funding.authentication_id()
+            && source_facts.funding_transition_sequence == state.transition_sequence
+            && source_facts.pending_pre_source_reservation_binding_id
+                == reservation_binding_id.content_id()
+            && source_facts.pending_reservation_receipt_id
+                == funding_reservation.reservation_receipt_id()
+            && source_facts.pending_clock_receipt_id == preauthorization.clock_receipt_id
+            && source_facts.pending_clock_bucket == preauthorization.clock_bucket
+            && source_facts.pending_source_work == preauthorization.source_work_funding
+            && source_facts.source_route_id == preauthorization.source_route_id
+            && source_facts.source_release_manifest_id == preauthorization.source_release_id
+            && source_facts.source_plane_contract_id == preauthorization.source_plane_contract_id
+            && source_facts.source_spec_id == preauthorization.source_spec_id
+            && source_facts.source_principal_refund.bytes()
+                == preauthorization.principal_refund_owner.to_bytes()
             && occurrence.occurrence_record_id() == preauthorization.source_occurrence_id
             && occurrence.series_plan_id() == preauthorization.series_plan_id.content_id()
             && occurrence.ordinal() == preauthorization.ordinal
@@ -621,7 +751,43 @@ where
             && occurrence.source_spec_id() == preauthorization.source_spec_id
             && occurrence.window_id() == preauthorization.source_window_id
             && occurrence.statistic_key_id() == preauthorization.statistic_key_id
-            && direct_capitalization.global_bundle_binding_id() != ContentId::ZERO,
+            && direct_capitalization.global_bundle_binding_id() != ContentId::ZERO
+            && reservation_binding.funding_account_id.bytes()
+                == preauthorization.funding_account.to_bytes()
+            && reservation_binding.funding_account_authentication_before_id
+                == preauthorization.funding_authentication_id
+            && reservation_binding.funding_state_before_id.content_id()
+                == preauthorization.funding_state_id
+            && reservation_binding.series_plan_id == preauthorization.series_plan_id
+            && reservation_binding.funding_terms_id.content_id()
+                == preauthorization.funding_terms_id
+            && reservation_binding.funding_quote_id.content_id()
+                == preauthorization.funding_quote_id
+            && reservation_binding.attachment_plan_id.content_id()
+                == preauthorization.attachment_plan_id
+            && reservation_binding.compiler_bundle_id.content_id()
+                == preauthorization.compiler_bundle_id
+            && reservation_binding.ordinal == preauthorization.ordinal
+            && reservation_binding.market_instance_id == preauthorization.market_instance_id
+            && reservation_binding.source_occurrence_id.content_id()
+                == preauthorization.source_occurrence_id
+            && reservation_binding.disposition == SeriesMarketDispositionV1::Founder
+            && reservation_binding.debits == preauthorization.funding_debits
+            && reservation_binding.market_root_account_id.bytes()
+                == preauthorization.lifecycle_root_account.to_bytes()
+            && reservation_binding.series_market_link_account_id.bytes()
+                == preauthorization.founder_link_account.to_bytes()
+            && reservation_binding.product_founder_preauthorization_id == preauthorization.id
+            && reservation_binding.direct_global_liveness_capitalization_id
+                == direct_capitalization.global_capitalization_receipt_id()
+            && reservation_binding.source_publication_id == preauthorization.source_publication_id
+            && reservation_binding.clock_policy_id == preauthorization.clock_policy_id
+            && reservation_binding.clock_receipt_id == preauthorization.clock_receipt_id
+            && reservation_binding.funding_transition_sequence_before
+                == preauthorization.funding_transition_sequence
+            && reservation_binding.clock_slot == preauthorization.clock_slot
+            && reservation_binding.clock_unix_timestamp == preauthorization.clock_unix_timestamp
+            && reservation_binding.clock_bucket == preauthorization.clock_bucket,
         ClutchError::MismatchedState,
     )?;
 
@@ -630,7 +796,8 @@ where
     let market_binding_id = market_binding.id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        market_binding.market_instance_id == preauthorization.market_instance_id
+        reservation_binding.market_binding_id == market_binding_id
+            && market_binding.market_instance_id == preauthorization.market_instance_id
             && market_binding.generation == preauthorization.generation
             && market_binding.outcome_count != 0
             && market_binding.product_template_id == preauthorization.product_template_id
@@ -724,34 +891,40 @@ where
     let founder_link_semantic_id = pending_link.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        ContentId::from_bytes(founder_link_semantic_id.bytes())
-            == state.pending_series_market_link_id,
+        ContentId::from_bytes(preauthorization.founder_link_account.to_bytes())
+            == reservation_binding.series_market_link_account_id
+            && founder_link_binding.market_binding_id == reservation_binding.market_binding_id
+            && founder_link_binding.source_occurrence_id
+                == reservation_binding.source_occurrence_id
+            && founder_link_binding.funding_transition_sequence == state.transition_sequence,
         ClutchError::MismatchedState,
     )?;
     let foundation_capital = owner.market_foundation_capital_v2(founder_link_semantic_id)?;
     let accepted_market_core_receipt_id = owner.accepted_market_core_receipt_id();
     let product_families = owner.product_families();
-    owner.authenticate_product_market_founder_completion_v2(
+    owner.authenticate_product_market_founder_completion_v3(
         preauthorization.id, direct_capitalization.global_bundle_binding_id(),
-        state.pending_reservation_receipt_id, source.id(), market_binding_id,
+        state.pending_reservation_receipt_id, source_id, market_binding_id,
         founder_link_semantic_id,
     )?;
     let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
-        PRODUCT_CURRENT_FOUNDER_CREATION_DOMAIN_V2,
+        PRODUCT_CURRENT_FOUNDER_CREATION_DOMAIN_V3,
         &preauthorization.id.bytes(),
         &direct_capitalization.account_authentication_id().bytes(),
         &direct_capitalization.global_bundle_binding_id().bytes(),
         &funding.authentication_id().bytes(),
+        &funding_reservation.id().bytes(),
+        &reservation_binding_id.bytes(),
         &state.pending_reservation_receipt_id.bytes(),
-        &source.id().bytes(),
+        &source_id.bytes(),
         &market_binding_id.bytes(),
         &founder_link_semantic_id.bytes(),
         &accepted_market_core_receipt_id.bytes(),
         &owner.authentication_id().bytes(),
     ]).to_bytes());
     require_live(id)?;
-    Ok(AuthenticatedProductMarketFounderCurrentCreationV2 {
-        id, preauthorization, source, direct_capitalization,
+    Ok(AuthenticatedProductMarketFounderCurrentCreationV3 {
+        id, preauthorization, funding_reservation, source, direct_capitalization,
         market_binding: Box::new(market_binding),
         founder_link_binding: Box::new(founder_link_binding),
         foundation_capital: Box::new(foundation_capital),
