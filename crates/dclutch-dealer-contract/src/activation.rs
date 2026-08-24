@@ -15,11 +15,9 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::{MarketRoot, Phase};
 
 use crate::{
-    Error as DealerError, LiquidityAmounts, LiquidityAttachment, LiquidityChangeReceipt,
-    LpPosition, PoolRetirementReceipt, RentCreditTerms,
-    frame::{
-        ConfigPdaSeedsV1, FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1,
-    },
+    Error as DealerError, LiquidityAmounts, LiquidityAttachment, LpPosition, PoolRetirementReceipt,
+    RentCreditTerms,
+    frame::{FrameError, LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1},
     instruction::ActivatePoolV1,
     runtime::{
         LiquidityConfigViewV1, LiquidityProfileV1, initialize_pool,
@@ -76,22 +74,14 @@ impl DealerFundingDebitV1 {
 
 /// Successful atomic Activate/Open state and custody plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ActivatePoolPlanV1<const N: usize> {
+pub struct ActivatePoolPlanV1 {
     market: MarketRoot,
     funding: FundingStateV1,
     initial_position: LpPosition,
     funding_debit: DealerFundingDebitV1,
-    liquidity_receipt: LiquidityChangeReceipt<N>,
-    capability_funding_seeds: CapabilityFundingDerivationV1,
-    capability_funding_authority_seeds: CapabilityFundingAuthorityDerivationV1,
-    capability_funding_vault_seeds: CapabilityFundingVaultDerivationV1,
-    pool_seeds: PoolPdaSeedsV1,
-    config_seeds: ConfigPdaSeedsV1,
-    lp_seeds: LpPositionPdaSeedsV1,
-    pool_position_seeds: PoolPositionPdaSeedsV1,
 }
 
-impl<const N: usize> ActivatePoolPlanV1<N> {
+impl ActivatePoolPlanV1 {
     /// Return Market after registering the Pool direct child.
     pub const fn market(self) -> MarketRoot {
         self.market
@@ -107,40 +97,6 @@ impl<const N: usize> ActivatePoolPlanV1<N> {
     /// Return exact physical funding debit plan.
     pub const fn funding_debit(self) -> DealerFundingDebitV1 {
         self.funding_debit
-    }
-    /// Return transient initial custody/share receipt.
-    pub const fn liquidity_receipt(self) -> LiquidityChangeReceipt<N> {
-        self.liquidity_receipt
-    }
-    /// Return reusable shared capability FundingState derivation authority.
-    pub const fn capability_funding_seeds(self) -> CapabilityFundingDerivationV1 {
-        self.capability_funding_seeds
-    }
-    /// Return the shared capability funding token-authority PDA preimage.
-    pub const fn capability_funding_authority_seeds(
-        self,
-    ) -> CapabilityFundingAuthorityDerivationV1 {
-        self.capability_funding_authority_seeds
-    }
-    /// Return the shared capability Realm-collateral Vault PDA preimage.
-    pub const fn capability_funding_vault_seeds(self) -> CapabilityFundingVaultDerivationV1 {
-        self.capability_funding_vault_seeds
-    }
-    /// Return Pool PDA seed preimage.
-    pub const fn pool_seeds(self) -> PoolPdaSeedsV1 {
-        self.pool_seeds
-    }
-    /// Return config PDA seed preimage.
-    pub const fn config_seeds(self) -> ConfigPdaSeedsV1 {
-        self.config_seeds
-    }
-    /// Return initial LP-position PDA seed preimage.
-    pub const fn lp_seeds(self) -> LpPositionPdaSeedsV1 {
-        self.lp_seeds
-    }
-    /// Return shared native Position PDA seeds for Pool-owned claim inventory.
-    pub const fn pool_position_seeds(self) -> PoolPositionPdaSeedsV1 {
-        self.pool_position_seeds
     }
 }
 
@@ -192,7 +148,7 @@ pub fn activate_pool_into<const N: usize>(
     pool_position_rent: RentCreditTerms,
     request: ActivatePoolV1,
     authenticated_now_slot: u64,
-) -> Result<ActivatePoolPlanV1<N>> {
+) -> Result<ActivatePoolPlanV1> {
     if !matches!(market.phase(), Phase::Founding | Phase::Open) {
         return Err(ActivationError::InvalidMarketPhase);
     }
@@ -249,7 +205,7 @@ pub fn activate_pool_into<const N: usize>(
         return Err(ActivationError::AuthorityMismatch);
     }
 
-    let capability_funding_seeds = CapabilityFundingDerivationV1::new(
+    CapabilityFundingDerivationV1::new(
         market_address,
         request.generation(),
         manifest_id,
@@ -257,24 +213,20 @@ pub fn activate_pool_into<const N: usize>(
         funding,
     )
     .map_err(ActivationError::Capability)?;
-    let capability_funding_authority_seeds =
-        CapabilityFundingAuthorityDerivationV1::new(funding_state_address)
-            .map_err(ActivationError::Capability)?;
-    let capability_funding_vault_seeds =
-        CapabilityFundingVaultDerivationV1::new(funding_authority_address, collateral_binding)
-            .map_err(ActivationError::Capability)?;
-    let pool_seeds = PoolPdaSeedsV1::new(market_address, request.generation(), config.content_id())
+    CapabilityFundingAuthorityDerivationV1::new(funding_state_address)
+        .map_err(ActivationError::Capability)?;
+    CapabilityFundingVaultDerivationV1::new(funding_authority_address, collateral_binding)
+        .map_err(ActivationError::Capability)?;
+    PoolPdaSeedsV1::new(market_address, request.generation(), config.content_id())
         .map_err(ActivationError::Frame)?;
-    let config_seeds = ConfigPdaSeedsV1::new(config.content_id());
-    let lp_seeds = LpPositionPdaSeedsV1::new(
+    LpPositionPdaSeedsV1::new(
         market_address,
         request.generation(),
         config.content_id(),
         request.initial_lp_id(),
     )
     .map_err(ActivationError::Frame)?;
-    let pool_position_seeds = PoolPositionPdaSeedsV1::new(market_address, pool_address)
-        .map_err(ActivationError::Frame)?;
+    PoolPositionPdaSeedsV1::new(market_address, pool_address).map_err(ActivationError::Frame)?;
 
     let mut next_funding = funding;
     let activation = next_funding
@@ -352,7 +304,7 @@ pub fn activate_pool_into<const N: usize>(
         [request.initial_claim_quantity(); N],
     )
     .map_err(ActivationError::Dealer)?;
-    let (initial_position, liquidity_receipt) = initialize_pool(
+    let (initial_position, _) = initialize_pool(
         pool_out,
         profile,
         attachment,
@@ -381,14 +333,6 @@ pub fn activate_pool_into<const N: usize>(
             liquidity,
             service,
         },
-        liquidity_receipt,
-        capability_funding_seeds,
-        capability_funding_authority_seeds,
-        capability_funding_vault_seeds,
-        pool_seeds,
-        config_seeds,
-        lp_seeds,
-        pool_position_seeds,
     })
 }
 

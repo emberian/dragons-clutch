@@ -454,21 +454,6 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             .claim_reserves(),
         [1_000; 2]
     );
-    assert_eq!(plan.capability_funding_seeds().config_id(), [7; 32]);
-    assert_eq!(
-        plan.capability_funding_authority_seeds().seed_components()[1],
-        funding_state.as_slice()
-    );
-    assert_eq!(
-        plan.capability_funding_vault_seeds().seed_components()[1],
-        funding_authority.as_slice()
-    );
-    assert_eq!(plan.lp_seeds().lp_id(), [44; 32]);
-    assert_eq!(
-        plan.pool_position_seeds().seed_components()[2],
-        POOL_ADDRESS.as_slice()
-    );
-
     assert_eq!(
         activate_pool_into::<2>(
             market,
