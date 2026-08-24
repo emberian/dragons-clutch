@@ -117,6 +117,7 @@ def manifest(
     evidence_path: str | None = None,
     evidence_profile_name: str | None = None,
     source_identity: str = "production-inert",
+    collateral_release_identity: str = "production-inert",
     profile_feature: str = "profile-general-source-v2-point",
     budget_limits: dict[str, int] | None = None,
 ) -> dict[str, object]:
@@ -129,6 +130,7 @@ def manifest(
     build_contract = {
         "cargo_profile_feature": profile_feature,
         "source_identity": source_identity,
+        "collateral_release_identity": collateral_release_identity,
         "expected_undefined_dynamic_symbols": SYSCALLS,
     }
     identity = checker.profile_identity(
@@ -233,6 +235,7 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
     if (
         contract["cargo_profile_feature"] == "profile-full"  # type: ignore[index]
         and contract["source_identity"] == "production-inert"  # type: ignore[index]
+        and contract["collateral_release_identity"] == "production-inert"  # type: ignore[index]
     ):
         default_equivalence = {
             "capability_profile_identity_sha256": identity,
@@ -295,6 +298,7 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
                 "name": value["profile"]["name"],  # type: ignore[index]
                 "label": value["profile"]["label"],  # type: ignore[index]
                 "source_identity": contract["source_identity"],  # type: ignore[index]
+                "collateral_release_identity": contract["collateral_release_identity"],  # type: ignore[index]
                 "cargo_features": checker.cargo_features(contract),  # type: ignore[arg-type]
                 "capability_profile_identity_sha256": identity,
                 "identity_manifest_sha256": checker.measurement_input_manifest_sha256(
@@ -764,6 +768,7 @@ class CapabilityProfileTests(unittest.TestCase):
             {
                 "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
                 "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": "production-inert",
                 "expected_undefined_dynamic_symbols": SYSCALLS,
             }
         )
@@ -776,6 +781,7 @@ class CapabilityProfileTests(unittest.TestCase):
                 {
                     "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
                     "source_identity": "caller-invented-release",
+                    "collateral_release_identity": "production-inert",
                     "expected_undefined_dynamic_symbols": SYSCALLS,
                 }
             )
@@ -799,6 +805,50 @@ class CapabilityProfileTests(unittest.TestCase):
             runtime["cargo_features"],
             ["custom-heap", checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE],
         )
+
+    def test_observed_release_selector_is_expressible_and_empty_rows_refuse(self) -> None:
+        selected = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": (
+                    "observed-positive-collateral-and-claim-release"
+                ),
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        self.assertEqual(
+            checker.cargo_features(selected),
+            [
+                "custom-heap",
+                checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                "observed-positive-collateral-release-manifest",
+            ],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "observed-positive collateral release rows are absent or mismatched",
+        ):
+            checker.validate_manifest(
+                manifest(
+                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                    source_identity="runtime-real-pyth-release",
+                    collateral_release_identity=(
+                        "observed-positive-collateral-and-claim-release"
+                    ),
+                ),
+                repo=ROOT,
+            )
+
+        with self.assertRaisesRegex(checker.ProfileError, "unknown class"):
+            checker.validate_build_contract(
+                {
+                    "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                    "source_identity": "runtime-real-pyth-release",
+                    "collateral_release_identity": "caller-invented-release",
+                    "expected_undefined_dynamic_symbols": SYSCALLS,
+                }
+            )
 
     def test_runtime_real_pyth_release_refuses_legacy_narrow_profile(self) -> None:
         with self.assertRaisesRegex(
@@ -910,6 +960,9 @@ class CapabilityProfileTests(unittest.TestCase):
             copy.deepcopy(checker.CURRENT_FRACTIONAL_EXTENSION_TRIPLES)
         )
         full_fractional["required_intent_triples"].sort()
+        fully_enabled["build_contract"]["collateral_release_identity"] = (
+            "observed-positive-collateral-and-claim-release"
+        )
         fully_enabled["central_registry"] = linked_coverage(
             fully_enabled["capabilities"]
         )
@@ -925,7 +978,21 @@ class CapabilityProfileTests(unittest.TestCase):
             fully_enabled["wire_surface"],
             fully_enabled["artifact_budget"]["limits"],
         )
-        checker.validate_manifest(fully_enabled, repo=ROOT)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            manifest_path = repo / checker.OBSERVED_RELEASE_MANIFEST_PATH
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                """
+static OBSERVED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 1] = [RELEASE];
+static OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2:
+    [CompiledCollateralReleaseManifestV2; 1] = [MANIFEST];
+const OBSERVED_CLAIM_ISSUANCE_RELEASE_V1:
+    Option<CompiledClaimIssuanceReleaseV1> = Some(CLAIM);
+""",
+                encoding="utf-8",
+            )
+            checker.validate_manifest(fully_enabled, repo=repo)
 
         partial_required = copy.deepcopy(value)
         partial_fractional = next(
