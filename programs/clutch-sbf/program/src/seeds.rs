@@ -331,6 +331,9 @@ pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
 /// Permanent compact Product Market-lifecycle replay anchor.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
+/// Current market-only persistent ProductReplayAnchor seed.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2: &[u8] =
+    b"dc:market-lifecycle-replay:v2";
 /// Non-persisted Market-family namespace anchor.
 pub const SEED_PRODUCT_MARKET_FAMILY_ROOT_V1: &[u8] = b"dc:product-family-root:v1";
 /// Per-Series/ordinal Product Market-admission link.
@@ -580,6 +583,23 @@ pub fn product_market_lifecycle_replay_pda(
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
+    )
+}
+
+/// Derive the current market-only persistent ProductReplayAnchor coordinate.
+///
+/// Generation is intentionally not a seed: this account exists first and is
+/// the sole durable owner from which the initial generation is derived.
+pub fn product_market_lifecycle_replay_v2_pda(
+    program_id: &Pubkey,
+    market_instance_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
+            market_instance_id,
+        ],
+        program_id,
     )
 }
 

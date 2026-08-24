@@ -16,12 +16,14 @@
 use clutch_product_series::{
     CompiledProductSeriesBundleV5Id, CompiledProductSeriesBundleV6Id, ContentId,
     DirectGlobalLivenessV2, FixedCodec, MarketInstanceV2Id,
-    MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1, MarketLifecycleRootV2,
+    MarketLifecycleReplayReceiptV1, MarketLifecycleReplayV2, MarketLifecycleRootV1,
+    MarketLifecycleRootV2,
     SeriesFundingComponentV1, SeriesFundingStateV1, SeriesFundingStateV2,
     SeriesFundingStateV3, SeriesFundingStateV4, SeriesFundingTermsV2Id, SeriesLifecycleReplayV1,
     SeriesLifecycleReplayV2, SeriesMarketLinkV1, SeriesMarketLinkV2, SeriesPlanV5Id,
     SourceOccurrenceV1Id, DIRECT_GLOBAL_LIVENESS_BYTES_V2,
-    MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    MARKET_LIFECYCLE_REPLAY_BYTES_V2, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
+    MARKET_LIFECYCLE_ROOT_BYTES_V1,
     MARKET_LIFECYCLE_ROOT_BYTES_V2,
     SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_BYTES_V3,
@@ -86,6 +88,10 @@ pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2: usize =
 /// Exact permanent Product Market-lifecycle replay account width.
 pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1;
+/// Exact current persistent ProductReplayAnchor account width.
+pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_REPLAY_BYTES_V2;
+const _: () = assert!(MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2 == 560);
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
@@ -1524,6 +1530,61 @@ impl MarketLifecycleReplayAccountV1 {
         require_reserved(&input[3..8])?;
         let value = Self {
             receipt: MarketLifecycleReplayReceiptV1::decode(
+                &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            )
+            .map_err(map_product_error)?,
+            permanent_rent_principal_lamports: u64::from_le_bytes(
+                input[8..16].try_into().map_err(|_| CodecError::Truncated)?,
+            ),
+            stored_bump: input[2],
+        };
+        if value.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(value)
+    }
+}
+
+/// Program-owned frame for the current persistent ProductReplayAnchor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLifecycleReplayAccountV2 {
+    /// Sole semantic generation and lifecycle replay owner.
+    pub state: MarketLifecycleReplayV2,
+    /// Exact permanent replay-account rent principal.
+    pub permanent_rent_principal_lamports: u64,
+    /// Canonical market-only replay PDA bump.
+    pub stored_bump: u8,
+}
+
+impl MarketLifecycleReplayAccountV2 {
+    /// Encode the exact current frame and persistent semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2)?;
+        if self.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact current frame and complete replay body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: MarketLifecycleReplayV2::decode(
                 &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
             )
             .map_err(map_product_error)?,

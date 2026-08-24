@@ -592,6 +592,8 @@ pub const DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2: usize =
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 /// First Product Market-lifecycle replay receipt version.
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Current persistent ProductReplayAnchor version.
+pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
 /// Permanent counted Product Series-lifecycle replay discriminator.
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb8;
 /// Historical permanent counted Product Series-lifecycle replay version.
@@ -1939,8 +1941,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG,
             version: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-product-market-lifecycle-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-market-lifecycle-replay-v1-account",
+        name: "product-market-lifecycle-replay-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

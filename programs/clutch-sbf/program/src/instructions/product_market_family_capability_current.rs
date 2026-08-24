@@ -25,10 +25,49 @@ use solana_pubkey::Pubkey;
 
 const PRODUCT_MARKET_FAMILY_CAPABILITY_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-market-family-capability-authentication/v1\0";
+const PRODUCT_MARKET_FAMILY_CAPABILITY_ARTIFACT_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product-market-family-capability-artifact-authentication/v1\0";
 
 struct ExactMarketFamilyInitializationV1 {
     policy_id: ContentId,
     binding_id: ContentId,
+}
+
+/// Move-only pre-generation authority over the hostile immutable family-policy
+/// artifact and its exact current Registry/physical-founder joins.
+///
+/// This receipt deliberately contains no generation and derives no family
+/// anchors. The persistent ProductReplayAnchor consumes it to derive and own
+/// the initial generation before this receipt can be completed into the
+/// generation-specific aggregator authority.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedMarketFamilyCapabilityPolicyArtifactV1 {
+    id: ContentId,
+    policy: AuthenticatedProductArtifactV1<MarketFamilyCapabilityPolicyV1>,
+    physical_founder_id: ContentId,
+    physical_capitalization_id: ContentId,
+    registry_capability_id: ContentId,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    attachment_plan_id: ContentId,
+}
+
+impl AuthenticatedMarketFamilyCapabilityPolicyArtifactV1 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn policy_id(&self) -> ContentId {
+        self.policy.semantic_id()
+    }
+
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.registry_release_id
+    }
+
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.capability_profile_id
+    }
 }
 
 impl AuthenticatedMarketFamilyAuthorityV1 for ExactMarketFamilyInitializationV1 {
@@ -91,18 +130,16 @@ impl AuthenticatedMarketFamilyCapabilityPolicyV1 {
     }
 }
 
-/// Hostile-authenticate the immutable family policy and derive every namespace
-/// anchor and Series-link initial status without caller roots or masks.
+/// Hostile-authenticate the immutable family-policy artifact before a Market
+/// generation exists.
 #[inline(never)]
-pub(crate) fn authenticate_market_family_capability_policy_v1(
+pub(crate) fn authenticate_market_family_capability_policy_artifact_v1(
     program_id: &Pubkey,
     physical: &AuthenticatedSeriesPhysicalFounderV4,
     registry: &AuthenticatedRegistryCapabilityV4,
     policy_account: &AccountInfo<'_>,
     expected_policy_id: MarketFamilyCapabilityPolicyV1Id,
-    market_instance_id: MarketInstanceV2Id,
-    generation: u64,
-) -> Outcome<AuthenticatedMarketFamilyCapabilityPolicyV1> {
+) -> Outcome<AuthenticatedMarketFamilyCapabilityPolicyArtifactV1> {
     let policy = authenticate_product_artifact_v1::<MarketFamilyCapabilityPolicyV1>(
         program_id,
         policy_account,
@@ -110,8 +147,7 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
     )?;
     let value = policy.value();
     require(
-        generation != 0
-            && physical.registry_capability_after_id() == registry.id()
+        physical.registry_capability_after_id() == registry.id()
             && physical.capability_profile_id() == registry.capability_profile_id()
             && physical.registry_release_id() == registry.registry_release_id()
             && physical.collateral_realm_id() == value.realm_id
@@ -122,6 +158,49 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
             && policy.account() != physical.capitalization().registry_account(),
         ClutchError::MismatchedState,
     )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_MARKET_FAMILY_CAPABILITY_ARTIFACT_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &physical.id().bytes(),
+            &physical.capitalization_id().bytes(),
+            &registry.id().bytes(),
+            &registry.registry_release_id().bytes(),
+            &registry.capability_profile_id().bytes(),
+            policy.account().as_ref(),
+            &policy.semantic_id().bytes(),
+            &value.realm_id.bytes(),
+            &value.collateral_profile_id.bytes(),
+            &value.registry_capability_profile_id.bytes(),
+            &[value.enabled_family_mask],
+            &physical.attachment_plan_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedMarketFamilyCapabilityPolicyArtifactV1 {
+        id,
+        policy,
+        physical_founder_id: physical.id(),
+        physical_capitalization_id: physical.capitalization_id(),
+        registry_capability_id: registry.id(),
+        registry_release_id: registry.registry_release_id(),
+        capability_profile_id: registry.capability_profile_id(),
+        attachment_plan_id: physical.attachment_plan_id(),
+    })
+}
+
+/// Consume the pre-generation artifact authority and derive every canonical
+/// family namespace anchor and initial Series-link obligation status.
+#[inline(never)]
+pub(crate) fn complete_market_family_capability_policy_v1(
+    program_id: &Pubkey,
+    artifact: AuthenticatedMarketFamilyCapabilityPolicyArtifactV1,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+) -> Outcome<AuthenticatedMarketFamilyCapabilityPolicyV1> {
+    require(generation != 0, ClutchError::MismatchedState)?;
+    let value = artifact.policy.value();
 
     let mut family_namespace_anchors = [ContentId::ZERO; MARKET_FAMILY_COUNT_V1];
     let market = market_instance_id.bytes();
@@ -135,7 +214,7 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
             family.byte(),
         )
         .0;
-        require(anchor != policy.account(), ClutchError::AccountAlias)?;
+        require(anchor != artifact.policy.account(), ClutchError::AccountAlias)?;
         family_namespace_anchors[index] = ContentId::from_bytes(anchor.to_bytes());
         index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
     }
@@ -143,10 +222,10 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
         market_instance_id,
         generation,
         registry_release_id: RegistryProgramReleaseV1Id::from_bytes(
-            registry.registry_release_id().bytes(),
+            artifact.registry_release_id.bytes(),
         ),
         capability_profile_id: RegistryCapabilityProfileV3Id::from_bytes(
-            registry.capability_profile_id().bytes(),
+            artifact.capability_profile_id.bytes(),
         ),
         enabled_family_mask: value.enabled_family_mask,
         family_root_ids: family_namespace_anchors,
@@ -155,24 +234,25 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let initialization = ExactMarketFamilyInitializationV1 {
-        policy_id: policy.semantic_id(),
+        policy_id: artifact.policy.semantic_id(),
         binding_id: binding_id.content_id(),
     };
     let aggregator = MarketFamilyAggregatorV1::initialize(&initialization, binding)
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     let obligation_configuration = value
-        .obligation_configuration(physical.attachment_plan_id())
+        .obligation_configuration(artifact.attachment_plan_id)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let statuses = obligation_configuration.initial_statuses;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             PRODUCT_MARKET_FAMILY_CAPABILITY_AUTHENTICATION_DOMAIN_V1,
             program_id.as_ref(),
-            &physical.id().bytes(),
-            &physical.capitalization_id().bytes(),
-            &registry.id().bytes(),
-            policy.account().as_ref(),
-            &policy.semantic_id().bytes(),
+            &artifact.id.bytes(),
+            &artifact.physical_founder_id.bytes(),
+            &artifact.physical_capitalization_id.bytes(),
+            &artifact.registry_capability_id.bytes(),
+            artifact.policy.account().as_ref(),
+            &artifact.policy.semantic_id().bytes(),
             &value.realm_id.bytes(),
             &value.collateral_profile_id.bytes(),
             &value.registry_capability_profile_id.bytes(),
@@ -201,10 +281,10 @@ pub(crate) fn authenticate_market_family_capability_policy_v1(
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedMarketFamilyCapabilityPolicyV1 {
         id,
-        policy,
+        policy: artifact.policy,
         family_namespace_anchors,
         aggregator,
         obligation_configuration,
-        physical_founder_id: physical.id(),
+        physical_founder_id: artifact.physical_founder_id,
     })
 }
