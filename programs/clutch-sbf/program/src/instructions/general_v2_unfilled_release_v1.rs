@@ -39,8 +39,8 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
-use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::collateral_position_v3::GeneralPositionReplayAuthorityV4;
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 use super::general_v2_settlement_traversal_v5::{
     authenticate_settlement_traversal_v5, authenticate_writable_root_settlement_traversal_v5,
@@ -91,7 +91,7 @@ struct ReleaseData<'a> {
 #[derive(Clone, Copy, Debug)]
 struct AuthenticatedReleaseEndpointV1 {
     reservation: ReservationAccountV9,
-    replay: GeneralPositionReplayAuthorityV2,
+    replay: GeneralPositionReplayAuthorityV4,
     replay_bump: u8,
 }
 
@@ -254,7 +254,7 @@ fn authenticate_release_endpoint_v1(
     )?;
 
     let owner = reservation.body().owner.bytes();
-    let replay = authenticate_current_general_position_replay_v2(
+    let replay = authenticate_current_general_position_replay_v4(
         program_id,
         collateral,
         market_binding,

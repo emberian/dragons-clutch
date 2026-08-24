@@ -48,9 +48,9 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::read_rent;
 use crate::seeds;
 
-use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
+use super::collateral_position_v3::GeneralPositionReplayAuthorityV4;
 use super::general_v2_direct_v5::authenticate_market_collateral_v2;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_readonly_v2;
+use super::general_v2_position_replay::authenticate_current_general_position_replay_readonly_v4;
 use super::general_v2_receipt_v5::{
     authenticate_general_receipt_v5_writable_root, AuthenticatedGeneralReceiptV5,
     RECEIPT_V5_AUTH_ACCOUNT_COUNT,
@@ -114,7 +114,7 @@ struct SellerData<'a> {
 struct AuthenticatedSellerV5 {
     owner: Id32,
     owner_row: OwnerSettlementAccountProjectionV5,
-    replay: GeneralPositionReplayAuthorityV2,
+    replay: GeneralPositionReplayAuthorityV4,
     replay_bump: u8,
 }
 
@@ -297,7 +297,7 @@ fn authenticate_seller_v5(
         Some(reservation.body().stored_bump),
     )?;
 
-    let replay = authenticate_current_general_position_replay_readonly_v2(
+    let replay = authenticate_current_general_position_replay_readonly_v4(
         program_id,
         bound,
         &accounts[IX_MARKET_BINDING],

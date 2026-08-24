@@ -36,7 +36,7 @@ use super::general_v2_fee_v5::{
     OwnerFeeRentAccountFrameV5, OwnerFeeSnapshotAccountFrameV5,
     OwnerFeeTerminalRentInputV5, PreparedOwnerSettlementAction38V5,
 };
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::general_v2_settlement_traversal_v5::{
     authenticate_settlement_traversal_v5, authenticate_writable_root_settlement_traversal_v5,
     SettlementTraversalAccountFrameV5,
@@ -439,7 +439,7 @@ pub fn process<'info>(
     )?;
     let row = OwnerSettlementV5AccountV1::decode(&borrow_data(owner_row_account)?)?;
     let owner = row.semantic.expectation().owner();
-    let position_replay = authenticate_current_general_position_replay_v2(
+    let position_replay = authenticate_current_general_position_replay_v4(
         program_id,
         traversal.collateral(),
         &accounts[IX_BINDING],

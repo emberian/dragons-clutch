@@ -57,7 +57,7 @@ use super::general_v2_settlement_root::{
     AuthenticatedGeneralSettlementRootV1,
 };
 use super::collateral_position_v3::authenticate_general_market_v4;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Root, child, MarketBinding, principal payer, and neutral sink.
@@ -978,7 +978,7 @@ fn distribute_maker_fee(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let position_owner = position.owner().bytes();
     drop(position_data);
-    let position_replay = authenticate_current_general_position_replay_v2(
+    let position_replay = authenticate_current_general_position_replay_v4(
         program_id,
         bound,
         &accounts[FEE_IX_BINDING],

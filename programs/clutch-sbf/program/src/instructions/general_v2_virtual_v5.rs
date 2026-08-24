@@ -74,7 +74,7 @@ use super::collateral_position_v3::{
     authenticate_general_market_value_authority_v2, RuntimeSha256,
 };
 use super::general_v2_account_receipt_v5::{locate_order_slot, route_and_order};
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::general_v2_receipt_v5::{
     authenticate_general_receipt_v5_root_traversal, AuthenticatedGeneralReceiptV5,
 };
@@ -143,7 +143,7 @@ struct AuthenticatedEndpointV5 {
     membership: clutch_owner_settlement::AuthenticatedOrderMembershipV2,
     legacy_order: AuthenticatedOrderMembershipV1,
     legacy_reservation: AuthenticatedReservationV1,
-    replay: super::collateral_position_v3::GeneralPositionReplayAuthorityV2,
+    replay: super::collateral_position_v3::GeneralPositionReplayAuthorityV4,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -459,7 +459,7 @@ fn authenticate_endpoint(
         ClutchError::MismatchedState,
     )?;
 
-    let replay = authenticate_current_general_position_replay_v2(
+    let replay = authenticate_current_general_position_replay_v4(
         program_id,
         bound,
         traversal_frame.market_binding,
