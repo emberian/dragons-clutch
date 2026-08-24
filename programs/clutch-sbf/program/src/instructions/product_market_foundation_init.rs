@@ -20,6 +20,8 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, transfer_data,
     SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::general_market_foundation_v3::
+    AuthenticatedGeneralMarketPreRootFoundingPlanV3;
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
 };
@@ -396,7 +398,8 @@ struct PendingNativeComponentPlanV1 {
 
 /// Product-owned semantic inputs for the first shared Market root and link.
 ///
-/// These values are projections until a private implementation of
+/// These values are projections until the exact General pre-root plan and a
+/// private implementation of
 /// [`AuthenticatedProductMarketFounderCreationAuthorityV1`] authenticates the
 /// exact Source, Failure, General, collateral, Registry, and capability
 /// owners from which every field was derived.
@@ -420,6 +423,7 @@ pub(crate) struct ProductMarketFounderCreationFactsV1 {
     pub(crate) foundation_vault: Pubkey,
     pub(crate) series_admission_vault: Pubkey,
     pub(crate) recovery_account: Pubkey,
+    pub(crate) general_pre_root_founding_plan_id: ContentId,
     pub(crate) active_foundation_accounts: u8,
     pub(crate) root_rent_principal_lamports: u64,
     pub(crate) root_donation_lamports: u64,
@@ -438,6 +442,7 @@ pub(crate) trait AuthenticatedProductMarketFounderCreationAuthorityV1 {
         &self,
         _facts: &ProductMarketFounderCreationFactsV1,
         _semantic: &ProductMarketFounderSemanticV1,
+        _general_pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
         _schedule: &MarketFoundationScheduleV2,
         _account_graph: &MarketFoundationAccountGraphV2,
     ) -> Outcome<()> {
@@ -2172,6 +2177,7 @@ pub(crate) fn create_product_market_founder_v1<
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
     registry: AuthenticatedSeriesRegistryAccountV2,
     funding: AuthenticatedSeriesFundingAccountV2,
+    general_pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
     semantic: ProductMarketFounderSemanticV1,
     account_graph: &MarketFoundationAccountGraphV2,
     active_foundation_accounts: &[AccountInfo<'a>],
@@ -2219,6 +2225,7 @@ pub(crate) fn create_product_market_founder_v1<
         &live_preauthorization,
         preauthorization,
     )?;
+    general_pre_root_plan.require_same_product_preauthorization(preauthorization)?;
     require_system_program(system_program)?;
     let rent = read_rent(rent_sysvar)?;
     require_distinct(&[
@@ -2347,6 +2354,33 @@ pub(crate) fn create_product_market_founder_v1<
         ClutchError::MismatchedState,
     )?;
     require_canonical_market_foundation_core_v2(program_id, *root_account.key, account_graph)?;
+    require(
+        general_pre_root_plan.product_preauthorization_id() == preauthorization.id()
+            && general_pre_root_plan.market_instance_v2_id()
+                == preauthorization.market_instance_id()
+            && general_pre_root_plan.product_generation() == preauthorization.generation()
+            && general_pre_root_plan.series_plan_v5_id() == preauthorization.series_plan_id()
+            && general_pre_root_plan.series_ordinal() == preauthorization.ordinal()
+            && general_pre_root_plan.compiler_bundle_v5_id()
+                == preauthorization.compiler_bundle_id()
+            && general_pre_root_plan.capability_profile_v4_id()
+                == preauthorization.capability_profile_id()
+            && general_pre_root_plan.attachment_plan_v4_id()
+                == preauthorization.attachment_plan_id()
+            && general_pre_root_plan.product_market_root_account() == *root_account.key
+            && general_pre_root_plan.series_market_link_account() == *founder_link_account
+            && account_graph
+                .account(MarketFoundationSlotV2::MarketBinding)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == general_pre_root_plan.market_binding_account().to_bytes()
+            && account_graph
+                .account(MarketFoundationSlotV2::MarketRuntime)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == general_pre_root_plan.market_runtime_account().to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
     let mut active_index = 0usize;
     let mut slot_index = 0usize;
     while slot_index < account_graph.account_ids.len() {
@@ -2405,7 +2439,15 @@ pub(crate) fn create_product_market_founder_v1<
                 == foundation_vault.key.to_bytes()
             && semantic.market_binding.foundation_account_graph_id
                 == init.coordinates.foundation_account_graph_id
-            && semantic.market_binding.foundation_schedule_id == init.foundation_schedule_id,
+            && semantic.market_binding.foundation_schedule_id == init.foundation_schedule_id
+            && semantic.market_binding.market_liability_founding_id
+                == general_pre_root_plan.market_liability_founding_id()
+            && semantic.market_binding.claim_mint_founding_plan_id
+                == general_pre_root_plan.claim_mint_founding_plan_id()
+            && semantic.market_binding.claim_issuance_binding_id
+                == general_pre_root_plan.claim_issuance_binding_id()
+            && semantic.market_binding.general_founding_capability_id
+                == general_pre_root_plan.general_founding_capability_id(),
         ClutchError::MismatchedState,
     )?;
     let market_binding_id = semantic
@@ -2606,6 +2648,7 @@ pub(crate) fn create_product_market_founder_v1<
         foundation_vault: *foundation_vault.key,
         series_admission_vault: *series_admission_vault.key,
         recovery_account: *recovery_account.key,
+        general_pre_root_founding_plan_id: general_pre_root_plan.id(),
         active_foundation_accounts: u8::try_from(active_index)
             .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
         root_rent_principal_lamports,
@@ -2621,6 +2664,7 @@ pub(crate) fn create_product_market_founder_v1<
     authority.authenticate_product_market_founder_creation_v1(
         &facts,
         &semantic,
+        general_pre_root_plan,
         &quote.foundation,
         account_graph,
     )?;
@@ -2845,6 +2889,7 @@ pub(crate) fn create_product_market_founder_v1<
             foundation_vault.key.as_ref(),
             series_admission_vault.key.as_ref(),
             recovery_account.key.as_ref(),
+            &facts.general_pre_root_founding_plan_id.bytes(),
             &root_semantic_id.bytes(),
             &root_data_id.bytes(),
             &root_authentication_id.bytes(),
@@ -3191,6 +3236,35 @@ mod tests {
             &wrong_schedule, &retained,
         )
         .is_err());
+    }
+
+    #[test]
+    fn founder_creation_cannot_drop_or_substitute_the_general_pre_root_plan() {
+        let source = include_str!("product_market_foundation_init.rs");
+        let creator = source
+            .split("pub(crate) fn create_product_market_founder_v1")
+            .nth(1)
+            .and_then(|body| body.split("#[cfg(test)]").next())
+            .expect("sole founder creator");
+        for required in [
+            "general_pre_root_plan.require_same_product_preauthorization(preauthorization)",
+            "MarketFoundationSlotV2::MarketBinding",
+            "general_pre_root_plan.market_binding_account()",
+            "MarketFoundationSlotV2::MarketRuntime",
+            "general_pre_root_plan.market_runtime_account()",
+            "general_pre_root_plan.market_liability_founding_id()",
+            "general_pre_root_plan.claim_mint_founding_plan_id()",
+            "general_pre_root_plan.claim_issuance_binding_id()",
+            "general_pre_root_plan.general_founding_capability_id()",
+            "general_pre_root_founding_plan_id: general_pre_root_plan.id()",
+            "&facts.general_pre_root_founding_plan_id.bytes()",
+        ] {
+            assert!(creator.contains(required));
+        }
+        assert!(creator
+            .find("general_pre_root_plan.require_same_product_preauthorization")
+            .unwrap()
+            < creator.find("invoke_founder_pda_transfer_v1").unwrap());
     }
 
     struct NoAuthority;
