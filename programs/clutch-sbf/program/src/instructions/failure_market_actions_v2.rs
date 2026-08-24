@@ -835,6 +835,22 @@ pub(crate) fn process_archive_failure_market_session_v2(
 
 #[cfg(test)]
 mod adversarial_action_tests {
+    use crate::instructions::failure_market_dispatch_v2::{
+        ADVANCE_FAILURE_MARKET_SESSION_METAS_V2, ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2,
+        BEGIN_FAILURE_MARKET_SESSION_METAS_V2, FailureMarketAccountMetaV2,
+        RESOLVE_FAILURE_MARKET_SESSION_METAS_V2,
+    };
+
+    fn require_every_contract_role_is_consumed(
+        handler: &str,
+        contract: &[FailureMarketAccountMetaV2],
+    ) {
+        for meta in contract {
+            let role = std::format!("Role::{:?}", meta.role);
+            assert!(handler.contains(&role), "unconsumed account role {role}");
+        }
+    }
+
     #[test]
     fn begin_reconstructs_source_and_compiler_authority_before_atomic_pin() {
         let source = include_str!("failure_market_actions_v2.rs");
@@ -854,6 +870,7 @@ mod adversarial_action_tests {
         ] {
             assert!(handler.contains(owner));
         }
+        require_every_contract_role_is_consumed(handler, BEGIN_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(!handler.contains("ExternalRecoveryStateV1"));
     }
 
@@ -875,6 +892,7 @@ mod adversarial_action_tests {
         ] {
             assert!(handler.contains(owner));
         }
+        require_every_contract_role_is_consumed(handler, ADVANCE_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(!handler.contains("ExternalRecoveryStateV1"));
     }
 
@@ -899,7 +917,9 @@ mod adversarial_action_tests {
         ] {
             assert!(handler.contains(owner));
         }
+        require_every_contract_role_is_consumed(handler, RESOLVE_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(handler.matches("source_custody,").count() >= 2);
+        assert!(!handler.contains("Role::NeutralSink"));
         assert!(!handler.contains("ExternalRecoveryStateV1"));
     }
 
@@ -917,6 +937,7 @@ mod adversarial_action_tests {
         ] {
             assert!(handler.contains(owner));
         }
+        require_every_contract_role_is_consumed(handler, ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(handler.contains("false,\n        true,\n        true,\n        true,"));
         assert!(!handler.contains("close_failure_market_recovery_v2"));
         assert!(!handler.contains("ExternalRecoveryStateV1"));
