@@ -382,8 +382,8 @@ impl MarketBindingV4 {
 }
 
 const SERIES_FUNDING_V5_ACCOUNT_OFFSET: usize = RENT_OFFSET;
-const SERIES_PHYSICAL_FOUNDER_V5_ID_OFFSET: usize = SERIES_FUNDING_V5_ACCOUNT_OFFSET + 32;
-const RENT_V5_OFFSET: usize = SERIES_PHYSICAL_FOUNDER_V5_ID_OFFSET + 32;
+const PHYSICAL_CAPITALIZATION_RECEIPT_ID_OFFSET: usize = SERIES_FUNDING_V5_ACCOUNT_OFFSET + 32;
+const RENT_V5_OFFSET: usize = PHYSICAL_CAPITALIZATION_RECEIPT_ID_OFFSET + 32;
 
 /// Immutable Product V3/Funding V5 and Revenue V2 coordinates for the current
 /// General binding.  V4 remains a historical RootV2/LinkV2 decoder and is
@@ -414,7 +414,7 @@ pub struct CurrentMarketAuthorityV5 {
     treasury_position_account: Id32,
     treasury_service_ledger_account: Id32,
     series_funding_v5_account: Id32,
-    series_physical_founder_v5_id: Id32,
+    physical_capitalization_receipt_id: Id32,
 }
 
 impl CurrentMarketAuthorityV5 {
@@ -446,7 +446,7 @@ impl CurrentMarketAuthorityV5 {
         treasury_position_account: Id32,
         treasury_service_ledger_account: Id32,
         series_funding_v5_account: Id32,
-        series_physical_founder_v5_id: Id32,
+        physical_capitalization_receipt_id: Id32,
     ) -> Result<Self, CodecError> {
         let value = Self {
             product_market_root_account,
@@ -473,7 +473,7 @@ impl CurrentMarketAuthorityV5 {
             treasury_position_account,
             treasury_service_ledger_account,
             series_funding_v5_account,
-            series_physical_founder_v5_id,
+            physical_capitalization_receipt_id,
         };
         value.validate()?;
         Ok(value)
@@ -511,8 +511,8 @@ impl CurrentMarketAuthorityV5 {
         self.treasury_service_ledger_account
     }
     pub const fn series_funding_v5_account(self) -> Id32 { self.series_funding_v5_account }
-    pub const fn series_physical_founder_v5_id(self) -> Id32 {
-        self.series_physical_founder_v5_id
+    pub const fn physical_capitalization_receipt_id(self) -> Id32 {
+        self.physical_capitalization_receipt_id
     }
 
     fn validate(&self) -> Result<(), CodecError> {
@@ -565,7 +565,7 @@ impl CurrentMarketAuthorityV5 {
             self.treasury_position_account,
             self.treasury_service_ledger_account,
             self.series_funding_v5_account,
-            self.series_physical_founder_v5_id,
+            self.physical_capitalization_receipt_id,
         ]
     }
 }
@@ -642,7 +642,8 @@ impl MarketBindingV5 {
             (TREASURY_POSITION_ACCOUNT_OFFSET, authority.treasury_position_account),
             (TREASURY_SERVICE_LEDGER_ACCOUNT_OFFSET, authority.treasury_service_ledger_account),
             (SERIES_FUNDING_V5_ACCOUNT_OFFSET, authority.series_funding_v5_account),
-            (SERIES_PHYSICAL_FOUNDER_V5_ID_OFFSET, authority.series_physical_founder_v5_id),
+            (PHYSICAL_CAPITALIZATION_RECEIPT_ID_OFFSET,
+                authority.physical_capitalization_receipt_id),
         ] {
             put_id(output, offset, id);
         }
@@ -693,7 +694,7 @@ impl MarketBindingV5 {
             read_id(input, TREASURY_POSITION_ACCOUNT_OFFSET)?,
             read_id(input, TREASURY_SERVICE_LEDGER_ACCOUNT_OFFSET)?,
             read_id(input, SERIES_FUNDING_V5_ACCOUNT_OFFSET)?,
-            read_id(input, SERIES_PHYSICAL_FOUNDER_V5_ID_OFFSET)?,
+            read_id(input, PHYSICAL_CAPITALIZATION_RECEIPT_ID_OFFSET)?,
         )?;
         let rent = DeletableRentOwnerV1 {
             payer: read_id(input, RENT_V5_OFFSET)?,
@@ -884,7 +885,7 @@ mod tests {
             current.revenue_policy_v2_digest(), current.treasury_owner(),
             current.treasury_position_derivation_policy_v2_id(),
             current.treasury_position_account(), current.treasury_service_ledger_account(),
-            current.product_market_root_account(), current.series_physical_founder_v5_id(),
+            current.product_market_root_account(), current.physical_capitalization_receipt_id(),
         ).is_err());
     }
 }
