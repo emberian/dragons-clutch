@@ -1,7 +1,7 @@
 # SourcePlane V3 runtime account contract
 
-Status: **complete runtime/SBF SourceSeries successor implementation awaiting
-the unified all-or-none profile composition; not a deployment claim**.
+Status: **successor runtime/SBF implementation under unified all-or-none profile
+composition; not a deployment claim**.
 
 SourceSeries `77/v2` actions 1 through 12 now have explicit account contracts
 and handlers over one release-selected route. Product privately capitalizes and
@@ -126,11 +126,12 @@ and refund destinations never sign.
 
 ## All-or-none integration boundary
 
-The successor profile may expose actions 1 through 12 only together, after the
-Product founder consumes the private capitalization/publication receipt, the
-Failure action-12 outer consumes the persisted Source context and final
-ResolutionV5 postwrite, and Product's counted retirement consumes the private
-Source-custody close receipt before FundingV2 close. There is no legacy
+The successor profile may expose actions 1 through 12 only together, after
+every persisted action-10 variant has a complete terminal consumer, Product's
+founder consumes the private capitalization/publication receipt, and Product's
+counted retirement consumes the private Source-custody close receipt before
+current Funding close. The successful Failure action-12 outer must consume the
+persisted Source context and final ResolutionV5 postwrite. There is no legacy
 SourceArchive/SourceGeneration fallback and no public receipt-ID projection.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this

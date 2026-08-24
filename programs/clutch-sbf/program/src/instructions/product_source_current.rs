@@ -8,18 +8,19 @@
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
+use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
 use crate::instructions::product_series::{
-    AuthenticatedProductSourceAuthorityV1, IX_SERIES_ARTIFACT_ATTACHMENT,
-    IX_SERIES_ARTIFACT_BASIS, IX_SERIES_ARTIFACT_FUNDING_TERMS,
+    IX_SERIES_ARTIFACT_ATTACHMENT, IX_SERIES_ARTIFACT_BASIS,
+    IX_SERIES_ARTIFACT_FUNDING_TERMS,
     IX_SERIES_ARTIFACT_GENESIS, IX_SERIES_ARTIFACT_PLAN,
     IX_SERIES_ARTIFACT_PRICE_POLICY, IX_SERIES_ARTIFACT_QUOTE,
     IX_SERIES_ARTIFACT_RECOVERY, IX_SERIES_ARTIFACT_TEMPLATE,
     SERIES_ARTIFACT_ACCOUNT_COUNT_V1,
 };
-use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
 use clutch_product_series::{
     assemble_compiled_product_series_bundle_v6, compile_source_semantic_inputs_v2,
-    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6Id,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV6,
+    CompiledProductSeriesBundleV6Id,
     CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductSeriesBundleInputsV6, ProductTemplateV4,
@@ -27,7 +28,9 @@ use clutch_product_series::{
     SeriesFundingQuoteV5, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
     SeriesPlanV5Id,
 };
-use clutch_source_plane_v3::{StatisticKeyV3, SummaryProgramV3, WindowSpecV3};
+use clutch_source_plane_v3::{
+    SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3, SummaryProgramV3, WindowSpecV3,
+};
 use clutch_source_plane_v3_runtime::{
     AuthenticatedPersistedSourcePolicyHandoffV1, AuthenticatedReceiverRouteV2,
     AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, RuntimeKey,
@@ -41,6 +44,163 @@ const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V4: &[u8] =
 const SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/source-semantic-publication-authentication/v2";
 
+/// Current Product/Source compiler authority over one exact RegistryV4 and
+/// Source ReleaseV2 join.
+///
+/// Its fields and constructor remain in this semantic-owner module. Current
+/// Source publication cannot pair a valid RegistryV4 projection with either a
+/// historical Product authority or a different authenticated Source release.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AuthenticatedProductSourceAuthorityV2 {
+    registry_projection: RegistryCapabilityProjectionV2,
+    summary_program: SummaryProgramV3,
+    resolved_statistic: StatisticKindV3,
+    resolved_coverage_policy_value: u16,
+    source_release: AuthenticatedSourceReleaseV1,
+}
+
+impl AuthenticatedProductSourceAuthorityV2 {
+    fn new(
+        registry: &AuthenticatedRegistryCapabilityV4,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Outcome<Self> {
+        let projection = registry.projection();
+        let manifest = source_release.manifest();
+        let source_plane_id = source_release
+            .source_plane()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            source_plane_id.bytes() == projection.semantic_owners.source_plane_contract_id.bytes()
+                && manifest.base.source_spec_id.bytes()
+                    == projection.semantic_owners.source_spec_id.bytes()
+                && registry.statistic_registry_value()
+                    == projection.statistic_registry_value
+                && registry.coverage_policy_registry_value()
+                    == projection.coverage_policy_registry_value
+                && registry.profile().rules.resolved_coverage_policy_value
+                    == projection.coverage_policy_registry_value,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            registry_projection: projection,
+            summary_program: registry.profile().rules.summary_program,
+            resolved_statistic: registry.resolved_statistic(),
+            resolved_coverage_policy_value: registry
+                .profile()
+                .rules
+                .resolved_coverage_policy_value,
+            source_release,
+        })
+    }
+
+    fn require_route(&self, route: AuthenticatedSourceProductRouteV4) -> Outcome<()> {
+        require(
+            self.source_release.manifest_id().bytes()
+                == route.source_release_manifest_id.bytes()
+                && self.source_release.id().bytes()
+                    == route.source_release_authentication_id.bytes()
+                && self
+                    .source_release
+                    .source_plane()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes()
+                    == route.source_plane_contract_id.bytes()
+                && self.source_release.manifest().base.source_spec_id.bytes()
+                    == route.source_spec_id.bytes(),
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+impl AuthenticatedSourceSeriesAuthorityV3 for AuthenticatedProductSourceAuthorityV2 {
+    fn authenticate_registry_projection(
+        &self,
+        projection: &RegistryCapabilityProjectionV2,
+    ) -> clutch_product_series::Result<()> {
+        if projection != &self.registry_projection {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticated_source_plane(
+        &self,
+        expected_contract_id: ContentId,
+    ) -> clutch_product_series::Result<SourcePlaneProgramV3> {
+        let source_plane = self.source_release.source_plane();
+        if source_plane
+            .id()
+            .map_err(|_| clutch_product_series::Error::MismatchedArtifact)?
+            .bytes()
+            != expected_contract_id.bytes()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(source_plane)
+    }
+
+    fn authenticate_source_spec(
+        &self,
+        expected_source_spec_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.source_release.manifest().base.source_spec_id.bytes()
+            != expected_source_spec_id.bytes()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticated_summary_program(
+        &self,
+        expected_summary_program_id: ContentId,
+    ) -> clutch_product_series::Result<SummaryProgramV3> {
+        if self
+            .summary_program
+            .id()
+            .map_err(|_| clutch_product_series::Error::MismatchedArtifact)?
+            .bytes()
+            != expected_summary_program_id.bytes()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.summary_program)
+    }
+
+    fn resolve_statistic(
+        &self,
+        registry_release_id: ContentId,
+        capability_profile_id: ContentId,
+        statistic_registry_value: u16,
+    ) -> clutch_product_series::Result<StatisticKindV3> {
+        let projection = self.registry_projection;
+        if registry_release_id != projection.registry_release_id
+            || capability_profile_id != projection.capability_profile_id
+            || statistic_registry_value != projection.statistic_registry_value
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.resolved_statistic)
+    }
+
+    fn resolve_coverage_policy(
+        &self,
+        registry_release_id: ContentId,
+        capability_profile_id: ContentId,
+        coverage_policy_registry_value: u16,
+    ) -> clutch_product_series::Result<u16> {
+        let projection = self.registry_projection;
+        if registry_release_id != projection.registry_release_id
+            || capability_profile_id != projection.capability_profile_id
+            || coverage_policy_registry_value != projection.coverage_policy_registry_value
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.resolved_coverage_policy_value)
+    }
+}
 /// Exact nine-account QuoteV5/AttachmentV5 artifact graph.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedSeriesSourceArtifactsV5 {
@@ -107,6 +267,14 @@ impl AuthenticatedSeriesSourceArtifactsV5 {
 
     pub(crate) fn funding_terms(&self) -> &SeriesFundingTermsV2 {
         &self.funding_terms
+    }
+
+    pub(crate) fn quote(&self) -> &SeriesFundingQuoteV5 {
+        &self.quote
+    }
+
+    pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV5 {
+        &self.attachment
     }
 }
 
@@ -441,9 +609,8 @@ pub(crate) fn authenticate_source_product_route_v4(
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let projection = registry.projection();
-    let profile = registry.profile();
-    let owners = profile.rules.semantic_owners;
-    let collateral = profile.rules.realm_collateral;
+    let owners = registry.semantic_owners();
+    let collateral = registry.realm_collateral();
     require(
         receiver.route_id() == route.route_id()
             && bundle_value.source_release_manifest_id.bytes()
@@ -508,15 +675,25 @@ pub(crate) fn authenticate_source_product_route_v4(
 /// Recompile the sole Source semantic graph for one V6 Series ordinal.
 pub(crate) fn authenticate_source_semantic_publication_v2(
     route: AuthenticatedSourceProductRouteV4,
-    authority: &AuthenticatedProductSourceAuthorityV1,
+    source_release: AuthenticatedSourceReleaseV1,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
-    projection: &RegistryCapabilityProjectionV2,
+    registry: &AuthenticatedRegistryCapabilityV4,
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV6,
     ordinal: u32,
 ) -> Outcome<AuthenticatedSourceSemanticPublicationV2> {
-    artifacts.validate_registry_projection(projection)?;
+    let projection = registry.projection();
+    let authority = AuthenticatedProductSourceAuthorityV2::new(registry, source_release)?;
+    authority.require_route(route)?;
+    require(
+        route.registry_release_id == registry.registry_release_id()
+            && route.capability_profile_id == registry.capability_profile_id()
+            && route.compiler_bundle_id == registry.compiler_bundle_id()
+            && compiler_bundle.bundle_id() == registry.compiler_bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
+    artifacts.validate_registry_projection(&projection)?;
     let compiled = compile_source_semantic_inputs_v2(
-        authority,
+        &authority,
         &artifacts.series,
         &artifacts.template,
         &artifacts.basis,
@@ -524,7 +701,7 @@ pub(crate) fn authenticate_source_semantic_publication_v2(
         &artifacts.price_policy,
         &artifacts.genesis,
         &artifacts.attachment,
-        projection,
+        &projection,
         ordinal,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
@@ -793,15 +970,22 @@ mod adversarial_tests {
     #[test]
     fn current_publication_has_no_bundle_v5_or_quote_v4_authority() {
         let source = include_str!("product_source_current.rs");
-        assert!(source.contains("CompiledProductSeriesBundleV6"));
-        assert!(source.contains("SeriesFundingQuoteV5"));
-        assert!(source.contains("SeriesAttachmentPlanV5"));
-        assert!(source.contains("compile_source_semantic_inputs_v2"));
-        assert!(source.contains("AuthenticatedRegistryCapabilityV4"));
-        assert!(!source.contains("AuthenticatedRegistryCapabilityV3"));
-        assert!(source.contains("expected_id == registry.compiler_bundle_id()"));
-        assert!(!source.contains("CompiledProductSeriesBundleV5"));
-        assert!(!source.contains("SeriesFundingQuoteV4"));
-        assert!(!source.contains("SeriesAttachmentPlanV4"));
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("current Source production module");
+        assert!(production.contains("CompiledProductSeriesBundleV6"));
+        assert!(production.contains("SeriesFundingQuoteV5"));
+        assert!(production.contains("SeriesAttachmentPlanV5"));
+        assert!(production.contains("compile_source_semantic_inputs_v2"));
+        assert!(production.contains("AuthenticatedRegistryCapabilityV4"));
+        assert!(production.contains("AuthenticatedProductSourceAuthorityV2"));
+        assert!(production.contains("authority.require_route(route)?"));
+        assert!(!production.contains("CompiledProductSeriesBundleV5"));
+        assert!(!production.contains("SeriesFundingQuoteV4"));
+        assert!(!production.contains("SeriesAttachmentPlanV4"));
+        assert!(!production.contains("AuthenticatedRegistryCapabilityV3"));
+        assert!(!production.contains("AuthenticatedProductSourceAuthorityV1"));
+        assert!(production.contains("expected_id == registry.compiler_bundle_id()"));
     }
 }
