@@ -10,7 +10,7 @@ use core::cell::{Ref, RefMut};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_exact_index_lifecycle_payload_v1, ExactIndexLifecyclePayloadKindV1, Id32,
-    MarketBindingV2,
+    MarketBindingV4,
 };
 use clutch_general_v2_runtime::{
     close_counted_exact_root_v1, stream_retire_counted_exact_feed_v1,
@@ -119,20 +119,20 @@ fn require_pairwise_distinct(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
 fn decode_binding(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-) -> Outcome<MarketBindingV2> {
+) -> Outcome<MarketBindingV4> {
     require_program_account(
         program_id,
         account,
         false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V2),
+        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
     )?;
-    let binding = MarketBindingV2::decode(&borrow_data(account)?)?;
+    let binding = MarketBindingV4::decode(&borrow_data(account)?)?;
     let canonical = seeds::general_v2_market_binding_pda(
         program_id,
-        &binding.base().market_instance_v2_id.bytes(),
+        &binding.base().base().market_instance_v2_id.bytes(),
     );
     require(
-        *account.key == canonical.0 && binding.base().stored_bump == canonical.1,
+        *account.key == canonical.0 && binding.base().base().stored_bump == canonical.1,
         ClutchError::WrongPda,
     )?;
     Ok(binding)
@@ -215,7 +215,7 @@ fn retire_index_children(
 
     let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
     require(
-        id(accounts[IX_CHILD_SINK].key) == binding.base().neutral_sink,
+        id(accounts[IX_CHILD_SINK].key) == binding.base().base().neutral_sink,
         ClutchError::MismatchedState,
     )?;
     let feed_body = borrow_data(&accounts[IX_FEED])?;
@@ -421,7 +421,7 @@ fn retire_retained_feed(
             && selector.settlement_root == id(accounts[IX_FEED_RETIRE_ROOT].key)
             && *accounts[IX_FEED_RETIRE_FEED].key == feed_pda.0
             && feed.stored_bump == feed_pda.1
-            && id(accounts[IX_FEED_RETIRE_SINK].key) == binding.base().neutral_sink,
+            && id(accounts[IX_FEED_RETIRE_SINK].key) == binding.base().base().neutral_sink,
         ClutchError::WrongPda,
     )?;
     let root_body = borrow_data(&accounts[IX_FEED_RETIRE_ROOT])?;
@@ -515,7 +515,7 @@ fn close_indexed_root(
     require(
         selector.epoch == id(accounts[IX_CLOSE_EPOCH].key)
             && selector.settlement_root == id(accounts[IX_CLOSE_ROOT].key)
-            && id(accounts[IX_CLOSE_SINK].key) == binding.base().neutral_sink,
+            && id(accounts[IX_CLOSE_SINK].key) == binding.base().base().neutral_sink,
         ClutchError::MismatchedState,
     )?;
     let epoch_body = borrow_data(&accounts[IX_CLOSE_EPOCH])?;

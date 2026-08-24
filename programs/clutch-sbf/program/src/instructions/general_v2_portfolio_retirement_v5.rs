@@ -277,7 +277,7 @@ pub(crate) fn compose_and_apply(
         program_id,
         &accounts[IX_MARKET_BINDING],
         false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V2),
+        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
     )?;
     require_credit_account(&accounts[IX_NEUTRAL_SINK])?;
     for index in [
@@ -342,18 +342,18 @@ pub(crate) fn compose_and_apply(
     )?;
 
     let market_binding_account = id(accounts[IX_MARKET_BINDING].key);
-    let market_binding = contract::MarketBindingV2::decode(&borrow_data(
+    let market_binding = contract::MarketBindingV4::decode(&borrow_data(
         &accounts[IX_MARKET_BINDING],
     )?)?;
     let binding_pda = seeds::general_v2_market_binding_pda(
         program_id,
-        &market_binding.base().market_instance_v2_id.bytes(),
+        &market_binding.base().base().market_instance_v2_id.bytes(),
     );
     require(
         market_binding_account == root.market_binding()
             && *accounts[IX_MARKET_BINDING].key == binding_pda.0
-            && market_binding.base().stored_bump == binding_pda.1
-            && id(accounts[IX_NEUTRAL_SINK].key) == market_binding.base().neutral_sink,
+            && market_binding.base().base().stored_bump == binding_pda.1
+            && id(accounts[IX_NEUTRAL_SINK].key) == market_binding.base().base().neutral_sink,
         ClutchError::MismatchedState,
     )?;
 

@@ -262,6 +262,10 @@ impl MarketBindingV4 {
 
     /// Complete owner-net candidate-cost General body.
     pub const fn base(&self) -> &MarketBindingV2 { &self.base }
+    /// Owner-blind RelationV2 projection of the same immutable General facts.
+    pub fn relation_projection(&self) -> crate::MarketBindingV1 {
+        self.base.relation_projection()
+    }
     /// Exact current Product/Revenue authority.
     pub const fn authority(&self) -> CurrentMarketAuthorityV4 { self.authority }
     /// Sole deletable rent owner for this immutable account.
