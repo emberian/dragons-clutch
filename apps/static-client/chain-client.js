@@ -19,6 +19,26 @@
   const DECODER_SET = "dragons-clutch/canonical-account-decoders/v7-product-v5-authority";
   const SOURCE_COORDINATE = Object.freeze({ familyTag: "77", familyVersion: "2", family: "source", flow: "source-plane-v3", messageVersion: "legacy", lookupTables: 0 });
   const STRUCTURED_COORDINATE = Object.freeze({ familyTag: "75", familyVersion: "1", family: "structured-claim", flow: "structured-claim", messageVersion: "v0", lookupTables: 1 });
+  const DIRECT_COORDINATE = Object.freeze({ familyTag: "80", familyVersion: "1", family: "direct", flow: "direct-market-v1", messageVersion: "legacy", lookupTables: 0 });
+  const directRole = (role, signer, writable) => Object.freeze({ role, signer, writable });
+  const DIRECT_ACTION_CONTRACTS = Object.freeze({
+    "2": Object.freeze({ action: "admit-direct-order", ownerSchema: "current-v1" }),
+    "3": Object.freeze({ action: "cancel-direct-order", ownerSchema: "current-v1" }),
+    "4": Object.freeze({ action: "freeze-direct-book", ownerSchema: "current-v1" }),
+    "5": Object.freeze({ action: "submit-direct-candidate", ownerSchema: "current-v1" }),
+    "6": Object.freeze({ action: "begin-direct-verification", ownerSchema: "current-v1" }),
+    "7": Object.freeze({ action: "verify-direct-candidate", ownerSchema: "current-v1" }),
+    "8": Object.freeze({ action: "finalize-direct-selection-current-v2", ownerSchema: "dragons-clutch/direct/finalize-selection-chain-material/v2" })
+  });
+  const DIRECT_RESERVATION_AUTHORITY_ROLES = Object.freeze([
+    directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true), directRole("realm", false, false),
+    directRole("collateral-profile", false, false), directRole("collateral-policy", false, false), directRole("token-program", false, false),
+    directRole("general-market-binding-v4", false, false), directRole("general-market-runtime", false, false), directRole("market-instance-v2", false, false)
+  ]);
+  const DIRECT_CANDIDATE_TAIL = Object.freeze([
+    directRole("candidate-liveness-policy", false, false), directRole("candidate-compartment", false, true),
+    directRole("keeper", true, true), directRole("candidate-immutable-payer", false, true)
+  ]);
   const DEALER_VARIANT_CONTRACTS = Object.freeze([
     Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "8", name: "dealer-retire-active-facility-credit" }),
     Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "9", name: "dealer-retire-unused-future-credit" })
@@ -852,14 +872,15 @@
     if (!callable) return Object.freeze({ scope: "indexed-release-coordinate-only", executionReleaseKey: null, driverReleaseKey: configuration.release.releaseKey, executionReleaseManifestSha256: null });
     const structured = coordinate.familyTag === STRUCTURED_COORDINATE.familyTag && coordinate.familyVersion === STRUCTURED_COORDINATE.familyVersion && coordinate.family === STRUCTURED_COORDINATE.family;
     const source = coordinate.familyTag === SOURCE_COORDINATE.familyTag && coordinate.familyVersion === SOURCE_COORDINATE.familyVersion && coordinate.family === SOURCE_COORDINATE.family;
-    if (!structured && !source) throw new Error("callable action lacks a current browser release-composition contract.");
+    const direct = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family && DIRECT_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
+    if (!structured && !source && !direct) throw new Error("callable action lacks a current browser release-composition contract.");
     const expectedScope = structured ? "structured-composite-wrapper-execution-base-driver-v1" : "single-release-execution-and-driver-v1";
     const manifestSha256 = hash32(raw.executionReleaseManifestSha256, `actions[${index}].releaseAdmission.executionReleaseManifestSha256`);
     const execution = executionReleaseKey(raw.executionReleaseKey, manifestSha256, `actions[${index}].releaseAdmission.executionReleaseKey`);
     const driverReleaseKey = text(raw.driverReleaseKey, `actions[${index}].releaseAdmission.driverReleaseKey`, 320);
     if (raw.scope !== expectedScope || driverReleaseKey !== configuration.release.releaseKey) throw new Error("action release admission has the wrong execution/driver scope.");
     if (structured && execution.releaseKey === driverReleaseKey) throw new Error("Structured action aliases its disjoint wrapper execution and base driver releases.");
-    if (source && (execution.releaseKey !== configuration.release.releaseKey || manifestSha256 !== configuration.release.releaseManifestSha256)) throw new Error("Source action does not use its one checked execution/driver release.");
+    if ((source || direct) && (execution.releaseKey !== configuration.release.releaseKey || manifestSha256 !== configuration.release.releaseManifestSha256)) throw new Error("single-release action does not use its one checked execution/driver release.");
     return Object.freeze({ scope: expectedScope, executionReleaseKey: execution.releaseKey, driverReleaseKey, executionReleaseManifestSha256: manifestSha256 });
   };
 
@@ -984,6 +1005,128 @@
     });
   };
 
+  const directRolesMatch = (actual, expected) => actual.length === expected.length && actual.every((role, roleIndex) => {
+    const contract = expected[roleIndex];
+    return role.role === contract.role && role.signer === contract.signer && role.writable === contract.writable && role.address !== null && role.identityDisposition === "semantic-owner-derived-and-bound-to-draft";
+  });
+
+  const directRoleContract = (localAction, roles) => {
+    const rootPrefix = [directRole("direct-root", false, true), directRole("direct-replay", false, true)];
+    if (localAction === "2") {
+      const fixed = [
+        ...rootPrefix, directRole("fresh-direct-reservation", false, true), directRole("actor-payer", true, true), ...DIRECT_RESERVATION_AUTHORITY_ROLES,
+        directRole("system-program", false, false), directRole("rent-sysvar", false, false), directRole("clock-sysvar", false, false),
+        directRole("compiler-bundle-v6", false, false), directRole("market-genesis-v2", false, false), directRole("price-grid", false, false)
+      ];
+      if (directRolesMatch(roles, fixed)) return "reservation-without-peer";
+      if (directRolesMatch(roles, [...fixed, directRole("root-owned-peer-reservation", false, false)])) return "reservation-with-peer";
+      return null;
+    }
+    if (localAction === "3") {
+      const fixed = [
+        ...rootPrefix, directRole("direct-reservation", false, true), directRole("actor-payer", true, true), ...DIRECT_RESERVATION_AUTHORITY_ROLES,
+        directRole("market-genesis-v2", false, false), directRole("neutral-lamport-sink", false, true), directRole("clock-sysvar", false, false)
+      ];
+      return directRolesMatch(roles, fixed) ? "reservation-cancel" : null;
+    }
+    if (localAction === "4") {
+      const prefix = [
+        ...rootPrefix, directRole("fresh-direct-selection", false, true), directRole("selection-rent-payer", true, true),
+        directRole("system-program", false, false), directRole("rent-sysvar", false, false), directRole("clock-sysvar", false, false),
+        directRole("compiler-bundle-v6", false, false), directRole("native-claim-basis", false, false), directRole("price-measure-policy", false, false),
+        directRole("market-genesis-v2", false, false), directRole("price-grid", false, false)
+      ];
+      for (let reservationCount = 0; reservationCount <= 2; reservationCount += 1) {
+        const expected = [...prefix, ...Array.from({ length: reservationCount }, () => directRole("root-owned-reservation", false, false)), ...DIRECT_CANDIDATE_TAIL];
+        if (directRolesMatch(roles, expected)) return `freeze-${reservationCount}-reservations`;
+      }
+      return null;
+    }
+    if (localAction === "5") {
+      const fixed = [
+        ...rootPrefix, directRole("direct-selection", false, true), directRole("clock-sysvar", false, false),
+        directRole("candidate-submitter", true, true), directRole("system-program", false, false)
+      ];
+      if (directRolesMatch(roles, fixed)) return "submit-without-eviction";
+      if (directRolesMatch(roles, [...fixed, directRole("evicted-bond-refund-owner", false, true)])) return "submit-with-eviction";
+      return null;
+    }
+    if (localAction === "6" || localAction === "7") {
+      const expected = [...rootPrefix, directRole("direct-selection", false, true), directRole("clock-sysvar", false, false), ...DIRECT_CANDIDATE_TAIL];
+      return directRolesMatch(roles, expected) ? (localAction === "6" ? "begin-verification" : "verify-candidate") : null;
+    }
+    if (localAction === "8") {
+      const prefix = [
+        directRole("direct-root-v2", false, true), directRole("direct-action-replay-v1", false, true),
+        directRole("direct-selection-v1", false, true), directRole("clock-sysvar", false, false)
+      ];
+      for (let refundCount = 1; refundCount <= 3; refundCount += 1) {
+        const expected = [...prefix, ...Array.from({ length: refundCount }, () => directRole("candidate-bond-refund-owner", false, true)),
+          directRole("candidate-liveness-policy", false, false), directRole("candidate-liveness-account", false, true),
+          directRole("keeper", true, true), directRole("candidate-liveness-payer", false, true)];
+        if (directRolesMatch(roles, expected)) return `nonempty-${refundCount}-refunds`;
+      }
+      const noCandidate = [
+        directRole("direct-root-v2", false, true), directRole("direct-action-replay-v1", false, true), directRole("direct-selection-v1", false, true),
+        directRole("realm-v1", false, false), directRole("collateral-profile-v2", false, false), directRole("collateral-policy-v2", false, false),
+        directRole("collateral-token-program", false, false), directRole("general-market-binding-v4", false, false), directRole("general-market-runtime-v3", false, false),
+        directRole("market-instance-v2-artifact", false, false), directRole("market-genesis-profile-v2-artifact", false, false), directRole("clock-sysvar", false, false),
+        directRole("direct-reservation-v1", false, true), directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true),
+        directRole("direct-reservation-v1", false, true), directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true),
+        directRole("candidate-liveness-policy", false, false), directRole("candidate-liveness-account", false, true),
+        directRole("keeper", true, true), directRole("candidate-liveness-payer", false, true)
+      ];
+      return directRolesMatch(roles, noCandidate) ? "no-candidate-two-endpoints" : null;
+    }
+    return null;
+  };
+
+  const validateDirectMaterialContract = (row, coordinate, accountRoles, stateSelection, transactionDraft, configuration, index) => {
+    const contract = DIRECT_ACTION_CONTRACTS[coordinate.localAction];
+    if (!contract || coordinate.action !== contract.action || row.semanticOwnerConstructor !== (coordinate.localAction === "8" ? contract.ownerSchema : "clutch-direct-market-runtime/current-v1")) throw new Error("Direct verdict is generic, legacy, or differs from the current action2-8 constructor contract.");
+    const branch = directRoleContract(coordinate.localAction, accountRoles);
+    if (branch === null) throw new Error("Direct verdict differs from its exact current account-role grammar.");
+    if (stateSelection.action !== contract.action || stateSelection.account !== accountRoles[0].address || transactionDraft.driverAccount !== accountRoles[0].address || transactionDraft.driverAccountSlot !== stateSelection.accountSlot) throw new Error("Direct driver, finalized selection, and exact root role do not agree.");
+    if (stateSelection.dependencies.some((dependency) => !accountRoles.some((role) => role.address === dependency))) throw new Error("Direct finalized selection names a dependency outside its exact account tuple.");
+    if (transactionDraft.messageVersion !== "legacy" || transactionDraft.addressLookupTables.length !== 0 || transactionDraft.flows[0] !== DIRECT_COORDINATE.flow || transactionDraft.actions[0] !== contract.action) throw new Error("Direct material is not one current legacy transaction with no lookup table.");
+    const owner = transactionDraft.semanticOwners[0];
+    if (owner.package !== "clutch-direct-market-runtime" || owner.schema !== contract.ownerSchema) throw new Error("Direct material differs from its exact current semantic owner.");
+    const binding = transactionDraft.registryBindings[0];
+    if (decimal(binding.centralAction, "Direct central action", 255n).toString() !== coordinate.localAction) throw new Error("Direct material does not retain its exact allocated central action.");
+    const expectedEquationNames = {
+      "2": [["reservation rent principal plus immutable prefund", "Position reserved-cash subset increases by exact order reserve"], ["reservation rent principal plus immutable prefund", "Position Egg debit equals exact Reservation escrow"]],
+      "3": [["reservation principal refund plus neutral surplus", "cancel releases the exact reserved-cash subset"], ["reservation principal refund plus neutral surplus", "cancel restores exact escrowed Eggs"]],
+      "4": [["selection rent principal plus immutable prefund", "candidate prepaid work conservation"]],
+      "5": [["selection retained-bond principal conservation"]],
+      "6": [["candidate work principal conservation"]],
+      "7": [["candidate work principal conservation"]],
+      "8": branch.startsWith("nonempty-")
+        ? [["selection-bond-principal-refunded-exactly", "candidate-work-capital-disposition-exactly"]]
+        : [["no-candidate-selection-bond-principal-is-zero", "candidate-work-capital-disposition-exactly"]]
+    }[coordinate.localAction];
+    const equationNames = transactionDraft.exactEquations.map((equation) => equation.name);
+    if (!expectedEquationNames.some((expected) => expected.length === equationNames.length && expected.every((name, equationIndex) => name === equationNames[equationIndex]))) throw new Error("Direct material differs from its exact current conservation equations.");
+    let symbolicPostcondition = null;
+    if (coordinate.localAction !== "8") {
+      if (row.symbolicPostcondition !== null) throw new Error("Direct actions2-7 unexpectedly carry an action8 execution-Clock postcondition.");
+    } else {
+      requirePlain(row.symbolicPostcondition, `actions[${index}].symbolicPostcondition`);
+      if (row.symbolicPostcondition.executionClock !== "hostile SBF Clock slot; absent from the unsigned payload"
+          || row.symbolicPostcondition.lamports !== "exact signed deltas from actual execution prebalances"
+          || row.symbolicPostcondition.confirmation !== "realize exact semantic successors from the confirmed execution slot; compare deltas to the actual execution pre/post witness"
+          || !Array.isArray(row.symbolicPostcondition.writableAccounts)) throw new Error("Direct action8 lacks its exact symbolic execution-Clock postcondition.");
+      const writableAccounts = Object.freeze(row.symbolicPostcondition.writableAccounts.map((value, writableIndex) => nonzeroAddress(value, `actions[${index}].symbolicPostcondition.writableAccounts[${writableIndex}]`)));
+      if (new Set(writableAccounts).size !== writableAccounts.length) throw new Error("Direct action8 symbolic postcondition repeats a writable identity.");
+      for (let writableIndex = 1; writableIndex < writableAccounts.length; writableIndex += 1) {
+        if (compareAddressBytes(writableAccounts[writableIndex - 1], writableAccounts[writableIndex]) >= 0) throw new Error("Direct action8 symbolic writable identities are not canonical.");
+      }
+      const roleWritable = [...new Set(accountRoles.filter((role) => role.writable).map((role) => role.address))].sort(compareAddressBytes);
+      if (roleWritable.length !== writableAccounts.length || roleWritable.some((addressValue, writableIndex) => addressValue !== writableAccounts[writableIndex])) throw new Error("Direct action8 symbolic postcondition differs from its exact writable role set.");
+      symbolicPostcondition = Object.freeze({ contractId: hash32(row.symbolicPostcondition.contractId, `actions[${index}].symbolicPostcondition.contractId`), executionClock: row.symbolicPostcondition.executionClock, lamports: row.symbolicPostcondition.lamports, writableAccounts, confirmation: row.symbolicPostcondition.confirmation });
+    }
+    return Object.freeze({ schema: "dragons-clutch/browser/direct-chain-material-contract/v2", branch, symbolicPostcondition });
+  };
+
   const validateActionCapabilities = (raw, configuration, session) => {
     requirePlain(raw, "action capabilities");
     if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1"
@@ -1074,13 +1217,16 @@
       const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
       if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles.");
       const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, releaseAdmission, coordinate, stateSelection, accountRoles, signerRequirements, index);
+      const directContract = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family
+        ? validateDirectMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, configuration, index)
+        : null;
       requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
       const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
       const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
       const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
       if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
       if (transactionDraft.addressLookupTables.some((lookup) => BigInt(lookup.observedSlot) > observedSlot)) throw new Error("callable action uses a lookup-table observation newer than its freshness observation.");
-      return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
+      return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }), directContract });
     });
     if (seen.size !== enabled.size || seenVariants.size !== enabledVariants.size) throw new Error("operatord omitted a checked release-enabled coordinate or payload variant from its action verdict set.");
     return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
@@ -1122,9 +1268,9 @@
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
     if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
     if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || raw.actions[0] !== coordinate.action || !Array.isArray(raw.flows) || raw.flows.length !== 1 || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0 || !Array.isArray(raw.addressLookupTables)) throw new Error("callable draft is not one exact release-admitted semantic-owner action.");
-    const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
+    const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE, DIRECT_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
     if (flowContract === null) throw new Error("callable draft belongs to a family without a current browser semantic-owner contract.");
-    if (raw.flows[0] !== flowContract.flow || raw.messageVersion !== flowContract.messageVersion || raw.addressLookupTables.length !== flowContract.lookupTables) throw new Error("callable draft differs from its current Source/Structured transport contract.");
+    if (raw.flows[0] !== flowContract.flow || raw.messageVersion !== flowContract.messageVersion || raw.addressLookupTables.length !== flowContract.lookupTables) throw new Error("callable draft differs from its current family transport contract.");
     const addressLookupTables = Object.freeze(raw.addressLookupTables.map((lookup, lookupIndex) => {
       requirePlain(lookup, `draft.addressLookupTables[${lookupIndex}]`);
       const writableAddresses = decimal(lookup.writableAddresses, `draft.addressLookupTables[${lookupIndex}].writableAddresses`, 256n);
@@ -1141,7 +1287,7 @@
     const binding = raw.registryBindings[0];
     requirePlain(binding, "draft registry binding");
     if (positiveDecimal(binding.familyTag, "draft binding family tag", 255n).toString() !== coordinate.familyTag || positiveDecimal(binding.familyVersion, "draft binding family version", 255n).toString() !== coordinate.familyVersion || positiveDecimal(binding.localAction, "draft binding local action", 255n).toString() !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("draft registry binding differs from the checked coordinate.");
-    if ((coordinate.family === "structured-claim" && binding.centralAction !== null) || (coordinate.family === "source" && decimal(binding.centralAction, "draft central Source action", 255n).toString() !== coordinate.localAction)) throw new Error("draft central action binding differs from its family-owned current contract.");
+    if ((coordinate.family === "structured-claim" && binding.centralAction !== null) || ((coordinate.family === "source" || coordinate.family === "direct") && decimal(binding.centralAction, "draft central action", 255n).toString() !== coordinate.localAction)) throw new Error("draft central action binding differs from its family-owned current contract.");
     raw.semanticOwners.forEach((owner, ownerIndex) => { requirePlain(owner, `draft.semanticOwners[${ownerIndex}]`); text(owner.package, "semantic owner package", 160); text(owner.schema, "semantic owner schema", 160); hash32(owner.releaseSha256, "semantic owner release"); });
     raw.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `draft.exactEquations[${equationIndex}]`); requirePlain(equation.unit, `draft.exactEquations[${equationIndex}].unit`); text(equation.name, "exact equation name", 200); const left = decimal(equation.left, "exact equation left"); const right = decimal(equation.right, "exact equation right"); if (left !== right) throw new Error("draft exact-integer equation is unbalanced."); });
     return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, addressLookupTables, serializedTransactionHex: transactionHex });
@@ -1228,6 +1374,16 @@
         eligible: false,
         kind: "draft-freshness-expired",
         reason: `The projected tip ${tipSlot} has reached the draft's exclusive valid-before slot ${action.freshnessDisposition.validBeforeSlot}.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    if (action.directContract) {
+      return Object.freeze({
+        eligible: true,
+        kind: "finalized-exact-direct-current-inspectable",
+        reason: `Current Direct ${action.coordinate.localAction} ${action.directContract.branch} material has an exact role grammar, single checked release, finalized driver/dependency cursor, balanced conservation equations, and no browser-authored authority input.`,
         observedAccounts: String(observations.length),
         staleAccounts: "0",
         validBeforeSlot: action.freshnessDisposition.validBeforeSlot

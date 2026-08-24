@@ -242,6 +242,8 @@
         definition("Finalized driver", action.stateSelection ? `${action.stateSelection.account} @ ${action.stateSelection.accountSlot}` : action.transactionDraft ? `${action.transactionDraft.driverAccount} @ ${action.transactionDraft.driverAccountSlot}` : "missing"),
         definition("Observed tuple accounts", action.inspection.observedAccounts),
         definition("Stale tuple accounts", action.inspection.staleAccounts),
+        definition("Current material contract", action.directContract ? `${action.directContract.schema} · ${action.directContract.branch}` : action.payloadVariant ? `exact Dealer target-${action.payloadVariant.payloadDiscriminator}` : "release-bound family contract"),
+        definition("Execution-Clock postcondition", action.directContract && action.directContract.symbolicPostcondition ? `${action.directContract.symbolicPostcondition.writableAccounts.length} exact writable accounts · ${action.directContract.symbolicPostcondition.contractId}` : "not required"),
         definition("Canonical unsigned material", action.transactionDraft ? `${action.transactionDraft.flows[0]} · ${action.transactionDraft.messageVersion} · ${action.transactionDraft.serializedBytes} bytes` : "unavailable"),
         definition("Exclusive valid-before slot", action.inspection.validBeforeSlot)
       );
