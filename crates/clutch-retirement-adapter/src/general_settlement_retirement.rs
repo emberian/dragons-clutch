@@ -11,24 +11,16 @@
 //! page, occurrence, Source, Failure, Position, and collateral terminal joins.
 
 use clutch_general_v2_contract::{
-    derive_owner_finalized_row_data_id_v2, fee_runtime_id_from_bytes,
     FeeTerminalReceiptBundleV1, GeneralEpochPhaseV1, GeneralEpochV6AccountV1,
-    GeneralFeeTerminalProjectionV1,
-    GeneralOwnerFeeFinalizationProjectionV2, Id32, OwnerFeeFinalizationOutcomeV2,
+    GeneralFeeTerminalProjectionV1, Id32,
     IndexedSettlementRootTerminalProjectionV1, IndexedSettlementRootV1AccountV1,
-    OwnerFeeFinalizationV2AccountV1, OwnerFinalizedRowDataHashV2, OwnerSettlementExpectationV2,
-    OwnerSettlementV2AccountV1, Sha256BackendV1,
-    FEE_CLOSURE_MANIFEST_V1_BYTES,
-    FEE_TERMINAL_RECEIPT_V1_BYTES,
+    Sha256BackendV1, FEE_CLOSURE_MANIFEST_V1_BYTES, FEE_TERMINAL_RECEIPT_V1_BYTES,
 };
 use clutch_retirement::{Identity32V1, RetirementErrorV2};
 
 use crate::{
-    authenticate_general_epoch_v6_exact,
-    authenticate_general_owner_fee_finalization_v2_exact,
-    authenticate_general_owner_settlement_v2_exact,
-    authenticate_general_indexed_settlement_root_v1_exact, AccountAccessV2, AccountViewV2,
-    CanonicalPdaV1, RetirementAdapterErrorV2,
+    authenticate_general_epoch_v6_exact, authenticate_general_indexed_settlement_root_v1_exact,
+    AccountAccessV2, AccountViewV2, CanonicalPdaV1, RetirementAdapterErrorV2,
 };
 
 fn identity(value: Id32) -> Result<Identity32V1, RetirementAdapterErrorV2> {
@@ -37,112 +29,6 @@ fn identity(value: Id32) -> Result<Identity32V1, RetirementAdapterErrorV2> {
 
 fn general_id(value: Identity32V1) -> Result<Id32, RetirementAdapterErrorV2> {
     Id32::new(value.bytes()).map_err(Into::into)
-}
-
-/// Exact presence-explicit V2 terminal owner row joined to its in-place
-/// 0x83/version-2 fee receipt.
-///
-/// This is not deletion authority. The row's separately persisted creation
-/// rent ledger and the fee runtime's exact rent-disposition preimage remain
-/// mandatory before either writable account may be closed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralOwnerSettlementTerminalV2 {
-    owner_settlement_account: Identity32V1,
-    owner_fee_finalization_account: Identity32V1,
-    program_id: Identity32V1,
-    expectation: OwnerSettlementExpectationV2,
-    fee: GeneralOwnerFeeFinalizationProjectionV2,
-    finalized_row_data_id: Identity32V1,
-}
-
-impl AuthenticatedGeneralOwnerSettlementTerminalV2 {
-    /// Canonical writable owner-settlement PDA.
-    pub const fn owner_settlement_account(self) -> Identity32V1 {
-        self.owner_settlement_account
-    }
-
-    /// Canonical writable existing owner-fee PDA after its v2 transition.
-    pub const fn owner_fee_finalization_account(self) -> Identity32V1 {
-        self.owner_fee_finalization_account
-    }
-
-    /// Exact General runtime program owner shared by both accounts.
-    pub const fn program_id(self) -> Identity32V1 {
-        self.program_id
-    }
-
-    /// Semantic owner's immutable finalized-row expectation.
-    pub const fn expectation(self) -> OwnerSettlementExpectationV2 {
-        self.expectation
-    }
-
-    /// Exact fee-runtime terminal projection bound to this row.
-    pub const fn fee(self) -> GeneralOwnerFeeFinalizationProjectionV2 {
-        self.fee
-    }
-
-    /// SHA-256 identity of the exact finalized 288-byte row body.
-    pub const fn finalized_row_data_id(self) -> Identity32V1 {
-        self.finalized_row_data_id
-    }
-}
-
-/// Authenticate a finalized `0x81/2` 288-byte semantic row and its 0x83/version-2
-/// in-place fee receipt before any shrink, transfer, or delete starts.
-#[allow(clippy::too_many_arguments)]
-pub fn authenticate_general_owner_settlement_terminal_v2<B: OwnerFinalizedRowDataHashV2>(
-    owner_settlement_view: AccountViewV2<'_>,
-    owner_settlement_pda: CanonicalPdaV1,
-    owner_fee_view: AccountViewV2<'_>,
-    owner_fee_pda: CanonicalPdaV1,
-    program_id: Identity32V1,
-    hash_backend: &B,
-) -> Result<AuthenticatedGeneralOwnerSettlementTerminalV2, RetirementAdapterErrorV2> {
-    let owner_settlement = authenticate_general_owner_settlement_v2_exact(
-        owner_settlement_view,
-        program_id,
-        owner_settlement_pda,
-    )?;
-    let owner_fee = authenticate_general_owner_fee_finalization_v2_exact(
-        owner_fee_view,
-        program_id,
-        owner_fee_pda,
-    )?;
-    if owner_settlement.address() == owner_fee.address() {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-
-    let row = OwnerSettlementV2AccountV1::decode(owner_settlement.data())?;
-    let row_terminal = row.retirement_projection()?;
-    let expectation = row_terminal.expectation();
-    let finalized_body = row_terminal.finalized_body();
-    let finalized_row_data_id = Identity32V1::new(
-        derive_owner_finalized_row_data_id_v2(finalized_body, hash_backend)
-            .map_err(|_| RetirementAdapterErrorV2::InvalidSchema)?,
-    )?;
-
-    let fee = OwnerFeeFinalizationV2AccountV1::decode(owner_fee.data())?
-        .terminal_projection(fee_runtime_id_from_bytes(owner_fee.address().bytes()))?;
-    if fee.outcome != OwnerFeeFinalizationOutcomeV2::Settled
-        || fee.owner_settlement_account.0 != owner_settlement.address().bytes()
-        || fee.owner_settlement_final_data_id.0 != finalized_row_data_id.bytes()
-        || fee.settlement_candidate.0 != expectation.candidate
-        || fee.owner.0 != expectation.owner
-        || fee.authorized_fee_atoms != expectation.selected_fee_atoms
-        || fee.position.0 == owner_settlement.address().bytes()
-        || fee.settlement_cash_pot.0 == owner_settlement.address().bytes()
-    {
-        return Err(RetirementErrorV2::WrongParent.into());
-    }
-
-    Ok(AuthenticatedGeneralOwnerSettlementTerminalV2 {
-        owner_settlement_account: owner_settlement.address(),
-        owner_fee_finalization_account: owner_fee.address(),
-        program_id,
-        expectation,
-        fee,
-        finalized_row_data_id,
-    })
 }
 
 /// Read-only canonical candidate-wide fee terminal and closure manifest.

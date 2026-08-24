@@ -22,15 +22,7 @@ use clutch_solana_layout::registry::{
 use crate::{RetirementAdapterErrorV1, RetirementAdapterErrorV2};
 use clutch_general_v2_contract::{
     GENERAL_EPOCH_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
-    OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG, OWNER_FEE_CARRY_ACCOUNT_VERSION,
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES, OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
-    OWNER_SETTLEMENT_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_TAG, OWNER_SETTLEMENT_ACCOUNT_VERSION,
-    OWNER_SETTLEMENT_ACCOUNT_VERSION_V1, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES, SELECTED_FEE_RECORD_ACCOUNT_TAG,
-    SELECTED_FEE_RECORD_ACCOUNT_VERSION,
-    SETTLEMENT_CASH_POT_ACCOUNT_BYTES, SETTLEMENT_CASH_POT_ACCOUNT_TAG,
-    SETTLEMENT_CASH_POT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
     INDEXED_SETTLEMENT_ROOT_BYTES_V1, SETTLEMENT_ROOT_ACCOUNT_BYTES,
     SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
@@ -49,15 +41,6 @@ const REPLAY_SUCCESSOR_STORED_BUMP_OFFSET: usize = 82;
 const PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_BUDGET_STORED_BUMP_OFFSET: usize = 270;
 const GENERAL_V2_EPOCH_STORED_BUMP_OFFSET: usize = GENERAL_EPOCH_ACCOUNT_BYTES - 2;
-const GENERAL_V2_OWNER_SETTLEMENT_STORED_BUMP_OFFSET: usize = OWNER_SETTLEMENT_ACCOUNT_BYTES - 2;
-const GENERAL_V2_SELECTED_FEE_RECORD_STORED_BUMP_OFFSET: usize =
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES - 2;
-const GENERAL_V2_OWNER_FEE_CARRY_STORED_BUMP_OFFSET: usize = OWNER_FEE_CARRY_ACCOUNT_BYTES - 2;
-const GENERAL_V2_PAYER_ALLOCATION_STORED_BUMP_OFFSET: usize = PAYER_ALLOCATION_ACCOUNT_BYTES - 2;
-const GENERAL_V2_SETTLEMENT_CASH_POT_STORED_BUMP_OFFSET: usize =
-    SETTLEMENT_CASH_POT_ACCOUNT_BYTES - 2;
-const GENERAL_V2_OWNER_FEE_FINALIZATION_STORED_BUMP_OFFSET: usize =
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES - 2;
 const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET: usize =
     16 + SETTLEMENT_ROOT_ACCOUNT_BYTES - 4;
 const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET == 992);
@@ -416,146 +399,6 @@ pub fn authenticate_general_epoch_v6_exact<'a>(
             bump_offset: GENERAL_V2_EPOCH_STORED_BUMP_OFFSET,
         },
         access,
-    )
-}
-
-/// Authenticate one exact writable General owner-settlement row.
-pub fn authenticate_general_owner_settlement_v1_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
-            len: OWNER_SETTLEMENT_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_OWNER_SETTLEMENT_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
-    )
-}
-
-/// Authenticate one exact writable presence-explicit General owner row.
-pub fn authenticate_general_owner_settlement_v2_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
-            len: OWNER_SETTLEMENT_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_OWNER_SETTLEMENT_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
-    )
-}
-
-/// Authenticate the exact immutable selected fee-record outer account.
-pub fn authenticate_general_selected_fee_record_v1_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
-            version: SELECTED_FEE_RECORD_ACCOUNT_VERSION,
-            len: SELECTED_FEE_RECORD_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_SELECTED_FEE_RECORD_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::ReadOnly,
-    )
-}
-
-/// Authenticate the mutable 0x83/version-1 carry before in-place finalization.
-pub fn authenticate_general_owner_fee_carry_v1_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
-            version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
-            len: OWNER_FEE_CARRY_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_OWNER_FEE_CARRY_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
-    )
-}
-
-/// Authenticate the exact temporary 0x84 payer snapshot before atomic close.
-pub fn authenticate_general_payer_allocation_v1_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: PAYER_ALLOCATION_ACCOUNT_TAG,
-            version: PAYER_ALLOCATION_ACCOUNT_VERSION,
-            len: PAYER_ALLOCATION_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_PAYER_ALLOCATION_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
-    )
-}
-
-/// Authenticate the exact candidate-wide cash pot under a writable role.
-pub fn authenticate_general_settlement_cash_pot_v1_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,
-            version: SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
-            len: SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_SETTLEMENT_CASH_POT_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
-    )
-}
-
-/// Authenticate one exact writable 0x83/version-2 owner fee receipt.
-pub fn authenticate_general_owner_fee_finalization_v2_exact<'a>(
-    view: AccountViewV2<'a>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
-    authenticate_v2(
-        view,
-        program_id,
-        canonical_pda,
-        ExpectedAccountV1 {
-            tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
-            version: OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
-            len: OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_OWNER_FEE_FINALIZATION_STORED_BUMP_OFFSET,
-        },
-        AccountAccessV2::Writable,
     )
 }
 

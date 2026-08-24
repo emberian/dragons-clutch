@@ -26,15 +26,8 @@ pub use account_auth::{
     authenticate_general_epoch_v6_exact,
     authenticate_general_epoch_tombstone_v1, authenticate_general_epoch_tombstone_v1_exact,
     authenticate_general_epoch_v5, authenticate_general_epoch_v5_exact,
-    authenticate_general_owner_fee_finalization_v2_exact,
-    authenticate_general_owner_fee_carry_v1_exact,
-    authenticate_general_owner_settlement_v1_exact,
-    authenticate_general_owner_settlement_v2_exact,
-    authenticate_general_payer_allocation_v1_exact,
     authenticate_general_reservation_v5, authenticate_general_reservation_v7,
-    authenticate_general_selected_fee_record_v1_exact,
     authenticate_general_indexed_settlement_root_v1_exact,
-    authenticate_general_settlement_cash_pot_v1_exact,
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,
     authenticate_position_tombstone_v3_exact, authenticate_position_v2,
@@ -63,11 +56,9 @@ pub use generation_migration::{
 pub use general_settlement_retirement::{
     authenticate_general_epoch_terminal_counts_v1,
     authenticate_general_fee_terminal_v1,
-    authenticate_general_owner_settlement_terminal_v2,
     authenticate_general_settlement_root_terminal_v1,
     AuthenticatedGeneralEpochTerminalCountsV1,
     AuthenticatedGeneralFeeTerminalV1,
-    AuthenticatedGeneralOwnerSettlementTerminalV2,
     AuthenticatedGeneralSettlementRootTerminalV1,
 };
 pub use live_family_auth::{
