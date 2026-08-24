@@ -20,6 +20,12 @@ pub const REVENUE_POLICY_V2_MAGIC: [u8; 8] = *b"DCREVP2\0";
 pub const REVENUE_POLICY_SCHEMA_V2: u16 = 2;
 /// SHA-256 transcript domain for V2 policy identities.
 pub const REVENUE_POLICY_V2_DIGEST_DOMAIN: &[u8] = b"dragons-clutch/revenue-policy/v2\0";
+/// SHA-256 transcript domain for the selected treasury-Position lifecycle.
+pub const TREASURY_POSITION_DERIVATION_V2_DIGEST_DOMAIN: &[u8] =
+    b"dragons-clutch/treasury-position-derivation/v2\0";
+/// SHA-256 transcript domain for one Realm's semantic revenue-record ID.
+pub const REVENUE_POLICY_RECORD_V2_ID_DOMAIN: &[u8] =
+    b"dragons-clutch/revenue-policy-record/v2\0";
 /// Basis-point denominator used by both V2 composite-fee rates.
 pub const REVENUE_POLICY_V2_BPS_DENOMINATOR: u32 = 10_000;
 /// Unified successor development dispersion rate: 40 basis points.
@@ -39,6 +45,10 @@ const REVENUE_POLICY_V2_FLAGS: u16 = 0;
 const REVENUE_POLICY_V2_RESERVED_BYTES: usize = 8;
 const REVENUE_POLICY_V2_PREIMAGE: usize =
     REVENUE_POLICY_V2_DIGEST_DOMAIN.len() + REVENUE_POLICY_V2_BYTES;
+const TREASURY_POSITION_DERIVATION_V2_PREIMAGE: usize =
+    TREASURY_POSITION_DERIVATION_V2_DIGEST_DOMAIN.len() + 1;
+const REVENUE_POLICY_RECORD_V2_ID_PREIMAGE: usize =
+    REVENUE_POLICY_RECORD_V2_ID_DOMAIN.len() + 32 + 32 + 32 + 32;
 const _: () = assert!(REVENUE_POLICY_V2_BYTES == 8 + 2 + 2 + 32 + 8 + 16 + 4 + 8);
 
 /// Destination for split-rounding residual atoms.
@@ -109,11 +119,40 @@ impl LamportSinkV2 {
     }
 }
 
+/// Exact lifecycle required for a V2 policy's treasury custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TreasuryPositionDerivationPolicyV2 {
+    /// For each full-width MarketInstanceV2, Product/General founding derives
+    /// and separately rent-funds an ordinary `PositionV3` owned and
+    /// controlled by the Realm's immutable treasury owner, plus a counted
+    /// service ledger that prevents closure while any fee-bearing epoch is
+    /// outstanding.  Neither account is a Realm account or a Product
+    /// ScheduleV3 funding slot.
+    PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1,
+}
+
+impl TreasuryPositionDerivationPolicyV2 {
+    /// Canonical transcript byte for this closed-set member.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1 => 0,
+        }
+    }
+
+    /// Decode one canonical transcript byte.
+    pub fn decode(byte: u8) -> Result<Self, RevenuePolicyErrorV2> {
+        match byte {
+            0 => Ok(Self::PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1),
+            _ => Err(RevenuePolicyErrorV2::InvalidEnum),
+        }
+    }
+}
+
 /// One immutable, registered V2 revenue policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RevenuePolicyV2 {
     /// Must equal [`REVENUE_POLICY_SCHEMA_V2`].
-    pub version: u32,
+    pub version: u16,
     /// Nonzero, non-sink owner of each Market's ordinary treasury Position.
     pub treasury_owner: [u8; 32],
     /// Composite-dispersion rate in basis points.
@@ -135,6 +174,8 @@ pub struct RevenuePolicyV2 {
     pub maker_weight_authority: MakerWeightAuthorityV2,
     /// Lamport plane remains absent and unit-disjoint.
     pub lamport_sink: LamportSinkV2,
+    /// Market-scoped ordinary-Position derivation and counted-close policy.
+    pub treasury_position_derivation: TreasuryPositionDerivationPolicyV2,
 }
 
 /// Refusal from a V2 policy validator or codec.
@@ -192,7 +233,7 @@ impl RevenuePolicyV2 {
     /// immutable treasury owner.  The owner is data, never a program constant.
     pub const fn successor_development(treasury_owner: [u8; 32]) -> Self {
         Self {
-            version: REVENUE_POLICY_SCHEMA_V2 as u32,
+            version: REVENUE_POLICY_SCHEMA_V2,
             treasury_owner,
             dispersion_bps: SUCCESSOR_DEV_DISPERSION_BPS,
             floor_range_bps: SUCCESSOR_DEV_FLOOR_RANGE_BPS,
@@ -204,12 +245,14 @@ impl RevenuePolicyV2 {
             maker_weight_authority:
                 MakerWeightAuthorityV2::CertifiedOwnerNettedCompositeNumerator,
             lamport_sink: LamportSinkV2::None,
+            treasury_position_derivation:
+                TreasuryPositionDerivationPolicyV2::PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1,
         }
     }
 
     /// Validate the generic immutable V2 envelope.
     pub fn validate(&self) -> Result<(), RevenuePolicyErrorV2> {
-        if self.version != REVENUE_POLICY_SCHEMA_V2 as u32 {
+        if self.version != REVENUE_POLICY_SCHEMA_V2 {
             return Err(RevenuePolicyErrorV2::WrongVersion);
         }
         if self.treasury_owner == [0; 32] {
@@ -268,6 +311,8 @@ impl RevenuePolicyV2 {
             && self.maker_weight_authority
                 == MakerWeightAuthorityV2::CertifiedOwnerNettedCompositeNumerator
             && self.lamport_sink == LamportSinkV2::None
+            && self.treasury_position_derivation
+                == TreasuryPositionDerivationPolicyV2::PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1
     }
 
     /// Split terminal collected fee atoms.  Maker and executor shares round
@@ -333,7 +378,7 @@ pub fn encode_revenue_policy_v2(
     at += 1;
     out[at] = policy.lamport_sink.byte();
     at += 1;
-    out[at] = 0;
+    out[at] = policy.treasury_position_derivation.byte();
     at += 1;
     out[at..at + REVENUE_POLICY_V2_RESERVED_BYTES].fill(0);
     at += REVENUE_POLICY_V2_RESERVED_BYTES;
@@ -382,7 +427,7 @@ pub fn decode_revenue_policy_v2(input: &[u8]) -> Result<RevenuePolicyV2, Revenue
         ]);
     }
     let policy = RevenuePolicyV2 {
-        version: u32::from(REVENUE_POLICY_SCHEMA_V2),
+        version: REVENUE_POLICY_SCHEMA_V2,
         treasury_owner,
         dispersion_bps: values[0],
         floor_range_bps: values[1],
@@ -393,14 +438,46 @@ pub fn decode_revenue_policy_v2(input: &[u8]) -> Result<RevenuePolicyV2, Revenue
         residual: RevenueResidualV2::decode(input[68])?,
         maker_weight_authority: MakerWeightAuthorityV2::decode(input[69])?,
         lamport_sink: LamportSinkV2::decode(input[70])?,
+        treasury_position_derivation: TreasuryPositionDerivationPolicyV2::decode(input[71])?,
     };
-    if input[71] != 0 || input[72..80] != [0; REVENUE_POLICY_V2_RESERVED_BYTES] {
+    if input[72..80] != [0; REVENUE_POLICY_V2_RESERVED_BYTES] {
         return Err(RevenuePolicyErrorV2::NonCanonicalPadding);
     }
     if canonical_revenue_policy_v2_bytes(&policy)? != input {
         return Err(RevenuePolicyErrorV2::NonCanonicalPadding);
     }
     Ok(policy)
+}
+
+/// Compute the typed identity of one treasury-Position lifecycle selector.
+pub fn treasury_position_derivation_policy_v2_id(
+    policy: TreasuryPositionDerivationPolicyV2,
+) -> Identity32V1 {
+    sha256::<Chosen<TREASURY_POSITION_DERIVATION_V2_PREIMAGE>>(
+        TREASURY_POSITION_DERIVATION_V2_DIGEST_DOMAIN,
+        &[&[policy.byte()]],
+    )
+}
+
+/// Compute the semantic ID of a Realm's immutable V2 record.  Physical rent,
+/// bump, and account address are deliberately outside this ID; the immutable
+/// economic owner and lifecycle selector are inside it.
+pub fn revenue_policy_record_v2_id(
+    realm: [u8; 32],
+    policy: &RevenuePolicyV2,
+) -> Result<Identity32V1, RevenuePolicyErrorV2> {
+    let policy_digest = revenue_policy_v2_digest(policy)?;
+    let derivation_id =
+        treasury_position_derivation_policy_v2_id(policy.treasury_position_derivation);
+    Ok(sha256::<Chosen<REVENUE_POLICY_RECORD_V2_ID_PREIMAGE>>(
+        REVENUE_POLICY_RECORD_V2_ID_DOMAIN,
+        &[
+            &realm,
+            &policy_digest.0,
+            &policy.treasury_owner,
+            &derivation_id.0,
+        ],
+    ))
 }
 
 /// Compute the immutable V2 revenue-policy identity.
@@ -446,6 +523,10 @@ mod tests {
         ] {
             assert_ne!(revenue_policy_v2_digest(&changed).unwrap(), digest);
         }
+        assert_ne!(
+            revenue_policy_record_v2_id([1; 32], &policy).unwrap(),
+            revenue_policy_record_v2_id([2; 32], &policy).unwrap()
+        );
     }
 
     #[test]
