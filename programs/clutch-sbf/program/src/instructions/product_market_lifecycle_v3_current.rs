@@ -13,10 +13,12 @@ use crate::instructions::product_market_replay_current::{
     settle_current_product_market_replay_foundation_v2, AuthenticatedMarketLifecycleReplayV2,
     AuthenticatedProductMarketReplayFoundationPostwriteV2,
 };
+use crate::instructions::product_market_foundation_graph_v4_current::
+    AuthenticatedCurrentMarketFoundationGraphV4;
 use crate::seeds;
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
-    MarketFoundationSlotV4, MarketFoundationStepProjectionV4, MarketInstanceV2Id,
+    ContentId, MarketFoundationScheduleV4, MarketFoundationSlotV4,
+    MarketFoundationStepProjectionV4, MarketInstanceV2Id,
     MarketLifecycleBindingV3, MarketLifecyclePhaseV3, MarketLifecycleReplayPhaseV2,
     MarketLifecycleRootV3,
     SeriesMarketLinkBindingV3, SeriesMarketLinkV3, SeriesMarketLinkV3Id, SeriesPlanV5Id,
@@ -420,7 +422,7 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     replay: AuthenticatedMarketLifecycleReplayV2,
     schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
+    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
     replay_account: &AccountInfo<'a>,
     foundation_vault: &AccountInfo<'a>,
     bootstrap_payer: &AccountInfo<'a>,
@@ -429,6 +431,7 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
     AuthenticatedProductMarketFoundationDebitV4,
     AuthenticatedProductMarketReplayFoundationPostwriteV2,
 )> {
+    let graph = graph_authority.graph();
     schedule
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -474,7 +477,12 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
         .ok_or(ClutchError::SeriesCustodyDeltaMismatch)?;
     let replay_observed_lamports = replay.observed_lamports();
     require(
-        root.is_writable()
+        graph_authority.id() != ContentId::ZERO
+            && graph_authority.schedule_id() == schedule_id
+            && graph_authority.graph_id() == graph_id
+            && graph_authority.market_instance_id() == binding.market_instance_id
+            && graph_authority.generation() == binding.generation
+            && root.is_writable()
             && root.owner_program() == *program_id
             && state.phase() == MarketLifecyclePhaseV3::Founding
             && slot == MarketFoundationSlotV4::ProductReplayAnchor
@@ -616,11 +624,12 @@ pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     replay: &AuthenticatedMarketLifecycleReplayV2,
     schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
+    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
     foundation_vault: &AccountInfo<'a>,
     destination: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
 ) -> Outcome<AuthenticatedProductMarketFoundationDebitV4> {
+    let graph = graph_authority.graph();
     schedule
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -670,7 +679,12 @@ pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
         MarketLifecycleReplayPhaseV2::FoundationSettled
     };
     require(
-        root.is_writable()
+        graph_authority.id() != ContentId::ZERO
+            && graph_authority.schedule_id() == schedule_id
+            && graph_authority.graph_id() == graph_id
+            && graph_authority.market_instance_id() == binding.market_instance_id
+            && graph_authority.generation() == binding.generation
+            && root.is_writable()
             && root.owner_program() == *program_id
             && state.phase() == MarketLifecyclePhaseV3::Founding
             && binding.foundation_schedule_id == schedule_id
@@ -846,7 +860,7 @@ pub(crate) fn record_current_product_market_foundation_step_v4<'state, P>(
     root_account: &AccountInfo<'_>,
     root_before: AuthenticatedMarketLifecycleRootV3<'_>,
     schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
+    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
     debit: AuthenticatedProductMarketFoundationDebitV4,
     postwrite: P,
     successor_state: &mut MarketLifecycleRootV3,
@@ -855,8 +869,21 @@ pub(crate) fn record_current_product_market_foundation_step_v4<'state, P>(
 where
     P: AuthenticatedProductMarketFoundationStepPostwriteV4,
 {
+    let graph = graph_authority.graph();
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        root_before.is_writable()
+        graph_authority.id() != ContentId::ZERO
+            && graph_authority.schedule_id() == schedule_id
+            && graph_authority.graph_id() == graph_id
+            && graph_authority.market_instance_id()
+                == root_before.binding().market_instance_id
+            && graph_authority.generation() == root_before.binding().generation
+            && root_before.is_writable()
             && root_before.account() == *root_account.key
             && root_before.owner_program() == *program_id
             && root_before.state().phase() == MarketLifecyclePhaseV3::Founding

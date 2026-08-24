@@ -16,14 +16,16 @@ use crate::instructions::product_market_family_capability_current::
     AuthenticatedMarketFamilyCapabilityPolicyArtifactV1;
 use crate::instructions::product_market_lifecycle_v3_current::
     AuthenticatedProductMarketFoundationStepPostwriteV4;
+use crate::instructions::product_market_foundation_graph_v4_current::
+    AuthenticatedCurrentMarketFoundationGraphV4;
 use crate::instructions::product_series::physical_v5::AuthenticatedSeriesPhysicalFounderV5;
 use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
 use crate::seeds;
 use clutch_product_series::{
     derive_initial_market_generation_v2, AuthenticatedMarketLifecycleGenerationAuthorityV2,
     AuthenticatedMarketLifecycleReplayFoundationAuthorityV2, ContentId,
-    MarketFoundationAccountGraphV4, MarketFoundationScheduleV4, MarketFoundationSlotV4,
-    MarketInstanceV2Id, MarketLifecycleGenerationBindingV2, MarketLifecycleReplayPhaseV2,
+    MarketFoundationScheduleV4, MarketFoundationSlotV4, MarketInstanceV2Id,
+    MarketLifecycleGenerationBindingV2, MarketLifecycleReplayPhaseV2,
     MarketLifecycleReplayV2, RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id,
 };
 use clutch_solana_layout::product_series::{
@@ -325,14 +327,15 @@ pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
     physical: &AuthenticatedSeriesPhysicalFounderV5,
     registry: &AuthenticatedRegistryCapabilityV5,
     family_policy: &AuthenticatedMarketFamilyCapabilityPolicyArtifactV1,
-    market_instance_id: MarketInstanceV2Id,
     schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
+    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
     bootstrap_payer: &AccountInfo<'a>,
     replay_account: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
 ) -> Outcome<AuthenticatedProductMarketGenerationV2> {
+    let graph = graph_authority.graph();
+    let market_instance_id = graph_authority.market_instance_id();
     schedule
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -366,7 +369,13 @@ pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
     let rent_principal_lamports =
         rent.minimum_balance(MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2)?;
     require(
-        physical.registry_capability_after_id() == registry.id()
+        graph_authority.id() != ContentId::ZERO
+            && graph_authority.schedule_id() == schedule_id
+            && graph_authority.graph_id() == graph_id
+            && graph_authority.physical_founder_id() == physical.id()
+            && graph_authority.physical_capitalization_id() == physical.capitalization_id()
+            && graph_authority.family_policy_authentication_id() == family_policy.id()
+            && physical.registry_capability_after_id() == registry.id()
             && family_policy.registry_release_id() == registry.registry_release_id()
             && family_policy.capability_profile_id() == registry.capability_profile_id()
             && bootstrap_payer.is_signer
