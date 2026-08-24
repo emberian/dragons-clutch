@@ -145,8 +145,11 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use market_lifecycle::{
-    MarketFoundationAccountGraphV2, MarketFoundationCapitalV1, MarketFoundationProgressV1,
-    MarketFoundationSlotV2, MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
+    authenticate_market_foundation_account_graph_bytes_v2,
+    authenticate_market_foundation_account_graph_slot_v2,
+    AuthenticatedMarketFoundationAccountGraphBytesV2, MarketFoundationAccountGraphV2,
+    MarketFoundationCapitalV1, MarketFoundationProgressV1, MarketFoundationSlotV2,
+    MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
     MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
     MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
     MarketSharedCoreV1, SeriesLinkObligationAdmissionProjectionV1,
@@ -156,7 +159,8 @@ pub use market_lifecycle::{
     SeriesMarketAdmissionProjectionV1, SeriesMarketLinkBindingV1, SeriesMarketLinkPhaseV1,
     SeriesMarketLinkRetirementProjectionV1, SeriesMarketLinkV1,
     MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, MARKET_LIFECYCLE_BINDING_DOMAIN_V1,
-    MARKET_LIFECYCLE_ROOT_BYTES_V1, MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
