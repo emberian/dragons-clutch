@@ -29,9 +29,9 @@ JSON keys refuse. Its canonical identity is SHA-256 of compact, key-sorted
 UTF-8 JSON containing:
 
 - the canonical profile name and label;
-- the Cargo profile feature and source identity;
+- the Cargo profile feature, source identity, and collateral/claim release identity;
 - the expected final undefined dynamic-symbol/syscall surface;
-- all eleven semantic-owner rows;
+- all twelve semantic-owner rows;
 - the central-registry version, digest, exact enabled intent triples, and exact
   linked account coordinates; and
 - the exhaustive `dragons-clutch/wire-surface/v1` projection of legacy intent
@@ -39,11 +39,12 @@ UTF-8 JSON containing:
   generation discriminants; and
 - ELF, `.text`, chosen ProgramData `max_len`, and persistent-loader-rent limits.
 
-The eleven semantic-owner slots, in canonical order, are `relation`, `score`,
+The twelve semantic-owner slots, in canonical order, are `relation`, `score`,
 `price-measure`, `candidate-lifecycle`, `clear-work-feed`, `retirement`,
-`source-plane`, `series-products`, `recovery`, `structured-claim`, and
-`liquidity-dealer`. Every row binds an owner name, version, digest, linkage
-state, required intent triples, and required account coordinates.
+`source-plane`, `fractional-redemption`, `series-products`, `recovery`,
+`structured-claim`, and `liquidity-dealer`. Every row binds an owner name,
+version, digest, linkage state, required intent triples, and required account
+coordinates.
 
 Intent coordinates are `[outer_tag, version, local_action]`. Legacy two-byte
 intents use local action zero; successor envelopes use their nonzero
@@ -74,6 +75,13 @@ top-level enabled/linked coverage exactly. A missing required coordinate and an
 enabled coordinate with no linked semantic owner both refuse. Requirements of
 a `planned` owner do not become live coverage. A profile with any planned owner
 can be described for planning but cannot be measured or deployment-eligible.
+
+The `fractional-redemption` owner is the only owner permitted to require tag
+`79`. Its required subset and the central enabled subset must each be either
+empty or exactly `79/v1` actions 1 through 10. A linked owner must match the
+central subset exactly; a planned owner cannot enable any member. Thus a
+profile cannot activate a partial Fractional lifecycle even though all ten
+handlers have allocated wire coordinates.
 
 This gate does not let a caller-provided digest attest to its own derivation.
 Each semantic owner and the central registry still need a reviewed producer for
@@ -116,6 +124,24 @@ admitted. This prevents actions 1 through 4 from creating Head, Lineage, or Page
 state that cannot reach terminal closure, and prevents action 2 from consuming
 an unfounded generation request. Every release-class wire surface also has no
 legacy Source pair and an empty `source_generation_discriminants` array.
+
+## Collateral and claim release selection
+
+`build_contract.collateral_release_identity` is independent of the Source
+selector and is exactly one of:
+
+| Identity | Additional Cargo feature | Meaning |
+| --- | --- | --- |
+| `production-inert` | none | No observed-positive collateral or claim release is asserted by this build identity. |
+| `observed-positive-collateral-and-claim-release` | `observed-positive-collateral-release-manifest` | Select the checked-in positive-slot collateral catalog and the independently checked Token-2022 claim release. |
+
+The observed-positive selector refuses unless the checked source manifest has
+at least one collateral release, the same positive number of deployment rows,
+and a nonempty independent claim release. The selected Rust module repeats
+those conditions as compile-time assertions, so the empty repository template
+cannot produce an apparently live ELF. Any profile enabling one Fractional
+action must select this observed-positive collateral-and-claim identity; the
+separate whole-family invariant then requires all ten actions.
 
 The successor's complete legacy intent projection is version 3 of tags
 `2..=5`, `7`, `10`, `11`, `14..=21`, and `68`. This is the current Collateral
