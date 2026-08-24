@@ -12,9 +12,9 @@ use crate::allocation::{
     RecipientAllocationV1, StandingMakerRowV1,
 };
 use crate::selected::{OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1};
-use crate::projection::CertifiedRecipientAllocationV2;
+use crate::projection::{CertifiedRecipientAllocationAccessV2, CertifiedRecipientAllocationV2};
 use crate::treasury::TreasuryLedgerV1;
-use crate::{Error, Id, Result, MAX_FEE_ROWS_V1};
+use crate::{add, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
 pub const FEE_RECORD_ACCOUNT_V1_BYTES: usize = 336;
 pub const OWNER_FEE_CARRY_ACCOUNT_V1_BYTES: usize = 128;
@@ -454,6 +454,156 @@ pub fn decode_persisted_certified_recipient_allocation_v2(
     Ok(value)
 }
 
+/// Borrowed, allocation-free view of the exact certified recipient body.
+/// Construction performs the same canonical row, padding, and conservation
+/// checks as the owning decoder without placing the 64-row value on the stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertifiedRecipientAllocationViewV2<'a> {
+    input: &'a [u8],
+    fee_record: Id,
+    maker_len: u8,
+    maker_rebate_total: u64,
+    executor_atoms: u64,
+    treasury_atoms: u64,
+    collected_fee_atoms: u64,
+    owner_fee_book_data_id: Id,
+    owner_order_set_digest: Id,
+    owner_count: u16,
+}
+
+impl<'a> CertifiedRecipientAllocationViewV2<'a> {
+    pub fn decode(input: &'a [u8]) -> Result<Self> {
+        exact_len(input, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)?;
+        let mut cursor = 0usize;
+        take_header(input, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
+        let fee_record = read_id(input, &mut cursor)?;
+        live(fee_record)?;
+        let maker_len = read_u8(input, &mut cursor)?;
+        require_zero(take(input, &mut cursor, 3)?)?;
+        if usize::from(maker_len) > MAX_FEE_ROWS_V1 {
+            return Err(Error::InvalidWidth);
+        }
+        let maker_rebate_total = read_u64(input, &mut cursor)?;
+        let executor_atoms = read_u64(input, &mut cursor)?;
+        let treasury_atoms = read_u64(input, &mut cursor)?;
+        let collected_fee_atoms = read_u64(input, &mut cursor)?;
+        let mut maker_sum = 0u64;
+        let mut prior = Id([0; 32]);
+        let mut index = 0u8;
+        while usize::from(index) < MAX_FEE_ROWS_V1 {
+            let position = read_id(input, &mut cursor)?;
+            let atoms = read_u64(input, &mut cursor)?;
+            if index < maker_len {
+                live(position)?;
+                if !prior.is_zero() && position <= prior {
+                    return Err(if position == prior {
+                        Error::DuplicateIdentity
+                    } else {
+                        Error::NonCanonicalOrder
+                    });
+                }
+                maker_sum = add(maker_sum, atoms)?;
+                prior = position;
+            } else if !position.is_zero() || atoms != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        let owner_fee_book_data_id = read_id(input, &mut cursor)?;
+        let owner_order_set_digest = read_id(input, &mut cursor)?;
+        let owner_count = read_u16(input, &mut cursor)?;
+        require_zero(take(input, &mut cursor, 6)?)?;
+        finish(cursor, input.len())?;
+        live(owner_fee_book_data_id)?;
+        live(owner_order_set_digest)?;
+        if owner_count == 0
+            || usize::from(owner_count) > MAX_FEE_ROWS_V1
+            || collected_fee_atoms == 0
+            || maker_sum != maker_rebate_total
+            || add(add(maker_sum, executor_atoms)?, treasury_atoms)? != collected_fee_atoms
+        {
+            return Err(Error::ConservationFailure);
+        }
+        Ok(Self {
+            input,
+            fee_record,
+            maker_len,
+            maker_rebate_total,
+            executor_atoms,
+            treasury_atoms,
+            collected_fee_atoms,
+            owner_fee_book_data_id,
+            owner_order_set_digest,
+            owner_count,
+        })
+    }
+
+    fn row_offset(index: u8) -> Result<usize> {
+        if usize::from(index) >= MAX_FEE_ROWS_V1 {
+            return Err(Error::InvalidWidth);
+        }
+        80usize
+            .checked_add(usize::from(index).checked_mul(40).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+}
+
+impl CertifiedRecipientAllocationAccessV2 for CertifiedRecipientAllocationViewV2<'_> {
+    fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+
+    fn maker_len(&self) -> u8 {
+        self.maker_len
+    }
+
+    fn maker_position(&self, index: u8) -> Result<Id> {
+        if index >= self.maker_len {
+            return Err(Error::InvalidWidth);
+        }
+        let mut at = Self::row_offset(index)?;
+        read_id(self.input, &mut at)
+    }
+
+    fn maker_rebate_atoms(&self, index: u8) -> Result<u64> {
+        if index >= self.maker_len {
+            return Err(Error::InvalidWidth);
+        }
+        let mut at = Self::row_offset(index)?
+            .checked_add(32)
+            .ok_or(Error::ArithmeticOverflow)?;
+        read_u64(self.input, &mut at)
+    }
+
+    fn maker_rebate_total(&self) -> u64 {
+        self.maker_rebate_total
+    }
+
+    fn executor_atoms(&self) -> u64 {
+        self.executor_atoms
+    }
+
+    fn treasury_atoms(&self) -> u64 {
+        self.treasury_atoms
+    }
+
+    fn collected_fee_atoms(&self) -> u64 {
+        self.collected_fee_atoms
+    }
+
+    fn owner_fee_book_data_id(&self) -> Id {
+        self.owner_fee_book_data_id
+    }
+
+    fn owner_order_set_digest(&self) -> Id {
+        self.owner_order_set_digest
+    }
+
+    fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+}
+
 pub fn encode_treasury_ledger_v1(
     ledger: &TreasuryLedgerV1,
 ) -> Result<[u8; TREASURY_LEDGER_ACCOUNT_V1_BYTES]> {
@@ -629,4 +779,107 @@ fn read_u128(input: &[u8], cursor: &mut usize) -> Result<u128> {
     let mut value = [0u8; 16];
     value.copy_from_slice(take(input, cursor, 16)?);
     Ok(u128::from_le_bytes(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id {
+        Id([byte; 32])
+    }
+
+    fn certified_bytes() -> [u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES] {
+        let mut positions = [Id([0; 32]); MAX_FEE_ROWS_V1];
+        let mut rebates = [0u64; MAX_FEE_ROWS_V1];
+        positions[0] = id(2);
+        positions[1] = id(3);
+        rebates[0] = 5;
+        rebates[1] = 7;
+        let allocation = RecipientAllocationV1::restore_persisted(
+            id(1), 2, positions, rebates, 12, 0, 8, 20,
+        );
+        let allocation = match allocation {
+            Ok(value) => value,
+            Err(error) => panic!("fixture allocation failed: {error:?}"),
+        };
+        let certified = CertifiedRecipientAllocationV2::restore_persisted(
+            allocation,
+            id(4),
+            id(5),
+            2,
+        );
+        match certified {
+            Ok(value) => match encode_certified_recipient_allocation_v2(&value) {
+                Ok(bytes) => bytes,
+                Err(error) => panic!("fixture encode failed: {error:?}"),
+            },
+            Err(error) => panic!("fixture certificate failed: {error:?}"),
+        }
+    }
+
+    #[test]
+    fn borrowed_certified_recipient_view_matches_owning_decode() {
+        let bytes = certified_bytes();
+        let view = CertifiedRecipientAllocationViewV2::decode(&bytes).unwrap();
+        let owning = decode_persisted_certified_recipient_allocation_v2(&bytes).unwrap();
+        assert_eq!(view.fee_record(), owning.fee_record());
+        assert_eq!(view.maker_len(), owning.maker_len());
+        assert_eq!(view.maker_position(0).unwrap(), id(2));
+        assert_eq!(view.maker_position(1).unwrap(), id(3));
+        assert_eq!(view.maker_rebate_atoms(0).unwrap(), 5);
+        assert_eq!(view.maker_rebate_atoms(1).unwrap(), 7);
+        assert_eq!(view.maker_rebate_total(), owning.maker_rebate_total());
+        assert_eq!(view.treasury_atoms(), owning.treasury_atoms());
+        assert_eq!(view.collected_fee_atoms(), owning.collected_fee_atoms());
+        assert_eq!(view.owner_fee_book_data_id(), owning.owner_fee_book_data_id());
+        assert_eq!(view.owner_order_set_digest(), owning.owner_order_set_digest());
+        assert_eq!(view.owner_count(), owning.owner_count());
+        assert_eq!(view.maker_position(2), Err(Error::InvalidWidth));
+    }
+
+    #[test]
+    fn borrowed_certified_recipient_view_refuses_noncanonical_rows_and_totals() {
+        let mut duplicate = certified_bytes();
+        duplicate[120..152].copy_from_slice(&[2; 32]);
+        assert_eq!(
+            CertifiedRecipientAllocationViewV2::decode(&duplicate),
+            Err(Error::DuplicateIdentity)
+        );
+
+        let mut padded = certified_bytes();
+        padded[192] = 1;
+        assert_eq!(
+            CertifiedRecipientAllocationViewV2::decode(&padded),
+            Err(Error::NonCanonicalPadding)
+        );
+
+        let mut unconserved = certified_bytes();
+        unconserved[48..56].copy_from_slice(&13u64.to_le_bytes());
+        assert_eq!(
+            CertifiedRecipientAllocationViewV2::decode(&unconserved),
+            Err(Error::ConservationFailure)
+        );
+    }
+
+    #[test]
+    fn borrowed_certified_recipient_view_refuses_missing_certificate() {
+        let mut missing_book = certified_bytes();
+        missing_book[RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES
+            ..RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32]
+            .fill(0);
+        assert_eq!(
+            CertifiedRecipientAllocationViewV2::decode(&missing_book),
+            Err(Error::ZeroIdentity)
+        );
+
+        let mut missing_owner = certified_bytes();
+        let owner_count_at = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 64;
+        missing_owner[owner_count_at..owner_count_at + 2]
+            .copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            CertifiedRecipientAllocationViewV2::decode(&missing_owner),
+            Err(Error::ConservationFailure)
+        );
+    }
 }

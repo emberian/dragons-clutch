@@ -21,7 +21,8 @@ use clutch_fee_runtime_contract::codec::{
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_owner_fee_carry_v1,
     encode_certified_recipient_allocation_v2, encode_payer_allocation_v1,
     encode_recipient_allocation_v1, encode_treasury_ledger_v1,
-    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES,
+    CertifiedRecipientAllocationViewV2, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES,
+    FEE_RECORD_ACCOUNT_V1_BYTES,
     OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
     PAYER_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES,
     TREASURY_LEDGER_ACCOUNT_V1_BYTES,
@@ -668,6 +669,53 @@ impl RecipientAllocationV2AccountV1 {
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_persisted_certified_recipient_allocation_v2(&body))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
+/// Borrowed allocation-free view of the rent-owned certified recipient outer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecipientAllocationV2ViewAccountV1<'a> {
+    pub semantic: CertifiedRecipientAllocationViewV2<'a>,
+    pub rent: DeletableRentOwnerV1,
+    pub stored_bump: u8,
+}
+
+impl<'a> RecipientAllocationV2ViewAccountV1<'a> {
+    pub fn decode(input: &'a [u8]) -> Result<Self, CodecError> {
+        if input.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 {
+            return Err(CodecError::WrongLength);
+        }
+        if input[0] != RECIPIENT_ALLOCATION_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        let body_end = 2usize
+            .checked_add(CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let mut reader = Reader::exact(
+            &input[body_end..],
+            DELETABLE_RENT_OWNER_BYTES + 2,
+        )?;
+        let rent = DeletableRentOwnerV1 {
+            payer: Id32::new(reader.array()?)?,
+            refundable_principal: reader.u64()?,
+            donation_floor: reader.u64()?,
+        };
+        rent.validate()?;
+        let stored_bump = reader.u8()?;
+        if reader.u8()? != 0 {
+            return Err(CodecError::InvalidState);
+        }
+        reader.finish()?;
+        Ok(Self {
+            semantic: map_fee_error(CertifiedRecipientAllocationViewV2::decode(
+                &input[2..body_end],
+            ))?,
             rent,
             stored_bump,
         })

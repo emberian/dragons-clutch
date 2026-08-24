@@ -11,7 +11,9 @@ use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
 };
-use clutch_fee_runtime_contract::projection::SelectedOwnerFeeBookHashV1;
+use clutch_fee_runtime_contract::projection::{
+    CertifiedRecipientAllocationAccessV2, SelectedOwnerFeeBookHashV1,
+};
 use clutch_fee_runtime_contract::retirement::FeeRetirementHashV1;
 use clutch_fee_runtime_contract::terminal::{
     CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1, FeeTerminalOutcomeV1,
@@ -24,7 +26,7 @@ use clutch_general_v2_contract::{
     FeeRetirementPayloadV1,
     fee_runtime_semantic_release_id_v1, DeletableRentOwnerV1,
     FeeRetirementAccumulatorV1AccountV1, Id32, MarketBindingV2,
-    RecipientAllocationV2AccountV1, SettlementCashPotV1AccountV1,
+    RecipientAllocationV2ViewAccountV1, SettlementCashPotV1AccountV1,
     SettlementChildRetirementPayloadV1,
     SettlementRetirementPayloadKindV1,
 };
@@ -926,7 +928,7 @@ fn distribute_maker_fee(
         ClutchError::MismatchedState,
     )?;
     let recipient_data = borrow_data(&accounts[FEE_IX_RECIPIENT])?;
-    let recipient = RecipientAllocationV2AccountV1::decode_persisted(&recipient_data)?;
+    let recipient = RecipientAllocationV2ViewAccountV1::decode(&recipient_data)?;
     recipient.rent.validate()?;
     let recipient_data_id = contract::recipient_allocation_account_data_id_v2(
         &recipient_data,
@@ -944,9 +946,9 @@ fn distribute_maker_fee(
                 == accumulator.semantic.owner_fee_book_data_id()
             && recipient.semantic.owner_order_set_digest()
                 == accumulator.semantic.owner_order_set_digest()
-            && recipient.semantic.allocation().fee_record().0 == selector.fee_record.bytes()
-            && maker_index < usize::from(recipient.semantic.allocation().maker_len())
-            && recipient.semantic.allocation().maker_positions()[maker_index].0
+            && recipient.semantic.fee_record().0 == selector.fee_record.bytes()
+            && maker_index < usize::from(recipient.semantic.maker_len())
+            && recipient.semantic.maker_position(selector.maker_ordinal)?.0
                 == selector.maker_position.bytes()
             && recipient_data_id.bytes()
                 == accumulator.semantic.recipient_allocation_data_id().0
@@ -986,7 +988,7 @@ fn distribute_maker_fee(
         &accounts[FEE_IX_REPLAY],
         position_owner,
     )?;
-    let credited_atoms = recipient.semantic.allocation().maker_rebate_atoms()[maker_index];
+    let credited_atoms = recipient.semantic.maker_rebate_atoms(selector.maker_ordinal)?;
     let plan = contract::prepare_fee_position_credit_v1(
         selector.fee_record,
         recipient_data_id,
