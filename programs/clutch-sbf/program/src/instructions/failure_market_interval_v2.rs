@@ -165,6 +165,264 @@ pub(crate) struct FailureMarketIntervalPostimageV2 {
     funding: FailureMarketIntervalFundingReceiptV2,
 }
 
+/// Exact paired `0xac` append and `0xab` Idle-reset postwrite.
+///
+/// This receipt remains private to the Failure owner. Product's narrow link
+/// release must consume it in the same outer instruction before the archive
+/// operation can return to a routed caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
+    id: ProductContentId,
+    accounts: AuthenticatedFailureMarketIntervalAccountsV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV2,
+}
+
+/// Current LinkV2 paired append/reset postwrite.
+///
+/// This fresh receipt never lowers a four-way current Product disposition
+/// into the historical two-way V2 release contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FailureMarketIntervalArchivePostwriteV3 {
+    id: ProductContentId,
+    accounts: AuthenticatedFailureMarketIntervalAccountsV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV3,
+    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
+    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+}
+
+impl AuthenticatedSourceFailureProductReleaseAuthorityV1
+    for FailureMarketIntervalArchivePostwriteV3
+{
+    fn authenticate_source_failure_product_release_v1(
+        &self,
+        expected: SourceFailureProductReleaseFactsV1,
+    ) -> Outcome<()> {
+        let source = self.source_terminal;
+        let source_failure = self.source_failure_receipt;
+        require(
+            expected.source_terminal_postwrite_id == source.id()
+                && expected.source_terminal_authority_facts == source.authority_facts()
+                && expected.source_terminal_policy_authentication_id
+                    == source.persisted_policy_authentication_id()
+                && expected.source_terminal_receipt_id == source.terminal_receipt_id()
+                && expected.source_terminal_receipt_authentication_id
+                    == source.terminal_receipt_authentication_id()
+                && expected.source_physical_disposition_id == source.physical_disposition_id()
+                && expected.product_archive_postwrite_id.bytes() == self.id.bytes()
+                && expected.product_append_receipt_id.bytes() == self.append.id().bytes()
+                && expected.product_reset_receipt_id.bytes() == self.reset.id().bytes()
+                && expected.product_session_terminal_receipt_id.bytes()
+                    == source_failure.id().bytes()
+                && expected.product_session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && expected.product_release_preauthorization_id
+                    == self.release_link_preauthorization_id
+                && expected.product_release_disposition == self.release_disposition
+                && expected.product_session_transcript_before.bytes()
+                    == self.append.session_binding_id().bytes()
+                && source_failure.facts().source_terminal_postwrite_id == source.id(),
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+impl FailureMarketIntervalArchivePostwriteV3 {
+    pub(super) const fn id(self) -> ProductContentId { self.id }
+    pub(super) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.accounts
+    }
+    pub(super) const fn append(self) -> FailureMarketIntervalHistoryAppendReceiptV2 {
+        self.append
+    }
+    pub(super) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 { self.reset }
+    pub(super) const fn release_disposition(self) -> FailureSessionReleaseDispositionV3 {
+        self.release_disposition
+    }
+    pub(super) const fn release_link_preauthorization_id(self) -> ProductContentId {
+        self.release_link_preauthorization_id
+    }
+}
+
+impl AuthenticatedSeriesFailureArchivePostwriteV3 for FailureMarketIntervalArchivePostwriteV3 {
+    fn archive_postwrite_id(&self) -> Outcome<ProductContentId> { Ok(self.id) }
+    fn append_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.id().bytes()))
+    }
+    fn reset_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.reset.id().bytes()))
+    }
+    fn market_instance_id(&self) -> Outcome<clutch_product_series::MarketInstanceV2Id> {
+        Ok(self.append.market_instance_id())
+    }
+    fn generation(&self) -> Outcome<u64> { Ok(self.append.generation()) }
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Ok(self.source_occurrence_id)
+    }
+    fn session_binding_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.session_binding_id().bytes()))
+    }
+    fn session_terminal_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_terminal_receipt_id().bytes(),
+        ))
+    }
+    fn release_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.release_link_preauthorization_id)
+    }
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV3> {
+        Ok(self.release_disposition)
+    }
+    fn authenticate_series_failure_archive_release_postwrite_v3(
+        &self,
+        archive_postwrite_id: ProductContentId,
+        append_receipt_id: ProductContentId,
+        reset_receipt_id: ProductContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ProductContentId,
+        session_terminal_receipt_id: ProductContentId,
+        disposition: FailureSessionReleaseDispositionV3,
+        release_link_preauthorization_id: ProductContentId,
+    ) -> Outcome<()> {
+        require(
+            archive_postwrite_id == self.id
+                && append_receipt_id.bytes() == self.append.id().bytes()
+                && reset_receipt_id.bytes() == self.reset.id().bytes()
+                && market_instance_id == self.append.market_instance_id()
+                && generation == self.append.generation()
+                && source_occurrence_id == self.source_occurrence_id
+                && session_binding_id.bytes() == self.append.session_binding_id().bytes()
+                && session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && disposition == self.release_disposition
+                && release_link_preauthorization_id == self.release_link_preauthorization_id,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+impl FailureMarketIntervalArchivePostwriteV2 {
+    /// Exact paired physical/semantic postwrite identity.
+    pub(crate) const fn id(self) -> ProductContentId {
+        self.id
+    }
+
+    /// Reauthenticated canonical Idle cell and appended history.
+    pub(crate) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.accounts
+    }
+
+    /// Exact terminal session folded into append-only history.
+    pub(crate) const fn append(self) -> FailureMarketIntervalHistoryAppendReceiptV2 {
+        self.append
+    }
+
+    /// Exact reset receipt paired to the append.
+    pub(crate) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 {
+        self.reset
+    }
+
+    /// Exact Source occurrence retained from the terminal Product work before
+    /// canonical Idle reset clears the reusable cell's session-local body.
+    pub(crate) const fn source_occurrence_id(self) -> SourceOccurrenceV1Id {
+        self.source_occurrence_id
+    }
+
+    /// Exact Product-owned writable-link preauthorization consumed at release.
+    pub(crate) const fn release_link_preauthorization_id(self) -> ProductContentId {
+        self.release_link_preauthorization_id
+    }
+
+    /// Exact disjoint Product release disposition.
+    pub(crate) const fn release_disposition(self) -> FailureSessionReleaseDispositionV2 {
+        self.release_disposition
+    }
+}
+
+impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchivePostwriteV2 {
+    fn archive_postwrite_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.id)
+    }
+
+    fn append_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.id().bytes()))
+    }
+
+    fn reset_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.reset.id().bytes()))
+    }
+
+    fn market_instance_id(&self) -> Outcome<clutch_product_series::MarketInstanceV2Id> {
+        Ok(self.append.market_instance_id())
+    }
+
+    fn generation(&self) -> Outcome<u64> {
+        Ok(self.append.generation())
+    }
+
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Ok(self.source_occurrence_id)
+    }
+
+    fn session_binding_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_binding_id().bytes(),
+        ))
+    }
+
+    fn session_terminal_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_terminal_receipt_id().bytes(),
+        ))
+    }
+
+    fn release_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.release_link_preauthorization_id)
+    }
+
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV2> {
+        Ok(self.release_disposition)
+    }
+
+    fn authenticate_series_failure_archive_release_postwrite_v2(
+        &self,
+        archive_postwrite_id: ProductContentId,
+        append_receipt_id: ProductContentId,
+        reset_receipt_id: ProductContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ProductContentId,
+        session_terminal_receipt_id: ProductContentId,
+        release_disposition: FailureSessionReleaseDispositionV2,
+        release_link_preauthorization_id: ProductContentId,
+    ) -> Outcome<()> {
+        require(
+            archive_postwrite_id == self.id
+                && append_receipt_id.bytes() == self.append.id().bytes()
+                && reset_receipt_id.bytes() == self.reset.id().bytes()
+                && market_instance_id == self.append.market_instance_id()
+                && generation == self.append.generation()
+                && source_occurrence_id == self.source_occurrence_id
+                && session_binding_id.bytes() == self.append.session_binding_id().bytes()
+                && session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && release_disposition == self.release_disposition
+                && release_link_preauthorization_id == self.release_link_preauthorization_id,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
 impl FailureMarketIntervalPostimageV2 {
     /// Newly persisted canonical Idle cell and empty append-only history.
     pub(crate) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {

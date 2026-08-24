@@ -36,7 +36,7 @@ use clutch_source_plane_v3_adapter::PdaRecipeV3;
 pub use clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1;
 use clutch_source_plane_v3_runtime::{
     account_data_id, advance_lineage_state, authenticate_persisted_source_policy_handoff,
-    authenticate_source_failure_terminal,
+    authenticate_source_failure_terminal_account_v2,
     authenticate_source_no_reopen_terminal, authenticate_source_work_receipt_account,
     authorize_reopen, close_lineage_generation, retire_never_created_lineage,
     decode_runtime_account, encode_runtime_account, initialize_source_head,
@@ -46,14 +46,15 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2,
     AuthenticatedPersistedSourcePolicyHandoffV1, AuthenticatedReopenLineageV1,
     AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceRouteV1,
-    AuthenticatedSourceFailureTerminalV1, AuthenticatedSourceNoReopenTerminalV1,
+    AuthenticatedSourceFailureTerminalAccountV2, AuthenticatedSourceNoReopenTerminalV1,
     AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
     ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1,
     LineageFamilyV1, RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1,
     RuntimeAccountHeaderV1, RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1,
-    SourceFailureTerminalAccessV1, SourceFailureTerminalV1,
+    SourceFailureTerminalAccountAccessV2, SourceFailureTerminalAccountV2,
+    SourceFailureTerminalV1,
     SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1, SourceReleaseManifestV2,
     SourceNoReopenTerminalAccessV1, SourceNoReopenTerminalV1, SourceReceiptDispositionV1,
     SourceGenerationRequestV1, SourceReopenGenerationRequestV1,
@@ -63,7 +64,7 @@ use clutch_source_plane_v3_runtime::{
     source_runtime_liveness_policy_id_v1,
     REOPEN_LINEAGE_BYTES, RUNTIME_ACCOUNT_HEADER_BYTES,
     SourceFundingCustodyLedgerV1, SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
-    SOURCE_FAILURE_TERMINAL_BYTES, SOURCE_NO_REOPEN_TERMINAL_BYTES,
+    SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES, SOURCE_NO_REOPEN_TERMINAL_BYTES,
     SOURCE_REOPEN_GENERATION_REQUEST_BYTES,
 };
 use solana_account_info::AccountInfo;
@@ -460,7 +461,7 @@ pub(crate) fn quote_source_lifecycle_capitalization_v1(
     )?;
     let terminal_policy_space = SOURCE_NO_REOPEN_TERMINAL_BYTES
         .max(SOURCE_REOPEN_GENERATION_REQUEST_BYTES)
-        .max(SOURCE_FAILURE_TERMINAL_BYTES);
+        .max(SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES);
     rent_total = add_total(rent_total, rent.minimum_balance(terminal_policy_space)?)?;
     rent_total = add_total(
         rent_total,
@@ -951,17 +952,17 @@ pub struct PersistedSourceNoReopenTerminalV1 {
 
 /// Exact durable Source failure-terminal decision and rent observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PersistedSourceFailureTerminalV1 {
+pub(crate) struct PersistedSourceFailureTerminalV2 {
     funding: ImmutableSourceInputFundingV1,
-    authenticated: AuthenticatedSourceFailureTerminalV1,
+    authenticated: AuthenticatedSourceFailureTerminalAccountV2,
 }
 
-impl PersistedSourceFailureTerminalV1 {
+impl PersistedSourceFailureTerminalV2 {
     pub(crate) const fn funding(self) -> ImmutableSourceInputFundingV1 {
         self.funding
     }
 
-    pub(crate) const fn authenticated(self) -> AuthenticatedSourceFailureTerminalV1 {
+    pub(crate) const fn authenticated(self) -> AuthenticatedSourceFailureTerminalAccountV2 {
         self.authenticated
     }
 }
@@ -1035,10 +1036,11 @@ impl AuthenticatedSourceTerminalSemanticV1 {
 
     /// Bind one durable failure-terminal postwrite. The raw body ID never
     /// enters this constructor without exact owner/PDA/body authentication.
-    pub(crate) fn source_failure(value: PersistedSourceFailureTerminalV1) -> Outcome<Self> {
+    pub(crate) fn source_failure(value: PersistedSourceFailureTerminalV2) -> Outcome<Self> {
         let semantic_id = value
             .authenticated()
-            .body()
+            .value()
+            .terminal()
             .id()
             .map_err(source_runtime)?;
         let persistence_authentication_id = value.authenticated().id();
@@ -3116,7 +3118,7 @@ pub(crate) fn persist_source_no_reopen_terminal(
 /// Persist and hostile-reauthenticate the exact Source-owned terminal record
 /// for either mature absence or a stable refused Result.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn persist_source_failure_terminal_v1(
+pub(crate) fn persist_source_failure_terminal_v2(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     body: SourceFailureTerminalV1,
@@ -3125,13 +3127,15 @@ pub(crate) fn persist_source_failure_terminal_v1(
     terminal_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-) -> Outcome<PersistedSourceFailureTerminalV1> {
+) -> Outcome<PersistedSourceFailureTerminalV2> {
     let terminal_id = body.id().map_err(source_runtime)?;
+    let account_body = SourceFailureTerminalAccountV2::new_pending(body)
+        .map_err(source_runtime)?;
     let recipe = PdaRecipeV3::source_no_reopen_terminal(terminal_id).map_err(source_pda)?;
     let rent = read_rent(rent_sysvar)?;
     let funding = publish_immutable_source_input(
         program_id,
-        &body,
+        &account_body,
         terminal_id,
         &recipe,
         custody,
@@ -3144,9 +3148,8 @@ pub(crate) fn persist_source_failure_terminal_v1(
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
-    let authenticated = authenticate_source_failure_terminal(
+    let authenticated = authenticate_source_failure_terminal_account_v2(
         route,
-        body,
         RuntimeAccountViewV1 {
             key: runtime_key(terminal_account.key),
             owner: runtime_key(terminal_account.owner),
@@ -3157,16 +3160,17 @@ pub(crate) fn persist_source_failure_terminal_v1(
             data: &data,
         },
         derived,
-        SourceFailureTerminalAccessV1::CreatedMutable,
+        SourceFailureTerminalAccountAccessV2::CreatedPendingMutable,
     )
     .map_err(source_runtime)?;
     require(
         authenticated.account() == funding.account
             && authenticated.account_data_id() == funding.account_data_id
-            && authenticated.body() == body,
+            && authenticated.value() == account_body
+            && authenticated.value().terminal() == body,
         ClutchError::MismatchedState,
     )?;
-    Ok(PersistedSourceFailureTerminalV1 {
+    Ok(PersistedSourceFailureTerminalV2 {
         funding,
         authenticated,
     })
@@ -4501,7 +4505,7 @@ fn create_with_raw_seeds_from_custody<'a>(
     )
 }
 
-fn write_exact_account_data(account: &AccountInfo<'_>, bytes: &[u8]) -> Outcome<()> {
+pub(crate) fn write_exact_account_data(account: &AccountInfo<'_>, bytes: &[u8]) -> Outcome<()> {
     require(
         account.is_writable && account.data_len() == bytes.len(),
         ClutchError::WrongDataLength,

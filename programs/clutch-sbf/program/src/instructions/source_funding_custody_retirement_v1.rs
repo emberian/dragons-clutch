@@ -54,6 +54,9 @@ pub(crate) struct SourceFundingCustodyLifecycleTerminalFactsV1 {
     pub(crate) capitalization_authority_id: ContentId,
     pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) pre_root_source_occurrence_id: ContentId,
+    pub(crate) product_link_account: RuntimeKey,
+    pub(crate) product_link_authentication_id: ContentId,
+    pub(crate) product_link_semantic_id: ContentId,
     pub(crate) source_terminal_postwrite_id: ContentId,
     pub(crate) source_result_or_absence_close_receipt_id: ContentId,
     pub(crate) source_product_release_binding_id: ContentId,
@@ -85,6 +88,9 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
                 &self.capitalization_authority_id.bytes(),
                 &self.capitalization_receipt_id.bytes(),
                 &self.pre_root_source_occurrence_id.bytes(),
+                &self.product_link_account.bytes(),
+                &self.product_link_authentication_id.bytes(),
+                &self.product_link_semantic_id.bytes(),
                 &self.source_terminal_postwrite_id.bytes(),
                 &self.source_result_or_absence_close_receipt_id.bytes(),
                 &self.source_product_release_binding_id.bytes(),
@@ -120,6 +126,9 @@ pub(crate) struct SourceFundingCustodyLiveFounderFactsV1 {
     pub(crate) capitalization_authority_id: ContentId,
     pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) pre_root_source_occurrence_id: ContentId,
+    pub(crate) product_link_account: RuntimeKey,
+    pub(crate) product_link_authentication_id: ContentId,
+    pub(crate) product_link_semantic_id: ContentId,
     pub(crate) market_instance_id: ContentId,
     pub(crate) series_plan_id: ContentId,
     pub(crate) ordinal: u32,
@@ -183,10 +192,18 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
     let ledger = custody.ledger();
     let link_state = link.state();
     let link_binding = link_state.binding();
+    let link_semantic_id = link_state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let founder = SourceFundingCustodyLiveFounderFactsV1 {
         capitalization_authority_id: ledger.capitalization_authority_id,
         capitalization_receipt_id: ledger.capitalization_receipt_id,
         pre_root_source_occurrence_id: link_binding.source_occurrence_receipt_id,
+        product_link_account: RuntimeKey::from_bytes(link.account().to_bytes()),
+        product_link_authentication_id: ContentId::from_bytes(
+            link.authentication_id().bytes(),
+        ),
+        product_link_semantic_id: ContentId::from_bytes(link_semantic_id.bytes()),
         market_instance_id: ContentId::from_bytes(link_binding.market_instance_id.bytes()),
         series_plan_id: ContentId::from_bytes(link_binding.series_plan_id.bytes()),
         ordinal: link_binding.ordinal,
@@ -214,6 +231,8 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
             && founder.capitalization_authority_id != founder.capitalization_receipt_id
             && link.is_writable()
             && link_state.phase() == SeriesMarketLinkPhaseV2::Retiring
+            && !founder.product_link_authentication_id.is_zero()
+            && !founder.product_link_semantic_id.is_zero()
             && link_binding.source_occurrence_receipt_id
                 == founder.pre_root_source_occurrence_id
             && link_binding.market_instance_id.bytes() == founder.market_instance_id.bytes()
@@ -246,6 +265,8 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
         expected.capitalization_authority_id,
         expected.capitalization_receipt_id,
         expected.pre_root_source_occurrence_id,
+        expected.product_link_authentication_id,
+        expected.product_link_semantic_id,
         expected.source_terminal_postwrite_id,
         expected.source_result_or_absence_close_receipt_id,
         expected.source_product_release_binding_id,
@@ -269,6 +290,10 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
                 == founder.capitalization_receipt_id
             && expected.pre_root_source_occurrence_id
                 == founder.pre_root_source_occurrence_id
+            && expected.product_link_account == founder.product_link_account
+            && expected.product_link_authentication_id
+                == founder.product_link_authentication_id
+            && expected.product_link_semantic_id == founder.product_link_semantic_id
             && expected.market_instance_id == founder.market_instance_id
             && expected.series_plan_id == founder.series_plan_id
             && expected.ordinal == founder.ordinal
@@ -292,6 +317,10 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
             && expected.source_funding_custody != expected.lamport_principal_refund
             && expected.source_funding_custody != expected.neutral_lamport_sink
             && expected.source_funding_custody != expected.source_occurrence_account
+            && expected.product_link_account != expected.source_funding_custody
+            && expected.product_link_account != expected.source_occurrence_account
+            && expected.product_link_account != expected.lamport_principal_refund
+            && expected.product_link_account != expected.neutral_lamport_sink
             && expected.source_occurrence_account != expected.lamport_principal_refund
             && expected.source_occurrence_account != expected.neutral_lamport_sink
             && expected.lamport_principal_refund != expected.neutral_lamport_sink,
@@ -656,6 +685,9 @@ mod adversarial_tests {
             .expect("bounded lifecycle terminal authentication");
         for exact_join in [
             "link_state.phase() == SeriesMarketLinkPhaseV2::Retiring",
+            "product_link_account: RuntimeKey::from_bytes(link.account().to_bytes())",
+            "link.authentication_id().bytes()",
+            "product_link_semantic_id: ContentId::from_bytes(link_semantic_id.bytes())",
             "pre_root_source_occurrence_id: link_binding.source_occurrence_receipt_id",
             "source_occurrence_id: ContentId::from_bytes(link_binding.source_occurrence_id.bytes())",
             "link_binding.source_occurrence_account_id.bytes()",
@@ -670,6 +702,9 @@ mod adversarial_tests {
         }
         for returned_join in [
             "expected.pre_root_source_occurrence_id",
+            "expected.product_link_account == founder.product_link_account",
+            "expected.product_link_authentication_id",
+            "expected.product_link_semantic_id == founder.product_link_semantic_id",
             "expected.source_occurrence_id == founder.source_occurrence_id",
             "expected.source_occurrence_account == founder.source_occurrence_account",
             "expected.source_occurrence_authentication_id",

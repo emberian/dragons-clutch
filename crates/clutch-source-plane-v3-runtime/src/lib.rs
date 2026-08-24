@@ -53,9 +53,12 @@ pub use custody::{
     SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG, SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION,
 };
 pub use failure_terminal::{
-    authenticate_source_failure_terminal, AuthenticatedSourceFailureTerminalV1,
-    SourceFailureTerminalAccessV1, SourceFailureTerminalDispositionV1,
-    SourceFailureTerminalV1, SOURCE_FAILURE_TERMINAL_BYTES,
+    authenticate_source_failure_terminal_account_v2,
+    AuthenticatedSourceFailureTerminalAccountV2, SourceFailureProductReleaseDispositionV2,
+    SourceFailureTerminalAccountAccessV2, SourceFailureTerminalAccountV2,
+    SourceFailureTerminalDispositionV1, SourceFailureTerminalProductReleasePhaseV2,
+    SourceFailureTerminalV1, SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES,
+    SOURCE_FAILURE_TERMINAL_BYTES,
 };
 pub use funding::{
     authenticate_source_work_receipt_account, plan_runtime_account_close_from_header,

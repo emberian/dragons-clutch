@@ -15,15 +15,27 @@ use crate::instructions::product_series_current::{
 use crate::instructions::source_failure_terminal_v1::{
     AuthenticatedSourceFailureTerminalPostwriteV1, SourceFailureTerminalAuthorityFactsV1,
 };
+use crate::source_plane_v3::{derive_runtime_pda, runtime_key};
+use crate::source_plane_v3_actions::write_exact_account_data;
 use clutch_product_series::SeriesMarketLinkV2Id;
-use clutch_source_plane_v3::ContentId;
-use clutch_source_plane_v3_runtime::SourceFailureKindV1;
+use clutch_source_plane_v3::{ContentId, FixedCodec};
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
+use clutch_source_plane_v3_runtime::{
+    account_data_id, authenticate_source_failure_terminal_account_v2,
+    AuthenticatedSourceFailureTerminalAccountV2, AuthenticatedSourceRouteV1,
+    RuntimeAccountViewV1, SourceFailureKindV1, SourceFailureProductReleaseDispositionV2,
+    SourceFailureTerminalAccountAccessV2, SourceFailureTerminalAccountV2,
+    SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES,
+};
+use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 const SOURCE_FAILURE_PRODUCT_RELEASE_FACTS_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-failure-product-release-facts/v1";
 const SOURCE_FAILURE_PRODUCT_RELEASE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-failure-product-release/v1";
+const PERSISTED_SOURCE_FAILURE_PRODUCT_RELEASE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/persisted-source-failure-product-release/v2";
 
 fn source_id(value: clutch_product_series::ContentId) -> ContentId {
     ContentId::from_bytes(value.bytes())
@@ -35,6 +47,7 @@ fn source_id(value: clutch_product_series::ContentId) -> ContentId {
 pub(crate) struct SourceFailureProductReleaseFactsV1 {
     pub(crate) source_terminal_postwrite_id: ContentId,
     pub(crate) source_terminal_authority_facts: SourceFailureTerminalAuthorityFactsV1,
+    pub(crate) source_terminal_policy_authentication_id: ContentId,
     pub(crate) source_terminal_receipt_id: ContentId,
     pub(crate) source_terminal_receipt_authentication_id: ContentId,
     pub(crate) source_physical_disposition_id: ContentId,
@@ -63,6 +76,7 @@ impl SourceFailureProductReleaseFactsV1 {
                 SOURCE_FAILURE_PRODUCT_RELEASE_FACTS_DOMAIN_V1,
                 &self.source_terminal_postwrite_id.bytes(),
                 &self.source_terminal_authority_facts.id().bytes(),
+                &self.source_terminal_policy_authentication_id.bytes(),
                 &self.source_terminal_receipt_id.bytes(),
                 &self.source_terminal_receipt_authentication_id.bytes(),
                 &self.source_physical_disposition_id.bytes(),
@@ -136,6 +150,7 @@ pub(crate) fn bind_source_failure_product_release_v1<
     let facts = SourceFailureProductReleaseFactsV1 {
         source_terminal_postwrite_id: source.id(),
         source_terminal_authority_facts: source.authority_facts(),
+        source_terminal_policy_authentication_id: source.persisted_policy_authentication_id(),
         source_terminal_receipt_id: source.terminal_receipt_id(),
         source_terminal_receipt_authentication_id: source
             .terminal_receipt_authentication_id(),
@@ -166,6 +181,7 @@ pub(crate) fn bind_source_failure_product_release_v1<
     let exact_ids = [
         facts.source_terminal_postwrite_id,
         facts.source_terminal_authority_facts.id(),
+        facts.source_terminal_policy_authentication_id,
         facts.source_terminal_receipt_id,
         facts.source_terminal_receipt_authentication_id,
         facts.source_physical_disposition_id,
@@ -183,6 +199,9 @@ pub(crate) fn bind_source_failure_product_release_v1<
     require(
         facts.product_release_disposition == expected_disposition
             && exact_ids.iter().all(|id| !id.is_zero())
+            && facts.product_link_account != Pubkey::default()
+            && facts.product_link_semantic_before.bytes() != [0; 32]
+            && facts.product_link_semantic_after.bytes() != [0; 32]
             && facts.product_link_authentication_before
                 != facts.product_link_authentication_after
             && facts.product_link_semantic_before != facts.product_link_semantic_after
@@ -210,6 +229,250 @@ pub(crate) fn bind_source_failure_product_release_v1<
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedSourceFailureProductReleaseV1 { id, facts })
+}
+
+/// Hostile, durable per-occurrence proof that the exact failed Source
+/// terminal reached the matching current Product LinkV2 release. This value
+/// is deliberately non-Copy so later retirement consumes one authenticated
+/// projection rather than reconstructing the transaction-local bridge.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedPersistedSourceFailureProductReleaseV2 {
+    id: ContentId,
+    authenticated: AuthenticatedSourceFailureTerminalAccountV2,
+}
+
+impl AuthenticatedPersistedSourceFailureProductReleaseV2 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn account(&self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.authenticated.account()
+    }
+
+    pub(crate) const fn account_data_id(&self) -> ContentId {
+        self.authenticated.account_data_id()
+    }
+
+    pub(crate) const fn authentication_id(&self) -> ContentId {
+        self.authenticated.id()
+    }
+
+    pub(crate) const fn value(&self) -> SourceFailureTerminalAccountV2 {
+        self.authenticated.value()
+    }
+}
+
+fn authenticated_persisted_release(
+    route: AuthenticatedSourceRouteV1,
+    authenticated: AuthenticatedSourceFailureTerminalAccountV2,
+) -> Outcome<AuthenticatedPersistedSourceFailureProductReleaseV2> {
+    let value = authenticated.value();
+    let value_id = value
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_id = value
+        .terminal()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PERSISTED_SOURCE_FAILURE_PRODUCT_RELEASE_DOMAIN_V2,
+            &route.route_id().bytes(),
+            &authenticated.account().bytes(),
+            &authenticated.account_data_id().bytes(),
+            &authenticated.id().bytes(),
+            &terminal_id.bytes(),
+            &value_id.bytes(),
+            &value.product_release_binding_id().bytes(),
+            &value.product_release_facts_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        !id.is_zero()
+            && value.product_release_binding_id() != id
+            && value.product_release_facts_id() != id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedPersistedSourceFailureProductReleaseV2 {
+        id,
+        authenticated,
+    })
+}
+
+/// Rewrite one exact pending Source terminal account to BoundProductRelease.
+/// The account is already fully prefunded; no caller amount, identity, or
+/// publication hook participates in this same-instruction one-way write.
+pub(crate) fn bind_persisted_source_failure_product_release_v2(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    bridge: AuthenticatedSourceFailureProductReleaseV1,
+    terminal_policy_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedPersistedSourceFailureProductReleaseV2> {
+    let facts = bridge.facts();
+    require(
+        runtime_key(terminal_policy_account.key)
+            == facts.source_terminal_authority_facts.source_terminal_policy_account
+            && terminal_policy_account.is_writable
+            && !terminal_policy_account.is_signer
+            && !terminal_policy_account.executable
+            && terminal_policy_account.owner == program_id
+            && terminal_policy_account.data_len() == SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    let pending_data = terminal_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let pending_body = SourceFailureTerminalAccountV2::decode(&pending_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_id = pending_body
+        .terminal()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let recipe = PdaRecipeV3::source_no_reopen_terminal(terminal_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+    let pending = authenticate_source_failure_terminal_account_v2(
+        route,
+        RuntimeAccountViewV1 {
+            key: runtime_key(terminal_policy_account.key),
+            owner: runtime_key(terminal_policy_account.owner),
+            lamports: terminal_policy_account.lamports(),
+            executable: terminal_policy_account.executable,
+            writable: terminal_policy_account.is_writable,
+            signer: terminal_policy_account.is_signer,
+            data: &pending_data,
+        },
+        derived,
+        SourceFailureTerminalAccountAccessV2::CreatedPendingMutable,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let pending_data_id = account_data_id(pending.account(), &pending_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(pending_data);
+    require(
+        pending.account_data_id() == pending_data_id
+            && pending.id() == facts.source_terminal_policy_authentication_id
+            && pending.value().terminal().source_failure_terminal_authority_id()
+                == facts.source_terminal_authority_facts.id()
+            && pending.value().terminal().source_failure_kind()
+                == facts.source_terminal_authority_facts.source_failure_kind,
+        ClutchError::MismatchedState,
+    )?;
+    let disposition = match facts.product_release_disposition {
+        FailureSessionReleaseDispositionV3::SourceAbsent => {
+            SourceFailureProductReleaseDispositionV2::SourceAbsent
+        }
+        FailureSessionReleaseDispositionV3::SourceRefused => {
+            SourceFailureProductReleaseDispositionV2::SourceRefused
+        }
+        FailureSessionReleaseDispositionV3::Resolved
+        | FailureSessionReleaseDispositionV3::Exhausted => {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        }
+    };
+    let bound_body = pending.value().bind_product_release(
+        disposition,
+        bridge.id(),
+        facts.id(),
+        facts.product_release_id,
+        clutch_source_plane_v3_runtime::RuntimeKey::from_bytes(
+            facts.product_link_account.to_bytes(),
+        ),
+        facts.product_link_authentication_before,
+        facts.product_link_authentication_after,
+        source_id(facts.product_link_semantic_before),
+        source_id(facts.product_link_semantic_after),
+        facts.product_transition_sequence_before,
+        facts.product_transition_sequence_after,
+        facts.product_session_transcript_before,
+        facts.product_session_transcript_after,
+        facts.product_session_terminal_receipt_id,
+        facts.product_archive_postwrite_id,
+        facts.product_append_receipt_id,
+        facts.product_reset_receipt_id,
+        facts.product_release_preauthorization_id,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES];
+    bound_body
+        .encode_into(&mut bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_exact_account_data(terminal_policy_account, &bytes)?;
+    let bound_data = terminal_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bound = authenticate_source_failure_terminal_account_v2(
+        route,
+        RuntimeAccountViewV1 {
+            key: runtime_key(terminal_policy_account.key),
+            owner: runtime_key(terminal_policy_account.owner),
+            lamports: terminal_policy_account.lamports(),
+            executable: terminal_policy_account.executable,
+            writable: terminal_policy_account.is_writable,
+            signer: terminal_policy_account.is_signer,
+            data: &bound_data,
+        },
+        derived,
+        SourceFailureTerminalAccountAccessV2::BoundMutable,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        bound.value() == bound_body
+            && bound.value().terminal() == pending.value().terminal()
+            && bound.value().product_release_binding_id() == bridge.id()
+            && bound.value().product_release_facts_id() == facts.id()
+            && bound.account_data_id() != pending_data_id
+            && bound.id() != pending.id(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticated_persisted_release(route, bound)
+}
+
+/// Hostile-read an already bound per-occurrence release for later same-Link
+/// lifecycle retirement. No caller-supplied terminal or bridge body is used.
+pub(crate) fn authenticate_persisted_source_failure_product_release_v2(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    terminal_policy_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedPersistedSourceFailureProductReleaseV2> {
+    require(
+        !terminal_policy_account.is_writable
+            && !terminal_policy_account.is_signer
+            && !terminal_policy_account.executable
+            && terminal_policy_account.owner == program_id
+            && terminal_policy_account.data_len() == SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    let data = terminal_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let decoded = SourceFailureTerminalAccountV2::decode(&data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_id = decoded
+        .terminal()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let recipe = PdaRecipeV3::source_no_reopen_terminal(terminal_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+    let authenticated = authenticate_source_failure_terminal_account_v2(
+        route,
+        RuntimeAccountViewV1 {
+            key: runtime_key(terminal_policy_account.key),
+            owner: runtime_key(terminal_policy_account.owner),
+            lamports: terminal_policy_account.lamports(),
+            executable: terminal_policy_account.executable,
+            writable: terminal_policy_account.is_writable,
+            signer: terminal_policy_account.is_signer,
+            data: &data,
+        },
+        derived,
+        SourceFailureTerminalAccountAccessV2::ExistingBoundReadOnly,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authenticated_persisted_release(route, authenticated)
 }
 
 #[cfg(test)]
@@ -243,5 +506,60 @@ mod adversarial_tests {
         assert!(compose.contains("SourceEvaluationRefused"));
         assert!(!compose.contains("FailureSessionReleaseDispositionV3::Resolved"));
         assert!(!compose.contains("FailureSessionReleaseDispositionV3::Exhausted"));
+    }
+
+    #[test]
+    fn persisted_binding_is_one_way_and_exact_over_release_facts() {
+        let source = include_str!("source_failure_product_release_v1.rs");
+        let bind = source
+            .split("pub(crate) fn bind_persisted_source_failure_product_release_v2")
+            .nth(1)
+            .and_then(|value| {
+                value.split("/// Hostile-read an already bound").next()
+            })
+            .expect("bounded persisted release binder");
+        for exact in [
+            "SourceFailureTerminalAccountAccessV2::CreatedPendingMutable",
+            "pending.id() == facts.source_terminal_policy_authentication_id",
+            "pending.value().terminal().source_failure_terminal_authority_id()",
+            "facts.product_link_authentication_before",
+            "facts.product_link_authentication_after",
+            "source_id(facts.product_link_semantic_before)",
+            "source_id(facts.product_link_semantic_after)",
+            "facts.product_transition_sequence_before",
+            "facts.product_transition_sequence_after",
+            "facts.product_session_transcript_before",
+            "facts.product_session_transcript_after",
+            "SourceFailureTerminalAccountAccessV2::BoundMutable",
+            "bound.value().terminal() == pending.value().terminal()",
+        ] {
+            assert!(bind.contains(exact), "missing {exact}");
+        }
+        assert!(!bind.contains("create_pda_account"));
+        assert!(!bind.contains("resize("));
+    }
+
+    #[test]
+    fn persisted_release_capability_is_non_clone_and_hostile_reopen_has_no_body() {
+        let source = include_str!("source_failure_product_release_v1.rs");
+        let prefix = source
+            .split("pub(crate) struct AuthenticatedPersistedSourceFailureProductReleaseV2")
+            .next()
+            .expect("persisted capability")
+            .rsplit("#[derive(")
+            .next()
+            .expect("derive list")
+            .split(")]" )
+            .next()
+            .expect("bounded derive list");
+        assert!(!prefix.contains("Clone"));
+        assert!(!prefix.contains("Copy"));
+        let reopen = source
+            .split("pub(crate) fn authenticate_persisted_source_failure_product_release_v2")
+            .nth(1)
+            .expect("hostile bound reopen");
+        assert!(reopen.contains("SourceFailureTerminalAccountAccessV2::ExistingBoundReadOnly"));
+        assert!(!reopen.contains("expected:"));
+        assert!(!reopen.contains("bridge:"));
     }
 }
