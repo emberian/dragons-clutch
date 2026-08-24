@@ -902,7 +902,9 @@ fn action_verdict_json(
             semantic_builder,
         );
     }
-    let state_reason = if matching_materials.len() > 1 {
+    let state_reason = if is_missing_product_terminal_preauthorization(coordinate) {
+        "current Product state does not persist the exact terminal preauthorization receipt required by Failure action 13"
+    } else if matching_materials.len() > 1 {
         "multiple canonical materials claim the same release/cursor coordinate"
     } else if semantic_builder.is_none() {
         "no reviewed semantic-owner transaction constructor is registered for this release-enabled coordinate"
@@ -934,6 +936,14 @@ fn action_verdict_json(
         "signerRequirements": [],
         "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
     })
+}
+
+fn is_missing_product_terminal_preauthorization(
+    coordinate: CanonicalIntentCoordinate,
+) -> bool {
+    coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
+        && coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag()
 }
 
 fn action_variant_verdict_json(
@@ -1320,7 +1330,7 @@ fn coordinate_description(
             return (
                 "recovery",
                 "close-failure-interval-consensus-work",
-                Some("missing-product-terminal-preauthorization"),
+                None,
             );
         }
         return ("recovery", "recovery-action", None);
