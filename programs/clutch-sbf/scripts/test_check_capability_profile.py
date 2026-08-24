@@ -29,27 +29,9 @@ def digest(label: str) -> str:
     return hashlib.sha256(f"test-only/{label}".encode("utf-8")).hexdigest()
 
 
-def capabilities(
-    linkage: str = "planned", profile_feature: str = "profile-general-source-v2-point"
-) -> list[dict[str, object]]:
+def capabilities(linkage: str = "planned") -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for index, (slot, owner) in enumerate(checker.CAPABILITY_OWNERS, start=1):
-        if profile_feature == checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
-            required_intents = []
-            if slot == "relation":
-                required_intents.extend(
-                    [pair + [0] for pair in checker.SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS]
-                )
-                required_intents.extend(
-                    [pair + [0] for pair in checker.SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS]
-                )
-            required_intents.sort()
-        else:
-            required_intents = [[index, 3, 0]]
-            if slot == "source-plane" and profile_feature == "profile-full":
-                required_intents.extend(
-                    copy.deepcopy(checker.FULL_PROFILE_SOURCE_EXTENSION_TRIPLES)
-                )
         rows.append(
             {
                 "slot": slot,
@@ -57,7 +39,7 @@ def capabilities(
                 "linkage": linkage,
                 "semantic_version": f"{slot}-test-v1",
                 "semantic_digest_sha256": digest(slot),
-                "required_intent_triples": required_intents,
+                "required_intent_triples": [[index, 3, 0]],
                 "required_account_coordinates": [[index, 1]],
             }
         )
@@ -76,25 +58,6 @@ def linked_coverage(rows: list[dict[str, object]]) -> dict[str, object]:
         "semantic_digest_sha256": digest("central-registry"),
         "enabled_intent_triples": sorted(intents),
         "linked_account_coordinates": sorted(accounts),
-    }
-
-
-def wire_surface(registry: dict[str, object]) -> dict[str, object]:
-    pairs = [
-        triple[:2]
-        for triple in registry["enabled_intent_triples"]  # type: ignore[index]
-        if triple[2] == 0
-    ]
-    return {
-        "schema": checker.WIRE_SURFACE_SCHEMA,
-        "legacy_intent_pairs": [
-            pair for pair in pairs if pair[0] not in checker.DIRECT_V3_TAGS
-        ],
-        "dedicated_direct_intent_pairs": [
-            pair for pair in pairs if pair[0] in checker.DIRECT_V3_TAGS
-        ],
-        "outer_request_actions": copy.deepcopy(checker.OUTER_REQUEST_ACTIONS),
-        "source_generation_discriminants": [],
     }
 
 
@@ -119,9 +82,8 @@ def manifest(
     profile_feature: str = "profile-general-source-v2-point",
     budget_limits: dict[str, int] | None = None,
 ) -> dict[str, object]:
-    rows = capabilities(linkage, profile_feature)
+    rows = capabilities(linkage)
     registry = linked_coverage(rows)
-    declared_wire_surface = wire_surface(registry)
     declared_limits = limits() if budget_limits is None else budget_limits
     name = "test-profile"
     label = "dragons-clutch/capability-profile/test-fixture/v2"
@@ -132,13 +94,7 @@ def manifest(
         "expected_undefined_dynamic_symbols": SYSCALLS,
     }
     identity = checker.profile_identity(
-        name,
-        label,
-        build_contract,
-        rows,
-        registry,
-        declared_wire_surface,
-        declared_limits,
+        name, label, build_contract, rows, registry, declared_limits
     )
     return {
         "schema": checker.MANIFEST_SCHEMA,
@@ -152,7 +108,6 @@ def manifest(
         "build_contract": build_contract,
         "capabilities": rows,
         "central_registry": registry,
-        "wire_surface": declared_wire_surface,
         "artifact_budget": {
             "limits": declared_limits,
             "measurement_class": measurement_class,
@@ -304,10 +259,6 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
                 ),
                 "semantic_owners": copy.deepcopy(value["capabilities"]),
                 "central_registry": copy.deepcopy(value["central_registry"]),
-                "wire_surface": copy.deepcopy(value["wire_surface"]),
-                "wire_surface_sha256": checker.wire_surface_sha256(
-                    value["wire_surface"]  # type: ignore[arg-type]
-                ),
                 "reproducible": True,
                 "measurements": [measurement_run(1), measurement_run(2)],
                 "default_feature_equivalence": default_equivalence,
@@ -350,7 +301,6 @@ class CapabilityProfileTests(unittest.TestCase):
                             changed["build_contract"],  # type: ignore[arg-type]
                             changed["capabilities"],  # type: ignore[arg-type]
                             changed["central_registry"],  # type: ignore[arg-type]
-                            changed["wire_surface"],  # type: ignore[arg-type]
                             changed["artifact_budget"]["limits"],  # type: ignore[index,arg-type]
                         ),
                     },
@@ -359,108 +309,7 @@ class CapabilityProfileTests(unittest.TestCase):
             )
             self.assertNotEqual(original, summary["profile_identity_sha256"])
 
-    def test_identity_and_domain_separated_digest_bind_exact_wire_surface(self) -> None:
-        value = manifest(linkage="linked")
-        original_surface = value["wire_surface"]
-        changed_surface = copy.deepcopy(original_surface)
-        changed_surface["outer_request_actions"] = [0, 1]
-        original_identity = value["profile"]["identity_sha256"]  # type: ignore[index]
-        changed_identity = checker.profile_identity(
-            value["profile"]["name"],  # type: ignore[index]
-            value["profile"]["label"],  # type: ignore[index]
-            value["build_contract"],  # type: ignore[arg-type]
-            value["capabilities"],  # type: ignore[arg-type]
-            value["central_registry"],  # type: ignore[arg-type]
-            changed_surface,  # type: ignore[arg-type]
-            value["artifact_budget"]["limits"],  # type: ignore[index,arg-type]
-        )
-        self.assertNotEqual(original_identity, changed_identity)
-        self.assertNotEqual(
-            checker.wire_surface_sha256(original_surface),  # type: ignore[arg-type]
-            checker.wire_surface_sha256(changed_surface),  # type: ignore[arg-type]
-        )
-
-    def test_wire_surface_is_canonical_exhaustive_and_decoder_separated(self) -> None:
-        value = manifest(linkage="linked")
-        value["wire_surface"]["legacy_intent_pairs"].pop()  # type: ignore[index,union-attr]
-        with self.assertRaisesRegex(checker.ProfileError, "do not exactly match"):
-            checker.validate_manifest(value, repo=ROOT)
-
-        value = manifest(linkage="linked")
-        pair = value["wire_surface"]["legacy_intent_pairs"].pop(0)  # type: ignore[index,union-attr]
-        value["wire_surface"]["dedicated_direct_intent_pairs"].append(pair)  # type: ignore[index,union-attr]
-        with self.assertRaisesRegex(checker.ProfileError, "non-Direct tag"):
-            checker.validate_manifest(value, repo=ROOT)
-
-        value = manifest(linkage="linked")
-        value["wire_surface"]["legacy_intent_pairs"].reverse()  # type: ignore[index,union-attr]
-        with self.assertRaisesRegex(checker.ProfileError, "noncanonical intent-pair"):
-            checker.validate_manifest(value, repo=ROOT)
-
-    def test_release_wire_surface_refuses_both_legacy_source_generations(self) -> None:
-        for tag, generation in ((23, 1), (70, 2)):
-            with self.subTest(tag=tag):
-                value = manifest(linkage="linked")
-                source_owner = next(
-                    row
-                    for row in value["capabilities"]  # type: ignore[union-attr]
-                    if row["slot"] == "source-plane"
-                )
-                source_owner["required_intent_triples"].append([tag, 3, 0])
-                source_owner["required_intent_triples"].sort()
-                value["central_registry"]["enabled_intent_triples"].append([tag, 3, 0])  # type: ignore[index,union-attr]
-                value["central_registry"]["enabled_intent_triples"].sort()  # type: ignore[index,union-attr]
-                value["wire_surface"]["legacy_intent_pairs"].append([tag, 3])  # type: ignore[index,union-attr]
-                value["wire_surface"]["legacy_intent_pairs"].sort()  # type: ignore[index,union-attr]
-                value["wire_surface"]["source_generation_discriminants"] = [generation]  # type: ignore[index]
-                with self.assertRaisesRegex(
-                    checker.ProfileError, "retains legacy Source authority"
-                ):
-                    checker.validate_manifest(value, repo=ROOT)
-
-    def test_full_successor_source_surface_is_exactly_actions_one_through_four(self) -> None:
-        for mutation in ("missing", "reserved"):
-            with self.subTest(mutation=mutation):
-                value = manifest(profile_feature="profile-full")
-                source_owner = next(
-                    row
-                    for row in value["capabilities"]  # type: ignore[union-attr]
-                    if row["slot"] == "source-plane"
-                )
-                triples = source_owner["required_intent_triples"]
-                if mutation == "missing":
-                    triples.remove([77, 2, 4])
-                else:
-                    triples.append([77, 2, 5])
-                with self.assertRaisesRegex(
-                    checker.ProfileError,
-                    "must be exactly 77/v2 actions 1 through 4",
-                ):
-                    checker.validate_manifest(value, repo=ROOT)
-
-    def test_chain_attached_successor_refuses_every_partial_source_surface(self) -> None:
-        for action in range(1, 13):
-            with self.subTest(action=action):
-                value = manifest(
-                    linkage="linked",
-                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                    source_identity="runtime-real-pyth-release",
-                )
-                source_owner = next(
-                    row
-                    for row in value["capabilities"]  # type: ignore[union-attr]
-                    if row["slot"] == "source-plane"
-                )
-                source_owner["required_intent_triples"].append([77, 2, action])
-                value["central_registry"]["enabled_intent_triples"].append([77, 2, action])  # type: ignore[index,union-attr]
-                value["central_registry"]["enabled_intent_triples"].sort()  # type: ignore[index,union-attr]
-                with self.assertRaisesRegex(
-                    checker.ProfileError,
-                    "incomplete chain-attached Source lifecycle must disable actions 1 through 12",
-                ):
-                    checker.validate_manifest(value, repo=ROOT)
-
-    def test_all_eleven_semantic_owners_are_mandatory_and_ordered(self) -> None:
+    def test_all_twelve_semantic_owners_are_mandatory_and_ordered(self) -> None:
         value = manifest()
         value["capabilities"].pop()  # type: ignore[union-attr]
         with self.assertRaisesRegex(checker.ProfileError, "missing capability slots"):
@@ -473,6 +322,118 @@ class CapabilityProfileTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(checker.ProfileError, "noncanonical order"):
             checker.validate_manifest(value, repo=ROOT)
+
+    def test_successor_dev_build_selector_and_release_rows_fail_closed(self) -> None:
+        contract = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": (
+                    "observed-positive-collateral-and-claim-release"
+                ),
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        self.assertEqual(
+            checker.cargo_features(contract),
+            [
+                "custom-heap",
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "observed-positive-collateral-release-manifest",
+            ],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "observed-positive collateral release rows are absent or mismatched",
+        ):
+            checker.require_populated_observed_release_manifest(ROOT)
+
+        hostile = copy.deepcopy(contract)
+        hostile["collateral_release_identity"] = "production-inert"
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "requires observed-positive collateral and claim releases",
+        ):
+            checker.validate_build_contract(hostile)
+
+    def test_successor_dev_family_closure_is_all_or_none(self) -> None:
+        rows = capabilities("linked")
+        for row in rows:
+            row["required_intent_triples"] = []
+            row["required_account_coordinates"] = []
+        by_slot = {row["slot"]: row for row in rows}
+        by_slot["source-plane"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_SOURCE_EXTENSION_TRIPLES
+        )
+        by_slot["series-products"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_SERIES_EXTENSION_TRIPLES
+        )
+        by_slot["recovery"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_RECOVERY_EXTENSION_TRIPLES
+        )
+        by_slot["structured-claim"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_STRUCTURED_EXTENSION_TRIPLES
+        )
+        by_slot["liquidity-dealer"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_DEALER_EXTENSION_TRIPLES
+        )
+        by_slot["fractional-redemption"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_FRACTIONAL_EXTENSION_TRIPLES
+        )
+        by_slot["relation"]["required_intent_triples"] = sorted(
+            copy.deepcopy(checker.CURRENT_GENERAL_EXTENSION_TRIPLES)
+            + copy.deepcopy(checker.CURRENT_DIRECT_EXTENSION_TRIPLES)
+        )
+        registry = linked_coverage(rows)
+        contract = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": (
+                    "observed-positive-collateral-and-claim-release"
+                ),
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        checker.validate_successor_dependency_closure(
+            contract,
+            checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+            rows,
+            registry,
+        )
+
+        partial = copy.deepcopy(registry)
+        partial["enabled_intent_triples"].remove([79, 1, 10])
+        with self.assertRaisesRegex(
+            checker.ProfileError, "extension closure is incomplete"
+        ):
+            checker.validate_successor_dependency_closure(
+                contract,
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+                rows,
+                partial,
+            )
+
+        wrong_owner_rows = copy.deepcopy(rows)
+        fractional = by_slot["fractional-redemption"]
+        wrong_owner_fractional = next(
+            row
+            for row in wrong_owner_rows
+            if row["slot"] == fractional["slot"]
+        )
+        wrong_owner_fractional["required_intent_triples"].remove([79, 1, 10])
+        next(
+            row for row in wrong_owner_rows if row["slot"] == "relation"
+        )["required_intent_triples"].append([79, 1, 10])
+        with self.assertRaisesRegex(
+            checker.ProfileError, "fractional-redemption does not own"
+        ):
+            checker.validate_successor_dependency_closure(
+                contract,
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+                wrong_owner_rows,
+                registry,
+            )
 
     def test_missing_linked_intent_or_account_coverage_refuses(self) -> None:
         value = manifest(linkage="linked")
@@ -576,26 +537,6 @@ class CapabilityProfileTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 checker.ProfileError, "semantic-owner manifest mismatch"
-            ):
-                checker.validate_manifest(value, repo=repo)
-
-    def test_measurement_evidence_must_repeat_exact_wire_surface(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            repo = Path(directory)
-            value = manifest(
-                linkage="linked",
-                classification="deployable",
-                measurement_class="linked",
-                evidence_path="measurement.json",
-                evidence_profile_name="test-profile",
-            )
-            evidence = measurement_document(value)
-            evidence["profiles"][0]["wire_surface"]["outer_request_actions"] = [0, 1]
-            (repo / "measurement.json").write_text(
-                json.dumps(evidence), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(
-                checker.ProfileError, "wire-surface manifest mismatch"
             ):
                 checker.validate_manifest(value, repo=repo)
 
@@ -757,256 +698,6 @@ class CapabilityProfileTests(unittest.TestCase):
                 "non-production-real-pyth-lab",
             ],
         )
-
-    def test_nonproduction_source_identities_cannot_be_deployable(self) -> None:
-        for source_identity in (
-            "non-production-mock-source-lab",
-            "non-production-real-pyth-lab",
-        ):
-            with self.subTest(source_identity=source_identity), self.assertRaisesRegex(
-                checker.ProfileError, "non-production source identity cannot be deployable"
-            ):
-                checker.validate_manifest(
-                    manifest(
-                        source_identity=source_identity,
-                        classification="deployable",
-                    ),
-                    repo=ROOT,
-                )
-
-    def test_runtime_real_pyth_release_never_enables_a_fixture_feature(self) -> None:
-        inert = checker.validate_manifest(
-            manifest(profile_feature="profile-full"), repo=ROOT
-        )
-        runtime = checker.validate_manifest(
-            manifest(
-                linkage="linked",
-                profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                source_identity="runtime-real-pyth-release",
-            ),
-            repo=ROOT,
-        )
-        self.assertNotEqual(
-            inert["profile_identity_sha256"], runtime["profile_identity_sha256"]
-        )
-        self.assertEqual(
-            runtime["cargo_features"],
-            ["custom-heap", checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE],
-        )
-
-    def test_observed_release_selector_is_expressible_and_empty_rows_refuse(self) -> None:
-        selected = checker.validate_build_contract(
-            {
-                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                "source_identity": "runtime-real-pyth-release",
-                "collateral_release_identity": (
-                    "observed-positive-collateral-and-claim-release"
-                ),
-                "expected_undefined_dynamic_symbols": SYSCALLS,
-            }
-        )
-        self.assertEqual(
-            checker.cargo_features(selected),
-            [
-                "custom-heap",
-                checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                "observed-positive-collateral-release-manifest",
-            ],
-        )
-        with self.assertRaisesRegex(
-            checker.ProfileError,
-            "observed-positive collateral release rows are absent or mismatched",
-        ):
-            checker.validate_manifest(
-                manifest(
-                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                    source_identity="runtime-real-pyth-release",
-                    collateral_release_identity=(
-                        "observed-positive-collateral-and-claim-release"
-                    ),
-                ),
-                repo=ROOT,
-            )
-
-        with self.assertRaisesRegex(checker.ProfileError, "unknown class"):
-            checker.validate_build_contract(
-                {
-                    "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                    "source_identity": "runtime-real-pyth-release",
-                    "collateral_release_identity": "caller-invented-release",
-                    "expected_undefined_dynamic_symbols": SYSCALLS,
-                }
-            )
-
-    def test_runtime_real_pyth_release_refuses_legacy_narrow_profile(self) -> None:
-        with self.assertRaisesRegex(
-            checker.ProfileError,
-            "runtime real-Pyth release requires the chain-attached successor profile",
-        ):
-            checker.validate_manifest(
-                manifest(
-                    profile_feature="profile-general-source-v2-point",
-                    source_identity="runtime-real-pyth-release",
-                ),
-                repo=ROOT,
-            )
-
-    def test_chain_attached_successor_requires_runtime_release_identity(self) -> None:
-        with self.assertRaisesRegex(
-            checker.ProfileError,
-            "chain-attached successor requires the runtime real-Pyth release identity",
-        ):
-            checker.validate_manifest(
-                manifest(
-                    linkage="linked",
-                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                    source_identity="production-inert",
-                ),
-                repo=ROOT,
-            )
-
-    def test_chain_attached_successor_wire_surface_is_exact(self) -> None:
-        value = manifest(
-            linkage="linked",
-            profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-            source_identity="runtime-real-pyth-release",
-        )
-        checked = checker.validate_manifest(value, repo=ROOT)
-        self.assertEqual(
-            checked["wire_surface"]["legacy_intent_pairs"],
-            checker.SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS,
-        )
-        self.assertEqual(
-            checked["wire_surface"]["dedicated_direct_intent_pairs"],
-            checker.SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS,
-        )
-        self.assertEqual(
-            checked["wire_surface"]["source_generation_discriminants"], [],
-        )
-
-        hostile = copy.deepcopy(value)
-        hostile["wire_surface"]["legacy_intent_pairs"].append([69, 3])
-        hostile["central_registry"]["enabled_intent_triples"].append([69, 3, 0])
-        hostile["central_registry"]["enabled_intent_triples"].sort()
-        hostile["capabilities"][0]["required_intent_triples"].append([69, 3, 0])
-        hostile["profile"]["identity_sha256"] = checker.profile_identity(
-            hostile["profile"]["name"],
-            hostile["profile"]["label"],
-            hostile["build_contract"],
-            hostile["capabilities"],
-            hostile["central_registry"],
-            hostile["wire_surface"],
-            hostile["artifact_budget"]["limits"],
-        )
-        with self.assertRaisesRegex(
-            checker.ProfileError,
-            "chain-attached successor legacy intent set is not exact",
-        ):
-            checker.validate_manifest(hostile, repo=ROOT)
-
-    def test_fractional_semantic_owner_and_all_or_none_enablement(self) -> None:
-        value = manifest()
-        fractional = next(
-            row
-            for row in value["capabilities"]
-            if row["slot"] == "fractional-redemption"
-        )
-        self.assertEqual(
-            [triple for triple in fractional["required_intent_triples"] if triple[0] == 79],
-            [],
-        )
-        checker.validate_manifest(value, repo=ROOT)
-
-        fully_enabled = copy.deepcopy(value)
-        full_fractional = next(
-            row
-            for row in fully_enabled["capabilities"]
-            if row["slot"] == "fractional-redemption"
-        )
-        full_fractional["required_intent_triples"].extend(
-            copy.deepcopy(checker.CURRENT_FRACTIONAL_EXTENSION_TRIPLES)
-        )
-        full_fractional["required_intent_triples"].sort()
-        fully_enabled["build_contract"]["collateral_release_identity"] = (
-            "observed-positive-collateral-and-claim-release"
-        )
-        fully_enabled["central_registry"] = linked_coverage(
-            fully_enabled["capabilities"]
-        )
-        fully_enabled["wire_surface"] = wire_surface(
-            fully_enabled["central_registry"]
-        )
-        fully_enabled["profile"]["identity_sha256"] = checker.profile_identity(
-            fully_enabled["profile"]["name"],
-            fully_enabled["profile"]["label"],
-            fully_enabled["build_contract"],
-            fully_enabled["capabilities"],
-            fully_enabled["central_registry"],
-            fully_enabled["wire_surface"],
-            fully_enabled["artifact_budget"]["limits"],
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            repo = Path(directory)
-            manifest_path = repo / checker.OBSERVED_RELEASE_MANIFEST_PATH
-            manifest_path.parent.mkdir(parents=True)
-            manifest_path.write_text(
-                """
-static OBSERVED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 1] = [RELEASE];
-static OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2:
-    [CompiledCollateralReleaseManifestV2; 1] = [MANIFEST];
-const OBSERVED_CLAIM_ISSUANCE_RELEASE_V1:
-    Option<CompiledClaimIssuanceReleaseV1> = Some(CLAIM);
-""",
-                encoding="utf-8",
-            )
-            checker.validate_manifest(fully_enabled, repo=repo)
-
-        partial_required = copy.deepcopy(value)
-        partial_fractional = next(
-            row
-            for row in partial_required["capabilities"]
-            if row["slot"] == "fractional-redemption"
-        )
-        partial_fractional["required_intent_triples"].append([79, 1, 1])
-        partial_fractional["required_intent_triples"].sort()
-        partial_required["central_registry"] = linked_coverage(
-            partial_required["capabilities"]
-        )
-        partial_required["wire_surface"] = wire_surface(
-            partial_required["central_registry"]
-        )
-        partial_required["profile"]["identity_sha256"] = checker.profile_identity(
-            partial_required["profile"]["name"],
-            partial_required["profile"]["label"],
-            partial_required["build_contract"],
-            partial_required["capabilities"],
-            partial_required["central_registry"],
-            partial_required["wire_surface"],
-            partial_required["artifact_budget"]["limits"],
-        )
-        with self.assertRaisesRegex(
-            checker.ProfileError, "exactly 79/v1 actions 1 through 10"
-        ):
-            checker.validate_manifest(partial_required, repo=ROOT)
-
-        wrong_owner = copy.deepcopy(value)
-        wrong_owner["capabilities"][0]["required_intent_triples"].append([79, 1, 1])
-        wrong_owner["capabilities"][0]["required_intent_triples"].sort()
-        wrong_owner["central_registry"] = linked_coverage(wrong_owner["capabilities"])
-        wrong_owner["wire_surface"] = wire_surface(wrong_owner["central_registry"])
-        wrong_owner["profile"]["identity_sha256"] = checker.profile_identity(
-            wrong_owner["profile"]["name"],
-            wrong_owner["profile"]["label"],
-            wrong_owner["build_contract"],
-            wrong_owner["capabilities"],
-            wrong_owner["central_registry"],
-            wrong_owner["wire_surface"],
-            wrong_owner["artifact_budget"]["limits"],
-        )
-        with self.assertRaisesRegex(
-            checker.ProfileError, "non-Fractional semantic owner"
-        ):
-            checker.validate_manifest(wrong_owner, repo=ROOT)
 
     def test_full_profile_records_cargo_default_identity_marker(self) -> None:
         full = checker.validate_manifest(

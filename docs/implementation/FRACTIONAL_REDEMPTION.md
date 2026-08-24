@@ -1,11 +1,13 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **RUNTIME CONTRACT PROMOTED / COMPLETE ROUTES STAGED-DISABLED** (2026-08-23).
+Status: **ALL TEN ROUTES IMPLEMENTED / UNIFIED PROFILE CLOSURE IN FLIGHT** (2026-08-24).
 `crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
 no-allocation, fixed-layout transition and account contract. Intent family
 79/v1 and current accounts `0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
-remain `ReservedDisabled`; the complete exact-internal, exact-bearer, and
-claims-exhausted handlers are present, but no release capability is enabled.
+remain `ReservedDisabled` while the in-flight unified profile has an empty
+capability mask. Concrete handlers exist for actions 1 through 10. The frozen
+complete profile admits that exact action range all-or-none only after every
+cross-family and observed-release dependency joins.
 `research/fractional-redemption` remains the
 derivation and exhaustive small-domain model, not a second runtime truth.
 
@@ -439,8 +441,8 @@ arithmetic truth. The runtime does not claim that a particular reachable
 B-spline family has a smaller universal lot without the corresponding gcd
 evidence.
 
-All ten SBF handlers are present but remain capability-disabled pending one
-whole-family release review. Action 1 consumes Product's private slot-11/12
+All ten SBF handlers are present but remain capability-refused in the in-flight
+profile. Action 1 consumes Product's private slot-11/12
 preallocation authority, allocates and assigns the exact prefunded PDAs without
 a second debit, hostile-reloads a4/a5/ClaimLedger, and promotes the private
 receipt into Product atomically. Action 10 hostile-verifies terminal
@@ -452,8 +454,23 @@ burn adapter and Realm-selected collateral CPI, orders burn acceptance before
 collateral request exposure, and writes `0xa5`, ClaimLedger V3, and Hoard V2
 atomically. Action 9 advances only `0xa5` and ClaimLedger after exact canonical
 supply reaches zero; it requires neither a signer nor bearer-release authority.
-Release-profile admission and local-bank adversarial execution remain open.
-Family 79/v1 stays `ReservedDisabled` until the complete boundary is reviewed.
+Action 10 first authenticates the exact independent Token-2022 claim Program,
+ProgramData, checked release row, and ELF identity; only then may it observe
+mint supply or perform a terminal write. The resulting claim-release receipt
+is an independent field of Product's private terminal writer authority. Action
+9 remains independent because it performs neither a mint read nor claim CPI.
+Static hostile/valid contract cases are authored but intentionally not run in
+this integration tranche. Family 79/v1 stays `ReservedDisabled` until the
+unified complete-profile switch joins every family and positive checked
+collateral/claim release row.
+
+The current action-1/action-10 outer is an integration checkpoint over the
+historical 46-slot `MarketFoundationAccountGraphV2` (14 fixed core accounts,
+then one mint/custody pair per active outcome). Product/Collateral has since
+required a fresh 47-slot successor with an explicit `HoardCollateralVault`.
+That successor's exact typed graph, account coordinates, and founder producer
+are an explicit dependency; the current V2 geometry must not be frozen into a
+callable profile.
 
 ## 7. Evidence and intentionally deferred validation
 

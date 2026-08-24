@@ -61,6 +61,7 @@ pub enum CanonicalFamily {
     StructuredClaim,
     Dealer,
     Failure,
+    Direct,
 }
 
 impl CanonicalFamily {
@@ -79,6 +80,7 @@ impl CanonicalFamily {
             Self::StructuredClaim => "structured-claim",
             Self::Dealer => "dealer",
             Self::Failure => "failure",
+            Self::Direct => "direct",
         }
     }
 }

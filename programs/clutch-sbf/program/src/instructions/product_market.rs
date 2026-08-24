@@ -7262,7 +7262,6 @@ mod adversarial_resolution_repin_tests {
             assert!(release.contains(guard), "missing release guard {guard}");
         }
     }
-
     #[test]
     fn exhausted_release_is_disjoint_and_requires_unresolved_root_and_exact_link() {
         assert_eq!(FailureSessionReleaseDispositionV2::Resolved.wire_byte(), 1);
@@ -7473,6 +7472,52 @@ mod adversarial_series_link_retirement_tests {
         let mut aliased = exact;
         aliased.neutral_lamport_sink = aliased.rent_refund_owner;
         assert!(aliased.validate().is_err());
+    }
+
+}
+
+#[cfg(test)]
+mod adversarial_failure_exhausted_release_tests {
+    use super::*;
+
+    #[test]
+    fn exhausted_release_is_disjoint_and_requires_unresolved_root_and_exact_link() {
+        assert_eq!(FailureSessionReleaseDispositionV2::Resolved.wire_byte(), 1);
+        assert_eq!(FailureSessionReleaseDispositionV2::Exhausted.wire_byte(), 2);
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Resolved,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Exhausted,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_err());
+
+        let source = include_str!("product_market.rs");
+        let exhausted = source
+            .split("pub(crate) fn authenticate_writable_failure_exhausted_link_v2")
+            .nth(1)
+            .and_then(|value| value.split("/// Release one exact subordinate").next())
+            .expect("typed exhausted preauthorization");
+        for guard in [
+            "!root.is_writable()",
+            "!live_root.is_writable()",
+            "require_unresolved_market_resolution_v1",
+            "live_root.authentication_id() == root.authentication_id()",
+            "SeriesMarketLinkAccountV1::decode_into(&data, link_output)?",
+            "state.active_failure_sessions() == 1",
+            "binding.market_binding_id == root_binding_id",
+            "FailureSessionReleaseDispositionV2::Exhausted.wire_byte()",
+        ] {
+            assert!(exhausted.contains(guard), "missing exhausted guard {guard}");
+        }
     }
 
 }

@@ -94,7 +94,7 @@ pub fn authenticate_release_v2(
     let mut slot_bytes = [0_u8; 8];
     slot_bytes.copy_from_slice(&data_body[4..12]);
     let slot = u64::from_le_bytes(slot_bytes);
-    let locus_matches = release_locus_matches_slot(release.locus, slot);
+    let locus_matches = current_release_locus_matches_slot(release.locus, slot);
     if release.program.bytes() != program.key.to_bytes()
         || release.programdata.bytes() != data.key.to_bytes()
         || release.programdata_sha256.bytes() != hashv(&[&data_body]).to_bytes()
@@ -111,11 +111,8 @@ pub fn authenticate_release_v2(
     })
 }
 
-fn release_locus_matches_slot(locus: RegistryReleaseLocusV2, slot: u64) -> bool {
+fn current_release_locus_matches_slot(locus: RegistryReleaseLocusV2, slot: u64) -> bool {
     matches!(
-        (locus, slot),
-        (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
-    ) || matches!(
         (locus, slot),
         (RegistryReleaseLocusV2::ObservedPositive, observed) if observed != 0
     )
@@ -135,20 +132,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release_loci_are_disjoint_at_slot_zero() {
-        assert!(release_locus_matches_slot(
+    fn current_release_requires_observed_positive_loader_locus() {
+        assert!(!current_release_locus_matches_slot(
             RegistryReleaseLocusV2::SynthesizedGenesisZero,
             0,
         ));
-        assert!(!release_locus_matches_slot(
+        assert!(!current_release_locus_matches_slot(
             RegistryReleaseLocusV2::SynthesizedGenesisZero,
             1,
         ));
-        assert!(!release_locus_matches_slot(
+        assert!(!current_release_locus_matches_slot(
             RegistryReleaseLocusV2::ObservedPositive,
             0,
         ));
-        assert!(release_locus_matches_slot(
+        assert!(current_release_locus_matches_slot(
             RegistryReleaseLocusV2::ObservedPositive,
             u64::MAX,
         ));

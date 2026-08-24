@@ -24,6 +24,8 @@ pub const FRACTIONAL_TRANSFER_INTENT_BYTES: usize = 208;
 pub const FRACTIONAL_CLOSE_CREDIT_INTENT_BYTES: usize = 80;
 /// Exact terminal seal/ledger close payload width.
 pub const FRACTIONAL_TERMINAL_INTENT_BYTES: usize = 8;
+/// Exact private Dealer-facility vector request width.
+pub const DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1: usize = 168;
 
 /// Immutable policy/ledger initialization selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +140,104 @@ impl FractionalRedeemIntentV1 {
         }
         output[160] = self.outcome;
         output[161] = self.credit_mode;
+        Ok(output)
+    }
+}
+
+/// Private fixed-width request consumed only inside Dealer action 23.
+///
+/// This is not a separately dispatched Fractional intent. Dealer owns the
+/// public outer and supplies the authenticated facility State, Position,
+/// Replay, Product-obligation, liveness, and future-credit-prefund receipts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerFacilityVectorRequestV1 {
+    /// Aggregate a5 sequence consumed by the one vector transition.
+    pub expected_ledger_sequence: u64,
+    /// Facility-owned a6 sequence; one selects same-instruction creation.
+    pub expected_credit_sequence: u64,
+    /// Exact facility Position generation authenticated by Dealer.
+    pub expected_position_generation: u64,
+    /// Exact post-initialization Dealer Replay ordinal authenticated by Dealer.
+    /// Zero is the founding prestate and cannot enter Resolve.
+    pub expected_replay_ordinal: u64,
+    /// Active Market outcome width.
+    pub outcome_count: u8,
+    /// Outcome-ordered internal quantities; inactive tail entries are zero.
+    pub quantities: [u64; crate::MAX_OUTCOMES],
+}
+
+impl DealerFacilityVectorRequestV1 {
+    /// Decode the exact canonical private request.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact(input, DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1)?;
+        require_zeroes(input, 33, 40)?;
+        let mut quantities = [0u64; crate::MAX_OUTCOMES];
+        let mut index = 0usize;
+        let mut any = false;
+        while index < crate::MAX_OUTCOMES {
+            quantities[index] = u64_at(input, 40 + index * 8)?;
+            any |= quantities[index] != 0;
+            index += 1;
+        }
+        let value = Self {
+            expected_ledger_sequence: u64_at(input, 0)?,
+            expected_credit_sequence: u64_at(input, 8)?,
+            expected_position_generation: u64_at(input, 16)?,
+            expected_replay_ordinal: u64_at(input, 24)?,
+            outcome_count: input[32],
+            quantities,
+        };
+        if value.expected_ledger_sequence == 0
+            || value.expected_credit_sequence == 0
+            || value.expected_position_generation == 0
+            || value.expected_replay_ordinal == 0
+            || value.outcome_count == 0
+            || usize::from(value.outcome_count) > crate::MAX_OUTCOMES
+            || !any
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut tail = usize::from(value.outcome_count);
+        while tail < crate::MAX_OUTCOMES {
+            if value.quantities[tail] != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            tail += 1;
+        }
+        Ok(value)
+    }
+
+    /// Encode the exact canonical private request.
+    pub fn encode(self) -> Result<[u8; DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1]> {
+        if self.expected_ledger_sequence == 0
+            || self.expected_credit_sequence == 0
+            || self.expected_position_generation == 0
+            || self.expected_replay_ordinal == 0
+            || self.outcome_count == 0
+            || usize::from(self.outcome_count) > crate::MAX_OUTCOMES
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut output = [0u8; DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1];
+        put_u64(&mut output, 0, self.expected_ledger_sequence)?;
+        put_u64(&mut output, 8, self.expected_credit_sequence)?;
+        put_u64(&mut output, 16, self.expected_position_generation)?;
+        put_u64(&mut output, 24, self.expected_replay_ordinal)?;
+        output[32] = self.outcome_count;
+        let mut index = 0usize;
+        let mut any = false;
+        while index < crate::MAX_OUTCOMES {
+            let quantity = self.quantities[index];
+            if index >= usize::from(self.outcome_count) && quantity != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            any |= quantity != 0;
+            put_u64(&mut output, 40 + index * 8, quantity)?;
+            index += 1;
+        }
+        if !any {
+            return Err(Error::ZeroQuantity);
+        }
         Ok(output)
     }
 }

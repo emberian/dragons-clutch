@@ -201,6 +201,16 @@ impl FailureMarketReplayV2 {
         self.runtime_terminal_state_commitment
     }
 
+    /// Exact permanent rent principal admitted at replay creation.
+    pub const fn permanent_rent_principal_lamports(self) -> u64 {
+        self.permanent_rent_principal_lamports
+    }
+
+    /// Unsolicited lamports observed before replay capitalization.
+    pub const fn donation_floor_lamports(self) -> u64 {
+        self.donation_floor_lamports
+    }
+
     /// Complete semantic state identity.
     pub fn id(self) -> Result<FailureMarketReplayStateIdV2> {
         let mut body = [0; FAILURE_MARKET_REPLAY_BYTES_V2];
@@ -251,6 +261,12 @@ impl FailureMarketReplayV2 {
         admission: FailureMarketAdmissionStateV1,
         funding: FailureMarketReplayFundingReceiptV2,
     ) -> Result<Self> {
+        let value = Self::decode_canonical(input)?;
+        value.validate_against(admission, funding)?;
+        Ok(value)
+    }
+
+    fn decode_canonical(input: &[u8; FAILURE_MARKET_REPLAY_BYTES_V2]) -> Result<Self> {
         if input[..8] != MAGIC_V2 {
             return Err(Error::BadMagic);
         }
@@ -291,7 +307,7 @@ impl FailureMarketReplayV2 {
         if input[cursor..].iter().any(|byte| *byte != 0) {
             return Err(Error::NonCanonicalReserved);
         }
-        value.validate_against(admission, funding)?;
+        value.validate()?;
         Ok(value)
     }
 
@@ -376,6 +392,50 @@ pub fn admit_failure_market_replay_v2<A: AuthenticatedFailureMarketReplayFunding
         donation_floor_lamports: facts.donation_floor_lamports,
     };
     replay.validate_against(admission, funding)?;
+    Ok((replay, funding))
+}
+
+/// Reopen the exact Product-capitalization receipt committed by an
+/// authenticated permanent replay account.
+///
+/// These facts are only a hash preimage. Initial creation required Product's
+/// private slot-7 receipt, and later code may recover the private-field receipt
+/// only when the complete domain-separated preimage equals the funding ID
+/// permanently stored by that program-owned replay body.
+pub fn reopen_failure_market_replay_funding_v2(
+    admission: FailureMarketAdmissionStateV1,
+    replay: FailureMarketReplayV2,
+    facts: FailureMarketReplayFundingFactsV2,
+) -> Result<FailureMarketReplayFundingReceiptV2> {
+    validate_funding(admission, facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FUNDING_DOMAIN_V2);
+    hash_funding(&mut hasher, facts);
+    let id = FailureMarketReplayFundingReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    if id != replay.funding_receipt_id
+        || facts.failure_policy_binding_id != replay.failure_policy_binding_id
+        || facts.market_instance_id != replay.market_instance_id
+        || facts.generation != replay.generation
+        || facts.permanent_rent_principal_lamports != replay.permanent_rent_principal_lamports
+        || facts.donation_floor_lamports != replay.donation_floor_lamports
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let funding = FailureMarketReplayFundingReceiptV2 { id, facts };
+    replay.validate_against(admission, funding)?;
+    Ok(funding)
+}
+
+/// Hostile-decode permanent replay and reopen its exact capitalization
+/// receipt from a content preimage in one semantic-owner operation.
+pub fn decode_and_reopen_failure_market_replay_v2(
+    input: &[u8; FAILURE_MARKET_REPLAY_BYTES_V2],
+    admission: FailureMarketAdmissionStateV1,
+    facts: FailureMarketReplayFundingFactsV2,
+) -> Result<(FailureMarketReplayV2, FailureMarketReplayFundingReceiptV2)> {
+    let replay = FailureMarketReplayV2::decode_canonical(input)?;
+    let funding = reopen_failure_market_replay_funding_v2(admission, replay, facts)?;
     Ok((replay, funding))
 }
 

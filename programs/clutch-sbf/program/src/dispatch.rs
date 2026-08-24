@@ -43,32 +43,25 @@ use crate::error::Refusal;
 use crate::instructions::dealer_facility;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::instructions::dealer_policy;
-#[cfg(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
-))]
-use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 use crate::instructions::structured_custody;
 use crate::instructions::{
-    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3,
-    external_redemption_v3, fractional_redemption, genesis, orders_batch,
+    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
+    failure_market_dispatch_v2, fractional_redemption, genesis,
 };
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
-use crate::instructions::{direct_selection, resolution_work, source_ingest};
+use crate::instructions::direct_market_v1;
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
+use crate::instructions::{resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
-#[cfg(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
-))]
-use clutch_solana_reference::DirectV3Request;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -85,33 +78,22 @@ use solana_pubkey::Pubkey;
 enum Route {
     Split,
     MergeMaterialize,
-    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     ObserveResolve,
     ExternalExit,
     CashExit,
     Artifact,
-    OrdersBatch,
     Genesis,
     FractionalRedemption,
     #[cfg(feature = "profile-full")]
     SourceIngest,
-    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     SourceIngestV2,
-    #[cfg(feature = "profile-full")]
-    DirectSelection,
-    #[cfg(any(
-        feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point",
-        feature = "profile-successor-chain-attached-v1"
-    ))]
-    DirectSelectionV3,
     #[cfg(feature = "profile-full")]
     ResolutionWork,
     #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
     DealerPolicy,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
-    #[cfg(feature = "non-production-structured-custody-lab")]
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
     StructuredClaim,
     DecodeOnly,
 }
@@ -128,10 +110,8 @@ const INTENT_MERGE_HINT: u8 = 3;
 const INTENT_MATERIALIZE_HINT: u8 = 4;
 const INTENT_DEMATERIALIZE_HINT: u8 = 5;
 const INTENT_FEED_ADVANCE_HINT: u8 = 6;
-const INTENT_PLACE_ORDER_HINT: u8 = 7;
 const INTENT_INIT_REALM_HINT: u8 = 10;
 const INTENT_INIT_PROFILE_HINT: u8 = 11;
-const INTENT_INIT_ORDER_PAGE_HINT: u8 = 14;
 const INTENT_ENDOW_HINT: u8 = 15;
 const INTENT_REDEEM_EXTERNAL_HINT: u8 = 16;
 const INTENT_WITHDRAW_CASH_HINT: u8 = 17;
@@ -139,22 +119,14 @@ const INTENT_BEGIN_ARTIFACT_HINT: u8 = 18;
 const INTENT_WRITE_ARTIFACT_HINT: u8 = 19;
 const INTENT_SEAL_ARTIFACT_HINT: u8 = 20;
 const INTENT_ABORT_ARTIFACT_HINT: u8 = 21;
-const INTENT_SUBMIT_DIRECT_PAGE_HINT: u8 = 22;
 const INTENT_INIT_SOURCE_SPEC_HINT: u8 = 23;
 const INTENT_INIT_SOURCE_ARCHIVE_HINT: u8 = 24;
 const INTENT_APPEND_SOURCE_ARCHIVE_HINT: u8 = 25;
 const INTENT_SEAL_SOURCE_ARCHIVE_HINT: u8 = 26;
-const INTENT_INIT_DIRECT_EPOCH_V3_HINT: u8 = 27;
-const INTENT_FREEZE_DIRECT_EPOCH_V3_HINT: u8 = 28;
-const INTENT_SUBMIT_DIRECT_CANDIDATE_V2_HINT: u8 = 29;
-const INTENT_SELECT_DIRECT_WINDOW_V1_HINT: u8 = 30;
-const INTENT_SETTLE_DIRECT_V2_HINT: u8 = 31;
 const INTENT_BEGIN_RESOLUTION_WORK_HINT: u8 = 32;
 const INTENT_FOLD_RESOLUTION_WORK_HINT: u8 = 33;
 const INTENT_FINALIZE_RESOLUTION_WORK_HINT: u8 = 34;
 const INTENT_ABORT_RESOLUTION_WORK_HINT: u8 = 35;
-const INTENT_INIT_DIRECT_EPOCH_V4_HINT: u8 = 36;
-const INTENT_LAPSE_SELECTED_DIRECT_V3_HINT: u8 = 46;
 const INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT: u8 = 68;
 const INTENT_INIT_SOURCE_SPEC_V2_HINT: u8 = 70;
 const INTENT_INIT_SOURCE_ARCHIVE_V2_HINT: u8 = 71;
@@ -195,7 +167,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::FractionalRedemption
             }
-            #[cfg(feature = "non-production-structured-custody-lab")]
+            #[cfg(feature = "profile-successor-chain-attached-dev")]
             Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
                 if instruction_data.get(14).copied()
                     == Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION)
@@ -225,7 +197,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
                 Route::MergeMaterialize
             }
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
             Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
             Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
@@ -235,17 +210,16 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_SEAL_ARTIFACT_HINT
                 | INTENT_ABORT_ARTIFACT_HINT,
             ) => Route::Artifact,
-            Some(INTENT_PLACE_ORDER_HINT) => Route::OrdersBatch,
-            #[cfg(feature = "profile-full")]
-            Some(INTENT_SUBMIT_DIRECT_PAGE_HINT) => Route::OrdersBatch,
             Some(
                 INTENT_INIT_REALM_HINT
                 | INTENT_INIT_PROFILE_HINT
-                | INTENT_INIT_ORDER_PAGE_HINT
                 | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_HINT
@@ -256,42 +230,26 @@ fn route_hint(instruction_data: &[u8]) -> Route {
              * The two never share a frame: V1's append holds three provider
              * account views and v2's holds six, and the pull authentication
              * join below it is the deepest call in either family. */
-            #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+            #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_V2_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT,
             ) => Route::SourceIngestV2,
-            #[cfg(feature = "profile-full")]
-            Some(
-                INTENT_INIT_DIRECT_EPOCH_V3_HINT
-                | INTENT_FREEZE_DIRECT_EPOCH_V3_HINT
-                | INTENT_SUBMIT_DIRECT_CANDIDATE_V2_HINT
-                | INTENT_SELECT_DIRECT_WINDOW_V1_HINT
-                | INTENT_SETTLE_DIRECT_V2_HINT,
-            ) => Route::DirectSelection,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_BEGIN_RESOLUTION_WORK_HINT
                 | INTENT_FOLD_RESOLUTION_WORK_HINT
                 | INTENT_FINALIZE_RESOLUTION_WORK_HINT
                 | INTENT_ABORT_RESOLUTION_WORK_HINT,
             ) => Route::ResolutionWork,
-            // Tags 36 through 46 are one all-or-nothing family: the dedicated
-            // Direct V3 request decoder is the only decoder that accepts them,
-            // and its handler match is exhaustive with no unimplemented arm.
-            #[cfg(any(
-                feature = "profile-full",
-                feature = "profile-direct-v3-source-v2-point",
-                feature = "profile-successor-chain-attached-v1"
-            ))]
-            Some(INTENT_INIT_DIRECT_EPOCH_V4_HINT..=INTENT_LAPSE_SELECTED_DIRECT_V3_HINT) => {
-                Route::DirectSelectionV3
-            }
             _ => Route::DecodeOnly,
         },
-        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
         _ => Route::DecodeOnly,
     }
@@ -322,8 +280,22 @@ pub fn process(
         }
         return process_source_v3(program_id, accounts, instruction_data);
     }
+    #[cfg(feature = "profile-full")]
+    if let Some(action) = direct_market_action(instruction_data) {
+        if !capabilities::extension_intent_action_enabled(
+            clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+            clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+            action.tag(),
+        ) {
+            return Err(ClutchError::UnsupportedInstruction.into());
+        }
+        return process_direct_market(program_id, accounts, instruction_data);
+    }
     if let Some(action) = disabled_dealer_facility_action(instruction_data) {
         return crate::instructions::dealer_runtime::process_reserved_disabled(action);
+    }
+    if let Some(action) = recovery_v2_action(instruction_data) {
+        return process_recovery_v2(program_id, accounts, instruction_data, action);
     }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
@@ -333,41 +305,89 @@ pub fn process(
         Route::MergeMaterialize => {
             process_merge_materialize(program_id, accounts, instruction_data)
         }
-        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::ObserveResolve => decode_only(instruction_data),
         Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
         Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
-        Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
         Route::FractionalRedemption => {
             process_fractional_redemption(program_id, accounts, instruction_data)
         }
-        #[cfg(feature = "profile-full")]
-        Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
-        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
-        Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
-        #[cfg(feature = "profile-full")]
-        Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
-        #[cfg(any(
+        #[cfg(all(
             feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-successor-chain-attached-v1"
+            not(feature = "profile-successor-chain-attached-dev")
         ))]
-        Route::DirectSelectionV3 => {
-            process_direct_selection_v3(program_id, accounts, instruction_data)
-        }
-        #[cfg(feature = "profile-full")]
+        Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::SourceIngest => decode_only(instruction_data),
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
+        Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::SourceIngestV2 => decode_only(instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            not(feature = "profile-successor-chain-attached-dev")
+        ))]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::ResolutionWork => decode_only(instruction_data),
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
-        #[cfg(feature = "non-production-structured-custody-lab")]
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
         Route::StructuredClaim => {
             process_structured_claim(program_id, accounts, instruction_data)
         }
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Identify one exact allocated Recovery78/v1 action without decoding its
+/// family payload. Current actions 10 through 13 enter the fresh V2 contract;
+/// withdrawn actions 1 through 9 enter its exhaustive account-free refusal.
+fn recovery_v2_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::RecoveryAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) => Some(action),
+        _ => None,
+    }
+}
+
+/// Decode the strict extension envelope and enter only the current checked,
+/// capability-disabled Failure contract. The module itself refuses before
+/// payload or account access while every Recovery capability remains false.
+#[inline(never)]
+fn process_recovery_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+    expected_action: clutch_solana_layout::registry::RecoveryAction,
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::Recovery(action) if action == expected_action => {
+            failure_market_dispatch_v2::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
     }
 }
 
@@ -400,6 +420,7 @@ fn process_dealer_policy(
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::DirectMarket(_)
         | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
@@ -430,6 +451,7 @@ fn process_recurring_series(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::DirectMarket(_)
         | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
@@ -442,7 +464,64 @@ fn source_v3_action(
     let request = ExtensionRequest::decode(instruction_data).ok()?;
     match request.envelope.action {
         ExtensionAction::SourceV3(action) => Some(action),
-        _ => None,
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::DirectMarket(_)
+        | ExtensionAction::FractionalRedemption(_) => None,
+    }
+}
+
+/// Identify one exact current Direct successor request without inspecting an
+/// account. The exact capability tuple is checked before its account contract.
+#[cfg(feature = "profile-full")]
+fn direct_market_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::DirectMarketAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::DirectMarket(action) => Some(action),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_) => None,
+    }
+}
+
+/// Enter the complete Direct successor composer only after exact central
+/// capability admission. All `80/1/1..=13` tuples remain false pending review.
+#[cfg(feature = "profile-full")]
+#[inline(never)]
+fn process_direct_market(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::DirectMarket(action) => direct_market_v1::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -464,14 +543,21 @@ fn process_source_v3(
             action,
             request.envelope.payload,
         ),
-        _ => unexpected_route(),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::DirectMarket(_)
+        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
 /// Decode the strict FractionalRedemption envelope after the central exact
-/// capability check. All ten actions have concrete handlers, but the current
-/// profiles admit none of their tuples: `disabled_canonical_tag` refuses every
-/// one before this function is reachable or any account is inspected.
+/// capability check. Until Product Foundation admits actions 1 and 2 together,
+/// `disabled_canonical_tag` refuses every tuple before this function is
+/// reachable or any account is inspected.
 #[inline(never)]
 fn process_fractional_redemption(
     program_id: &Pubkey,
@@ -488,7 +574,14 @@ fn process_fractional_redemption(
             action,
             request.envelope.payload,
         ),
-        _ => unexpected_route(),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_)
+        | ExtensionAction::DirectMarket(_) => unexpected_route(),
     }
 }
 
@@ -512,16 +605,25 @@ fn disabled_dealer_facility_action(
             if !capabilities::extension_intent_action_enabled(
                 clutch_solana_layout::registry::DEALER_FAMILY_TAG,
                 clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
-                action as u8,
+                action.tag(),
             ) =>
         {
             Some(action)
         }
-        _ => None,
+        Ok(ExtensionAction::GeneralV2(_))
+        | Ok(ExtensionAction::DealerPolicy(_))
+        | Ok(ExtensionAction::DealerFacility(_))
+        | Ok(ExtensionAction::StructuredClaim(_))
+        | Ok(ExtensionAction::SourceV3(_))
+        | Ok(ExtensionAction::RecurringSeries(_))
+        | Ok(ExtensionAction::Recovery(_))
+        | Ok(ExtensionAction::DirectMarket(_))
+        | Ok(ExtensionAction::FractionalRedemption(_))
+        | Err(_) => None,
     }
 }
 
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 #[inline(never)]
 fn process_structured_claim(
     program_id: &Pubkey,
@@ -688,7 +790,7 @@ fn process_merge_materialize(
 }
 
 #[inline(never)]
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -759,25 +861,6 @@ fn process_artifact(
 }
 
 #[inline(never)]
-fn process_orders_batch(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::PlaceOrder { .. }) => {
-            orders_batch::process(program_id, accounts, &request)
-        }
-        #[cfg(feature = "profile-full")]
-        Action::Layout(Intent::SubmitDirectPage { .. }) => {
-            orders_batch::process(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
 fn process_genesis(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -787,7 +870,6 @@ fn process_genesis(
     match request.action {
         Action::Layout(Intent::InitRealm { .. })
         | Action::Layout(Intent::InitProfileV2 { .. })
-        | Action::Layout(Intent::InitOrderPage { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
         }
@@ -799,7 +881,10 @@ fn process_genesis(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
 fn process_source_ingest(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -818,7 +903,7 @@ fn process_source_ingest(
 }
 
 #[inline(never)]
-#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_source_ingest_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -837,47 +922,10 @@ fn process_source_ingest_v2(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
-fn process_direct_selection(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::InitDirectEpochV3 { .. })
-        | Action::Layout(Intent::FreezeDirectEpochV3 { .. })
-        | Action::Layout(Intent::SubmitDirectCandidateV2 { .. })
-        | Action::Layout(Intent::SelectDirectWindowV1 { .. })
-        | Action::Layout(Intent::SettleDirectV2 { .. }) => {
-            direct_selection::process(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-/// The Direct V3 family decodes through its dedicated strict envelope.
-///
-/// The legacy [`Request`] decoder still refuses every tag in `36..=46`, and
-/// [`DirectV3Request::decode`] refuses every legacy tag, so a partially added
-/// tag can never fall into a handler with different account versions.
-#[inline(never)]
-#[cfg(any(
+#[cfg(all(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
+    not(feature = "profile-successor-chain-attached-dev")
 ))]
-fn process_direct_selection_v3(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = DirectV3Request::decode(instruction_data)?;
-    direct_selection_v3::process(program_id, accounts, &request)
-}
-
-#[inline(never)]
-#[cfg(feature = "profile-full")]
 fn process_resolution_work(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1036,7 +1084,7 @@ mod tests {
                     max_fee_atoms: 3,
                     slot: OrderSlot::Single(order),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CancelOrder {
@@ -1046,7 +1094,7 @@ mod tests {
                     order_id: canonical_order_id(1),
                     generation: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SettlePage {
@@ -1054,7 +1102,7 @@ mod tests {
                     epoch: hash(2),
                     page_index: 0,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitRealm {
@@ -1095,7 +1143,7 @@ mod tests {
                     page_index: 0,
                     page_count: 1,
                 },
-                Route::Genesis,
+                Route::DecodeOnly,
             ),
             (
                 Intent::Endow {
@@ -1169,7 +1217,7 @@ mod tests {
                     epoch: hash(2),
                     page_index: 0,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitClearWork {
@@ -1177,7 +1225,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::GrowClearWork {
@@ -1185,7 +1233,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitEpoch {
@@ -1194,14 +1242,14 @@ mod tests {
                     policy: hash(2),
                     freeze_deadline_slot: 900,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FreezeEpoch {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::AdvanceClearWork {
@@ -1210,7 +1258,7 @@ mod tests {
                     candidate: hash(3),
                     max_orders: 16,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::AdvanceClearSlices {
@@ -1219,7 +1267,7 @@ mod tests {
                     candidate: hash(3),
                     max_slices: 16,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CompleteClearWork {
@@ -1227,7 +1275,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SubmitCandidate {
@@ -1247,7 +1295,7 @@ mod tests {
                     limit_surplus_price_units: 0,
                     distinct_owners: 2,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::WriteCandidateFeed {
@@ -1263,7 +1311,7 @@ mod tests {
                         },
                     },
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SealCandidate {
@@ -1271,14 +1319,14 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FinalizeSelection {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FreezeEntitlement {
@@ -1286,7 +1334,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::EntitleSlice {
@@ -1295,14 +1343,14 @@ mod tests {
                     candidate: hash(3),
                     slice_index: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::ReleaseTerminalReservation {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralReceipt {
@@ -1311,14 +1359,14 @@ mod tests {
                     candidate: hash(3),
                     slice_index: 4,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralReservation {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralPage {
@@ -1326,14 +1374,14 @@ mod tests {
                     epoch: hash(2),
                     page_index: 0,
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralPot {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralCandidate {
@@ -1341,7 +1389,7 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralClearWork {
@@ -1349,14 +1397,14 @@ mod tests {
                     epoch: hash(2),
                     candidate: hash(3),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::CloseGeneralEpoch {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::OrdersBatch,
+                Route::DecodeOnly,
             ),
             (
                 Intent::InitSourceSpec {
@@ -1404,14 +1452,14 @@ mod tests {
                     submission_opens_slot: 100,
                     submission_closes_slot: 120,
                 },
-                Route::DirectSelection,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FreezeDirectEpochV3 {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::DirectSelection,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SubmitDirectCandidateV2 {
@@ -1419,21 +1467,21 @@ mod tests {
                     epoch: hash(2),
                     outcome_price: 5_000,
                 },
-                Route::DirectSelection,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SelectDirectWindowV1 {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::DirectSelection,
+                Route::DecodeOnly,
             ),
             (
                 Intent::SettleDirectV2 {
                     market: hash(1),
                     epoch: hash(2),
                 },
-                Route::DirectSelection,
+                Route::DecodeOnly,
             ),
             (
                 Intent::BeginResolutionWork(BeginResolutionWorkV1 {
@@ -1714,23 +1762,21 @@ mod tests {
         bytes
     }
 
-    /// Tags 36 through 46 are one family: every encoded V3 request selects
-    /// the dedicated route, decodes only through the strict V3 envelope, and
-    /// the legacy decoder still refuses every one of those tags, so a V3
-    /// request can never fall into a legacy direct handler.
+    /// Historical Direct V3 stays strictly decodable for archive clients, but
+    /// every allocated tag is absent from the executable route graph.
     #[test]
     #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
-    fn direct_v3_family_routes_all_or_nothing() {
+    fn direct_v3_family_is_decode_only_and_refuses_before_accounts() {
         for index in 0..direct_v3_intents().len() {
             let bytes = direct_v3_request(0, index);
-            assert_eq!(route_hint(&bytes), Route::DirectSelectionV3, "{index}");
+            assert_eq!(route_hint(&bytes), Route::DecodeOnly, "{index}");
             assert!(clutch_solana_reference::DirectV3Request::decode(&bytes).is_ok());
             assert!(Request::decode(&bytes).is_err(), "{index}");
-            // Fail-closed with no accounts: shape refusal, never a stub.
+            assert!(disabled_canonical_tag(&bytes), "{index}");
             let refusal = process_without_accounts(&bytes);
             assert_eq!(
                 refusal,
-                ProgramError::Custom(ClutchError::AccountCount as u32),
+                ProgramError::Custom(ClutchError::UnsupportedInstruction as u32),
                 "{index}"
             );
 
@@ -1738,24 +1784,14 @@ mod tests {
             for mutate in [0usize, 1, 10] {
                 let mut hostile = direct_v3_request(0, index);
                 hostile[mutate] ^= 1;
-                let expected: ProgramError = Refusal::from(
-                    clutch_solana_reference::DirectV3Request::decode(&hostile).unwrap_err(),
-                )
-                .into();
-                // A mutated action byte no longer routes to the V3 family;
-                // whatever route wins must still refuse by decode.
                 assert!(
                     clutch_solana_reference::DirectV3Request::decode(&hostile).is_err(),
                     "{index}/{mutate}"
                 );
-                if route_hint(&hostile) == Route::DirectSelectionV3 {
-                    assert_eq!(process_without_accounts(&hostile), expected);
-                } else {
-                    assert!(
-                        process(&Pubkey::new_from_array([9; 32]), &[], &hostile).is_err(),
-                        "{index}/{mutate}"
-                    );
-                }
+                assert!(
+                    process(&Pubkey::new_from_array([9; 32]), &[], &hostile).is_err(),
+                    "{index}/{mutate}"
+                );
             }
             let mut truncated = direct_v3_request(0, index);
             truncated.pop();
@@ -1811,20 +1847,6 @@ mod profile_tests {
         bytes[13] = tag;
         bytes[14] = version;
         bytes[15] = action;
-        bytes
-    }
-
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
-    fn successor_layout_request(intent: Intent) -> Vec<u8> {
-        let mut intent_bytes = [0_u8; clutch_solana_layout::MAX_INTENT_BYTES];
-        let intent_len = intent.encode(&mut intent_bytes).unwrap();
-        let mut bytes = vec![0_u8; 13 + intent_len];
-        bytes[0] = 0xd1;
-        bytes[1] = 1;
-        bytes[2..10].copy_from_slice(&1_u64.to_le_bytes());
-        bytes[10] = ACTION_LAYOUT_HINT;
-        bytes[11..13].copy_from_slice(&(intent_len as u16).to_le_bytes());
-        bytes[13..].copy_from_slice(&intent_bytes[..intent_len]);
         bytes
     }
 
@@ -1906,59 +1928,6 @@ mod profile_tests {
         assert!(!disabled_canonical_tag(&bytes));
         assert!(!disabled_canonical_tag(&bytes[..13]));
     }
-
-    #[test]
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
-    fn successor_outer_resolve_actions_reach_only_the_predecode_refusal_shell() {
-        let mut resolve = [0_u8; 12];
-        resolve[0] = 0xd1;
-        resolve[1] = 1;
-        resolve[2..10].copy_from_slice(&7_u64.to_le_bytes());
-        resolve[10] = ACTION_RESOLVE_HINT;
-        assert!(Request::decode(&resolve).is_ok());
-        assert_eq!(route_hint(&resolve), Route::DecodeOnly);
-        assert_eq!(
-            process(&Pubkey::new_from_array([9; 32]), &[], &resolve)
-                .map_err(ProgramError::from),
-            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32))
-        );
-
-        let mut redeem = [0_u8; 20];
-        redeem[0] = 0xd1;
-        redeem[1] = 1;
-        redeem[2..10].copy_from_slice(&8_u64.to_le_bytes());
-        redeem[10] = ACTION_REDEEM_INTERNAL_HINT;
-        redeem[12..20].copy_from_slice(&5_u64.to_le_bytes());
-        assert!(Request::decode(&redeem).is_ok());
-        assert_eq!(route_hint(&redeem), Route::DecodeOnly);
-        assert_eq!(
-            process(&Pubkey::new_from_array([9; 32]), &[], &redeem)
-                .map_err(ProgramError::from),
-            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32))
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
-    fn successor_endow_has_only_the_full_width_collateral_owner() {
-        let bytes = successor_layout_request(Intent::Endow {
-            market: clutch_solana_layout::Hash32::from_bytes([1; 32]),
-            owner: clutch_solana_layout::Hash32::from_bytes([2; 32]),
-            amount: 3,
-        });
-        let request = Request::decode(&bytes).unwrap();
-        assert_eq!(route_hint(&bytes), Route::Genesis);
-        assert_eq!(
-            genesis::process(&Pubkey::new_from_array([9; 32]), &[], &request)
-                .map_err(ProgramError::from),
-            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32)),
-        );
-        assert_eq!(
-            process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
-                .map_err(ProgramError::from),
-            Err(ProgramError::Custom(ClutchError::AccountCount as u32)),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2025,31 +1994,15 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
                 local_action,
             );
-            let enabled = capabilities::extension_intent_action_enabled(
-                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
-                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
-                local_action,
-            );
-            assert_eq!(
+            assert!(
                 disabled_canonical_tag(&bytes),
-                !enabled,
                 "source action {local_action}"
             );
-            let actual =
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
-            if enabled {
-                assert_ne!(
-                    actual,
-                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
-                    "enabled source action {local_action} must reach its strict payload decoder"
-                );
-            } else {
-                assert_eq!(
-                    actual,
-                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
-                    "disabled source action {local_action}"
-                );
-            }
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "source action {local_action}"
+            );
         }
         for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
@@ -2121,6 +2074,25 @@ mod extension_registry_tests {
                 "recovery action {local_action}"
             );
         }
+        for local_action in clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::DirectMarketAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "direct successor action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
+                    .map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "direct successor action {local_action}"
+            );
+        }
     }
 
     #[test]
@@ -2136,6 +2108,9 @@ mod extension_registry_tests {
             (78, 1, 0),
             (78, 1, 10),
             (79, 1, 1),
+            (80, 1, 0),
+            (80, 1, 14),
+            (80, 2, 1),
         ] {
             let bytes = extension_request(family_tag, family_version, local_action);
             assert!(!disabled_canonical_tag(&bytes));

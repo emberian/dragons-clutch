@@ -16,8 +16,7 @@
 
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
+    feature = "profile-direct-v3-source-v2-point"
 ))]
 use super::direct_selection_v3::DirectBatchPolicyV3;
 use super::direct_selection_v3::DIRECT_BATCH_POLICY_V3_BYTES;
@@ -111,10 +110,7 @@ const _: () = {
             == clutch_product_series::COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES
     );
 };
-#[cfg(any(
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
-))]
+#[cfg(feature = "profile-direct-v3-source-v2-point")]
 use clutch_batch_policy_identity::BATCH_POLICY_BYTES;
 #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
 use clutch_batch_policy_identity::{
@@ -247,8 +243,7 @@ impl ArtifactKind {
             4 => Ok(Self::BatchPolicy),
             #[cfg(any(
                 feature = "profile-full",
-                feature = "profile-direct-v3-source-v2-point",
-                feature = "profile-successor-chain-attached-v1"
+                feature = "profile-direct-v3-source-v2-point"
             ))]
             5 => Ok(Self::DirectBatchPolicyV3),
             #[cfg(feature = "non-production-product-series-lab")]
@@ -773,15 +768,11 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
-        #[cfg(any(
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-successor-chain-attached-v1"
-        ))]
+        #[cfg(feature = "profile-direct-v3-source-v2-point")]
         ArtifactKind::BatchPolicy => Err(CodecError::InvalidEnum),
         #[cfg(any(
             feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-successor-chain-attached-v1"
+            feature = "profile-direct-v3-source-v2-point"
         ))]
         ArtifactKind::DirectBatchPolicyV3 => {
             let policy = DirectBatchPolicyV3::decode(body)?;
@@ -1704,8 +1695,7 @@ mod tests {
         round_trip(ArtifactKind::BatchPolicy);
         #[cfg(any(
             feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-successor-chain-attached-v1"
+            feature = "profile-direct-v3-source-v2-point"
         ))]
         round_trip(ArtifactKind::DirectBatchPolicyV3);
     }
@@ -1972,8 +1962,7 @@ mod tests {
     #[test]
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point",
-        feature = "profile-successor-chain-attached-v1"
+        feature = "profile-direct-v3-source-v2-point"
     ))]
     fn direct_batch_policy_artifact_binds_kind_context_release_and_all_bytes() {
         let context = Hash32::from_bytes([0x44; 32]);
@@ -1998,10 +1987,7 @@ mod tests {
             validate_artifact(old_kind, &bytes[..BATCH_POLICY_BYTES]),
             Err(CodecError::MismatchedBinding)
         );
-        #[cfg(any(
-            feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-successor-chain-attached-v1"
-        ))]
+        #[cfg(feature = "profile-direct-v3-source-v2-point")]
         assert_eq!(
             validate_artifact(old_kind, &bytes[..BATCH_POLICY_BYTES]),
             Err(CodecError::InvalidEnum)
@@ -2027,10 +2013,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(
-        feature = "profile-direct-v3-source-v2-point",
-        feature = "profile-successor-chain-attached-v1"
-    ))]
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
     fn direct_profile_refuses_general_artifact_kind() {
         assert_eq!(ArtifactKind::from_byte(4), Err(CodecError::InvalidEnum));
     }

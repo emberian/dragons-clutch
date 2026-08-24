@@ -15,8 +15,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketBindingV2, MarketRuntimeV3AccountV1, MARKET_BINDING_ACCOUNT_BYTES,
-    MARKET_BINDING_ACCOUNT_BYTES_V2, MARKET_RUNTIME_ACCOUNT_BYTES,
+    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketRuntimeV3AccountV1,
+    MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
+    MARKET_BINDING_ACCOUNT_BYTES_V3, MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::MarketInstancePreimageV2;
@@ -531,6 +532,61 @@ pub(crate) fn authenticate_general_market_v2(
         base.market.bytes() == market_runtime_account.key.to_bytes()
             && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
             && runtime.market_instance_v2_id == base.market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok((binding, runtime))
+}
+
+/// Authenticate only the Product-authorized General MarketBinding V3 and its
+/// stable runtime. The historical V1/V2 bindings cannot satisfy this seam.
+/// Both immutable accounts must remain read-only, must retain their typed rent
+/// principal plus donation floor, and must be the exact canonical PDAs.
+pub(crate) fn authenticate_general_market_v3(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+) -> Outcome<(MarketBindingV3, MarketRuntimeV3AccountV1)> {
+    require_program_account(
+        program_id,
+        market_binding_account,
+        false,
+        MARKET_BINDING_ACCOUNT_BYTES_V3,
+    )?;
+    require_program_account(
+        program_id,
+        market_runtime_account,
+        false,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+    )?;
+    let binding = MarketBindingV3::decode(&market_binding_account.data.borrow())?;
+    let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
+    let base = binding.base().base();
+    expect_pda(
+        market_binding_account.key,
+        seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),
+        Some(base.stored_bump),
+    )?;
+    expect_pda(
+        market_runtime_account.key,
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.key.to_bytes()),
+        Some(runtime.stored_bump),
+    )?;
+    let binding_rent = binding.rent();
+    let required_binding_lamports = binding_rent
+        .refundable_principal
+        .checked_add(binding_rent.donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let required_runtime_lamports = runtime
+        .rent
+        .refundable_principal
+        .checked_add(runtime.rent.donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        base.market.bytes() == market_runtime_account.key.to_bytes()
+            && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
+            && runtime.market_instance_v2_id == base.market_instance_v2_id
+            && market_binding_account.lamports() >= required_binding_lamports
+            && market_runtime_account.lamports() >= required_runtime_lamports,
         ClutchError::MismatchedState,
     )?;
     Ok((binding, runtime))

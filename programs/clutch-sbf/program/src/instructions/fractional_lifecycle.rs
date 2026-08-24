@@ -1,10 +1,8 @@
 //! Atomic Product-owned admission and retirement of the Fractional family.
 //!
-//! These handlers are compiled so the complete account/CPI boundary can be
-//! reviewed, but the central capability table continues to refuse every action
-//! from 1 through 10. Neither lifecycle function can be reached through checked
-//! dispatch until all ten Fractional actions are enabled as one coherent
-//! lifecycle.
+//! These handlers are always compiled so the central successor profile can
+//! admit all ten actions only as one coherent lifecycle with its complete
+//! Product, collateral, claim-release, and registry dependency closure.
 
 use crate::accounts::{require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
@@ -592,8 +590,7 @@ pub(super) fn process_initialize(
     let postwrite = authenticate_fractional_family_admission_postwrite_v1(
         program_id,
         runtime_release,
-        Identity32V1::new(resolution.semantic_id.bytes())
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        resolution,
         plan,
         &accounts[POLICY],
         &accounts[LEDGER],

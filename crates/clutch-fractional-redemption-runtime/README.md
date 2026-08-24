@@ -5,9 +5,11 @@ allocation-free, fixed-layout runtime contract. The SBF adapter contains all
 ten handlers, including Product-owned atomic family admission and terminal
 consumption around the Fractional-owned account writes, deletion, and rent
 splits. Their capability remains disabled until the whole family passes one
-release review. Intent family `79/v1`, actions `1..=10`, and account coordinates
+checked unified successor closure. Intent family `79/v1`, actions `1..=10`, and account coordinates
 `0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
-`ReservedDisabled`.
+`ReservedDisabled` in the in-flight profile. The frozen complete
+`successor-chain-attached-dev` identity admits actions 1 through 10 together or
+admits none of them.
 
 The new persisted facts have one owner each:
 
@@ -54,6 +56,22 @@ than a Fractional-owned replay projection. Its frozen family/action/role
 coordinates are `(4,2,1)`, `(4,4,1)`, `(4,6,1)`, and `(4,7,1)` for exact
 redemption, credited redemption, credit-transfer payout, and credit-merge
 payout respectively; every tuple uses transition version `1`.
+
+Dealer terminal resolution does not allocate a detachable Fractional action.
+The versioned private `DealerFacilityVectorTransitionV1` is consumed only
+inside Dealer `76/v1` action 23. It authenticates one facility Position and
+Dealer Replay prestate, folds at most 16 outcome quantities in canonical order,
+divides the aggregate numerator once, advances a5/ClaimLedger/Hoard once, and
+returns a non-Copy SBF receipt whose digest Dealer Replay must commit. Any
+aggregate remainder is retained in one newly initialized facility-owned
+`0xa6/v2` credit and changes `K` by exactly the same numerator. The real credit
+cannot be created at Dealer initialization because Resolution V5 and a4/a5 do
+not yet exist. Dealer therefore owns a pre-Resolution future-credit
+rent-principal vault/receipt; action 23 must close or terminalize that one-shot
+prefund under its immutable refund/neutral-sink partition before Fractional
+accepts the exact derived a6 PDA, version, bytes, bump, and funded zero prewrite.
+The private SBF seam remains capability-refusing until Dealer implements that
+authority and its retirement path closes or terminalizes the facility credit.
 
 Every redemption and credit transfer checks both its prospective prestate and
 poststate against
@@ -115,19 +133,29 @@ release narrowed from the loader-authenticated registry capability. Product's
 consumer can accept those private values but cannot construct them or replace
 their receipt. Product's atomic aggregator/root consumers and private
 Foundation preallocation authority are present. Actions 1 and 10, like actions
-2 through 9, remain disabled until the whole family passes release review and
-is admitted by one exact linked capability profile.
+2 through 9, remain disabled until the whole Product/Source/General/Direct/
+Fractional/Structured/Dealer/Failure and observed-release closure is admitted
+by the one exact linked capability profile.
 
 ## Solana activation boundary
 
-The executable-but-capability-disabled account order is:
+The always-compiled, currently capability-refused account order is:
+
+The present SBF checkpoint consumes the historical 46-slot
+`MarketFoundationAccountGraphV2`, whose active projection has 14 fixed core
+accounts plus two accounts per outcome. This is not the acceptance graph:
+Product/Collateral has identified a required 47th fixed
+`HoardCollateralVault` slot. Fractional must migrate both lifecycle outers to
+that typed successor before 79/v1 becomes callable; the current counts below
+describe the checked-in checkpoint exactly and are not frozen for release.
 
 - `Initialize`: the 14 Product Foundation core accounts in slot order, the
   active OutcomeMint prefix, the active OutcomeCustody prefix, then Realm,
   Profile, collateral policy/program/ProgramData, claim program/ProgramData,
   MarketInstance artifact, founder Series link, FundingQuoteV4 artifact,
   SeriesRegistryV2, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
-  System Program, and Rent. No signer or second Foundation debit exists.
+  System Program, and Rent. For `N` active outcomes the exact count is
+  `14 + 2*N + 17 = 31 + 2*N`. No signer or second Foundation debit exists.
 - Exact internal redeem: owner; Realm; collateral Profile/policy/program;
   MarketBinding; MarketRuntime; MarketInstance artifact; Hoard V2; ClaimLedger
   V3; Resolution V5; fractional policy; aggregate ledger; Position V3; GEN1
@@ -166,7 +194,8 @@ The executable-but-capability-disabled account order is:
   claim program/ProgramData, MarketInstance artifact, founder Series link,
   FundingQuoteV4, SeriesRegistryV2, this
   Program/ProgramData, ReleaseV2/ProfileV4, writable shared rent refund owner,
-  and writable neutral sink. It consumes Product terminality before deleting
+  and writable neutral sink. Its exact count is also `31 + 2*N`. It consumes
+  Product terminality before deleting
   `0xa4` and `0xa5`, refunds only both stored principals, sends every surplus
   lamport to the exact System-owned neutral sink, and advances ClaimLedger to
   Retiring. Any later refusal rolls the whole instruction back.
@@ -184,5 +213,7 @@ Foundation debit/donation evidence and persisted typed claim-issuance binding;
 the Fractional adapter will not invent a duplicate owner or provision mock
 state. Action 10 consumes Product's private terminal writer before deletion;
 Fractional owns release authentication, terminal postwrite verification,
-account deletion, and both exact rent splits. Whole-family release review is
-the remaining activation gate.
+account deletion, and both exact rent splits. The central in-flight profile
+still requires the remaining family implementations and positive checked
+collateral/claim release rows before its one acceptance switch can enable any
+successor tuple.

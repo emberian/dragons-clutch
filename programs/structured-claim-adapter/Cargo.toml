@@ -23,9 +23,10 @@ profile-general-source-v2-point = [
     "clutch-retirement-adapter/profile-general-source-v2-point",
     "clutch-solana-layout/profile-general-source-v2-point",
 ]
-# Stages the current Structured wrapper code in a distinct non-production ELF.
-# The compiled action mask remains exactly zero; this feature admits no action.
-live-current-wrapper = []
+# Admits the exact current Structured action/release contract for the separately
+# deployed wrapper in the unified successor-chain-attached development profile.
+# The base program must select the identically named profile independently.
+profile-successor-chain-attached-dev = []
 
 [dependencies]
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }

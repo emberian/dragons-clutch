@@ -5,10 +5,9 @@
 //! strictly precedes rent close**, every rent close pays **exactly the
 //! recorded principal to the exact recorded payer**, and **every other live
 //! lamport burns at the frozen program-wide neutral sink** — the same
-//! incinerator the ResolutionWork and Direct V3 planes froze.  The V3
-//! precedent (`direct_selection_v3::common::close_funded_account`) is the
-//! shape every close here follows: refuse before any byte moves, zero the
-//! account, resize to nothing, reassign to the System program.
+//! incinerator the ResolutionWork plane froze. Every close refuses before any
+//! byte moves, zeros the account, resizes to nothing, and reassigns it to the
+//! System program.
 //!
 //! ## The close DAG
 //!
@@ -134,8 +133,8 @@ use solana_sdk_ids::incinerator;
 
 /// The frozen program-wide neutral sink of the general plane's closes: the
 /// canonical incinerator — the same identity `RESOLUTION_WORK_NEUTRAL_SINK_V1`
-/// and `DIRECT_NEUTRAL_SINK_V3` froze, restated here so the general plane's
-/// close family names its sink in its own vocabulary.
+/// froze, restated here so the general plane's close family names its sink in
+/// its own vocabulary.
 pub const GENERAL_NEUTRAL_SINK_V1: Pubkey = incinerator::ID;
 
 /// Accounts in a LAPSED-epoch `ReleaseTerminalReservation`, exactly.
@@ -1406,14 +1405,12 @@ fn borrow_account_mut<'a, 'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instructions::direct_selection_v3::DIRECT_NEUTRAL_SINK_V3;
     use crate::instructions::resolution_work::RESOLUTION_WORK_NEUTRAL_SINK_V1;
 
     #[test]
     fn one_frozen_sink_across_all_three_planes() {
         // The general plane's sink is the same frozen incinerator the
         // ResolutionWork and Direct V3 planes already burned into the ELF.
-        assert_eq!(GENERAL_NEUTRAL_SINK_V1, DIRECT_NEUTRAL_SINK_V3);
         assert_eq!(GENERAL_NEUTRAL_SINK_V1, RESOLUTION_WORK_NEUTRAL_SINK_V1);
     }
 

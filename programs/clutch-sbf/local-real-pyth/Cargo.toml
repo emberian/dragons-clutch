@@ -53,6 +53,7 @@ clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
 clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
+clutch-direct-market-runtime = { path = "../../../crates/clutch-direct-market-runtime" }
 clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime" }
 clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }

@@ -19,10 +19,10 @@ The enduring product algebra and comparative research model remain in
 - [`programs/structured-claim-sbf/README.md`](../../programs/structured-claim-sbf/README.md)
 - [`docs/implementation/CENTRAL_INTENT_REGISTRY.md`](../../docs/implementation/CENTRAL_INTENT_REGISTRY.md)
 
-The current source-staged family has exact account contracts only for actions
-1, 3, 5, 6, 7, and 8. Actions 2 and 4 are withdrawn and refused by current
-Replay V3 construction and decode. Every Structured capability mask is still
-zero, so no Structured route is admitted by a checked release.
+The current family has exact account contracts only for actions 1, 3, 5, 6,
+7, and 8. Actions 2 and 4 are withdrawn and refused by current Replay V3
+construction and decode. The unified successor development profile admits only
+those six actions through exact wrapper/base/Token-2022 release manifests.
 
 This tombstone is not evidence that the successor has been built, measured,
 deployed, or validated.

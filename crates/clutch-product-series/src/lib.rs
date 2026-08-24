@@ -31,6 +31,7 @@ mod foundation_funding_v3;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
+mod failure_begin_schedule;
 mod funding_state_v3;
 mod interval_consensus;
 mod market_family_aggregator;
@@ -138,6 +139,12 @@ pub use funding_state_v2::{
     AuthenticatedSeriesFundingAuthorityV2, SeriesComponentCapitalV2, SeriesFundingPhaseV2,
     SeriesFundingStateV2, SeriesFundingTerminalProjectionV2, SERIES_COMPONENT_CAPITAL_BYTES_V2,
     SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_V2_DOMAIN,
+};
+pub use failure_begin_schedule::{
+    derive_product_failure_begin_schedule_projection_v1,
+    ProductFailureBeginCompilerProvenanceV1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1,
 };
 pub use funding_state_v3::{
     AuthenticatedSeriesFundingAuthorityV3, SeriesComponentCapitalV3, SeriesFundingPhaseV3,
@@ -546,6 +553,10 @@ typed_id!(
 typed_id!(
     QuantizedIntervalConsensusWorkV1Id,
     "Typed identity of one complete structural interval-consensus work preimage."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV1Id,
+    "Typed identity of one exact current Product-compiled Failure Begin schedule and provenance."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.

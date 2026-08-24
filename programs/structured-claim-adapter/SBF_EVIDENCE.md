@@ -8,8 +8,9 @@ adapter-local `0xd1` descriptor codec and independent `RoutePlan` economic
 planner. They are not evidence for the canonical runtime-contract consumer and
 must not be carried forward.
 
-Before any structured-claim action leaves `ReservedDisabled`, new evidence must
-bind all of the following to one exact source digest and linked ELF identity:
+Before any admitted development action is treated as validated or deployable,
+new evidence must bind all of the following to one exact source digest and
+linked ELF identity:
 
 - `clutch-structured-claim-runtime-contract` and this adapter revision;
 - the implemented current `75/v1` actions 1/3/5/6/7/8 and explicit refusal of
@@ -29,5 +30,5 @@ bind all of the following to one exact source digest and linked ELF identity:
 - descriptor retirement with base close receipt, rent split, permanent mint,
   revoked mint authority, and permanent descriptor tombstone.
 
-Until that campaign exists, the only accurate status is implemented but
-disabled and unvalidated.
+Until that campaign exists, the only accurate status is source-callable in the
+named development profile and unvalidated.

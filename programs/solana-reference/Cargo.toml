@@ -24,6 +24,6 @@ profile-direct-v3-source-v2-point = [
 profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
 ]
-profile-successor-chain-attached-v1 = [
-    "clutch-solana-layout/profile-successor-chain-attached-v1",
+profile-successor-chain-attached-dev = [
+    "clutch-solana-layout/profile-successor-chain-attached-dev",
 ]

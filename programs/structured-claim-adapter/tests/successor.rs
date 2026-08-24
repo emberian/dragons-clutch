@@ -11,6 +11,8 @@ use clutch_structured_claim_adapter::{
     canonical_series_scoped_wrapper_product_id_v2, decode_instruction_v1,
     Error, PdaVerifierV1, RuntimeDeploymentsV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
 };
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+use clutch_structured_claim_adapter::IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1;
 
 fn key(marker: u8) -> [u8; 32] {
     [marker; 32]
@@ -113,7 +115,7 @@ fn descriptor_v1_is_archivally_decodable_but_cannot_promote_live() {
 }
 
 #[test]
-fn family_payload_uses_the_runtime_contract_and_runtime_gate_stays_empty() {
+fn family_payload_uses_the_runtime_contract_and_withdrawn_route_refuses() {
     let payload = WrapperQuantityPayloadV1 {
         wrapper_product_id: key(30),
         quantity: 2,
@@ -132,7 +134,13 @@ fn family_payload_uses_the_runtime_contract_and_runtime_gate_stays_empty() {
         decode_instruction_v1(&instruction),
         Ok(StructuredClaimPayloadV1::WrapCanonical(payload))
     );
+    #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     assert_eq!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK, 0);
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
+    assert_eq!(
+        ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
+        IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
+    );
     assert_eq!(
         admit_runtime_envelope_v1(&instruction),
         Err(Error::CapabilityDisabled)

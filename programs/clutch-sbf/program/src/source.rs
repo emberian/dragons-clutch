@@ -20,7 +20,9 @@
 //! Only historical, explicitly non-successor laboratory profiles retain the
 //! `InitSourceSpec`, archive, and legacy Resolve consumers of this module. The
 //! checked chain-attached successor compiles this authority out; its allocated
-//! SourceSeries V3 family remains capability-empty. Legacy
+//! SourceSeries V3 family is implemented but remains centrally unavailable
+//! until the Product founder and custody-retirement authorities join the same
+//! all-or-none profile closure. Legacy
 //! `Intent::FeedAdvance` folds a caller-supplied observation page and must not
 //! be described as source-authenticated. See
 //! `docs/implementation/AUTHENTICATED_SOURCE_CONSTRUCTION_V1.md`.

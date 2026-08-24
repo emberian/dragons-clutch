@@ -1,18 +1,17 @@
-//! The checked program enters this module only for exact DirectEpochV4
-//! placement and the current direct submission route. Historical General
-//! placement, cancellation, clearing, selection, entitlement, settlement, and
-//! terminal-close handlers remain host-test fixtures; no checked capability or
-//! dispatch arm can reach them.
+//! Historical General and Direct V2/V3 placement, cancellation, submission,
+//! clearing, selection, entitlement, settlement, and terminal-close handlers
+//! remain host-test fixtures. No checked capability or dispatch arm can reach
+//! them; the current Direct replacement is the disabled `80/1` family.
 //!
 //! The historical handlers remain useful as hostile fixtures and dependency-
 //! lower arithmetic adapters, but they are not a deployable General lifecycle.
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **current only for DirectEpochV4**; other epoch widths refuse before legacy account processing |
+//! | `PlaceOrder` | withdrawn General/Direct host fixture; no checked route |
 //! | `CancelOrder` | withdrawn General host fixture; no checked route |
-//! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
-//! | `SettlePage` | withdrawn General host fixture; current settlement uses the disabled V5 successor modules |
+//! | `SubmitDirectPage` | decode-only; Direct `80/1` owns the disabled replacement |
+//! | `SettlePage` | withdrawn General host fixture; current settlement successors remain separately gated |
 //! | `FreezeEntitlement` / `EntitleSlice` | withdrawn General host fixtures; no checked route |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
@@ -276,9 +275,8 @@
 //! (`distinct_owners == filled_order_count`) rather than assumed.
 //!
 //! The typed preflight remains executable in `settlement` and is not a
-//! settlement verdict.  `SubmitDirectPage` removes the caller-provided feed
-//! from the narrow path but leaves it explicitly `SUBMITTED`; neither it nor
-//! the page is selection authority.
+//! settlement verdict. Historical `SubmitDirectPage` is decode-only; no page
+//! projection or caller-built feed is current Direct selection authority.
 //!
 //! **Post-resolution direction (PROPOSED, not integrated).** Verification,
 //! selection, and the complete receipt/pot entitlement set must be frozen
@@ -447,6 +445,7 @@ use crate::accounts::{
 };
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::artifact::read_clock_slot;
+#[cfg(any())]
 use crate::instructions::direct_selection_v3::{
     create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
     DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
@@ -457,6 +456,7 @@ use crate::instructions::genesis::{
 };
 use crate::instructions::split;
 use crate::seeds;
+#[cfg(any())]
 use clutch_solana_layout::direct_selection_v3::{
     DirectBatchPolicyV3, DirectEpochV4Account, DirectReservationV2Account,
     DIRECT_BATCH_POLICY_V3_BYTES, DIRECT_EPOCH_V4_BYTES, DIRECT_RESERVATION_V2_BYTES,
@@ -468,6 +468,7 @@ use clutch_solana_layout::{
     stream, CandidateRecord, CodecError, EpochAccount, Hash32, Intent, OrderSlot, PositionAccount,
     PriceGridAccount, SettlementReceiptAccount, EPOCH_PHASE_OPEN, MAX_GRID_TICKS,
 };
+#[cfg(test)]
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -654,6 +655,7 @@ const PLACE_ORDER_STATE_ROLES: [StateRole; 3] = [
 ];
 
 /// Program-owned roles unique to the Direct V4 placement branch.
+#[cfg(any())]
 const DIRECT_V4_POLICY_ROLE: [StateRole; 1] = [StateRole::read_only(
     IX_DIRECT_V4_POLICY,
     DIRECT_BATCH_POLICY_V3_BYTES,
@@ -926,6 +928,7 @@ fn validate_place_order(
 /// This remains a branch of the existing `PlaceOrder` wire: the account
 /// version selects it, and no Direct V3 lifecycle tag is routed by this seam.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any())]
 fn validate_direct_v4_place(
     page: &[u8],
     epoch: &DirectEpochV4Account,
@@ -1108,6 +1111,7 @@ fn apply_cancel_order(page: &mut [u8], cancellation: &Cancellation<'_>) -> Outco
 /* ------------------------------------------------------------------------ */
 
 /// Validate hostile accounts and apply exactly one batch-plane transition.
+#[cfg(test)]
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request) -> Outcome<()> {
     /* Match through the borrowed envelope.  `Intent::PlaceOrder` carries a
      * full fixed-width portfolio slot; copying the whole Action into this
@@ -1153,19 +1157,6 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             page_index,
         }) => settle_page(
-            program_id,
-            accounts,
-            request.sequence,
-            market,
-            epoch,
-            *page_index,
-        ),
-        #[cfg(feature = "profile-full")]
-        Action::Layout(Intent::SubmitDirectPage {
-            market,
-            epoch,
-            page_index,
-        }) => submit_direct_page(
             program_id,
             accounts,
             request.sequence,
@@ -1458,6 +1449,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
 /// This transition does not mutate the Epoch, does not verify or select the
 /// proposal, and creates no SettlementReceipt. Its two new accounts are an
 /// authenticated candidate submission, not clearing or settlement authority.
+#[cfg(any())]
 #[inline(never)]
 fn submit_direct_page(
     program_id: &Pubkey,
@@ -1554,6 +1546,7 @@ fn submit_direct_page(
 /// Keeping the Epoch, grid, two reservations, and output plan alive in the
 /// outer CPI frame exceeds SBF's 4 KiB limit. This helper's return value is the
 /// only state the creator needs after all semantic checks have passed.
+#[cfg(any())]
 #[inline(never)]
 fn load_direct_submission_plan(
     accounts: &[AccountInfo],
@@ -1585,6 +1578,7 @@ fn load_direct_submission_plan(
 }
 
 /// Authenticate every frozen input address without retaining decoded values.
+#[cfg(any())]
 #[inline(never)]
 fn validate_direct_submission_source_addresses(
     program_id: &Pubkey,
@@ -2067,31 +2061,16 @@ fn place_order(
     }
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     {
-        require(
-            accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES),
-            ClutchError::UnsupportedInstruction,
-        )?;
-        return place_direct_v4_order(
+        let _ = (
             program_id,
             accounts,
             sequence,
-            *intent_market,
-            *intent_epoch,
+            intent_market,
+            intent_epoch,
             max_fee_atoms,
-            *slot,
+            slot,
         );
-    }
-    #[cfg(feature = "profile-full")]
-    if accounts.get(IX_EPOCH).map(|account| account.data_len()) == Some(DIRECT_EPOCH_V4_BYTES) {
-        return place_direct_v4_order(
-            program_id,
-            accounts,
-            sequence,
-            *intent_market,
-            *intent_epoch,
-            max_fee_atoms,
-            *slot,
-        );
+        return Err(ClutchError::UnsupportedInstruction.into());
     }
     /* The shared tag is current only for the exact DirectEpochV4 account
      * plane. A different epoch width is a withdrawn General placement, not an
@@ -2137,12 +2116,6 @@ fn place_legacy_order(
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
     let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
@@ -2272,6 +2245,7 @@ fn place_legacy_order(
     Ok(())
 }
 
+#[cfg(any())]
 struct DirectV4PlaceCommit {
     reservation: DirectReservationV2Account,
     reservation_id: Hash32,
@@ -2284,6 +2258,7 @@ struct DirectV4PlaceCommit {
 /// The legacy eight-account ABI above is byte- and behavior-stable. V4 is an
 /// exact nine-account branch selected only by the otherwise-unrouted 672-byte
 /// Epoch schema, with the exact 96-byte DirectBatchPolicy artifact appended.
+#[cfg(any())]
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn place_direct_v4_order(
@@ -2343,6 +2318,7 @@ fn place_direct_v4_order(
     Ok(())
 }
 
+#[cfg(any())]
 struct DirectV4EconomicCommit {
     position: PositionAccount,
     reservation: DirectReservationV2Account,
@@ -2351,6 +2327,7 @@ struct DirectV4EconomicCommit {
     reservation_funding: clutch_solana_layout::direct_selection_v3::DirectFundingLedgerV3,
 }
 
+#[cfg(any())]
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn prepare_direct_v4_economics(
@@ -2462,6 +2439,7 @@ fn prepare_direct_v4_economics(
     })
 }
 
+#[cfg(any())]
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn prepare_direct_v4_order(
@@ -2556,6 +2534,7 @@ fn prepare_direct_v4_order(
 /// placement. All three borrows are acquired before the first byte moves, and
 /// each typed poststate was validated by the caller. This keeps the SBF frame
 /// bounded without weakening host-level refusal atomicity.
+#[cfg(any())]
 #[inline(never)]
 fn stage_direct_v4_existing(
     accounts: &[AccountInfo],
@@ -2588,12 +2567,6 @@ fn cancel_order(
     require_signer(&accounts[IX_ACTOR])?;
     require_distinct(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &CANCEL_ORDER_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
     let admitted_epoch_lengths = [account_len::EPOCH];
     accounts::validate_state_role_lengths(
         program_id,
@@ -2685,9 +2658,13 @@ fn cancel_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any())]
     use clutch_batch_policy_identity::batch_policy_digest;
+    #[cfg(any())]
     use clutch_batch_policy_identity::direct_window_v1::DIRECT_POLICY_V1;
+    #[cfg(any())]
     use clutch_solana_layout::direct_selection::DirectEpochV3Account;
+    #[cfg(any())]
     use clutch_solana_layout::direct_selection_v3::{
         DirectFundingLedgerV3, DirectTerminalReceiptV3, DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN,
     };
@@ -2915,6 +2892,7 @@ mod tests {
         }
     }
 
+    #[cfg(any())]
     fn direct_v4_epoch(grid: &PriceGridAccount) -> DirectEpochV4Account {
         let market = h(1);
         let epoch_id = canonical_epoch_id(market, 4);
@@ -3054,6 +3032,7 @@ mod tests {
         assert_eq!(decoded.orders[2], OrderSlot::Empty);
     }
 
+    #[cfg(any())]
     #[test]
     fn direct_v4_place_accepts_only_the_fixed_two_order_profile() {
         let grid = grid_account();
@@ -3132,6 +3111,7 @@ mod tests {
         .is_err());
     }
 
+    #[cfg(any())]
     #[test]
     fn direct_v4_place_refuses_policy_schedule_page_and_replay_substitution() {
         let grid = grid_account();
@@ -4064,11 +4044,7 @@ mod tests {
                     epoch,
                     page_index: 0,
                 }),
-                if crate::capabilities::GENERAL_CLEARING {
-                    ClutchError::AccountCount
-                } else {
-                    ClutchError::UnsupportedInstruction
-                },
+                ClutchError::UnsupportedInstruction,
             ),
             (
                 Action::Layout(Intent::PlaceOrder {
@@ -4096,11 +4072,7 @@ mod tests {
                     order_id: canonical_order_id(1),
                     generation: 7,
                 }),
-                if crate::capabilities::GENERAL_CLEARING {
-                    ClutchError::AccountCount
-                } else {
-                    ClutchError::UnsupportedInstruction
-                },
+                ClutchError::UnsupportedInstruction,
             ),
             (
                 Action::Layout(Intent::SubmitDirectPage {
@@ -4108,11 +4080,7 @@ mod tests {
                     epoch,
                     page_index: 0,
                 }),
-                if cfg!(feature = "profile-full") {
-                    ClutchError::AccountCount
-                } else {
-                    ClutchError::UnsupportedInstruction
-                },
+                ClutchError::UnsupportedInstruction,
             ),
         ];
         for (action, expected_error) in cases {

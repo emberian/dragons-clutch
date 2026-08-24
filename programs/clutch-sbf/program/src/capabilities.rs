@@ -1,40 +1,41 @@
 //! Compile-time identity and wire admission for one deployable product.
 //!
-//! Capability profiles are protocol identities, not build-size aliases.  A
-//! profile fixes which canonical instruction families this ELF can decode and
-//! execute.  Disabled canonical tags refuse before any account is read.  The
-//! label and SHA-256 identity below are copied into the artifact manifest by
-//! `scripts/measure_capability_profiles.py`; changing either the membership or
-//! the label therefore creates a different release identity.
+//! Capability profiles are protocol identities, not build-size aliases.
+//! Disabled canonical tags refuse before any account is read. The successor
+//! profile has one frozen identity; its exact callable tuple set is compiled
+//! below, while release readiness and observed external-program manifests stay
+//! outside runtime dispatch. The label and SHA-256 identity are copied into the
+//! artifact manifest by `scripts/measure_capability_profiles.py`.
 
 /// Full research/runtime surface retained by the historical default build.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev"),
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/full/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
+    "dragons-clutch/capability-profile/full/v10-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn-legacy-direct-retired-direct-80-staged-disabled";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev"),
     feature = "non-production-product-series-lab",
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
-/// Direct V3 exact-point product with legacy Source authority disabled.
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v10-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn-legacy-direct-retired-direct-80-staged-disabled";
+/// Source V2 and archive exact-point d1-d3 resolution product. The retained
+/// feature spelling is build-input compatibility only; legacy Direct and
+/// General founder routes are withdrawn.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/direct-v3-source-disabled-point/v2";
-/// General clearing product with legacy Source authority disabled.
+    "dragons-clutch/capability-profile/source-v2-point/v4-current-collateral-legacy-general-founder-withdrawn-legacy-direct-retired";
+/// Source V2 and archive-direct exact-point d1-d3 resolution product. The
+/// withdrawn General V3 request family is not resident in this identity.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/general-source-disabled-point/v2";
-/// Current chain-attached successor with no legacy Source or laboratory plane.
-#[cfg(feature = "profile-successor-chain-attached-v1")]
-pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/successor-chain-attached/v3-current-collateral-direct-source-lifecycle-disabled-no-legacy-source-labs";
+    "dragons-clutch/capability-profile/general-source-v2-point/v5-current-collateral-legacy-general-founder-placement-withdrawn";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -42,51 +43,60 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7";
+    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v8";
 /// Non-production General V2 successor laboratory. All action tuples are
 /// fail-closed until the Product admission, counted settlement, and retirement
 /// chain is reachable under one exact current account family.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-successor-lab/v9-unreachable";
+    "dragons-clutch/capability-profile/non-production-general-v2-successor-lab/v10-unreachable";
+
+/// Frozen label for the complete unified successor development closure.
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL: &str =
+    "dragons-clutch/capability-profile/successor-chain-attached-dev/complete-product-source-general-direct-fractional-structured-dealer-failure-release-closure/v1";
+/// SHA-256 of [`SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL`].
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID: [u8; 32] = [
+    0xf1, 0xd4, 0xc9, 0xbb, 0xb8, 0x9e, 0x89, 0xbf, 0x13, 0xfe, 0x0a, 0x54, 0xae, 0x82, 0x42, 0x20,
+    0xdc, 0x0d, 0x11, 0x09, 0xbd, 0xf2, 0x13, 0x16, 0xe2, 0x95, 0x3a, 0xa3, 0x34, 0xaf, 0xd4, 0xca,
+];
+
+/// Identity selected for the single successor development product.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub const PROFILE_LABEL: &str = SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL;
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev"),
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0xbf, 0x5c, 0x48, 0x9a, 0x5a, 0x1c, 0xcd, 0x6a, 0x48, 0xc3, 0x77, 0x84, 0x4c, 0x58, 0xe1, 0xcd,
-    0xec, 0x68, 0x91, 0x38, 0x6c, 0x58, 0xa8, 0x54, 0xb8, 0x0e, 0xf9, 0x61, 0x40, 0x94, 0xa5, 0x26,
+    0x4c, 0x6f, 0x21, 0xdf, 0x7b, 0x06, 0x6e, 0x26, 0xa9, 0x37, 0xe5, 0xd4, 0x13, 0x92, 0xe0, 0x75,
+    0xd9, 0x3b, 0x96, 0xe2, 0x50, 0xe3, 0x87, 0xfa, 0x5c, 0xe7, 0x7d, 0x18, 0xfe, 0x92, 0xd2, 0x8b,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
     feature = "profile-full",
     feature = "non-production-product-series-lab",
+    not(feature = "profile-successor-chain-attached-dev"),
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb8, 0x48, 0xe9, 0xc9, 0xd1, 0xf4, 0x70, 0xd9, 0xe3, 0x13, 0x00, 0x41, 0x6c, 0x55, 0xbe, 0xbf,
-    0xc5, 0x46, 0xa9, 0xf9, 0x8d, 0xca, 0x97, 0x9d, 0x72, 0x4b, 0xe7, 0xbf, 0x5c, 0xd4, 0xd4, 0x1e,
+    0xf4, 0xef, 0x38, 0xb5, 0x4d, 0xfd, 0xaf, 0xbf, 0x64, 0x51, 0x03, 0x5b, 0xa2, 0x95, 0xc0, 0x45,
+    0xf3, 0xbf, 0x7c, 0xe8, 0x4b, 0x3d, 0xde, 0xd1, 0x1d, 0x28, 0x3b, 0x36, 0xeb, 0x5c, 0x17, 0x2e,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x5e, 0x7c, 0x05, 0x29, 0xdd, 0x07, 0x92, 0x83, 0xd1, 0x2c, 0x77, 0x84, 0x62, 0x74, 0xeb, 0x27,
-    0xbd, 0x82, 0xae, 0x8b, 0xb3, 0xbd, 0x6b, 0x7e, 0x23, 0x0d, 0x22, 0xa8, 0x43, 0xa0, 0x1d, 0x2d,
+    0xd6, 0xec, 0x0c, 0xf5, 0xfc, 0xe9, 0xf6, 0x02, 0xb7, 0x9b, 0xde, 0x81, 0xd8, 0x97, 0x0f, 0x69,
+    0xb5, 0x88, 0xc3, 0x5e, 0x66, 0x07, 0x9a, 0xed, 0x52, 0xb2, 0x09, 0x69, 0xb4, 0x0f, 0x11, 0x6f,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xd3, 0x39, 0x83, 0xa3, 0x0f, 0x4e, 0xfa, 0x57, 0x7e, 0x54, 0x09, 0x38, 0x1d, 0xb1, 0x8f, 0xe4,
-    0x39, 0x4d, 0x45, 0xf5, 0x60, 0xbc, 0x2e, 0x06, 0x3a, 0x51, 0xee, 0x78, 0x42, 0x0c, 0x1d, 0xef,
-];
-/// SHA-256 of the chain-attached successor profile label.
-#[cfg(feature = "profile-successor-chain-attached-v1")]
-pub const PROFILE_ID: [u8; 32] = [
-    0x3e, 0x4f, 0x6d, 0xf2, 0xf8, 0x2a, 0x2b, 0x91, 0xfc, 0x5c, 0x6b, 0x65, 0xc7, 0x90, 0x7d, 0x6d,
-    0x07, 0x1c, 0x9e, 0x75, 0xb2, 0xfb, 0x95, 0xd9, 0x0b, 0xca, 0x9a, 0x05, 0x51, 0x18, 0xf4, 0xa2,
+    0xb7, 0xe2, 0x37, 0x0c, 0xcf, 0x13, 0xa5, 0xa1, 0x78, 0x42, 0x73, 0xce, 0xfb, 0x58, 0xb2, 0x2f,
+    0xa4, 0x5e, 0xc6, 0x69, 0xf8, 0x33, 0x23, 0x5d, 0x7f, 0xc3, 0x0a, 0x92, 0x9f, 0x2d, 0xf7, 0xc2,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -94,15 +104,19 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x15, 0xbe, 0x8b, 0x99, 0x15, 0x35, 0x10, 0x24, 0x80, 0xa3, 0x41, 0xed, 0xdf, 0x86, 0x35, 0x0d,
-    0xb0, 0xff, 0xcc, 0x67, 0x5a, 0xc8, 0x88, 0x8b, 0x4c, 0xf2, 0x9b, 0xed, 0x21, 0x5b, 0x7e, 0xbb,
+    0xb3, 0x67, 0xe8, 0x43, 0x41, 0x38, 0xe6, 0x07, 0x3b, 0x46, 0xf5, 0x39, 0x66, 0x4d, 0x31, 0xa7,
+    0x29, 0x6e, 0x88, 0xd6, 0x5b, 0x02, 0x75, 0x72, 0x00, 0x4e, 0x10, 0x6f, 0xcd, 0x54, 0xfd, 0x8b,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x91, 0x46, 0xa2, 0x66, 0x50, 0xfa, 0x69, 0x22, 0x9d, 0xc4, 0xaf, 0x1a, 0x9d, 0x8c, 0x4d, 0xc8,
-    0xc5, 0xf7, 0x8e, 0xeb, 0x89, 0x73, 0xe4, 0xe7, 0x01, 0x6e, 0x5c, 0x3a, 0xdd, 0xb9, 0x65, 0xf9,
+    0xcf, 0xb6, 0x11, 0x64, 0xcc, 0xf9, 0xe4, 0x60, 0x42, 0x4d, 0x82, 0x1e, 0x0b, 0x9c, 0x5b, 0x63,
+    0xac, 0x9a, 0xf5, 0xc6, 0xd0, 0x40, 0x1c, 0x17, 0x74, 0x1b, 0x1a, 0x5d, 0x74, 0x82, 0x6b, 0xfc,
 ];
+
+/// Frozen identity of the successor development product.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub const PROFILE_ID: [u8; 32] = SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID;
 
 /// Whether this artifact is the explicitly non-production identity lab.
 pub const GENERAL_V2_IDENTITY_LAB: bool =
@@ -112,61 +126,37 @@ pub const GENERAL_V2_IDENTITY_LAB: bool =
 pub const DEALER_POLICY_CATALOG_LAB: bool =
     cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
 
-/// Whether this artifact was explicitly compiled as a non-production Source lab.
-///
-/// Checked deployable profiles reject both features. Keeping the laboratory
-/// gate here lets historical fixtures remain test inputs without leaving their
-/// V1/V2 dispatch coordinates reachable in a release artifact.
-pub const LEGACY_SOURCE_LAB: bool = cfg!(any(
-    feature = "non-production-mock-source",
-    feature = "non-production-real-pyth-lab"
-));
-/// Whether the non-production laboratory contains legacy Source V1 ingestion.
+/// Whether this is the unified successor development product.
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV: bool =
+    cfg!(feature = "profile-successor-chain-attached-dev");
+
+/// Whether the profile contains legacy Source V1 ingestion and resolution.
 pub const SOURCE_V1: bool =
-    LEGACY_SOURCE_LAB && cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the non-production laboratory contains Source V2 ingestion.
-pub const SOURCE_V2: bool =
-    LEGACY_SOURCE_LAB
-        && !DEALER_POLICY_CATALOG_LAB
-        && !GENERAL_V2_IDENTITY_LAB
-        && !cfg!(feature = "profile-successor-chain-attached-v1");
-/// Whether the profile contains legacy Direct V2 clearing.
-pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the profile contains Direct V3 clearing.
-pub const DIRECT_V3: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-successor-chain-attached-v1"
-)) && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the profile contains the withdrawn legacy General clearing family.
-/// No checked release does; current General successors remain allocated but
-/// unreachable until their complete Product-to-retirement chain is admitted.
-pub const GENERAL_CLEARING: bool = false;
+    cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB && !SUCCESSOR_CHAIN_ATTACHED_DEV;
+/// Whether the profile contains Source V2 ingestion and resolution.
+pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB
+    && !GENERAL_V2_IDENTITY_LAB
+    && !SUCCESSOR_CHAIN_ATTACHED_DEV;
 /// Whether the profile contains occupation and resumable resolution.
 pub const OCCUPATION_RESOLUTION: bool =
-    cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+    cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB && !SUCCESSOR_CHAIN_ATTACHED_DEV;
 
 /// Return whether one canonical legacy Intent tag belongs to this product.
 ///
 /// Direct V3 tags `36..=46` use their own strict decoder and are handled by
 /// [`direct_v3_tag_enabled`].  Unknown values are false.
 pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
-    if DEALER_POLICY_CATALOG_LAB {
+    if DEALER_POLICY_CATALOG_LAB || SUCCESSOR_CHAIN_ATTACHED_DEV {
         return false;
     }
     match tag {
-        // Current full-width collateral/value, Realm/Profile, artifact, and
-        // revenue-record planes. Withdrawn General coordinates are split out
-        // below rather than inheriting this range.
-        2..=5 | 10..=11 | 15..=21 | 68 => !GENERAL_V2_IDENTITY_LAB,
-        // Historical Source V2 is laboratory-only. A checked release cannot
-        // reach its ingest/archive intent tags 70 through 73.
-        70..=73 => SOURCE_V2,
-        // The old feed buffer and direct-page settlement families.
-        6 | 22 | 27..=31 => cfg!(feature = "profile-full"),
-        // Historical Source V1 is laboratory-only. Tags 23 through 26 are
-        // never admitted merely because a deployable profile is full-width.
-        23..=26 => SOURCE_V1,
+        // Current full-width collateral/value, Realm/Profile, artifact,
+        // revenue-record, and Source V2 planes.
+        2..=5 | 10..=11 | 15..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
+        // The old feed buffer and Source V1 family. SubmitDirectPage (22) and
+        // Direct V2 actions (27..=31) remain allocated for hostile decoding,
+        // but no current artifact can execute them.
+        6 | 23..=26 => cfg!(feature = "profile-full"),
         // Resumable occupation work.
         32..=35 => cfg!(feature = "profile-full"),
         // Withdrawn General construction, clearing, settlement, and close
@@ -174,12 +164,12 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
         // seven-account Market founder. Tags 12/13 named constructors whose
         // sole live handler already refused in favor of typed artifact sealing.
         1 | 8..=9 | 12..=13 | 47..=67 | 69 => false,
-        // The shared PlaceOrder wire is current only for exact DirectEpochV4.
-        // The account-width-selected General fallback is withdrawn.
-        7 => DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB,
-        // This shared wire coordinate remains admitted only for the exact
-        // Direct V4 page-zero constructor; the General Epoch fallback is gone.
-        14 => DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB,
+        // Shared PlaceOrder was retained only for retired DirectEpochV4; the
+        // account-width-selected General fallback is also withdrawn.
+        7 => false,
+        // This shared wire coordinate belonged to the retired Direct V4
+        // page-zero constructor; the General Epoch fallback is also gone.
+        14 => false,
         _ => false,
     }
 }
@@ -196,7 +186,8 @@ pub const fn legacy_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether one dedicated Direct V3 tag belongs to this product.
 pub const fn direct_v3_tag_enabled(tag: u8) -> bool {
-    (tag >= 36 && tag <= 46) && DIRECT_V3
+    let _ = tag;
+    false
 }
 
 /// Return whether an exact dedicated Direct V3 tag/version pair belongs to this product.
@@ -224,52 +215,103 @@ pub const fn extension_intent_action_allocated(
     .is_ok()
 }
 
-/// Exact extension actions executable by this product.
+/// Number of successor actions in the complete unified closure.
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT: usize = 117;
+
+const fn complete_successor_actions(
+) -> [(u8, u8, u8); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT] {
+    let mut rows = [(0, 0, 0); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT];
+    let mut cursor = 0usize;
+    let mut action = 1u8;
+    while action <= 42 {
+        if action != 35 {
+            rows[cursor] = (74, 1, action);
+            cursor += 1;
+        }
+        action += 1;
+    }
+    let structured = [1u8, 3, 5, 6, 7, 8];
+    let mut index = 0usize;
+    while index < structured.len() {
+        rows[cursor] = (75, 1, structured[index]);
+        cursor += 1;
+        index += 1;
+    }
+    action = 1;
+    while action <= 25 {
+        rows[cursor] = (76, 1, action);
+        cursor += 1;
+        action += 1;
+    }
+    action = 1;
+    while action <= 18 {
+        rows[cursor] = (77, 2, action);
+        cursor += 1;
+        action += 1;
+    }
+    action = 10;
+    while action <= 13 {
+        rows[cursor] = (78, 1, action);
+        cursor += 1;
+        action += 1;
+    }
+    action = 1;
+    while action <= 10 {
+        rows[cursor] = (79, 1, action);
+        cursor += 1;
+        action += 1;
+    }
+    action = 1;
+    while action <= 13 {
+        rows[cursor] = (80, 1, action);
+        cursor += 1;
+        action += 1;
+    }
+    assert!(cursor == SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT);
+    rows
+}
+
+/// Exact canonical tuple set admitted only by the complete unified profile.
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
+    [(u8, u8, u8); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT] =
+    complete_successor_actions();
+
+/// Exact extension actions executable by the successor product at this
+/// dependency checkpoint.
 ///
-/// The historical full profile retains its Source V3 laboratory slice.
-/// Checked successor admission is defined separately below so an incomplete
-/// Source lifecycle can never inherit these actions.
+/// Failure actions 10 through 13 have complete current session creation,
+/// advance, resolution, and archive handlers. Other target tuples remain
+/// absent until their current authority tranche is integrated. In particular,
+/// Source actions 1 through 12 stay gated until Product consumes the private
+/// whole-lifecycle funding-custody retirement transition.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (78, 1, 10),
+    (78, 1, 11),
+    (78, 1, 12),
+    (78, 1, 13),
+];
+
+/// Exact extension actions executable by other products.
+///
+/// Full profiles execute artifact-authenticated Source release registration
+/// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
+/// authenticated parser ingestion. Actions 5 through 12 remain independently
+/// disabled.
 #[cfg(all(
     feature = "profile-full",
-    not(any(
-        feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab",
-        feature = "non-production-structured-custody-lab"
-    ))
-))]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
-    &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
-
-/// The checked successor admits no SourceSeries action until release
-/// publication, actions 1 through 12, the exact Failure/ResolutionV5
-/// authority, terminal reopen, and physical close are one reachable family.
-/// In particular, action 2 cannot consume an unfounded generation request.
-#[cfg(feature = "profile-successor-chain-attached-v1")]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
-
-/// Structured laboratory build seam. Actions 1/3/5/6/7/8 have one closed
-/// current account contract, but runtime tuples remain empty because the checked
-/// wrapper/base release identities still describe zero-Structured-capability
-/// artifacts and no replacement release evidence has been admitted.
-#[cfg(all(
-    feature = "profile-full",
-    feature = "non-production-structured-custody-lab",
+    not(feature = "profile-successor-chain-attached-dev"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
     ))
 ))]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
-    (77, 2, 1),
-    (77, 2, 2),
-    (77, 2, 3),
-    (77, 2, 4),
-];
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
+    &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
     not(feature = "profile-full"),
-    not(feature = "profile-successor-chain-attached-v1"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
@@ -326,63 +368,55 @@ mod tests {
             PROFILE_ID
         );
         assert!(!legacy_intent_tag_enabled(1));
-        assert_eq!(legacy_intent_tag_enabled(70), SOURCE_V2);
+        assert_eq!(
+            legacy_intent_tag_enabled(70),
+            !DEALER_POLICY_CATALOG_LAB
+                && !GENERAL_V2_IDENTITY_LAB
+                && !SUCCESSOR_CHAIN_ATTACHED_DEV
+        );
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
-        assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
-        assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
+        assert!(!direct_v3_tag_enabled(36));
+        assert!(!legacy_intent_tag_enabled(47));
         for tag in [1, 8, 9, 12, 13, 69] {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
         }
         for tag in [2, 3, 4, 5, 15, 16, 17] {
             assert_eq!(
                 legacy_intent_tag_enabled(tag),
-                !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB,
+                !DEALER_POLICY_CATALOG_LAB
+                    && !GENERAL_V2_IDENTITY_LAB
+                    && !SUCCESSOR_CHAIN_ATTACHED_DEV,
                 "current full-width Collateral tag {tag}",
             );
         }
         for tag in 47..=67 {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
         }
-        assert_eq!(legacy_intent_tag_enabled(14), DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB);
-        assert_eq!(legacy_intent_tag_enabled(7), DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB);
+        assert!(!legacy_intent_tag_enabled(14));
+        assert!(!legacy_intent_tag_enabled(7));
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
-        assert_eq!(legacy_intent_tag_enabled(27), DIRECT_V2);
-    }
-
-    #[test]
-    fn legacy_source_tags_require_an_explicit_nonproduction_lab() {
-        for tag in [23_u8, 24, 25, 26] {
-            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V1, "tag {tag}");
-        }
-        for tag in [70_u8, 71, 72, 73] {
-            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V2, "tag {tag}");
-        }
-        if !LEGACY_SOURCE_LAB {
-            assert!(!SOURCE_V1);
-            assert!(!SOURCE_V2);
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "profile-successor-chain-attached-v1")]
-    fn chain_attached_successor_membership_is_exact() {
-        for tag in u8::MIN..=u8::MAX {
-            let expected = matches!(
-                tag,
-                2..=5 | 7 | 10..=11 | 14..=21 | 36..=46 | 68
-            );
-            assert_eq!(
-                legacy_intent_tag_enabled(tag) || direct_v3_tag_enabled(tag),
-                expected,
-                "successor tag {tag}"
-            );
-        }
-        for action in 1..=12 {
-            assert!(
-                !extension_intent_action_enabled(77, 2, action),
-                "SourceSeries action {action}",
-            );
+        assert!(!legacy_intent_tag_enabled(22));
+        assert!(!legacy_intent_tag_enabled(27));
+        assert!(!legacy_intent_tag_enabled(31));
+        assert!(!direct_v3_tag_enabled(46));
+        assert_eq!(
+            solana_sha256_hasher::hash(SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL.as_bytes())
+                .to_bytes(),
+            SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID
+        );
+        assert_eq!(
+            SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS.len(),
+            SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT
+        );
+        for (family_tag, family_version, local_action) in
+            SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS
+        {
+            assert!(extension_intent_action_allocated(
+                family_tag,
+                family_version,
+                local_action
+            ));
         }
     }
 
@@ -457,12 +491,20 @@ mod tests {
                         && (clutch_solana_layout::registry::FractionalRedemptionAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::FractionalRedemptionAction::LAST_TAG)
                             .contains(&local_action);
+                    let direct = family_tag
+                        == clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DirectMarketAction::LAST_TAG)
+                            .contains(&local_action);
                     let expected_allocated = general
                         || dealer
                         || structured
                         || source_or_series
                         || recovery
-                        || fractional;
+                        || fractional
+                        || direct;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
@@ -477,14 +519,20 @@ mod tests {
                             || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = false;
                     let source_runtime_enabled = cfg!(feature = "profile-full")
+                        && !SUCCESSOR_CHAIN_ATTACHED_DEV
                         && !DEALER_POLICY_CATALOG_LAB
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
+                    let successor_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
+                        && family_tag == 78
+                        && family_version == 1
+                        && matches!(local_action, 10..=13);
                     let expected_enabled = dealer_enabled
                         || general_enabled
-                        || source_runtime_enabled;
+                        || source_runtime_enabled
+                        || successor_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,
@@ -494,8 +542,11 @@ mod tests {
         }
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
-            !(DEALER_POLICY_CATALOG_LAB
-                || (cfg!(feature = "profile-full") && !GENERAL_V2_IDENTITY_LAB))
+            !(SUCCESSOR_CHAIN_ATTACHED_DEV
+                || DEALER_POLICY_CATALOG_LAB
+                || (cfg!(feature = "profile-full")
+                    && !GENERAL_V2_IDENTITY_LAB
+                    && !SUCCESSOR_CHAIN_ATTACHED_DEV))
         );
     }
 
@@ -506,6 +557,24 @@ mod tests {
             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG
         {
             assert!(!extension_intent_action_enabled(74, 1, action));
+        }
+    }
+
+    #[test]
+    fn direct_successor_is_allocated_but_independently_disabled() {
+        let mut action = clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG;
+        while action <= clutch_solana_layout::registry::DirectMarketAction::LAST_TAG {
+            assert!(extension_intent_action_allocated(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                action,
+            ));
+            assert!(!extension_intent_action_enabled(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                action,
+            ));
+            action += 1;
         }
     }
 }

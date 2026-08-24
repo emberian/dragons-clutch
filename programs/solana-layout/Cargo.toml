@@ -21,7 +21,7 @@ profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point
 # Current chain-attached request/account surface.  The exact admitted wire
 # coordinates live in the program capability table and checked manifest; this
 # feature exists here so strict hostile decoders can compile the same closure.
-profile-successor-chain-attached-v1 = []
+profile-successor-chain-attached-dev = []
 # Host-only hostile-byte decoder for withdrawn General V3 fixtures. The crate
 # rejects this feature, and all `cfg(test)` forensic decoders, on Solana. No
 # deployable checked profile forwards it.

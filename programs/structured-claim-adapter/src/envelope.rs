@@ -17,13 +17,12 @@ pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
 
 /// Runtime actions admitted by this adapter artifact.
 ///
-/// The default is empty. The separately deployed wrapper feature is also empty
-/// until every current authority join is present in one executable frame.
-#[cfg(not(feature = "live-current-wrapper"))]
+/// The default is empty. The separately deployed wrapper admits only the
+/// action intersection selected by the exact three-release join.
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
-/// Wrapper build seam. No action is admitted until the current Product,
-/// deployment-release, and collateral-route joins are executable together.
-#[cfg(feature = "live-current-wrapper")]
+/// Exact unified successor development profile for the wrapper artifact.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
     STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
 
@@ -35,10 +34,12 @@ const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_VERSION
         == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION
 );
-#[cfg(not(feature = "live-current-wrapper"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
-#[cfg(feature = "live-current-wrapper")]
-const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+const _: () = assert!(
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK == IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
+);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(
@@ -95,9 +96,8 @@ pub fn decode_instruction_v1(input: &[u8]) -> Result<StructuredClaimPayloadV1> {
 
 /// Apply the current ELF's runtime capability gate.
 ///
-/// Only the exact three-byte extension header is inspected. With the current
-/// empty mask this always refuses an allocated structured-claim action before
-/// payload or account data is read.
+/// Only the exact three-byte extension header is inspected. Disabled actions
+/// always refuse before payload or account data is read.
 pub fn admit_runtime_envelope_v1(input: &[u8]) -> Result<StructuredClaimEnvelopeV1<'_>> {
     let envelope = StructuredClaimEnvelopeV1::decode_header(input)?;
     let bit = 1_u16

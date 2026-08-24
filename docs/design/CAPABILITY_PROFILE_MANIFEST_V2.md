@@ -29,14 +29,12 @@ JSON keys refuse. Its canonical identity is SHA-256 of compact, key-sorted
 UTF-8 JSON containing:
 
 - the canonical profile name and label;
-- the Cargo profile feature, source identity, and collateral/claim release identity;
+- the Cargo profile feature, source identity, and collateral/claim release
+  identity;
 - the expected final undefined dynamic-symbol/syscall surface;
 - all twelve semantic-owner rows;
 - the central-registry version, digest, exact enabled intent triples, and exact
   linked account coordinates; and
-- the exhaustive `dragons-clutch/wire-surface/v1` projection of legacy intent
-  pairs, dedicated Direct intent pairs, outer Request actions, and Source
-  generation discriminants; and
 - ELF, `.text`, chosen ProgramData `max_len`, and persistent-loader-rent limits.
 
 The twelve semantic-owner slots, in canonical order, are `relation`, `score`,
@@ -49,39 +47,14 @@ coordinates.
 Intent coordinates are `[outer_tag, version, local_action]`. Legacy two-byte
 intents use local action zero; successor envelopes use their nonzero
 family-local action. Account coordinates are `[tag, version]`. The manifest
-pins the central registry's own semantic digest; the Python checker retains
-only the decoder partition and retired Source-generation boundaries needed to
-prove that this exhaustive projection does not reopen a legacy authority.
-
-`wire_surface` has exactly five fields: `schema`, `legacy_intent_pairs`,
-`dedicated_direct_intent_pairs`, `outer_request_actions`, and
-`source_generation_discriminants`. The two intent-pair arrays are canonical,
-sorted, disjoint projections of every enabled central-registry triple whose
-local action is zero. Tags `36..=46` belong only to the dedicated Direct
-decoder; all other pairs belong to the hostile current Request/Intent decoder.
-The outer Request action surface is exactly `[0, 1, 2]`. Source generation
-discriminants are derived from reachable legacy Source pairs: generation 1 for
-tags `23..=26` and generation 2 for tags `70..=73`.
-
-The checker returns the validated object as `wire_surface` and also computes
-`wire_surface_sha256` over a canonical object domain-separated by
-`dragons-clutch/wire-surface-identity/v1`. Both the exact object and this digest
-are repeated in linked measurement evidence. The profile identity and the
-normalized producer-input manifest digest separately bind the same object; a
-client projection cannot substitute its own wire table or digest.
+pins the central registry's own semantic digest rather than teaching the Python
+checker another copy of Rust's allocation ranges.
 
 For all `linked` owners, required intent and account coordinates must equal the
 top-level enabled/linked coverage exactly. A missing required coordinate and an
 enabled coordinate with no linked semantic owner both refuse. Requirements of
 a `planned` owner do not become live coverage. A profile with any planned owner
 can be described for planning but cannot be measured or deployment-eligible.
-
-The `fractional-redemption` owner is the only owner permitted to require tag
-`79`. Its required subset and the central enabled subset must each be either
-empty or exactly `79/v1` actions 1 through 10. A linked owner must match the
-central subset exactly; a planned owner cannot enable any member. Thus a
-profile cannot activate a partial Fractional lifecycle even though all ten
-handlers have allocated wire coordinates.
 
 This gate does not let a caller-provided digest attest to its own derivation.
 Each semantic owner and the central registry still need a reviewed producer for
@@ -96,7 +69,7 @@ profile.
 | Identity | Additional Cargo feature | Meaning |
 | --- | --- | --- |
 | `production-inert` | none | Ordinary artifact identity; this name does not claim a production source release. |
-| `runtime-real-pyth-release` | none | Checked `profile-successor-chain-attached-v1` identity for a separately authenticated SourceReleaseManifestV2/real-Pyth route; it compiles no fixture row. |
+| `runtime-real-pyth-release` | none | Checked runtime Source release identity; valid only with the unified successor dev profile and never enables fixture code. |
 | `non-production-mock-source-lab` | `non-production-mock-source` | Fabricated-provider laboratory ELF. |
 | `non-production-real-pyth-lab` | `non-production-real-pyth-lab` | Captured real-program/local-synthetic-observation laboratory ELF. |
 
@@ -105,57 +78,35 @@ ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
 
-`runtime-real-pyth-release` is admitted only with
-`profile-successor-chain-attached-v1`, which reserves the `77/v2` Source V3
-family but currently admits none of its actions. That profile in turn requires
-this exact Source identity; `production-inert` cannot be relabeled as the
-chain-attached successor. The checked-profile gate refuses both laboratory
-identities as deployable; the runtime also gates legacy Source V1 tags
-`23..=26` and Source V2 tags `70..=73` on those explicit non-production
-features. A release-class ELF therefore has no fixture or legacy Source
-fallback.
-
-For the chain-attached successor profile the Source semantic-owner requirements
-and enabled central-registry Source subset are both empty. Actions 1 through 12
-remain an all-or-none lifecycle: release/request publication, ingestion,
-seal/fold/evaluate/handoff, exact Failure/ResolutionV5 terminal authority,
-reopen, and physical close must be reachable together before any tuple is
-admitted. This prevents actions 1 through 4 from creating Head, Lineage, or Page
-state that cannot reach terminal closure, and prevents action 2 from consuming
-an unfounded generation request. Every release-class wire surface also has no
-legacy Source pair and an empty `source_generation_discriminants` array.
-
-## Collateral and claim release selection
-
 `build_contract.collateral_release_identity` is independent of the Source
-selector and is exactly one of:
+selector. `production-inert` adds no row. The only positive selector,
+`observed-positive-collateral-and-claim-release`, adds
+`observed-positive-collateral-release-manifest` and refuses unless the checked
+source contains at least one exact positive-slot collateral release row and one
+independent claim-issuance release. Fractional capability can never be
+described by the unified profile with either plane absent.
 
-| Identity | Additional Cargo feature | Meaning |
-| --- | --- | --- |
-| `production-inert` | none | No observed-positive collateral or claim release is asserted by this build identity. |
-| `observed-positive-collateral-and-claim-release` | `observed-positive-collateral-release-manifest` | Select the checked-in positive-slot collateral catalog and the independently checked Token-2022 claim release. |
+## Unified successor development closure
 
-The observed-positive selector refuses unless the checked source manifest has
-at least one collateral release, the same positive number of deployment rows,
-and a nonempty independent claim release. The selected Rust module repeats
-those conditions as compile-time assertions, so the empty repository template
-cannot produce an apparently live ELF. Any profile enabling one Fractional
-action must select this observed-positive collateral-and-claim identity; the
-separate whole-family invariant then requires all ten actions. In particular,
-action 10's terminal supply proof authenticates the exact current claim
-ProgramData and binds its release receipt into the private Product terminal
-authority; the profile cannot enable that action under `production-inert`.
+`profile-successor-chain-attached-dev` is the sole integrated successor
+selector. Its complete identity label is
+`dragons-clutch/capability-profile/successor-chain-attached-dev/complete-product-source-general-direct-fractional-structured-dealer-failure-release-closure/v1`;
+the SHA-256 label identity is
+`f1d4c9bbb89e89bf13fe0a54ae824220dc0d1109bdf21316e2953aa334afd4ca`.
+That identity is valid only for the complete callable closure: Product-owned
+SourceSeries actions 13--18, Source actions 1--12, General actions 1--34 and
+36--42, Direct actions 1--13, Fractional actions 1--10, Structured actions
+1/3/5/6/7/8, Dealer actions 1--25, and Recovery actions 10--13. General action
+35, Structured actions 2/4, and Recovery actions 1--9 remain withdrawn.
 
-The successor's complete legacy intent projection is version 3 of tags
-`2..=5`, `7`, `10`, `11`, `14..=21`, and `68`. This is the current Collateral
-value plane, current Direct V4's shared tags `7` and `14`, the Realm/Profile,
-artifact, and exact close paths still used by the chain-attached product. Its
-dedicated Direct projection is version 3 of tags `36..=46`. No market-founding,
-General value/clearing, historical Direct, legacy Source, or Dealer intent is
-admitted. The checker compares both arrays to these exact constants after
-proving that their union exhausts central-registry local-action-zero coverage;
-adding a merely decodable historical DTO therefore cannot silently widen a
-checked release.
+The checker requires all twelve semantic owners linked, exact central tuple
+coverage, exclusive family ownership where one family owns the semantics, and
+market-semantic ownership of every General and Direct tuple. A partial family,
+a second owner, an inert collateral/claim selector, or an empty checked release
+manifest refuses. While implementation lanes are still converging, the Rust
+program uses a different explicitly in-flight identity and an empty successor
+mask; that identity is not the complete closure above and is not an acceptance
+state.
 
 The separately named
 `profile-non-production-dealer-policy-catalog-lab` is a capability profile,
@@ -232,8 +183,8 @@ uniformly SHA-256 (64). Mixed object formats refuse.
 The evidence also records a digest of the producer's canonical planning
 manifest. When a checker later reads a deployable manifest, it normalizes only
 the classification and evidence-pointer fields back to their planning values
-and requires that digest to match. Semantic, registry, wire-surface, build, or
-budget changes therefore cannot be hidden behind a new evidence pointer.
+and requires that digest to match. Semantic, registry, build, or budget changes
+therefore cannot be hidden behind a new evidence pointer.
 
 ## Final artifact evidence
 
@@ -306,7 +257,6 @@ python3 programs/clutch-sbf/scripts/measure_capability_profile_sizes.py \
   --profile full=profile-full \
   --profile direct-v3-source-v2-point=profile-direct-v3-source-v2-point \
   --profile general-source-v2-point=profile-general-source-v2-point \
-  --profile successor-chain-attached=profile-successor-chain-attached-v1 \
   --cargo-default-profile full \
   --output path/to/size-diagnostic.json
 

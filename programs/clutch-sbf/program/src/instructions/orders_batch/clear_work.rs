@@ -85,8 +85,9 @@ use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
 };
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::direct_selection_v3::{
-    create_pda_account_full_principal, direct_creation_funding, DIRECT_NEUTRAL_SINK_V3,
+use crate::instructions::full_principal_funding_v1::{
+    create_pda_account_full_principal, full_principal_creation_funding,
+    FULL_PRINCIPAL_NEUTRAL_SINK_V1,
 };
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -405,12 +406,12 @@ pub(crate) fn create_candidate_feed_account<'a>(
     let candidate_bytes = candidate.bytes();
     let (address, bump) = seeds::candidate_feed_pda(program_id, &epoch_bytes, &candidate_bytes);
     expect_pda(feed.key, (address, bump), None)?;
-    let funding = direct_creation_funding(
+    let funding = full_principal_creation_funding(
         payer,
         feed,
         rent,
         account_len::CANDIDATE_FEED,
-        DIRECT_NEUTRAL_SINK_V3,
+        FULL_PRINCIPAL_NEUTRAL_SINK_V1,
     )?;
     let bump_seed = [bump];
     create_pda_account_full_principal(

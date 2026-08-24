@@ -45,6 +45,11 @@ pub const FRACTIONAL_CREDIT_ACCOUNT_VERSION: u8 =
 /// Exact owner-scoped live credit body width.
 pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES: usize =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES;
+/// Frozen wire-width projection used in semantic transcripts.
+///
+/// This is deliberately typed directly as `u64`; hashing code must not use an
+/// unchecked cast from the host-sized codec width.
+pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64: u64 = 296;
 /// Permanent zero-credit tombstone discriminator.
 pub const FRACTIONAL_CREDIT_TOMBSTONE_TAG: u8 =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG;
@@ -749,4 +754,5 @@ impl FractionalCreditSeedsV2 {
 const _: () = assert!(FRACTIONAL_POLICY_ACCOUNT_BYTES == 248 + 48);
 const _: () = assert!(FRACTIONAL_LEDGER_ACCOUNT_BYTES == 176 + 48);
 const _: () = assert!(FRACTIONAL_CREDIT_ACCOUNT_BYTES == 240 + 56);
+const _: () = assert!(FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64 == 296);
 const _: () = assert!(FRACTIONAL_CREDIT_TOMBSTONE_BYTES == 224 + 8);
