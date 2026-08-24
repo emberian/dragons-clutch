@@ -199,6 +199,8 @@ pub(crate) mod product_market_family_capability_current;
 pub(crate) mod product_market_lifecycle_v3_current;
 /// Persistent current ProductReplayAnchor generation and stage owner.
 pub(crate) mod product_market_replay_current;
+/// Sole current FundingV5 Active-to-Pending reservation postwrite.
+pub(crate) mod product_series_funding_v5_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain
