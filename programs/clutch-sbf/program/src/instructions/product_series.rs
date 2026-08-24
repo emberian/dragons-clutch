@@ -9599,7 +9599,7 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
             .split("pub(crate) fn retire_and_close_series_market_link_v1")
             .nth(1)
             .expect("single Product link close");
-        let physical_close = close.find("link_account.resize(0)").expect("physical close");
+        let physical_close = close.find(".resize(0)").expect("physical close");
         let aggregate_accept = close
             .find("authenticate_series_link_retirement_aggregate_postwrite_v1")
             .expect("aggregate acceptance");
