@@ -19,6 +19,10 @@
   const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-source-work-schedule";
   const SOURCE_COORDINATE = Object.freeze({ familyTag: "77", familyVersion: "2", family: "source", flow: "source-plane-v3", messageVersion: "legacy", lookupTables: 0 });
   const STRUCTURED_COORDINATE = Object.freeze({ familyTag: "75", familyVersion: "1", family: "structured-claim", flow: "structured-claim", messageVersion: "v0", lookupTables: 1 });
+  const DEALER_VARIANT_CONTRACTS = Object.freeze([
+    Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "8", name: "dealer-retire-active-facility-credit" }),
+    Object.freeze({ familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "9", name: "dealer-retire-unused-future-credit" })
+  ]);
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -170,6 +174,28 @@
   const bool = (value, name) => {
     if (typeof value !== "boolean") throw new Error(`${name} must be boolean.`);
     return value;
+  };
+
+  const validateIntentVariants = (raw, name, enabledIntents) => {
+    if (!Array.isArray(raw) || raw.length > DEALER_VARIANT_CONTRACTS.length) throw new Error(`${name} is not a bounded current payload-variant set.`);
+    const coarse = new Set(enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    const variants = raw.map((variant, index) => {
+      requirePlain(variant, `${name}[${index}]`);
+      const value = Object.freeze({
+        familyTag: positiveDecimal(variant.familyTag, `${name}[${index}].familyTag`, 255n).toString(),
+        familyVersion: positiveDecimal(variant.familyVersion, `${name}[${index}].familyVersion`, 255n).toString(),
+        localAction: positiveDecimal(variant.localAction, `${name}[${index}].localAction`, 255n).toString(),
+        payloadDiscriminator: positiveDecimal(variant.payloadDiscriminator, `${name}[${index}].payloadDiscriminator`, 255n).toString(),
+        name: text(variant.name, `${name}[${index}].name`, 96)
+      });
+      const contract = DEALER_VARIANT_CONTRACTS.find((candidate) => candidate.familyTag === value.familyTag && candidate.familyVersion === value.familyVersion && candidate.localAction === value.localAction && candidate.payloadDiscriminator === value.payloadDiscriminator && candidate.name === value.name);
+      if (!contract) throw new Error(`${name}[${index}] is not a closed current Dealer payload variant.`);
+      if (coarse.has(`${value.familyTag}:${value.familyVersion}:${value.localAction}`)) throw new Error(`${name}[${index}] illegally promotes its disabled coarse Dealer coordinate.`);
+      return value;
+    });
+    const keys = variants.map((variant) => `${variant.familyTag.padStart(3, "0")}:${variant.familyVersion.padStart(3, "0")}:${variant.localAction.padStart(3, "0")}:${variant.payloadDiscriminator.padStart(3, "0")}`);
+    if (new Set(keys).size !== keys.length || keys.some((key, index) => index > 0 && keys[index - 1] >= key)) throw new Error(`${name} is duplicated or not in canonical coordinate/discriminator order.`);
+    return Object.freeze(variants);
   };
 
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
@@ -382,9 +408,10 @@
       }
       return coordinate;
     }));
+    const enabledIntentVariants = validateIntentVariants(boundRelease.enabledIntentVariants, "transportBinding.release.enabledIntentVariants", enabledIntents);
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
-    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, enabledIntentVariants, families, releaseKey: expectedReleaseKey });
     const configuration = Object.freeze({
       ...target,
       schema: "dragons-clutch/browser-daemon-chain-projection/v3",
@@ -467,6 +494,14 @@
     const releases = raw.releases.map((release, index) => {
       requirePlain(release, `releases[${index}]`);
       if (!Array.isArray(release.families) || release.families.length === 0 || release.families.length > 16) throw new Error(`releases[${index}].families is invalid.`);
+      const enabledIntents = Object.freeze(Array.isArray(release.enabledIntents) ? release.enabledIntents.map((intent, intentIndex) => {
+        requirePlain(intent, `releases[${index}].enabledIntents[${intentIndex}]`);
+        return Object.freeze({
+          familyTag: positiveDecimal(intent.familyTag, `releases[${index}].enabledIntents[${intentIndex}].familyTag`, 255n).toString(),
+          familyVersion: positiveDecimal(intent.familyVersion, `releases[${index}].enabledIntents[${intentIndex}].familyVersion`, 255n).toString(),
+          localAction: decimal(intent.localAction, `releases[${index}].enabledIntents[${intentIndex}].localAction`, 255n).toString()
+        });
+      }) : (() => { throw new Error(`releases[${index}].enabledIntents is invalid.`); })());
       return Object.freeze({
         releaseKey: text(release.releaseKey, `releases[${index}].releaseKey`, 256),
         programId: address(release.programId, `releases[${index}].programId`),
@@ -476,13 +511,14 @@
         releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
-        enabledIntents: Object.freeze(Array.isArray(release.enabledIntents) ? release.enabledIntents : (() => { throw new Error(`releases[${index}].enabledIntents is invalid.`); })()),
+        enabledIntents,
+        enabledIntentVariants: validateIntentVariants(release.enabledIntentVariants, `releases[${index}].enabledIntentVariants`, enabledIntents),
         families: Object.freeze(release.families.map((family, familyIndex) => text(family, `releases[${index}].families[${familyIndex}]`, 40)))
       });
     });
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents)) {
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.enabledIntentVariants) !== JSON.stringify(configuration.release.enabledIntentVariants)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
@@ -581,6 +617,8 @@
       const expected = configuration.release.enabledIntents[index];
       if (positiveDecimal(intent.familyTag, "session enabled family tag", 255n).toString() !== expected.familyTag || positiveDecimal(intent.familyVersion, "session enabled family version", 255n).toString() !== expected.familyVersion || positiveDecimal(intent.localAction, "session enabled local action", 255n).toString() !== expected.localAction) throw new Error("session checked release enabled-intent coordinate differs from acquisition.");
     });
+    const enabledIntentVariants = validateIntentVariants(release.enabledIntentVariants, "session.release.enabledIntentVariants", configuration.release.enabledIntents);
+    if (JSON.stringify(enabledIntentVariants) !== JSON.stringify(configuration.release.enabledIntentVariants)) throw new Error("session checked release payload-variant set differs from acquisition.");
     if (!Array.isArray(raw.canonicalAccounts) || BigInt(raw.canonicalAccounts.length) > BigInt(configuration.bounds.maximumAccounts)) throw new Error("session canonical account identities exceed the explicit browser bound.");
     const canonicalAccounts = Object.freeze(raw.canonicalAccounts.map((accountValue, index) => validateSessionAccount(accountValue, index, configuration)));
     if (new Set(canonicalAccounts.map((accountValue) => accountValue.address)).size !== canonicalAccounts.length) throw new Error("session canonical account identities contain duplicate addresses.");
@@ -610,7 +648,7 @@
       submission: false,
       commitment: "finalized",
       transport: Object.freeze({ clusterName: configuration.clusterName, genesisHash: configuration.genesisHash, clusterKey: configuration.clusterKey, rpcHttpEndpoint: configuration.rpcHttpEndpoint, rpcWebsocketEndpoint: configuration.rpcWebsocketEndpoint }),
-      release: Object.freeze({ ...configuration.release, decoderSet: configuration.decoderSet }),
+      release: Object.freeze({ ...configuration.release, enabledIntentVariants, decoderSet: configuration.decoderSet }),
       canonicalAccounts,
       restart: Object.freeze({ semantics: raw.restart.semantics, identitySource: raw.restart.identitySource, accountCount: String(canonicalAccounts.length), cursorCount: String(cursors.length), cursors })
     });
@@ -736,6 +774,94 @@
     return Object.freeze(actions);
   };
 
+  const executionReleaseKey = (value, manifestSha256, name) => {
+    text(value, name, 320);
+    const fields = value.split(":");
+    if (fields.length !== 4) throw new Error(`${name} does not contain exact Program/deployment/ELF/manifest coordinates.`);
+    const parsed = Object.freeze({
+      programId: nonzeroAddress(fields[0], `${name}.programId`),
+      deploymentSlot: positiveDecimal(fields[1], `${name}.deploymentSlot`).toString(),
+      elfSha256: hash32(fields[2], `${name}.elfSha256`),
+      releaseManifestSha256: hash32(fields[3], `${name}.releaseManifestSha256`)
+    });
+    if (parsed.releaseManifestSha256 !== manifestSha256) throw new Error(`${name} differs from its exact execution manifest digest.`);
+    return Object.freeze({ ...parsed, releaseKey: value });
+  };
+
+  const validateActionReleaseAdmission = (raw, coordinate, callable, configuration, index) => {
+    requirePlain(raw, `actions[${index}].releaseAdmission`);
+    if (raw.enabled !== true || raw.releaseKey !== configuration.release.releaseKey || raw.capabilityProfileId !== configuration.release.capabilityProfileId) throw new Error("action release admission differs from the checked indexed release.");
+    if (!callable) return Object.freeze({ scope: "indexed-release-coordinate-only", executionReleaseKey: null, driverReleaseKey: configuration.release.releaseKey, executionReleaseManifestSha256: null });
+    const structured = coordinate.familyTag === STRUCTURED_COORDINATE.familyTag && coordinate.familyVersion === STRUCTURED_COORDINATE.familyVersion && coordinate.family === STRUCTURED_COORDINATE.family;
+    const source = coordinate.familyTag === SOURCE_COORDINATE.familyTag && coordinate.familyVersion === SOURCE_COORDINATE.familyVersion && coordinate.family === SOURCE_COORDINATE.family;
+    if (!structured && !source) throw new Error("callable action lacks a current browser release-composition contract.");
+    const expectedScope = structured ? "structured-composite-wrapper-execution-base-driver-v1" : "single-release-execution-and-driver-v1";
+    const manifestSha256 = hash32(raw.executionReleaseManifestSha256, `actions[${index}].releaseAdmission.executionReleaseManifestSha256`);
+    const execution = executionReleaseKey(raw.executionReleaseKey, manifestSha256, `actions[${index}].releaseAdmission.executionReleaseKey`);
+    const driverReleaseKey = text(raw.driverReleaseKey, `actions[${index}].releaseAdmission.driverReleaseKey`, 320);
+    if (raw.scope !== expectedScope || driverReleaseKey !== configuration.release.releaseKey) throw new Error("action release admission has the wrong execution/driver scope.");
+    if (structured && execution.releaseKey === driverReleaseKey) throw new Error("Structured action aliases its disjoint wrapper execution and base driver releases.");
+    if (source && (execution.releaseKey !== configuration.release.releaseKey || manifestSha256 !== configuration.release.releaseManifestSha256)) throw new Error("Source action does not use its one checked execution/driver release.");
+    return Object.freeze({ scope: expectedScope, executionReleaseKey: execution.releaseKey, driverReleaseKey, executionReleaseManifestSha256: manifestSha256 });
+  };
+
+  const validateDealerVariantVerdict = (row, coordinate, payloadVariant, accountRoles, configuration, index) => {
+    if (row.releaseAdmission.enabled !== true
+        || row.releaseAdmission.scope !== "payload-discriminator-only"
+        || row.releaseAdmission.coarseCoordinateEnabled !== false
+        || row.releaseAdmission.releaseKey !== configuration.release.releaseKey
+        || row.releaseAdmission.capabilityProfileId !== configuration.release.capabilityProfileId
+        || row.stateSelection !== null
+        || row.semanticOwnerConstructor !== "chain-derived-dealer-terminal-v1") {
+      throw new Error("Dealer payload-variant verdict promotes a coarse tuple or differs from its checked release.");
+    }
+    const projectedCallable = bool(row.callable, `actions[${index}].callable`);
+    if (!projectedCallable) {
+      if (row.verdict !== "unavailable" || row.transactionDraft !== null || !Array.isArray(row.signerRequirements) || row.signerRequirements.length !== 0 || typeof row.freshnessDisposition !== "string") throw new Error("unavailable Dealer payload variant carries executable-looking material.");
+      return Object.freeze({ coordinate, payloadVariant, accountRoles, callable: false, projectedCallable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: null, transactionDraft: null, signerRequirements: Object.freeze([]), freshnessDisposition: null });
+    }
+    requirePlain(row.transactionDraft, `actions[${index}].transactionDraft`);
+    const draft = row.transactionDraft;
+    if (row.verdict !== "callable-unsigned-draft"
+        || draft.schema !== "dragons-clutch/operator-canonical-action-material/v1"
+        || draft.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3"
+        || hash32(draft.releaseManifestSha256, "Dealer draft release manifest") !== configuration.release.releaseManifestSha256
+        || hash32(draft.capabilityProfileId, "Dealer draft capability profile") !== configuration.release.capabilityProfileId
+        || (draft.messageVersion !== "legacy" && draft.messageVersion !== "v0")
+        || draft.recentBlockhashPresent !== false
+        || draft.signed !== false
+        || draft.submitted !== false) throw new Error("callable Dealer payload variant violates its unsigned release boundary.");
+    const transactionHex = text(draft.serializedTransactionHex, "Dealer serialized transaction", 2464);
+    if (!HEX_BYTES.test(transactionHex)) throw new Error("Dealer serialized transaction is not bounded canonical hexadecimal bytes.");
+    if (accountRoles.length === 0 || accountRoles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable Dealer payload variant has unresolved account-role identity.");
+    if (!Array.isArray(row.signerRequirements) || row.signerRequirements.length > 64) throw new Error("Dealer signer projection exceeds the browser bound.");
+    const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
+      requirePlain(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
+      if (requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("Dealer signer projection implies signature or key access.");
+      return Object.freeze({ address: nonzeroAddress(requirement.address, `actions[${index}].signerRequirements[${signerIndex}].address`), signaturePresent: false, keyAccess: false });
+    }));
+    if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("Dealer signer projection repeats an identity.");
+    requirePlain(row.freshness, `actions[${index}].freshness`);
+    const observedSlot = positiveDecimal(row.freshness.observedSlot, `actions[${index}].freshness.observedSlot`);
+    const validBeforeSlot = positiveDecimal(row.freshness.validBeforeSlot, `actions[${index}].freshness.validBeforeSlot`);
+    const maximumValiditySlots = positiveDecimal(row.freshness.maximumValiditySlots, `actions[${index}].freshness.maximumValiditySlots`);
+    if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || row.freshness.recentBlockhash !== "absent-by-contract") throw new Error("Dealer payload-variant freshness boundary is invalid.");
+    return Object.freeze({
+      coordinate,
+      payloadVariant,
+      accountRoles,
+      callable: false,
+      projectedCallable: true,
+      verdict: "browser-transport-contract-unavailable",
+      reason: "The payload-scoped Dealer coordinate and unsigned boundary are release-authenticated, but the current browser does not yet accept its transaction as an inspectable exact account tuple.",
+      stateSelection: null,
+      transactionDraft: null,
+      signerRequirements,
+      freshnessDisposition: null,
+      projectedDraft: Object.freeze({ draftId: hash32(draft.draftId, "Dealer draft ID"), driverAccount: nonzeroAddress(draft.driverAccount, "Dealer draft driver account"), driverAccountSlot: decimal(draft.driverAccountSlot, "Dealer draft driver account slot").toString(), authorityStateSha256: hash32(draft.authorityStateSha256, "Dealer draft authority state"), feePayer: nonzeroAddress(draft.feePayer, "Dealer draft fee payer"), messageVersion: draft.messageVersion, serializedBytes: String(transactionHex.length / 2), observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString() })
+    });
+  };
+
   const validateActionCapabilities = (raw, configuration, session) => {
     requirePlain(raw, "action capabilities");
     if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1"
@@ -757,9 +883,11 @@
         || typeof raw.freshness.afterSubmission !== "string") {
       throw new Error("action capability freshness/reacquisition contract is incomplete.");
     }
-    if (!Array.isArray(raw.actions) || raw.actions.length > 256) throw new Error("action capability set exceeds the browser bound.");
+    if (!Array.isArray(raw.actions) || raw.actions.length > 256 || !Array.isArray(configuration.release.enabledIntentVariants)) throw new Error("action capability or payload-variant set exceeds the browser bound.");
     const enabled = new Set(configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    const enabledVariants = new Set(configuration.release.enabledIntentVariants.map((variant) => `${variant.familyTag}:${variant.familyVersion}:${variant.localAction}:${variant.payloadDiscriminator}:${variant.name}`));
     const seen = new Set();
+    const seenVariants = new Set();
     const actions = raw.actions.map((row, index) => {
       requirePlain(row, `actions[${index}]`);
       requirePlain(row.coordinate, `actions[${index}].coordinate`);
@@ -772,9 +900,19 @@
         action: text(row.coordinate.action, `actions[${index}].coordinate.action`, 96)
       });
       const key = `${coordinate.familyTag}:${coordinate.familyVersion}:${coordinate.localAction}`;
-      if (!enabled.has(key) || seen.has(key)) throw new Error("action verdict is absent from, or duplicated within, the checked release enabled-intent set.");
-      seen.add(key);
-      if (row.releaseAdmission.enabled !== true || row.releaseAdmission.releaseKey !== configuration.release.releaseKey || row.releaseAdmission.capabilityProfileId !== configuration.release.capabilityProfileId) throw new Error("action release admission differs from the checked release.");
+      let payloadVariant = null;
+      if (row.payloadVariant !== undefined) {
+        requirePlain(row.payloadVariant, `actions[${index}].payloadVariant`);
+        payloadVariant = validateIntentVariants([{ familyTag: coordinate.familyTag, familyVersion: coordinate.familyVersion, localAction: coordinate.localAction, payloadDiscriminator: row.payloadVariant.discriminator, name: row.payloadVariant.name }], `actions[${index}].payloadVariant`, configuration.release.enabledIntents)[0];
+      }
+      if (payloadVariant === null) {
+        if (!enabled.has(key) || seen.has(key)) throw new Error("action verdict is absent from, or duplicated within, the checked release enabled-intent set.");
+        seen.add(key);
+      } else {
+        const variantKey = `${key}:${payloadVariant.payloadDiscriminator}:${payloadVariant.name}`;
+        if (!enabledVariants.has(variantKey) || seenVariants.has(variantKey) || enabled.has(key)) throw new Error("Dealer payload-variant verdict is absent from its exact enabled variant set or promotes the coarse coordinate.");
+        seenVariants.add(variantKey);
+      }
       if (!Array.isArray(row.accountRoles) || row.accountRoles.length > 64 || !Array.isArray(row.signerRequirements)) throw new Error("action role/signer projection is invalid.");
       const accountRoles = Object.freeze(row.accountRoles.map((role, roleIndex) => {
         requirePlain(role, `actions[${index}].accountRoles[${roleIndex}]`);
@@ -788,12 +926,14 @@
           identityDisposition: text(role.identityDisposition, `actions[${index}].accountRoles[${roleIndex}].identityDisposition`, 160)
         });
       }));
+      if (payloadVariant !== null) return validateDealerVariantVerdict(row, coordinate, payloadVariant, accountRoles, configuration, index);
       const callable = bool(row.callable, `actions[${index}].callable`);
+      const releaseAdmission = validateActionReleaseAdmission(row.releaseAdmission, coordinate, callable, configuration, index);
       if (!callable && (row.verdict !== "unavailable" || row.transactionDraft !== null || row.signerRequirements.length !== 0)) throw new Error("unavailable action carries executable-looking transaction or signer material.");
       if (!callable) {
         const stateSelection = row.stateSelection === null ? null : validateFinalizedStateSelection(row.stateSelection, session, index);
         if (typeof row.freshnessDisposition !== "string") throw new Error("unavailable action must carry an explicit non-draft freshness disposition.");
-        return Object.freeze({ coordinate, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]), freshnessDisposition: null });
+        return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]), freshnessDisposition: null });
       }
       if (row.verdict !== "callable-unsigned-draft" || row.stateSelection === null) throw new Error("callable action lacks an exact finalized state selection.");
       const stateSelection = validateFinalizedStateSelection(row.stateSelection, session, index);
@@ -811,16 +951,16 @@
       if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("callable signer requirements repeat an identity.");
       const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
       if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles.");
-      const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, coordinate, stateSelection, accountRoles, signerRequirements, index);
+      const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, releaseAdmission, coordinate, stateSelection, accountRoles, signerRequirements, index);
       requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
       const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
       const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
       const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
       if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
       if (transactionDraft.addressLookupTables.some((lookup) => BigInt(lookup.observedSlot) > observedSlot)) throw new Error("callable action uses a lookup-table observation newer than its freshness observation.");
-      return Object.freeze({ coordinate, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
+      return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
     });
-    if (seen.size !== enabled.size) throw new Error("operatord omitted a checked release-enabled coordinate from its action verdict set.");
+    if (seen.size !== enabled.size || seenVariants.size !== enabledVariants.size) throw new Error("operatord omitted a checked release-enabled coordinate or payload variant from its action verdict set.");
     return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
   };
 
@@ -852,9 +992,9 @@
     return value;
   };
 
-  const validateCanonicalTransactionDraft = (raw, configuration, coordinate, selection, roles, signers, index) => {
+  const validateCanonicalTransactionDraft = (raw, configuration, releaseAdmission, coordinate, selection, roles, signers, index) => {
     requirePlain(raw, `actions[${index}].transactionDraft`);
-    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== configuration.release.releaseManifestSha256 || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || text(raw.driverReleaseKey, "draft driver release key", 320) !== selection.releaseKey || hash32(raw.authorityStateSha256, "draft authority state") !== selection.cursor.observedStateSha256 || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its release/construction boundary.");
+    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== releaseAdmission.executionReleaseManifestSha256 || text(raw.executionReleaseKey, "draft execution release key", 320) !== releaseAdmission.executionReleaseKey || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || text(raw.driverReleaseKey, "draft driver release key", 320) !== releaseAdmission.driverReleaseKey || releaseAdmission.driverReleaseKey !== selection.releaseKey || hash32(raw.authorityStateSha256, "draft authority state") !== selection.cursor.observedStateSha256 || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its composite release/construction boundary.");
     const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
     if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || !roles.some((role) => role.address === feePayer && role.signer)) throw new Error("draft fee payer is not the exact signer role.");
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
@@ -908,11 +1048,11 @@
     if (!action.callable) {
       return Object.freeze({
         eligible: false,
-        kind: action.stateSelection === null ? "missing-finalized-selection" : "exact-tuple-unavailable",
+        kind: action.projectedCallable ? "payload-variant-browser-contract-unavailable" : action.stateSelection === null ? "missing-finalized-selection" : "exact-tuple-unavailable",
         reason: action.reason,
         observedAccounts: action.stateSelection === null ? "0" : String(1 + action.stateSelection.dependencies.length),
         staleAccounts: "0",
-        validBeforeSlot: null
+        validBeforeSlot: action.projectedDraft ? action.projectedDraft.validBeforeSlot : null
       });
     }
     const selection = action.stateSelection;
@@ -1004,7 +1144,7 @@
     const successorCapabilities = inspectedActions.map((action) => Object.freeze({
       surface: "successor-action",
       family: action.coordinate.family,
-      label: `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}`,
+      label: `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`,
       indexedByRelease: action.stateSelection !== null,
       allocationStatus: action.inspection.eligible ? "inspectable" : "refused",
       enabled: action.inspection.eligible,

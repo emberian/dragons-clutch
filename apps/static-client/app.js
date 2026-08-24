@@ -215,7 +215,8 @@
     empty.value = "";
     select.append(empty);
     actions.forEach((action, index) => {
-      const option = create("option", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}${action.inspection.eligible ? "" : ` — refused (${action.inspection.kind}): ${action.inspection.reason}`}`);
+      const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
+      const option = create("option", null, `${label}${action.inspection.eligible ? "" : ` — refused (${action.inspection.kind}): ${action.inspection.reason}`}`);
       option.value = String(index);
       option.disabled = !action.inspection.eligible;
       select.append(option);
@@ -227,10 +228,11 @@
     const verdicts = $("action-verdicts");
     reset(verdicts);
     for (const action of actions) {
+      const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
       const card = create("article", `action-verdict ${action.inspection.eligible ? "eligible" : "refused"}`);
       const heading = create("div", "card-heading");
       heading.append(
-        create("h3", null, `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}`),
+        create("h3", null, label),
         create("span", `chip ${action.inspection.eligible ? "" : "disabled-chip"}`.trim(), action.inspection.eligible ? "inspectable" : "refused")
       );
       const facts = create("dl", "compact-facts");

@@ -34,7 +34,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.match(chain, /remainingResponseBytes/);
   assert.match(chain, /operatord-only; browser does not call validator RPC/);
   assert.doesNotMatch(chain, /method:\s*"(?:POST|PUT|PATCH|DELETE)"/);
-  for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/session", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
+  for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/session", "/v1/actions", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
@@ -90,7 +90,6 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
   const result = vm.runInContext(`(() => {
     const account = "11111111111111111111111111111112";
     const lookup = "11111111111111111111111111111113";
-    const releaseKey = "checked-release";
     const manifest = "01".repeat(32);
     const profile = "02".repeat(32);
     const sessionId = "03".repeat(32);
@@ -98,14 +97,17 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
     const workflow = "05".repeat(32);
     const ownerRelease = "06".repeat(32);
     const make = (familyTag, familyVersion, family, action, flow, messageVersion, addressLookupTables) => {
+      const releaseKey = account + ":1:" + ownerRelease + ":" + manifest;
+      const executionManifest = family === "structured-claim" ? "09".repeat(32) : manifest;
+      const executionReleaseKey = family === "structured-claim" ? lookup + ":2:" + ownerRelease + ":" + executionManifest : releaseKey;
       const coordinate = { familyTag, familyVersion, localAction: "1", family, action };
       const cursor = { workflowId: workflow, lane: family, generation: "1", phase: "1", item: "0", observedStateSha256: state };
       const selection = { account, releaseKey, action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
-      const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [{ familyTag, familyVersion, localAction: "1" }] } };
+      const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [{ familyTag, familyVersion, localAction: "1" }], enabledIntentVariants: [] } };
       const session = { sessionId, release: { releaseKey }, restart: { cursors: [selection] } };
       const row = {
         coordinate,
-        releaseAdmission: { enabled: true, releaseKey, capabilityProfileId: profile },
+        releaseAdmission: { enabled: true, scope: family === "structured-claim" ? "structured-composite-wrapper-execution-base-driver-v1" : "single-release-execution-and-driver-v1", releaseKey, executionReleaseKey, driverReleaseKey: releaseKey, executionReleaseManifestSha256: executionManifest, capabilityProfileId: profile },
         stateSelection: selection,
         semanticOwnerConstructor: "closed-rust-owner",
         accountRoles: [{ index: "0", role: "payer", writable: true, signer: true, address, identityDisposition: "semantic-owner-derived-and-bound-to-draft" }],
@@ -119,8 +121,9 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
           driverAccount: account,
           driverAccountSlot: "100",
           driverReleaseKey: releaseKey,
+          executionReleaseKey,
           authorityStateSha256: state,
-          releaseManifestSha256: manifest,
+          releaseManifestSha256: executionManifest,
           capabilityProfileId: profile,
           feePayer: account,
           messageVersion,
@@ -152,11 +155,21 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
     structured.raw.actions[0].transactionDraft.addressLookupTables = [];
     let refused = false;
     try { GlassChainClient.validateActionCapabilities(structured.raw, structured.configuration, structured.session); } catch (_) { refused = true; }
-    return { sourceFlow: sourceOutput.actions[0].transactionDraft.flows[0], structuredFlow: structuredOutput.actions[0].transactionDraft.flows[0], refused };
+    const dealerVariant = { familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "8", name: "dealer-retire-active-facility-credit" };
+    const dealerConfiguration = { release: { releaseKey: source.configuration.release.releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [], enabledIntentVariants: [dealerVariant] } };
+    const dealerSession = { sessionId, release: { releaseKey: dealerConfiguration.release.releaseKey }, restart: { cursors: [] } };
+    const dealerRaw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId, releaseKey: dealerConfiguration.release.releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [{ coordinate: { familyTag: "76", familyVersion: "1", localAction: "25", family: "dealer", action: "retire" }, payloadVariant: { discriminator: "8", name: dealerVariant.name }, releaseAdmission: { enabled: true, scope: "payload-discriminator-only", coarseCoordinateEnabled: false, releaseKey: dealerConfiguration.release.releaseKey, capabilityProfileId: profile }, stateSelection: null, semanticOwnerConstructor: "chain-derived-dealer-terminal-v1", accountRoles: [], callable: false, verdict: "unavailable", reason: "exact frame absent", transactionDraft: null, signerRequirements: [], freshnessDisposition: "no draft" }] };
+    const dealerOutput = GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession);
+    dealerConfiguration.release.enabledIntents = [{ familyTag: "76", familyVersion: "1", localAction: "25" }];
+    let coarseRefused = false;
+    try { GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession); } catch (_) { coarseRefused = true; }
+    return { sourceFlow: sourceOutput.actions[0].transactionDraft.flows[0], structuredFlow: structuredOutput.actions[0].transactionDraft.flows[0], refused, dealerDiscriminator: dealerOutput.actions[0].payloadVariant.payloadDiscriminator, coarseRefused };
   })()`, context);
   assert.equal(result.sourceFlow, "source-plane-v3");
   assert.equal(result.structuredFlow, "structured-claim");
   assert.equal(result.refused, true);
+  assert.equal(result.dealerDiscriminator, "8");
+  assert.equal(result.coarseRefused, true);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
