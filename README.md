@@ -48,9 +48,7 @@ same market resolves, redeems, and returns all 128 collateral atoms. The
 campaign ran at repository HEAD `4e83648`; the strict Operator parser landed at
 `633a366`, the public-safe transcript at `94f5143`, and its current documentation
 at `bbfeaa5`. Read the retained
-[campaign evidence](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/)
-or render it with Operator's explicitly historical
-`non-production-retained-source-v2` mode.
+[campaign evidence](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/).
 
 That is **unpromoted local SBF execution over a synthetic observation**, not a
 production price, devnet or mainnet execution, deployment, live frontend,
@@ -95,12 +93,6 @@ ELF `342fdfcb0e6b0836ec9ecd492d9a8577c87f493b49fd8c35e3cb47c448d06112`.
 The mock result exercises laboratory source/value paths and is not production
 source evidence.
 
-The older `scripts/run_operator_trade.sh` demonstration remains a useful,
-separate interactive bench: its 2026-08-22 run confirmed 54/54 local
-transactions and closed six reported conservation identities, but it uses a
-non-production mock-source ELF. It is no longer the strongest joined lifecycle
-evidence.
-
 ### Implemented and bounded
 
 | Surface | Current state |
@@ -110,8 +102,8 @@ evidence.
 | General venue | Structural bounds of 16 outcomes, 64 orders in four pages, and 416 witness slices; the executed scale shapes do not cover that Cartesian maximum |
 | Candidate checking | Resumable streamed relation, exact simplex prices, degree-2/3 moment-cone admission, and atomic verified-only retention before the shared deadline |
 | Resolution | Frozen source/Terms bindings, authenticated receiver-write seam, canonical nonzero-confidence interval evaluation, and prepaid ResolutionWork profile |
-| Local operation | Permissionless keeper, committed local-validator walks, and a human-vs-fixed-automaton Operator Bench |
-| Clients | Literate static microsite, offline inspect-only Glass client, and loopback-only Operator Bench |
+| Local operation | Permissionless keeper plus release-bound local-validator and finalized-chain discovery |
+| Clients | Literate static microsite and chain-derived Glass operator client; neither signs nor submits |
 
 ### Important limits
 
@@ -226,18 +218,6 @@ signer, transaction submission, or release identity. Its bundled capability
 ledger is a labeled historical snapshot pending regeneration from current
 truth.
 
-### Check the Operator browser source
-
-```sh
-cd apps/operator
-npm test
-npm run check
-```
-
-These dependency-free checks cover JavaScript syntax, exact integer display,
-and mechanical interaction/accessibility invariants. They do not replace a
-real browser/DOM and visual run.
-
 ### Clone the real Pyth devnet substrate locally
 
 This command reads canonical devnet, verifies its genesis hash, and boots a
@@ -289,20 +269,8 @@ CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/absolute/path/to/new-empty-transcript \
 ```
 
 The runner uses disposable local keys and loopback listeners, never a default
-wallet or public RPC. To inspect the already retained result without replaying
-or extending it:
-
-```sh
-CARGO_NET_OFFLINE=true cargo run --offline \
-  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode non-production-retained-source-v2 \
-  --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
-# open http://127.0.0.1:9130/
-```
-
-Operator strictly parses the three public transcript files and presents them
-as an untrusted projection. It does not contact RPC, load a wallet, or attest
-chain state independently.
+wallet or public RPC. The retained public files are historical evidence, not a
+chain-derived operator session.
 
 The faster in-process bank version remains available:
 
@@ -320,41 +288,6 @@ selected cell contains the entire admitted conservative interval
 `[99,980,929, 100,019,071]`. The fixture provenance and every binary/input
 digest live under
 `programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/`.
-
-### Run the separate mock-source trading bench
-
-```sh
-CARGO_NET_OFFLINE=true scripts/run_operator_trade.sh
-```
-
-The gate builds a non-production SBF profile, starts a fresh loopback validator,
-founds the eight-outcome Friday clutch, posts the same intents as the browser,
-and requires the observed settlement identities to close. Expect several
-minutes: it waits for a 260-slot freeze deadline and the protocol's fixed
-1,000-slot candidate window on the validator's real clock.
-
-To leave the interactive bench open instead:
-
-```sh
-CARGO_NET_OFFLINE=true cargo run --offline \
-  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode non-production-mock-trade
-# open http://127.0.0.1:9130/
-```
-
-The daemon, not the browser, holds ephemeral local test signers and builds
-transactions through the canonical harness. This is test infrastructure, not a
-wallet architecture.
-
-The separate `non-production-synthetic-source-v2-live` mode uses the real
-captured local receiver/router
-plane. Its daemon owns a private reusable session root and keeps the loopback
-validator and signer roster alive after the fixed campaign reaches terminal
-state. It also rebuilds one result-bound typed plan from public actor identities
-without reading a private key, fetching a blockhash, signing, submitting, or
-exporting the wire. That proves construction continuity only; the
-browser remains read-only and there is not yet an admitted interactive trading
-endpoint.
 
 ## Architecture in five minutes
 
@@ -378,9 +311,9 @@ endpoint.
 - [`programs/clutch-sbf/keeper`](programs/clutch-sbf/keeper) — state-derived
   permissionless crank logic.
 - [`apps/static-client`](apps/static-client) — offline inspect-only Glass.
-- [`apps/operator`](apps/operator) and
-  [`programs/clutch-sbf/operatord`](programs/clutch-sbf/operatord) — local
-  operator test surface.
+- [`programs/clutch-sbf/operatord`](programs/clutch-sbf/operatord) —
+  release-bound local/devnet chain indexing and server-constructed unsigned
+  operator transactions consumed by Glass.
 - [`research`](research) — models and promotion candidates, not automatically
   runtime capability.
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 publish = false
-description = "Loopback-only daemon serving the Operator Bench over the repository's own transaction builders"
+description = "Release-bound chain index, transaction construction, and local-infrastructure daemon"
 
 # Intentionally NOT a member of the SBF build workspace, for the reason
 # `../committed-harness/README.md` already records: the program ELF must not
@@ -31,24 +31,12 @@ clutch-sbf-harness = { path = "../harness" }
 # The frozen account codecs the daemon decodes observed bytes through, so the
 # browser is shown decoded state rather than a second hand-written parser.
 clutch-solana-layout = { path = "../../solana-layout" }
-# The program's own seeds and account-count contracts, so the trade session's
-# role vectors are asserted against the program's numbers rather than against
-# a comment.  Already in this graph through `clutch-sbf-harness`.
+# The program's seeds, loader state, and account-count contracts.
 clutch-sbf = { path = "../program" }
-# Host-only typed construction for the real-Pyth laboratory plane. This crate
-# never enters the SBF artifact; operatord resolves its signer roles and owns
-# the separate sign/submit boundary.
+# Host-only typed construction for chain-derived operator workflows. This
+# crate never enters the SBF artifact; no browser-authored protocol bytes or
+# account-role vectors cross this boundary.
 clutch-local-real-pyth = { path = "../local-real-pyth", default-features = false, features = ["builder", "operator"] }
-# The host relation twin the trade session's auto-crank runs: one canonical
-# candidate constructor and one canonical pairing constructor, the same two
-# the sealed lane's plan generator calls.  There is no second solver here and
-# no optimality claim -- these answer "what is the canonical candidate at
-# these coordinates", never "which coordinates are best".
-clutch-batch = { path = "../../../crates/clutch-batch" }
-clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
-# Shared untrusted projection vocabulary and the fail-closed settlement-shape
-# classifier. This crate owns no account bytes and submits no transactions.
-clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
 # Pure, offline Product payoff compilation. These remain host-only dependencies:
 # the daemon accepts exact rational JSON and emits canonical Product artifacts,
 # but owns no account, signer, RPC client, or registration authority.
