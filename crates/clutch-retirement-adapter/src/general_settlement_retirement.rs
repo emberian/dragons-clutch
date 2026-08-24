@@ -12,23 +12,21 @@
 
 use clutch_general_v2_contract::{
     derive_owner_finalized_row_data_id_v2, fee_runtime_id_from_bytes,
-    AuthenticatedSelectedCandidateV1, FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1,
-    FinalPotAdapterBindingV1, FinalPotRetirementProjectionV1, FinalPotV1AccountV1,
-    GeneralEpochPhaseV1, GeneralEpochV6AccountV1, GeneralFeeTerminalProjectionV1,
+    FeeTerminalReceiptBundleV1, GeneralEpochPhaseV1, GeneralEpochV6AccountV1,
+    GeneralFeeTerminalProjectionV1,
     GeneralOwnerFeeFinalizationProjectionV2, Id32, OwnerFeeFinalizationOutcomeV2,
     IndexedSettlementRootTerminalProjectionV1, IndexedSettlementRootV1AccountV1,
     OwnerFeeFinalizationV2AccountV1, OwnerFinalizedRowDataHashV2, OwnerSettlementExpectationV2,
-    OwnerSettlementV2AccountV1, SelectedCandidateV1AccountV1, Sha256BackendV1,
+    OwnerSettlementV2AccountV1, Sha256BackendV1,
     FEE_CLOSURE_MANIFEST_V1_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES,
 };
 use clutch_retirement::{Identity32V1, RetirementErrorV2};
 
 use crate::{
-    authenticate_general_epoch_v6_exact, authenticate_general_final_pot_v1_exact,
+    authenticate_general_epoch_v6_exact,
     authenticate_general_owner_fee_finalization_v2_exact,
     authenticate_general_owner_settlement_v2_exact,
-    authenticate_general_selected_candidate_v1_exact,
     authenticate_general_indexed_settlement_root_v1_exact, AccountAccessV2, AccountViewV2,
     CanonicalPdaV1, RetirementAdapterErrorV2,
 };
@@ -247,217 +245,6 @@ pub fn authenticate_general_fee_terminal_v1(
         closure_manifest_account: manifest_view.address,
         receipt_program_id,
         projection: terminal_projection,
-    })
-}
-
-/// Exact selected-candidate join for a candidate-wide fee abort.
-///
-/// An abort has no settled FinalPot authority to authenticate. This projection
-/// therefore binds the immutable SelectedCandidate directly to the paired fee
-/// terminal/manifest and deliberately grants neither account-close nor value
-/// movement authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralFeeAbortV1 {
-    selected_candidate_account: Identity32V1,
-    selected_fee_record_account: Identity32V1,
-    program_id: Identity32V1,
-    fee_terminal: AuthenticatedGeneralFeeTerminalV1,
-}
-
-impl AuthenticatedGeneralFeeAbortV1 {
-    /// Immutable SelectedCandidate account joined to this abort.
-    pub const fn selected_candidate_account(self) -> Identity32V1 {
-        self.selected_candidate_account
-    }
-
-    /// Exact General runtime program identity.
-    pub const fn program_id(self) -> Identity32V1 {
-        self.program_id
-    }
-
-    /// Canonically derived selected fee-record PDA consumed by the terminal.
-    pub const fn selected_fee_record_account(self) -> Identity32V1 {
-        self.selected_fee_record_account
-    }
-
-    /// Strictly authenticated paired terminal and closure manifest.
-    pub const fn fee_terminal(self) -> AuthenticatedGeneralFeeTerminalV1 {
-        self.fee_terminal
-    }
-
-    /// Terminal evidence is not a liveness capitalization source.
-    pub const fn available_liveness_lamports(self) -> u64 {
-        0
-    }
-
-    /// Terminal evidence is not Hoard principal.
-    pub const fn available_hoard_atoms(self) -> u64 {
-        0
-    }
-
-    /// Released authorization is not collected future fee revenue.
-    pub const fn available_future_fee_atoms(self) -> u64 {
-        0
-    }
-}
-
-/// Authenticate the strict SelectedCandidate/fee-abort identity join.
-pub fn authenticate_general_fee_abort_v1(
-    selected_view: AccountViewV2<'_>,
-    selected_pda: CanonicalPdaV1,
-    selected_fee_record_pda: CanonicalPdaV1,
-    program_id: Identity32V1,
-    fee_terminal: AuthenticatedGeneralFeeTerminalV1,
-) -> Result<AuthenticatedGeneralFeeAbortV1, RetirementAdapterErrorV2> {
-    let selected = authenticate_general_selected_candidate_v1_exact(
-        selected_view,
-        program_id,
-        selected_pda,
-        AccountAccessV2::ReadOnly,
-    )?;
-    if fee_terminal.receipt_program_id != program_id {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
-    }
-    if selected.address() == fee_terminal.terminal_receipt_account
-        || selected.address() == fee_terminal.closure_manifest_account
-        || selected.address() == selected_fee_record_pda.address()
-        || selected_fee_record_pda.address() == fee_terminal.terminal_receipt_account
-        || selected_fee_record_pda.address() == fee_terminal.closure_manifest_account
-    {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-    let selected_body = SelectedCandidateV1AccountV1::decode(selected.data())?;
-    let fee = fee_terminal.projection;
-    if fee.outcome != FeeTerminalOutcomeV1::Aborted
-        || fee.market.0 != selected_body.market.bytes()
-        || fee.epoch.0 != selected_body.epoch.bytes()
-        || fee.settlement_candidate.0 != selected_body.settlement_candidate_id.bytes()
-        || fee.fee_record.0 != selected_fee_record_pda.address().bytes()
-    {
-        return Err(RetirementErrorV2::WrongParent.into());
-    }
-    Ok(AuthenticatedGeneralFeeAbortV1 {
-        selected_candidate_account: selected.address(),
-        selected_fee_record_account: selected_fee_record_pda.address(),
-        program_id,
-        fee_terminal,
-    })
-}
-
-/// Exact zero-liability FinalPot joined to SelectedCandidate and candidate-wide
-/// fee terminal authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralFinalPotTerminalV1 {
-    final_pot_account: Identity32V1,
-    selected_candidate_account: Identity32V1,
-    selected_fee_record_account: Identity32V1,
-    program_id: Identity32V1,
-    terminal: FinalPotRetirementProjectionV1,
-    fee_terminal: AuthenticatedGeneralFeeTerminalV1,
-}
-
-impl AuthenticatedGeneralFinalPotTerminalV1 {
-    /// Canonical writable FinalPot PDA.
-    pub const fn final_pot_account(self) -> Identity32V1 {
-        self.final_pot_account
-    }
-
-    /// Read-only SelectedCandidate semantic authority.
-    pub const fn selected_candidate_account(self) -> Identity32V1 {
-        self.selected_candidate_account
-    }
-
-    /// Exact General program owner shared by FinalPot and SelectedCandidate.
-    pub const fn program_id(self) -> Identity32V1 {
-        self.program_id
-    }
-
-    /// Canonically derived selected fee-record PDA consumed by the terminal.
-    pub const fn selected_fee_record_account(self) -> Identity32V1 {
-        self.selected_fee_record_account
-    }
-
-    /// Zero-liability projection minted only by the FinalPot semantic owner.
-    pub const fn terminal(self) -> FinalPotRetirementProjectionV1 {
-        self.terminal
-    }
-
-    /// Candidate-wide fee terminal bound to this same selection.
-    pub const fn fee_terminal(self) -> AuthenticatedGeneralFeeTerminalV1 {
-        self.fee_terminal
-    }
-}
-
-/// Authenticate FinalPot, SelectedCandidate, and candidate-wide fee terminal
-/// before any close or Epoch count decrement.
-#[allow(clippy::too_many_arguments)]
-pub fn authenticate_general_final_pot_terminal_v1(
-    final_pot_view: AccountViewV2<'_>,
-    final_pot_pda: CanonicalPdaV1,
-    selected_view: AccountViewV2<'_>,
-    selected_pda: CanonicalPdaV1,
-    selected_fee_record_pda: CanonicalPdaV1,
-    program_id: Identity32V1,
-    fee_terminal: AuthenticatedGeneralFeeTerminalV1,
-) -> Result<AuthenticatedGeneralFinalPotTerminalV1, RetirementAdapterErrorV2> {
-    let final_pot =
-        authenticate_general_final_pot_v1_exact(final_pot_view, program_id, final_pot_pda)?;
-    let selected = authenticate_general_selected_candidate_v1_exact(
-        selected_view,
-        program_id,
-        selected_pda,
-        AccountAccessV2::ReadOnly,
-    )?;
-    if fee_terminal.receipt_program_id != program_id {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
-    }
-    if final_pot.address() == selected.address()
-        || selected.address() == fee_terminal.terminal_receipt_account
-        || selected.address() == fee_terminal.closure_manifest_account
-        || final_pot.address() == fee_terminal.terminal_receipt_account
-        || final_pot.address() == fee_terminal.closure_manifest_account
-        || selected.address() == selected_fee_record_pda.address()
-        || final_pot.address() == selected_fee_record_pda.address()
-        || selected_fee_record_pda.address() == fee_terminal.terminal_receipt_account
-        || selected_fee_record_pda.address() == fee_terminal.closure_manifest_account
-    {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-
-    let selected_body = SelectedCandidateV1AccountV1::decode(selected.data())?;
-    let selected_binding = AuthenticatedSelectedCandidateV1 {
-        artifact: general_id(selected.address())?,
-        account: &selected_body,
-    };
-    let binding = FinalPotAdapterBindingV1 {
-        final_pot: general_id(final_pot.address())?,
-        derived_bump: final_pot.bump(),
-        selected: selected_binding,
-        final_pot_pda_authenticated: true,
-        final_pot_program_owner_authenticated: true,
-        selected_pda_authenticated: true,
-        selected_program_owner_authenticated: true,
-        writable: true,
-    };
-    let terminal =
-        FinalPotV1AccountV1::decode(final_pot.data(), binding)?.retirement_projection(binding)?;
-    let fee = fee_terminal.projection;
-    if fee.outcome != FeeTerminalOutcomeV1::Settled
-        || fee.market.0 != terminal.market()
-        || fee.epoch.0 != terminal.epoch()
-        || fee.settlement_candidate.0 != terminal.candidate()
-        || fee.fee_record.0 != selected_fee_record_pda.address().bytes()
-    {
-        return Err(RetirementErrorV2::WrongParent.into());
-    }
-
-    Ok(AuthenticatedGeneralFinalPotTerminalV1 {
-        final_pot_account: final_pot.address(),
-        selected_candidate_account: selected.address(),
-        selected_fee_record_account: selected_fee_record_pda.address(),
-        program_id,
-        terminal,
-        fee_terminal,
     })
 }
 
