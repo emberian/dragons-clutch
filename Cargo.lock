@@ -359,6 +359,10 @@ name = "dclutch-realm-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-sbf"
 version = "0.1.0"
 dependencies = [

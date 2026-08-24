@@ -12,6 +12,7 @@ members = [
     "crates/dclutch-pyth-contract",
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
+    "crates/dclutch-record-contract",
     "crates/dclutch-realm-contract",
     "crates/dclutch-source-contract",
     "crates/dclutch-terminal-contract",
