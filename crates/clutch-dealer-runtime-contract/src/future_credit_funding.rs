@@ -11,7 +11,9 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    add, Error, FixedCodec, Id, Result, DEALER_FUTURE_CREDIT_FUNDING_CONTENT_DOMAIN_V1,
+    add, DealerPhaseV2, DealerSeriesObligationBindingV2, DealerSeriesObligationPhaseV1,
+    DealerStateV3, Error, FixedCodec, Id, Result,
+    DEALER_FUTURE_CREDIT_FUNDING_CONTENT_DOMAIN_V1,
 };
 
 /// Exact local semantic-body magic.
@@ -205,11 +207,46 @@ impl DealerFutureCreditFundingV1 {
     /// Close unused future-credit capital only at complete Dealer retirement.
     pub fn prepare_unused_close(
         &self,
+        dealer_state_account_id: Id,
+        state: &DealerStateV3,
+        terminal_obligation: &DealerSeriesObligationBindingV2,
         observed_balance_lamports: u64,
-        terminal_state_receipt_id: Id,
     ) -> Result<DealerFutureCreditUnusedCloseV1> {
         self.validate()?;
+        state.validate()?;
+        terminal_obligation.validate()?;
+        dealer_state_account_id.validate_live()?;
+        let terminal_state_receipt_id = state.base.terminal_state_receipt_id;
         terminal_state_receipt_id.validate_live()?;
+        let terminal_obligation_binding_id = terminal_obligation.binding_id()?;
+        let state_pre_semantic_id = state.state_id()?;
+        if state.base.phase != DealerPhaseV2::Retiring
+            || state.base.children.facility_positions != 0
+            || state.base.children.facility_replays != 0
+            || state.series_obligation_children != 1
+            || state.series_obligation_binding_account_id
+                != terminal_obligation.key.binding_account_id
+            || state.series_obligation_binding_id != terminal_obligation_binding_id
+            || terminal_obligation.phase != DealerSeriesObligationPhaseV1::Terminal
+            || terminal_obligation.terminal_state_receipt_id != terminal_state_receipt_id
+            || terminal_obligation.key.dealer_state_account_id != dealer_state_account_id
+            || terminal_obligation.key.policy_id != state.base.policy_id
+            || terminal_obligation.key.facility_id != state.base.facility_id
+            || terminal_obligation.key.facility_position_binding_id
+                != state.base.facility_position_binding_id
+            || terminal_obligation.key.market_instance_v2_id != self.market_instance_v2_id
+            || self.dealer_state_account_id != dealer_state_account_id
+            || self.policy_id != state.base.policy_id
+            || self.facility_id != state.base.facility_id
+            || self.facility_position_account_id != state.base.facility_position_account_id
+            || self.facility_position_binding_id != state.base.facility_position_binding_id
+            || self.dealer_replay_account_id != state.base.facility_replay_account_id
+            || self.neutral_sink != state.base.rent.neutral_sink
+            || self.neutral_sink != terminal_obligation.rent.neutral_sink
+            || state.base.generation < self.founding_generation
+        {
+            return Err(Error::MismatchedBinding);
+        }
         if observed_balance_lamports < self.minimum_balance_lamports()? {
             return Err(Error::InvalidParameter);
         }
@@ -221,12 +258,12 @@ impl DealerFutureCreditFundingV1 {
             .checked_sub(refundable_principal_lamports)
             .ok_or(Error::ArithmeticOverflow)?;
         let funding_receipt_id = self.funding_receipt_id()?;
-        let terminal_receipt_id = consumption_receipt_id(
-            DEALER_FUTURE_CREDIT_UNUSED_CLOSE_RECEIPT_DOMAIN_V1,
+        let terminal_receipt_id = unused_close_receipt_id(
             funding_receipt_id,
-            self.founding_generation,
+            state_pre_semantic_id,
             terminal_state_receipt_id,
-            self.funding_account_id,
+            terminal_obligation_binding_id,
+            terminal_obligation,
             observed_balance_lamports,
             self,
         )?;
@@ -234,7 +271,14 @@ impl DealerFutureCreditFundingV1 {
             funding_account_id: self.funding_account_id,
             funding_receipt_id,
             terminal_receipt_id,
+            state_pre_semantic_id,
             terminal_state_receipt_id,
+            terminal_obligation_binding_id,
+            terminal_product_projection_id: terminal_obligation.terminal_projection_id,
+            terminal_link_post_semantic_id: terminal_obligation
+                .terminal_link_post_semantic_id,
+            terminal_link_transition_sequence: terminal_obligation
+                .terminal_link_transition_sequence,
             refund_owner: self.refund_owner,
             neutral_sink: self.neutral_sink,
             refundable_principal_lamports,
@@ -284,8 +328,18 @@ pub struct DealerFutureCreditUnusedCloseV1 {
     pub funding_receipt_id: Id,
     /// One-shot unused-close receipt.
     pub terminal_receipt_id: Id,
+    /// Exact Retiring State V3 semantic identity before value movement.
+    pub state_pre_semantic_id: Id,
     /// Dealer terminal receipt authorizing the unused close.
     pub terminal_state_receipt_id: Id,
+    /// Exact terminal 0xaf/v2 binding identity retained by State V3.
+    pub terminal_obligation_binding_id: Id,
+    /// Exact Product LinkV2 terminal projection accepted by Dealer.
+    pub terminal_product_projection_id: Id,
+    /// Exact Product LinkV2 semantic identity after terminal consumption.
+    pub terminal_link_post_semantic_id: Id,
+    /// Monotone Product LinkV2 sequence after terminal consumption.
+    pub terminal_link_transition_sequence: u64,
     /// Recipient of both unused principal compartments.
     pub refund_owner: Id,
     /// Recipient of hostile prefund and later surplus.
@@ -407,6 +461,46 @@ fn consumption_receipt_id(
     Ok(Id::from_bytes(hasher.finalize().into()))
 }
 
+fn unused_close_receipt_id(
+    funding_receipt_id: Id,
+    state_pre_semantic_id: Id,
+    terminal_state_receipt_id: Id,
+    terminal_obligation_binding_id: Id,
+    terminal_obligation: &DealerSeriesObligationBindingV2,
+    observed_balance_lamports: u64,
+    funding: &DealerFutureCreditFundingV1,
+) -> Result<Id> {
+    for identity in [
+        funding_receipt_id,
+        state_pre_semantic_id,
+        terminal_state_receipt_id,
+        terminal_obligation_binding_id,
+        terminal_obligation.terminal_projection_id,
+        terminal_obligation.terminal_link_post_semantic_id,
+    ] {
+        identity.validate_live()?;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(DEALER_FUTURE_CREDIT_UNUSED_CLOSE_RECEIPT_DOMAIN_V1);
+    hasher.update(funding_receipt_id.bytes());
+    hasher.update(state_pre_semantic_id.bytes());
+    hasher.update(terminal_state_receipt_id.bytes());
+    hasher.update(terminal_obligation_binding_id.bytes());
+    hasher.update(terminal_obligation.terminal_projection_id.bytes());
+    hasher.update(terminal_obligation.terminal_link_pre_semantic_id.bytes());
+    hasher.update(terminal_obligation.terminal_link_post_semantic_id.bytes());
+    hasher.update(terminal_obligation.terminal_link_transition_sequence.to_le_bytes());
+    hasher.update(observed_balance_lamports.to_le_bytes());
+    hasher.update(funding.funding_account_id.bytes());
+    hasher.update(funding.refund_owner.bytes());
+    hasher.update(funding.neutral_sink.bytes());
+    hasher.update(funding.funding_account_principal_lamports.to_le_bytes());
+    hasher.update(funding.credit_refundable_principal_lamports.to_le_bytes());
+    hasher.update(funding.credit_tombstone_principal_lamports.to_le_bytes());
+    hasher.update(funding.donation_floor_lamports.to_le_bytes());
+    Ok(Id::from_bytes(hasher.finalize().into()))
+}
+
 const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1 == 516);
 const _: () = assert!(DEALER_FUTURE_CREDIT_ACCOUNT_BYTES_V1 == 296);
 const _: () = assert!(DEALER_FUTURE_CREDIT_ACCOUNT_VERSION_V1 == 2);
@@ -415,6 +509,10 @@ const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1 <= crate::MAX_SEMANT
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        DealerChildCountsV2, DealerSeriesObligationKeyV2, DeletableRentOwnerV1,
+        RootRentOwnerV1, SponsorCapitalDispositionV1, MAX_OUTCOMES,
+    };
 
     fn id(byte: u8) -> Id {
         Id::from_bytes([byte; 32])
@@ -442,6 +540,99 @@ mod tests {
             credit_tombstone_principal_lamports: 80,
             donation_floor_lamports: 7,
         }
+    }
+
+    fn terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV2) {
+        let live = DealerSeriesObligationBindingV2::new_live(
+            DealerSeriesObligationKeyV2 {
+                binding_account_id: id(30),
+                policy_id: id(2),
+                facility_id: id(3),
+                dealer_state_account_id: id(9),
+                facility_position_binding_id: id(11),
+                market_instance_v2_id: id(4),
+                product_market_root_account_id: id(31),
+                product_market_binding_id: id(32),
+                series_plan_v5_id: id(33),
+                series_market_link_account_id: id(34),
+                compiler_bundle_v6_id: id(35),
+                attachment_plan_v5_id: id(36),
+                product_generation: 1,
+                series_ordinal: 7,
+            },
+            id(37),
+            id(38),
+            id(39),
+            id(40),
+            1,
+            DeletableRentOwnerV1 {
+                payer: id(41),
+                neutral_sink: id(14),
+                refundable_principal: 9,
+                donation_floor: 2,
+            },
+        )
+        .unwrap();
+        let terminal = live
+            .terminalized(id(42), id(43), id(44), id(45), id(26), 2)
+            .unwrap();
+        let base = crate::DealerStateV2 {
+            policy_id: id(2),
+            facility_id: id(3),
+            facility_position_binding_id: id(11),
+            facility_position_id: id(46),
+            facility_position_account_id: id(10),
+            facility_replay_account_id: id(12),
+            sponsor: id(47),
+            sponsor_refund_recipient: id(48),
+            lp_page_head_id: Id::ZERO,
+            lp_page_set_root: Id::ZERO,
+            last_lp_owner: Id::ZERO,
+            active_epoch_id: Id::ZERO,
+            active_epoch_binding_account_id: Id::ZERO,
+            active_lease_id: Id::ZERO,
+            funded_dependencies_id: id(49),
+            funded_dependencies_account_id: id(50),
+            terminal_position_tombstone_id: id(51),
+            terminal_replay_semantic_id: id(52),
+            terminal_replay_intent_id: id(53),
+            terminal_state_receipt_id: id(26),
+            phase: DealerPhaseV2::Retiring,
+            sponsor_capital_disposition: SponsorCapitalDispositionV1::Donated,
+            outcome_count: 2,
+            generation: 2,
+            child_sequence: 4,
+            total_shares: 0,
+            queued_shares: 0,
+            terminal_claimed_shares: 0,
+            sponsor_capital_atoms: 1,
+            net_sold: [0; MAX_OUTCOMES],
+            children: DealerChildCountsV2 {
+                funded_dependencies: 1,
+                ..DealerChildCountsV2::default()
+            },
+            rent: RootRentOwnerV1 {
+                payer: id(54),
+                neutral_sink: id(14),
+                refundable_live_principal: 3,
+                permanent_tombstone_principal: 5,
+                donation_floor: 0,
+            },
+        };
+        let state = DealerStateV3 {
+            base,
+            series_obligation_binding_id: terminal.binding_id().unwrap(),
+            series_obligation_binding_account_id: terminal.key.binding_account_id,
+            series_obligation_children: 1,
+            product_upgrade_rent: DeletableRentOwnerV1 {
+                payer: id(55),
+                neutral_sink: id(14),
+                refundable_principal: 1,
+                donation_floor: 0,
+            },
+        };
+        state.validate().unwrap();
+        (state, terminal)
     }
 
     #[test]
@@ -480,9 +671,38 @@ mod tests {
     #[test]
     fn unused_close_refunds_both_principals_and_neutralizes_donation() {
         let value = funding();
-        let plan = value.prepare_unused_close(217, id(15)).unwrap();
+        let (state, terminal) = terminal_graph();
+        let plan = value
+            .prepare_unused_close(id(9), &state, &terminal, 217)
+            .unwrap();
         assert_eq!(plan.refundable_principal_lamports, 200);
         assert_eq!(plan.neutral_sink_credit_lamports, 17);
+        assert_eq!(plan.terminal_state_receipt_id, id(26));
+        assert_eq!(plan.terminal_obligation_binding_id, terminal.binding_id().unwrap());
         assert_ne!(plan.terminal_receipt_id, plan.funding_receipt_id);
+    }
+
+    #[test]
+    fn unused_close_refuses_live_product_or_substituted_terminal_state() {
+        let value = funding();
+        let (state, terminal) = terminal_graph();
+        let mut live = terminal;
+        live.phase = DealerSeriesObligationPhaseV1::Live;
+        live.terminal_owner_receipt_id = Id::ZERO;
+        live.terminal_projection_id = Id::ZERO;
+        live.terminal_link_pre_semantic_id = Id::ZERO;
+        live.terminal_link_post_semantic_id = Id::ZERO;
+        live.terminal_state_receipt_id = Id::ZERO;
+        live.terminal_link_transition_sequence = 0;
+        assert_eq!(
+            value.prepare_unused_close(id(9), &state, &live, 217),
+            Err(Error::MismatchedBinding)
+        );
+        let mut substituted = state;
+        substituted.base.terminal_state_receipt_id = id(56);
+        assert_eq!(
+            value.prepare_unused_close(id(9), &substituted, &terminal, 217),
+            Err(Error::MismatchedBinding)
+        );
     }
 }

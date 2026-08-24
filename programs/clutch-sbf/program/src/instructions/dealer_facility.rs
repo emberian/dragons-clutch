@@ -39,7 +39,7 @@ use clutch_dealer_runtime_contract::{
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
-    DealerFutureCreditFundingV1,
+    DealerFutureCreditFundingV1, DealerFutureCreditUnusedCloseV1,
     DealerActionLivenessAuthorizationV1, DealerTransitionIntentV1,
     DealerTransitionLivenessModeV1,
     DealerClaimWorkV1, DealerExitTicketV1, DealerLivenessCompartmentV1,
@@ -250,6 +250,8 @@ const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-product-resolution-authentication/v2\0";
 const DEALER_FUTURE_CREDIT_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-future-credit-postwrite/v1\0";
+const DEALER_FUTURE_CREDIT_UNUSED_CLOSE_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/dealer-future-credit-unused-close-postwrite/v1\0";
 const _: () = assert!(
     DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES
         == 8 + clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1
@@ -313,6 +315,22 @@ struct AuthenticatedDealerFacilityVectorAuthoritySbfV1<'a, 'info> {
     current_generation: u64,
     live_credit_rent_lamports: u64,
     tombstone_rent_lamports: u64,
+}
+
+/// Non-detachable physical receipt proving the unused `0xbc/v1` owner was
+/// deleted only after the exact current Product obligation reached Terminal.
+/// It retains the pure terminal plan plus every observed lamport poststate.
+struct AuthenticatedDealerFutureCreditUnusedCloseV1 {
+    plan: DealerFutureCreditUnusedCloseV1,
+    postwrite_receipt_id: Id,
+    refund_owner_lamports_after: u64,
+    neutral_sink_lamports_after: u64,
+}
+
+impl AuthenticatedDealerFutureCreditUnusedCloseV1 {
+    const fn receipt_id(&self) -> Id {
+        self.postwrite_receipt_id
+    }
 }
 
 /// Exact already-live Product obligation retained across later Dealer leases.
@@ -1198,6 +1216,108 @@ fn authenticate_future_credit_funding(
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok((bump, funding))
+}
+
+/// Delete the unused future-credit funding owner and partition its balance.
+///
+/// This helper is intentionally private and has no raw-plan caller. The final
+/// action25 outer must first persist Product's LinkV2 terminal successor and
+/// then pass the hostile-reopened terminal `0xaf/v2` and Retiring StateV3.
+/// The alternative live-a6 path is owned by Fractional and cannot call this
+/// function after action23 has deleted `0xbc/v1`.
+#[inline(never)]
+fn close_unused_future_credit_funding_v1(
+    program_id: &Pubkey,
+    state_account: &AccountInfo<'_>,
+    terminal_obligation_account: &AccountInfo<'_>,
+    funding_account: &AccountInfo<'_>,
+    refund_owner: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedDealerFutureCreditUnusedCloseV1> {
+    let authenticated_state = authenticate_dealer_state_v3(program_id, state_account, true)?;
+    let authenticated_obligation =
+        authenticate_dealer_series_obligation_v2(program_id, terminal_obligation_account, true)?;
+    let (_, funding) = authenticate_future_credit_funding(program_id, funding_account, true)?;
+    require(
+        refund_owner.is_writable
+            && neutral_sink.is_writable
+            && !refund_owner.executable
+            && neutral_sink.owner == &SYSTEM_PROGRAM_ID
+            && neutral_sink.data_is_empty()
+            && !neutral_sink.is_signer
+            && !neutral_sink.executable
+            && funding_account.key != refund_owner.key
+            && funding_account.key != neutral_sink.key
+            && refund_owner.key != neutral_sink.key
+            && funding.refund_owner == id(refund_owner.key)
+            && funding.neutral_sink == id(neutral_sink.key),
+        ClutchError::MismatchedState,
+    )?;
+    let plan = funding
+        .prepare_unused_close(
+            id(state_account.key),
+            authenticated_state.state(),
+            authenticated_obligation.binding(),
+            funding_account.lamports(),
+        )
+        .map_err(dealer_fault)?;
+    require(
+        plan.funding_account_id == id(funding_account.key)
+            && plan.refund_owner == id(refund_owner.key)
+            && plan.neutral_sink == id(neutral_sink.key)
+            && plan.terminal_obligation_binding_id
+                == authenticated_obligation.binding().binding_id().map_err(dealer_fault)?,
+        ClutchError::MismatchedState,
+    )?;
+
+    let refund_before = refund_owner.lamports();
+    let neutral_before = neutral_sink.lamports();
+    release_dealer_account(funding_account)?;
+    credit_exact_dealer_terminal_lamports([
+        (refund_owner, plan.refundable_principal_lamports),
+        (neutral_sink, plan.neutral_sink_credit_lamports),
+        (neutral_sink, 0),
+        (neutral_sink, 0),
+    ])?;
+    require_released_dealer_account(funding_account)?;
+    let refund_after = refund_before
+        .checked_add(plan.refundable_principal_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let neutral_after = neutral_before
+        .checked_add(plan.neutral_sink_credit_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        refund_owner.lamports() == refund_after && neutral_sink.lamports() == neutral_after,
+        ClutchError::MismatchedState,
+    )?;
+    let postwrite_receipt_id = Id::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            DEALER_FUTURE_CREDIT_UNUSED_CLOSE_POSTWRITE_DOMAIN_V1,
+            &plan.terminal_receipt_id.bytes(),
+            &plan.state_pre_semantic_id.bytes(),
+            &plan.terminal_state_receipt_id.bytes(),
+            &plan.terminal_obligation_binding_id.bytes(),
+            &plan.terminal_product_projection_id.bytes(),
+            &plan.terminal_link_post_semantic_id.bytes(),
+            &plan.terminal_link_transition_sequence.to_le_bytes(),
+            funding_account.key.as_ref(),
+            refund_owner.key.as_ref(),
+            neutral_sink.key.as_ref(),
+            &plan.observed_balance_lamports.to_le_bytes(),
+            &refund_before.to_le_bytes(),
+            &refund_after.to_le_bytes(),
+            &neutral_before.to_le_bytes(),
+            &neutral_after.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    postwrite_receipt_id.validate_live().map_err(dealer_fault)?;
+    Ok(AuthenticatedDealerFutureCreditUnusedCloseV1 {
+        plan,
+        postwrite_receipt_id,
+        refund_owner_lamports_after: refund_after,
+        neutral_sink_lamports_after: neutral_after,
+    })
 }
 
 impl AuthenticatedDealerFacilityVectorAuthorityV1
@@ -11061,5 +11181,53 @@ mod resolve_vector_adversarial_tests {
         ] {
             assert!(handler.contains(guard), "missing Resolve guard {guard}");
         }
+    }
+}
+
+#[cfg(test)]
+mod future_credit_terminal_adversarial_tests {
+    #[test]
+    fn unused_close_is_terminal_product_bound_and_partitions_exact_lamports() {
+        let source = include_str!("dealer_facility.rs");
+        let helper = source
+            .split("fn close_unused_future_credit_funding_v1")
+            .nth(1)
+            .and_then(|value| value.split("impl AuthenticatedDealerFacilityVectorAuthorityV1").next())
+            .expect("unused future-credit close helper");
+        for guard in [
+            "authenticate_dealer_state_v3",
+            "authenticate_dealer_series_obligation_v2",
+            "authenticate_future_credit_funding",
+            "prepare_unused_close",
+            "plan.terminal_obligation_binding_id",
+            "release_dealer_account",
+            "plan.refundable_principal_lamports",
+            "plan.neutral_sink_credit_lamports",
+            "require_released_dealer_account",
+            "DEALER_FUTURE_CREDIT_UNUSED_CLOSE_POSTWRITE_DOMAIN_V1",
+        ] {
+            assert!(helper.contains(guard), "missing unused-close guard {guard}");
+        }
+    }
+
+    #[test]
+    fn unused_close_cannot_alias_refund_sink_or_leave_a_detachable_raw_plan() {
+        let source = include_str!("dealer_facility.rs");
+        let helper = source
+            .split("fn close_unused_future_credit_funding_v1")
+            .nth(1)
+            .and_then(|value| value.split("impl AuthenticatedDealerFacilityVectorAuthorityV1").next())
+            .expect("unused future-credit close helper");
+        for guard in [
+            "funding_account.key != refund_owner.key",
+            "funding_account.key != neutral_sink.key",
+            "refund_owner.key != neutral_sink.key",
+            "neutral_sink.owner == &SYSTEM_PROGRAM_ID",
+            "neutral_sink.data_is_empty()",
+        ] {
+            assert!(helper.contains(guard), "missing alias/owner guard {guard}");
+        }
+        assert!(!source.contains("pub(crate) fn close_unused_future_credit_funding_v1"));
+        assert!(!source.contains("pub fn close_unused_future_credit_funding_v1"));
     }
 }
