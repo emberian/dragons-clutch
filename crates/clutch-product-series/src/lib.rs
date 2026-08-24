@@ -28,6 +28,7 @@ mod compiler_output_v6;
 mod compiler_output_v7;
 mod direct_global_liveness;
 mod failure_begin_schedule_v2;
+mod failure_begin_schedule_v3;
 mod foundation_funding;
 mod foundation_funding_v3;
 mod foundation_funding_v4;
@@ -122,6 +123,13 @@ pub use failure_begin_schedule_v2::{
     PRODUCT_FAILURE_BEGIN_COMPILER_PROVENANCE_BYTES_V2,
     PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V2,
     PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V2,
+};
+pub use failure_begin_schedule_v3::{
+    derive_product_failure_begin_schedule_projection_v3,
+    ProductFailureBeginCompilerProvenanceV3,
+    PRODUCT_FAILURE_BEGIN_COMPILER_PROVENANCE_BYTES_V3,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V3,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V3,
 };
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
@@ -344,7 +352,7 @@ pub use series_lifecycle_replay_v2::{
 };
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
-    compile_ordinal_v6,
+    compile_ordinal_v6, compile_ordinal_v7,
     project_component_debits_v2, AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2,
     CompiledOrdinalV2, MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
     ProjectedComponentPresenceV2, RegistryCapabilityProjectionV2, SeriesFundingTermsV2,
@@ -709,6 +717,10 @@ typed_id!(
 typed_id!(
     ProductFailureBeginScheduleProjectionV2Id,
     "Typed identity of one current BundleV6/QuoteV5 Failure begin schedule projection."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV3Id,
+    "Typed identity of one current BundleV7/QuoteV6 Failure begin schedule projection."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.
