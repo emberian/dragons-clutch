@@ -24,6 +24,8 @@ pub mod failure_action11_material;
 pub mod failure_source_action10_material;
 #[cfg(feature = "operator")]
 pub mod failure_action13_material;
+#[cfg(feature = "operator")]
+pub mod general_action39_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
