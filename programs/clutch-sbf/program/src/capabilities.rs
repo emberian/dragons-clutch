@@ -34,7 +34,7 @@ pub const PROFILE_LABEL: &str =
 /// Current chain-attached successor with no legacy Source or laboratory plane.
 #[cfg(feature = "profile-successor-chain-attached-v1")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/successor-chain-attached/v2-current-collateral-direct-source-series-no-legacy-source-labs";
+    "dragons-clutch/capability-profile/successor-chain-attached/v3-current-collateral-direct-source-lifecycle-disabled-no-legacy-source-labs";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -85,8 +85,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of the chain-attached successor profile label.
 #[cfg(feature = "profile-successor-chain-attached-v1")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb5, 0x86, 0x52, 0x48, 0x59, 0xe1, 0x57, 0xdd, 0xc1, 0x3f, 0x1c, 0xc0, 0xbf, 0x56, 0x48, 0x94,
-    0x06, 0x0f, 0xbd, 0x57, 0x7f, 0x7b, 0x5a, 0x7f, 0xcf, 0xd6, 0xaa, 0xb2, 0x36, 0x74, 0x23, 0xba,
+    0x3e, 0x4f, 0x6d, 0xf2, 0xf8, 0x2a, 0x2b, 0x91, 0xfc, 0x5c, 0x6b, 0x65, 0xc7, 0x90, 0x7d, 0x6d,
+    0x07, 0x1c, 0x9e, 0x75, 0xb2, 0xfb, 0x95, 0xd9, 0x0b, 0xca, 0x9a, 0x05, 0x51, 0x18, 0xf4, 0xa2,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -226,15 +226,11 @@ pub const fn extension_intent_action_allocated(
 
 /// Exact extension actions executable by this product.
 ///
-/// Current chain-attached profiles execute artifact-authenticated release registration
-/// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
-/// authenticated parser ingestion. Actions 5 through 12 remain independently
-/// disabled.
+/// The historical full profile retains its Source V3 laboratory slice.
+/// Checked successor admission is defined separately below so an incomplete
+/// Source lifecycle can never inherit these actions.
 #[cfg(all(
-    any(
-        feature = "profile-full",
-        feature = "profile-successor-chain-attached-v1"
-    ),
+    feature = "profile-full",
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab",
@@ -243,6 +239,13 @@ pub const fn extension_intent_action_allocated(
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
+
+/// The checked successor admits no SourceSeries action until release
+/// publication, actions 1 through 12, the exact Failure/ResolutionV5
+/// authority, terminal reopen, and physical close are one reachable family.
+/// In particular, action 2 cannot consume an unfounded generation request.
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
 /// Structured laboratory build seam. Runtime tuples remain empty until
 /// Product BundleV5/ReleaseV2/ProfileV4, locus-aware deployment releases, and
@@ -375,9 +378,8 @@ mod tests {
             );
         }
         for action in 1..=12 {
-            assert_eq!(
-                extension_intent_action_enabled(77, 2, action),
-                action <= 4,
+            assert!(
+                !extension_intent_action_enabled(77, 2, action),
                 "SourceSeries action {action}",
             );
         }
@@ -473,10 +475,7 @@ mod tests {
                             .contains(&local_action)
                             || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = false;
-                    let source_runtime_enabled = cfg!(any(
-                        feature = "profile-full",
-                        feature = "profile-successor-chain-attached-v1"
-                    ))
+                    let source_runtime_enabled = cfg!(feature = "profile-full")
                         && !DEALER_POLICY_CATALOG_LAB
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
@@ -495,10 +494,7 @@ mod tests {
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
             !(DEALER_POLICY_CATALOG_LAB
-                || (cfg!(any(
-                    feature = "profile-full",
-                    feature = "profile-successor-chain-attached-v1"
-                )) && !GENERAL_V2_IDENTITY_LAB))
+                || (cfg!(feature = "profile-full") && !GENERAL_V2_IDENTITY_LAB))
         );
     }
 

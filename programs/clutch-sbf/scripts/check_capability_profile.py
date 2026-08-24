@@ -33,7 +33,7 @@ OUTER_REQUEST_ACTIONS = [0, 1, 2]
 DIRECT_V3_TAGS = frozenset(range(36, 47))
 SOURCE_V1_TAGS = frozenset(range(23, 27))
 SOURCE_V2_TAGS = frozenset(range(70, 74))
-CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
+FULL_PROFILE_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
 SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE = "profile-successor-chain-attached-v1"
 # This is the complete local-action-zero wire surface of the first
 # chain-attached successor.  It intentionally excludes legacy market founding,
@@ -371,14 +371,14 @@ def validate_wire_surface(
         if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
     ]
     profile_feature = build_contract["cargo_profile_feature"]
-    if profile_feature in {"profile-full", SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE}:
+    if profile_feature == "profile-full":
         require(
-            required_source_extensions == CURRENT_SOURCE_EXTENSION_TRIPLES,
+            required_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
             "wire_surface: current Source requirements must be exactly 77/v2 actions 1 through 4",
         )
         if source_owner["linkage"] == "linked":
             require(
-                enabled_source_extensions == CURRENT_SOURCE_EXTENSION_TRIPLES,
+                enabled_source_extensions == FULL_PROFILE_SOURCE_EXTENSION_TRIPLES,
                 "wire_surface: linked current Source must enable exactly 77/v2 actions 1 through 4",
             )
         else:
@@ -386,6 +386,11 @@ def validate_wire_surface(
                 enabled_source_extensions == [],
                 "wire_surface: planned Source owner unexpectedly enables Source V3 actions",
             )
+    elif profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
+        require(
+            required_source_extensions == [] and enabled_source_extensions == [],
+            "wire_surface: incomplete chain-attached Source lifecycle must disable actions 1 through 12",
+        )
     else:
         require(
             required_source_extensions == [] and enabled_source_extensions == [],

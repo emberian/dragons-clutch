@@ -98,20 +98,24 @@ even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
 
 `runtime-real-pyth-release` is admitted only with
-`profile-successor-chain-attached-v1`, whose current SourceSeries authority is
-the `77/v2` Source V3 family. That profile in turn requires this exact Source
-identity; `production-inert` cannot be relabeled as the chain-attached
-successor. The checked-profile gate refuses both laboratory identities as
-deployable; the runtime also gates legacy Source V1 tags `23..=26` and Source
-V2 tags `70..=73` on those explicit non-production features. A release-class
-ELF therefore has no fixture or legacy Source fallback.
+`profile-successor-chain-attached-v1`, which reserves the `77/v2` Source V3
+family but currently admits none of its actions. That profile in turn requires
+this exact Source identity; `production-inert` cannot be relabeled as the
+chain-attached successor. The checked-profile gate refuses both laboratory
+identities as deployable; the runtime also gates legacy Source V1 tags
+`23..=26` and Source V2 tags `70..=73` on those explicit non-production
+features. A release-class ELF therefore has no fixture or legacy Source
+fallback.
 
-For the chain-attached successor profile the Source semantic-owner requirements are
-exactly `(77,2,1)` through `(77,2,4)`. When that owner is linked, the enabled
-central-registry Source subset must be exactly the same four triples. Reserved
-actions 5 through 12 refuse; narrow profiles must expose no Source V3 action.
-Every release-class wire surface has no legacy Source pair and an empty
-`source_generation_discriminants` array.
+For the chain-attached successor profile the Source semantic-owner requirements
+and enabled central-registry Source subset are both empty. Actions 1 through 12
+remain an all-or-none lifecycle: release/request publication, ingestion,
+seal/fold/evaluate/handoff, exact Failure/ResolutionV5 terminal authority,
+reopen, and physical close must be reachable together before any tuple is
+admitted. This prevents actions 1 through 4 from creating Head, Lineage, or Page
+state that cannot reach terminal closure, and prevents action 2 from consuming
+an unfounded generation request. Every release-class wire surface also has no
+legacy Source pair and an empty `source_generation_discriminants` array.
 
 The successor's complete legacy intent projection is version 3 of tags
 `2..=5`, `7`, `10`, `11`, `14..=21`, and `68`. This is the current Collateral

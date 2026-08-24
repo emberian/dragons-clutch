@@ -43,15 +43,13 @@ def capabilities(
                 required_intents.extend(
                     [pair + [0] for pair in checker.SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS]
                 )
-            if slot == "source-plane":
-                required_intents.extend(
-                    copy.deepcopy(checker.CURRENT_SOURCE_EXTENSION_TRIPLES)
-                )
             required_intents.sort()
         else:
             required_intents = [[index, 3, 0]]
             if slot == "source-plane" and profile_feature == "profile-full":
-                required_intents.extend(copy.deepcopy(checker.CURRENT_SOURCE_EXTENSION_TRIPLES))
+                required_intents.extend(
+                    copy.deepcopy(checker.FULL_PROFILE_SOURCE_EXTENSION_TRIPLES)
+                )
         rows.append(
             {
                 "slot": slot,
@@ -433,6 +431,28 @@ class CapabilityProfileTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     checker.ProfileError,
                     "must be exactly 77/v2 actions 1 through 4",
+                ):
+                    checker.validate_manifest(value, repo=ROOT)
+
+    def test_chain_attached_successor_refuses_every_partial_source_surface(self) -> None:
+        for action in range(1, 13):
+            with self.subTest(action=action):
+                value = manifest(
+                    linkage="linked",
+                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                    source_identity="runtime-real-pyth-release",
+                )
+                source_owner = next(
+                    row
+                    for row in value["capabilities"]  # type: ignore[union-attr]
+                    if row["slot"] == "source-plane"
+                )
+                source_owner["required_intent_triples"].append([77, 2, action])
+                value["central_registry"]["enabled_intent_triples"].append([77, 2, action])  # type: ignore[index,union-attr]
+                value["central_registry"]["enabled_intent_triples"].sort()  # type: ignore[index,union-attr]
+                with self.assertRaisesRegex(
+                    checker.ProfileError,
+                    "incomplete chain-attached Source lifecycle must disable actions 1 through 12",
                 ):
                     checker.validate_manifest(value, repo=ROOT)
 
