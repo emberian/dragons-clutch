@@ -1,6 +1,6 @@
 //! Atomic founding of one authenticated categorical-Pyth Market and Fund.
 
-use dclutch_capability_contract::CapabilityManifestV1;
+use dclutch_capability_contract::{CapabilityFundingDerivationV1, CapabilityManifestV1};
 use dclutch_collateral_contract::{
     AccountPrivilege, FoundMarketAndFundV1, InstructionTag, validate_account_frame,
 };
@@ -20,6 +20,9 @@ use dclutch_pyth_contract::{
     resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
+use dclutch_rent_contract::{
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
+};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -33,12 +36,9 @@ use solana_program::{
 use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
-use crate::{
-    AdapterError,
-    authenticate::{FUND_SEED, MARKET_SEED},
-};
+use crate::{AdapterError, authenticate::MARKET_SEED};
 
-const FOUNDING_ACCOUNTS: usize = 11;
+const FOUNDING_ACCOUNTS: usize = 12;
 const MIN_OUTCOMES: u8 = 2;
 const MAX_OUTCOMES: u8 = 16;
 
@@ -46,6 +46,7 @@ struct FoundingFrame<'a, 'info> {
     sponsor: &'a AccountInfo<'info>,
     market: &'a AccountInfo<'info>,
     fund: &'a AccountInfo<'info>,
+    rent_credit: &'a AccountInfo<'info>,
     realm: &'a AccountInfo<'info>,
     product_instance: &'a AccountInfo<'info>,
     claim_basis: &'a AccountInfo<'info>,
@@ -65,19 +66,21 @@ impl<'a, 'info> FoundingFrame<'a, 'info> {
             sponsor: account(accounts, 0)?,
             market: account(accounts, 1)?,
             fund: account(accounts, 2)?,
-            realm: account(accounts, 3)?,
-            product_instance: account(accounts, 4)?,
-            claim_basis: account(accounts, 5)?,
-            capacity_profile: account(accounts, 6)?,
-            resolution_material: account(accounts, 7)?,
-            capability_manifest: account(accounts, 8)?,
-            system_program: account(accounts, 9)?,
-            rent_sysvar: account(accounts, 10)?,
+            rent_credit: account(accounts, 3)?,
+            realm: account(accounts, 4)?,
+            product_instance: account(accounts, 5)?,
+            claim_basis: account(accounts, 6)?,
+            capacity_profile: account(accounts, 7)?,
+            resolution_material: account(accounts, 8)?,
+            capability_manifest: account(accounts, 9)?,
+            system_program: account(accounts, 10)?,
+            rent_sysvar: account(accounts, 11)?,
         };
         let privileges = [
             privilege(frame.sponsor),
             privilege(frame.market),
             privilege(frame.fund),
+            privilege(frame.rent_credit),
             privilege(frame.realm),
             privilege(frame.product_instance),
             privilege(frame.claim_basis),
@@ -101,9 +104,12 @@ struct FoundingPlan {
     outcome_count: u8,
     market_bump: u8,
     fund_bump: u8,
+    funding_derivation: CapabilityFundingDerivationV1,
     market_rent: u64,
     fund_balance: u64,
     fund: FundingStateV1,
+    rent_credit: RentCreditV1,
+    rent_credit_lamports: u64,
     sponsor_before: u64,
 }
 
@@ -166,7 +172,16 @@ pub(crate) fn process_found_market_and_fund(
         program_id,
     );
     let fund_bump = [plan.fund_bump];
-    let fund_signer = [FUND_SEED, frame.market.key.as_ref(), fund_bump.as_slice()];
+    let funding_components = plan.funding_derivation.seed_components();
+    let fund_signer = [
+        funding_components[0],
+        funding_components[1],
+        funding_components[2],
+        funding_components[3],
+        funding_components[4],
+        funding_components[5],
+        fund_bump.as_slice(),
+    ];
     invoke_signed(
         &create_fund,
         &[
@@ -199,12 +214,6 @@ fn authenticate_founding(
     if frame.market.key != &expected_market {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let (expected_fund, fund_bump) =
-        Pubkey::find_program_address(&[FUND_SEED, frame.market.key.as_ref()], program_id);
-    if frame.fund.key != &expected_fund {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-
     let root = founding_root(identity, frame.sponsor.key.to_bytes())?;
     let expected_market_bytes = validate_selected_market(instruction.outcome_count(), root)?;
 
@@ -212,7 +221,18 @@ fn authenticate_founding(
         .map_err(|_| AdapterError::FoundingAuthentication)?;
     let market_rent = rent.minimum_balance(expected_market_bytes);
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
-    let fund = authenticate_fund(frame, identity, fund_rent, current_slot)?;
+    let (fund, funding_derivation) =
+        authenticate_fund(program_id, frame, identity, fund_rent, current_slot)?;
+    let (expected_fund, fund_bump) =
+        Pubkey::find_program_address(&funding_derivation.seed_components(), program_id);
+    if frame.fund.key != &expected_fund {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let rent_credit = authenticate_rent_credit(program_id, frame.rent_credit, frame.sponsor.key)?;
+    let rent_credit_lamports = frame
+        .rent_credit
+        .try_lamports()
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
     let fund_balance =
         required_resolution_minimum_balance(fund).map_err(|_| AdapterError::Arithmetic)?;
     let total_debit = market_rent
@@ -246,19 +266,23 @@ fn authenticate_founding(
         outcome_count: instruction.outcome_count(),
         market_bump,
         fund_bump,
+        funding_derivation,
         market_rent,
         fund_balance,
         fund,
+        rent_credit,
+        rent_credit_lamports,
         sponsor_before: frame.sponsor.lamports(),
     })
 }
 
 fn authenticate_fund(
+    program_id: &Pubkey,
     frame: &FoundingFrame<'_, '_>,
     identity: MarketIdentity,
     fund_rent: u64,
     current_slot: u64,
-) -> Result<FundingStateV1, ProgramError> {
+) -> Result<(FundingStateV1, CapabilityFundingDerivationV1), ProgramError> {
     let material_data = frame
         .resolution_material
         .try_borrow_data()
@@ -277,14 +301,27 @@ fn authenticate_fund(
     if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
         return Err(AdapterError::FoundingAuthentication.into());
     }
-    construct_required_resolution_funding(
+    let funding = construct_required_resolution_funding(
         identity.capability_manifest_id(),
         manifest,
         selected,
         fund_rent,
         current_slot,
     )
-    .map_err(|_| AdapterError::FoundingAuthentication.into())
+    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let derivation = CapabilityFundingDerivationV1::new(
+        frame.market.key.to_bytes(),
+        identity.generation(),
+        identity.capability_manifest_id(),
+        manifest,
+        funding,
+    )
+    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let (expected, _) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
+    if frame.fund.key != &expected {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    Ok((funding, derivation))
 }
 
 fn authenticate_account_identities(
@@ -441,6 +478,7 @@ fn persist_founding(
         || frame.fund.lamports() != plan.fund_balance
         || frame.fund.owner != program_id
         || frame.fund.data_len() != FUNDING_BYTES
+        || frame.rent_credit.lamports() != plan.rent_credit_lamports
     {
         return Err(AdapterError::FoundingPostcondition.into());
     }
@@ -459,6 +497,59 @@ fn persist_founding(
         .map_err(|_| AdapterError::FoundingPostcondition)?;
     fund_data.copy_from_slice(&plan.fund.to_bytes());
     if FundingStateV1::decode(&fund_data) != Ok(plan.fund) {
+        return Err(AdapterError::FoundingPostcondition.into());
+    }
+    require_unchanged_rent_credit(program_id, frame.rent_credit, plan.rent_credit)?;
+    Ok(())
+}
+
+fn authenticate_rent_credit(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authority_key: &Pubkey,
+) -> Result<RentCreditV1, ProgramError> {
+    let authority = RefundAuthority::new(authority_key.to_bytes())
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let authority_bytes = authority.to_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
+        program_id,
+    );
+    if account.key != &expected
+        || account.owner != program_id
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let credit = RentCreditV1::decode(&data).map_err(|_| AdapterError::FoundingAuthentication)?;
+    credit
+        .validate_binding(authority, bump)
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    if credit.to_bytes().as_slice() != &data[..] {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(credit)
+}
+
+fn require_unchanged_rent_credit(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected: RentCreditV1,
+) -> Result<(), ProgramError> {
+    if account.owner != program_id
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+    {
+        return Err(AdapterError::FoundingPostcondition.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FoundingPostcondition)?;
+    if RentCreditV1::decode(&data) != Ok(expected) || expected.to_bytes().as_slice() != &data[..] {
         return Err(AdapterError::FoundingPostcondition.into());
     }
     Ok(())
@@ -714,14 +805,46 @@ mod tests {
             let identity_digest = hash(&identity.to_bytes()).to_bytes();
             let (market_key, _) =
                 Pubkey::find_program_address(&[MARKET_SEED, &identity_digest], &program_id);
-            let (fund_key, _) =
-                Pubkey::find_program_address(&[FUND_SEED, market_key.as_ref()], &program_id);
+            let sponsor_key = Pubkey::new_unique();
+            let fund_key = if matches!(manifest_case, ManifestCase::Valid) {
+                let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+                let selected = manifest
+                    .required_founding_entry_for_config(identity.resolution_policy_id())
+                    .expect("selected funding");
+                let funding = construct_required_resolution_funding(
+                    identity.capability_manifest_id(),
+                    manifest,
+                    selected,
+                    fund_rent,
+                    0,
+                )
+                .expect("funding");
+                let derivation = CapabilityFundingDerivationV1::new(
+                    market_key.to_bytes(),
+                    identity.generation(),
+                    identity.capability_manifest_id(),
+                    manifest,
+                    funding,
+                )
+                .expect("derivation");
+                Pubkey::find_program_address(&derivation.seed_components(), &program_id).0
+            } else {
+                Pubkey::new_unique()
+            };
+            let (rent_credit_key, rent_credit_bump) = Pubkey::find_program_address(
+                &[RENT_CREDIT_PDA_DOMAIN_V1, sponsor_key.as_ref()],
+                &program_id,
+            );
+            let rent_credit = RentCreditV1::new(
+                RefundAuthority::new(sponsor_key.to_bytes()).expect("authority"),
+                rent_credit_bump,
+            );
             let instruction =
                 FoundMarketAndFundV1::new(identity, outcome_count).expect("valid instruction");
 
             let mut accounts = vec![
                 leak_account(
-                    Pubkey::new_unique(),
+                    sponsor_key,
                     true,
                     true,
                     100_000_000,
@@ -739,6 +862,15 @@ mod tests {
                     false,
                 ),
                 leak_account(fund_key, false, true, 0, vec![], system_program::ID, false),
+                leak_account(
+                    rent_credit_key,
+                    false,
+                    false,
+                    1,
+                    rent_credit.to_bytes().to_vec(),
+                    program_id,
+                    false,
+                ),
                 leak_account(
                     realm_key,
                     false,
@@ -812,7 +944,7 @@ mod tests {
                     false,
                 ),
             ];
-            let rent_account = accounts.get_mut(10).expect("rent account");
+            let rent_account = accounts.get_mut(11).expect("rent account");
             assert_eq!(Rent::default().to_account_info(rent_account), Some(()));
             Self {
                 program_id,

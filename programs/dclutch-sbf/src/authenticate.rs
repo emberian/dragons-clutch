@@ -1,6 +1,6 @@
 //! Exact account-frame, replay, funding, and provider authentication.
 
-use dclutch_capability_contract::CapabilityManifestV1;
+use dclutch_capability_contract::{CapabilityFundingDerivationV1, CapabilityManifestV1};
 use dclutch_core_contract::ContentId;
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_pyth_contract::{
@@ -16,6 +16,9 @@ use dclutch_pyth_contract::{
 use dclutch_pyth_svm::{
     PostUpdateParamsView, ProgramDataV3View, ProgramV3View, PythReleaseV1, ReceiverConfigV2View,
 };
+use dclutch_rent_contract::{
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
+};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
     sysvar::Sysvar,
@@ -23,7 +26,6 @@ use solana_program::{
 
 use crate::AdapterError;
 
-pub(crate) const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_CONFIG_SEED: &[u8] = b"config";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
@@ -144,6 +146,7 @@ pub(crate) struct MarketFacts {
     pub(crate) outcome_count: u8,
     pub(crate) resolution_policy_id: ContentId,
     pub(crate) capability_manifest_id: ContentId,
+    pub(crate) generation: u64,
     pub(crate) rent_refund: [u8; 32],
 }
 
@@ -152,8 +155,8 @@ pub(crate) struct MarketFacts {
 pub(crate) struct FundFacts {
     pub(crate) funding: FundingStateV1,
     pub(crate) required_rent: u64,
-    pub(crate) sponsor_refund_excess: u64,
-    pub(crate) sponsor_refund: [u8; 32],
+    pub(crate) rent_credit: RentCreditV1,
+    pub(crate) credit_excess: u64,
 }
 
 /// Exact receiver fee and temporary-account rent expected from `post_update`.
@@ -224,6 +227,7 @@ fn market_facts<const N: usize>(
         outcome_count: u8::try_from(N).map_err(|_| AdapterError::AccountData)?,
         resolution_policy_id: root.identity().resolution_policy_id(),
         capability_manifest_id: root.identity().capability_manifest_id(),
+        generation: root.identity().generation(),
         rent_refund: root.rent_refund(),
     })
 }
@@ -234,21 +238,14 @@ pub(crate) fn authenticate_fund(
     market: &AccountInfo<'_>,
     material_account: &AccountInfo<'_>,
     manifest_account: &AccountInfo<'_>,
-    sponsor: &AccountInfo<'_>,
+    rent_credit_account: &AccountInfo<'_>,
     market_facts: MarketFacts,
 ) -> Result<(FundFacts, CategoricalPythResolutionMaterialV1), ProgramError> {
     if fund_account.owner != program_id
         || material_account.owner != program_id
         || manifest_account.owner != program_id
-        || fund_account.key == sponsor.key
-        || sponsor.key.to_bytes() != market_facts.rent_refund
-        || sponsor.owner != &SYSTEM_PROGRAM
-        || !sponsor.data_is_empty()
+        || fund_account.key == rent_credit_account.key
     {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    let (expected, _) = Pubkey::find_program_address(&[FUND_SEED, market.key.as_ref()], program_id);
-    if fund_account.key != &expected {
         return Err(AdapterError::AccountIdentity.into());
     }
     let material_data = material_account
@@ -286,11 +283,23 @@ pub(crate) fn authenticate_fund(
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
     let funding = FundingStateV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
+    let derivation = CapabilityFundingDerivationV1::new(
+        market.key.to_bytes(),
+        market_facts.generation,
+        market_facts.capability_manifest_id,
+        manifest,
+        funding,
+    )
+    .map_err(|_| AdapterError::AccountIdentity)?;
+    let (expected, _) = Pubkey::find_program_address(&derivation.seed_components(), program_id);
+    if fund_account.key != &expected {
+        return Err(AdapterError::AccountIdentity.into());
+    }
     let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
     let required_rent = rent.minimum_balance(data.len());
     let minimum =
         required_resolution_minimum_balance(funding).map_err(|_| AdapterError::FundUnderfunded)?;
-    let sponsor_refund_excess = fund_account
+    let credit_excess = fund_account
         .lamports()
         .checked_sub(minimum)
         .ok_or(AdapterError::FundUnderfunded)?;
@@ -303,12 +312,17 @@ pub(crate) fn authenticate_fund(
         funding.remaining().total_principal(),
     )
     .map_err(|_| AdapterError::FundUnderfunded)?;
+    let rent_credit = authenticate_rent_credit(
+        program_id,
+        rent_credit_account,
+        Pubkey::new_from_array(market_facts.rent_refund),
+    )?;
     Ok((
         FundFacts {
             funding,
             required_rent,
-            sponsor_refund_excess,
-            sponsor_refund: market_facts.rent_refund,
+            rent_credit,
+            credit_excess,
         },
         material,
     ))
@@ -396,6 +410,38 @@ pub(crate) fn authenticate_provider(
         update_rent,
         fee: config.fee(),
     })
+}
+
+fn authenticate_rent_credit(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    beneficiary: Pubkey,
+) -> Result<RentCreditV1, ProgramError> {
+    let authority =
+        RefundAuthority::new(beneficiary.to_bytes()).map_err(|_| AdapterError::AccountIdentity)?;
+    let authority_bytes = authority.to_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
+        program_id,
+    );
+    if account.key != &expected
+        || account.owner != program_id
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let credit = RentCreditV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
+    credit
+        .validate_binding(authority, bump)
+        .map_err(|_| AdapterError::AccountIdentity)?;
+    if credit.to_bytes().as_slice() != &data[..] {
+        return Err(AdapterError::AccountData.into());
+    }
+    Ok(credit)
 }
 
 fn authenticate_loader_link(
@@ -525,16 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn fund_pda_is_market_bound() {
-        let program = Pubkey::new_from_array([3; 32]);
-        let market = Pubkey::new_from_array([4; 32]);
-        let first = Pubkey::find_program_address(&[FUND_SEED, market.as_ref()], &program);
-        let other_market = Pubkey::new_from_array([5; 32]);
-        let second = Pubkey::find_program_address(&[FUND_SEED, other_market.as_ref()], &program);
-        assert_ne!(first.0, second.0);
-    }
-
-    #[test]
     fn production_catalog_does_not_select_a_release() {
         assert_eq!(dclutch_pyth_svm::PRODUCTION_RELEASES.len(), 0);
     }
@@ -557,10 +593,13 @@ mod tests {
     }
 
     #[test]
-    fn price_frame_allows_resolver_sponsor_alias_and_refuses_extras() {
+    fn price_frame_refuses_rent_credit_alias_and_extras() {
         let mut aliased_sponsor = price_accounts();
         aliased_sponsor[6] = aliased_sponsor[0].clone();
-        assert!(PriceFrame::parse(&aliased_sponsor).is_ok());
+        assert_eq!(
+            PriceFrame::parse(&aliased_sponsor).err(),
+            Some(AdapterError::AccountPrivilege.into())
+        );
 
         let mut extras = Vec::from(price_accounts());
         extras.push(test_account(false, false, false));
@@ -588,11 +627,18 @@ mod tests {
     }
 
     #[test]
-    fn failure_frame_is_permissionless_and_allows_destination_alias() {
+    fn failure_frame_is_permissionless_but_rent_credit_is_not_a_destination_alias() {
         assert!(FailureFrame::parse(&failure_accounts(false, false)).is_ok());
-        assert!(FailureFrame::parse(&failure_accounts(true, true)).is_ok());
+        assert!(FailureFrame::parse(&failure_accounts(true, false)).is_ok());
+        assert_eq!(
+            FailureFrame::parse(&failure_accounts(true, true)).err(),
+            Some(AdapterError::AccountPrivilege.into())
+        );
         let mut aliased = failure_accounts(false, false);
         aliased[5] = aliased[0].clone();
-        assert!(FailureFrame::parse(&aliased).is_ok());
+        assert_eq!(
+            FailureFrame::parse(&aliased).err(),
+            Some(AdapterError::AccountIdentity.into())
+        );
     }
 }

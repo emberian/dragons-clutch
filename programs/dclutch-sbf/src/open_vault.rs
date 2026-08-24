@@ -14,6 +14,10 @@ use dclutch_collateral_contract::{
 use dclutch_core_contract::{ContentId, Phase as RootPhase};
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
+use dclutch_rent_contract::{
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
+    SourceCloseCreditPlanV1,
+};
 use dclutch_token_svm::{ACCOUNT_BYTES, CollateralAdapterReleaseV1, initialize_account3};
 use solana_program::{
     account_info::AccountInfo,
@@ -37,7 +41,7 @@ use crate::{
     },
 };
 
-const OPEN_ACCOUNTS: usize = 11;
+const OPEN_ACCOUNTS: usize = 12;
 const REQUIRED_FUND_CHILD_COUNT: u64 = 1;
 const REQUIRED_PREOPEN_CHILD_COUNT: u64 = 2;
 const OPENED_CHILD_COUNT: u64 = 2;
@@ -48,6 +52,7 @@ struct OpenFrame<'a, 'info> {
     sponsor: &'a AccountInfo<'info>,
     market: &'a AccountInfo<'info>,
     readiness: &'a AccountInfo<'info>,
+    rent_credit: &'a AccountInfo<'info>,
     capability_manifest: &'a AccountInfo<'info>,
     realm: &'a AccountInfo<'info>,
     custody: &'a AccountInfo<'info>,
@@ -67,19 +72,21 @@ impl<'a, 'info> OpenFrame<'a, 'info> {
             sponsor: account(accounts, 0)?,
             market: account(accounts, 1)?,
             readiness: account(accounts, 2)?,
-            capability_manifest: account(accounts, 3)?,
-            realm: account(accounts, 4)?,
-            custody: account(accounts, 5)?,
-            vault: account(accounts, 6)?,
-            mint: account(accounts, 7)?,
-            token_program: account(accounts, 8)?,
-            system_program: account(accounts, 9)?,
-            rent_sysvar: account(accounts, 10)?,
+            rent_credit: account(accounts, 3)?,
+            capability_manifest: account(accounts, 4)?,
+            realm: account(accounts, 5)?,
+            custody: account(accounts, 6)?,
+            vault: account(accounts, 7)?,
+            mint: account(accounts, 8)?,
+            token_program: account(accounts, 9)?,
+            system_program: account(accounts, 10)?,
+            rent_sysvar: account(accounts, 11)?,
         };
         let privileges = [
             privilege(frame.sponsor),
             privilege(frame.market),
             privilege(frame.readiness),
+            privilege(frame.rent_credit),
             privilege(frame.capability_manifest),
             privilege(frame.realm),
             privilege(frame.custody),
@@ -105,6 +112,8 @@ struct OpenPlan {
     vault_rent: u64,
     sponsor_before: u64,
     readiness_rent: u64,
+    rent_credit: RentCreditV1,
+    rent_credit_lamports: u64,
     market_lamports: u64,
     mint_lamports: u64,
     mint_digest: [u8; 32],
@@ -246,6 +255,11 @@ fn authenticate_open(
             manifest,
         )
         .map_err(|_| AdapterError::VaultAuthentication)?;
+    let rent_credit = authenticate_rent_credit(program_id, frame.rent_credit, frame.sponsor.key)?;
+    let rent_credit_lamports = frame
+        .rent_credit
+        .try_lamports()
+        .map_err(|_| AdapterError::VaultAuthentication)?;
 
     let generation_seed = instruction.generation().to_le_bytes();
     let (expected_readiness, _) = Pubkey::find_program_address(
@@ -327,6 +341,7 @@ fn authenticate_open(
     preflight_mutable(frame.sponsor)?;
     preflight_mutable(frame.market)?;
     preflight_mutable(frame.readiness)?;
+    preflight_mutable(frame.rent_credit)?;
     preflight_mutable(frame.custody)?;
     preflight_mutable(frame.vault)?;
     drop(
@@ -368,6 +383,8 @@ fn authenticate_open(
         vault_rent,
         sponsor_before: frame.sponsor.lamports(),
         readiness_rent,
+        rent_credit,
+        rent_credit_lamports,
         market_lamports: frame.market.lamports(),
         mint_lamports: frame.mint.lamports(),
         mint_digest,
@@ -514,11 +531,13 @@ fn persist_open(
     open_selected_market(plan.outcome_count, &mut market_data, instruction)?;
     drop(market_data);
 
-    close_readiness(program_id, frame, plan.readiness_rent)?;
-    let expected_sponsor = sponsor_after_debits
-        .checked_add(plan.readiness_rent)
-        .ok_or(AdapterError::Arithmetic)?;
-    if frame.sponsor.lamports() != expected_sponsor
+    close_readiness(program_id, frame, plan.readiness_rent, plan.rent_credit)?;
+    if frame.sponsor.lamports() != sponsor_after_debits
+        || frame.rent_credit.lamports()
+            != plan
+                .rent_credit_lamports
+                .checked_add(plan.readiness_rent)
+                .ok_or(AdapterError::Arithmetic)?
         || frame.readiness.lamports() != 0
         || frame.readiness.owner != &system_program::ID
         || !frame
@@ -535,6 +554,7 @@ fn close_readiness(
     program_id: &Pubkey,
     frame: &OpenFrame<'_, '_>,
     readiness_rent: u64,
+    rent_credit: RentCreditV1,
 ) -> Result<(), ProgramError> {
     if frame.readiness.owner != program_id
         || frame.readiness.lamports() != readiness_rent
@@ -542,21 +562,22 @@ fn close_readiness(
     {
         return Err(AdapterError::VaultPostcondition.into());
     }
-    let sponsor_next = frame
-        .sponsor
-        .lamports()
-        .checked_add(readiness_rent)
-        .ok_or(AdapterError::Arithmetic)?;
+    let credit_plan = SourceCloseCreditPlanV1::new(
+        frame.readiness.lamports(),
+        frame.rent_credit.lamports(),
+        readiness_rent,
+    )
+    .map_err(|_| AdapterError::Arithmetic)?;
     {
-        let mut sponsor_lamports = frame
-            .sponsor
+        let mut credit_lamports = frame
+            .rent_credit
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::VaultPostcondition)?;
         let mut readiness_lamports = frame
             .readiness
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::VaultPostcondition)?;
-        **sponsor_lamports = sponsor_next;
+        **credit_lamports = credit_plan.credit_after();
         **readiness_lamports = 0;
     }
     frame
@@ -564,6 +585,62 @@ fn close_readiness(
         .resize(0)
         .map_err(|_| AdapterError::VaultPostcondition)?;
     frame.readiness.assign(&system_program::ID);
+    credit_plan
+        .validate_post(frame.readiness.lamports(), frame.rent_credit.lamports())
+        .map_err(|_| AdapterError::VaultPostcondition)?;
+    require_unchanged_rent_credit(program_id, frame.rent_credit, rent_credit)?;
+    Ok(())
+}
+
+fn authenticate_rent_credit(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authority_key: &Pubkey,
+) -> Result<RentCreditV1, ProgramError> {
+    let authority = RefundAuthority::new(authority_key.to_bytes())
+        .map_err(|_| AdapterError::VaultAuthentication)?;
+    let authority_bytes = authority.to_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
+        program_id,
+    );
+    if account.key != &expected
+        || account.owner != program_id
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::VaultAuthentication)?;
+    let credit = RentCreditV1::decode(&data).map_err(|_| AdapterError::VaultAuthentication)?;
+    credit
+        .validate_binding(authority, bump)
+        .map_err(|_| AdapterError::VaultAuthentication)?;
+    if credit.to_bytes().as_slice() != &data[..] {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(credit)
+}
+
+fn require_unchanged_rent_credit(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected: RentCreditV1,
+) -> Result<(), ProgramError> {
+    if account.owner != program_id
+        || account.executable
+        || account.data_len() != RENT_CREDIT_BYTES_V1
+    {
+        return Err(AdapterError::VaultPostcondition.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::VaultPostcondition)?;
+    if RentCreditV1::decode(&data) != Ok(expected) || expected.to_bytes().as_slice() != &data[..] {
+        return Err(AdapterError::VaultPostcondition.into());
+    }
     Ok(())
 }
 
@@ -949,6 +1026,14 @@ mod tests {
                 &[COLLATERAL_VAULT_PDA_DOMAIN, market_key.as_ref()],
                 &program_id,
             );
+            let (rent_credit_key, rent_credit_bump) = Pubkey::find_program_address(
+                &[RENT_CREDIT_PDA_DOMAIN_V1, sponsor_key.as_ref()],
+                &program_id,
+            );
+            let rent_credit = RentCreditV1::new(
+                RefundAuthority::new(sponsor_key.to_bytes()).expect("authority"),
+                rent_credit_bump,
+            );
 
             let mut root = MarketRoot::founding(identity, sponsor_key.to_bytes()).expect("root");
             root.register_child(GENERATION, 0).expect("Fund child");
@@ -988,6 +1073,15 @@ mod tests {
                     true,
                     Rent::default().minimum_balance(MARKET_OPENING_READINESS_BYTES),
                     readiness.to_bytes().to_vec(),
+                    program_id,
+                    false,
+                ),
+                leak_account(
+                    rent_credit_key,
+                    false,
+                    true,
+                    1,
+                    rent_credit.to_bytes().to_vec(),
                     program_id,
                     false,
                 ),
@@ -1056,7 +1150,7 @@ mod tests {
                     false,
                 ),
             ];
-            let rent = accounts.get_mut(10).expect("rent");
+            let rent = accounts.get_mut(11).expect("rent");
             assert_eq!(Rent::default().to_account_info(rent), Some(()));
             Self {
                 program_id,
@@ -1119,8 +1213,8 @@ mod tests {
             assert_eq!(plan.readiness_rent, Rent::default().minimum_balance(128));
             let instruction = initialize_vault_instruction(
                 plan.release,
-                *account(&fixture, 6).key,
                 *account(&fixture, 7).key,
+                *account(&fixture, 8).key,
                 *account(&fixture, 1).key,
             )
             .expect("initialize instruction");
@@ -1145,14 +1239,14 @@ mod tests {
         );
 
         let mut aliased = Fixture::new(LEGACY_TOKEN_PROGRAM_ID, true);
-        *account_mut(&mut aliased, 6) = account(&aliased, 5).clone();
+        *account_mut(&mut aliased, 7) = account(&aliased, 6).clone();
         assert_eq!(
             aliased.authenticate().err(),
             Some(ProgramError::from(AdapterError::AccountIdentity))
         );
 
         let existing = Fixture::new(LEGACY_TOKEN_PROGRAM_ID, true);
-        **account(&existing, 5)
+        **account(&existing, 6)
             .try_borrow_mut_lamports()
             .expect("custody lamports") = 1;
         assert_eq!(

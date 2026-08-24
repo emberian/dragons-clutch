@@ -13,9 +13,11 @@ refund identity, provider reimbursement, or bounty.
 
 Those omitted occurrence facts remain authenticated without Fund duplication:
 
-- the Fund PDA and its owner bind it to the authenticated Market occurrence;
+- the generic `CapabilityFundingDerivationV1` PDA and its owner bind it to the
+  authenticated Market occurrence and selected immutable manifest entry;
 - the Market root owns the current generation and manifest content identity;
-- the Market root's immutable `rent_refund` owns physical excess routing; and
+- the Market root's immutable `rent_refund` derives the sole permanent
+  RentCredit receiving physical excess and Fund-closure residuals; and
 - the manifest entry's funding quote solely owns rent, provider, and bounty.
 
 The adapter authenticates the immutable capability manifest and its content
@@ -65,9 +67,10 @@ policy, freshly calculated exact rent, and physically observed held non-rent
 principal. It refuses wrong bindings, selection, activation status, rent,
 compartments, conservation, and observations.
 
-The adapter refuses a physical balance below the minimum. It routes any excess
-to the authenticated Market root's `rent_refund`; there is deliberately no
-Fund-local refund fact or Pyth balance-classification DTO.
+The adapter refuses a physical balance below the minimum. It credits any excess
+to the permanent RentCredit derived from the authenticated Market root's
+`rent_refund`; there is deliberately no Fund-local refund fact or Pyth
+balance-classification DTO.
 
 Provider reimbursement and bounty release use `FundingStateV1::release` and
 execute the exact lamport transfers atomically with the state mutation or

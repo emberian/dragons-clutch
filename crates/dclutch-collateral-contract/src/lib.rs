@@ -31,14 +31,14 @@ pub use frame::{
     validate_account_frame,
 };
 pub use instruction::{
-    CLOSE_EMPTY_POSITION_BYTES, CREATE_POSITION_AND_SPLIT_BYTES, CREATE_REALM_BYTES,
-    CloseEmptyPositionV1, CreatePositionAndSplitV1, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES,
-    FoundMarketAndFundV1, HEADER_BYTES, INSTRUCTION_MAGIC, INSTRUCTION_SCHEMA_VERSION,
-    InstructionTag, InstructionV1, MERGE_COMPLETE_SET_BYTES, MergeCompleteSetV1,
-    OPEN_COLLATERAL_VAULT_BYTES, OpenCollateralVaultV1, REDEEM_RESOLVED_OUTCOME_BYTES,
-    RETIRE_EMPTY_VAULT_BYTES, RedeemResolvedOutcomeV1, RetireEmptyVaultV1,
-    SPLIT_COMPLETE_SET_BYTES, SWEEP_SURPLUS_BYTES, SplitCompleteSetV1, SweepSurplusV1,
-    TRANSFER_CLAIMS_BYTES, TransferClaimsV1,
+    CLOSE_EMPTY_POSITION_BYTES, COMPACT_TERMINAL_MARKET_BYTES, CREATE_POSITION_AND_SPLIT_BYTES,
+    CREATE_REALM_BYTES, CloseEmptyPositionV1, CompactTerminalMarketV1, CreatePositionAndSplitV1,
+    CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1, HEADER_BYTES,
+    INSTRUCTION_MAGIC, INSTRUCTION_SCHEMA_VERSION, InstructionTag, InstructionV1,
+    MERGE_COMPLETE_SET_BYTES, MergeCompleteSetV1, OPEN_COLLATERAL_VAULT_BYTES,
+    OpenCollateralVaultV1, REDEEM_RESOLVED_OUTCOME_BYTES, RETIRE_EMPTY_VAULT_BYTES,
+    RedeemResolvedOutcomeV1, RetireEmptyVaultV1, SPLIT_COMPLETE_SET_BYTES, SWEEP_SURPLUS_BYTES,
+    SplitCompleteSetV1, SweepSurplusV1, TRANSFER_CLAIMS_BYTES, TransferClaimsV1,
 };
 
 /// Explicit refusal returned by instruction or account-frame decoding.

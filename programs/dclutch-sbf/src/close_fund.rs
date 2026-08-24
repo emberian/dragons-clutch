@@ -1,6 +1,7 @@
 //! Exact two-destination Fund distribution and closure.
 
 use dclutch_pyth_contract::funding::required_resolution_minimum_balance;
+use dclutch_rent_contract::{CreditBalancePlanV1, RENT_CREDIT_BYTES_V1, RentCreditV1};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::{
@@ -25,6 +26,7 @@ pub(crate) fn close_price(
         amounts.first,
         frame.sponsor,
         amounts.second,
+        facts.rent_credit,
     )
 }
 
@@ -39,6 +41,7 @@ pub(crate) fn close_failure(
         amounts.first,
         frame.sponsor,
         amounts.second,
+        facts.rent_credit,
     )
 }
 
@@ -50,7 +53,7 @@ fn price_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
         .ok_or(AdapterError::Arithmetic)?;
     let sponsor = facts
         .required_rent
-        .checked_add(facts.sponsor_refund_excess)
+        .checked_add(facts.credit_excess)
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
@@ -64,7 +67,7 @@ fn failure_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> 
     let sponsor = facts
         .required_rent
         .checked_add(remaining.provider_principal())
-        .and_then(|value| value.checked_add(facts.sponsor_refund_excess))
+        .and_then(|value| value.checked_add(facts.credit_excess))
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
@@ -80,7 +83,7 @@ fn validate_minimum(facts: FundFacts) -> Result<(), ProgramError> {
         .required_rent
         .checked_add(facts.funding.remaining().total_principal())
         .ok_or(AdapterError::Arithmetic)?;
-    if expected != reconstructed || facts.sponsor_refund == [0; 32] {
+    if expected != reconstructed {
         return Err(AdapterError::FundClose.into());
     }
     Ok(())
@@ -93,8 +96,9 @@ fn distribute_and_close(
     first_amount: u64,
     second: &AccountInfo<'_>,
     second_amount: u64,
+    rent_credit: RentCreditV1,
 ) -> Result<(), ProgramError> {
-    if fund.key == first.key || fund.key == second.key {
+    if fund.key == first.key || fund.key == second.key || first.key == second.key {
         return Err(AdapterError::FundClose.into());
     }
     let total = first_amount
@@ -104,42 +108,33 @@ fn distribute_and_close(
         return Err(AdapterError::FundClose.into());
     }
 
-    if first.key == second.key {
-        let next = first
+    if second.data_len() != RENT_CREDIT_BYTES_V1 || second.executable {
+        return Err(AdapterError::FundClose.into());
+    }
+    let first_next = first
+        .try_lamports()
+        .map_err(|_| AdapterError::AccountData)?
+        .checked_add(first_amount)
+        .ok_or(AdapterError::Arithmetic)?;
+    let credit_plan = CreditBalancePlanV1::new(
+        second
             .try_lamports()
-            .map_err(|_| AdapterError::AccountData)?
-            .checked_add(total)
-            .ok_or(AdapterError::Arithmetic)?;
-        let mut destination = first
-            .try_borrow_mut_lamports()
-            .map_err(|_| AdapterError::AccountData)?;
-        let mut source = fund
-            .try_borrow_mut_lamports()
-            .map_err(|_| AdapterError::AccountData)?;
-        **destination = next;
-        **source = 0;
-    } else {
-        let first_next = first
-            .try_lamports()
-            .map_err(|_| AdapterError::AccountData)?
-            .checked_add(first_amount)
-            .ok_or(AdapterError::Arithmetic)?;
-        let second_next = second
-            .try_lamports()
-            .map_err(|_| AdapterError::AccountData)?
-            .checked_add(second_amount)
-            .ok_or(AdapterError::Arithmetic)?;
+            .map_err(|_| AdapterError::AccountData)?,
+        second_amount,
+    )
+    .map_err(|_| AdapterError::Arithmetic)?;
+    {
         let mut first_lamports = first
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::AccountData)?;
-        let mut second_lamports = second
+        let mut credit_lamports = second
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::AccountData)?;
         let mut source = fund
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::AccountData)?;
         **first_lamports = first_next;
-        **second_lamports = second_next;
+        **credit_lamports = credit_plan.credit_after();
         **source = 0;
     }
 
@@ -148,6 +143,17 @@ fn distribute_and_close(
     fund.resize(0)
         .map_err(|_| ProgramError::from(AdapterError::FundClose))?;
     fund.assign(&SYSTEM_PROGRAM);
+    credit_plan
+        .validate_post(second.lamports())
+        .map_err(|_| AdapterError::FundClose)?;
+    let data = second
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FundClose)?;
+    if RentCreditV1::decode(&data) != Ok(rent_credit)
+        || rent_credit.to_bytes().as_slice() != &data[..]
+    {
+        return Err(AdapterError::FundClose.into());
+    }
     if fund.try_lamports().map_err(|_| AdapterError::AccountData)? != 0
         || !fund
             .try_data_is_empty()
@@ -166,6 +172,7 @@ mod tests {
         ContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_pyth_contract::funding::construct_required_resolution_funding;
+    use dclutch_rent_contract::{RefundAuthority, RentCreditV1};
     use solana_program::{hash::hash, pubkey::Pubkey};
     use std::{boxed::Box, vec::Vec};
 
@@ -208,8 +215,8 @@ mod tests {
         FundFacts {
             funding,
             required_rent,
-            sponsor_refund_excess: actual.checked_sub(minimum).expect("funded"),
-            sponsor_refund: [2; 32],
+            rent_credit: RentCreditV1::new(RefundAuthority::new([2; 32]).expect("authority"), 1),
+            credit_excess: actual.checked_sub(minimum).expect("funded"),
         }
     }
 
@@ -223,6 +230,22 @@ mod tests {
         let data: &'static mut [u8] = Box::leak(Vec::<u8>::new().into_boxed_slice());
         let owner = Box::leak(Box::new(owner));
         AccountInfo::new(key, false, true, lamports, data, owner, false)
+    }
+
+    fn credit(program: Pubkey, lamports: u64) -> (AccountInfo<'static>, RentCreditV1) {
+        let state = RentCreditV1::new(RefundAuthority::new([2; 32]).expect("authority"), 1);
+        (
+            AccountInfo::new(
+                Box::leak(Box::new(Pubkey::new_from_array([8; 32]))),
+                false,
+                true,
+                Box::leak(Box::new(lamports)),
+                Box::leak(state.to_bytes().to_vec().into_boxed_slice()),
+                Box::leak(Box::new(program)),
+                false,
+            ),
+            state,
+        )
     }
 
     #[test]
@@ -248,22 +271,15 @@ mod tests {
     }
 
     #[test]
-    fn distinct_and_aliased_destinations_receive_the_exact_total() {
+    fn external_payout_and_bound_credit_receive_the_exact_total() {
         let program = Pubkey::new_from_array([9; 32]);
         let fund = account(1, 12, program);
         let first = account(2, 3, SYSTEM_PROGRAM);
-        let second = account(3, 5, SYSTEM_PROGRAM);
-        distribute_and_close(&fund, &first, 7, &second, 5).expect("distinct close");
+        let (second, credit) = credit(program, 5);
+        distribute_and_close(&fund, &first, 7, &second, 5, credit).expect("close");
         assert_eq!(fund.lamports(), 0);
         assert_eq!(first.lamports(), 10);
         assert_eq!(second.lamports(), 10);
-        assert_eq!(fund.owner, &SYSTEM_PROGRAM);
-
-        let fund = account(4, 12, program);
-        let destination = account(5, 3, SYSTEM_PROGRAM);
-        distribute_and_close(&fund, &destination, 7, &destination, 5).expect("aliased close");
-        assert_eq!(fund.lamports(), 0);
-        assert_eq!(destination.lamports(), 15);
         assert_eq!(fund.owner, &SYSTEM_PROGRAM);
     }
 
@@ -271,9 +287,9 @@ mod tests {
     fn a_fund_destination_alias_refuses_before_mutation() {
         let program = Pubkey::new_from_array([9; 32]);
         let fund = account(6, 12, program);
-        let second = account(7, 0, SYSTEM_PROGRAM);
+        let (second, credit) = credit(program, 0);
         assert_eq!(
-            distribute_and_close(&fund, &fund, 7, &second, 5),
+            distribute_and_close(&fund, &fund, 7, &second, 5, credit),
             Err(AdapterError::FundClose.into())
         );
         assert_eq!(fund.lamports(), 12);

@@ -22,8 +22,10 @@ pub enum ResolutionAccountClassV1 {
     FundingState,
     /// Immutable program-owned record authenticated by a Market content ID.
     ImmutableProtocolRecord,
-    /// A writable system account receiving a fixed payout.
+    /// A writable externally supplied account receiving a fixed payout.
     PayoutAccount,
+    /// A writable permanent program-owned rent-credit PDA.
+    RentCredit,
     /// An executable provider program.
     ProviderProgram,
     /// Immutable provider ProgramData or configuration state.
@@ -51,8 +53,8 @@ pub enum ResolutionRoleV1 {
     ResolutionMaterial,
     /// Immutable capability manifest that selects the funding state.
     CapabilityManifest,
-    /// Immutable Fund refund recipient; may receive a closure residual.
-    Sponsor,
+    /// Permanent Market-beneficiary rent-credit PDA receiving Fund residuals.
+    RentCredit,
     /// Executable Pyth receiver program.
     Receiver,
     /// Readonly Pyth receiver ProgramData account.
@@ -198,7 +200,7 @@ const fn role(
 /// Exact ordered price-resolution frame.
 ///
 /// This is the canonical 15-role order: resolver, update, Market, funding
-/// state, resolution material, capability manifest, sponsor, receiver,
+/// state, resolution material, capability manifest, RentCredit, receiver,
 /// receiver ProgramData, receiver config, encoded VAA, router, router
 /// ProgramData, treasury, System Program.
 pub const PRICE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 15] = [
@@ -245,8 +247,8 @@ pub const PRICE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 15] = [
         false,
     ),
     role(
-        ResolutionRoleV1::Sponsor,
-        ResolutionAccountClassV1::PayoutAccount,
+        ResolutionRoleV1::RentCredit,
+        ResolutionAccountClassV1::RentCredit,
         false,
         true,
         false,
@@ -347,8 +349,8 @@ pub const FAILURE_RESOLUTION_FRAME_V1: [ResolutionAccountRoleV1; 6] = [
         false,
     ),
     role(
-        ResolutionRoleV1::Sponsor,
-        ResolutionAccountClassV1::PayoutAccount,
+        ResolutionRoleV1::RentCredit,
+        ResolutionAccountClassV1::RentCredit,
         false,
         true,
         false,
@@ -366,9 +368,9 @@ pub const fn resolution_frame_v1(kind: ResolutionFrameKindV1) -> ResolutionFrame
 
 /// Validate one exact price-resolution account list.
 ///
-/// The resolver and sponsor are the only allowed key alias. Payout accounts
-/// may independently be transaction signers or fee payers without becoming
-/// protocol authorities; all writable and executable privileges remain exact.
+/// Every role is distinct. External payout accounts may independently be
+/// transaction signers or fee payers without becoming protocol authorities;
+/// the permanent RentCredit is never an external payout destination.
 pub fn validate_price_resolution_frame_v1(
     accounts: &[ResolutionAccountPrivilegeV1],
 ) -> ResolutionFrameResultV1<()> {
@@ -377,9 +379,8 @@ pub fn validate_price_resolution_frame_v1(
 
 /// Validate one exact permissionless failure-resolution account list.
 ///
-/// The bounty recipient and sponsor are the only allowed key alias.  All
-/// Market, FundingState, immutable record, provider, and System roles remain
-/// distinct from each other and from either payout role.
+/// Every role is distinct. Market, FundingState, RentCredit, immutable record,
+/// provider, and bounty roles remain independently authenticated.
 pub fn validate_failure_resolution_frame_v1(
     accounts: &[ResolutionAccountPrivilegeV1],
 ) -> ResolutionFrameResultV1<()> {
@@ -408,7 +409,7 @@ fn validate_frame(
         }
     }
     validate_signer_privileges(accounts, frame.roles())?;
-    validate_aliases(kind, accounts)
+    validate_aliases(accounts)
 }
 
 fn validate_signer_privileges(
@@ -426,10 +427,7 @@ fn validate_signer_privileges(
     Ok(())
 }
 
-fn validate_aliases(
-    kind: ResolutionFrameKindV1,
-    accounts: &[ResolutionAccountPrivilegeV1],
-) -> ResolutionFrameResultV1<()> {
+fn validate_aliases(accounts: &[ResolutionAccountPrivilegeV1]) -> ResolutionFrameResultV1<()> {
     let mut left = 0usize;
     while left < accounts.len() {
         let mut right = left
@@ -442,7 +440,7 @@ fn validate_aliases(
             let right_account = accounts
                 .get(right)
                 .ok_or(ResolutionFrameErrorV1::InvalidAccountCount)?;
-            if left_account.key == right_account.key && !safe_payout_alias(kind, left, right) {
+            if left_account.key == right_account.key {
                 return Err(ResolutionFrameErrorV1::UnsafeAlias);
             }
             right = right
@@ -454,13 +452,6 @@ fn validate_aliases(
             .ok_or(ResolutionFrameErrorV1::UnsafeAlias)?;
     }
     Ok(())
-}
-
-const fn safe_payout_alias(kind: ResolutionFrameKindV1, left: usize, right: usize) -> bool {
-    match kind {
-        ResolutionFrameKindV1::Price => left == 0 && right == 6,
-        ResolutionFrameKindV1::Failure => left == 0 && right == 5,
-    }
 }
 
 #[cfg(test)]
@@ -508,11 +499,11 @@ mod tests {
         );
         assert_eq!(
             PRICE_RESOLUTION_FRAME_V1.get(6).map(|role| role.role()),
-            Some(ResolutionRoleV1::Sponsor)
+            Some(ResolutionRoleV1::RentCredit)
         );
         assert_eq!(
             FAILURE_RESOLUTION_FRAME_V1.get(5).map(|role| role.role()),
-            Some(ResolutionRoleV1::Sponsor)
+            Some(ResolutionRoleV1::RentCredit)
         );
         assert_eq!(validate_price_resolution_frame_v1(&price), Ok(()));
         assert_eq!(validate_failure_resolution_frame_v1(&failure[..6]), Ok(()));
@@ -594,13 +585,15 @@ mod tests {
     }
 
     #[test]
-    fn payout_aliases_are_admitted_but_owned_or_provider_aliases_refuse() {
+    fn rent_credit_and_external_roles_are_never_aliasable() {
         let mut price = accounts(ResolutionFrameKindV1::Price);
         let resolver_key = price.first().expect("resolver exists").key;
         let sponsor = price.get_mut(6).expect("sponsor exists");
         sponsor.key = resolver_key;
-        sponsor.is_signer = true;
-        assert_eq!(validate_price_resolution_frame_v1(&price), Ok(()));
+        assert_eq!(
+            validate_price_resolution_frame_v1(&price),
+            Err(ResolutionFrameErrorV1::UnsafeAlias)
+        );
 
         let mut market_alias = accounts(ResolutionFrameKindV1::Price);
         let market_key = market_alias.get(2).expect("Market exists").key;
@@ -621,19 +614,24 @@ mod tests {
         );
 
         let mut independent_price_payout = accounts(ResolutionFrameKindV1::Price);
-        let sponsor = independent_price_payout.get_mut(6).expect("sponsor exists");
+        let sponsor = independent_price_payout
+            .get_mut(6)
+            .expect("RentCredit exists");
         sponsor.is_signer = true;
         assert_eq!(
             validate_price_resolution_frame_v1(&independent_price_payout),
-            Ok(()),
-            "a separately signed payout recipient gains no resolver authority"
+            Err(ResolutionFrameErrorV1::UnexpectedPrivilege),
+            "RentCredit never gains caller authority"
         );
 
         let mut failure = accounts(ResolutionFrameKindV1::Failure);
         let bounty_key = failure.first().expect("bounty recipient exists").key;
         let sponsor = failure.get_mut(5).expect("sponsor exists");
         sponsor.key = bounty_key;
-        assert_eq!(validate_failure_resolution_frame_v1(&failure[..6]), Ok(()));
+        assert_eq!(
+            validate_failure_resolution_frame_v1(&failure[..6]),
+            Err(ResolutionFrameErrorV1::UnsafeAlias)
+        );
         let fund_key = failure.get(2).expect("FundingState exists").key;
         let bounty = failure.get_mut(0).expect("bounty recipient exists");
         bounty.key = fund_key;
@@ -653,8 +651,8 @@ mod tests {
         sponsor.is_signer = true;
         assert_eq!(
             validate_failure_resolution_frame_v1(&independent_failure_payouts[..6]),
-            Ok(()),
-            "permissionless failure remains valid when either payout role pays fees"
+            Err(ResolutionFrameErrorV1::UnexpectedPrivilege),
+            "RentCredit cannot be made a caller authority"
         );
     }
 }

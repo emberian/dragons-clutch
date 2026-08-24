@@ -58,6 +58,8 @@ pub const SWEEP_SURPLUS_BYTES: usize = HEADER_BYTES + 8;
 pub const CLOSE_EMPTY_POSITION_BYTES: usize = HEADER_BYTES + 16;
 /// Exact empty collateral-Vault retirement instruction width.
 pub const RETIRE_EMPTY_VAULT_BYTES: usize = HEADER_BYTES + 16;
+/// Exact terminal-Market compaction instruction width.
+pub const COMPACT_TERMINAL_MARKET_BYTES: usize = HEADER_BYTES + 8;
 /// Exact claims-transfer instruction width for the current measured Market profile.
 pub const TRANSFER_CLAIMS_BYTES: usize = HEADER_BYTES + 16 + (MAX_OUTCOMES * 8);
 
@@ -91,6 +93,8 @@ pub enum InstructionTag {
     CloseEmptyPosition = 0x50,
     /// Close an empty Vault and retire its direct child.
     RetireEmptyVault = 0x51,
+    /// Compact one economically empty terminal Market into its RentCredit.
+    CompactTerminalMarket = 0x52,
 }
 
 impl InstructionTag {
@@ -107,6 +111,7 @@ impl InstructionTag {
             0x45 => Ok(Self::TransferClaims),
             0x50 => Ok(Self::CloseEmptyPosition),
             0x51 => Ok(Self::RetireEmptyVault),
+            0x52 => Ok(Self::CompactTerminalMarket),
             _ => Err(Error::UnknownInstructionTag),
         }
     }
@@ -124,6 +129,7 @@ impl InstructionTag {
             Self::TransferClaims => 0x45,
             Self::CloseEmptyPosition => 0x50,
             Self::RetireEmptyVault => 0x51,
+            Self::CompactTerminalMarket => 0x52,
         }
     }
 }
@@ -153,6 +159,8 @@ pub enum InstructionV1 {
     CloseEmptyPosition(CloseEmptyPositionV1),
     /// Empty collateral Vault retirement.
     RetireEmptyVault(RetireEmptyVaultV1),
+    /// Terminal Market compaction.
+    CompactTerminalMarket(CompactTerminalMarketV1),
 }
 
 impl InstructionV1 {
@@ -189,6 +197,9 @@ impl InstructionV1 {
             InstructionTag::RetireEmptyVault => {
                 RetireEmptyVaultV1::decode(bytes).map(Self::RetireEmptyVault)
             }
+            InstructionTag::CompactTerminalMarket => {
+                CompactTerminalMarketV1::decode(bytes).map(Self::CompactTerminalMarket)
+            }
         }
     }
 
@@ -206,6 +217,7 @@ impl InstructionV1 {
             Self::TransferClaims(_) => InstructionTag::TransferClaims,
             Self::CloseEmptyPosition(_) => InstructionTag::CloseEmptyPosition,
             Self::RetireEmptyVault(_) => InstructionTag::RetireEmptyVault,
+            Self::CompactTerminalMarket(_) => InstructionTag::CompactTerminalMarket,
         }
     }
 }
@@ -627,6 +639,42 @@ impl SweepSurplusV1 {
     }
 }
 
+/// Permissionless compaction request for one terminal economically empty Market.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompactTerminalMarketV1 {
+    generation: u64,
+}
+
+impl CompactTerminalMarketV1 {
+    /// Construct from the immutable Market generation.
+    pub const fn new(generation: u64) -> Self {
+        Self { generation }
+    }
+
+    /// Decode one exact generation-only replay body.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        require_header(
+            bytes,
+            COMPACT_TERMINAL_MARKET_BYTES,
+            InstructionTag::CompactTerminalMarket,
+        )?;
+        Ok(Self::new(read_u64(bytes, GENERATION_OFFSET)?))
+    }
+
+    /// Encode into an exact caller-owned output without partial mutation.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        let mut encoded = [0; COMPACT_TERMINAL_MARKET_BYTES];
+        write_header(&mut encoded, InstructionTag::CompactTerminalMarket)?;
+        write_u64(&mut encoded, GENERATION_OFFSET, self.generation)?;
+        commit(output, &encoded)
+    }
+
+    /// Return immutable Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 /// A selected nonzero vector of outcome-claim transfers.
 ///
 /// `MAX_OUTCOMES` is the current chain measured-profile bound. Raising this
@@ -1019,8 +1067,8 @@ mod tests {
         .expect("valid Realm")
     }
 
-    fn encode_all() -> [([u8; 256], usize, InstructionTag); 11] {
-        let mut outputs = [([0; 256], 0, InstructionTag::CreateRealm); 11];
+    fn encode_all() -> [([u8; 256], usize, InstructionTag); 12] {
+        let mut outputs = [([0; 256], 0, InstructionTag::CreateRealm); 12];
         let mut cursor = 0usize;
 
         let mut create_realm = [0; CREATE_REALM_BYTES];
@@ -1150,11 +1198,22 @@ mod tests {
             InstructionTag::RetireEmptyVault,
         );
 
+        let mut compact = [0; COMPACT_TERMINAL_MARKET_BYTES];
+        CompactTerminalMarketV1::new(9)
+            .encode(&mut compact)
+            .expect("compact encoding");
+        put_case(
+            &mut outputs,
+            &mut cursor,
+            &compact,
+            InstructionTag::CompactTerminalMarket,
+        );
+
         outputs
     }
 
     fn put_case(
-        cases: &mut [([u8; 256], usize, InstructionTag); 11],
+        cases: &mut [([u8; 256], usize, InstructionTag); 12],
         cursor: &mut usize,
         input: &[u8],
         tag: InstructionTag,

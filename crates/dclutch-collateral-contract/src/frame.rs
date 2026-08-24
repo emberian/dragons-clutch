@@ -48,6 +48,8 @@ pub enum Role {
     Market,
     /// Prepaid one-shot resolution Fund direct child.
     ResolutionFund,
+    /// Mutable manifest-bound generic capability funding ledger.
+    FundingState,
     /// Immutable resolution-policy record committed by Market identity.
     ResolutionPolicy,
     /// Immutable capability manifest committed by Market identity.
@@ -339,10 +341,11 @@ pub const CREATE_REALM_FRAME: [AccountRole; 6] = [
 /// `ResolutionPolicy`, validates its specialized Fund quote against `Rent`,
 /// and derives all Fund amounts from that entry. No founding instruction field
 /// or sponsor argument may override the immutable quote.
-pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
+pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 12] = [
     sponsor(),
     state(Role::Market, true),
-    state(Role::ResolutionFund, true),
+    state(Role::FundingState, true),
+    state(Role::RentCredit, false),
     immutable(Role::Realm),
     immutable(Role::ProductInstance),
     immutable(Role::ClaimBasis),
@@ -361,10 +364,11 @@ pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
 /// readiness while creating custody and refunding its rent. Readiness is a
 /// direct Market child, so this replacement keeps the Market child count
 /// coherent.
-pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 11] = [
+pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 12] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::CapabilityReadiness, true),
+    state(Role::RentCredit, true),
     immutable(Role::CapabilityManifest),
     immutable(Role::Realm),
     state(Role::CollateralCustody, true),
@@ -471,6 +475,13 @@ pub const CLOSE_EMPTY_POSITION_FRAME: [AccountRole; 3] = [
     state(Role::RentCredit, true),
 ];
 
+/// Exact permissionless terminal-Market compaction frame.
+pub const COMPACT_TERMINAL_MARKET_FRAME: [AccountRole; 3] = [
+    state(Role::Market, true),
+    state(Role::RentCredit, true),
+    RENT_SYSVAR,
+];
+
 /// Exact empty collateral-Vault retirement frame.
 ///
 /// `RentRefund` must match the immutable custody record. Both token-Vault and
@@ -506,6 +517,7 @@ pub const fn instruction_frame(tag: InstructionTag) -> InstructionFrame {
         InstructionTag::TransferClaims => &TRANSFER_CLAIMS_FRAME,
         InstructionTag::SweepSurplus => &SWEEP_SURPLUS_FRAME,
         InstructionTag::CloseEmptyPosition => &CLOSE_EMPTY_POSITION_FRAME,
+        InstructionTag::CompactTerminalMarket => &COMPACT_TERMINAL_MARKET_FRAME,
         InstructionTag::RetireEmptyVault => &RETIRE_EMPTY_VAULT_FRAME,
     };
     InstructionFrame { tag, roles }
@@ -598,6 +610,7 @@ mod tests {
             InstructionTag::TransferClaims,
             InstructionTag::SweepSurplus,
             InstructionTag::CloseEmptyPosition,
+            InstructionTag::CompactTerminalMarket,
             InstructionTag::RetireEmptyVault,
         ];
         for tag in tags {
@@ -634,14 +647,14 @@ mod tests {
             Some(Role::CapabilityReadiness)
         );
         assert_eq!(
-            OPEN_COLLATERAL_VAULT_FRAME.get(3).map(|role| role.role()),
+            OPEN_COLLATERAL_VAULT_FRAME.get(4).map(|role| role.role()),
             Some(Role::CapabilityManifest)
         );
         assert_eq!(
-            OPEN_COLLATERAL_VAULT_FRAME.get(3).map(|role| role.class()),
+            OPEN_COLLATERAL_VAULT_FRAME.get(4).map(|role| role.class()),
             Some(AccountClass::ImmutableProtocolRecord)
         );
-        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 11);
+        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 12);
     }
 
     #[test]
