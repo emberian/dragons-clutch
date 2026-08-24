@@ -649,6 +649,11 @@ pub const DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact current binding bytes including the Dealer global envelope.
 pub const DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 796;
+/// Product RootV3/LinkV3 Dealer Series-obligation binding version.
+pub const DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact RootV3/LinkV3 binding bytes including the Dealer global envelope.
+pub const DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3: usize =
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 892;
 /// Permanent compact Product Market-lifecycle replay receipt discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 /// First Product Market-lifecycle replay receipt version.
@@ -2098,6 +2103,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-series-obligation-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            version: DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-series-obligation-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {

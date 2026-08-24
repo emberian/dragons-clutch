@@ -10,7 +10,7 @@
 
 use clutch_dealer_runtime_contract::{
     CoveredDealerTerminalV2, DealerSeriesObligationBindingV1,
-    DealerSeriesObligationBindingV2, DealerStateV3, FixedCodec, Id,
+    DealerSeriesObligationBindingV2, DealerSeriesObligationBindingV3, DealerStateV3, FixedCodec, Id,
 };
 use clutch_fractional_redemption_runtime::MAX_OUTCOMES as FRACTIONAL_MAX_OUTCOMES;
 use clutch_solana_layout::registry::{
@@ -19,6 +19,7 @@ use clutch_solana_layout::registry::{
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
     DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
@@ -156,6 +157,13 @@ pub(crate) struct AuthenticatedDealerSeriesObligationV2 {
     binding: DealerSeriesObligationBindingV2,
 }
 
+/// Private exact account capability for the Product RootV3/LinkV3 obligation.
+pub(crate) struct AuthenticatedDealerSeriesObligationV3 {
+    account_id: Id,
+    bump: u8,
+    binding: DealerSeriesObligationBindingV3,
+}
+
 /// Private exact account capability for Product-obligation-counting State V3.
 pub(crate) struct AuthenticatedDealerStateV3 {
     account_id: Id,
@@ -278,6 +286,19 @@ impl AuthenticatedDealerSeriesObligationV2 {
     }
 }
 
+impl AuthenticatedDealerSeriesObligationV3 {
+    /// Exact authenticated physical account.
+    pub(crate) const fn account_id(&self) -> Id { self.account_id }
+
+    /// Exact canonical PDA bump.
+    pub(crate) const fn bump(&self) -> u8 { self.bump }
+
+    /// Borrow the complete RootV3/LinkV3 body.
+    pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV3 {
+        &self.binding
+    }
+}
+
 /// Authenticate one exact `0xaf/1` Dealer facility obligation account.
 pub(crate) fn authenticate_dealer_series_obligation_v1(
     program_id: &Pubkey,
@@ -380,6 +401,56 @@ pub(crate) fn authenticate_dealer_series_obligation_v2(
         ClutchError::MismatchedState,
     )?;
     Ok(AuthenticatedDealerSeriesObligationV2 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        bump: envelope.bump,
+        binding,
+    })
+}
+
+/// Authenticate one exact current `0xaf/v3` Dealer facility obligation.
+pub(crate) fn authenticate_dealer_series_obligation_v3(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedDealerSeriesObligationV3> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable { ClutchError::NotWritable } else { ClutchError::UnexpectedWritable },
+    )?;
+    require(
+        account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, binding) =
+        decode_dealer_account_body_v1::<DealerSeriesObligationBindingV3>(
+            &data,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_series_obligation_pda(program_id, &binding.key.facility_id.bytes()),
+        Some(envelope.bump),
+    )?;
+    let floor = binding
+        .rent
+        .refundable_principal
+        .checked_add(binding.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        binding.key.binding_account_id.bytes() == account.key.to_bytes()
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedDealerSeriesObligationV3 {
         account_id: Id::from_bytes(account.key.to_bytes()),
         bump: envelope.bump,
         binding,
@@ -639,6 +710,14 @@ pub const fn persisted_account_contract_v1(
                         tag,
                         version,
                         account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+                        lifetime: DealerAccountLifetimeV1::CountedChild,
+                    });
+                }
+                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3 => {
+                    return Some(DealerPersistedAccountContractV1 {
+                        tag,
+                        version,
+                        account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
                         lifetime: DealerAccountLifetimeV1::CountedChild,
                     });
                 }
@@ -1176,6 +1255,10 @@ pub enum DealerMetaRoleV1 {
     ClaimLedger,
     /// Exact active and unresolved shared Product Market root.
     ProductMarketRoot,
+    /// Permanent current Product Market replay/generation owner.
+    ProductMarketReplay,
+    /// Immutable Product Market family-capability policy artifact.
+    MarketFamilyCapabilityPolicy,
     /// Current Product SeriesRegistry V2 selecting release/profile/bundle.
     SeriesRegistry,
     /// Current executable Dragon's Clutch program observed by its loader.
@@ -1531,8 +1614,8 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
-const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 58;
-const SELECT_LEASE_BEGIN_FIRST: [DealerMetaSpecV1; 62] = [
+const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 53;
+const SELECT_LEASE_BEGIN_FIRST: [DealerMetaSpecV1; 57] = [
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
@@ -1581,15 +1664,10 @@ const SELECT_LEASE_BEGIN_FIRST: [DealerMetaSpecV1; 62] = [
     meta(DealerMetaRoleV1::MarketRuntime, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::SeriesRegistry, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::CurrentProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
-    meta(DealerMetaRoleV1::CurrentProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
-    meta(DealerMetaRoleV1::RegistryRelease, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::CapabilityProfile, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ProductMarketReplay, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::MarketFamilyCapabilityPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, true),
-    meta(DealerMetaRoleV1::CompilerBundle, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::Attachment, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
@@ -1597,15 +1675,21 @@ const SELECT_LEASE_BEGIN_FIRST: [DealerMetaSpecV1; 62] = [
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
-const fn select_lease_begin_existing_contract() -> [DealerMetaSpecV1; 62] {
+const fn select_lease_begin_existing_contract() -> [DealerMetaSpecV1; 57] {
     let mut contract = SELECT_LEASE_BEGIN_FIRST;
-    contract[54] = meta(
+    contract[48] = meta(
+        DealerMetaRoleV1::ProductMarketRoot,
+        DealerMetaOwnerV1::SelfProgram,
+        false,
+        false,
+    );
+    contract[51] = meta(
         DealerMetaRoleV1::SeriesMarketLink,
         DealerMetaOwnerV1::SelfProgram,
         false,
         false,
     );
-    contract[57] = meta(
+    contract[52] = meta(
         DealerMetaRoleV1::SeriesObligation,
         DealerMetaOwnerV1::SelfProgram,
         false,
@@ -1614,7 +1698,7 @@ const fn select_lease_begin_existing_contract() -> [DealerMetaSpecV1; 62] {
     contract
 }
 
-const SELECT_LEASE_BEGIN_EXISTING: [DealerMetaSpecV1; 62] =
+const SELECT_LEASE_BEGIN_EXISTING: [DealerMetaSpecV1; 57] =
     select_lease_begin_existing_contract();
 
 const COLLECT_DELIVER_FIXED_COUNT: usize = 43;
