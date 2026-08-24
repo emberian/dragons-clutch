@@ -282,6 +282,8 @@ pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_BYTES_V5: usize = 340;
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
+/// Sole future rent-owned selected fee-record envelope version.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 owner fee-carry envelope discriminator.
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// General V2 owner fee-carry envelope version.
@@ -300,6 +302,8 @@ pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// General V2 selected-record treasury-ledger envelope version.
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// Sole future rent-owned treasury-ledger envelope version.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 buyer-first settlement cash-pot envelope discriminator.
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// General V2 buyer-first settlement cash-pot envelope version.
@@ -565,7 +569,7 @@ pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
 /// Durable candidate-wide fee-terminal version.
 pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
 /// Exact rent-owned streaming accumulator bytes.
-pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 596;
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 708;
 /// Exact rent-owned durable closure-manifest bytes.
 pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 276;
 /// Exact rent-owned durable fee-terminal bytes.
@@ -1337,6 +1341,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+            version: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "rent-owned-general-v2-selected-fee-record-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
         },
@@ -1378,6 +1391,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-treasury-ledger-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+            version: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "rent-owned-general-v2-treasury-ledger-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2090,7 +2112,7 @@ pub enum GeneralV2Action {
     /// Close one rent-owned owner fee-finalization account.
     CloseOwnerFeeFinalization = 49,
     /// Consume one authenticated candidate-wide fee terminal receipt.
-    RetireSelectedFeeRecord = 50,
+    AdvanceFeeRetirement = 50,
     /// Advance one fully discharged counted root from Settling to Retiring.
     BeginSettlementRetirement = 51,
 }
@@ -2329,7 +2351,7 @@ impl GeneralV2Action {
             Self::CloseIndexedSettlementRoot => 47,
             Self::CloseOwnerSettlementRow => 48,
             Self::CloseOwnerFeeFinalization => 49,
-            Self::RetireSelectedFeeRecord => 50,
+            Self::AdvanceFeeRetirement => 50,
             Self::BeginSettlementRetirement => 51,
         }
     }
@@ -2386,7 +2408,7 @@ impl GeneralV2Action {
             47 => Some(Self::CloseIndexedSettlementRoot),
             48 => Some(Self::CloseOwnerSettlementRow),
             49 => Some(Self::CloseOwnerFeeFinalization),
-            50 => Some(Self::RetireSelectedFeeRecord),
+            50 => Some(Self::AdvanceFeeRetirement),
             51 => Some(Self::BeginSettlementRetirement),
             _ => None,
         }

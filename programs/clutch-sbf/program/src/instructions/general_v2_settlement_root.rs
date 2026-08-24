@@ -80,6 +80,11 @@ impl AuthenticatedGeneralSettlementRootV1 {
     }
 
     /// Full indexed-root body ID; it never collapses to the nested base transcript.
+    /// Full retained-Feed byte identity carried by the indexed root.
+    pub fn selected_feed_data_id(&self) -> Outcome<Id32> {
+        Ok(self.body.selected_feed_data_id())
+    }
+
     pub fn data_id<B: Sha256BackendV1>(&self, backend: &B) -> Outcome<Id32> {
         self.body.data_id(backend, self.account).map_err(Into::into)
     }

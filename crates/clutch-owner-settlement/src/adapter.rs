@@ -536,7 +536,7 @@ pub struct SettlementCashPotV1 {
     pub expectation: SettlementCashPotExpectationV1,
     /// Buyer consideration not yet credited to sellers.
     pub available_consideration_atoms: Amount,
-    /// Fees collected under the selected candidate-wide fee record.
+    /// Collected fees still held for candidate-wide recipient distribution.
     pub collected_fee_atoms: Amount,
     /// Relation-certified rounding slack realized by finalized owners.
     pub realized_rounding_price_units: u128,
@@ -590,7 +590,6 @@ impl SettlementCashPotV1 {
             )
             .map_err(|_| Error::ArithmeticOverflow)?;
             if self.finalized_owner_count != self.expectation.owner_count
-                || self.collected_fee_atoms != self.expectation.selected_fee_atoms
                 || self.realized_rounding_price_units != self.expectation.rounding_pot_price_units
             {
                 return Err(Error::InvariantViolation);
@@ -610,6 +609,22 @@ impl SettlementCashPotV1 {
             }
         }
         Ok(())
+    }
+
+    /// Debit one exact fee-recipient credit after owner finalization. The
+    /// caller must atomically authenticate and credit the ordinary Position;
+    /// this semantic owner only releases atoms actually held by this pot.
+    pub fn distribute_collected_fee(mut self, recipient_atoms: Amount) -> Result<Self> {
+        self.validate()?;
+        if self.state == 0 || self.finalized_owner_count != self.expectation.owner_count {
+            return Err(Error::InvariantViolation);
+        }
+        self.collected_fee_atoms = self
+            .collected_fee_atoms
+            .checked_sub(recipient_atoms)
+            .ok_or(Error::InsufficientCash)?;
+        self.validate()?;
+        Ok(self)
     }
 
     /// Encode the exact canonical semantic body.
@@ -1049,6 +1064,39 @@ mod tests {
             virtual_cash_atoms: 0,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn finalized_fee_pot_only_releases_exact_collected_atoms() {
+        let mut pot = SettlementCashPotV1::new(SettlementCashPotExpectationV1 {
+            market: key(1),
+            epoch: key(2),
+            candidate: key(3),
+            owner_order_set_digest: key(9),
+            fee_record: key(10),
+            price_scale: 10,
+            owner_count: 1,
+            consideration_debit_atoms: 0,
+            seller_credit_atoms: 0,
+            selected_fee_atoms: 7,
+            rounding_pot_price_units: 0,
+            virtual_cash_direction: VirtualCashDirectionV1::None,
+            virtual_cash_atoms: 0,
+        })
+        .unwrap();
+        pot.finalized_owner_count = 1;
+        pot.collected_fee_atoms = 7;
+        pot.state = 1;
+        pot.validate().unwrap();
+        assert_eq!(
+            pot.distribute_collected_fee(8),
+            Err(Error::InsufficientCash)
+        );
+        let pot = pot.distribute_collected_fee(3).unwrap();
+        assert_eq!(pot.collected_fee_atoms, 4);
+        let pot = pot.distribute_collected_fee(4).unwrap();
+        assert_eq!(pot.collected_fee_atoms, 0);
+        pot.validate().unwrap();
     }
 
     fn identity(byte: u8) -> Identity32V1 {
