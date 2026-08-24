@@ -1953,6 +1953,16 @@ pub enum GeneralV2Action {
     ReleaseUnfilledReservation = 41,
     /// Atomically consume one exact full coefficient-portfolio pair.
     ConsumePortfolioPairEggs = 42,
+    /// Freeze one nonempty V5 order book under the successor chain.
+    FreezeEpochV5 = 43,
+    /// Retire one complete coefficient-portfolio archive set.
+    RetirePortfolioPairArchives = 44,
+    /// Retire both compact exact-index children atomically.
+    RetireExactIndexChildren = 45,
+    /// Retire the retained Feed after every child liability is discharged.
+    RetireRetainedFeed = 46,
+    /// Close one terminal indexed SettlementRoot and decrement its Epoch.
+    CloseIndexedSettlementRoot = 47,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -2135,7 +2145,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 42;
+    pub const LAST_TAG: u8 = 47;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -2182,6 +2192,11 @@ impl GeneralV2Action {
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
             Self::ConsumePortfolioPairEggs => 42,
+            Self::FreezeEpochV5 => 43,
+            Self::RetirePortfolioPairArchives => 44,
+            Self::RetireExactIndexChildren => 45,
+            Self::RetireRetainedFeed => 46,
+            Self::CloseIndexedSettlementRoot => 47,
         }
     }
 
@@ -2230,6 +2245,11 @@ impl GeneralV2Action {
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
             42 => Some(Self::ConsumePortfolioPairEggs),
+            43 => Some(Self::FreezeEpochV5),
+            44 => Some(Self::RetirePortfolioPairArchives),
+            45 => Some(Self::RetireExactIndexChildren),
+            46 => Some(Self::RetireRetainedFeed),
+            47 => Some(Self::CloseIndexedSettlementRoot),
             _ => None,
         }
     }

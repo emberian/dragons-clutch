@@ -949,7 +949,11 @@ fn feed_close_credits(
     ExactIndexPlaneErrorV1,
 > {
     rent.validate().map_err(|_| ExactIndexPlaneErrorV1::InvalidRent)?;
-    if close_reward_lamports == 0 || sink.is_zero() || keeper.is_zero() {
+    if close_reward_lamports == 0
+        || sink.is_zero()
+        || keeper.is_zero()
+        || sink == rent.payer
+    {
         return Err(ExactIndexPlaneErrorV1::InvalidRent);
     }
     let required = rent
@@ -988,10 +992,6 @@ pub struct CloseCountedExactRootInputV1<'a> {
     pub root_writable: bool,
     /// Whether the root account is executable.
     pub root_executable: bool,
-    /// Independently derived canonical root PDA.
-    pub canonical_root_account: Id32,
-    /// Independently derived canonical root bump.
-    pub canonical_root_bump: u8,
     /// Canonical writable parent Epoch account.
     pub epoch_account: Id32,
     /// Exact hostile parent Epoch body.
@@ -1056,7 +1056,6 @@ pub fn close_counted_exact_root_v1(
     if input.program_id.is_zero()
         || input.root_account.is_zero()
         || input.market_binding_account.is_zero()
-        || input.root_account != input.canonical_root_account
         || input.epoch_account.is_zero()
         || input.window_account.is_zero()
         || input.root_owner != input.program_id
@@ -1095,7 +1094,6 @@ pub fn close_counted_exact_root_v1(
     )
     .map_err(|_| ExactIndexPlaneErrorV1::NonTerminalRoot)?;
     if terminal.terminal().base().root_account() != input.root_account
-        || terminal.stored_bump() != input.canonical_root_bump
         || terminal.market_binding() != input.market_binding_account
         || terminal.terminal().base().epoch() != input.epoch_account
         || terminal.terminal().base().market() != input.market_binding.base().market

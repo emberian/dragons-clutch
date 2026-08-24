@@ -131,6 +131,17 @@ pub mod general_v2_settlement_root;
 /// action-24 materialization is reachable under the same profile.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_producer_v5;
+/// Ordered indexed-root terminal lifecycle.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_exact_index_retirement_v1;
+/// Nonempty V5 Epoch freeze successor.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_freeze_v5;
+/// Complete coefficient-portfolio settlement and archive retirement.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_v5;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_retirement_v5;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(

@@ -49,6 +49,8 @@ pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 /// Exact action-44 portfolio archive-retirement selector width.
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
+/// Exact action-45 through action-47 indexed lifecycle selector width.
+pub const EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES: usize = 64;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -918,6 +920,33 @@ impl RetirePortfolioPairArchivesPayloadV1 {
         Ok(value)
     }
 }
+
+/// Immutable selector shared by the three ordered exact-index retirement
+/// actions. Every child, Feed, rent, MarketBinding, Window, and Epoch fact is
+/// rederived from authenticated accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactIndexLifecyclePayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped indexed SettlementRoot PDA.
+    pub settlement_root: Id32,
+}
+
+impl ExactIndexLifecyclePayloadV1 {
+    /// Decode exactly two distinct live identities.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.settlement_root {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -975,6 +1004,17 @@ pub enum PortfolioSettlementPayloadV1 {
     ConsumePortfolioPairEggs(ConsumePortfolioPairEggsPayloadV1),
     /// Action 44 selector; all archive and refund facts are adapter-derived.
     RetirePortfolioPairArchives(RetirePortfolioPairArchivesPayloadV1),
+}
+
+/// Ordered exact-index terminal lifecycle selectors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExactIndexLifecyclePayloadKindV1 {
+    /// Close both compact index children and mark their root compartment retired.
+    RetireIndexChildren(ExactIndexLifecyclePayloadV1),
+    /// Close the retained Feed and make the base root Terminal.
+    RetireRetainedFeed(ExactIndexLifecyclePayloadV1),
+    /// Close the terminal indexed root and decrement the parent Epoch count.
+    CloseIndexedRoot(ExactIndexLifecyclePayloadV1),
 }
 
 /// Decode action 26 without adding it to the live-lab union.
@@ -1040,6 +1080,20 @@ pub fn decode_portfolio_settlement_payload_v1(
         44 => Ok(PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(
             RetirePortfolioPairArchivesPayloadV1::decode(payload)?,
         )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode only the ordered indexed-root terminal lifecycle.
+pub fn decode_exact_index_lifecycle_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<ExactIndexLifecyclePayloadKindV1, CodecError> {
+    let selector = ExactIndexLifecyclePayloadV1::decode(payload)?;
+    match local_action {
+        45 => Ok(ExactIndexLifecyclePayloadKindV1::RetireIndexChildren(selector)),
+        46 => Ok(ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(selector)),
+        47 => Ok(ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(selector)),
         _ => Err(CodecError::InvalidState),
     }
 }
@@ -1342,6 +1396,44 @@ mod tests {
         assert_eq!(
             decode_portfolio_settlement_payload_v1(44, &selector),
             Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn actions45_through_47_share_one_strict_disjoint_selector() {
+        let mut selector = [0u8; EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES];
+        selector[..ID_BYTES].copy_from_slice(&live(1));
+        selector[ID_BYTES..].copy_from_slice(&live(2));
+
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::RetireIndexChildren(_))
+        ));
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(46, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(_))
+        ));
+        assert!(matches!(
+            decode_exact_index_lifecycle_payload_v1(47, &selector),
+            Ok(ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(_))
+        ));
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(44, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector[..63]),
+            Err(CodecError::WrongLength)
+        );
+        selector[ID_BYTES..].copy_from_slice(&live(1));
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(45, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[ID_BYTES..].fill(0);
+        assert_eq!(
+            decode_exact_index_lifecycle_payload_v1(46, &selector),
+            Err(CodecError::ZeroIdentity)
         );
     }
 
