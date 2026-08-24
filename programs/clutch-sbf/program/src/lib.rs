@@ -83,6 +83,11 @@
 #[cfg(all(target_os = "solana", test))]
 compile_error!("host-forensic General fixtures cannot compile for Solana");
 
+#[cfg(feature = "non-production-mock-source")]
+compile_error!(
+    "the mock-source ELF has been withdrawn; use the successor Source plane or an explicit real-provider laboratory profile"
+);
+
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-successor-chain-attached-dev",
@@ -137,7 +142,6 @@ compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
         feature = "profile-non-production-general-v2-empty-book-identity-lab",
         feature = "non-production-product-series-lab",
         feature = "non-production-failure-recovery-lab",
-        feature = "non-production-mock-source",
         feature = "non-production-real-pyth-lab",
         feature = "laboratory-fixtures"
     )

@@ -119,6 +119,6 @@ digest and source tree.
 
 One gap worth closing in the same pass: the default gate's key pattern
 `^[0-9a-f]{64}\s+.*clutch_sbf\.so$` does not match anything
-`run_svm_tests.sh` emits (the script prints `elf_sha256=<hex>`), so unlike the
-mock-source gate, **the default profile's ELF identity is not captured in any
-manifest key line**.
+`run_svm_tests.sh` emits (the script prints `elf_sha256=<hex>`), so **the
+default profile's ELF identity is not captured in any manifest key line**. The
+former mock-source gate is withdrawn.
