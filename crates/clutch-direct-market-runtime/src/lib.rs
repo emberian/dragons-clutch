@@ -24,6 +24,7 @@ pub mod codec_v1;
 pub mod codec_v2;
 pub mod current_v2;
 pub mod fee_v1;
+pub mod fee_v2;
 pub mod liveness_v1;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.

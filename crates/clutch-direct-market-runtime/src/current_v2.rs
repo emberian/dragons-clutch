@@ -9,7 +9,7 @@
 //! Product and General authorities, and every poststate is reconstructed into
 //! V2 and revalidated before it can leave this module.
 
-use crate::fee_v1::DirectFeePolicyV1;
+use crate::fee_v2::DirectFeePolicyV2;
 use crate::liveness_v1::DirectCandidateLivenessBindingV1;
 use crate::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketBindingV1,
@@ -278,6 +278,7 @@ impl DirectMarketBindingV2 {
         self.fee_policy().validate()?;
         self.candidate_liveness.validate()?;
         if self.fee_treasury_owner != self.general.treasury_owner
+            || self.revenue_policy_id != self.general.revenue_policy_v2_digest
             || self.product.product_market_binding_id
                 != self.product.activated_product_market_binding_id
             || self.candidate_liveness.policy_account
@@ -306,11 +307,14 @@ impl DirectMarketBindingV2 {
     }
 
     /// Exact copied fee arithmetic facts, authenticated from RevenuePolicyV2.
-    pub const fn fee_policy(&self) -> DirectFeePolicyV1 {
-        DirectFeePolicyV1 {
+    pub const fn fee_policy(&self) -> DirectFeePolicyV2 {
+        DirectFeePolicyV2 {
             batch_policy_id: self.batch_policy_id,
-            revenue_policy_id: self.revenue_policy_id,
+            revenue_policy_v2_digest: self.revenue_policy_id,
+            revenue_policy_record_v2_id: self.general.revenue_policy_record_v2_id,
             treasury_owner: self.fee_treasury_owner,
+            treasury_position_derivation_policy_v2_id:
+                self.general.treasury_position_derivation_policy_v2_id,
             dispersion_bps: self.fee_dispersion_bps,
             floor_range_bps: self.fee_floor_range_bps,
             maker_rebate_num: self.fee_maker_rebate_num,
@@ -334,8 +338,12 @@ impl DirectMarketBindingV2 {
         self.validate()?;
         let product_id = self.product.semantic_id(backend)?;
         let general_id = self.general.semantic_id(backend)?;
+        let fee_policy_id = self.fee_policy().semantic_id(backend)?;
         if product_id == general_id {
             return Err(DirectMarketErrorV1::IdentityAlias);
+        }
+        if fee_policy_id != self.direct_fee_shape_id {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
         }
         let candidate_id = candidate_liveness_id_v2(self.candidate_liveness, backend)?;
         let id = backend.sha256_parts(&[
