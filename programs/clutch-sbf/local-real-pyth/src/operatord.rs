@@ -13,6 +13,11 @@ use crate::action_material::{
     structured_action_from_selection, structured_selection_action,
     CanonicalActionMaterialV1,
 };
+use crate::direct_action8_material::{
+    DirectAction8CanonicalMaterialV2, DirectAction8OperatorBatchV2,
+    DirectAction8SymbolicPostconditionV2,
+};
+use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -22,7 +27,8 @@ use crate::transaction_builder::{
     IntegerUnit, ProtocolFlow, RuntimeAdmission, TransactionMessageVersionV1,
 };
 use clutch_solana_layout::registry::{
-    GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
+    DirectMarketAction, GeneralV2Action, RecurringSeriesAction, RecoveryAction,
+    SourceSeriesAction, DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION,
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
     STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
@@ -170,31 +176,29 @@ impl ResumableKeeperSelector {
 fn merge_chain_material_cursors(
     mut cursors: Vec<KeeperActionSelection>,
     index: &CanonicalAccountIndex,
-    batch: Option<&DirectAction8OperatorBatchV2>,
+    direct_batch: Option<&DirectAction8OperatorBatchV2>,
+    dealer_batch: Option<&DealerTerminalOperatorBatchV1>,
     release: &IndexedProgramRelease,
     maximum_actions: usize,
 ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
-    let action8 = CanonicalIntentCoordinate {
-        family_tag: DIRECT_MARKET_FAMILY_TAG,
-        family_version: DIRECT_MARKET_FAMILY_VERSION,
-        local_action: DirectMarketAction::FinalizeSelection.tag(),
-    };
-    let Some(batch) = batch else { return Ok(cursors); };
-    if batch.release_key() != release.key() || batch.snapshot_receipt_id() == [0; 32] {
-        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    if direct_batch.is_none() && dealer_batch.is_none() {
+        return Ok(cursors);
     }
     let current_finalized_slot = index
         .forks()
         .finalized_root()
         .map(|(slot, _)| slot)
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-    if current_finalized_slot < batch.observed_slot()
-        || current_finalized_slot >= batch.valid_before_slot()
-    {
-        return Err(KeeperSelectionError::IncompleteCanonicalHint);
-    }
     let finalized = index.current_accounts(RpcCommitment::Finalized);
-    for typed in batch.materials() {
+    if let Some(batch) = direct_batch {
+        if batch.release_key() != release.key()
+            || batch.snapshot_receipt_id() == [0; 32]
+            || current_finalized_slot < batch.observed_slot()
+            || current_finalized_slot >= batch.valid_before_slot()
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        for typed in batch.materials() {
         let material = typed.canonical();
         if material.release_key() != release.key()
             || material.release_manifest_sha256() != release.release_manifest_sha256
@@ -250,13 +254,10 @@ fn merge_chain_material_cursors(
         }) {
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
-        let mut dependencies = material
-            .account_roles()
-            .iter()
-            .map(|role| role.address())
-            .collect::<Vec<_>>();
-        dependencies.sort();
-        dependencies.dedup();
+        let dependencies = selection_dependencies_without_driver(
+            material.account_roles(),
+            material.driver_account(),
+        );
         cursors.push(KeeperActionSelection {
             account: material.driver_account(),
             release_key: material.release_key().to_string(),
@@ -268,6 +269,66 @@ fn merge_chain_material_cursors(
             branch: IndexedBranch::FinalizedScan,
             dependencies,
         });
+        }
+    }
+    if let Some(batch) = dealer_batch {
+        if batch.release_key() != release.key()
+            || batch.snapshot_receipt_id() == [0; 32]
+            || current_finalized_slot < batch.observed_slot()
+            || current_finalized_slot >= batch.valid_before_slot()
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        for material in batch.materials() {
+            let variant = material
+                .variant()
+                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+            if !material.matches_variant(release, variant)
+                || material.cursor().lane != WorkflowLane::RecoveryRetirement
+                || material.driver_account() == Address::default()
+                || material.driver_account_slot() != batch.observed_slot()
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+            let mut current_driver = finalized
+                .iter()
+                .filter(|version| version.account.address == material.driver_account());
+            let driver = current_driver
+                .next()
+                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+            if current_driver.next().is_some()
+                || driver.account.provenance.release_key != release.key()
+                || driver.account.provenance.commitment != RpcCommitment::Finalized
+                || driver.account.provenance.slot != material.driver_account_slot()
+                || cursors.iter().any(|cursor| {
+                    cursor.account == material.driver_account()
+                        || cursor.cursor == material.cursor()
+                })
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+            cursors.push(KeeperActionSelection {
+                account: material.driver_account(),
+                release_key: material.release_key().to_string(),
+                action: match variant {
+                    CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => {
+                        "retire-dealer-facility-current-v1-target8"
+                    }
+                    CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => {
+                        "retire-dealer-facility-current-v1-target9"
+                    }
+                },
+                cursor: material.cursor(),
+                account_slot: material.driver_account_slot(),
+                observed_commitment: RpcCommitment::Finalized,
+                effective_commitment: RpcCommitment::Finalized,
+                branch: IndexedBranch::FinalizedScan,
+                dependencies: selection_dependencies_without_driver(
+                    material.account_roles(),
+                    material.driver_account(),
+                ),
+            });
+        }
     }
     cursors.sort_by(|left, right| {
         (left.action, left.account.to_bytes(), left.cursor.position.phase, left.cursor.position.item)
@@ -284,13 +345,29 @@ fn merge_chain_material_cursors(
     Ok(cursors)
 }
 
+fn selection_dependencies_without_driver(
+    roles: &[crate::action_material::CanonicalAccountRoleV1],
+    driver: Address,
+) -> Vec<Address> {
+    let mut dependencies = roles
+        .iter()
+        .map(|role| role.address())
+        .filter(|address| *address != driver)
+        .collect::<Vec<_>>();
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
 fn select_operator_release<'a>(
     releases: &'a [IndexedProgramRelease],
     materials: &[CanonicalActionMaterialV1],
     direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
+    dealer_terminal_batch: Option<&DealerTerminalOperatorBatchV1>,
 ) -> Result<&'a IndexedProgramRelease, KeeperSelectionError> {
     if materials.iter().any(|material| {
-        material.coordinate()
+        material.variant().is_some()
+            || material.coordinate()
             == (CanonicalIntentCoordinate {
                 family_tag: DIRECT_MARKET_FAMILY_TAG,
                 family_version: DIRECT_MARKET_FAMILY_VERSION,
@@ -304,6 +381,12 @@ fn select_operator_release<'a>(
         .map(|material| material.release_key().to_string())
         .collect::<BTreeSet<_>>();
     if let Some(batch) = direct_action8_batch {
+        keys.insert(batch.release_key().to_string());
+    }
+    if let Some(batch) = dealer_terminal_batch {
+        if batch.snapshot_receipt_id() == [0; 32] {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
         keys.insert(batch.release_key().to_string());
     }
     if keys.is_empty() {
@@ -549,6 +632,8 @@ pub struct OperatorJsonApi<'index> {
     index: &'index CanonicalAccountIndex,
     selector: ResumableKeeperSelector,
     action_materials: &'index [CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&'index DirectAction8OperatorBatchV2>,
+    dealer_terminal_batch: Option<&'index DealerTerminalOperatorBatchV1>,
 }
 
 impl<'index> OperatorJsonApi<'index> {
@@ -561,6 +646,8 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials: &[],
+            direct_action8_batch: None,
+            dealer_terminal_batch: None,
         }
     }
 
@@ -576,6 +663,45 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials,
+            direct_action8_batch: None,
+            dealer_terminal_batch: None,
+        }
+    }
+
+    /// Bind the exhaustive receipt-backed current Direct action-8 batch. The
+    /// generic material slice cannot stand in for this typed registry.
+    #[must_use]
+    pub const fn with_action_materials_and_direct_action8(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+        direct_action8_batch: &'index DirectAction8OperatorBatchV2,
+    ) -> Self {
+        Self {
+            index,
+            selector,
+            action_materials,
+            direct_action8_batch: Some(direct_action8_batch),
+            dealer_terminal_batch: None,
+        }
+    }
+
+    /// Bind both exhaustive chain-derived current operator batches. Neither
+    /// typed batch can be replaced by a friendly subset in the generic slice.
+    #[must_use]
+    pub const fn with_current_action_batches(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+        direct_action8_batch: Option<&'index DirectAction8OperatorBatchV2>,
+        dealer_terminal_batch: &'index DealerTerminalOperatorBatchV1,
+    ) -> Self {
+        Self {
+            index,
+            selector,
+            action_materials,
+            direct_action8_batch,
+            dealer_terminal_batch: Some(dealer_terminal_batch),
         }
     }
 
@@ -669,6 +795,7 @@ impl<'index> OperatorJsonApi<'index> {
             &plan.releases,
             self.action_materials,
             self.direct_action8_batch,
+            self.dealer_terminal_batch,
         ) {
             Ok(release) => release,
             Err(error) => {
@@ -685,6 +812,7 @@ impl<'index> OperatorJsonApi<'index> {
                 cursors,
                 self.index,
                 self.direct_action8_batch,
+                self.dealer_terminal_batch,
                 release,
                 self.selector.maximum_actions,
             ) {
@@ -789,18 +917,42 @@ impl<'index> OperatorJsonApi<'index> {
     /// must also be present in one server-constructed transaction draft.
     fn actions(&self) -> OperatorJsonResponse {
         let plan = self.index.acquisition_plan();
-        let [release] = plan.releases.as_slice() else {
-            return response(
-                409,
-                json!({
+        let release = match select_operator_release(
+            &plan.releases,
+            self.action_materials,
+            self.direct_action8_batch,
+            self.dealer_terminal_batch,
+        ) {
+            Ok(release) => release,
+            Err(error) => {
+                return response(409, json!({
                     "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
                     "status": "unavailable",
-                    "reason": "action projection requires exactly one checked release"
-                }),
-            );
+                    "reason": error.to_string()
+                }));
+            }
         };
         let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
-            Ok(cursors) => cursors,
+            Ok(cursors) => match merge_chain_material_cursors(
+                cursors,
+                self.index,
+                self.direct_action8_batch,
+                self.dealer_terminal_batch,
+                release,
+                self.selector.maximum_actions,
+            ) {
+                Ok(cursors) => cursors,
+                Err(error) => {
+                    return response(
+                        409,
+                        json!({
+                            "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
+                            "status": "unavailable",
+                            "reason": error.to_string()
+                        }),
+                    );
+                }
+            },
             Err(error) => {
                 return response(
                     409,
@@ -829,11 +981,17 @@ impl<'index> OperatorJsonApi<'index> {
             .enabled_intents
             .iter()
             .map(|coordinate| {
-                action_verdict_json(release, *coordinate, &cursors, self.action_materials)
+                action_verdict_json(
+                    release,
+                    *coordinate,
+                    &cursors,
+                    self.action_materials,
+                    self.direct_action8_batch,
+                )
             })
             .collect::<Vec<_>>();
-        verdicts.extend(release.enabled_intent_variants.iter().map(|variant| {
-            action_variant_verdict_json(release, *variant, self.action_materials)
+        verdicts.extend(release.enabled_intent_variants.iter().flat_map(|variant| {
+            action_variant_verdicts_json(release, *variant, self.dealer_terminal_batch)
         }));
         response(
             200,
@@ -953,6 +1111,7 @@ fn action_verdict_json(
     coordinate: CanonicalIntentCoordinate,
     cursors: &[KeeperActionSelection],
     action_materials: &[CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
 ) -> Value {
     let cursor = cursors
         .iter()
@@ -976,19 +1135,36 @@ fn action_verdict_json(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let matching_materials = cursor
-        .map(|selection| {
+    let action8 = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: DirectMarketAction::FinalizeSelection.tag(),
+    };
+    let matching_materials = cursor.map_or_else(Vec::new, |selection| {
+        if coordinate == action8 {
+            direct_action8_batch
+                .into_iter()
+                .flat_map(DirectAction8OperatorBatchV2::materials)
+                .map(DirectAction8CanonicalMaterialV2::canonical)
+                .filter(|material| material.matches(release, coordinate, selection))
+                .collect::<Vec<_>>()
+        } else {
             action_materials
                 .iter()
                 .filter(|material| material.matches(release, coordinate, selection))
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        }
+    });
     let material = match matching_materials.as_slice() {
         [material] => Some(*material),
         _ => None,
     };
     if let (Some(selection), Some(material)) = (cursor, material) {
+        let symbolic_postcondition = direct_action8_batch
+            .into_iter()
+            .flat_map(DirectAction8OperatorBatchV2::materials)
+            .find(|typed| typed.canonical() == material)
+            .map(DirectAction8CanonicalMaterialV2::postcondition);
         return callable_action_verdict_json(
             release,
             coordinate,
@@ -997,6 +1173,7 @@ fn action_verdict_json(
             family,
             action,
             semantic_builder,
+            symbolic_postcondition,
         );
     }
     let state_reason = if matching_materials.len() > 1 {
@@ -1033,24 +1210,24 @@ fn action_verdict_json(
     })
 }
 
-fn action_variant_verdict_json(
+fn action_variant_verdicts_json(
     release: &IndexedProgramRelease,
     variant: CanonicalIntentVariantV1,
-    action_materials: &[CanonicalActionMaterialV1],
-) -> Value {
+    dealer_terminal_batch: Option<&DealerTerminalOperatorBatchV1>,
+) -> Vec<Value> {
     let coordinate = variant.coordinate();
-    let matching_materials = action_materials
-        .iter()
+    let matching_materials = dealer_terminal_batch
+        .into_iter()
+        .flat_map(DealerTerminalOperatorBatchV1::materials)
         .filter(|material| material.matches_variant(release, variant))
         .collect::<Vec<_>>();
-    let material = match matching_materials.as_slice() {
-        [material] => Some(*material),
-        _ => None,
-    };
-    if let Some(material) = material {
-        return callable_action_variant_verdict_json(release, variant, material);
+    if !matching_materials.is_empty() {
+        return matching_materials
+            .into_iter()
+            .map(|material| callable_action_variant_verdict_json(release, variant, material))
+            .collect();
     }
-    json!({
+    vec![json!({
         "coordinate": {
             "familyTag": coordinate.family_tag.to_string(),
             "familyVersion": coordinate.family_version.to_string(),
@@ -1074,15 +1251,11 @@ fn action_variant_verdict_json(
         "accountRoles": [],
         "callable": false,
         "verdict": "unavailable",
-        "reason": if matching_materials.len() > 1 {
-            "multiple canonical materials claim the same payload-scoped Dealer terminal variant"
-        } else {
-            "no complete finalized hostile-authenticated Dealer terminal account frame is presently available"
-        },
+        "reason": "no complete finalized hostile-authenticated Dealer terminal account frame is presently available",
         "transactionDraft": null,
         "signerRequirements": [],
         "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
-    })
+    })]
 }
 
 fn callable_action_variant_verdict_json(
@@ -1173,6 +1346,7 @@ fn callable_action_verdict_json(
     family: &'static str,
     action: &'static str,
     semantic_builder: Option<&'static str>,
+    symbolic_postcondition: Option<&DirectAction8SymbolicPostconditionV2>,
 ) -> Value {
     let transaction = material.unsigned_transaction();
     let roles = material
@@ -1282,6 +1456,13 @@ fn callable_action_verdict_json(
             })).collect::<Vec<_>>(),
             "reloadAuthoritativeAccounts": material.reload_authoritative_accounts()
         },
+        "symbolicPostcondition": symbolic_postcondition.map(|postcondition| json!({
+            "contractId": hex32(postcondition.contract_id()),
+            "executionClock": "hostile SBF Clock slot; absent from the unsigned payload",
+            "lamports": "exact signed deltas from actual execution prebalances",
+            "writableAccounts": postcondition.writable_accounts().iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "confirmation": "realize exact semantic successors from the confirmed execution slot; compare deltas to the actual execution pre/post witness"
+        })),
         "signerRequirements": signer_requirements,
         "freshnessDisposition": {
             "observedSlot": freshness.observed_slot.to_string(),
@@ -1296,6 +1477,13 @@ fn callable_action_verdict_json(
 }
 
 fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
+    if action == "finalize-direct-selection-current-v2" {
+        return Some(CanonicalIntentCoordinate {
+            family_tag: DIRECT_MARKET_FAMILY_TAG,
+            family_version: DIRECT_MARKET_FAMILY_VERSION,
+            local_action: DirectMarketAction::FinalizeSelection.tag(),
+        });
+    }
     if let Some(action) = source_action_from_selection(action) {
         return Some(CanonicalIntentCoordinate {
             family_tag: SOURCE_SERIES_FAMILY_TAG,
@@ -1358,6 +1546,21 @@ fn source_action(coordinate: CanonicalIntentCoordinate) -> Option<SourceSeriesAc
 fn coordinate_description(
     coordinate: CanonicalIntentCoordinate,
 ) -> (&'static str, &'static str, Option<&'static str>) {
+    if coordinate.family_tag == DIRECT_MARKET_FAMILY_TAG
+        && coordinate.family_version == DIRECT_MARKET_FAMILY_VERSION
+    {
+        let Some(action) = DirectMarketAction::from_tag(coordinate.local_action) else {
+            return ("direct", "unknown-direct-action", None);
+        };
+        if action == DirectMarketAction::FinalizeSelection {
+            return (
+                "direct",
+                "finalize-direct-selection-current-v2",
+                Some(crate::direct_action8_material::DIRECT_ACTION8_OWNER_SCHEMA_V2),
+            );
+        }
+        return ("direct", "non-current-direct-action", None);
+    }
     if let Some(action) = source_action(coordinate) {
         let name = source_selection_action(action);
         let builder = matches!(
@@ -1828,6 +2031,27 @@ mod read_only_session_contract_tests {
         assert_eq!(
             source_role_label_v2(contract.meta(18).unwrap().role),
             "rent-sysvar"
+        );
+    }
+
+    #[test]
+    fn chain_derived_driver_is_never_repeated_as_a_dependency() {
+        let driver = Address::new_from_array([0x31; 32]);
+        let dependency = Address::new_from_array([0x32; 32]);
+        let roles = [
+            crate::action_material::CanonicalAccountRoleV1::new(
+                "driver", driver, true, false,
+            ),
+            crate::action_material::CanonicalAccountRoleV1::new(
+                "dependency-a", dependency, false, false,
+            ),
+            crate::action_material::CanonicalAccountRoleV1::new(
+                "dependency-b", dependency, true, false,
+            ),
+        ];
+        assert_eq!(
+            selection_dependencies_without_driver(&roles, driver),
+            vec![dependency]
         );
     }
 }

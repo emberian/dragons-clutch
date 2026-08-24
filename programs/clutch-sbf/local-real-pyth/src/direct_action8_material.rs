@@ -11,6 +11,10 @@ use crate::action_material::{
     ActionFreshnessBoundaryV1, CanonicalAccountRoleV1, CanonicalActionMaterialErrorV1,
     CanonicalActionMaterialV1,
 };
+use crate::collateral_release_catalog::{
+    AuthenticatedCurrentCollateralReleaseV1, CurrentCollateralReleaseCatalogV1,
+    FinalizedCollateralReleaseFrameV1,
+};
 use crate::rpc_index::{
     finalized_exact_account_snapshot_request_v1,
     CanonicalFamily, CanonicalIntentCoordinate, FinalizedAccountSnapshotV1,
@@ -23,11 +27,9 @@ use crate::transaction_builder::{
 };
 use crate::workflow_graph::{
     CanonicalActionCoordinate, ExplicitOperatorReleaseManifest, PlannedWorkflowNode,
-    ReleasedProgram, ResumableWorkflowCursor, WorkflowLane, WorkflowPosition,
+    ResumableWorkflowCursor, WorkflowLane, WorkflowPosition,
 };
-use clutch_collateral_adapter_v2::{
-    AdapterReleaseV2, CollateralPolicyV2, MAX_ADAPTER_RELEASES,
-};
+use clutch_collateral_adapter_v2::CollateralPolicyV2;
 use clutch_direct_market_runtime::codec_v1::{
     DIRECT_ACTION_REPLAY_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
     DIRECT_SELECTION_BODY_BYTES_V1,
@@ -104,126 +106,6 @@ pub const DIRECT_ACTION8_OWNER_SCHEMA_V2: &str =
 /// Checked bounded lifetime for a finalized action-8 observation. A caller
 /// cannot widen this release-owned operator policy.
 pub const DIRECT_ACTION8_MAXIMUM_VALIDITY_SLOTS_V2: u64 = 32;
-
-/// One external collateral executable selected by the same checked manifest
-/// and profile as the Clutch release. It is deliberately not an
-/// `IndexedProgramRelease`: external token programs are never Dragon-family
-/// account-scan owners.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectAction8CollateralExecutableV2 {
-    adapter_release: AdapterReleaseV2,
-    executable: ReleasedProgram,
-    release_manifest_sha256: [u8; 32],
-    capability_profile_id: [u8; 32],
-}
-
-impl DirectAction8CollateralExecutableV2 {
-    pub(crate) fn checked(
-        adapter_release: AdapterReleaseV2,
-        executable: ReleasedProgram,
-        release_manifest_sha256: [u8; 32],
-        capability_profile_id: [u8; 32],
-    ) -> Result<Self> {
-        adapter_release
-            .validate()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        if executable.program_id == Address::default()
-            || executable.program_data == Address::default()
-            || executable.program_id == executable.program_data
-            || executable.elf_sha256 == [0; 32]
-            || Address::new_from_array(adapter_release.token_program.bytes())
-                != executable.program_id
-            || adapter_release.token_program_deployment.bytes() != executable.elf_sha256
-            || release_manifest_sha256 == [0; 32]
-            || capability_profile_id == [0; 32]
-        {
-            return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-        }
-        Ok(Self {
-            adapter_release,
-            executable,
-            release_manifest_sha256,
-            capability_profile_id,
-        })
-    }
-}
-
-/// Closed external collateral-release catalog for current Direct action 8.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectAction8CollateralCatalogV2 {
-    rows: Vec<DirectAction8CollateralExecutableV2>,
-}
-
-impl DirectAction8CollateralCatalogV2 {
-    pub(crate) fn checked(mut rows: Vec<DirectAction8CollateralExecutableV2>) -> Result<Self> {
-        if rows.len() > MAX_ADAPTER_RELEASES {
-            return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-        }
-        rows.sort_by_key(|row| {
-            row.adapter_release
-                .id()
-                .map_or([0; 32], |identity| identity.bytes())
-        });
-        let mut prior = None;
-        for row in &rows {
-            let identity = row
-                .adapter_release
-                .id()
-                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?
-                .bytes();
-            if prior.is_some_and(|value| value >= identity) {
-                return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-            }
-            prior = Some(identity);
-        }
-        Ok(Self { rows })
-    }
-
-    fn resolve(
-        &self,
-        clutch_release: &IndexedProgramRelease,
-        policy: CollateralPolicyV2,
-    ) -> Result<DirectAction8CollateralExecutableV2> {
-        policy
-            .validate_for_release(
-                &self
-                    .rows
-                    .iter()
-                    .find(|row| {
-                        row.adapter_release
-                            .id()
-                            .is_ok_and(|identity| identity == policy.adapter_release)
-                    })
-                    .ok_or(CanonicalActionMaterialErrorV1::InvalidRelease)?
-                    .adapter_release,
-            )
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        let mut matching = self.rows.iter().filter(|row| {
-            row.adapter_release
-                .id()
-                .is_ok_and(|identity| identity == policy.adapter_release)
-                && row.release_manifest_sha256 == clutch_release.release_manifest_sha256
-                && row.capability_profile_id == clutch_release.capability_profile_id
-        });
-        let row = matching
-            .next()
-            .copied()
-            .ok_or(CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        if matching.next().is_some() {
-            return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-        }
-        Ok(row)
-    }
-}
-
-/// Repository-owned checked collateral catalog for this operator build.
-/// No observed-positive external executable is ratified in the current source,
-/// so Nonempty action8 remains constructible while NoCandidate refuses at the
-/// exact release join. Populating this function requires the same reviewed
-/// ProgramData/ELF row as the SBF compiled collateral manifest.
-pub fn checked_direct_action8_collateral_catalog_v2() -> DirectAction8CollateralCatalogV2 {
-    DirectAction8CollateralCatalogV2 { rows: Vec::new() }
-}
 
 const DIRECT_ACTION8_WORKFLOW_DOMAIN_V2: &[u8] =
     b"dragons-clutch/operator/direct-action8-workflow/v2\0";
@@ -422,7 +304,7 @@ pub fn join_direct_action8_finalized_snapshots_v2(
 pub fn plan_direct_action8_context_snapshot_v2(
     plan: &RpcIndexPlan,
     releases: &[IndexedProgramRelease],
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     program_scan: &FinalizedAccountSnapshotV1,
@@ -525,6 +407,11 @@ pub fn plan_direct_action8_context_snapshot_v2(
             ] {
                 addresses.insert(account.address);
             }
+            addresses.extend([
+                graph.token_program,
+                graph.token_program_data,
+                graph.token_release_artifact,
+            ]);
             let mut endpoint_index = 0u8;
             while endpoint_index < selection.reservation_count() {
                 let endpoint = authenticate_current_endpoint_v2(
@@ -618,7 +505,7 @@ fn invalid<T>() -> Result<T> { Err(CanonicalActionMaterialErrorV1::InvalidPlan) 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn construct_direct_action8_material_v2(
     releases: &[IndexedProgramRelease],
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     direct_root: Address,
@@ -645,7 +532,7 @@ pub(crate) fn construct_direct_action8_material_v2(
 pub fn project_direct_action8_postconditions_for_execution_slot_v2(
     material: &DirectAction8CanonicalMaterialV2,
     releases: &[IndexedProgramRelease],
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     finalized_snapshot: &DirectAction8FinalizedSnapshotV2,
@@ -696,7 +583,7 @@ pub fn project_direct_action8_postconditions_for_execution_slot_v2(
 #[allow(clippy::too_many_arguments)]
 fn construct_direct_action8_material_at_execution_slot_v2(
     releases: &[IndexedProgramRelease],
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     direct_root: Address,
@@ -964,7 +851,7 @@ fn construct_direct_action8_material_at_execution_slot_v2(
 /// silently omitted or allowing a launcher to choose a friendlier subset.
 pub fn enumerate_direct_action8_material_v2(
     releases: &[IndexedProgramRelease],
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     finalized_snapshot: &DirectAction8FinalizedSnapshotV2,
@@ -1060,53 +947,6 @@ fn dependency(account: &ObservedRpcAccount) -> DependencyFactV2 {
     }
 }
 
-fn checked_executable_release_dependency(
-    program: Address,
-    elf_sha256: [u8; 32],
-    deployment_slot: u64,
-) -> Result<DependencyFactV2> {
-    if program == Address::default() || elf_sha256 == [0; 32] {
-        return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-    }
-    Ok(DependencyFactV2 {
-        address: program.to_bytes(),
-        owner: [0; 32],
-        data_sha256: elf_sha256,
-        lamports: 0,
-        slot: deployment_slot,
-    })
-}
-
-fn checked_programdata_release_dependency(
-    program: Address,
-    program_data: Address,
-    elf_sha256: [u8; 32],
-    deployment_slot: u64,
-) -> Result<DependencyFactV2> {
-    if program == Address::default()
-        || program_data == Address::default()
-        || program == program_data
-        || elf_sha256 == [0; 32]
-    {
-        return Err(CanonicalActionMaterialErrorV1::InvalidRelease);
-    }
-    let data_sha256 = Sha256::new()
-        .chain_update(b"dragons-clutch/operator/external-programdata-release/v1\0")
-        .chain_update(program.to_bytes())
-        .chain_update(program_data.to_bytes())
-        .chain_update(elf_sha256)
-        .chain_update(deployment_slot.to_le_bytes())
-        .finalize()
-        .into();
-    Ok(DependencyFactV2 {
-        address: program_data.to_bytes(),
-        owner: [0; 32],
-        data_sha256,
-        lamports: 0,
-        slot: deployment_slot,
-    })
-}
-
 fn require_unique_finalized_snapshot(
     finalized_snapshot: &FinalizedAccountSnapshotV1,
 ) -> Result<()> {
@@ -1115,7 +955,6 @@ fn require_unique_finalized_snapshot(
     let mut addresses = BTreeSet::new();
     for account in accounts {
         if account.address == Address::default()
-            || account.executable
             || account.provenance.commitment != RpcCommitment::Finalized
             || !matches!(
                 account.provenance.source,
@@ -1661,7 +1500,7 @@ fn prepare_nonempty(
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_no_candidate(
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     release: &IndexedProgramRelease,
     accounts: &[ObservedRpcAccount],
     observed_slot: u64,
@@ -1691,6 +1530,28 @@ fn prepare_no_candidate(
         accounts,
         state.root(),
     )?;
+    let token_program_account = find_account(accounts, graph.token_program)?;
+    let token_programdata_account = find_account(accounts, graph.token_program_data)?;
+    let token_release_artifact_account = find_account(accounts, graph.token_release_artifact)?;
+    let policy = CollateralPolicyV2::decode(&graph.policy_account.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let selected = collateral_catalog
+        .select(release, policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let refreshed = AuthenticatedCurrentCollateralReleaseV1::authenticate(
+        selected.entry().adapter(),
+        selected.entry().program(),
+        release.program_id,
+        FinalizedCollateralReleaseFrameV1 {
+            release_artifact: token_release_artifact_account,
+            program: token_program_account,
+            programdata: token_programdata_account,
+        },
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    refreshed
+        .select_for(release, policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
     let mut endpoint_receipts: [Option<CurrentEndpointV2<'_>>; 2] = [None, None];
     let mut endpoints = [None; 2];
     let endpoint_count = usize::from(selection.reservation_count());
@@ -1782,17 +1643,13 @@ fn prepare_no_candidate(
     ] {
         push_dependency_unique(&mut dependencies, account);
     }
-    dependencies.push(checked_executable_release_dependency(
-        graph.token_program,
-        graph.token_release_elf_sha256,
-        graph.token_release_deployment_slot,
-    )?);
-    dependencies.push(checked_programdata_release_dependency(
-        graph.token_program,
-        graph.token_program_data,
-        graph.token_release_elf_sha256,
-        graph.token_release_deployment_slot,
-    )?);
+    for account in [
+        token_release_artifact_account,
+        token_program_account,
+        token_programdata_account,
+    ] {
+        push_dependency_unique(&mut dependencies, account);
+    }
     let mut first_position = None;
     let mut first_replay = None;
     index = 0;
@@ -2267,8 +2124,7 @@ struct CurrentGeneralGraphV2<'a> {
     policy_account: &'a ObservedRpcAccount,
     token_program: Address,
     token_program_data: Address,
-    token_release_elf_sha256: [u8; 32],
-    token_release_deployment_slot: u64,
+    token_release_artifact: Address,
     binding_account: &'a ObservedRpcAccount,
     runtime_account: &'a ObservedRpcAccount,
     instance_account: &'a ObservedRpcAccount,
@@ -2464,7 +2320,7 @@ fn account_data_identity(
 }
 
 fn authenticate_current_general_graph_v2<'a>(
-    collateral_catalog: &DirectAction8CollateralCatalogV2,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     release: &IndexedProgramRelease,
     accounts: &'a [ObservedRpcAccount],
     root: &AuthenticatedDirectRootTransitionV2,
@@ -2529,8 +2385,10 @@ fn authenticate_current_general_graph_v2<'a>(
         &[SEED_REALM_V1, &root.realm_id()],
         release.program_id,
     )?;
-    let token_release = collateral_catalog.resolve(release, policy)?;
-    let token_program = token_release.executable.program_id;
+    let token_release = collateral_catalog
+        .select(release, policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let token_program = token_release.entry().program().program_id;
 
     let binding_address = Address::new_from_array(root.general_market_binding_account());
     let runtime_address = Address::new_from_array(root.general_market_runtime_account());
@@ -2678,9 +2536,8 @@ fn authenticate_current_general_graph_v2<'a>(
         profile_account,
         policy_account,
         token_program,
-        token_program_data: token_release.executable.program_data,
-        token_release_elf_sha256: token_release.executable.elf_sha256,
-        token_release_deployment_slot: token_release.executable.deployment_slot,
+        token_program_data: token_release.entry().program().program_data,
+        token_release_artifact: token_release.entry().artifact_account(),
         binding_account,
         runtime_account,
         instance_account,
@@ -2756,7 +2613,11 @@ fn direct_action8_cursor(
     snapshot.update(DIRECT_ACTION8_SNAPSHOT_DOMAIN_V2);
     snapshot.update(finalized_receipt.receipt_id());
     snapshot.update(finalized_receipt.slot().to_le_bytes());
-    snapshot.update((ordered.len() as u64).to_le_bytes());
+    snapshot.update(
+        u64::try_from(ordered.len())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+            .to_le_bytes(),
+    );
     for fact in &ordered {
         if fact.slot > finalized_receipt.slot() { return invalid(); }
         snapshot.update(fact.address);
@@ -2801,7 +2662,11 @@ fn symbolic_postcondition(
         DirectAction8BranchV2::NoCandidate => 2,
     }]);
     hash.update(sequence.to_le_bytes());
-    hash.update((postimages.len() as u64).to_le_bytes());
+    hash.update(
+        u64::try_from(postimages.len())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+            .to_le_bytes(),
+    );
     let mut writable_accounts = Vec::with_capacity(postimages.len());
     for postimage in postimages {
         if postimage.account == Address::default()

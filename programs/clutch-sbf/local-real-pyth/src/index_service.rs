@@ -11,8 +11,13 @@ use crate::account_index::{
 use crate::action_material::CanonicalActionMaterialErrorV1;
 use crate::direct_action8_material::{
     enumerate_direct_action8_material_v2, join_direct_action8_finalized_snapshots_v2,
-    plan_direct_action8_context_snapshot_v2, DirectAction8CollateralCatalogV2,
-    DirectAction8OperatorBatchV2,
+    plan_direct_action8_context_snapshot_v2, DirectAction8OperatorBatchV2,
+};
+use crate::collateral_release_catalog::CurrentCollateralReleaseCatalogV1;
+use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1;
+use crate::dealer_terminal_material::{
+    enumerate_dealer_terminal_material_v1, join_dealer_terminal_snapshots_v1,
+    plan_dealer_terminal_snapshot_v1, DealerTerminalOperatorBatchV1,
 };
 use crate::rpc_index::{
     decode_block_notification, decode_finalized_exact_account_snapshot_v1,
@@ -265,7 +270,7 @@ impl RpcIndexEngine {
     /// registered atomically with this engine before transport sees it.
     pub fn plan_direct_action8_cycle(
         &mut self,
-        collateral_catalog: &DirectAction8CollateralCatalogV2,
+        collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
         manifest: &ExplicitOperatorReleaseManifest,
         builder: &ProtocolTransactionBuilder,
         request_id: u64,
@@ -305,7 +310,7 @@ impl RpcIndexEngine {
     /// the typed batch consumed by `OperatorJsonApi`.
     pub fn materialize_direct_action8_batch(
         &self,
-        collateral_catalog: &DirectAction8CollateralCatalogV2,
+        collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
         manifest: &ExplicitOperatorReleaseManifest,
         builder: &ProtocolTransactionBuilder,
         exact_request_id: Option<u64>,
@@ -340,6 +345,83 @@ impl RpcIndexEngine {
             manifest,
             builder,
             &snapshot,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Start one exhaustive Dealer action-25 target-8/9 acquisition cycle.
+    /// The retained owner scan selects every Retiring facility; callers cannot
+    /// supply a facility, target discriminator, or semantic identifier.
+    pub fn plan_dealer_terminal_cycle(
+        &mut self,
+        collateral: &AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        request_id: u64,
+    ) -> Result<Option<u64>> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let request = plan_dealer_terminal_snapshot_v1(
+            self.index.acquisition_plan(),
+            release,
+            collateral,
+            builder,
+            snapshot,
+            lookup_table,
+            request_id,
+        )?;
+        let Some(request) = request else { return Ok(None); };
+        let registered_id = request.request().request_id;
+        self.register_exact_snapshot_request(request)?;
+        Ok(Some(registered_id))
+    }
+
+    /// Join the exact same-slot reread and materialize the complete target-8/9
+    /// batch consumed by capability discovery and the operator API.
+    pub fn materialize_dealer_terminal_batch(
+        &self,
+        collateral: AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        exact_request_id: u64,
+    ) -> Result<DealerTerminalOperatorBatchV1> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let discovery = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let exact = self
+            .exact_snapshots
+            .get(&exact_request_id)
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = join_dealer_terminal_snapshots_v1(discovery, exact)?;
+        enumerate_dealer_terminal_material_v1(
+            release,
+            collateral,
+            builder,
+            &snapshot,
+            lookup_table,
         )
         .map_err(Into::into)
     }

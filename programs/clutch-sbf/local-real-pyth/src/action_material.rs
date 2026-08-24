@@ -23,7 +23,7 @@ use crate::workflow_graph::{
     SourceCrankObservation, SourceWorkflowActionMaterial, WorkflowGraphError,
 };
 use clutch_solana_layout::registry::{
-    AllocationStatus, ExtensionAction, ExtensionFamily, STRUCTURED_CLAIM_FAMILY_TAG,
+    AllocationStatus, DirectMarketAction, ExtensionAction, ExtensionFamily, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
@@ -270,6 +270,27 @@ impl<'account> StructuredChainAccountV1<'account> {
         })
     }
 
+    /// Retain absence of one exact program-owned PDA from an exhaustive
+    /// finalized owner scan. The semantic constructor must still derive and
+    /// equality-check the address before the absence is usable.
+    pub(crate) fn absent_from_snapshot(
+        address: Address,
+        snapshot: &'account crate::rpc_index::FinalizedAccountSnapshotV1,
+    ) -> Result<Self> {
+        if address == Address::default()
+            || snapshot.receipt().slot() == 0
+            || snapshot.receipt().release_key().trim().is_empty()
+            || snapshot.accounts().iter().any(|account| account.address == address)
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        Ok(Self {
+            address,
+            present: None,
+            observed_slot: snapshot.receipt().slot(),
+        })
+    }
+
     fn data(self) -> Result<&'account [u8]> {
         self.present
             .map(|account| account.data.as_slice())
@@ -443,6 +464,20 @@ pub struct CanonicalAccountRoleV1 {
 }
 
 impl CanonicalAccountRoleV1 {
+    pub(crate) const fn new(
+        label: &'static str,
+        address: Address,
+        writable: bool,
+        signer: bool,
+    ) -> Self {
+        Self {
+            label,
+            address,
+            writable,
+            signer,
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         self.label
@@ -504,6 +539,76 @@ pub struct CanonicalActionMaterialV1 {
 }
 
 impl CanonicalActionMaterialV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_chain_derived_direct_v2(
+        release: &IndexedProgramRelease,
+        coordinate: CanonicalIntentCoordinate,
+        driver_account: Address,
+        driver_account_slot: u64,
+        cursor: ResumableWorkflowCursor,
+        freshness: ActionFreshnessBoundaryV1,
+        fee_payer: Address,
+        account_roles: Vec<CanonicalAccountRoleV1>,
+        planned: PlannedWorkflowNode,
+        symbolic_postcondition_contract_id: [u8; 32],
+    ) -> Result<Self> {
+        freshness.validate()?;
+        if symbolic_postcondition_contract_id == [0; 32]
+            || cursor.observed_state_sha256 == [0; 32]
+            || planned.manifest_sha256 != release.release_manifest_sha256
+            || planned.cursor != cursor
+            || planned.coordinate
+                != CanonicalActionCoordinate::Direct(DirectMarketAction::FinalizeSelection)
+            || !planned.reload_authoritative_accounts
+            || planned.unsigned_transaction.has_recent_blockhash
+            || planned.unsigned_transaction.signed
+            || planned.unsigned_transaction.submitted
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+        validate_unsigned_direct_plan(coordinate, fee_payer, &account_roles, &planned)?;
+        let release_key = release.key();
+        let authority_state_sha256 = cursor.observed_state_sha256;
+        let base_id = action_material_id(
+            &release_key,
+            &release_key,
+            release.release_manifest_sha256,
+            release.capability_profile_id,
+            coordinate,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            authority_state_sha256,
+            freshness,
+            fee_payer,
+            &account_roles,
+            &planned.unsigned_transaction,
+        );
+        let draft_id = Sha256::new()
+            .chain_update(b"dragons-clutch/operator/direct-action8-material/v2\0")
+            .chain_update(base_id)
+            .chain_update(symbolic_postcondition_contract_id)
+            .finalize()
+            .into();
+        Ok(Self {
+            release_key: release_key.clone(),
+            driver_release_key: release_key,
+            release_manifest_sha256: release.release_manifest_sha256,
+            capability_profile_id: release.capability_profile_id,
+            coordinate,
+            variant: None,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            authority_state_sha256,
+            freshness,
+            fee_payer,
+            account_roles,
+            planned,
+            draft_id,
+        })
+    }
+
     #[must_use]
     pub fn release_key(&self) -> &str {
         &self.release_key
@@ -2917,6 +3022,7 @@ struct DerivedDealerTerminalV1 {
     replay_ordinal: u64,
     liveness_call_ordinal: u32,
     keeper_payment_lamports: u64,
+    collateral_selection_receipt_id: [u8; 32],
 }
 
 /// Construct one unsigned current Dealer action-25 terminal cut from a single
@@ -2937,14 +3043,14 @@ pub fn construct_dealer_terminal_action_material_v1(
         .validate()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
     collateral
-        .program
+        .program()
         .validate()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
     freshness.validate()?;
     if workflow_id == [0; 32]
         || builder.clutch_program() != release.program_id
         || builder.clutch_release_sha256() != release.elf_sha256
-        || collateral.artifact_owner != release.program_id
+        || collateral.artifact_owner() != release.program_id
         || lookup_table.observed_slot > freshness.observed_slot
         || lookup_table.cluster_key.trim().is_empty()
     {
@@ -3038,7 +3144,7 @@ pub fn construct_dealer_terminal_action_material_v1(
     let authority_state_sha256 = dealer_terminal_authority_state_id_v1(
         accounts,
         lookup_table.state_sha256,
-        collateral.receipt_id,
+        derived.collateral_selection_receipt_id,
         variant,
     );
     let cursor = ResumableWorkflowCursor {
@@ -3491,6 +3597,7 @@ struct DealerTerminalMarketV1 {
     resolution_data_id: [u8; 32],
     generation: u64,
     outcome_count: u8,
+    collateral_selection_receipt_id: [u8; 32],
 }
 
 fn authenticate_dealer_terminal_product_and_value_v1(
@@ -3664,12 +3771,17 @@ fn authenticate_dealer_terminal_product_and_value_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    authenticate_indexed_loader_release(
-        collateral.program,
-        collateral.artifact,
-        accounts[37],
-        accounts[38],
-    )?;
+    let collateral_program = accounts[37]
+        .present
+        .and_then(CurrentCollateralExecutableAccountViewV1::from_finalized)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_programdata = accounts[38]
+        .present
+        .and_then(CurrentCollateralExecutableAccountViewV1::from_finalized)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    collateral
+        .reauthenticate_executable(collateral_program, collateral_programdata)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
     let realm = RealmAccount::decode(accounts[34].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_profile = ProfileAccount::decode(accounts[35].data()?)
@@ -3679,13 +3791,13 @@ fn authenticate_dealer_terminal_product_and_value_v1(
     let collateral_policy_id = collateral_policy
         .id()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let selected_collateral = collateral
+        .select_for(release, collateral_policy)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
     let collateral_release_id = collateral
-        .adapter
+        .adapter()
         .id()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-    collateral_policy
-        .validate_for_release(&collateral.adapter)
-        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
     let realm_pda = Address::find_program_address(
         &[REALM_PDA_SEED_V1, &realm.realm.bytes()],
         &program,
@@ -3706,8 +3818,8 @@ fn authenticate_dealer_terminal_product_and_value_v1(
         ],
         &program,
     );
-    if accounts[37].address != collateral.program.program_id
-        || accounts[38].address != collateral.program.program_data
+    if accounts[37].address != collateral.program().program_id
+        || accounts[38].address != collateral.program().program_data
         || realm.profile != collateral_profile.profile
         || realm.realm != collateral_profile.realm
         || collateral_profile.collateral_policy_id.bytes() != collateral_policy_id.bytes()
@@ -3838,6 +3950,7 @@ fn authenticate_dealer_terminal_product_and_value_v1(
         resolution_data_id: root_state.resolution_data_id().bytes(),
         generation: root_binding.generation,
         outcome_count: root_binding.outcome_count,
+        collateral_selection_receipt_id: selected_collateral.receipt_id(),
     })
 }
 
@@ -4301,6 +4414,7 @@ fn derive_dealer_terminal_v1(
         replay_ordinal: position.replay.next_transition_ordinal(),
         liveness_call_ordinal: call_ordinal,
         keeper_payment_lamports: payment,
+        collateral_selection_receipt_id: market.collateral_selection_receipt_id,
     })
 }
 
@@ -4604,6 +4718,56 @@ fn validate_unsigned_structured_plan(
         || transaction.signed
         || transaction.submitted
         || !planned.reload_authoritative_accounts
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+fn validate_unsigned_direct_plan(
+    coordinate: CanonicalIntentCoordinate,
+    fee_payer: Address,
+    roles: &[CanonicalAccountRoleV1],
+    planned: &PlannedWorkflowNode,
+) -> Result<()> {
+    let transaction = &planned.unsigned_transaction;
+    let expected_signers = roles
+        .iter()
+        .filter(|role| role.signer)
+        .map(|role| role.address)
+        .chain(core::iter::once(fee_payer))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding_matches = matches!(
+        transaction.registry_bindings.as_slice(),
+        [Some(binding)]
+            if binding.family.tag() == coordinate.family_tag
+                && binding.family.version() == coordinate.family_version
+                && binding.local_action == coordinate.local_action
+                && binding.family_status == AllocationStatus::Frozen
+                && matches!(
+                    binding.central_action,
+                    Some(ExtensionAction::DirectMarket(action))
+                        if action.tag() == coordinate.local_action
+                )
+    );
+    if !matches!(
+        planned.coordinate,
+        CanonicalActionCoordinate::Direct(action)
+            if action.tag() == coordinate.local_action
+    )
+        || transaction.flows != [ProtocolFlow::DirectMarketV1]
+        || transaction.actions.len() != 1
+        || transaction.semantic_owners.len() != 1
+        || !binding_matches
+        || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
+        || transaction.required_signers != expected_signers
+        || transaction.exact_equations.is_empty()
+        || transaction.serialized_transaction.is_empty()
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }

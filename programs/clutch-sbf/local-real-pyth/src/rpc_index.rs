@@ -1072,7 +1072,11 @@ pub fn decode_program_scan_snapshot_v1(
     let slot = program_scan_context_slot(result)?;
     let mut hash = Sha256::new();
     hash.update(b"dragons-clutch/operator/program-scan-addresses/v1\0");
-    hash.update((accounts.len() as u64).to_le_bytes());
+    hash.update(
+        u64::try_from(accounts.len())
+            .map_err(|_| RpcIndexError::InvalidBound)?
+            .to_le_bytes(),
+    );
     for account in &accounts { hash.update(account.address.to_bytes()); }
     let receipt = finalized_snapshot_receipt_v1(plan, request, slot, hash.finalize().into())?;
     Ok(FinalizedAccountSnapshotV1 { receipt, accounts })
@@ -1115,7 +1119,6 @@ pub fn decode_finalized_exact_account_snapshot_v1(
     for (index, (address, value)) in request.addresses.iter().zip(values).enumerate() {
         if value.is_null() { return Err(RpcIndexError::InvalidAccount); }
         let data = decode_account_value(value, plan.bounds)?;
-        if data.executable { return Err(RpcIndexError::InvalidAccount); }
         total = total
             .checked_add(data.data.len())
             .ok_or(RpcIndexError::ResponseTooLarge)?;
@@ -1147,7 +1150,11 @@ pub fn decode_finalized_exact_account_snapshot_v1(
     }
     let mut hash = Sha256::new();
     hash.update(b"dragons-clutch/operator/exact-snapshot-addresses/v1\0");
-    hash.update((request.addresses.len() as u64).to_le_bytes());
+    hash.update(
+        u64::try_from(request.addresses.len())
+            .map_err(|_| RpcIndexError::InvalidBound)?
+            .to_le_bytes(),
+    );
     for address in &request.addresses { hash.update(address.to_bytes()); }
     let receipt = finalized_snapshot_receipt_v1(plan, wire, slot, hash.finalize().into())?;
     Ok(FinalizedAccountSnapshotV1 {

@@ -10,6 +10,10 @@ pub mod account_index;
 pub mod action_material;
 #[cfg(feature = "operator")]
 pub mod collateral_release_catalog;
+#[cfg(feature = "operator")]
+pub mod direct_action8_material;
+#[cfg(feature = "operator")]
+pub mod dealer_terminal_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
