@@ -22,6 +22,7 @@
   const DIRECT_COORDINATE = Object.freeze({ familyTag: "80", familyVersion: "1", family: "direct", flow: "direct-market-v1", messageVersion: "legacy", lookupTables: 0 });
   const FRACTIONAL_COORDINATE = Object.freeze({ familyTag: "79", familyVersion: "1", family: "fractional", flow: "fractional-redemption", messageVersion: "legacy", lookupTables: 0 });
   const FRACTIONAL_ACTION_CONTRACTS = Object.freeze({
+    "1": Object.freeze({ action: "initialize-fractional", ownerSchema: "fractional-redemption/79/1/1/initialize", driverRole: 0, equationNames: Object.freeze(["chain-derived Product foundation outcome width"]) }),
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
     "3": Object.freeze({ action: "redeem-fractional-bearer-exact", ownerSchema: "fractional-redemption/79/1/3/redeem-bearer-exact", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
     "4": Object.freeze({ action: "redeem-fractional-internal-credit", ownerSchema: "fractional-redemption/79/1/4/redeem-internal-credit", driverRole: 12, equationNames: Object.freeze(["holder-approved internal Eggs retired", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
@@ -29,7 +30,8 @@
     "6": Object.freeze({ action: "transfer-fractional-credit", ownerSchema: "fractional-redemption/79/1/6/transfer-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
     "7": Object.freeze({ action: "merge-fractional-credit", ownerSchema: "fractional-redemption/79/1/7/merge-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
     "8": Object.freeze({ action: "close-fractional-zero-credit", ownerSchema: "fractional-redemption/79/1/8/close-zero-credit", driverRole: 13, equationNames: Object.freeze(["chain-derived zero-credit rent split"]) }),
-    "9": Object.freeze({ action: "seal-fractional-claims-exhausted", ownerSchema: "fractional-redemption/79/1/9/seal-claims-exhausted", driverRole: 11, equationNames: Object.freeze(["chain-derived zero native claim supply"]) })
+    "9": Object.freeze({ action: "seal-fractional-claims-exhausted", ownerSchema: "fractional-redemption/79/1/9/seal-claims-exhausted", driverRole: 11, equationNames: Object.freeze(["chain-derived zero native claim supply"]) }),
+    "10": Object.freeze({ action: "close-empty-fractional-ledger", ownerSchema: "fractional-redemption/79/1/10/close-empty-ledger", driverRole: 12, equationNames: Object.freeze(["chain-derived Product foundation outcome width"]) })
   });
   const directRole = (role, signer, writable) => Object.freeze({ role, signer, writable });
   const DIRECT_ACTION_CONTRACTS = Object.freeze({
@@ -1102,7 +1104,30 @@
     let holderChoice = null;
     let derivedFacts = null;
     let payerIndex = null;
-    if (coordinate.localAction === "2") {
+    if (coordinate.localAction === "1" || coordinate.localAction === "10") {
+      const variableRoles = accountRoles.length - 32;
+      if (variableRoles < 4 || variableRoles > 32 || variableRoles % 2 !== 0) throw new Error("Fractional lifecycle material does not have the exact 32+2*N Product-foundation geometry.");
+      const outcomeCount = variableRoles / 2;
+      const core = Array.from({ length: 15 }, (_, index) => ["foundation-core", false, index === 0 || index === 4 || index === 11 || index === 12]);
+      const outcomes = Array.from({ length: 2 * outcomeCount }, () => ["foundation-outcome", false, false]);
+      const auxiliary = Array.from({ length: 17 }, (_, index) => ["lifecycle-authority", false, coordinate.localAction === "10" && (index === 15 || index === 16)]);
+      expected = [...core, ...outcomes, ...auxiliary];
+      geometry = `${coordinate.localAction === "1" ? "initialize" : "close-empty-ledger"}-foundation-32+2*${outcomeCount}-${accountRoles.length}-roles`;
+      requirePlain(transactionDraft.exactEquations[0].unit, "Fractional lifecycle outcome-width unit");
+      const equationOutcome = decimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional lifecycle equation outcome", 15n);
+      const equationWidth = decimal(transactionDraft.exactEquations[0].left, "Fractional lifecycle outcome width", 16n);
+      if (transactionDraft.exactEquations[0].unit.kind !== "egg-atoms" || equationOutcome !== 0n || equationWidth !== BigInt(outcomeCount)) throw new Error("Fractional lifecycle material does not bind its chain-derived Product outcome width.");
+      if (stateSelection.cursor.lane !== FRACTIONAL_COORDINATE.flow || stateSelection.cursor.phase !== coordinate.localAction || (coordinate.localAction === "1" ? stateSelection.cursor.item !== "0" : BigInt(stateSelection.cursor.item) === 0n)) throw new Error("Fractional lifecycle selection does not carry its exact scheduler lane, phase, and sequence.");
+      const dependencies = [...new Set(accountRoles.map((role) => role.address).filter((identity) => identity !== accountRoles[contract.driverRole].address))].sort(compareAddressBytes);
+      if (dependencies.length !== stateSelection.dependencies.length || dependencies.some((identity, index) => identity !== stateSelection.dependencies[index])) throw new Error("Fractional lifecycle restart cursor differs from the complete canonical Product-foundation dependency index.");
+      derivedFacts = Object.freeze({
+        kind: "fractional-lifecycle",
+        outcomeCount: String(outcomeCount),
+        driver: coordinate.localAction === "1" ? "market-lifecycle-root-v2" : "fractional-ledger-v1",
+        sequence: stateSelection.cursor.item,
+        authority: "complete-finalized-product-foundation-and-release-join"
+      });
+    } else if (coordinate.localAction === "2") {
       expected = [["claimant", true, false], ...common, ["position-v3", false, true], ["general-replay-v3", false, true]];
     } else if (coordinate.localAction === "9") {
       expected = common;
@@ -1228,10 +1253,16 @@
     const exactRoles = expected.map(([role, signer, writable]) => directRole(role, signer, writable));
     if (!contract || coordinate.action !== contract.action || row.semanticOwnerConstructor !== `clutch-fractional-redemption-runtime/${contract.ownerSchema}` || !directRolesMatch(accountRoles, exactRoles)) throw new Error("Fractional verdict differs from its exact landed chain-derived material contract.");
     const loaderAlias = (left, right) => (left === 4 && right === 17) || (left === 18 && right === 20);
+    if (coordinate.localAction === "1" || coordinate.localAction === "10") {
+      const lifecycleAux = accountRoles.length - 17;
+      if ((accountRoles[lifecycleAux + 3].address === accountRoles[lifecycleAux + 5].address) !== (accountRoles[lifecycleAux + 4].address === accountRoles[lifecycleAux + 6].address)) throw new Error("Fractional lifecycle collateral/claim loader aliases are not correlated.");
+    }
     if ((coordinate.localAction === "3" || coordinate.localAction === "5") && ((accountRoles[4].address === accountRoles[17].address) !== (accountRoles[18].address === accountRoles[20].address))) throw new Error("Fractional bearer loader program/programdata aliases are not correlated.");
     for (let left = 0; left < accountRoles.length; left += 1) {
       for (let right = left + 1; right < accountRoles.length; right += 1) {
-        const permitted = (coordinate.localAction === "8" && left === 0 && right === 14)
+        const lifecycleAux = accountRoles.length - 17;
+        const permitted = ((coordinate.localAction === "1" || coordinate.localAction === "10") && ((left === lifecycleAux + 3 && right === lifecycleAux + 5) || (left === lifecycleAux + 4 && right === lifecycleAux + 6)))
+          || (coordinate.localAction === "8" && left === 0 && right === 14)
           || ((coordinate.localAction === "3" || coordinate.localAction === "5") && loaderAlias(left, right))
           || (coordinate.localAction === "5" && payerIndex !== null && left === 0 && right === payerIndex)
           || ((coordinate.localAction === "6" || coordinate.localAction === "7") && payerIndex !== null && (left === 0 || left === 1) && right === payerIndex)
@@ -1268,7 +1299,7 @@
       geometry,
       holderChoice,
       derivedFacts,
-      holderChoiceDisposition: holderChoice === null ? "none-for-current-actions-2-8-9" : "irreducible-holder-choices-only-no-account-meta-authority"
+      holderChoiceDisposition: holderChoice === null ? "none-chain-derived-lifecycle-or-permissionless-maintenance-action" : "irreducible-holder-choices-only-no-account-meta-authority"
     });
   };
 
