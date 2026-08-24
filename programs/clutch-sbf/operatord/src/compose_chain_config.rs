@@ -428,6 +428,24 @@ fn selected_families(summary: &Value) -> Result<Vec<CanonicalFamily>> {
             }
         }
     }
+    for variant in enabled_intent_variants(summary)? {
+        match (variant[0], variant[1], variant[2]) {
+            (
+                clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+                clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+                action,
+            ) if action
+                == clutch_solana_layout::registry::DealerFacilityAction::Retire.tag() =>
+            {
+                families.insert(CanonicalFamily::Dealer);
+            }
+            _ => {
+                return Err(
+                    "checked profile enables an unknown payload-scoped capability".into(),
+                )
+            }
+        }
+    }
     Ok(families.into_iter().collect())
 }
 
@@ -457,6 +475,37 @@ fn enabled_intents(summary: &Value) -> Result<Vec<[u8; 3]>> {
             return Err("enabled intent triples are not strictly canonical".into());
         }
         output.push(triple);
+    }
+    Ok(output)
+}
+
+fn enabled_intent_variants(summary: &Value) -> Result<Vec<[u8; 4]>> {
+    let rows = summary
+        .get("enabled_intent_variants")
+        .and_then(Value::as_array)
+        .ok_or("checked profile summary has no enabled intent variants")?;
+    let mut output = Vec::with_capacity(rows.len());
+    for row in rows {
+        let items = row
+            .as_array()
+            .ok_or("enabled intent variant is not a quadruple")?;
+        if items.len() != 4 {
+            return Err("enabled intent variant is not a quadruple".into());
+        }
+        let mut variant = [0_u8; 4];
+        for (index, item) in items.iter().enumerate() {
+            variant[index] = u8::try_from(
+                item.as_u64()
+                    .ok_or("enabled intent variant component is not unsigned")?,
+            )?;
+        }
+        if variant[0] == 0
+            || variant[1] == 0
+            || output.last().is_some_and(|previous| previous >= &variant)
+        {
+            return Err("enabled intent variants are not strictly canonical".into());
+        }
+        output.push(variant);
     }
     Ok(output)
 }
@@ -558,6 +607,7 @@ pub(crate) fn compose_checked_chain_config(
     workflow_binding: &[u8; 32],
 ) -> Result<String> {
     let intents = enabled_intents(&checked.summary)?;
+    let intent_variants = enabled_intent_variants(&checked.summary)?;
     let families = selected_families(&checked.summary)?;
     let sink = Address::from_str(source_neutral_sink)?;
     if sink == Address::default() {
@@ -602,6 +652,12 @@ pub(crate) fn compose_checked_chain_config(
                 "familyVersion": triple[1].to_string(),
                 "localAction": triple[2].to_string()
             })).collect::<Vec<_>>(),
+            "enabledIntentVariants": intent_variants.iter().map(|variant| json!({
+                "familyTag": variant[0].to_string(),
+                "familyVersion": variant[1].to_string(),
+                "localAction": variant[2].to_string(),
+                "payloadDiscriminator": variant[3].to_string()
+            })).collect::<Vec<_>>(),
             "families": families.iter().map(|family| family.name()).collect::<Vec<_>>()
         }],
         "sourceNeutralSink": source_neutral_sink,
@@ -635,6 +691,7 @@ mod tests {
     fn canonical_hash_and_intent_selection_do_not_depend_on_browser_input() {
         let summary = json!({
             "central_registry": {"enabled_intent_triples": [[74, 1, 26], [76, 1, 1], [78, 1, 1], [79, 1, 1], [80, 1, 1]]},
+            "enabled_intent_variants": [],
             "capabilities": [
                 {"slot": "source-plane", "linkage": "linked"},
                 {"slot": "liquidity-dealer", "linkage": "linked"},
@@ -650,6 +707,24 @@ mod tests {
         assert!(families.contains(&CanonicalFamily::Direct));
         assert!(families.contains(&CanonicalFamily::PositionV3));
         assert!(families.contains(&CanonicalFamily::ReplayV3));
+
+        let variant_summary = json!({
+            "central_registry": {"enabled_intent_triples": []},
+            "enabled_intent_variants": [[76, 1, 25, 8], [76, 1, 25, 9]],
+            "capabilities": []
+        });
+        assert_eq!(
+            enabled_intent_variants(&variant_summary).unwrap(),
+            vec![[76, 1, 25, 8], [76, 1, 25, 9]]
+        );
+        assert!(selected_families(&variant_summary)
+            .unwrap()
+            .contains(&CanonicalFamily::Dealer));
+
+        let reversed = json!({
+            "enabled_intent_variants": [[76, 1, 25, 9], [76, 1, 25, 8]]
+        });
+        assert!(enabled_intent_variants(&reversed).is_err());
     }
 
     #[test]

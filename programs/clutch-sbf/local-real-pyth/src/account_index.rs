@@ -16,8 +16,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_dealer_runtime_contract::{
     DealerActionReceiptV1, DealerClaimWorkV1, DealerEpochBindingV2, DealerExitTicketV1,
-    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1,
-    DealerPolicyV1, DealerRootTombstoneV2, DealerStateV2, DealerTerminalAllocationV1,
+    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerFutureCreditFundingV1,
+    DealerLeaseV2, DealerLivenessScheduleV1, DealerPolicyV1, DealerRootTombstoneV2,
+    DealerSeriesObligationBindingV2, DealerStateV2, DealerStateV3, DealerTerminalAllocationV1,
     FixedCodec as DealerFixedCodec, LpPageV2, SettlementPotV2, DEALER_FACILITY_REPLAY_BYTES_V1,
 };
 use clutch_direct_market_runtime::codec_v1::decode_direct_market_root_body_v1;
@@ -115,7 +116,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v5-source-work-schedule-general-no-keeper-no-selected-candidate-direct-80-current";
+    "dragons-clutch/canonical-account-decoders/v6-current-dealer-terminal-targets-8-9";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -210,6 +211,9 @@ pub enum CanonicalAccountKind {
     DealerPolicy,
     DealerLivenessSchedule,
     DealerStateV2,
+    DealerStateV3,
+    DealerSeriesObligationV2,
+    DealerFutureCreditFundingV1,
     DealerFundedDependenciesV2,
     DealerLpPageV2,
     DealerLeaseV2,
@@ -290,6 +294,9 @@ impl CanonicalAccountKind {
             Self::DealerPolicy => "dealer-policy-v1",
             Self::DealerLivenessSchedule => "dealer-liveness-schedule-v1",
             Self::DealerStateV2 => "dealer-state-v2",
+            Self::DealerStateV3 => "dealer-state-v3",
+            Self::DealerSeriesObligationV2 => "dealer-series-obligation-v2",
+            Self::DealerFutureCreditFundingV1 => "dealer-future-credit-funding-v1",
             Self::DealerFundedDependenciesV2 => "dealer-funded-dependencies-v2",
             Self::DealerLpPageV2 => "dealer-lp-page-v2",
             Self::DealerLeaseV2 => "dealer-lease-v2",
@@ -1428,6 +1435,51 @@ fn decode_dealer(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.generation);
         projection.primary_binding = Some(value.facility_id.bytes());
         projection.secondary_binding = Some(value.policy_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerStateV3>(
+        data,
+        registry::DEALER_STATE_V3_ACCOUNT_TAG,
+        registry::DEALER_STATE_V3_ACCOUNT_VERSION,
+        registry::DEALER_STATE_V3_ACCOUNT_BYTES,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerStateV3,
+        );
+        projection.generation = Some(value.base.generation);
+        projection.primary_binding = Some(value.base.facility_id.bytes());
+        projection.secondary_binding = Some(value.series_obligation_binding_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerSeriesObligationBindingV2>(
+        data,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerSeriesObligationV2,
+        );
+        projection.generation = Some(value.key.product_generation);
+        projection.primary_binding = Some(value.key.facility_id.bytes());
+        projection.secondary_binding = Some(value.key.market_instance_v2_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<DealerFutureCreditFundingV1>(
+        data,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerFutureCreditFundingV1,
+        );
+        projection.generation = Some(value.founding_generation);
+        projection.primary_binding = Some(value.facility_id.bytes());
+        projection.secondary_binding = Some(value.market_instance_v2_id.bytes());
         return Ok(Some(projection));
     }
     if let Some(value) = decode_current_dealer_body::<DealerFundedDependenciesV2>(
@@ -2974,6 +3026,7 @@ mod processed_fork_tests {
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             enabled_intents: vec![],
+            enabled_intent_variants: vec![],
             families: vec![CanonicalFamily::General],
         };
         let release_key = release.key();

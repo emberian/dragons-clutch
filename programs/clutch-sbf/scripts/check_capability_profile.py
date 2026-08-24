@@ -43,6 +43,13 @@ CURRENT_STRUCTURED_EXTENSION_TRIPLES = [
     [75, 1, action] for action in (1, 3, 5, 6, 7, 8)
 ]
 CURRENT_DEALER_EXTENSION_TRIPLES = [[76, 1, action] for action in range(1, 26)]
+# Action25 retains one coarse registry coordinate, but the current dispatcher
+# admits only these hostile-decoded payload targets. They are emitted as
+# checked variants rather than falsely enabling the whole tuple.
+CURRENT_DEALER_PAYLOAD_VARIANTS = [
+    [76, 1, 25, 8],
+    [76, 1, 25, 9],
+]
 CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 13)]
 CURRENT_SERIES_EXTENSION_TRIPLES = [[77, 2, action] for action in range(13, 19)]
 CURRENT_RECOVERY_EXTENSION_TRIPLES = [[78, 1, action] for action in range(10, 14)]
@@ -1735,6 +1742,12 @@ def validate_manifest(
         "cargo_features": cargo_features(build_contract),
         "capabilities": capabilities,
         "central_registry": central_registry,
+        "enabled_intent_variants": (
+            CURRENT_DEALER_PAYLOAD_VARIANTS
+            if build_contract["cargo_profile_feature"]
+            == SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE
+            else []
+        ),
         "limits": limits,
         "linked_capabilities": linked,
         "planned_capabilities": planned,

@@ -502,6 +502,13 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
                     "familyVersion": intent.family_version.to_string(),
                     "localAction": intent.local_action.to_string()
                 })).collect::<Vec<_>>(),
+                "enabledIntentVariants": release.enabled_intent_variants.iter().map(|variant| json!({
+                    "familyTag": variant.coordinate().family_tag.to_string(),
+                    "familyVersion": variant.coordinate().family_version.to_string(),
+                    "localAction": variant.coordinate().local_action.to_string(),
+                    "payloadDiscriminator": variant.payload_discriminator().to_string(),
+                    "name": variant.name()
+                })).collect::<Vec<_>>(),
                 "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
             })
         })

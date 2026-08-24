@@ -7,7 +7,8 @@
 
 use crate::account_index::{FinalizedAccountAbsence, IndexedBranch};
 use crate::rpc_index::{
-    CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount, RpcCommitment,
+    CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
+    ObservedRpcAccount, RpcCommitment,
 };
 use crate::operatord::KeeperActionSelection;
 use crate::transaction_builder::{
@@ -544,6 +545,7 @@ pub struct CanonicalActionMaterialV1 {
     release_manifest_sha256: [u8; 32],
     capability_profile_id: [u8; 32],
     coordinate: CanonicalIntentCoordinate,
+    variant: Option<CanonicalIntentVariantV1>,
     driver_account: Address,
     driver_account_slot: u64,
     cursor: ResumableWorkflowCursor,
@@ -579,6 +581,11 @@ impl CanonicalActionMaterialV1 {
     #[must_use]
     pub const fn coordinate(&self) -> CanonicalIntentCoordinate {
         self.coordinate
+    }
+
+    #[must_use]
+    pub const fn variant(&self) -> Option<CanonicalIntentVariantV1> {
+        self.variant
     }
 
     #[must_use]
@@ -644,6 +651,7 @@ impl CanonicalActionMaterialV1 {
             && self.release_manifest_sha256 == release.release_manifest_sha256
             && self.capability_profile_id == release.capability_profile_id
             && self.coordinate == coordinate
+            && self.variant.is_none()
             && self.driver_account == selection.account
             && self.driver_account_slot == selection.account_slot
             && self.cursor == selection.cursor
@@ -654,6 +662,28 @@ impl CanonicalActionMaterialV1 {
                 .planned
                 .unsigned_transaction
                 .has_recent_blockhash
+            && !self.planned.unsigned_transaction.signed
+            && !self.planned.unsigned_transaction.submitted
+    }
+
+
+    /// Exact payload-scoped release join. Unlike ordinary coordinates, these
+    /// variants deliberately require the coarse tuple to remain absent.
+    #[must_use]
+    pub fn matches_variant(
+        &self,
+        release: &IndexedProgramRelease,
+        variant: CanonicalIntentVariantV1,
+    ) -> bool {
+        self.release_key == release.key()
+            && self.release_manifest_sha256 == release.release_manifest_sha256
+            && self.capability_profile_id == release.capability_profile_id
+            && self.coordinate == variant.coordinate()
+            && self.variant == Some(variant)
+            && release.enabled_intents.binary_search(&variant.coordinate()).is_err()
+            && release.enabled_intent_variants.binary_search(&variant).is_ok()
+            && self.planned.reload_authoritative_accounts
+            && !self.planned.unsigned_transaction.has_recent_blockhash
             && !self.planned.unsigned_transaction.signed
             && !self.planned.unsigned_transaction.submitted
     }
@@ -884,6 +914,7 @@ fn construct_detected_structured_action_material_v1(
         release_manifest_sha256: releases.wrapper.release_manifest_sha256,
         capability_profile_id: releases.wrapper.capability_profile_id,
         coordinate,
+        variant: None,
         driver_account: selection.account,
         driver_account_slot: selection.account_slot,
         cursor: selection.cursor,
@@ -3036,6 +3067,7 @@ pub fn construct_source_action_material_v1(
         release_manifest_sha256: release.release_manifest_sha256,
         capability_profile_id: release.capability_profile_id,
         coordinate,
+        variant: None,
         driver_account: selection.account,
         driver_account_slot: selection.account_slot,
         cursor: selection.cursor,

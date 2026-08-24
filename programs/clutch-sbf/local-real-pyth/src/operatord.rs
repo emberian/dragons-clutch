@@ -14,7 +14,8 @@ use crate::action_material::{
     CanonicalActionMaterialV1,
 };
 use crate::rpc_index::{
-    public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
+    public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
+    IndexedProgramRelease, RpcCommitment,
 };
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{
@@ -478,6 +479,13 @@ impl<'index> OperatorJsonApi<'index> {
                         "familyVersion": intent.family_version.to_string(),
                         "localAction": intent.local_action.to_string()
                     })).collect::<Vec<_>>(),
+                    "enabledIntentVariants": release.enabled_intent_variants.iter().map(|variant| json!({
+                        "familyTag": variant.coordinate().family_tag.to_string(),
+                        "familyVersion": variant.coordinate().family_version.to_string(),
+                        "localAction": variant.coordinate().local_action.to_string(),
+                        "payloadDiscriminator": variant.payload_discriminator().to_string(),
+                        "name": variant.name()
+                    })).collect::<Vec<_>>(),
                     "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
                 })
             })
@@ -568,6 +576,13 @@ impl<'index> OperatorJsonApi<'index> {
                         "familyTag": intent.family_tag.to_string(),
                         "familyVersion": intent.family_version.to_string(),
                         "localAction": intent.local_action.to_string()
+                    })).collect::<Vec<_>>(),
+                    "enabledIntentVariants": release.enabled_intent_variants.iter().map(|variant| json!({
+                        "familyTag": variant.coordinate().family_tag.to_string(),
+                        "familyVersion": variant.coordinate().family_version.to_string(),
+                        "localAction": variant.coordinate().local_action.to_string(),
+                        "payloadDiscriminator": variant.payload_discriminator().to_string(),
+                        "name": variant.name()
                     })).collect::<Vec<_>>()
                 },
                 "canonicalAccounts": accounts.iter().map(|version| session_account_json(version)).collect::<Vec<_>>(),
@@ -625,13 +640,16 @@ impl<'index> OperatorJsonApi<'index> {
             &accounts,
             &cursors,
         );
-        let verdicts = release
+        let mut verdicts = release
             .enabled_intents
             .iter()
             .map(|coordinate| {
                 action_verdict_json(release, *coordinate, &cursors, self.action_materials)
             })
             .collect::<Vec<_>>();
+        verdicts.extend(release.enabled_intent_variants.iter().map(|variant| {
+            action_variant_verdict_json(release, *variant, self.action_materials)
+        }));
         response(
             200,
             json!({
@@ -827,6 +845,137 @@ fn action_verdict_json(
         "transactionDraft": null,
         "signerRequirements": [],
         "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
+    })
+}
+
+fn action_variant_verdict_json(
+    release: &IndexedProgramRelease,
+    variant: CanonicalIntentVariantV1,
+    action_materials: &[CanonicalActionMaterialV1],
+) -> Value {
+    let coordinate = variant.coordinate();
+    let matching_materials = action_materials
+        .iter()
+        .filter(|material| material.matches_variant(release, variant))
+        .collect::<Vec<_>>();
+    let material = match matching_materials.as_slice() {
+        [material] => Some(*material),
+        _ => None,
+    };
+    if let Some(material) = material {
+        return callable_action_variant_verdict_json(release, variant, material);
+    }
+    json!({
+        "coordinate": {
+            "familyTag": coordinate.family_tag.to_string(),
+            "familyVersion": coordinate.family_version.to_string(),
+            "localAction": coordinate.local_action.to_string(),
+            "family": "dealer",
+            "action": "retire"
+        },
+        "payloadVariant": {
+            "discriminator": variant.payload_discriminator().to_string(),
+            "name": variant.name()
+        },
+        "releaseAdmission": {
+            "enabled": true,
+            "scope": "payload-discriminator-only",
+            "coarseCoordinateEnabled": false,
+            "releaseKey": release.key(),
+            "capabilityProfileId": hex32(release.capability_profile_id)
+        },
+        "stateSelection": null,
+        "semanticOwnerConstructor": "chain-derived-dealer-terminal-v1",
+        "accountRoles": [],
+        "callable": false,
+        "verdict": "unavailable",
+        "reason": if matching_materials.len() > 1 {
+            "multiple canonical materials claim the same payload-scoped Dealer terminal variant"
+        } else {
+            "no complete finalized hostile-authenticated Dealer terminal account frame is presently available"
+        },
+        "transactionDraft": null,
+        "signerRequirements": [],
+        "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
+    })
+}
+
+fn callable_action_variant_verdict_json(
+    release: &IndexedProgramRelease,
+    variant: CanonicalIntentVariantV1,
+    material: &CanonicalActionMaterialV1,
+) -> Value {
+    let coordinate = variant.coordinate();
+    let transaction = material.unsigned_transaction();
+    let roles = material
+        .account_roles()
+        .iter()
+        .enumerate()
+        .map(|(index, role)| json!({
+            "index": index.to_string(),
+            "role": role.label(),
+            "writable": role.writable(),
+            "signer": role.signer(),
+            "address": role.address().to_string(),
+            "identityDisposition": "semantic-owner-derived-and-bound-to-draft"
+        }))
+        .collect::<Vec<_>>();
+    let freshness = material.freshness();
+    json!({
+        "coordinate": {
+            "familyTag": coordinate.family_tag.to_string(),
+            "familyVersion": coordinate.family_version.to_string(),
+            "localAction": coordinate.local_action.to_string(),
+            "family": "dealer",
+            "action": "retire"
+        },
+        "payloadVariant": {
+            "discriminator": variant.payload_discriminator().to_string(),
+            "name": variant.name()
+        },
+        "releaseAdmission": {
+            "enabled": true,
+            "scope": "payload-discriminator-only",
+            "coarseCoordinateEnabled": false,
+            "releaseKey": release.key(),
+            "capabilityProfileId": hex32(release.capability_profile_id)
+        },
+        "stateSelection": null,
+        "semanticOwnerConstructor": "chain-derived-dealer-terminal-v1",
+        "accountRoles": roles,
+        "callable": true,
+        "verdict": "callable-unsigned-draft",
+        "reason": "checked payload-scoped release admission and one finalized hostile-authenticated Dealer terminal frame agree",
+        "transactionDraft": {
+            "schema": crate::action_material::CANONICAL_ACTION_MATERIAL_SCHEMA_V1,
+            "draftId": hex32(material.draft_id()),
+            "constructionSchema": transaction.schema,
+            "driverAccount": material.driver_account().to_string(),
+            "driverAccountSlot": material.driver_account_slot().to_string(),
+            "authorityStateSha256": hex32(material.authority_state_sha256()),
+            "releaseManifestSha256": hex32(material.release_manifest_sha256()),
+            "capabilityProfileId": hex32(material.capability_profile_id()),
+            "feePayer": material.fee_payer().to_string(),
+            "messageVersion": match transaction.message_version {
+                TransactionMessageVersionV1::Legacy => "legacy",
+                TransactionMessageVersionV1::V0 => "v0",
+            },
+            "serializedTransactionHex": hex_bytes(&transaction.serialized_transaction),
+            "recentBlockhashPresent": transaction.has_recent_blockhash,
+            "signed": transaction.signed,
+            "submitted": transaction.submitted
+        },
+        "signerRequirements": transaction.required_signers.iter().map(|signer| json!({
+            "address": signer.to_string(),
+            "signaturePresent": false,
+            "keyAccess": false
+        })).collect::<Vec<_>>(),
+        "freshness": {
+            "observedSlot": freshness.observed_slot.to_string(),
+            "validBeforeSlot": freshness.valid_before_slot.to_string(),
+            "maximumValiditySlots": freshness.maximum_validity_slots.to_string(),
+            "recentBlockhash": "absent-by-contract"
+        }
     })
 }
 
@@ -1179,6 +1328,20 @@ fn read_only_session_id(
             coordinate.local_action,
         ]);
     }
+    hash.update(
+        u64::try_from(release.enabled_intent_variants.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for variant in &release.enabled_intent_variants {
+        let coordinate = variant.coordinate();
+        hash.update([
+            coordinate.family_tag,
+            coordinate.family_version,
+            coordinate.local_action,
+            variant.payload_discriminator(),
+        ]);
+    }
     hash.update(workflow_id);
     hash.update(u64::try_from(accounts.len()).unwrap_or(u64::MAX).to_le_bytes());
     for version in accounts {
@@ -1388,6 +1551,15 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
 
 fn hex32(bytes: [u8; 32]) -> String {
     let mut output = String::with_capacity(64);
+    for byte in bytes {
+        use core::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         use core::fmt::Write as _;
         let _ = write!(output, "{byte:02x}");
