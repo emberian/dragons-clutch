@@ -367,7 +367,7 @@ impl ChainDerivedFailureSourceAction10MaterialV1 {
             self.release_manifest_sha256,
             transport,
         )
-        .and_then(|builder| builder.build_atomic(&[draft]))
+        .and_then(|builder| builder.build_source_v0(draft))
         .map_err(map_construction)
     }
 }

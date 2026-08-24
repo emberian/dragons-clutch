@@ -3295,6 +3295,80 @@ impl ProtocolTransactionBuilder {
         })
     }
 
+    /// Compile exactly one current SourcePlane instruction as an inline v0
+    /// message. Source account contracts are narrow enough not to require an
+    /// address lookup table, but the operator still emits one canonical
+    /// transaction format for all twelve actions. The fee payer may alias an
+    /// instruction role only when that role is already writable and signing;
+    /// otherwise Solana privilege union would change the frozen Source ABI.
+    pub(crate) fn build_source_v0(
+        &self,
+        draft: OwnedInstructionDraft,
+    ) -> Result<UnsignedProtocolTransaction> {
+        if !matches!(draft.wire, OwnedWireContract::MainSuccessorRequest { .. })
+            || draft.flow != ProtocolFlow::SourcePlaneV3
+            || draft.program_id != self.clutch_program
+        {
+            return Err(ConstructionError::WrongFlow);
+        }
+        draft.validate()?;
+        if draft
+            .accounts
+            .iter()
+            .any(|account| account.pubkey == self.payer && !(account.is_signer && account.is_writable))
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut required_signers = BTreeSet::from([self.payer]);
+        for signer in &draft.required_signers {
+            let represented = *signer == self.payer
+                || draft
+                    .accounts
+                    .iter()
+                    .any(|meta| meta.pubkey == *signer && meta.is_signer);
+            if !represented {
+                return Err(ConstructionError::MissingSignerMeta);
+            }
+            required_signers.insert(*signer);
+        }
+        let message = v0::Message::try_compile(
+            &self.payer,
+            &[draft.instruction()],
+            &[],
+            Default::default(),
+        )
+        .map_err(|_| ConstructionError::Serialization)?;
+        let signature_count = usize::from(message.header.num_required_signatures);
+        if signature_count != required_signers.len() {
+            return Err(ConstructionError::MissingSignerMeta);
+        }
+        let transaction = VersionedTransaction {
+            signatures: vec![Default::default(); signature_count],
+            message: VersionedMessage::V0(message),
+        };
+        let serialized_transaction =
+            bincode::serialize(&transaction).map_err(|_| ConstructionError::Serialization)?;
+        if serialized_transaction.len() > self.transport.packet_limit_bytes {
+            return Err(ConstructionError::PacketTooLarge);
+        }
+        Ok(UnsignedProtocolTransaction {
+            schema: CONSTRUCTION_PLAN_SCHEMA,
+            flows: vec![draft.flow],
+            actions: vec![draft.action_name],
+            semantic_owners: vec![draft.semantic_owner],
+            registry_bindings: vec![draft.registry_binding],
+            runtime_admissions: vec![draft.runtime_admission],
+            required_signers: required_signers.into_iter().collect(),
+            exact_equations: draft.equations,
+            message_version: TransactionMessageVersionV1::V0,
+            address_lookup_tables: Vec::new(),
+            serialized_transaction,
+            has_recent_blockhash: false,
+            signed: false,
+            submitted: false,
+        })
+    }
+
     /// Compile exactly one current wide Structured, Dealer, or Failure
     /// instruction as a
     /// v0 message. This crate-private seam is reachable only after the

@@ -1885,7 +1885,7 @@ fn construct_enabled_source_transition(
     )
     .map_err(|_| WorkflowGraphError::Construction)?;
     let unsigned_transaction = builder
-        .build_atomic(&[draft])
+        .build_source_v0(draft)
         .map_err(|_| WorkflowGraphError::Construction)?;
     Ok(PlannedWorkflowNode {
         manifest_sha256: manifest.manifest_sha256,
