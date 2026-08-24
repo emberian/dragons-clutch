@@ -30,6 +30,8 @@ pub enum AccountClass {
 /// Semantic name of one ordered account role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
+    /// Signer funding creation of a Position account; need not own it.
+    PositionPayer,
     /// Signer capitalizing account rent and resolution liveness.
     Sponsor,
     /// Signer that owns one Position and authorizes token movement.
@@ -60,6 +62,10 @@ pub enum Role {
     RentRefund,
     /// Native claims owned by one Market participant.
     Position,
+    /// Existing Position receiving a liability-neutral claim transfer.
+    DestinationPosition,
+    /// Permanent native-rent credit bound to a Position owner.
+    RentCredit,
     /// User token account supplying collateral for a split.
     CollateralSource,
     /// Compatible token account receiving released collateral or surplus.
@@ -370,11 +376,19 @@ pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 11] = [
 ];
 
 /// Exact Position creation and first complete-set split frame.
-pub const CREATE_POSITION_AND_SPLIT_FRAME: [AccountRole; 10] = [
-    authority(Role::PositionOwner, true, true),
+pub const CREATE_POSITION_AND_SPLIT_FRAME: [AccountRole; 12] = [
+    AccountRole::new(
+        Role::PositionPayer,
+        AccountClass::SystemAccount,
+        true,
+        true,
+        false,
+    ),
+    authority(Role::PositionOwner, true, false),
     state(Role::Market, true),
     immutable(Role::Realm),
     state(Role::Position, true),
+    state(Role::RentCredit, false),
     token_account(Role::CollateralVault),
     token_account(Role::CollateralSource),
     mint(),
@@ -419,6 +433,19 @@ pub const REDEEM_RESOLVED_OUTCOME_FRAME: [AccountRole; 8] = [
     TOKEN_PROGRAM,
 ];
 
+/// Exact liability-neutral native-claim transfer frame.
+///
+/// The source owner alone signs. Both Position accounts are existing mutable
+/// children of the same Market and must be distinct; the SVM adapter verifies
+/// each stored owner and PDA independently. This operation has no collateral,
+/// Vault, rent, or Market-child side effect.
+pub const TRANSFER_CLAIMS_FRAME: [AccountRole; 4] = [
+    authority(Role::PositionOwner, true, false),
+    state(Role::Market, false),
+    state(Role::Position, true),
+    state(Role::DestinationPosition, true),
+];
+
 /// Exact permissionless collateral-surplus sweep frame.
 ///
 /// The adapter must authenticate the Market root, Realm, Vault, and
@@ -438,11 +465,10 @@ pub const SWEEP_SURPLUS_FRAME: [AccountRole; 6] = [
 ];
 
 /// Exact empty-Position retirement frame.
-pub const CLOSE_EMPTY_POSITION_FRAME: [AccountRole; 4] = [
-    authority(Role::PositionOwner, true, true),
+pub const CLOSE_EMPTY_POSITION_FRAME: [AccountRole; 3] = [
     state(Role::Market, true),
     state(Role::Position, true),
-    SYSTEM_PROGRAM,
+    state(Role::RentCredit, true),
 ];
 
 /// Exact empty collateral-Vault retirement frame.
@@ -477,6 +503,7 @@ pub const fn instruction_frame(tag: InstructionTag) -> InstructionFrame {
         InstructionTag::SplitCompleteSet => &SPLIT_COMPLETE_SET_FRAME,
         InstructionTag::MergeCompleteSet => &MERGE_COMPLETE_SET_FRAME,
         InstructionTag::RedeemResolvedOutcome => &REDEEM_RESOLVED_OUTCOME_FRAME,
+        InstructionTag::TransferClaims => &TRANSFER_CLAIMS_FRAME,
         InstructionTag::SweepSurplus => &SWEEP_SURPLUS_FRAME,
         InstructionTag::CloseEmptyPosition => &CLOSE_EMPTY_POSITION_FRAME,
         InstructionTag::RetireEmptyVault => &RETIRE_EMPTY_VAULT_FRAME,
@@ -542,12 +569,12 @@ mod tests {
             .expect("nonzero test token facts")
     }
 
-    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 11] {
+    fn exact_privileges(tag: InstructionTag) -> [AccountPrivilege; 12] {
         let mut output = [AccountPrivilege {
             is_signer: false,
             is_writable: false,
             is_executable: false,
-        }; 11];
+        }; 12];
         for (destination, role) in output.iter_mut().zip(instruction_frame(tag).roles()) {
             *destination = AccountPrivilege {
                 is_signer: role.is_signer(),
@@ -568,6 +595,7 @@ mod tests {
             InstructionTag::SplitCompleteSet,
             InstructionTag::MergeCompleteSet,
             InstructionTag::RedeemResolvedOutcome,
+            InstructionTag::TransferClaims,
             InstructionTag::SweepSurplus,
             InstructionTag::CloseEmptyPosition,
             InstructionTag::RetireEmptyVault,
@@ -636,7 +664,7 @@ mod tests {
                 is_signer: false,
                 is_writable: false,
                 is_executable: false,
-            }; 10];
+            }; 12];
             changed.copy_from_slice(exact);
             if required.is_signer() {
                 if let Some(account) = changed.get_mut(position) {
@@ -667,9 +695,9 @@ mod tests {
             );
         }
 
-        let mut escalated: [AccountPrivilege; 10] = exact
+        let mut escalated: [AccountPrivilege; 12] = exact
             .try_into()
-            .expect("CreatePositionAndSplit has ten roles");
+            .expect("CreatePositionAndSplit has twelve roles");
         for (actual, required) in escalated.iter_mut().zip(frame.roles()) {
             if !required.is_signer() {
                 actual.is_signer = true;
@@ -679,6 +707,50 @@ mod tests {
             }
         }
         assert_eq!(validate_account_frame(tag, &escalated), Ok(()));
+    }
+
+    #[test]
+    fn position_creation_separates_payer_owner_and_permanent_credit() {
+        assert_eq!(CREATE_POSITION_AND_SPLIT_FRAME.len(), 12);
+        assert_eq!(
+            CREATE_POSITION_AND_SPLIT_FRAME
+                .first()
+                .map(|role| role.role()),
+            Some(Role::PositionPayer)
+        );
+        assert_eq!(
+            CREATE_POSITION_AND_SPLIT_FRAME.get(1).map(|role| (
+                role.role(),
+                role.is_signer(),
+                role.is_writable()
+            )),
+            Some((Role::PositionOwner, true, false))
+        );
+        assert_eq!(
+            CREATE_POSITION_AND_SPLIT_FRAME
+                .get(5)
+                .map(|role| (role.role(), role.is_writable())),
+            Some((Role::RentCredit, false))
+        );
+    }
+
+    #[test]
+    fn empty_position_close_is_permissionless_and_credits_owner_record() {
+        assert_eq!(CLOSE_EMPTY_POSITION_FRAME.len(), 3);
+        assert_eq!(
+            CLOSE_EMPTY_POSITION_FRAME.map(|role| role.role()),
+            [Role::Market, Role::Position, Role::RentCredit]
+        );
+        assert!(
+            CLOSE_EMPTY_POSITION_FRAME
+                .iter()
+                .all(|role| !role.is_signer())
+        );
+        assert!(
+            CLOSE_EMPTY_POSITION_FRAME
+                .iter()
+                .all(|role| role.is_writable())
+        );
     }
 
     #[test]
