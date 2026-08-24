@@ -368,6 +368,7 @@ fn structured_release_intents_joined_v1(
 pub struct StructuredChainAccountV1<'account> {
     address: Address,
     present: Option<&'account ObservedRpcAccount>,
+    absence: Option<&'account FinalizedAccountAbsence>,
     observed_slot: u64,
 }
 
@@ -380,6 +381,7 @@ impl<'account> StructuredChainAccountV1<'account> {
         Ok(Self {
             address: account.address,
             present: Some(account),
+            absence: None,
             observed_slot: account.provenance.slot,
         })
     }
@@ -397,6 +399,7 @@ impl<'account> StructuredChainAccountV1<'account> {
         Ok(Self {
             address,
             present: None,
+            absence: Some(absence),
             observed_slot: absence.slot(),
         })
     }
@@ -418,6 +421,7 @@ impl<'account> StructuredChainAccountV1<'account> {
         Ok(Self {
             address,
             present: None,
+            absence: None,
             observed_slot: snapshot.receipt().slot(),
         })
     }
@@ -616,6 +620,7 @@ pub struct CanonicalAccountRoleV1 {
 /// must be reacquired before signing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalAccountAbsenceV1 {
+    role_index: usize,
     label: &'static str,
     address: Address,
     release_key: String,
@@ -625,14 +630,16 @@ pub struct CanonicalAccountAbsenceV1 {
 
 impl CanonicalAccountAbsenceV1 {
     pub(crate) fn new(
+        role_index: usize,
         label: &'static str,
         address: Address,
         release_key: String,
         finalized_slot: u64,
         receive_sequence: u64,
     ) -> Self {
-        Self { label, address, release_key, finalized_slot, receive_sequence }
+        Self { role_index, label, address, release_key, finalized_slot, receive_sequence }
     }
+    pub const fn role_index(&self) -> usize { self.role_index }
     pub const fn label(&self) -> &'static str { self.label }
     pub const fn address(&self) -> Address { self.address }
     pub fn release_key(&self) -> &str { &self.release_key }
@@ -1578,6 +1585,7 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
     authority_state_sha256: [u8; 32],
     accounts: Vec<AccountMeta>,
     account_roles: Vec<CanonicalAccountRoleV1>,
+    account_absences: Vec<CanonicalAccountAbsenceV1>,
     equations: Vec<ExactEquation>,
     lookup_table: &StructuredAddressLookupTableV1,
 ) -> Result<CanonicalActionMaterialV1> {
@@ -1597,6 +1605,7 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
         || generation == 0
         || accounts.len() != 41
         || account_roles.len() != 41
+        || account_absences.len() != 2
         || release.enabled_intents.binary_search(&coordinate).is_err()
         || release.program_id != manifest.clutch.program_id
         || release.program_data != manifest.clutch.program_data
@@ -1608,6 +1617,21 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
         || lookup_table.observed_slot() > freshness.observed_slot
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    if account_absences.iter().any(|absence| {
+        !matches!(absence.role_index(), 35 | 36)
+            || account_roles
+                .get(absence.role_index())
+                .is_none_or(|role| {
+                    role.label() != absence.label() || role.address() != absence.address()
+                })
+            || absence.release_key() != release.key()
+            || absence.finalized_slot() != freshness.observed_slot
+            || absence.receive_sequence() == 0
+    }) || account_absences[0].role_index() == account_absences[1].role_index()
+        || account_absences[0].address() == account_absences[1].address()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     let semantic_owner = manifest
         .semantic_releases
@@ -1663,7 +1687,7 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
     };
     validate_unsigned_direct_plan(coordinate, builder.payer(), &account_roles, &planned)?;
     let release_key = release.key();
-    let draft_id = action_material_id(
+    let draft_id = action_material_id_with_absences(
         &release_key,
         &release_key,
         release.release_manifest_sha256,
@@ -1676,6 +1700,7 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
         freshness,
         builder.payer(),
         &account_roles,
+        Some(&account_absences),
         &planned.unsigned_transaction,
     );
     Ok(CanonicalActionMaterialV1 {
@@ -1692,6 +1717,7 @@ pub(crate) fn finish_chain_derived_direct_action1_material_v2(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences,
         planned,
         draft_id,
     })
@@ -2417,12 +2443,16 @@ pub fn construct_general_action39_action_material_v1(
         .collect::<Vec<_>>();
     let account_absences = material.account_absences().to_vec();
     if account_absences.len() != 9
-        || account_absences.iter().any(|absence| {
+        || account_absences.iter().enumerate().any(|(absence_index, absence)| {
             absence.release_key() != release.key()
                 || absence.finalized_slot() != material.observed_slot()
                 || absence.receive_sequence() == 0
-                || !account_roles.iter().any(|role| {
-                    role.label() == absence.label() && role.address() == absence.address()
+                || account_roles.get(absence.role_index()).is_none_or(|role| {
+                    role.label() != absence.label() || role.address() != absence.address()
+                })
+                || account_absences[..absence_index].iter().any(|prior| {
+                    prior.role_index() == absence.role_index()
+                        || prior.address() == absence.address()
                 })
         })
     {
@@ -2437,7 +2467,7 @@ pub fn construct_general_action39_action_material_v1(
     };
     let release_key = release.key();
     let authority_state_sha256 = material.state_sha256();
-    let draft_id = action_material_id(
+    let draft_id = action_material_id_with_absences(
         &release_key,
         &release_key,
         release.release_manifest_sha256,
@@ -2450,6 +2480,7 @@ pub fn construct_general_action39_action_material_v1(
         freshness,
         builder.payer(),
         &account_roles,
+        Some(&account_absences),
         &planned.unsigned_transaction,
     );
     Ok(CanonicalActionMaterialV1 {
@@ -8654,6 +8685,14 @@ fn general_terminal_authority_state_id_v5(
             hash.update(Sha256::digest(&observed.data));
         } else {
             hash.update([0]);
+            if let Some(absence) = account.absence {
+                hash.update([1]);
+                hash_text(&mut hash, absence.release_key());
+                hash.update(absence.slot().to_le_bytes());
+                hash.update(absence.receive_sequence().to_le_bytes());
+            } else {
+                hash.update([0]);
+            }
         }
     }
     hash.finalize().into()
@@ -8710,7 +8749,7 @@ pub fn construct_general_terminal_action_material_v5(
     let final_action50 = action == GeneralV2Action::AdvanceFeeRetirement && accounts.len() == 45;
     if accounts.iter().enumerate().any(|(index, account)| {
         let must_be_absent = final_action50 && matches!(index, 38 | 39);
-        must_be_absent != account.present.is_none()
+        must_be_absent != account.present.is_none() || must_be_absent != account.absence.is_some()
     }) {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
@@ -8730,6 +8769,7 @@ pub fn construct_general_terminal_action_material_v5(
     }
     let mut metas = Vec::with_capacity(accounts.len());
     let mut account_roles = Vec::with_capacity(accounts.len());
+    let mut account_absences = Vec::with_capacity(2);
     for (index, account) in accounts.iter().enumerate() {
         let spec = crate::transaction_builder::general_terminal_account_spec_v5(
             action,
@@ -8749,6 +8789,29 @@ pub fn construct_general_terminal_action_material_v5(
             spec.writable,
             spec.signer,
         ));
+        if final_action50 && matches!(index, 38 | 39) {
+            let absence = account.absence.ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if absence.release_key() != release.key()
+                || absence.slot() != freshness.observed_slot
+                || absence.receive_sequence() == 0
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            account_absences.push(CanonicalAccountAbsenceV1::new(
+                index,
+                spec.label,
+                account.address,
+                absence.release_key().to_string(),
+                absence.slot(),
+                absence.receive_sequence(),
+            ));
+        }
+    }
+    if account_absences.len() != if final_action50 { 2 } else { 0 } || (final_action50
+        && (account_absences[0].address() == account_absences[1].address()
+            || account_absences[0].role_index() == account_absences[1].role_index()))
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     let observed_lamports = accounts.iter().try_fold(0u128, |total, account| {
         total.checked_add(u128::from(
@@ -8824,7 +8887,7 @@ pub fn construct_general_terminal_action_material_v5(
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     let release_key = release.key();
-    let draft_id = action_material_id(
+    let draft_id = action_material_id_with_absences(
         &release_key,
         &release_key,
         release.release_manifest_sha256,
@@ -8837,6 +8900,7 @@ pub fn construct_general_terminal_action_material_v5(
         freshness,
         builder.payer(),
         &account_roles,
+        Some(&account_absences),
         &planned.unsigned_transaction,
     );
     Ok(CanonicalActionMaterialV1 {
@@ -8853,6 +8917,7 @@ pub fn construct_general_terminal_action_material_v5(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences,
         planned,
         draft_id,
     })
@@ -10620,6 +10685,41 @@ fn action_material_id(
     roles: &[CanonicalAccountRoleV1],
     transaction: &UnsignedProtocolTransaction,
 ) -> [u8; 32] {
+    action_material_id_with_absences(
+        release_key,
+        driver_release_key,
+        release_manifest_sha256,
+        capability_profile_id,
+        coordinate,
+        driver_account,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer,
+        roles,
+        None,
+        transaction,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn action_material_id_with_absences(
+    release_key: &str,
+    driver_release_key: &str,
+    release_manifest_sha256: [u8; 32],
+    capability_profile_id: [u8; 32],
+    coordinate: CanonicalIntentCoordinate,
+    driver_account: Address,
+    driver_account_slot: u64,
+    cursor: ResumableWorkflowCursor,
+    authority_state_sha256: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    fee_payer: Address,
+    roles: &[CanonicalAccountRoleV1],
+    absences: Option<&[CanonicalAccountAbsenceV1]>,
+    transaction: &UnsignedProtocolTransaction,
+) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(CANONICAL_ACTION_MATERIAL_SCHEMA_V1.as_bytes());
     hash_text(&mut hash, release_key);
@@ -10660,6 +10760,17 @@ fn action_material_id(
         hash_text(&mut hash, role.label);
         hash.update(role.address.to_bytes());
         hash.update([u8::from(role.writable), u8::from(role.signer)]);
+    }
+    if let Some(absences) = absences {
+        hash.update(u64::try_from(absences.len()).unwrap_or(u64::MAX).to_le_bytes());
+        for absence in absences {
+            hash.update(u64::try_from(absence.role_index()).unwrap_or(u64::MAX).to_le_bytes());
+            hash_text(&mut hash, absence.label());
+            hash.update(absence.address().to_bytes());
+            hash_text(&mut hash, absence.release_key());
+            hash.update(absence.finalized_slot().to_le_bytes());
+            hash.update(absence.receive_sequence().to_le_bytes());
+        }
     }
     hash.update(
         u64::try_from(transaction.actions.len())

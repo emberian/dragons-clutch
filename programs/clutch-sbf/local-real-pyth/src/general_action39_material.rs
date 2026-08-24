@@ -7,22 +7,17 @@
 //! bitmap, or generic account vector from a caller.
 
 use crate::account_index::FinalizedAccountAbsence;
-use crate::action_material::{
-    CanonicalAccountAbsenceV1, StructuredAddressLookupTableV1,
-};
+use crate::action_material::{CanonicalAccountAbsenceV1, StructuredAddressLookupTableV1};
 use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
     RpcCommitment,
 };
 use crate::transaction_builder::{
     ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
-    ProtocolTransactionBuilder, SemanticOwner, TransactionTransport,
-    UnsignedProtocolTransaction,
+    ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
-use clutch_batch_policy_identity::revenue_policy_v2::{
-    decode_revenue_policy_v2, RevenuePolicyV2,
-};
+use clutch_batch_policy_identity::revenue_policy_v2::{decode_revenue_policy_v2, RevenuePolicyV2};
 use clutch_general_v2_contract::{
     AdmissionNodeV4AccountV1, CandidateFeedHeaderV2, CandidateWindowV5AccountV1,
     FinalPotSeedTupleV1, GeneralEpochPhaseV1, GeneralEpochV6AccountV1,
@@ -44,34 +39,67 @@ pub const GENERAL_ACTION39_MAX_ACCOUNT_COUNT_V1: usize = 53;
 pub const GENERAL_ACTION39_LOCAL_ACTION_V1: u8 = 39;
 
 pub const GENERAL_ACTION39_FIXED_ROLE_LABELS_V1: [&str; GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1] = [
-    "epoch-v6", "candidate-window-v5", "selected-admission-node-v4", "retained-feed-v2",
-    "market-binding-v5", "market-runtime-v3", "economic-domain-v2", "price-grid",
-    "realm", "collateral-profile-v2", "collateral-policy-v2", "collateral-token-program",
-    "market-instance-v2", "market-genesis-v2", "selected-fee-record-v2",
-    "recipient-allocation-v3", "batch-policy", "treasury-service-ledger-v1",
-    "revenue-policy-record-v2", "treasury-ledger-v2", "fee-retirement-accumulator-v1",
-    "product-market-root-v3", "series-market-link-v3", "series-funding-v5",
-    "series-registry-v4", "registry-program", "registry-program-data",
-    "registry-release-v2", "capability-profile-v4", "source-release-v2",
-    "compiler-bundle-v7", "revenue-policy-preimage-v2", "series-plan-v5",
-    "series-funding-terms-v2", "product-template-v4", "native-claim-basis-v1",
-    "recovery-policy-v1", "price-measure-policy-v1", "funding-quote-v6",
-    "attachment-plan-v6", "indexed-settlement-root-v1", "settlement-cash-pot-v1",
-    "final-pot-v1", "frozen-order-locator-v1", "candidate-slice-index-v1", "rent-payer",
-    "system-program", "rent-sysvar", "clock-sysvar",
+    "epoch-v6",
+    "candidate-window-v5",
+    "selected-admission-node-v4",
+    "retained-feed-v2",
+    "market-binding-v5",
+    "market-runtime-v3",
+    "economic-domain-v2",
+    "price-grid",
+    "realm",
+    "collateral-profile-v2",
+    "collateral-policy-v2",
+    "collateral-token-program",
+    "market-instance-v2",
+    "market-genesis-v2",
+    "selected-fee-record-v2",
+    "recipient-allocation-v3",
+    "batch-policy",
+    "treasury-service-ledger-v1",
+    "revenue-policy-record-v2",
+    "treasury-ledger-v2",
+    "fee-retirement-accumulator-v1",
+    "product-market-root-v3",
+    "series-market-link-v3",
+    "series-funding-v5",
+    "series-registry-v4",
+    "registry-program",
+    "registry-program-data",
+    "registry-release-v2",
+    "capability-profile-v4",
+    "source-release-v2",
+    "compiler-bundle-v7",
+    "revenue-policy-preimage-v2",
+    "series-plan-v5",
+    "series-funding-terms-v2",
+    "product-template-v4",
+    "native-claim-basis-v1",
+    "recovery-policy-v1",
+    "price-measure-policy-v1",
+    "funding-quote-v6",
+    "attachment-plan-v6",
+    "indexed-settlement-root-v1",
+    "settlement-cash-pot-v1",
+    "final-pot-v1",
+    "frozen-order-locator-v1",
+    "candidate-slice-index-v1",
+    "rent-payer",
+    "system-program",
+    "rent-sysvar",
+    "clock-sysvar",
 ];
 pub const GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1: [bool; GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1] = [
-    true, true, false, false, false, false, false, false, false, false, false, false,
-    false, false, true, true, false, true, false, true, true, false, false, false,
-    false, false, false, false, false, false, false, false, false, false, false, false,
-    false, false, false, false, true, true, true, true, true, true, false, false, false,
+    true, true, false, false, false, false, false, false, false, false, false, false, false, false,
+    true, true, false, true, false, true, true, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false, true, true,
+    true, true, true, true, false, false, false,
 ];
 pub const GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1: [bool; GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1] = [
-    false, false, false, false, false, false, false, false, false, false, false, false,
-    false, false, false, false, false, false, false, false, false, false, false, false,
-    false, false, false, false, false, false, false, false, false, false, false, false,
-    false, false, false, false, false, false, false, false, false, true, false, false,
-    false,
+    false, false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, true, false, false, false,
 ];
 const GENERAL_ACTION39_FRESH_ROLE_INDICES_V1: [usize; 9] = [14, 15, 19, 20, 40, 41, 42, 43, 44];
 
@@ -209,13 +237,27 @@ pub struct ChainDerivedGeneralAction39MaterialV1 {
 }
 
 impl ChainDerivedGeneralAction39MaterialV1 {
-    pub fn release_key(&self) -> &str { &self.release_key }
-    pub const fn observed_slot(&self) -> u64 { self.observed_slot }
-    pub const fn valid_before_slot(&self) -> u64 { self.valid_before_slot }
-    pub const fn state_sha256(&self) -> [u8; 32] { self.state_sha256 }
-    pub const fn payer(&self) -> Address { self.payer }
-    pub fn account_metas(&self) -> &[AccountMeta] { &self.ordered_accounts }
-    pub fn account_absences(&self) -> &[CanonicalAccountAbsenceV1] { &self.account_absences }
+    pub fn release_key(&self) -> &str {
+        &self.release_key
+    }
+    pub const fn observed_slot(&self) -> u64 {
+        self.observed_slot
+    }
+    pub const fn valid_before_slot(&self) -> u64 {
+        self.valid_before_slot
+    }
+    pub const fn state_sha256(&self) -> [u8; 32] {
+        self.state_sha256
+    }
+    pub const fn payer(&self) -> Address {
+        self.payer
+    }
+    pub fn account_metas(&self) -> &[AccountMeta] {
+        &self.ordered_accounts
+    }
+    pub fn account_absences(&self) -> &[CanonicalAccountAbsenceV1] {
+        &self.account_absences
+    }
     pub fn role_labels(&self) -> impl Iterator<Item = &'static str> {
         GENERAL_ACTION39_FIXED_ROLE_LABELS_V1.into_iter().chain(
             (0..self.ordered_accounts.len() - GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1)
@@ -227,11 +269,17 @@ impl ChainDerivedGeneralAction39MaterialV1 {
             workflow_id: action39_workflow_id(self.release_manifest_sha256, self.epoch),
             lane: WorkflowLane::GeneralSettlement,
             generation: self.generation,
-            position: WorkflowPosition { phase: 39, item: self.selected_ordinal },
+            position: WorkflowPosition {
+                phase: 39,
+                item: self.selected_ordinal,
+            },
             observed_state_sha256: self.state_sha256,
         }
     }
-    pub fn unsigned_instruction(&self, release: &IndexedProgramRelease) -> Result<OwnedInstructionDraft> {
+    pub fn unsigned_instruction(
+        &self,
+        release: &IndexedProgramRelease,
+    ) -> Result<OwnedInstructionDraft> {
         authenticate_material_release(self, release)?;
         OwnedInstructionDraft::checked_release_general_action39_v1(
             release,
@@ -242,7 +290,8 @@ impl ChainDerivedGeneralAction39MaterialV1 {
             },
             self.ordered_accounts.clone(),
             vec![ExactEquation {
-                name: "finalized absence proves zero preexisting fresh-account rent principal".into(),
+                name: "finalized absence proves zero preexisting fresh-account rent principal"
+                    .into(),
                 unit: IntegerUnit::Lamports,
                 left: 0,
                 right: 0,
@@ -265,12 +314,14 @@ impl ChainDerivedGeneralAction39MaterialV1 {
             release.release_manifest_sha256,
             transport,
         )
-        .and_then(|builder| builder.build_exact_v0(
-            draft,
-            self.lookup_table.table(),
-            self.lookup_table.observed_slot(),
-            self.lookup_table.state_sha256(),
-        ))
+        .and_then(|builder| {
+            builder.build_exact_v0(
+                draft,
+                self.lookup_table.table(),
+                self.lookup_table.observed_slot(),
+                self.lookup_table.state_sha256(),
+            )
+        })
         .map_err(map_construction)
     }
     pub(crate) fn build_unsigned_transaction(
@@ -358,13 +409,16 @@ pub fn derive_general_action39_material_v1(
     let account_absences = fresh_accounts(snapshot)
         .into_iter()
         .zip(GENERAL_ACTION39_FRESH_ROLE_INDICES_V1)
-        .map(|(fresh, role_index)| CanonicalAccountAbsenceV1::new(
-            GENERAL_ACTION39_FIXED_ROLE_LABELS_V1[role_index],
-            fresh.address,
-            release_key.clone(),
-            fresh.absence.slot(),
-            fresh.absence.receive_sequence(),
-        ))
+        .map(|(fresh, role_index)| {
+            CanonicalAccountAbsenceV1::new(
+                role_index,
+                GENERAL_ACTION39_FIXED_ROLE_LABELS_V1[role_index],
+                fresh.address,
+                release_key.clone(),
+                fresh.absence.slot(),
+                fresh.absence.receive_sequence(),
+            )
+        })
         .collect::<Vec<_>>();
     Ok(ChainDerivedGeneralAction39MaterialV1 {
         release_key,
@@ -388,7 +442,9 @@ fn authenticate_release(release: &IndexedProgramRelease) -> Result<()> {
     let action = ExtensionAction::GeneralV2(GeneralV2Action::InitializeSettlementRoot);
     let family = action.family();
     let coordinate = CanonicalIntentCoordinate {
-        family_tag: family.tag(), family_version: family.version(), local_action: action.local_tag(),
+        family_tag: family.tag(),
+        family_version: family.version(),
+        local_action: action.local_tag(),
     };
     if release.validate().is_err()
         || !release.families.contains(&CanonicalFamily::General)
@@ -399,21 +455,54 @@ fn authenticate_release(release: &IndexedProgramRelease) -> Result<()> {
     Ok(())
 }
 
-fn present_accounts<'a>(snapshot: GeneralAction39ChainSnapshotV1<'a>) -> Vec<&'a ObservedRpcAccount> {
+fn present_accounts<'a>(
+    snapshot: GeneralAction39ChainSnapshotV1<'a>,
+) -> Vec<&'a ObservedRpcAccount> {
     let c = snapshot.common;
     let f = snapshot.fee;
     let a = snapshot.current;
     let x = snapshot.creation;
     let mut out = vec![
-        c.epoch, c.window, c.selected_node, c.retained_feed, c.market_binding, c.market_runtime,
-        c.economic_domain, c.price_grid, c.realm, c.collateral_profile, c.collateral_policy,
-        c.collateral_token_program, c.market_instance, c.market_genesis, f.batch_policy,
-        f.treasury_service_ledger, f.revenue_policy_record, a.product_root, a.series_link,
-        a.series_funding, a.series_registry, a.registry_program, a.registry_program_data,
-        a.registry_release, a.capability_profile, a.source_release, a.compiler_bundle,
-        a.revenue_policy_preimage, a.series_plan, a.funding_terms, a.product_template,
-        a.native_claim_basis, a.recovery_policy, a.price_measure_policy, a.funding_quote,
-        a.attachment_plan, x.payer, x.system_program, x.rent_sysvar, x.clock_sysvar,
+        c.epoch,
+        c.window,
+        c.selected_node,
+        c.retained_feed,
+        c.market_binding,
+        c.market_runtime,
+        c.economic_domain,
+        c.price_grid,
+        c.realm,
+        c.collateral_profile,
+        c.collateral_policy,
+        c.collateral_token_program,
+        c.market_instance,
+        c.market_genesis,
+        f.batch_policy,
+        f.treasury_service_ledger,
+        f.revenue_policy_record,
+        a.product_root,
+        a.series_link,
+        a.series_funding,
+        a.series_registry,
+        a.registry_program,
+        a.registry_program_data,
+        a.registry_release,
+        a.capability_profile,
+        a.source_release,
+        a.compiler_bundle,
+        a.revenue_policy_preimage,
+        a.series_plan,
+        a.funding_terms,
+        a.product_template,
+        a.native_claim_basis,
+        a.recovery_policy,
+        a.price_measure_policy,
+        a.funding_quote,
+        a.attachment_plan,
+        x.payer,
+        x.system_program,
+        x.rent_sysvar,
+        x.clock_sysvar,
     ];
     out.extend_from_slice(snapshot.order_pages);
     out
@@ -424,7 +513,9 @@ fn authenticate_provenance(
     accounts: &[&ObservedRpcAccount],
     lookup: &ObservedRpcAccount,
 ) -> Result<()> {
-    let first = accounts.first().ok_or(GeneralAction39MaterialError::ChainSnapshot)?;
+    let first = accounts
+        .first()
+        .ok_or(GeneralAction39MaterialError::ChainSnapshot)?;
     if accounts.len() < 41
         || first.provenance.slot == 0
         || first.provenance.commitment != RpcCommitment::Finalized
@@ -452,10 +543,14 @@ fn fresh_accounts<'a>(
     snapshot: GeneralAction39ChainSnapshotV1<'a>,
 ) -> [GeneralAction39FreshAccountV1<'a>; 9] {
     [
-        snapshot.common.selected_fee_record, snapshot.fee.recipient_allocation,
-        snapshot.fee.treasury_ledger, snapshot.fee.fee_retirement_accumulator,
-        snapshot.creation.indexed_settlement_root, snapshot.creation.settlement_cash_pot,
-        snapshot.creation.final_pot, snapshot.creation.frozen_order_locator,
+        snapshot.common.selected_fee_record,
+        snapshot.fee.recipient_allocation,
+        snapshot.fee.treasury_ledger,
+        snapshot.fee.fee_retirement_accumulator,
+        snapshot.creation.indexed_settlement_root,
+        snapshot.creation.settlement_cash_pot,
+        snapshot.creation.final_pot,
+        snapshot.creation.frozen_order_locator,
         snapshot.creation.candidate_slice_index,
     ]
 }
@@ -521,27 +616,65 @@ fn authenticate_fresh_pdas(
     epoch: [u8; 32],
     candidate: [u8; 32],
 ) -> Result<()> {
-    let selected = Address::find_program_address(&[SELECTED_FEE_RECORD_SEED_DOMAIN_V1, &candidate], &program).0;
+    let selected =
+        Address::find_program_address(&[SELECTED_FEE_RECORD_SEED_DOMAIN_V1, &candidate], &program)
+            .0;
     let selected_bytes = selected.to_bytes();
-    let root = Address::find_program_address(&[SETTLEMENT_ROOT_SEED_DOMAIN_V1, &epoch, &candidate], &program).0;
+    let root = Address::find_program_address(
+        &[SETTLEMENT_ROOT_SEED_DOMAIN_V1, &epoch, &candidate],
+        &program,
+    )
+    .0;
     let root_bytes = root.to_bytes();
     let final_seeds = FinalPotSeedTupleV1::new(
         clutch_general_v2_contract::Id32::from_bytes(epoch),
         clutch_general_v2_contract::Id32::from_bytes(candidate),
-    ).map_err(|_| GeneralAction39MaterialError::ChainAuthority)?;
+    )
+    .map_err(|_| GeneralAction39MaterialError::ChainAuthority)?;
     let expected = [
         selected,
-        Address::find_program_address(&[RECIPIENT_ALLOCATION_SEED_DOMAIN_V1, &selected_bytes], &program).0,
-        Address::find_program_address(&[TREASURY_LEDGER_SEED_DOMAIN_V1, &selected_bytes], &program).0,
-        Address::find_program_address(&[FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1, &selected_bytes], &program).0,
+        Address::find_program_address(
+            &[RECIPIENT_ALLOCATION_SEED_DOMAIN_V1, &selected_bytes],
+            &program,
+        )
+        .0,
+        Address::find_program_address(&[TREASURY_LEDGER_SEED_DOMAIN_V1, &selected_bytes], &program)
+            .0,
+        Address::find_program_address(
+            &[FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1, &selected_bytes],
+            &program,
+        )
+        .0,
         root,
-        Address::find_program_address(&[SETTLEMENT_CASH_POT_SEED_DOMAIN_V1, &epoch, &candidate], &program).0,
-        Address::find_program_address(&[final_seeds.domain(), final_seeds.epoch(), final_seeds.settlement_candidate()], &program).0,
-        Address::find_program_address(&[FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1, &root_bytes], &program).0,
-        Address::find_program_address(&[CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1, &root_bytes], &program).0,
+        Address::find_program_address(
+            &[SETTLEMENT_CASH_POT_SEED_DOMAIN_V1, &epoch, &candidate],
+            &program,
+        )
+        .0,
+        Address::find_program_address(
+            &[
+                final_seeds.domain(),
+                final_seeds.epoch(),
+                final_seeds.settlement_candidate(),
+            ],
+            &program,
+        )
+        .0,
+        Address::find_program_address(
+            &[FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1, &root_bytes],
+            &program,
+        )
+        .0,
+        Address::find_program_address(
+            &[CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1, &root_bytes],
+            &program,
+        )
+        .0,
     ];
     let observed = fresh_accounts(snapshot).map(|fresh| fresh.address);
-    if observed != expected { return Err(GeneralAction39MaterialError::FreshAccount); }
+    if observed != expected {
+        return Err(GeneralAction39MaterialError::FreshAccount);
+    }
     Ok(())
 }
 
@@ -587,38 +720,77 @@ fn ordered_metas(snapshot: GeneralAction39ChainSnapshotV1<'_>) -> Vec<AccountMet
     let a = snapshot.current;
     let x = snapshot.creation;
     let mut out = vec![
-        AccountMeta::new(c.epoch.address, false), AccountMeta::new(c.window.address, false),
-        ro(c.selected_node), ro(c.retained_feed), ro(c.market_binding), ro(c.market_runtime),
-        ro(c.economic_domain), ro(c.price_grid), ro(c.realm), ro(c.collateral_profile),
-        ro(c.collateral_policy), ro(c.collateral_token_program), ro(c.market_instance),
-        ro(c.market_genesis), fresh_writable(c.selected_fee_record),
-        fresh_writable(f.recipient_allocation), ro(f.batch_policy),
-        AccountMeta::new(f.treasury_service_ledger.address, false), ro(f.revenue_policy_record),
-        fresh_writable(f.treasury_ledger), fresh_writable(f.fee_retirement_accumulator),
-        ro(a.product_root), ro(a.series_link), ro(a.series_funding), ro(a.series_registry),
-        ro(a.registry_program), ro(a.registry_program_data), ro(a.registry_release),
-        ro(a.capability_profile), ro(a.source_release), ro(a.compiler_bundle),
-        ro(a.revenue_policy_preimage), ro(a.series_plan), ro(a.funding_terms),
-        ro(a.product_template), ro(a.native_claim_basis), ro(a.recovery_policy),
-        ro(a.price_measure_policy), ro(a.funding_quote), ro(a.attachment_plan),
-        fresh_writable(x.indexed_settlement_root), fresh_writable(x.settlement_cash_pot),
-        fresh_writable(x.final_pot), fresh_writable(x.frozen_order_locator),
-        fresh_writable(x.candidate_slice_index), AccountMeta::new(x.payer.address, true),
-        ro(x.system_program), ro(x.rent_sysvar), ro(x.clock_sysvar),
+        AccountMeta::new(c.epoch.address, false),
+        AccountMeta::new(c.window.address, false),
+        ro(c.selected_node),
+        ro(c.retained_feed),
+        ro(c.market_binding),
+        ro(c.market_runtime),
+        ro(c.economic_domain),
+        ro(c.price_grid),
+        ro(c.realm),
+        ro(c.collateral_profile),
+        ro(c.collateral_policy),
+        ro(c.collateral_token_program),
+        ro(c.market_instance),
+        ro(c.market_genesis),
+        fresh_writable(c.selected_fee_record),
+        fresh_writable(f.recipient_allocation),
+        ro(f.batch_policy),
+        AccountMeta::new(f.treasury_service_ledger.address, false),
+        ro(f.revenue_policy_record),
+        fresh_writable(f.treasury_ledger),
+        fresh_writable(f.fee_retirement_accumulator),
+        ro(a.product_root),
+        ro(a.series_link),
+        ro(a.series_funding),
+        ro(a.series_registry),
+        ro(a.registry_program),
+        ro(a.registry_program_data),
+        ro(a.registry_release),
+        ro(a.capability_profile),
+        ro(a.source_release),
+        ro(a.compiler_bundle),
+        ro(a.revenue_policy_preimage),
+        ro(a.series_plan),
+        ro(a.funding_terms),
+        ro(a.product_template),
+        ro(a.native_claim_basis),
+        ro(a.recovery_policy),
+        ro(a.price_measure_policy),
+        ro(a.funding_quote),
+        ro(a.attachment_plan),
+        fresh_writable(x.indexed_settlement_root),
+        fresh_writable(x.settlement_cash_pot),
+        fresh_writable(x.final_pot),
+        fresh_writable(x.frozen_order_locator),
+        fresh_writable(x.candidate_slice_index),
+        AccountMeta::new(x.payer.address, true),
+        ro(x.system_program),
+        ro(x.rent_sysvar),
+        ro(x.clock_sysvar),
     ];
     out.extend(snapshot.order_pages.iter().map(|page| ro(page)));
     out
 }
 
-fn ro(account: &ObservedRpcAccount) -> AccountMeta { AccountMeta::new_readonly(account.address, false) }
-fn fresh_writable(account: GeneralAction39FreshAccountV1<'_>) -> AccountMeta { AccountMeta::new(account.address, false) }
+fn ro(account: &ObservedRpcAccount) -> AccountMeta {
+    AccountMeta::new_readonly(account.address, false)
+}
+fn fresh_writable(account: GeneralAction39FreshAccountV1<'_>) -> AccountMeta {
+    AccountMeta::new(account.address, false)
+}
 
 fn authenticate_lookup_coverage(
     lookup: &StructuredAddressLookupTableV1,
     accounts: &[AccountMeta],
 ) -> Result<()> {
     let table = lookup.table();
-    if accounts.iter().filter(|meta| !meta.is_signer).any(|meta| !table.addresses.contains(&meta.pubkey)) {
+    if accounts
+        .iter()
+        .filter(|meta| !meta.is_signer)
+        .any(|meta| !table.addresses.contains(&meta.pubkey))
+    {
         return Err(GeneralAction39MaterialError::ChainAuthority);
     }
     Ok(())
@@ -670,7 +842,12 @@ fn authenticate_material_release(
 }
 
 fn order_page_role_label(index: usize) -> &'static str {
-    match index { 0 => "order-page-v5-0", 1 => "order-page-v5-1", 2 => "order-page-v5-2", _ => "order-page-v5-3" }
+    match index {
+        0 => "order-page-v5-0",
+        1 => "order-page-v5-1",
+        2 => "order-page-v5-2",
+        _ => "order-page-v5-3",
+    }
 }
 
 fn map_construction(_: ConstructionError) -> GeneralAction39MaterialError {

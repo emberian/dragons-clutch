@@ -11,14 +11,14 @@ use crate::account_index::{
 };
 use crate::action_material::{
     source_action_from_selection, source_role_label_v2, source_selection_action,
-    structured_action_from_selection, structured_selection_action,
-    CanonicalAccountAbsenceV1, CanonicalActionMaterialV1,
+    structured_action_from_selection, structured_selection_action, CanonicalAccountAbsenceV1,
+    CanonicalActionMaterialV1,
 };
+use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::direct_action8_material::{
     DirectAction8CanonicalMaterialV2, DirectAction8OperatorBatchV2,
     DirectAction8SymbolicPostconditionV2,
 };
-use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::failure_action11_material::{
     FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
 };
@@ -33,21 +33,10 @@ use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
 };
-use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{
     IntegerUnit, ProtocolFlow, RuntimeAdmission, TransactionMessageVersionV1,
 };
-use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
-use clutch_solana_layout::failure_recovery::{
-    FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
-};
-use clutch_solana_layout::registry::{
-    DirectMarketAction, GeneralV2Action, RecurringSeriesAction, RecoveryAction,
-    SourceSeriesAction, DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION,
-    GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
-    RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
-    STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
-};
+use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use clutch_direct_market_runtime::codec_v3::{
     authenticate_direct_root_transition_body_v3,
     decode_direct_action_replay_body_for_transition_v3,
@@ -56,20 +45,30 @@ use clutch_direct_market_runtime::codec_v3::{
 use clutch_direct_market_runtime::lifecycle_v2::DirectRootReplayTransitionV2;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionPhaseV1;
 use clutch_direct_market_runtime::{DirectHashBackendV1, DirectRootPhaseV1};
+use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
+use clutch_fractional_redemption_runtime::{
+    FractionalRedemptionActionV1, FRACTIONAL_REDEMPTION_FAMILY_TAG,
+    FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+};
 use clutch_liveness::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
-    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
-    RUNTIME_LIVENESS_POLICY_BYTES_V1,
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectSelectionAccountV1,
 };
 use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
-use clutch_solana_layout::source_series::account_contract_v2;
-use clutch_fractional_redemption_runtime::{
-    FractionalRedemptionActionV1, FRACTIONAL_REDEMPTION_FAMILY_TAG,
-    FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+use clutch_solana_layout::failure_recovery::{
+    FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
+use clutch_solana_layout::registry::{
+    DirectMarketAction, GeneralV2Action, RecoveryAction, RecurringSeriesAction, SourceSeriesAction,
+    DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION, GENERAL_V2_FAMILY_TAG,
+    GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG, RECOVERY_FAMILY_VERSION,
+    SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION, STRUCTURED_CLAIM_FAMILY_TAG,
+    STRUCTURED_CLAIM_FAMILY_VERSION,
+};
+use clutch_solana_layout::source_series::account_contract_v2;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -231,6 +230,7 @@ fn merge_chain_material_cursors(
             matches!(
                 material.cursor().lane,
                 WorkflowLane::SourceCrank
+                    | WorkflowLane::Creation
                     | WorkflowLane::FractionalRedemption
                     | WorkflowLane::FailureRecovery
                     | WorkflowLane::GeneralSettlement
@@ -255,6 +255,11 @@ fn merge_chain_material_cursors(
         let coordinate = material.coordinate();
         let freshness = material.freshness();
         let lane_coordinate_matches = match material.cursor().lane {
+            WorkflowLane::Creation => {
+                coordinate.family_tag == DIRECT_MARKET_FAMILY_TAG
+                    && coordinate.family_version == DIRECT_MARKET_FAMILY_VERSION
+                    && coordinate.local_action == DirectMarketAction::InitializeMarket.tag()
+            }
             WorkflowLane::SourceCrank => {
                 coordinate.family_tag == SOURCE_SERIES_FAMILY_TAG
                     && coordinate.family_version == SOURCE_SERIES_FAMILY_VERSION
@@ -295,8 +300,7 @@ fn merge_chain_material_cursors(
             WorkflowLane::GeneralSettlement => {
                 coordinate.family_tag == GENERAL_V2_FAMILY_TAG
                     && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
-                    && coordinate.local_action
-                        == GeneralV2Action::InitializeSettlementRoot.tag()
+                    && coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag()
             }
             _ => false,
         };
@@ -312,15 +316,32 @@ fn merge_chain_material_cursors(
             || current_finalized_slot < freshness.observed_slot
             || current_finalized_slot >= freshness.valid_before_slot
             || !material.reload_authoritative_accounts()
-            || material.account_absences().iter().any(|absence| {
-                absence.release_key() != release.key()
-                    || absence.finalized_slot() != freshness.observed_slot
-                    || absence.receive_sequence() == 0
-                    || finalized.iter().any(|version| {
-                        version.account.address == absence.address()
-                            && version.account.provenance.slot >= absence.finalized_slot()
-                    })
-            })
+            || material
+                .account_absences()
+                .iter()
+                .enumerate()
+                .any(|(absence_index, absence)| {
+                    absence.release_key() != release.key()
+                        || absence.finalized_slot() != freshness.observed_slot
+                        || absence.receive_sequence() == 0
+                        || material
+                            .account_roles()
+                            .get(absence.role_index())
+                            .is_none_or(|role| {
+                                role.label() != absence.label()
+                                    || role.address() != absence.address()
+                            })
+                        || material.account_absences()[..absence_index]
+                            .iter()
+                            .any(|prior| {
+                                prior.role_index() == absence.role_index()
+                                    || prior.address() == absence.address()
+                            })
+                        || finalized.iter().any(|version| {
+                            version.account.address == absence.address()
+                                && version.account.provenance.slot >= absence.finalized_slot()
+                        })
+                })
         {
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
@@ -344,12 +365,16 @@ fn merge_chain_material_cursors(
         {
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
-        if let Some(existing) = cursors.iter().find(|cursor| cursor.cursor == material.cursor()) {
+        if let Some(existing) = cursors
+            .iter()
+            .find(|cursor| cursor.cursor == material.cursor())
+        {
             let (_, expected_action, _) = coordinate_description(coordinate);
             if existing.account != material.driver_account()
                 || existing.account_slot != material.driver_account_slot()
                 || match material.cursor().lane {
                     WorkflowLane::FailureRecovery
+                    | WorkflowLane::Creation
                     | WorkflowLane::Candidate
                     | WorkflowLane::RecoveryRetirement
                     | WorkflowLane::GeneralSettlement => existing.action != expected_action,
@@ -387,77 +412,76 @@ fn merge_chain_material_cursors(
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
         for typed in batch.materials() {
-        let material = typed.canonical();
-        if material.release_key() != release.key()
-            || material.release_manifest_sha256() != release.release_manifest_sha256
-            || material.capability_profile_id() != release.capability_profile_id
-            || material.cursor().lane != WorkflowLane::Candidate
-            || material.driver_account() == Address::default()
-            || material.driver_account_slot() == 0
-        {
-            return Err(KeeperSelectionError::IncompleteCanonicalHint);
-        }
-        let mut current_driver = finalized
-            .iter()
-            .filter(|version| version.account.address == material.driver_account());
-        let driver = current_driver
-            .next()
-            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-        let freshness = material.freshness();
-        if current_driver.next().is_some()
-            || driver.account.provenance.release_key != release.key()
-            || driver.account.provenance.commitment != RpcCommitment::Finalized
-            || driver.account.provenance.slot < material.driver_account_slot()
-            || current_finalized_slot < freshness.observed_slot
-            || current_finalized_slot >= freshness.valid_before_slot
-            || driver.account.lamports != typed.driver_lamports()
-            || driver.data_sha256 != typed.driver_data_sha256()
-        {
-            return Err(KeeperSelectionError::IncompleteCanonicalHint);
-        }
-        for fact in typed
-            .dependency_facts()
-            .iter()
-            .filter(|fact| fact.owner == release.program_id.to_bytes())
-        {
-            let address = Address::new_from_array(fact.address);
-            let mut versions = finalized
-                .iter()
-                .filter(|version| version.account.address == address);
-            let version = versions
-                .next()
-                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-            if versions.next().is_some()
-                || version.account.owner.to_bytes() != fact.owner
-                || version.account.provenance.slot < fact.slot
-                || version.account.lamports != fact.lamports
-                || version.data_sha256 != fact.data_sha256
+            let material = typed.canonical();
+            if material.release_key() != release.key()
+                || material.release_manifest_sha256() != release.release_manifest_sha256
+                || material.capability_profile_id() != release.capability_profile_id
+                || material.cursor().lane != WorkflowLane::Candidate
+                || material.driver_account() == Address::default()
+                || material.driver_account_slot() == 0
             {
                 return Err(KeeperSelectionError::IncompleteCanonicalHint);
             }
-        }
-        if cursors.iter().any(|cursor| {
-            cursor.account == material.driver_account()
-                || cursor.cursor == material.cursor()
-        }) {
-            return Err(KeeperSelectionError::IncompleteCanonicalHint);
-        }
-        let dependencies = selection_dependencies_without_driver(
-            material.account_roles(),
-            material.driver_account(),
-        );
-        cursors.push(KeeperActionSelection {
-            account: material.driver_account(),
-            release_key: material.release_key().to_string(),
-            action: "finalize-direct-selection-current-v2",
-            cursor: material.cursor(),
-            account_slot: material.driver_account_slot(),
-            observed_commitment: RpcCommitment::Finalized,
-            effective_commitment: RpcCommitment::Finalized,
-            branch: IndexedBranch::FinalizedScan,
-            dependencies,
-            absence_observations: Vec::new(),
-        });
+            let mut current_driver = finalized
+                .iter()
+                .filter(|version| version.account.address == material.driver_account());
+            let driver = current_driver
+                .next()
+                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+            let freshness = material.freshness();
+            if current_driver.next().is_some()
+                || driver.account.provenance.release_key != release.key()
+                || driver.account.provenance.commitment != RpcCommitment::Finalized
+                || driver.account.provenance.slot < material.driver_account_slot()
+                || current_finalized_slot < freshness.observed_slot
+                || current_finalized_slot >= freshness.valid_before_slot
+                || driver.account.lamports != typed.driver_lamports()
+                || driver.data_sha256 != typed.driver_data_sha256()
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+            for fact in typed
+                .dependency_facts()
+                .iter()
+                .filter(|fact| fact.owner == release.program_id.to_bytes())
+            {
+                let address = Address::new_from_array(fact.address);
+                let mut versions = finalized
+                    .iter()
+                    .filter(|version| version.account.address == address);
+                let version = versions
+                    .next()
+                    .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+                if versions.next().is_some()
+                    || version.account.owner.to_bytes() != fact.owner
+                    || version.account.provenance.slot < fact.slot
+                    || version.account.lamports != fact.lamports
+                    || version.data_sha256 != fact.data_sha256
+                {
+                    return Err(KeeperSelectionError::IncompleteCanonicalHint);
+                }
+            }
+            if cursors.iter().any(|cursor| {
+                cursor.account == material.driver_account() || cursor.cursor == material.cursor()
+            }) {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+            let dependencies = selection_dependencies_without_driver(
+                material.account_roles(),
+                material.driver_account(),
+            );
+            cursors.push(KeeperActionSelection {
+                account: material.driver_account(),
+                release_key: material.release_key().to_string(),
+                action: "finalize-direct-selection-current-v2",
+                cursor: material.cursor(),
+                account_slot: material.driver_account_slot(),
+                observed_commitment: RpcCommitment::Finalized,
+                effective_commitment: RpcCommitment::Finalized,
+                branch: IndexedBranch::FinalizedScan,
+                dependencies,
+                absence_observations: Vec::new(),
+            });
         }
     }
     if let Some(batch) = dealer_batch {
@@ -521,7 +545,12 @@ fn merge_chain_material_cursors(
         }
     }
     cursors.sort_by(|left, right| {
-        (left.action, left.account.to_bytes(), left.cursor.position.phase, left.cursor.position.item)
+        (
+            left.action,
+            left.account.to_bytes(),
+            left.cursor.position.phase,
+            left.cursor.position.item,
+        )
             .cmp(&(
                 right.action,
                 right.account.to_bytes(),
@@ -573,10 +602,7 @@ fn selection_present_dependencies_without_driver(
         .iter()
         .map(|role| role.address())
         .filter(|address| {
-            *address != driver
-                && !absences
-                    .iter()
-                    .any(|absence| absence.address() == *address)
+            *address != driver && !absences.iter().any(|absence| absence.address() == *address)
         })
         .collect::<Vec<_>>();
     dependencies.sort();
@@ -593,11 +619,11 @@ fn select_operator_release<'a>(
     if materials.iter().any(|material| {
         material.variant().is_some()
             || material.coordinate()
-            == (CanonicalIntentCoordinate {
-                family_tag: DIRECT_MARKET_FAMILY_TAG,
-                family_version: DIRECT_MARKET_FAMILY_VERSION,
-                local_action: DirectMarketAction::FinalizeSelection.tag(),
-            })
+                == (CanonicalIntentCoordinate {
+                    family_tag: DIRECT_MARKET_FAMILY_TAG,
+                    family_version: DIRECT_MARKET_FAMILY_VERSION,
+                    local_action: DirectMarketAction::FinalizeSelection.tag(),
+                })
     }) {
         return Err(KeeperSelectionError::IncompleteCanonicalHint);
     }
@@ -696,10 +722,9 @@ fn direct_candidate_dependency_v2(
     let Ok(frame) = DirectMarketRootAccountV3::decode(&driver.account.data) else {
         return false;
     };
-    let Ok(root) = authenticate_direct_root_transition_body_v3(
-        frame.semantic_body(),
-        &DirectOperatorIndexSha,
-    ) else {
+    let Ok(root) =
+        authenticate_direct_root_transition_body_v3(frame.semantic_body(), &DirectOperatorIndexSha)
+    else {
         return false;
     };
     let binding = root.candidate_liveness();
@@ -728,11 +753,9 @@ fn current_direct_candidate_hint_v2(
     }
     let frame = DirectMarketRootAccountV3::decode(&driver.account.data)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let root = authenticate_direct_root_transition_body_v3(
-        frame.semantic_body(),
-        &DirectOperatorIndexSha,
-    )
-    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let root =
+        authenticate_direct_root_transition_body_v3(frame.semantic_body(), &DirectOperatorIndexSha)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let replay_address = Address::new_from_array(root.action_replay_account());
     let replay_version = exact_direct_dependency_v2(accounts, driver, replay_address)?;
     let replay_bytes: &[u8; clutch_solana_layout::registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] =
@@ -744,13 +767,14 @@ fn current_direct_candidate_hint_v2(
             .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let replay_frame = DirectActionReplayAccountV1::decode(replay_bytes)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let replay = decode_direct_action_replay_body_for_transition_v3(
-        replay_frame.semantic_body(),
-        &root,
-    )
-    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay =
+        decode_direct_action_replay_body_for_transition_v3(replay_frame.semantic_body(), &root)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let (expected_replay, replay_bump) = Address::find_program_address(
-        &[b"dc:direct-action-replay:v1", driver.account.address.as_ref()],
+        &[
+            b"dc:direct-action-replay:v1",
+            driver.account.address.as_ref(),
+        ],
         &driver.account.owner,
     );
     if replay_version.account.address != expected_replay
@@ -774,8 +798,7 @@ fn current_direct_candidate_hint_v2(
     let slot = driver.account.provenance.slot;
     let schedule = state.root().schedule();
     if state.root().selection_account() == [0; 32] {
-        if state.root().phase() != DirectRootPhaseV1::Open
-            || slot < schedule.submission_closes_slot
+        if state.root().phase() != DirectRootPhaseV1::Open || slot < schedule.submission_closes_slot
         {
             return Ok(None);
         }
@@ -836,7 +859,10 @@ fn current_direct_candidate_hint_v2(
                 && selection.phase() == DirectSelectionPhaseV1::SubmissionOpen
                 && selection.candidate_count() == 0 =>
         {
-            ("submit-direct-candidate", DirectMarketAction::SubmitCandidate.tag())
+            (
+                "submit-direct-candidate",
+                DirectMarketAction::SubmitCandidate.tag(),
+            )
         }
         DirectRootPhaseV1::SubmissionOpen
             if slot >= schedule.submission_closes_slot
@@ -844,30 +870,41 @@ fn current_direct_candidate_hint_v2(
                 && selection.phase() == DirectSelectionPhaseV1::SubmissionOpen
                 && selection.candidate_count() > 0 =>
         {
-            ("begin-direct-verification", DirectMarketAction::BeginVerification.tag())
+            (
+                "begin-direct-verification",
+                DirectMarketAction::BeginVerification.tag(),
+            )
         }
         DirectRootPhaseV1::Verifying
             if slot < schedule.selection_deadline_slot
                 && selection.phase() == DirectSelectionPhaseV1::Verifying
                 && selection.verification_cursor() < selection.candidate_count() =>
         {
-            ("verify-direct-candidate", DirectMarketAction::VerifyCandidate.tag())
+            (
+                "verify-direct-candidate",
+                DirectMarketAction::VerifyCandidate.tag(),
+            )
         }
         DirectRootPhaseV1::FrozenEmpty
             if slot >= schedule.submission_closes_slot
                 && selection.phase() == DirectSelectionPhaseV1::FrozenEmpty =>
         {
-            ("lapse-empty-direct-market", DirectMarketAction::LapseEmpty.tag())
+            (
+                "lapse-empty-direct-market",
+                DirectMarketAction::LapseEmpty.tag(),
+            )
         }
         DirectRootPhaseV1::SubmissionOpen | DirectRootPhaseV1::Verifying
             if slot >= schedule.selection_deadline_slot
                 && matches!(
                     selection.phase(),
-                    DirectSelectionPhaseV1::SubmissionOpen
-                        | DirectSelectionPhaseV1::Verifying
+                    DirectSelectionPhaseV1::SubmissionOpen | DirectSelectionPhaseV1::Verifying
                 ) =>
         {
-            ("lapse-unselected-direct-market", DirectMarketAction::LapseUnselected.tag())
+            (
+                "lapse-unselected-direct-market",
+                DirectMarketAction::LapseUnselected.tag(),
+            )
         }
         DirectRootPhaseV1::Selected
             if slot < schedule.settlement_deadline_slot
@@ -879,7 +916,10 @@ fn current_direct_candidate_hint_v2(
             if slot >= schedule.settlement_deadline_slot
                 && selection.phase() == DirectSelectionPhaseV1::Selected =>
         {
-            ("lapse-selected-direct-market", DirectMarketAction::LapseSelected.tag())
+            (
+                "lapse-selected-direct-market",
+                DirectMarketAction::LapseSelected.tag(),
+            )
         }
         DirectRootPhaseV1::Terminal
             if state.replay().phase()
@@ -888,7 +928,10 @@ fn current_direct_candidate_hint_v2(
                 && !state.replay().candidate_liveness_pending()
                 && state.replay().family_terminal_receipt_id() == [0; 32] =>
         {
-            ("retire-direct-terminal", DirectMarketAction::RetireTerminal.tag())
+            (
+                "retire-direct-terminal",
+                DirectMarketAction::RetireTerminal.tag(),
+            )
         }
         _ => return Ok(None),
     };
@@ -976,10 +1019,8 @@ fn exact_direct_dependency_v2<'a>(
 ) -> Result<&'a IndexedAccountVersion, KeeperSelectionError> {
     let mut matches = accounts.iter().copied().filter(|version| {
         version.account.address == address
-            && version.account.provenance.release_key
-                == driver.account.provenance.release_key
-            && version.account.provenance.commitment
-                == driver.account.provenance.commitment
+            && version.account.provenance.release_key == driver.account.provenance.release_key
+            && version.account.provenance.commitment == driver.account.provenance.commitment
     });
     let found = matches
         .next()
@@ -1023,9 +1064,9 @@ fn failure_action11_dependency(
     }) else {
         return false;
     };
-    let Ok(bytes) = <&[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3]>::try_from(
-        root.account.data.as_slice(),
-    ) else {
+    let Ok(bytes) =
+        <&[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3]>::try_from(root.account.data.as_slice())
+    else {
         return false;
     };
     let Ok(record) = FailureMarketRootAccountV3::decode(bytes) else {
@@ -1036,7 +1077,9 @@ fn failure_action11_dependency(
     };
     let facts = state.binding().facts();
     match candidate.projection.kind {
-        CanonicalAccountKind::FailureMarketRootV3 => candidate.account.address == root.account.address,
+        CanonicalAccountKind::FailureMarketRootV3 => {
+            candidate.account.address == root.account.address
+        }
         CanonicalAccountKind::FailureMarketRuntimeV1 => {
             candidate.projection.primary_binding == Some(failure_policy_binding_id)
         }
@@ -1081,9 +1124,9 @@ fn source_dependency(
     }) else {
         return false;
     };
-    let Ok(manifest) = clutch_source_plane_v3_runtime::SourceReleaseManifestV2::decode(
-        &release.account.data,
-    ) else {
+    let Ok(manifest) =
+        clutch_source_plane_v3_runtime::SourceReleaseManifestV2::decode(&release.account.data)
+    else {
         return false;
     };
     match candidate.projection.kind {
@@ -1096,8 +1139,7 @@ fn source_dependency(
             candidate.projection.primary_binding == Some(manifest.base.liveness_policy_id.bytes())
         }
         CanonicalAccountKind::LivenessCompartment => {
-            candidate.account.address.to_bytes()
-                == manifest.base.source_compartment_account.bytes()
+            candidate.account.address.to_bytes() == manifest.base.source_compartment_account.bytes()
                 && candidate.projection.primary_binding
                     == Some(manifest.base.liveness_policy_id.bytes())
         }
@@ -1407,11 +1449,14 @@ impl<'index> OperatorJsonApi<'index> {
         ) {
             Ok(release) => release,
             Err(error) => {
-                return response(409, json!({
-                    "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
-                    "status": "unavailable",
-                    "reason": error.to_string()
-                }));
+                return response(
+                    409,
+                    json!({
+                        "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
+                        "status": "unavailable",
+                        "reason": error.to_string()
+                    }),
+                );
             }
         };
         let accounts = self.index.current_accounts(RpcCommitment::Finalized);
@@ -1534,11 +1579,14 @@ impl<'index> OperatorJsonApi<'index> {
         ) {
             Ok(release) => release,
             Err(error) => {
-                return response(409, json!({
-                    "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
-                    "status": "unavailable",
-                    "reason": error.to_string()
-                }));
+                return response(
+                    409,
+                    json!({
+                        "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
+                        "status": "unavailable",
+                        "reason": error.to_string()
+                    }),
+                );
             }
         };
         let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
@@ -1701,12 +1749,12 @@ impl<'index> OperatorJsonApi<'index> {
                     selections
                 };
                 response(
-                200,
-                json!({
-                    "effectiveCommitment": commitment.name(),
-                    "authorityEligible": false,
-                    "actions": selections.iter().map(selection_json).collect::<Vec<_>>()
-                }),
+                    200,
+                    json!({
+                        "effectiveCommitment": commitment.name(),
+                        "authorityEligible": false,
+                        "actions": selections.iter().map(selection_json).collect::<Vec<_>>()
+                    }),
                 )
             }
             Err(error) => response(409, json!({"error": error.to_string()})),
@@ -1768,14 +1816,16 @@ fn action_verdict_json(
             .zip(GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1)
             .zip(GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1)
             .enumerate()
-            .map(|(index, ((role, writable), signer))| json!({
-                "index": index.to_string(),
-                "role": role,
-                "writable": writable,
-                "signer": signer,
-                "address": null,
-                "identityDisposition": "unresolved-until-semantic-owner-construction"
-            }))
+            .map(|(index, ((role, writable), signer))| {
+                json!({
+                    "index": index.to_string(),
+                    "role": role,
+                    "writable": writable,
+                    "signer": signer,
+                    "address": null,
+                    "identityDisposition": "unresolved-until-semantic-owner-construction"
+                })
+            })
             .collect::<Vec<_>>()
     } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
@@ -1817,23 +1867,23 @@ fn action_verdict_json(
             .collect::<Vec<_>>()
     } else {
         source_action(coordinate)
-        .map(|action| {
-            let contract = account_contract_v2(action);
-            (0..contract.len())
-                .filter_map(|index| contract.meta(index).map(|role| (index, role)))
-                .map(|(index, role)| {
-                    json!({
-                        "index": index.to_string(),
-                        "role": source_role_label_v2(role.role),
-                        "writable": role.writable,
-                        "signer": role.signer,
-                        "address": null,
-                        "identityDisposition": "unresolved-until-semantic-owner-construction"
+            .map(|action| {
+                let contract = account_contract_v2(action);
+                (0..contract.len())
+                    .filter_map(|index| contract.meta(index).map(|role| (index, role)))
+                    .map(|(index, role)| {
+                        json!({
+                            "index": index.to_string(),
+                            "role": source_role_label_v2(role.role),
+                            "writable": role.writable,
+                            "signer": role.signer,
+                            "address": null,
+                            "identityDisposition": "unresolved-until-semantic-owner-construction"
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     };
     let action8 = CanonicalIntentCoordinate {
         family_tag: DIRECT_MARKET_FAMILY_TAG,
@@ -1969,14 +2019,16 @@ fn callable_action_variant_verdict_json(
         .account_roles()
         .iter()
         .enumerate()
-        .map(|(index, role)| json!({
-            "index": index.to_string(),
-            "role": role.label(),
-            "writable": role.writable(),
-            "signer": role.signer(),
-            "address": role.address().to_string(),
-            "identityDisposition": "semantic-owner-derived-and-bound-to-draft"
-        }))
+        .map(|(index, role)| {
+            json!({
+                "index": index.to_string(),
+                "role": role.label(),
+                "writable": role.writable(),
+                "signer": role.signer(),
+                "address": role.address().to_string(),
+                "identityDisposition": "semantic-owner-derived-and-bound-to-draft"
+            })
+        })
         .collect::<Vec<_>>();
     let freshness = material.freshness();
     json!({
@@ -2102,6 +2154,7 @@ fn callable_action_verdict_json(
         "stateSelection": selection_json(selection),
         "semanticOwnerConstructor": semantic_builder,
         "accountRoles": roles,
+        "absenceObservations": material.account_absences().iter().map(absence_observation_json).collect::<Vec<_>>(),
         "callable": true,
         "verdict": "callable-unsigned-draft",
         "reason": "checked release, finalized semantic state, exact account roles, and one canonical blockhash-free transaction draft agree",
@@ -2518,12 +2571,8 @@ const fn allocation_status_name(
 ) -> &'static str {
     match status {
         clutch_solana_layout::registry::AllocationStatus::Frozen => "frozen",
-        clutch_solana_layout::registry::AllocationStatus::ReservedDisabled => {
-            "reserved-disabled"
-        }
-        clutch_solana_layout::registry::AllocationStatus::NonProductionLab => {
-            "non-production-lab"
-        }
+        clutch_solana_layout::registry::AllocationStatus::ReservedDisabled => "reserved-disabled",
+        clutch_solana_layout::registry::AllocationStatus::NonProductionLab => "non-production-lab",
         clutch_solana_layout::registry::AllocationStatus::Withdrawn => "withdrawn",
     }
 }
@@ -2606,7 +2655,11 @@ fn read_only_session_id(
         ]);
     }
     hash.update(workflow_id);
-    hash.update(u64::try_from(accounts.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hash.update(
+        u64::try_from(accounts.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
     for version in accounts {
         hash.update(version.account.address.to_bytes());
         hash.update(version.account.owner.to_bytes());
@@ -2634,7 +2687,11 @@ fn read_only_session_id(
             }
         }
     }
-    hash.update(u64::try_from(cursors.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hash.update(
+        u64::try_from(cursors.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
     for selection in cursors {
         hash.update(selection.account.to_bytes());
         hash_text(&mut hash, &selection.release_key);
@@ -2645,7 +2702,11 @@ fn read_only_session_id(
         hash.update(selection.cursor.position.phase.to_le_bytes());
         hash.update(selection.cursor.position.item.to_le_bytes());
         hash.update(selection.cursor.observed_state_sha256);
-        hash.update(u64::try_from(selection.dependencies.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hash.update(
+            u64::try_from(selection.dependencies.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
         for dependency in &selection.dependencies {
             hash.update(dependency.to_bytes());
         }
@@ -2655,6 +2716,11 @@ fn read_only_session_id(
                 .to_le_bytes(),
         );
         for absence in &selection.absence_observations {
+            hash.update(
+                u64::try_from(absence.role_index())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
             hash_text(&mut hash, absence.label());
             hash.update(absence.address().to_bytes());
             hash_text(&mut hash, absence.release_key());
@@ -2828,6 +2894,7 @@ fn session_selection_json(selection: &KeeperActionSelection) -> Value {
 
 fn absence_observation_json(absence: &CanonicalAccountAbsenceV1) -> Value {
     json!({
+        "roleIndex": absence.role_index().to_string(),
         "role": absence.label(),
         "address": absence.address().to_string(),
         "releaseKey": absence.release_key(),
@@ -2957,14 +3024,18 @@ mod read_only_session_contract_tests {
         let driver = Address::new_from_array([0x31; 32]);
         let dependency = Address::new_from_array([0x32; 32]);
         let roles = [
+            crate::action_material::CanonicalAccountRoleV1::new("driver", driver, true, false),
             crate::action_material::CanonicalAccountRoleV1::new(
-                "driver", driver, true, false,
+                "dependency-a",
+                dependency,
+                false,
+                false,
             ),
             crate::action_material::CanonicalAccountRoleV1::new(
-                "dependency-a", dependency, false, false,
-            ),
-            crate::action_material::CanonicalAccountRoleV1::new(
-                "dependency-b", dependency, true, false,
+                "dependency-b",
+                dependency,
+                true,
+                false,
             ),
         ];
         assert_eq!(
