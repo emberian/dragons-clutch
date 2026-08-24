@@ -1,8 +1,8 @@
 //! Isolated General action 44: retire one complete portfolio archive set.
 //!
-//! The route remains deliberately unregistered. Once action 43 has been
-//! allocated, shared dispatch may pass the fresh action-44 enum value here.
-//! This handler authenticates the counted SettlementRoot, retained sealed
+//! The sole current General router dispatches allocated action 44 here after
+//! current V5 release authentication. This handler authenticates the counted
+//! SettlementRoot, retained sealed
 //! Feed, MarketBinding neutral sink, both consumed Reservation V9 endpoints,
 //! both Position V3/GEN1 pairs, the complete committed Receipt V5 prefix, and
 //! the sorted unique persisted refund-owner suffix. It then applies the one

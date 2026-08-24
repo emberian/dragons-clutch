@@ -3538,8 +3538,8 @@ impl ProtocolTransactionBuilder {
         })
     }
 
-    /// Compile exactly one current wide Structured, Dealer, or Failure
-    /// instruction as a
+    /// Compile exactly one current wide Structured, Dealer, Failure, or
+    /// current-General terminal instruction as a
     /// v0 message. This crate-private seam is reachable only after the
     /// operator material constructor has hostile-decoded the finalized
     /// lookup-table account and proved complete role coverage.
