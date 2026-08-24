@@ -17,7 +17,7 @@ pub const WRAPPER_QUANTITY_PAYLOAD_BYTES: usize = 32 + (5 * 8);
 /// Exact vault-only mutation payload width.
 pub const VAULT_MUTATION_PAYLOAD_BYTES: usize = 32 + (2 * 8);
 
-/// Family-local structured-claim action allocation.
+/// Current family-local structured-claim actions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StructuredClaimActionV1 {
@@ -293,7 +293,7 @@ pub enum StructuredClaimPayloadV1 {
     RetireDescriptor(VaultMutationPayloadV1),
 }
 
-/// Decode only the exact payload width belonging to one allocated action.
+/// Decode only the exact payload width belonging to one current action.
 pub fn decode_structured_claim_payload_v1(
     action_tag: u8,
     input: &[u8],

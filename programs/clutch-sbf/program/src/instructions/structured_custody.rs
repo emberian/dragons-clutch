@@ -12,9 +12,9 @@
 //! canonical actions 2/4 have no endpoint in this module.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId, FixedCodec,
+    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6Id, ContentId, FixedCodec,
     MarketInstanceV2Id, NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
-    SeriesAttachmentPlanV4Id, SeriesFundingTermsV2, SeriesLinkObligationStatusV1,
+    SeriesAttachmentPlanV5Id, SeriesFundingTermsV2, SeriesLinkObligationStatusV1,
     SeriesLinkObligationV1, SeriesMarketLinkPhaseV1, SeriesPlanV5Id,
 };
 use clutch_collateral_adapter_v2::{
@@ -671,7 +671,7 @@ fn admit_structured_descriptor_root_v1(
             && authorization.rent_refund_owner().bytes() == accounts[CV_PAYER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
         program_id,
         &accounts[CV_COMPILER_BUNDLE],
         authorization.compiler_bundle_id(),
@@ -897,10 +897,10 @@ fn structured_root_binding_v1(
         ordinal: authorization.ordinal(),
         market_instance_id: authorization.market_instance_id(),
         generation: authorization.generation(),
-        attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(
+        attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes(
             authorization.attachment_plan_id().bytes(),
         ),
-        compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes(
+        compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes(
             authorization.compiler_bundle_id().bytes(),
         ),
         compiler_release_id,

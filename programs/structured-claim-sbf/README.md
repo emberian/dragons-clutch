@@ -7,8 +7,8 @@ the exact checked manifest and hostile loader boundary. It is not a production
 or deployment claim.
 
 The create route uses an exact 34-account frame. The base side
-authenticates the Product SeriesRegistryV2, SeriesMarketLink, current BundleV5,
-ReleaseV2/ProfileV4, and current AttachmentV4, verifies
+authenticates the Product SeriesRegistryV3, SeriesMarketLinkV2, current BundleV6,
+ReleaseV2/ProfileV4, and current AttachmentV5, verifies
 fixed-depth recipe-set membership, atomically records Product's first Wrapper
 admission, funds the
 `0xb7/1` Structured root with explicit refundable principal/donation

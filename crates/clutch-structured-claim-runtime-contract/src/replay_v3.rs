@@ -574,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn withdrawn_pair_actions_cannot_construct_encode_or_decode_current_replay() {
+    fn withdrawn_pair_tags_have_no_current_action_or_replay_decode() {
         let founding =
             StructuredClaimReplayExtensionV1::founding([1; 32], [2; 32], [3; 32], [4; 32])
                 .unwrap();
