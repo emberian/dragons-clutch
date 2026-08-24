@@ -291,6 +291,12 @@ pub enum OwnedWireContract {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
+    /// Sole chain-derived current Direct action-1 request. Its 41-account
+    /// Product foundation frame is compiled only as an authenticated ALT-backed
+    /// v0 message; the generic Direct material path cannot construct it.
+    EnabledDirectInitializeMarketRequestV2 {
+        binding: SuccessorRegistryBinding,
+    },
     /// Sole chain-derived current Direct action-8 request. The hostile state
     /// chooses the branch through the exact account geometry; payload is empty.
     EnabledDirectFinalizeSelectionRequestV2 {
@@ -1210,6 +1216,68 @@ impl OwnedInstructionDraft {
             registry_binding: Some(binding),
             runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
             wire: OwnedWireContract::EnabledDirectMarketRequestV1 { binding, sequence },
+            data: request.bytes().to_vec(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Assemble current Direct action 1 only after the Product-root snapshot
+    /// owner has derived the exact 41-account frame from finalized state.
+    pub(crate) fn enabled_direct_initialize_market_request_v2(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        payer: Address,
+        equations: Vec<ExactEquation>,
+    ) -> Result<Self> {
+        use clutch_client_contract::direct_market::{
+            DirectMarketClientPayloadV1, DirectMarketClientRequestV1,
+        };
+        use clutch_solana_layout::registry::DirectMarketAction;
+
+        const ACCOUNT_COUNT: usize = 41;
+        const PAYER: usize = 37;
+        const WRITABLE: [usize; 7] = [2, 3, 25, 27, 35, 36, 37];
+        if accounts.len() != ACCOUNT_COUNT
+            || payer == Address::default()
+            || accounts[PAYER].pubkey != payer
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut identities = BTreeSet::new();
+        for (index, account) in accounts.iter().enumerate() {
+            let writable = WRITABLE.contains(&index);
+            let signer = index == PAYER;
+            if account.pubkey == Address::default()
+                || account.is_writable != writable
+                || account.is_signer != signer
+                || !identities.insert(account.pubkey)
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+        }
+        let action = DirectMarketAction::InitializeMarket;
+        let central_action = ExtensionAction::DirectMarket(action);
+        let binding = registry_binding(
+            ExtensionFamily::DirectMarket,
+            action.tag(),
+            Some(central_action),
+        )?;
+        let payload = DirectMarketClientPayloadV1::InitializeMarket;
+        let request = DirectMarketClientRequestV1::encode(0, &payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let value = Self {
+            flow: ProtocolFlow::DirectMarketV1,
+            action_name: "initialize-direct-market".into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: vec![payer],
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { binding },
             data: request.bytes().to_vec(),
         };
         value.validate()?;
@@ -2748,6 +2816,7 @@ impl OwnedInstructionDraft {
             self.wire,
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                 | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
+                | OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { .. }
                 | OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 { .. }
         );
         let fractional_request = matches!(
@@ -3477,6 +3546,27 @@ impl OwnedInstructionDraft {
                     return Err(ConstructionError::WrongWirePrefix);
                 }
             }
+            OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { binding } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if request.sequence != 0
+                    || request.envelope.family != ExtensionFamily::DirectMarket
+                    || request.envelope.action
+                        != ExtensionAction::DirectMarket(
+                            clutch_solana_layout::registry::DirectMarketAction::InitializeMarket,
+                        )
+                    || binding.family != ExtensionFamily::DirectMarket
+                    || binding.local_action
+                        != clutch_solana_layout::registry::DirectMarketAction::InitializeMarket.tag()
+                    || binding.central_action != Some(request.envelope.action)
+                    || self.registry_binding != Some(binding)
+                    || self.flow != ProtocolFlow::DirectMarketV1
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || self.accounts.len() != 41
+                {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+            }
             OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 {
                 binding,
                 sequence,
@@ -4047,6 +4137,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
                     | OwnedWireContract::GeneralTerminalRequestV5 { .. }
                     | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
+                    | OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { .. }
             )
         }) {
             return Err(ConstructionError::MissingLookupTable);
@@ -4072,6 +4163,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::FractionalRedemptionRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
+                    | OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { .. }
                     | OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
                     | OwnedWireContract::DealerFacilityRequestV1 { .. }
@@ -4265,8 +4357,8 @@ impl ProtocolTransactionBuilder {
         })
     }
 
-    /// Compile exactly one current wide Structured, Dealer, Failure, or
-    /// current-General terminal instruction as a
+    /// Compile exactly one current wide Structured, Dealer, Failure,
+    /// current-General terminal, or Direct-foundation instruction as a
     /// v0 message. This crate-private seam is reachable only after the
     /// operator material constructor has hostile-decoded the finalized
     /// lookup-table account and proved complete role coverage.
@@ -4286,6 +4378,7 @@ impl ProtocolTransactionBuilder {
                 | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
                 | OwnedWireContract::GeneralTerminalRequestV5 { .. }
                 | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
+                | OwnedWireContract::EnabledDirectInitializeMarketRequestV2 { .. }
         );
         if !supported
             || !matches!(
@@ -4297,6 +4390,7 @@ impl ProtocolTransactionBuilder {
                     | ProtocolFlow::GeneralV2Candidate
                     | ProtocolFlow::GeneralV2Settlement
                     | ProtocolFlow::GeneralV2Fees
+                    | ProtocolFlow::DirectMarketV1
             )
             || lookup_table.key == Address::default()
             || lookup_table.addresses.is_empty()

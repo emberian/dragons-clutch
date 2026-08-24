@@ -93,6 +93,7 @@ const PROFILE_SEED: &[u8] = b"profile";
 const POLICY_SEED: &[u8] = b"policy";
 const BATCH_POLICY_SEED: &[u8] = b"dragons-clutch:batch-policy:v1";
 const REVENUE_POLICY_SEED: &[u8] = b"dragons-clutch:revenue-policy:v1";
+const REVENUE_POLICY_PREIMAGE_SEED_V2: &[u8] = b"dc:revenue-preimage:v2";
 const TREASURY_SERVICE_LEDGER_SEED_V1: &[u8] = b"treasury-service-v1";
 const PRICE_GRID_SEED_V1: &[u8] = b"dragons-clutch:grid:v1";
 const PRODUCT_ARTIFACT_SEED: &[u8] = b"dc:product-artifact:v1";
@@ -1240,6 +1241,7 @@ fn authenticate_fee(
     for account in [
         fee.batch_policy,
         fee.revenue_record,
+        fee.revenue_policy_preimage,
         fee.treasury_position,
         fee.treasury_replay,
         fee.treasury_service_ledger,
@@ -1265,9 +1267,17 @@ fn authenticate_fee(
     let revenue_id = revenue_policy_v2_digest(&revenue)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?.0;
     let record_pda = pda(release.program_id, &[REVENUE_POLICY_SEED, &root.realm_id()]);
+    let preimage_pda = pda(
+        release.program_id,
+        &[REVENUE_POLICY_PREIMAGE_SEED_V2, &root.realm_id()],
+    );
     let record_rent_floor = record
         .terminal_payer_principal
         .checked_add(record.terminal_donation_floor)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let preimage_rent_floor = record
+        .policy_preimage_payer_principal
+        .checked_add(record.policy_preimage_donation_floor)
         .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
     if batch_id != policy.batch_policy_id
         || fee.batch_policy.address
@@ -1276,6 +1286,9 @@ fn authenticate_fee(
         || fee.revenue_record.address != record_pda.0
         || record.stored_bump != record_pda.1
         || fee.revenue_record.lamports < record_rent_floor
+        || fee.revenue_policy_preimage.address != preimage_pda.0
+        || record.policy_preimage_stored_bump != preimage_pda.1
+        || fee.revenue_policy_preimage.lamports < preimage_rent_floor
         || record.realm.bytes() != root.realm_id()
         || record_id != general.revenue_policy_record_v2_id
         || revenue_id != general.revenue_policy_v2_digest
