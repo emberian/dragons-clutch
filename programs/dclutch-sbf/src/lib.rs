@@ -134,7 +134,7 @@ mod tests {
             7,
         );
         let mut found = [0; FOUND_MARKET_AND_FUND_BYTES];
-        FoundMarketAndFundV1::new(identity, 2, 3, 5)
+        FoundMarketAndFundV1::new(identity, 2)
             .expect("valid founding")
             .encode(&mut found)
             .expect("exact encoding");

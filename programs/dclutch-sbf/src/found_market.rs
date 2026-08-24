@@ -1,6 +1,6 @@
 //! Atomic founding of one authenticated categorical-Pyth Market and Fund.
 
-use dclutch_capability_contract::CapabilityManifestV1;
+use dclutch_capability_contract::{CapabilityManifestV1, FundingQuoteV1};
 use dclutch_collateral_contract::{
     AccountPrivilege, FoundMarketAndFundV1, InstructionTag, validate_account_frame,
 };
@@ -97,6 +97,8 @@ struct FoundingPlan {
     fund_bump: u8,
     market_rent: u64,
     fund_balance: u64,
+    provider_fee_reimbursement: u64,
+    resolution_success_bounty: u64,
     sponsor_before: u64,
 }
 
@@ -168,7 +170,7 @@ pub(crate) fn process_found_market_and_fund(
     )
     .map_err(|_| AdapterError::FundCreateCpi)?;
 
-    persist_founding(program_id, &frame, instruction, plan)?;
+    persist_founding(program_id, &frame, plan)?;
     Ok(())
 }
 
@@ -213,17 +215,21 @@ fn authenticate_founding(
         .map_err(|_| AdapterError::FoundingAuthentication)?;
     let market_rent = rent.minimum_balance(expected_market_bytes);
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
+    let quote = authenticate_fund_quote(frame, identity, fund_rent)?;
     let fund = ResolutionFundV1::new(
         frame.market.key.to_bytes(),
         identity.generation(),
         frame.sponsor.key.to_bytes(),
-        instruction.provider_fee_reimbursement(),
-        instruction.resolution_success_bounty(),
+        quote.provider_principal(),
+        quote.bounty_principal(),
     )
     .map_err(|_| AdapterError::FoundingAuthentication)?;
     let fund_balance = fund
         .minimum_balance(fund_rent)
         .map_err(|_| AdapterError::Arithmetic)?;
+    if fund_balance != quote.total_principal() {
+        return Err(AdapterError::FoundingAuthentication.into());
+    }
     let total_debit = market_rent
         .checked_add(fund_balance)
         .ok_or(AdapterError::Arithmetic)?;
@@ -257,8 +263,38 @@ fn authenticate_founding(
         fund_bump,
         market_rent,
         fund_balance,
+        provider_fee_reimbursement: quote.provider_principal(),
+        resolution_success_bounty: quote.bounty_principal(),
         sponsor_before: frame.sponsor.lamports(),
     })
+}
+
+fn authenticate_fund_quote(
+    frame: &FoundingFrame<'_, '_>,
+    identity: MarketIdentity,
+    fund_rent: u64,
+) -> Result<FundingQuoteV1, ProgramError> {
+    let material_data = frame
+        .resolution_material
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let manifest_data = frame
+        .capability_manifest
+        .try_borrow_data()
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let manifest = CapabilityManifestV1::decode(&manifest_data)
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let selected = manifest
+        .required_founding_entry_for_config(identity.resolution_policy_id())
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+        return Err(AdapterError::FoundingAuthentication.into());
+    }
+    selected
+        .validate_one_shot_resolution_fund_quote(fund_rent)
+        .map_err(|_| AdapterError::FoundingAuthentication.into())
 }
 
 fn authenticate_account_identities(
@@ -404,7 +440,6 @@ fn authenticate_immutable_records(
 fn persist_founding(
     program_id: &Pubkey,
     frame: &FoundingFrame<'_, '_>,
-    instruction: FoundMarketAndFundV1,
     plan: FoundingPlan,
 ) -> Result<(), ProgramError> {
     let expected_sponsor = plan
@@ -448,8 +483,8 @@ fn persist_founding(
         frame.market.key.to_bytes(),
         plan.identity.generation(),
         frame.sponsor.key.to_bytes(),
-        instruction.provider_fee_reimbursement(),
-        instruction.resolution_success_bounty(),
+        plan.provider_fee_reimbursement,
+        plan.resolution_success_bounty,
     )
     .map_err(|_| AdapterError::FoundingPostcondition)?;
     let mut fund_data = frame
@@ -635,6 +670,10 @@ const _: () = assert!(MARKET_ROOT_BYTES == 232);
 
 #[cfg(test)]
 mod tests {
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
     use dclutch_core_contract::ContentId as CoreContentId;
     use dclutch_kernel::resolution::categorical_pyth_v1::{
         CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
@@ -661,8 +700,24 @@ mod tests {
         accounts: Vec<AccountInfo<'static>>,
     }
 
+    #[derive(Clone, Copy)]
+    enum ManifestCase {
+        Valid,
+        Empty,
+        WrongConfig,
+        WrongRelease,
+        WrongRent,
+        ZeroBounty,
+        ExtraneousPrincipal,
+        Ambiguous,
+    }
+
     impl Fixture {
         fn new(outcome_count: u8) -> Self {
+            Self::new_with_manifest(outcome_count, ManifestCase::Valid)
+        }
+
+        fn new_with_manifest(outcome_count: u8, manifest_case: ManifestCase) -> Self {
             let program_id = Pubkey::new_unique();
             let realm = RealmV1::new(RealmV1Input {
                 collateral_semantic_id: [1; 32],
@@ -709,7 +764,9 @@ mod tests {
             let material = CategoricalPythResolutionMaterialV1::new(policy, feed_profile)
                 .expect("valid material");
             let material_bytes = material.to_bytes();
-            let manifest_bytes = dclutch_capability_contract::EMPTY_MANIFEST_BYTES;
+            let policy_id = core_id(hash(&policy.to_bytes()).to_bytes());
+            let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
+            let manifest_bytes = manifest_bytes(manifest_case, policy_id, policy, fund_rent);
 
             let identity = MarketIdentity::new(
                 core_id(realm_digest),
@@ -724,8 +781,8 @@ mod tests {
                 Pubkey::find_program_address(&[MARKET_SEED, &identity_digest], &program_id);
             let (fund_key, _) =
                 Pubkey::find_program_address(&[FUND_SEED, market_key.as_ref()], &program_id);
-            let instruction = FoundMarketAndFundV1::new(identity, outcome_count, 3, 5)
-                .expect("valid instruction");
+            let instruction =
+                FoundMarketAndFundV1::new(identity, outcome_count).expect("valid instruction");
 
             let mut accounts = vec![
                 leak_account(
@@ -797,7 +854,7 @@ mod tests {
                     false,
                     false,
                     1,
-                    manifest_bytes.to_vec(),
+                    manifest_bytes,
                     program_id,
                     false,
                 ),
@@ -833,6 +890,109 @@ mod tests {
             let frame = FoundingFrame::parse(&self.accounts)?;
             authenticate_founding(&self.program_id, &frame, self.instruction)
         }
+    }
+
+    fn manifest_bytes(
+        manifest_case: ManifestCase,
+        policy_id: CoreContentId,
+        policy: CategoricalPythPolicyRecordV1,
+        fund_rent: u64,
+    ) -> Vec<u8> {
+        let entries = match manifest_case {
+            ManifestCase::Empty => vec![],
+            ManifestCase::Valid => vec![resolution_entry(
+                13,
+                policy_id,
+                *policy.release_id(),
+                fund_rent,
+                3,
+                5,
+                0,
+            )],
+            ManifestCase::WrongConfig => vec![resolution_entry(
+                13,
+                core_id([31; 32]),
+                *policy.release_id(),
+                fund_rent,
+                3,
+                5,
+                0,
+            )],
+            ManifestCase::WrongRelease => vec![resolution_entry(
+                13, policy_id, [32; 32], fund_rent, 3, 5, 0,
+            )],
+            ManifestCase::WrongRent => vec![resolution_entry(
+                13,
+                policy_id,
+                *policy.release_id(),
+                fund_rent.checked_add(1).expect("bounded rent"),
+                3,
+                5,
+                0,
+            )],
+            ManifestCase::ZeroBounty => vec![resolution_entry(
+                13,
+                policy_id,
+                *policy.release_id(),
+                fund_rent,
+                3,
+                0,
+                0,
+            )],
+            ManifestCase::ExtraneousPrincipal => vec![resolution_entry(
+                13,
+                policy_id,
+                *policy.release_id(),
+                fund_rent,
+                3,
+                5,
+                1,
+            )],
+            ManifestCase::Ambiguous => vec![
+                resolution_entry(13, policy_id, *policy.release_id(), fund_rent, 3, 5, 0),
+                resolution_entry(14, policy_id, *policy.release_id(), fund_rent, 3, 5, 0),
+            ],
+        };
+        let mut bytes = vec![
+            0;
+            MANIFEST_HEADER_BYTES
+                .checked_add(
+                    entries
+                        .len()
+                        .checked_mul(CAPABILITY_ENTRY_BYTES)
+                        .expect("bounded manifest entries"),
+                )
+                .expect("bounded manifest bytes")
+        ];
+        CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("canonical manifest");
+        bytes
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolution_entry(
+        kind: u8,
+        config_id: CoreContentId,
+        release_id: [u8; 32],
+        rent: u64,
+        provider: u64,
+        bounty: u64,
+        creation: u64,
+    ) -> CapabilityEntryV1 {
+        CapabilityEntryV1::new(
+            core_id([kind; 32]),
+            core_id(release_id),
+            config_id,
+            core_id([41; 32]),
+            core_id([42; 32]),
+            core_id([43; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(rent, creation, 0, provider, bounty, 0, 0)
+                .expect("representable quote"),
+        )
+        .expect("canonical capability entry")
     }
 
     fn capacity() -> CapacityProfileV1 {
@@ -1054,6 +1214,33 @@ mod tests {
     }
 
     #[test]
+    fn manifest_is_the_unique_resolution_fund_capital_authority() {
+        for manifest_case in [
+            ManifestCase::Empty,
+            ManifestCase::WrongConfig,
+            ManifestCase::WrongRelease,
+            ManifestCase::WrongRent,
+            ManifestCase::ZeroBounty,
+            ManifestCase::ExtraneousPrincipal,
+            ManifestCase::Ambiguous,
+        ] {
+            assert_eq!(
+                Fixture::new_with_manifest(2, manifest_case)
+                    .authenticate()
+                    .err(),
+                Some(ProgramError::from(AdapterError::FoundingAuthentication))
+            );
+        }
+
+        let valid = Fixture::new(2);
+        let plan = valid.authenticate().expect("manifest-authorized funding");
+        let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
+        assert_eq!(plan.provider_fee_reimbursement, 3);
+        assert_eq!(plan.resolution_success_bounty, 5);
+        assert_eq!(plan.fund_balance, fund_rent + 3 + 5);
+    }
+
+    #[test]
     fn existing_state_and_insufficient_atomic_capital_refuse_preflight() {
         let existing_market = Fixture::new(2);
         **test_account(&existing_market.accounts, 1)
@@ -1109,8 +1296,7 @@ mod tests {
                 false,
             );
             let frame = FoundingFrame::parse(&fixture.accounts).expect("created frame");
-            persist_founding(&fixture.program_id, &frame, fixture.instruction, plan)
-                .expect("exact persistence");
+            persist_founding(&fixture.program_id, &frame, plan).expect("exact persistence");
             let fund_data = frame.fund.try_borrow_data().expect("fund data");
             let fund = ResolutionFundV1::decode(&fund_data).expect("canonical Fund");
             assert_eq!(fund.market(), market_key.as_ref());
