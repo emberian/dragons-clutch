@@ -24,7 +24,8 @@ use crate::instructions::failure_market_runtime::{
 };
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::instructions::source_terminal_resolution_v5::{
-    AuthenticatedSourceResolutionTerminalV1, PersistedSourceResolutionTerminalPolicyV1,
+    AuthenticatedSourceResolutionStatisticResultCloseV1, AuthenticatedSourceResolutionTerminalV1,
+    PersistedSourceResolutionTerminalPolicyV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_recovery_terminal_v2::{
@@ -164,6 +165,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
     archive_runtime: AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
     source_terminal: AuthenticatedSourceResolutionTerminalV1,
+    source_result_close: AuthenticatedSourceResolutionStatisticResultCloseV1,
 ) -> Outcome<AuthenticatedFailureMarketRecoveryClosePostwriteV2> {
     require_distinct(&[
         admission_root_account.clone(),
@@ -202,6 +204,12 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
     )?;
     let policy = live_admission.state().binding().facts();
     let source_liveness = source_terminal.liveness();
+    let source_terminal_policy = match source_terminal.policy() {
+        PersistedSourceResolutionTerminalPolicyV1::NoReopen(value) => value.authenticated(),
+        PersistedSourceResolutionTerminalPolicyV1::ReopenRequest(_) => {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        }
+    };
     require(
         live_interval == archived_accounts
             && live_runtime.state().session_resolution_receipt_id().bytes()
@@ -221,10 +229,18 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
                 .failure_resolution_receipt_id()
                 .bytes()
                 == resolution.failure_resolution().id().bytes()
-            && matches!(
-                source_terminal.policy(),
-                PersistedSourceResolutionTerminalPolicyV1::NoReopen(_)
-            )
+            && source_result_close.source_terminal_id() == source_terminal.id()
+            && source_result_close.source_resolution_input_id()
+                == source_terminal_policy.source_resolution_input_id()
+            && source_result_close.result_account()
+                == source_terminal_policy.target_account()
+            && source_result_close.lineage_account()
+                == source_terminal_policy.lineage_account()
+            && source_result_close.lineage_state_before_id()
+                == source_terminal_policy.expected_lineage_state_id()
+            && source_result_close.lineage_state_after_id()
+                != source_result_close.lineage_state_before_id()
+            && !source_result_close.close().lineage_after.is_open
             && source_liveness.action == RuntimeTransitionActionV1::CloseSuccess
             && source_liveness.kind == RuntimeCompartmentKindV1::Source
             && source_liveness.close_account
@@ -256,6 +272,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         latest_interval_terminal_receipt_id: live_interval.history().latest_terminal_receipt_id(),
         resolution_activation_receipt_id: resolution.product_activation().id(),
         source_resolution_terminal_receipt_id: ContentId::from_bytes(source_terminal.id().bytes()),
+        source_result_close_receipt_id: ContentId::from_bytes(source_result_close.id().bytes()),
         liveness_policy_id: policy.liveness_policy_id,
         liveness_lifecycle_id: policy.liveness_lifecycle_id,
         recovery_compartment_account_id: policy.recovery_compartment_account_id,
@@ -274,6 +291,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         live_interval.history(),
         resolution.product_activation().id(),
         ContentId::from_bytes(source_terminal.id().bytes()),
+        ContentId::from_bytes(source_result_close.id().bytes()),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
@@ -311,6 +329,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
         exact_reward_lamports: expected_terminal.exact_reward_lamports,
         latest_interval_terminal_receipt_id: expected_terminal.latest_interval_terminal_receipt_id,
         resolution_activation_receipt_id: expected_terminal.resolution_activation_receipt_id,
+        source_result_close_receipt_id: expected_terminal.source_result_close_receipt_id,
         recovery_terminal_receipt_id: terminal.id(),
         closed_recovery_join_id: closed_join,
     };
@@ -358,6 +377,7 @@ pub(crate) fn close_failure_market_recovery_v2<'a>(
             RECOVERY_CLOSE_POSTWRITE_DOMAIN_V2,
             &terminal.id().bytes(),
             &close.id().bytes(),
+            &source_result_close.id().bytes(),
             &live_runtime.state_commitment().bytes(),
             &runtime_after.state_commitment().bytes(),
             &closed_join.bytes(),
@@ -772,6 +792,27 @@ mod adversarial_recovery_close_tests {
             "source_liveness.account_id != policy.recovery_compartment_account_id",
         ] {
             assert!(outer.contains(predicate), "missing predicate {predicate}");
+        }
+    }
+
+    #[test]
+    fn recovery_terminal_requires_the_physical_source_result_close() {
+        let source = include_str!("failure_market_recovery_terminal_v2.rs");
+        let outer = source
+            .split("pub(crate) fn close_failure_market_recovery_v2")
+            .nth(1)
+            .expect("single close composer");
+        for predicate in [
+            "source_result_close.source_terminal_id() == source_terminal.id()",
+            "source_result_close.source_resolution_input_id()",
+            "source_result_close.result_account()",
+            "source_result_close.lineage_account()",
+            "source_result_close.lineage_state_before_id()",
+            "!source_result_close.close().lineage_after.is_open",
+            "source_result_close_receipt_id: ContentId::from_bytes(source_result_close.id().bytes())",
+            "&source_result_close.id().bytes()",
+        ] {
+            assert!(outer.contains(predicate), "missing Source close guard {predicate}");
         }
     }
 }

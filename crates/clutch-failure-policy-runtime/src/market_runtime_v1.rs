@@ -171,6 +171,8 @@ pub struct FailureMarketRecoveryCloseFactsV2 {
     pub latest_interval_terminal_receipt_id: ProductContentId,
     /// Product-private once-only Resolution V5 activation.
     pub resolution_activation_receipt_id: ProductContentId,
+    /// Source's exact physical StatisticResult/lineage close postwrite.
+    pub source_result_close_receipt_id: ProductContentId,
     /// Failure semantic owner's exact Recovery terminal receipt.
     pub recovery_terminal_receipt_id: FailureMarketRecoveryTerminalReceiptIdV2,
     /// Liveness adapter's re-executed exact successful Recovery close.
@@ -1452,6 +1454,12 @@ pub fn plan_close_failure_market_recovery_v2<
         || terminal_facts.resolution_activation_receipt_id.bytes() == recovery_terminal.id().bytes()
         || terminal_facts.resolution_activation_receipt_id.bytes()
             == closed_recovery_join_id.bytes()
+        || terminal_facts.source_result_close_receipt_id.bytes()
+            == recovery_terminal.id().bytes()
+        || terminal_facts.source_result_close_receipt_id.bytes()
+            == closed_recovery_join_id.bytes()
+        || terminal_facts.source_result_close_receipt_id
+            == terminal_facts.resolution_activation_receipt_id
         || recovery_terminal.id().bytes() == closed_recovery_join_id.bytes()
     {
         return Err(Error::BindingMismatch);
@@ -1473,6 +1481,7 @@ pub fn plan_close_failure_market_recovery_v2<
         exact_reward_lamports: history.exact_reward_lamports(),
         latest_interval_terminal_receipt_id: history.latest_terminal_receipt_id(),
         resolution_activation_receipt_id: terminal_facts.resolution_activation_receipt_id,
+        source_result_close_receipt_id: terminal_facts.source_result_close_receipt_id,
         recovery_terminal_receipt_id: recovery_terminal.id(),
         closed_recovery_join_id,
     };
@@ -1707,6 +1716,7 @@ fn hash_recovery_close_facts(hasher: &mut Sha256, facts: FailureMarketRecoveryCl
     hasher.update(facts.exact_reward_lamports.to_le_bytes());
     hasher.update(facts.latest_interval_terminal_receipt_id.bytes());
     hasher.update(facts.resolution_activation_receipt_id.bytes());
+    hasher.update(facts.source_result_close_receipt_id.bytes());
     hasher.update(facts.recovery_terminal_receipt_id.bytes());
     hasher.update(facts.closed_recovery_join_id.bytes());
 }

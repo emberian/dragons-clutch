@@ -27,7 +27,8 @@ use crate::instructions::failure_market_runtime::{
     AuthenticatedFailureMarketRuntimeRootV1,
 };
 use crate::instructions::product_market::{
-    record_failure_shared_core_terminal_v1, AuthenticatedFailureSharedCoreTerminalOwnerV1,
+    authenticate_market_lifecycle_root_v1, record_failure_shared_core_terminal_v1,
+    AuthenticatedFailureSharedCoreTerminalOwnerV1,
     AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
@@ -860,6 +861,7 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
     admission: AuthenticatedFailureMarketRootV2,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
+    resolved_root_decode: &mut MarketLifecycleRootAccountV1,
 ) -> Outcome<AuthenticatedFailureMarketFamilyTerminalPostwriteV2> {
     require_distinct(&[
         market_root_account.clone(),
@@ -869,11 +871,21 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
         interval_history_account.clone(),
         replay_account.clone(),
     ])?;
-    let root = resolved_market_root.state();
+    let policy = admission.state().binding().facts();
+    let live_root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        market_root_account,
+        policy.market_instance_id,
+        policy.generation,
+        true,
+        resolved_root_decode,
+    )?;
+    require(live_root == resolved_market_root, ClutchError::MismatchedState)?;
+    let root = live_root.state();
     let close = recovery_close.close().facts();
     require(
-        resolved_market_root.account() == *market_root_account.key
-            && resolved_market_root.owner_program() == *program_id
+        live_root.account() == *market_root_account.key
+            && live_root.owner_program() == *program_id
             && root.phase() == MarketLifecyclePhaseV1::Active
             && root.binding().market_instance_id
                 == admission.state().binding().facts().market_instance_id
@@ -1127,10 +1139,16 @@ mod adversarial_family_terminal_tests {
             })
             .expect("Active-root persistence outer");
         assert!(persist.contains("MarketLifecyclePhaseV1::Active"));
+        assert!(persist.contains("authenticate_market_lifecycle_root_v1"));
+        assert!(persist.contains("live_root == resolved_market_root"));
         assert!(persist.contains("root.resolution_activation_receipt_id()"));
         assert!(persist.contains("close.resolution_activation_receipt_id"));
         assert!(persist.contains("write_failure_market_family_terminal_v2"));
         assert!(!persist.contains("record_failure_shared_core_terminal_v1"));
+        assert!(
+            persist.find("authenticate_market_lifecycle_root_v1")
+                < persist.find("write_failure_market_family_terminal_v2")
+        );
 
         let latch = source
             .split("pub(crate) fn record_persisted_failure_market_family_terminal_v2")

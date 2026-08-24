@@ -103,6 +103,8 @@ pub struct FailureMarketRecoveryTerminalFactsV2 {
     pub resolution_activation_receipt_id: ProductContentId,
     /// Source's exact persisted terminal/no-reopen composition.
     pub source_resolution_terminal_receipt_id: ProductContentId,
+    /// Source's exact physical StatisticResult/lineage close postwrite.
+    pub source_result_close_receipt_id: ProductContentId,
     /// Immutable liveness policy.
     pub liveness_policy_id: LivenessId,
     /// Market-scoped liveness lifecycle.
@@ -196,6 +198,7 @@ pub fn admit_failure_market_recovery_terminal_v2<
     history: FailureMarketIntervalHistoryV2,
     resolution_activation_receipt_id: ProductContentId,
     source_resolution_terminal_receipt_id: ProductContentId,
+    source_result_close_receipt_id: ProductContentId,
 ) -> Result<FailureMarketRecoveryTerminalReceiptV2> {
     runtime.validate_against_admission(admission)?;
     if runtime.phase() != FailureMarketRuntimePhaseV1::IntervalArchived {
@@ -211,7 +214,11 @@ pub fn admit_failure_market_recovery_terminal_v2<
     )?;
     require_live(resolution_activation_receipt_id.bytes())?;
     require_live(source_resolution_terminal_receipt_id.bytes())?;
-    if resolution_activation_receipt_id == source_resolution_terminal_receipt_id {
+    require_live(source_result_close_receipt_id.bytes())?;
+    if resolution_activation_receipt_id == source_resolution_terminal_receipt_id
+        || resolution_activation_receipt_id == source_result_close_receipt_id
+        || source_resolution_terminal_receipt_id == source_result_close_receipt_id
+    {
         return Err(Error::BindingMismatch);
     }
     let policy = admission.binding().facts();
@@ -231,6 +238,7 @@ pub fn admit_failure_market_recovery_terminal_v2<
         latest_interval_terminal_receipt_id: history.latest_terminal_receipt_id(),
         resolution_activation_receipt_id,
         source_resolution_terminal_receipt_id,
+        source_result_close_receipt_id,
         liveness_policy_id: policy.liveness_policy_id,
         liveness_lifecycle_id: policy.liveness_lifecycle_id,
         recovery_compartment_account_id: policy.recovery_compartment_account_id,
@@ -344,6 +352,7 @@ fn hash_terminal_facts(hasher: &mut Sha256, facts: FailureMarketRecoveryTerminal
     hasher.update(facts.latest_interval_terminal_receipt_id.bytes());
     hasher.update(facts.resolution_activation_receipt_id.bytes());
     hasher.update(facts.source_resolution_terminal_receipt_id.bytes());
+    hasher.update(facts.source_result_close_receipt_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
@@ -421,11 +430,12 @@ mod adversarial_terminal_tests {
             latest_interval_terminal_receipt_id: ProductContentId::from_bytes([13; 32]),
             resolution_activation_receipt_id: ProductContentId::from_bytes([14; 32]),
             source_resolution_terminal_receipt_id: ProductContentId::from_bytes([15; 32]),
-            liveness_policy_id: LivenessId::from_bytes([16; 32]),
-            liveness_lifecycle_id: LivenessId::from_bytes([17; 32]),
-            recovery_compartment_account_id: LivenessId::from_bytes([18; 32]),
-            semantic_owner: LivenessId::from_bytes([19; 32]),
-            quote_schedule_id: LivenessId::from_bytes([20; 32]),
+            source_result_close_receipt_id: ProductContentId::from_bytes([16; 32]),
+            liveness_policy_id: LivenessId::from_bytes([17; 32]),
+            liveness_lifecycle_id: LivenessId::from_bytes([18; 32]),
+            recovery_compartment_account_id: LivenessId::from_bytes([19; 32]),
+            semantic_owner: LivenessId::from_bytes([20; 32]),
+            quote_schedule_id: LivenessId::from_bytes([21; 32]),
         };
         let mut first = Sha256::new();
         hash_terminal_facts(&mut first, facts);
@@ -442,5 +452,12 @@ mod adversarial_terminal_tests {
         original_facts.resolution_activation_receipt_id = ProductContentId::from_bytes([14; 32]);
         hash_terminal_facts(&mut original, original_facts);
         assert_ne!(original.finalize(), product_splice.finalize());
+        let mut physical_splice = facts;
+        physical_splice.source_result_close_receipt_id = ProductContentId::from_bytes([23; 32]);
+        let mut physical = Sha256::new();
+        hash_terminal_facts(&mut physical, physical_splice);
+        let mut unspliced = Sha256::new();
+        hash_terminal_facts(&mut unspliced, facts);
+        assert_ne!(unspliced.finalize(), physical.finalize());
     }
 }
