@@ -70,8 +70,226 @@ impl ReplayV3HashBackend for RuntimeSha256 {
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/general/current-founding-join/v5\0";
+const GENERAL_CURRENT_PRE_ROOT_FOUNDING_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/general/current-pre-root-founding/v5\0";
 const GENERAL_PRODUCT_FUNDED_SLOT_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/general/product-funded-slot/v5\0";
+
+/// Product facts that are final before RootV3 or LinkV3 exists.
+///
+/// The implementor is the action14 bootstrap owner. It retains the physical
+/// Series founder, exact GraphV4/ScheduleV4, and future root/link coordinates;
+/// copied identifiers cannot implement the default-refusing authentication.
+pub(crate) trait AuthenticatedCurrentProductGeneralPreRootV5 {
+    fn authenticate_current_product_general_pre_root_v5(
+        &self,
+        _program_id: &Pubkey,
+        _market_binding_account: Pubkey,
+        _market_runtime_account: Pubkey,
+        _policy: GeneralFoundingPolicyV1,
+        _base: &MarketBindingV2,
+        _revenue: &AuthenticatedRevenuePolicyRecordV2,
+        _treasury: &RevenueMarketTreasuryDerivationV1,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+
+    fn authentication_id(&self) -> ContentId;
+    fn market_instance_id(&self) -> MarketInstanceV2Id;
+    fn product_market_root_account(&self) -> Id32;
+    fn product_generation(&self) -> u64;
+    fn series_market_link_account(&self) -> Id32;
+    fn series_ordinal(&self) -> u32;
+    fn compiler_bundle_v7_id(&self) -> Id32;
+    fn funding_quote_v6_id(&self) -> Id32;
+    fn attachment_plan_v6_id(&self) -> Id32;
+    fn foundation_schedule_v4_id(&self) -> Id32;
+    fn foundation_account_graph_v4_id(&self) -> Id32;
+    fn series_funding_v5_account(&self) -> Id32;
+    fn physical_capitalization_receipt_id(&self) -> Id32;
+    fn realm_id(&self) -> Id32;
+    fn collateral_policy_id(&self) -> Id32;
+    fn collateral_release_id(&self) -> Id32;
+}
+
+/// Collateral-owned pre-root authority for the three Product binding facts
+/// which General must never synthesize from IDs supplied by an instruction.
+pub(crate) trait AuthenticatedCurrentGeneralCollateralPreRootV5 {
+    fn authenticate_current_general_collateral_pre_root_v5<P>(
+        &self,
+        _product: &P,
+        _market_runtime_account: Pubkey,
+    ) -> Outcome<()>
+    where
+        P: AuthenticatedCurrentProductGeneralPreRootV5 + ?Sized,
+    {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+
+    fn market_instance_id(&self) -> MarketInstanceV2Id;
+    fn market_liability_founding_id(&self) -> Id32;
+    fn claim_mint_founding_plan_id(&self) -> Id32;
+    fn claim_issuance_binding_id(&self) -> Id32;
+    fn claim_mint_authority(&self) -> Pubkey;
+    fn authentication_id(&self) -> ContentId;
+}
+
+/// Move-only acyclic General plan minted before Product creates RootV3.
+///
+/// The later physical General founder consumes this exact value after Product
+/// has derived RootV3 and LinkV3 semantic IDs. Thus those later IDs cannot
+/// influence the General capability that RootV3 already commits.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedGeneralMarketPreRootFoundingPlanV5 {
+    founding_policy: GeneralFoundingPolicyV1,
+    base: MarketBindingV2,
+    revenue: AuthenticatedRevenuePolicyRecordV2,
+    treasury: RevenueMarketTreasuryDerivationV1,
+    market_binding_account: Pubkey,
+    market_runtime_account: Pubkey,
+    product_preauthorization_id: ContentId,
+    market_liability_founding_id: Id32,
+    claim_mint_founding_plan_id: Id32,
+    claim_issuance_binding_id: Id32,
+    collateral_authentication_id: ContentId,
+    general_founding_capability_id: Id32,
+}
+
+impl AuthenticatedGeneralMarketPreRootFoundingPlanV5 {
+    pub(crate) const fn id(&self) -> ContentId {
+        ContentId::from_bytes(self.general_founding_capability_id.bytes())
+    }
+    pub(crate) const fn market_binding_account(&self) -> Pubkey {
+        self.market_binding_account
+    }
+    pub(crate) const fn market_runtime_account(&self) -> Pubkey {
+        self.market_runtime_account
+    }
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
+        self.product_preauthorization_id
+    }
+    pub(crate) const fn market_liability_founding_id(&self) -> Id32 {
+        self.market_liability_founding_id
+    }
+    pub(crate) const fn claim_mint_founding_plan_id(&self) -> Id32 {
+        self.claim_mint_founding_plan_id
+    }
+    pub(crate) const fn claim_issuance_binding_id(&self) -> Id32 {
+        self.claim_issuance_binding_id
+    }
+    pub(crate) const fn general_founding_capability_id(&self) -> Id32 {
+        self.general_founding_capability_id
+    }
+}
+
+/// Join the action14 Product bootstrap to sealed General policy, Collateral,
+/// and immutable Revenue authority without reading RootV3 or LinkV3.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_general_market_pre_root_founding_v5<P, C>(
+    program_id: &Pubkey,
+    product: &P,
+    collateral: &C,
+    founding_policy_bytes: &[u8],
+    base: MarketBindingV2,
+    revenue: AuthenticatedRevenuePolicyRecordV2,
+) -> Outcome<AuthenticatedGeneralMarketPreRootFoundingPlanV5>
+where
+    P: AuthenticatedCurrentProductGeneralPreRootV5 + ?Sized,
+    C: AuthenticatedCurrentGeneralCollateralPreRootV5 + ?Sized,
+{
+    let founding_policy = GeneralFoundingPolicyV1::decode(founding_policy_bytes)?;
+    base.validate()?;
+    founding_policy.binds_market(base.base())?;
+    let relation = base.base();
+    let market_instance = relation.market_instance_v2_id.bytes();
+    let (market_binding_account, _) =
+        seeds::general_v2_market_binding_pda(program_id, &market_instance);
+    let (market_runtime_account, _) =
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.to_bytes());
+    let treasury = derive_revenue_market_treasury_v1(
+        program_id,
+        revenue,
+        clutch_solana_layout::Hash32::from_bytes(market_instance),
+        market_runtime_account,
+    )?;
+    require(
+        product.market_instance_id() == relation.market_instance_v2_id
+            && product.product_generation() != 0
+            && product.realm_id().bytes() == revenue.realm().bytes()
+            && collateral.market_instance_id() == product.market_instance_id()
+            && collateral.claim_mint_authority() == market_runtime_account
+            && relation.market == Id32::from_bytes(market_runtime_account.to_bytes()),
+        ClutchError::MismatchedState,
+    )?;
+    product.authenticate_current_product_general_pre_root_v5(
+        program_id,
+        market_binding_account,
+        market_runtime_account,
+        founding_policy,
+        &base,
+        &revenue,
+        &treasury,
+    )?;
+    collateral.authenticate_current_general_collateral_pre_root_v5(
+        product,
+        market_runtime_account,
+    )?;
+    let market_liability_founding_id = collateral.market_liability_founding_id();
+    let claim_mint_founding_plan_id = collateral.claim_mint_founding_plan_id();
+    let claim_issuance_binding_id = collateral.claim_issuance_binding_id();
+    let collateral_authentication_id = collateral.authentication_id();
+    let general_founding_capability_id = Id32::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            GENERAL_CURRENT_PRE_ROOT_FOUNDING_DOMAIN_V5,
+            program_id.as_ref(),
+            &product.authentication_id().bytes(),
+            &market_instance,
+            &product.product_generation().to_le_bytes(),
+            &product.product_market_root_account().bytes(),
+            &product.series_market_link_account().bytes(),
+            &product.series_ordinal().to_le_bytes(),
+            &product.compiler_bundle_v7_id().bytes(),
+            &product.funding_quote_v6_id().bytes(),
+            &product.attachment_plan_v6_id().bytes(),
+            &product.foundation_schedule_v4_id().bytes(),
+            &product.foundation_account_graph_v4_id().bytes(),
+            &product.series_funding_v5_account().bytes(),
+            &product.physical_capitalization_receipt_id().bytes(),
+            market_binding_account.as_ref(),
+            market_runtime_account.as_ref(),
+            &market_liability_founding_id.bytes(),
+            &claim_mint_founding_plan_id.bytes(),
+            &claim_issuance_binding_id.bytes(),
+            &collateral_authentication_id.bytes(),
+            &revenue.record_semantic_id().bytes(),
+            treasury.treasury_position_account().as_ref(),
+            treasury.treasury_replay_account().as_ref(),
+            treasury.treasury_service_ledger_account().as_ref(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        general_founding_capability_id != Id32::from_bytes([0u8; 32])
+            && market_liability_founding_id != general_founding_capability_id
+            && claim_mint_founding_plan_id != general_founding_capability_id
+            && claim_issuance_binding_id != general_founding_capability_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedGeneralMarketPreRootFoundingPlanV5 {
+        founding_policy,
+        base,
+        revenue,
+        treasury,
+        market_binding_account,
+        market_runtime_account,
+        product_preauthorization_id: product.authentication_id(),
+        market_liability_founding_id,
+        claim_mint_founding_plan_id,
+        claim_issuance_binding_id,
+        collateral_authentication_id,
+        general_founding_capability_id,
+    })
+}
 
 /// Sole Product-current authority accepted by the General V5 founder.
 /// Implementations must own the exact hostile-authenticated RootV3, LinkV3,
@@ -155,36 +373,47 @@ impl AuthenticatedGeneralMarketFoundingPlanV5 {
 pub(crate) fn prepare_general_market_founding_v5<P>(
     program_id: &Pubkey,
     product: &P,
-    founding_policy_bytes: &[u8],
-    base: MarketBindingV2,
-    revenue: AuthenticatedRevenuePolicyRecordV2,
+    pre_root: AuthenticatedGeneralMarketPreRootFoundingPlanV5,
 ) -> Outcome<AuthenticatedGeneralMarketFoundingPlanV5>
 where
     P: AuthenticatedCurrentProductGeneralFoundingV5 + ?Sized,
 {
-    let founding_policy = GeneralFoundingPolicyV1::decode(founding_policy_bytes)?;
-    let founding_policy_id = founding_policy.semantic_id(&RuntimeSha256)?;
-    base.validate()?;
-    founding_policy.binds_market(base.base())?;
+    let AuthenticatedGeneralMarketPreRootFoundingPlanV5 {
+        founding_policy,
+        base,
+        revenue,
+        treasury,
+        market_binding_account,
+        market_runtime_account,
+        product_preauthorization_id,
+        market_liability_founding_id,
+        claim_mint_founding_plan_id,
+        claim_issuance_binding_id,
+        collateral_authentication_id,
+        general_founding_capability_id,
+    } = pre_root;
     let relation = base.base();
     let market_instance = relation.market_instance_v2_id.bytes();
-    let (market_binding_account, market_binding_bump) =
+    let (expected_market_binding_account, market_binding_bump) =
         seeds::general_v2_market_binding_pda(program_id, &market_instance);
-    let (market_runtime_account, market_runtime_bump) =
-        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.to_bytes());
+    let (expected_market_runtime_account, market_runtime_bump) = seeds::general_v2_market_runtime_pda(
+        program_id,
+        &market_binding_account.to_bytes(),
+    );
     require(
-        relation.market == Id32::from_bytes(market_runtime_account.to_bytes())
+        market_binding_account == expected_market_binding_account
+            && market_runtime_account == expected_market_runtime_account
+            && relation.market == Id32::from_bytes(market_runtime_account.to_bytes())
             && relation.stored_bump == market_binding_bump
             && product.product_generation() != 0
-            && product.general_founding_capability_id() == founding_policy_id
+            && product.product_preauthorization_id().bytes()
+                == product_preauthorization_id.bytes()
+            && product.market_liability_founding_id() == market_liability_founding_id
+            && product.claim_mint_founding_plan_id() == claim_mint_founding_plan_id
+            && product.claim_issuance_binding_id() == claim_issuance_binding_id
+            && product.general_founding_capability_id() == general_founding_capability_id
             && product.realm_id().bytes() == revenue.realm().bytes(),
         ClutchError::MismatchedState,
-    )?;
-    let treasury = derive_revenue_market_treasury_v1(
-        program_id,
-        revenue,
-        clutch_solana_layout::Hash32::from_bytes(market_instance),
-        market_runtime_account,
     )?;
     product.authenticate_current_product_general_founding_v5(
         program_id,
@@ -236,6 +465,7 @@ where
             &product.series_market_link_v3_id().bytes(),
             &product.physical_capitalization_receipt_id().bytes(),
             &product.product_preauthorization_id().bytes(),
+            &collateral_authentication_id.bytes(),
             &revenue.record_semantic_id().bytes(),
             treasury.treasury_position_account().as_ref(),
             treasury.treasury_replay_account().as_ref(),
