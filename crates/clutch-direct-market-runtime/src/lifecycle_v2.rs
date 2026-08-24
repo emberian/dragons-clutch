@@ -49,9 +49,12 @@ use crate::settlement_v1::{
 use crate::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketActionV1,
     DirectMarketErrorV1, DirectRentOwnerV1, DirectReplayPhaseV1,
-    DirectRetirementTransferV1, DirectRootReplayPostV1, DirectScheduleV1,
+    DirectRetirementTransferV1, DirectRootPhaseV1, DirectRootReplayPostV1, DirectScheduleV1,
     DirectTerminalReasonV1,
 };
+
+const DIRECT_TREASURY_SERVICE_SETTLEMENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/treasury-service-settlement/v2\0";
 
 const FOUNDATION_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/foundation-receipt/v2\0";
@@ -333,6 +336,39 @@ pub fn bind_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
     let replay = bind_direct_candidate_work_batch_v1(&projection, batch, backend)?;
     replay.validate_against(projection.root)?;
     state.replay = replay;
+    state.validate()
+}
+
+/// Bind General's sole 0xbb settlement receipt into the permanent b3
+/// transcript after the exact economic action-9 transition and before its
+/// Candidate work batch is sealed. General remains the arithmetic and account
+/// owner of the ledger; Direct retains only the nonzero transition receipt.
+pub fn bind_direct_treasury_service_settlement_v2<B: DirectHashBackendV1>(
+    state: &mut DirectRootReplayTransitionV2,
+    treasury_service_transition_id: [u8; 32],
+    backend: &B,
+) -> Result<(), DirectMarketErrorV1> {
+    state.validate()?;
+    require_live(treasury_service_transition_id)?;
+    if state.root().phase() != DirectRootPhaseV1::Terminal
+        || state.root().terminal_reason() != Some(DirectTerminalReasonV1::Settled)
+        || !state.replay.candidate_liveness_pending()
+        || state.replay.economic_terminal_receipt_id() == [0; 32]
+    {
+        return Err(DirectMarketErrorV1::WrongPhase);
+    }
+    let prior = state.replay.action_transcript_id();
+    state.replay.action_transcript_id = backend.sha256_parts(&[
+        DIRECT_TREASURY_SERVICE_SETTLEMENT_DOMAIN_V2,
+        &state.root().market_instance_id(),
+        &state.root().generation().to_le_bytes(),
+        &state.root().direct_epoch_semantics_id(),
+        &state.root().root_semantic_id(),
+        &state.replay.economic_terminal_receipt_id(),
+        &treasury_service_transition_id,
+        &prior,
+    ]);
+    require_live(state.replay.action_transcript_id)?;
     state.validate()
 }
 
