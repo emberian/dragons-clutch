@@ -64,11 +64,18 @@ pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION: u8 = 2;
 pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES: usize = 160;
 /// Per-Market counted treasury-service ledger account discriminator.
 pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG: u8 = 0xbb;
+/// Transient General per-owner fee-assessment work.
+pub const GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG: u8 = 0xbe;
+/// First exact streaming assessment-work version.
+pub const GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Exact maximum/current assessment-work width.
+pub const GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_BYTES: usize = 3_300;
 /// Per-Market counted treasury-service ledger account version.
 pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_VERSION: u8 = 1;
 /// Exact treasury-service ledger account width.
 pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES: usize = 268;
 const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG == 0xbb);
+const _: () = assert!(GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG == 0xbe);
 const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG != 0xba);
 const _: () = assert!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG != 0xbc);
 const _: () = assert!(REALM_REVENUE_V2_FAMILY_TAG == 0x51);
@@ -791,6 +798,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "market-treasury-service-ledger-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "transient-general-v2-owner-fee-assessment-work-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3283,6 +3299,10 @@ mod tests {
             (
                 GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
                 GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {

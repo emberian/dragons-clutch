@@ -267,6 +267,9 @@ pub const SEED_GENERAL_V2_OWNER_FEE_CARRY: &[u8] =
 /// Disabled owner payer-allocation seed prefix.
 pub const SEED_GENERAL_V2_PAYER_ALLOCATION: &[u8] =
     clutch_general_v2_contract::PAYER_ALLOCATION_SEED_DOMAIN_V1;
+/// Transient page-streamed owner fee-assessment work.
+pub const SEED_GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK: &[u8] =
+    clutch_general_v2_contract::OWNER_FEE_ASSESSMENT_WORK_SEED_DOMAIN_V1;
 /// Disabled candidate-wide recipient-allocation seed prefix.
 pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
     clutch_general_v2_contract::RECIPIENT_ALLOCATION_SEED_DOMAIN_V1;
@@ -965,6 +968,18 @@ pub fn general_v2_payer_allocation_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_PAYER_ALLOCATION, fee_record, owner],
+    )
+}
+
+/// Canonical transient assessment-work address for one selected owner.
+pub fn general_v2_owner_fee_assessment_work_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_OWNER_FEE_ASSESSMENT_WORK, fee_record, owner],
     )
 }
 

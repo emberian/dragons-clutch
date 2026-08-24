@@ -21,6 +21,7 @@ mod market_binding_v2;
 mod market_binding_v3;
 mod market_binding_v4;
 mod owner_settlement;
+mod owner_fee_assessment_work;
 mod payload;
 mod position_replay;
 mod rank;
@@ -40,6 +41,7 @@ pub use market_binding_v2::*;
 pub use market_binding_v3::*;
 pub use market_binding_v4::*;
 pub use owner_settlement::*;
+pub use owner_fee_assessment_work::*;
 pub use payload::*;
 pub use position_replay::*;
 pub use rank::{
@@ -1032,7 +1034,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 41] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 42] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1112,6 +1114,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 41] = [
         tag: PAYER_ALLOCATION_ACCOUNT_TAG,
         version: PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
         owner: "clutch-general-v2-contract/PayerAllocationV2AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG,
+        version: OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerFeeAssessmentWorkV1AccountV1",
     },
     AccountAllocationV1 {
         tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
@@ -1265,6 +1272,7 @@ const _: () = assert!(MAX_SLICES_U16 == 416);
 const _: () = assert!(FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1.len() <= 32);
 const _: () = assert!(FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1.len() <= 32);
 const _: () = assert!(FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1.len() <= 32);
+const _: () = assert!(OWNER_FEE_ASSESSMENT_WORK_SEED_DOMAIN_V1.len() <= 32);
 
 #[cfg(test)]
 mod seed_tests {

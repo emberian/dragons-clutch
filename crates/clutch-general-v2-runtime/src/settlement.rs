@@ -1616,6 +1616,93 @@ fn settlement_page_data_id_v5(body: &[u8]) -> Result<Id32, SettlementAdapterErro
     Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
 }
 
+/// Borrowed hostile-authenticated view of one immutable V5 page.
+///
+/// This deliberately is not a complete order-book authority. It exists for
+/// bounded continuation instructions that process exactly one canonical page;
+/// any liability-minting finalizer must still reauthenticate the complete
+/// [`SettlementTraversalAccessV5`] and compare every accumulated row.
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementPageViewV5<'a> {
+    page: GeneralOrderPageInputV5<'a>,
+    header: clutch_solana_layout::order_page_v5::OrderPageHeaderV5,
+    data_id: Id32,
+}
+
+impl SettlementPageViewV5<'_> {
+    /// Canonical page account.
+    pub const fn account(&self) -> Id32 { self.page.account }
+    /// Zero-based canonical page cursor.
+    pub const fn page_index(&self) -> u16 { self.header.page_index }
+    /// Exact physical populated width, including tombstones.
+    pub const fn physical_slot_count(&self) -> u8 { self.header.order_count }
+    /// Exact dense live width.
+    pub const fn live_order_count(&self) -> u8 { self.header.live_count() }
+    /// Complete set page count copied from the verified immutable header.
+    pub const fn page_count(&self) -> u16 { self.header.page_count }
+    /// Complete physical set width copied from the verified header.
+    pub const fn set_order_count(&self) -> u16 { self.header.set_order_count }
+    /// Full exact page-byte identity.
+    pub const fn data_id(&self) -> Id32 { self.data_id }
+
+    /// Read one dense live row from this page only.
+    pub fn order(
+        &self,
+        domain: &clutch_batch::relation_v2::EconomicDomainV2,
+        local_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1> {
+        if local_index >= self.live_order_count() {
+            return Ok(None);
+        }
+        read_owner_blind_page_order_v5(domain, self.page, local_index).map_err(Into::into)
+    }
+}
+
+/// Authenticate one retained page for a bounded continuation.
+///
+/// The caller supplies no width or cursor authority: every value is checked
+/// against the exact immutable root/Feed identities and the page's verified
+/// header. The SBF boundary must additionally authenticate program ownership
+/// and the canonical page PDA/bump.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_settlement_page_view_v5(
+    page: GeneralOrderPageInputV5<'_>,
+    expected_market: Id32,
+    expected_epoch: Id32,
+    expected_order_set: Id32,
+    expected_page_index: u8,
+    expected_page_count: u8,
+    expected_set_order_count: u8,
+) -> Result<SettlementPageViewV5<'_>, SettlementAdapterErrorV1> {
+    if page.account.is_zero()
+        || expected_market.is_zero()
+        || expected_epoch.is_zero()
+        || expected_order_set.is_zero()
+        || expected_page_count == 0
+        || usize::from(expected_page_count) > clutch_solana_layout::MAX_ORDER_PAGES
+        || expected_page_index >= expected_page_count
+        || expected_set_order_count == 0
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let header = verify_page_v5(page.body)?;
+    if header.market.0 != expected_market.bytes()
+        || header.epoch.0 != expected_epoch.bytes()
+        || header.order_set.0 != expected_order_set.bytes()
+        || header.page_index != u16::from(expected_page_index)
+        || header.page_count != u16::from(expected_page_count)
+        || header.set_order_count != u16::from(expected_set_order_count)
+        || header.frozen != 1
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(SettlementPageViewV5 {
+        page,
+        header,
+        data_id: settlement_page_data_id_v5(page.body)?,
+    })
+}
+
 impl SettlementOrderBookAccessV5 for SettlementOrderBookViewV5<'_, '_> {
     fn market_binding(&self) -> &MarketBindingV1 { self.stream.market_binding() }
     fn market(&self) -> Id32 { self.stream.market() }
