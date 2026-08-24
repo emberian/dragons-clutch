@@ -14,20 +14,25 @@
 //! wired.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5Id, ContentId, FixedCodec, MarketInstanceV2Id,
-    MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id,
-    SeriesLifecycleReplayV1, SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    CompiledProductSeriesBundleV5Id, CompiledProductSeriesBundleV6Id, ContentId, FixedCodec,
+    MarketInstanceV2Id, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
+    MarketLifecycleRootV2, SeriesFundingComponentV1, SeriesFundingStateV1,
+    SeriesFundingStateV2, SeriesFundingStateV3, SeriesFundingTermsV2Id,
+    SeriesLifecycleReplayV1, SeriesLifecycleReplayV2, SeriesMarketLinkV1, SeriesMarketLinkV2,
+    SeriesPlanV5Id, SourceOccurrenceV1Id, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
+    MARKET_LIFECYCLE_ROOT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V2,
     SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
-    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2,
-    SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_MARKET_LINK_BYTES_V1,
+    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_BYTES_V3,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_LIFECYCLE_REPLAY_BYTES_V2,
+    SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_BYTES_V2,
 };
 
 use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
 
 const SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-account-authentication/v1";
+const SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-market-link-account-authentication/v2";
 
 /// Canonical SeriesRegistry PDA prefix shared by SBF and untrusted indexers.
 /// V2 intentionally retains the address to make V1 presence a replay refusal,
@@ -44,6 +49,8 @@ pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact current registered-Series account width. There is no reserved tail:
 /// every byte belongs to one named, authenticated fact.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V2: usize = 172;
+/// Exact current BundleV6-bound registered-Series account width.
+pub const SERIES_REGISTRY_ACCOUNT_BYTES_V3: usize = 172;
 /// Exact mutable Series-funding account width.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
     4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES;
@@ -52,20 +59,32 @@ pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
 /// separate from the six-component semantic state.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V2: usize =
     4 + 8 + (8 * SERIES_COLLATERAL_VAULT_COUNT_V2) + SERIES_FUNDING_STATE_BYTES_V2;
+/// Exact current Series FundingV3 wrapper width.
+pub const SERIES_FUNDING_ACCOUNT_BYTES_V3: usize =
+    4 + 8 + (8 * SERIES_COLLATERAL_VAULT_COUNT_V2) + SERIES_FUNDING_STATE_BYTES_V3;
 /// Exact common header before one Product market/link semantic body.
 pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
 /// Exact permanent counted Series lifecycle replay account width.
 pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_LIFECYCLE_REPLAY_BYTES_V1;
+/// Exact permanent counted Series lifecycle replay V2 account width.
+pub const SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_LIFECYCLE_REPLAY_BYTES_V2;
 /// Exact framed shared MarketLifecycleRoot account width.
 pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
+/// Exact current framed MarketLifecycleRoot V2 account width.
+pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V2;
 /// Exact permanent Product Market-lifecycle replay account width.
 pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1;
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
+/// Exact current framed SeriesMarketLink V2 account width.
+pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V2: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V2;
 
 /// Recompute the sole shared authentication identity for one exact Product
 /// SeriesMarketLink account. Product and standalone attachment adapters must
@@ -80,6 +99,29 @@ pub fn series_market_link_authentication_id_v1(
 ) -> Hash32 {
     digest(
         SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1,
+        &[
+            &account,
+            &owner_program,
+            &framed_data_id,
+            &semantic_id,
+            &market_root,
+            &observed_lamports.to_le_bytes(),
+        ],
+    )
+}
+
+/// Recompute the sole shared authentication identity for an exact current
+/// Product SeriesMarketLink V2 account.
+pub fn series_market_link_authentication_id_v2(
+    account: [u8; HASH_BYTES],
+    owner_program: [u8; HASH_BYTES],
+    framed_data_id: [u8; HASH_BYTES],
+    semantic_id: [u8; HASH_BYTES],
+    market_root: [u8; HASH_BYTES],
+    observed_lamports: u64,
+) -> Hash32 {
+    digest(
+        SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V2,
         &[
             &account,
             &owner_program,
@@ -1214,7 +1256,7 @@ impl SeriesLifecycleReplayAccountV1 {
         }
         output.fill(0);
         output[0] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG;
-        output[1] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION;
+        output[1] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
         output[2] = self.stored_bump;
         output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
         self.state
@@ -1228,7 +1270,7 @@ impl SeriesLifecycleReplayAccountV1 {
         if input[0] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION {
+        if input[1] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..8])?;
@@ -1295,7 +1337,7 @@ impl MarketLifecycleRootAccountV1 {
         }
         output.fill(0);
         output[0] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG;
-        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION;
+        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1;
         output[2] = stored_bump;
         output[8..16].copy_from_slice(&rent_principal_lamports.to_le_bytes());
         state
@@ -1316,7 +1358,7 @@ impl MarketLifecycleRootAccountV1 {
         if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION {
+        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..8])?;
@@ -1422,7 +1464,7 @@ impl SeriesMarketLinkAccountV1 {
         require_exact(output, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
         output.fill(0);
         output[0] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG;
-        output[1] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION;
+        output[1] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V1;
         output[2] = stored_bump;
         state
             .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
@@ -1442,7 +1484,7 @@ impl SeriesMarketLinkAccountV1 {
         if input[0] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION {
+        if input[1] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..8])?;
@@ -1455,6 +1497,406 @@ impl SeriesMarketLinkAccountV1 {
         Ok(())
     }
 }
+
+/// Current persistent Series registration and replay anchor.
+///
+/// Unlike the historical V1/V2 accounts, this body retains the exact BundleV6
+/// identity selected by registration. Every later value-bearing adapter must
+/// reopen that content-addressed bundle and its current QuoteV5/AttachmentV5
+/// graph before it may interpret any Series state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesRegistryAccountV3 {
+    /// Exact registered recurring Series artifact.
+    pub series_plan_id: SeriesPlanV5Id,
+    /// Exact immutable funding/refund ownership artifact.
+    pub funding_terms_id: SeriesFundingTermsV2Id,
+    /// Exact loader-authenticated RegistryProgramReleaseV2 artifact.
+    pub registry_release_id: ContentId,
+    /// Exact RegistryCapabilityProfileV4 artifact.
+    pub capability_profile_id: ContentId,
+    /// Exact current compiler output; this transitively retains the Source
+    /// release, QuoteV5, AttachmentV5, and all immutable Product identities.
+    pub compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+    /// Exact payer-owned rent principal locked at account creation.
+    pub rent_principal_lamports: u64,
+    /// Canonical account PDA bump.
+    pub stored_bump: u8,
+    /// Whether the one permitted successor funding activation was consumed.
+    pub activation_consumed: bool,
+}
+
+impl SeriesRegistryAccountV3 {
+    /// Validate canonical typed identities without claiming account authority.
+    pub fn validate(&self) -> Result<()> {
+        self.series_plan_id.validate().map_err(map_product_error)?;
+        self.funding_terms_id
+            .validate()
+            .map_err(map_product_error)?;
+        require_live(self.registry_release_id.bytes())?;
+        require_live(self.capability_profile_id.bytes())?;
+        self.compiler_bundle_id
+            .validate()
+            .map_err(map_product_error)?;
+        if self.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(())
+    }
+
+    /// Encode the exact current 0x7f/version3 body.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if out.len() < SERIES_REGISTRY_ACCOUNT_BYTES_V3 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        if out.len() > SERIES_REGISTRY_ACCOUNT_BYTES_V3 {
+            return Err(CodecError::TrailingBytes);
+        }
+        out.fill(0);
+        out[0] = registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG;
+        out[1] = registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3;
+        out[2] = self.stored_bump;
+        out[3] = u8::from(self.activation_consumed);
+        let mut at = 4;
+        put_u64(out, &mut at, self.rent_principal_lamports);
+        put_id(out, &mut at, self.series_plan_id.bytes());
+        put_id(out, &mut at, self.funding_terms_id.bytes());
+        put_id(out, &mut at, self.registry_release_id.bytes());
+        put_id(out, &mut at, self.capability_profile_id.bytes());
+        put_id(out, &mut at, self.compiler_bundle_id.bytes());
+        if at != SERIES_REGISTRY_ACCOUNT_BYTES_V3 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(())
+    }
+
+    /// Hostile-decode the exact current V3 body, refusing V1 and all trailing data.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_REGISTRY_ACCOUNT_BYTES_V3)?;
+        if input[0] != registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3 {
+            return Err(CodecError::WrongVersion);
+        }
+        let activation_consumed = match input[3] {
+            0 => false,
+            1 => true,
+            _ => return Err(CodecError::InvalidEnum),
+        };
+        let mut at = 4;
+        let rent_principal_lamports = take_u64(input, &mut at);
+        let value = Self {
+            series_plan_id: SeriesPlanV5Id::from_bytes(take_id(input, &mut at)),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes(take_id(input, &mut at)),
+            registry_release_id: ContentId::from_bytes(take_id(input, &mut at)),
+            capability_profile_id: ContentId::from_bytes(take_id(input, &mut at)),
+            compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes(take_id(input, &mut at)),
+            rent_principal_lamports,
+            stored_bump: input[2],
+            activation_consumed,
+        };
+        if at != input.len() {
+            return Err(CodecError::TrailingBytes);
+        }
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+
+/// Program-owned current Series funding wrapper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesFundingAccountV3 {
+    /// Sole current six-component semantic state.
+    pub state: SeriesFundingStateV3,
+    /// Refundable payer-owned funding-account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Refundable payer-owned rent for the five collateral-capable vaults.
+    pub collateral_vault_rent_principal_lamports: [u64; SERIES_COLLATERAL_VAULT_COUNT_V2],
+    /// Canonical account PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesFundingAccountV3 {
+    /// Validate exact semantic state and rent ownership.
+    pub fn validate(&self) -> Result<()> {
+        if self.rent_principal_lamports == 0
+            || self
+                .collateral_vault_rent_principal_lamports
+                .iter()
+                .any(|principal| *principal == 0)
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(())
+    }
+
+    /// Encode exact 0x80/version3 bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if out.len() < SERIES_FUNDING_ACCOUNT_BYTES_V3 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        if out.len() > SERIES_FUNDING_ACCOUNT_BYTES_V3 {
+            return Err(CodecError::TrailingBytes);
+        }
+        out.fill(0);
+        out[0] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG;
+        out[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V3;
+        out[2] = self.stored_bump;
+        let mut at = 4;
+        put_u64(out, &mut at, self.rent_principal_lamports);
+        for principal in self.collateral_vault_rent_principal_lamports {
+            put_u64(out, &mut at, principal);
+        }
+        self.state
+            .encode_into(&mut out[at..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact current V3 wrapper and semantic body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_FUNDING_ACCOUNT_BYTES_V3)?;
+        if input[0] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V3 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..4])?;
+        let mut at = 4;
+        let rent_principal_lamports = take_u64(input, &mut at);
+        let mut collateral_vault_rent_principal_lamports =
+            [0; SERIES_COLLATERAL_VAULT_COUNT_V2];
+        for principal in &mut collateral_vault_rent_principal_lamports {
+            *principal = take_u64(input, &mut at);
+        }
+        let value = Self {
+            state: SeriesFundingStateV3::decode(&input[at..]).map_err(map_product_error)?,
+            rent_principal_lamports,
+            collateral_vault_rent_principal_lamports,
+            stored_bump: input[2],
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+
+/// Program-owned frame for the permanent counted Series lifecycle replay.
+///
+/// The 501-byte semantic body is owned solely by `clutch-product-series`; this
+/// layout contributes only the exact tag/version/bump/rent frame. The rent
+/// principal is permanently retained and therefore names no close authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesLifecycleReplayAccountV2 {
+    /// Sole field-level semantic owner.
+    pub state: SeriesLifecycleReplayV2,
+    /// Exact permanently retained payer-supplied rent principal.
+    pub permanent_rent_principal_lamports: u64,
+    /// Canonical per-Series replay PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesLifecycleReplayAccountV2 {
+    /// Encode the exact 16-byte frame plus Product-owned semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2)?;
+        if self.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact frame and complete Product semantic owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: SeriesLifecycleReplayV2::decode(
+                &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            )
+            .map_err(map_product_error)?,
+            permanent_rent_principal_lamports: u64::from_le_bytes(
+                input[8..16]
+                    .try_into()
+                    .map_err(|_| CodecError::Truncated)?,
+            ),
+            stored_bump: input[2],
+        };
+        if value.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(value)
+    }
+}
+
+
+/// Program-owned frame for the shared Product MarketLifecycleRoot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLifecycleRootAccountV2 {
+    /// Sole semantic lifecycle body.
+    pub state: MarketLifecycleRootV2,
+    /// Exact refundable payer-owned account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Canonical MarketLifecycleRoot PDA bump.
+    pub stored_bump: u8,
+}
+
+impl MarketLifecycleRootAccountV2 {
+    /// Invalid storage used only as an out-parameter decode target.
+    pub const fn decode_buffer() -> Self {
+        Self {
+            state: MarketLifecycleRootV2::decode_buffer(),
+            rent_principal_lamports: 0,
+            stored_bump: 0,
+        }
+    }
+
+    /// Encode the exact hostile account frame and semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(
+            &self.state,
+            self.rent_principal_lamports,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Encode from borrowed state without copying the 2,448-byte semantic root.
+    pub fn encode_parts(
+        state: &MarketLifecycleRootV2,
+        rent_principal_lamports: u64,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
+        require_exact(output, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2)?;
+        if rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V2;
+        output[2] = stored_bump;
+        output[8..16].copy_from_slice(&rent_principal_lamports.to_le_bytes());
+        state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Decode the exact frame and fully validate the embedded lifecycle owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+
+    /// Hostile-decode into caller-owned storage for frame-bounded adapters.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
+        require_exact(input, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        MarketLifecycleRootV2::decode_into(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            &mut output.state,
+        )
+        .map_err(map_product_error)?;
+        output.rent_principal_lamports =
+            u64::from_le_bytes(input[8..16].try_into().map_err(|_| CodecError::Truncated)?);
+        output.stored_bump = input[2];
+        if output.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(())
+    }
+}
+
+
+/// Program-owned frame for one Series/ordinal admission link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesMarketLinkAccountV2 {
+    /// Sole semantic SeriesMarketLink body.
+    pub state: SeriesMarketLinkV2,
+    /// Canonical SeriesMarketLink PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesMarketLinkAccountV2 {
+    /// Invalid storage used only as an out-parameter decode target.
+    pub fn decode_buffer() -> Self {
+        Self {
+            state: SeriesMarketLinkV2::decode_buffer(),
+            stored_bump: 0,
+        }
+    }
+
+    /// Encode the exact hostile account frame and semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(&self.state, self.stored_bump, output)
+    }
+
+    /// Encode from borrowed state without copying the 1,232-byte link body.
+    pub fn encode_parts(
+        state: &SeriesMarketLinkV2,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
+        require_exact(output, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2)?;
+        output.fill(0);
+        output[0] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2;
+        output[2] = stored_bump;
+        state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Decode the exact frame and fully validate the embedded link owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+
+    /// Hostile-decode into caller-owned storage for frame-bounded adapters.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
+        require_exact(input, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        SeriesMarketLinkV2::decode_into(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            &mut output.state,
+        )
+        .map_err(map_product_error)?;
+        output.stored_bump = input[2];
+        Ok(())
+    }
+}
+
 
 /// Exact Source/Series registration payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1941,6 +2383,53 @@ mod tests {
         }
     }
 
+    fn registry_v3() -> SeriesRegistryAccountV3 {
+        SeriesRegistryAccountV3 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([21; HASH_BYTES]),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([22; HASH_BYTES]),
+            registry_release_id: ContentId::from_bytes([23; HASH_BYTES]),
+            capability_profile_id: ContentId::from_bytes([24; HASH_BYTES]),
+            compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes([25; HASH_BYTES]),
+            rent_principal_lamports: 27,
+            stored_bump: 29,
+            activation_consumed: false,
+        }
+    }
+
+    fn funding_v3() -> SeriesFundingAccountV3 {
+        SeriesFundingAccountV3 {
+            state: SeriesFundingStateV3 {
+                series_plan_id: SeriesPlanV5Id::from_bytes([21; HASH_BYTES]),
+                funding_terms_id: SeriesFundingTermsV2Id::from_bytes([22; HASH_BYTES]),
+                funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id::from_bytes([
+                    23; HASH_BYTES
+                ]),
+                attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV5Id::from_bytes([
+                    24; HASH_BYTES
+                ]),
+                compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes([25; HASH_BYTES]),
+                instance_count: 1,
+                next_ordinal: 0,
+                lapsed_count: 0,
+                transition_sequence: 0,
+                phase: clutch_product_series::SeriesFundingPhaseV3::Active,
+                pending_disposition: None,
+                pending_market_instance_id: ContentId::ZERO,
+                pending_source_occurrence_id: ContentId::ZERO,
+                pending_series_market_link_id: ContentId::ZERO,
+                pending_ordinal: 0,
+                pending_reservation_receipt_id: ContentId::ZERO,
+                pending_debits: [clutch_product_series::ComponentDebitV1::ZERO;
+                    clutch_product_series::SERIES_FUNDING_COMPONENT_COUNT_V2],
+                components: [clutch_product_series::SeriesComponentCapitalV3::ZERO;
+                    clutch_product_series::SERIES_FUNDING_COMPONENT_COUNT_V2],
+            },
+            rent_principal_lamports: 27,
+            collateral_vault_rent_principal_lamports: [28; SERIES_COLLATERAL_VAULT_COUNT_V2],
+            stored_bump: 29,
+        }
+    }
+
     #[test]
     fn registry_v2_round_trips_every_owned_byte() {
         let value = registry_v2();
@@ -1981,6 +2470,35 @@ mod tests {
             SeriesFundingAccountV2::decode(&body),
             Err(CodecError::WrongVersion)
         );
+    }
+
+    #[test]
+    fn current_registry_and_funding_refuse_historical_versions() {
+        let registry = registry_v3();
+        let mut registry_bytes = [0u8; SERIES_REGISTRY_ACCOUNT_BYTES_V3];
+        registry.encode(&mut registry_bytes).unwrap();
+        assert_eq!(SeriesRegistryAccountV3::decode(&registry_bytes), Ok(registry));
+        for historical in [
+            registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1,
+            registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
+        ] {
+            let mut hostile = registry_bytes;
+            hostile[1] = historical;
+            assert_eq!(SeriesRegistryAccountV3::decode(&hostile), Err(CodecError::WrongVersion));
+        }
+
+        let funding = funding_v3();
+        let mut funding_bytes = [0u8; SERIES_FUNDING_ACCOUNT_BYTES_V3];
+        funding.encode(&mut funding_bytes).unwrap();
+        assert_eq!(SeriesFundingAccountV3::decode(&funding_bytes), Ok(funding));
+        for historical in [
+            registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1,
+            registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
+        ] {
+            let mut hostile = funding_bytes;
+            hostile[1] = historical;
+            assert_eq!(SeriesFundingAccountV3::decode(&hostile), Err(CodecError::WrongVersion));
+        }
     }
 
     #[test]
