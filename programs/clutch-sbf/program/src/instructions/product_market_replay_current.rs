@@ -26,7 +26,8 @@ use clutch_product_series::{
     AuthenticatedMarketLifecycleReplayActivationAuthorityV2,
     AuthenticatedMarketLifecycleReplayFoundationAuthorityV2, ContentId,
     MarketFoundationScheduleV4, MarketFoundationSlotV4, MarketInstanceV2Id,
-    MarketLifecycleGenerationBindingV2, MarketLifecycleReplayPhaseV2,
+    MarketLifecycleBootstrapLineageV2, MarketLifecycleGenerationBindingV2,
+    MarketLifecycleReplayPhaseV2,
     MarketLifecycleReplayV2, RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id,
 };
 use clutch_solana_layout::product_series::{
@@ -50,6 +51,25 @@ const PRODUCT_MARKET_REPLAY_FOUNDATION_SETTLEMENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-market-replay-foundation-settlement/v2\0";
 const PRODUCT_MARKET_REPLAY_FOUNDATION_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-market-replay-foundation-postwrite/v2\0";
+
+/// Move-only owner of the exact post-Source action14 transcript persisted in
+/// ProductReplayAnchor. The default refuses so a decoded lineage body or an
+/// operator projection cannot authorize replay creation.
+pub(crate) trait AuthenticatedCurrentProductMarketBootstrapLineageV2 {
+    fn bootstrap_lineage(&self) -> MarketLifecycleBootstrapLineageV2;
+
+    fn authenticate_current_product_market_bootstrap_lineage_v2(
+        &self,
+        _program_id: &Pubkey,
+        _physical: &AuthenticatedSeriesPhysicalFounderV5,
+        _registry: &AuthenticatedRegistryCapabilityV5,
+        _family_policy: &AuthenticatedMarketFamilyCapabilityPolicyArtifactV1,
+        _graph: &AuthenticatedCurrentMarketFoundationGraphV4,
+        _lineage: MarketLifecycleBootstrapLineageV2,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
 
 /// Move-only hostile authentication of the current persistent replay account.
 #[derive(Debug)]
@@ -362,18 +382,22 @@ pub(crate) fn authenticate_market_lifecycle_replay_v2(
 /// slot 13. Every later stage reconstructs authority from hostile state.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
+pub(crate) fn bootstrap_current_product_market_generation_v2<'a, L>(
     program_id: &Pubkey,
     physical: &AuthenticatedSeriesPhysicalFounderV5,
     registry: &AuthenticatedRegistryCapabilityV5,
     family_policy: &AuthenticatedMarketFamilyCapabilityPolicyArtifactV1,
     schedule: &MarketFoundationScheduleV4,
     graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
+    lineage_authority: &L,
     bootstrap_payer: &AccountInfo<'a>,
     replay_account: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedProductMarketGenerationV2> {
+) -> Outcome<AuthenticatedProductMarketGenerationV2>
+where
+    L: AuthenticatedCurrentProductMarketBootstrapLineageV2 + ?Sized,
+{
     let graph = graph_authority.graph();
     let market_instance_id = graph_authority.market_instance_id();
     schedule
@@ -456,6 +480,18 @@ pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
     let replay_lamports_after = prefund_donation_lamports
         .checked_add(rent_principal_lamports)
         .ok_or(ClutchError::Arithmetic)?;
+    let bootstrap_lineage = lineage_authority.bootstrap_lineage();
+    lineage_authority.authenticate_current_product_market_bootstrap_lineage_v2(
+        program_id,
+        physical,
+        registry,
+        family_policy,
+        graph_authority,
+        bootstrap_lineage,
+    )?;
+    let bootstrap_lineage_id = bootstrap_lineage
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let binding = MarketLifecycleGenerationBindingV2 {
         replay_account_id: ContentId::from_bytes(replay_account.key.to_bytes()),
         market_instance_id,
@@ -487,6 +523,7 @@ pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
         &registry.id().bytes(),
         &family_policy.id().bytes(),
         &family_policy.policy_id().bytes(),
+        &bootstrap_lineage_id.bytes(),
         &binding
             .id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
@@ -512,6 +549,7 @@ pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
     let state = MarketLifecycleReplayV2::initialize(
         &initialization,
         binding,
+        bootstrap_lineage,
         family_policy.id(),
         bootstrap_receipt_id,
     )

@@ -16,10 +16,10 @@ use crate::{
 };
 
 const MARKET_LIFECYCLE_REPLAY_MAGIC_V2: [u8; 8] = *b"DCMLRPV2";
-const MARKET_LIFECYCLE_REPLAY_SCHEMA_V2: u16 = 2;
+const MARKET_LIFECYCLE_REPLAY_SCHEMA_V2: u16 = 3;
 
 /// Exact semantic width of the current persistent ProductReplayAnchor.
-pub const MARKET_LIFECYCLE_REPLAY_BYTES_V2: usize = 688;
+pub const MARKET_LIFECYCLE_REPLAY_BYTES_V2: usize = 1_872;
 /// Immutable generation-binding identity domain.
 pub const MARKET_LIFECYCLE_GENERATION_BINDING_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-lifecycle-generation-binding/v2";
@@ -29,8 +29,153 @@ pub const MARKET_LIFECYCLE_INITIAL_GENERATION_DOMAIN_V2: &[u8] =
 /// Complete current replay-state identity domain.
 pub const MARKET_LIFECYCLE_REPLAY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-lifecycle-replay/v2";
+/// Immutable action14 physical-lineage identity domain.
+pub const MARKET_LIFECYCLE_BOOTSTRAP_LINEAGE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/market-lifecycle-bootstrap-lineage/v2";
 
-const _: () = assert!(MARKET_LIFECYCLE_REPLAY_BYTES_V2 == 16 + 12 * 32 + 3 * 8 + 8 * 32 + 8);
+const _: () = assert!(
+    MARKET_LIFECYCLE_REPLAY_BYTES_V2
+        == 16 + 12 * 32 + 3 * 8 + 35 * 32 + 8 * 8 + 8 * 32 + 8
+);
+
+/// Exact post-Source action14 transcript retained by the permanent replay.
+///
+/// Generation binding remains acyclic and contains only facts available
+/// before Source publication. This separate immutable section records every
+/// physical authority produced afterward, so action15 can hostile-reconstruct
+/// the whole bootstrap without an ephemeral cross-instruction receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLifecycleBootstrapLineageV2 {
+    pub series_replay_account_id: ContentId,
+    pub series_replay_founder_id: ContentId,
+    pub series_replay_state_id: ContentId,
+    pub series_replay_data_id: ContentId,
+    pub series_replay_authentication_id: ContentId,
+    pub funding_account_id: ContentId,
+    pub funding_reservation_binding_id: ContentId,
+    pub funding_reservation_postwrite_id: ContentId,
+    pub funding_reservation_receipt_id: ContentId,
+    pub funding_pending_state_id: ContentId,
+    pub funding_pending_data_id: ContentId,
+    pub funding_pending_authentication_id: ContentId,
+    pub source_foundation_id: ContentId,
+    pub source_capitalization_receipt_id: ContentId,
+    pub source_occurrence_receipt_id: ContentId,
+    pub source_occurrence_publication_id: ContentId,
+    pub source_occurrence_data_id: ContentId,
+    pub source_occurrence_authentication_id: ContentId,
+    pub foundation_capitalization_id: ContentId,
+    pub foundation_vault_account_id: ContentId,
+    pub market_core_debit_receipt_id: ContentId,
+    pub recovery_capitalization_id: ContentId,
+    pub recovery_account_id: ContentId,
+    pub recovery_state_id: ContentId,
+    pub recovery_data_id: ContentId,
+    pub failure_policy_binding_id: ContentId,
+    pub failure_quote_artifact_account_id: ContentId,
+    pub failure_quote_artifact_data_id: ContentId,
+    pub direct_capitalization_id: ContentId,
+    pub direct_binding_id: ContentId,
+    pub direct_account_id: ContentId,
+    pub direct_data_id: ContentId,
+    pub direct_authentication_id: ContentId,
+    pub general_pre_root_capability_id: ContentId,
+    pub product_founder_preauthorization_id: ContentId,
+    pub foundation_principal_lamports: u64,
+    pub foundation_vault_donation_floor_lamports: u64,
+    pub foundation_vault_current_donation_lamports: u64,
+    pub recovery_work_principal_lamports: u64,
+    pub recovery_rent_principal_lamports: u64,
+    pub recovery_donation_lamports: u64,
+    pub recovery_source_donation_lamports: u64,
+    pub funding_pending_transition_sequence: u64,
+}
+
+impl MarketLifecycleBootstrapLineageV2 {
+    /// Domain-separated identity of every retained action14 receipt and amount.
+    pub fn id(self) -> Result<ContentId> {
+        self.validate()?;
+        let mut body = [0u8; 1_184];
+        let mut writer = Writer::new(&mut body, 1_184)?;
+        for id in self.ids() {
+            writer.id(id);
+        }
+        for amount in self.amounts() {
+            writer.u64(amount);
+        }
+        writer.finish()?;
+        Ok(content_id(MARKET_LIFECYCLE_BOOTSTRAP_LINEAGE_DOMAIN_V2, &body))
+    }
+
+    fn ids(self) -> [ContentId; 35] {
+        [
+            self.series_replay_account_id,
+            self.series_replay_founder_id,
+            self.series_replay_state_id,
+            self.series_replay_data_id,
+            self.series_replay_authentication_id,
+            self.funding_account_id,
+            self.funding_reservation_binding_id,
+            self.funding_reservation_postwrite_id,
+            self.funding_reservation_receipt_id,
+            self.funding_pending_state_id,
+            self.funding_pending_data_id,
+            self.funding_pending_authentication_id,
+            self.source_foundation_id,
+            self.source_capitalization_receipt_id,
+            self.source_occurrence_receipt_id,
+            self.source_occurrence_publication_id,
+            self.source_occurrence_data_id,
+            self.source_occurrence_authentication_id,
+            self.foundation_capitalization_id,
+            self.foundation_vault_account_id,
+            self.market_core_debit_receipt_id,
+            self.recovery_capitalization_id,
+            self.recovery_account_id,
+            self.recovery_state_id,
+            self.recovery_data_id,
+            self.failure_policy_binding_id,
+            self.failure_quote_artifact_account_id,
+            self.failure_quote_artifact_data_id,
+            self.direct_capitalization_id,
+            self.direct_binding_id,
+            self.direct_account_id,
+            self.direct_data_id,
+            self.direct_authentication_id,
+            self.general_pre_root_capability_id,
+            self.product_founder_preauthorization_id,
+        ]
+    }
+
+    fn amounts(self) -> [u64; 8] {
+        [
+            self.foundation_principal_lamports,
+            self.foundation_vault_donation_floor_lamports,
+            self.foundation_vault_current_donation_lamports,
+            self.recovery_work_principal_lamports,
+            self.recovery_rent_principal_lamports,
+            self.recovery_donation_lamports,
+            self.recovery_source_donation_lamports,
+            self.funding_pending_transition_sequence,
+        ]
+    }
+
+    fn validate(self) -> Result<()> {
+        for id in self.ids() {
+            id.validate()?;
+        }
+        if self.foundation_principal_lamports == 0
+            || self.recovery_work_principal_lamports == 0
+            || self.recovery_rent_principal_lamports == 0
+            || self.funding_pending_transition_sequence == 0
+            || self.foundation_vault_current_donation_lamports
+                < self.foundation_vault_donation_floor_lamports
+        {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(())
+    }
+}
 
 /// Exhaustive lifecycle of the permanent current ProductReplayAnchor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -256,6 +401,7 @@ pub trait AuthenticatedMarketLifecycleReplayTerminalAuthorityV2 {
 #[derive(Debug, Eq, PartialEq)]
 pub struct MarketLifecycleReplayV2 {
     binding: MarketLifecycleGenerationBindingV2,
+    bootstrap_lineage: MarketLifecycleBootstrapLineageV2,
     phase: MarketLifecycleReplayPhaseV2,
     transition_sequence: u64,
     bootstrap_authority_id: ContentId,
@@ -273,10 +419,12 @@ impl MarketLifecycleReplayV2 {
     pub fn initialize<A: AuthenticatedMarketLifecycleGenerationAuthorityV2 + ?Sized>(
         authority: &A,
         binding: MarketLifecycleGenerationBindingV2,
+        bootstrap_lineage: MarketLifecycleBootstrapLineageV2,
         bootstrap_authority_id: ContentId,
         bootstrap_receipt_id: ContentId,
     ) -> Result<Self> {
         binding.validate()?;
+        bootstrap_lineage.validate()?;
         bootstrap_authority_id.validate()?;
         bootstrap_receipt_id.validate()?;
         if bootstrap_authority_id == bootstrap_receipt_id {
@@ -289,6 +437,7 @@ impl MarketLifecycleReplayV2 {
         )?;
         let value = Self {
             binding,
+            bootstrap_lineage,
             phase: MarketLifecycleReplayPhaseV2::Founding,
             transition_sequence: 0,
             bootstrap_authority_id,
@@ -424,6 +573,10 @@ impl MarketLifecycleReplayV2 {
     pub const fn binding(&self) -> MarketLifecycleGenerationBindingV2 {
         self.binding
     }
+    /// Complete immutable action14 physical transcript.
+    pub const fn bootstrap_lineage(&self) -> MarketLifecycleBootstrapLineageV2 {
+        self.bootstrap_lineage
+    }
     /// Exact nonzero generation; no other current owner may synthesize it.
     pub const fn generation(&self) -> u64 {
         self.binding.generation
@@ -464,6 +617,7 @@ impl MarketLifecycleReplayV2 {
 
     fn validate(&self) -> Result<()> {
         self.binding.validate()?;
+        self.bootstrap_lineage.validate()?;
         self.bootstrap_authority_id.validate()?;
         self.bootstrap_receipt_id.validate()?;
         self.last_transition_receipt_id.validate()?;
@@ -528,6 +682,12 @@ impl FixedCodec for MarketLifecycleReplayV2 {
         writer.u64(self.binding.generation);
         writer.u64(self.binding.replay_rent_principal_lamports);
         writer.u64(self.binding.replay_prefund_donation_lamports);
+        for id in self.bootstrap_lineage.ids() {
+            writer.id(id);
+        }
+        for amount in self.bootstrap_lineage.amounts() {
+            writer.u64(amount);
+        }
         for id in [
             self.bootstrap_authority_id,
             self.bootstrap_receipt_id,
@@ -580,8 +740,63 @@ impl FixedCodec for MarketLifecycleReplayV2 {
             replay_rent_principal_lamports: reader.u64(),
             replay_prefund_donation_lamports: reader.u64(),
         };
+        let lineage_ids = [
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+            reader.id(), reader.id(), reader.id(), reader.id(), reader.id(),
+        ];
+        let bootstrap_lineage = MarketLifecycleBootstrapLineageV2 {
+            series_replay_account_id: lineage_ids[0],
+            series_replay_founder_id: lineage_ids[1],
+            series_replay_state_id: lineage_ids[2],
+            series_replay_data_id: lineage_ids[3],
+            series_replay_authentication_id: lineage_ids[4],
+            funding_account_id: lineage_ids[5],
+            funding_reservation_binding_id: lineage_ids[6],
+            funding_reservation_postwrite_id: lineage_ids[7],
+            funding_reservation_receipt_id: lineage_ids[8],
+            funding_pending_state_id: lineage_ids[9],
+            funding_pending_data_id: lineage_ids[10],
+            funding_pending_authentication_id: lineage_ids[11],
+            source_foundation_id: lineage_ids[12],
+            source_capitalization_receipt_id: lineage_ids[13],
+            source_occurrence_receipt_id: lineage_ids[14],
+            source_occurrence_publication_id: lineage_ids[15],
+            source_occurrence_data_id: lineage_ids[16],
+            source_occurrence_authentication_id: lineage_ids[17],
+            foundation_capitalization_id: lineage_ids[18],
+            foundation_vault_account_id: lineage_ids[19],
+            market_core_debit_receipt_id: lineage_ids[20],
+            recovery_capitalization_id: lineage_ids[21],
+            recovery_account_id: lineage_ids[22],
+            recovery_state_id: lineage_ids[23],
+            recovery_data_id: lineage_ids[24],
+            failure_policy_binding_id: lineage_ids[25],
+            failure_quote_artifact_account_id: lineage_ids[26],
+            failure_quote_artifact_data_id: lineage_ids[27],
+            direct_capitalization_id: lineage_ids[28],
+            direct_binding_id: lineage_ids[29],
+            direct_account_id: lineage_ids[30],
+            direct_data_id: lineage_ids[31],
+            direct_authentication_id: lineage_ids[32],
+            general_pre_root_capability_id: lineage_ids[33],
+            product_founder_preauthorization_id: lineage_ids[34],
+            foundation_principal_lamports: reader.u64(),
+            foundation_vault_donation_floor_lamports: reader.u64(),
+            foundation_vault_current_donation_lamports: reader.u64(),
+            recovery_work_principal_lamports: reader.u64(),
+            recovery_rent_principal_lamports: reader.u64(),
+            recovery_donation_lamports: reader.u64(),
+            recovery_source_donation_lamports: reader.u64(),
+            funding_pending_transition_sequence: reader.u64(),
+        };
         let value = Self {
             binding,
+            bootstrap_lineage,
             phase,
             bootstrap_authority_id: reader.id(),
             bootstrap_receipt_id: reader.id(),

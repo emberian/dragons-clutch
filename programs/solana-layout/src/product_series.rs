@@ -110,7 +110,7 @@ pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
 /// Exact current persistent ProductReplayAnchor account width.
 pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_REPLAY_BYTES_V2;
-const _: () = assert!(MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2 == 704);
+const _: () = assert!(MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2 == 1_888);
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;

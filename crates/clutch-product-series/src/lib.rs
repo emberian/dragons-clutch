@@ -48,6 +48,7 @@ mod market_lifecycle_v3;
 mod market_foundation_v3;
 mod market_foundation_v4;
 mod market_replay;
+mod market_replay_v2;
 mod product_registry;
 mod registry;
 mod source_series;
@@ -313,6 +314,18 @@ pub use market_foundation_v4::{
 pub use market_replay::{
     MarketLifecycleReplayReceiptV1, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
     MARKET_LIFECYCLE_REPLAY_RECEIPT_DOMAIN_V1,
+};
+pub use market_replay_v2::{
+    derive_initial_market_generation_v2, AuthenticatedMarketLifecycleGenerationAuthorityV2,
+    AuthenticatedMarketLifecycleReplayActivationAuthorityV2,
+    AuthenticatedMarketLifecycleReplayFoundationAuthorityV2,
+    AuthenticatedMarketLifecycleReplayTerminalAuthorityV2,
+    MarketLifecycleBootstrapLineageV2, MarketLifecycleGenerationBindingV2,
+    MarketLifecycleReplayPhaseV2, MarketLifecycleReplayV2,
+    MARKET_LIFECYCLE_BOOTSTRAP_LINEAGE_DOMAIN_V2,
+    MARKET_LIFECYCLE_GENERATION_BINDING_DOMAIN_V2,
+    MARKET_LIFECYCLE_INITIAL_GENERATION_DOMAIN_V2, MARKET_LIFECYCLE_REPLAY_BYTES_V2,
+    MARKET_LIFECYCLE_REPLAY_DOMAIN_V2,
 };
 pub use product_registry::{
     RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
@@ -626,6 +639,14 @@ typed_id!(
 typed_id!(
     MarketLifecycleReplayReceiptV1Id,
     "Typed identity of one permanent `MarketLifecycleReplayReceiptV1`."
+);
+typed_id!(
+    MarketLifecycleGenerationBindingV2Id,
+    "Typed identity of one immutable current Market generation binding."
+);
+typed_id!(
+    MarketLifecycleReplayV2Id,
+    "Typed semantic identity of one current permanent Market replay state."
 );
 typed_id!(
     SeriesMarketLinkV1Id,

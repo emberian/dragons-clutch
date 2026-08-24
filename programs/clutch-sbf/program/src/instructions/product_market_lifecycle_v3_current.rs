@@ -684,6 +684,7 @@ where
     let state = root.state();
     let binding = state.binding_ref();
     let replay_binding = replay.state().binding();
+    let bootstrap_lineage = replay.state().bootstrap_lineage();
     let replay_binding_id = replay_binding
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -730,6 +731,13 @@ where
             && binding.market_lifecycle_replay_account_id.bytes()
                 == replay.account().to_bytes()
             && binding.market_lifecycle_generation_binding_id == replay_binding_id
+            && binding.foundation_vault_id == bootstrap_lineage.foundation_vault_account_id
+            && binding.market_failure_policy_binding_id
+                == bootstrap_lineage.failure_policy_binding_id
+            && binding.recovery_state_id == bootstrap_lineage.recovery_state_id
+            && binding.direct_global_liveness_binding_id == bootstrap_lineage.direct_binding_id
+            && binding.general_founding_capability_id
+                == bootstrap_lineage.general_pre_root_capability_id
             && replay_binding.market_instance_id == binding.market_instance_id
             && replay_binding.generation == binding.generation
             && replay_binding.foundation_schedule_id == schedule_id
@@ -740,6 +748,16 @@ where
             && replay_account_id.bytes() == replay_account.key.to_bytes()
             && principal_lamports == replay_binding.replay_rent_principal_lamports
             && principal_lamports != 0
+            && capital.principal_total_lamports
+                == bootstrap_lineage.foundation_principal_lamports
+            && capital.vault_donation_floor_lamports
+                == bootstrap_lineage.foundation_vault_donation_floor_lamports
+            && capital.vault_current_donation_lamports
+                == bootstrap_lineage.foundation_vault_current_donation_lamports
+            && capital.recovery_work_principal_lamports
+                == bootstrap_lineage.recovery_work_principal_lamports
+            && capital.recovery_rent_principal_lamports
+                == bootstrap_lineage.recovery_rent_principal_lamports
             && capital.rent_refund_owner == replay_binding.rent_principal_refund_owner
             && capital.neutral_lamport_sink == replay_binding.neutral_lamport_sink
             && bootstrap_payer.key.to_bytes() == capital.rent_refund_owner.bytes()
@@ -748,7 +766,7 @@ where
             && vault_donation_before_lamports >= capital.vault_current_donation_lamports,
         ClutchError::MismatchedState,
     )?;
-    let founder_preauthorization_id = replay_binding_id.content_id();
+    let founder_preauthorization_id = bootstrap_lineage.product_founder_preauthorization_id;
     let market_binding_id = binding
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;

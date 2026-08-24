@@ -322,6 +322,11 @@ pub(crate) fn authenticate_persisted_market_foundation_graph_v4(
         .ok_or(ClutchError::Arithmetic)?;
     require(accounts.len() == expected_count, ClutchError::AccountCount)?;
     let replay_binding = replay.state().binding();
+    let bootstrap_lineage_id = replay
+        .state()
+        .bootstrap_lineage()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         replay_binding.foundation_schedule_id == schedule_id
             && replay_binding.generation == replay.generation()
@@ -391,6 +396,7 @@ pub(crate) fn authenticate_persisted_market_foundation_graph_v4(
                 .id()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                 .bytes(),
+            &bootstrap_lineage_id.bytes(),
             &schedule_id.bytes(),
             &graph_id.bytes(),
             &replay_binding.market_instance_id.bytes(),
