@@ -17,6 +17,8 @@ use super::super::failure_market_family_terminal_v2::{
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
     FailureMarketPhysicalTerminalConsumerFactsV3,
 };
+use super::super::fractional_product_consumer::consume_fractional_terminal_v2;
+use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
 use super::super::direct_market_v2::{
     AuthenticatedDirectFamilyTerminalV3, AuthenticatedProductDirectFamilyPreterminalV3,
@@ -28,6 +30,7 @@ use super::super::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
+use super::super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2;
 use super::super::source_funding_custody_retirement_v1::{
     authenticate_source_family_terminal_authority_v3,
     consume_source_family_terminal_into_product_v3, retire_source_funding_custody_v3,
@@ -70,6 +73,8 @@ const PRODUCT_DIRECT_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-direct-family-terminal-postwrite/v5\0";
 const PRODUCT_STRUCTURED_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-structured-family-terminal-postwrite/v5\0";
+const PRODUCT_FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-fractional-family-terminal-postwrite/v5\0";
 const PRODUCT_LIQUIDITY_OBLIGATION_ABSENCE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-liquidity-obligation-absence/v5\0";
 const PRODUCT_LIQUIDITY_OBLIGATION_POSTWRITE_DOMAIN_V5: &[u8] =
@@ -524,6 +529,156 @@ pub(crate) fn consume_direct_family_terminal_v5(
         series_link_authentication_id,
         series_link_semantic_id,
         series_link_transition_sequence,
+    })
+}
+
+/// Move-only Product postwrite proving that Fractional's exact a4/a5 physical
+/// close was consumed into the current RootV3.  The retained V2 value is the
+/// current Fractional-to-Product receipt version; it is not a Product RootV2
+/// bridge and cannot be reconstructed from its public IDs.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductFractionalFamilyTerminalV5 {
+    id: ContentId,
+    terminal: AuthenticatedProductFractionalFamilyTerminalV2,
+    physical_terminal_id: ContentId,
+    policy_account: Pubkey,
+    ledger_account: Pubkey,
+    refund_owner: Pubkey,
+    neutral_sink: Pubkey,
+    policy_lamports_before: u64,
+    ledger_lamports_before: u64,
+    refund_lamports_before: u64,
+    refund_lamports_after: u64,
+    neutral_sink_lamports_before: u64,
+    neutral_sink_lamports_after: u64,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+}
+
+impl AuthenticatedProductFractionalFamilyTerminalV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn physical_terminal_id(&self) -> ContentId {
+        self.physical_terminal_id
+    }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.terminal.root_account() }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.terminal.root_authentication_after()
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.terminal.root_semantic_after()
+    }
+    pub(crate) const fn terminal_receipt_id(&self) -> ContentId {
+        self.terminal.terminal_receipt_id()
+    }
+    pub(crate) const fn policy_terminal_state_id(&self) -> ContentId {
+        self.terminal.policy_terminal_state_id()
+    }
+    pub(crate) const fn ledger_terminal_state_id(&self) -> ContentId {
+        self.terminal.ledger_terminal_state_id()
+    }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+}
+
+/// Consume Fractional's sole physical terminal by value and immediately latch
+/// its two terminal states into RootV3.  LinkV3 is hostile-authenticated as the
+/// exact writable founder link needed by the later same-instruction Series
+/// retirement; no Fractional obligation is invented on LinkV3.
+#[inline(never)]
+pub(crate) fn consume_fractional_family_physical_terminal_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    terminal: AuthenticatedFractionalFamilyPhysicalTerminalV2,
+    schedule: &clutch_product_series::MarketFoundationScheduleV4,
+    graph: &clutch_product_series::MarketFoundationAccountGraphV4,
+) -> Outcome<AuthenticatedProductFractionalFamilyTerminalV5> {
+    require(root_account.key != link_account.key, ClutchError::AccountAlias)?;
+    let family = terminal.family_terminal();
+    let physical_terminal_id = terminal.id();
+    let policy_account = terminal.policy_account();
+    let ledger_account = terminal.ledger_account();
+    let refund_owner = terminal.refund_owner();
+    let neutral_sink = terminal.neutral_sink();
+    let policy_lamports_before = terminal.policy_lamports_before();
+    let ledger_lamports_before = terminal.ledger_lamports_before();
+    let refund_lamports_before = terminal.refund_lamports_before();
+    let refund_lamports_after = terminal.refund_lamports_after();
+    let neutral_sink_lamports_before = terminal.neutral_sink_lamports_before();
+    let neutral_sink_lamports_after = terminal.neutral_sink_lamports_after();
+    require_live(physical_terminal_id)?;
+    let (series_plan_id, ordinal) = observe_link_coordinate_v3(link_account)?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        ordinal,
+        MarketInstanceV2Id::from_bytes(family.market_instance_id().bytes()),
+        family.domain_generation(),
+        *root_account.key,
+        true,
+        &mut link_value,
+    )?;
+    let link_authentication_id = link.authentication_id();
+    let mut root_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut root_successor = Box::new(clutch_product_series::MarketLifecycleRootV3::decode_buffer());
+    let mut root_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let accepted = consume_fractional_terminal_v2(
+        program_id,
+        root_account,
+        terminal,
+        &link,
+        schedule,
+        graph,
+        &mut root_before,
+        &mut root_successor,
+        &mut root_after,
+    )?;
+    require(
+        accepted.terminal_receipt_id() == physical_terminal_id
+            && accepted.root_account() == *root_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &physical_terminal_id.bytes(),
+        &accepted.id().bytes(),
+        root_account.key.as_ref(),
+        &accepted.root_authentication_before().bytes(),
+        &accepted.root_authentication_after().bytes(),
+        &accepted.root_semantic_before().bytes(),
+        &accepted.root_semantic_after().bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_id.bytes(),
+        policy_account.as_ref(),
+        &policy_lamports_before.to_le_bytes(),
+        ledger_account.as_ref(),
+        &ledger_lamports_before.to_le_bytes(),
+        refund_owner.as_ref(),
+        &refund_lamports_before.to_le_bytes(),
+        &refund_lamports_after.to_le_bytes(),
+        neutral_sink.as_ref(),
+        &neutral_sink_lamports_before.to_le_bytes(),
+        &neutral_sink_lamports_after.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductFractionalFamilyTerminalV5 {
+        id,
+        terminal: accepted,
+        physical_terminal_id,
+        policy_account,
+        ledger_account,
+        refund_owner,
+        neutral_sink,
+        policy_lamports_before,
+        ledger_lamports_before,
+        refund_lamports_before,
+        refund_lamports_after,
+        neutral_sink_lamports_before,
+        neutral_sink_lamports_after,
+        link_account: *link_account.key,
+        link_authentication_id,
     })
 }
 
