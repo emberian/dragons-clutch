@@ -176,6 +176,8 @@ pub mod product_market;
 /// separately capability-gated, including in source-empty releases.
 pub mod product_series;
 pub(crate) mod product_series_current;
+/// Current Product V3/V5/V6 to Source occurrence publication authority.
+pub(crate) mod product_source_current;
 pub mod resolution_work;
 pub mod series_failure_funding;
 pub mod source_ingest;
