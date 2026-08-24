@@ -340,7 +340,6 @@ pub(crate) fn authenticate_inactive_failure_resolution_v5(
     expected_outcome_count: u8,
     expected_generation: u64,
     expected_rent_refund_owner: Pubkey,
-    expected_donation_floor_lamports: u64,
     require_writable: bool,
 ) -> Outcome<AuthenticatedInactiveFailureResolutionV5> {
     require(
@@ -374,7 +373,6 @@ pub(crate) fn authenticate_inactive_failure_resolution_v5(
             && resolution.facts.payout_unit_boundary
                 == ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms
             && resolution.rent.payer.bytes() == expected_rent_refund_owner.to_bytes()
-            && resolution.rent.donation_floor == expected_donation_floor_lamports
             && account.lamports()
                 >= resolution
                     .rent
@@ -495,7 +493,6 @@ pub(crate) fn create_inactive_failure_resolution_from_product_foundation_debit_v
         outcome_count,
         generation,
         debit.rent_refund_owner(),
-        debit.destination_donation_floor_lamports(),
         true,
     )?;
     require(
