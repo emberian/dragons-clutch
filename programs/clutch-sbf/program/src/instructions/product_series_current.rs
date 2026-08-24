@@ -69,6 +69,10 @@ const SERIES_WRAPPER_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-wrapper-admission-authentication/v2\0";
 const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-wrapper-terminal-authentication/v2\0";
+const SERIES_DEALER_AUTHORIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-dealer-authorization/v2\0";
+const SERIES_DEALER_ADMISSION_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-dealer-admission-postwrite/v2\0";
 const SERIES_FAILURE_BEGIN_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-failure-begin-authentication/v2\0";
 const SERIES_FAILURE_RELEASE_PREAUTHENTICATION_DOMAIN_V3: &[u8] =
@@ -119,6 +123,7 @@ pub(crate) struct AuthenticatedSeriesRegistryCapabilityRefsV3 {
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
     compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    activation_consumed: bool,
 }
 
 impl AuthenticatedSeriesRegistryCapabilityRefsV3 {
@@ -144,6 +149,7 @@ impl AuthenticatedSeriesRegistryCapabilityRefsV3 {
     ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
         self.compiler_bundle_id
     }
+    pub(crate) const fn activation_consumed(self) -> bool { self.activation_consumed }
 }
 
 /// Exact RegistryV3-bound ReleaseV2/ProfileV4 loader authority.
@@ -155,6 +161,7 @@ pub(crate) struct AuthenticatedRegistryCapabilityV4 {
     series_plan_id: SeriesPlanV5Id,
     funding_terms_id: clutch_product_series::SeriesFundingTermsV2Id,
     compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    activation_consumed: bool,
     program_account: Pubkey,
     programdata_account: Pubkey,
     release_artifact_account: Pubkey,
@@ -184,6 +191,7 @@ impl AuthenticatedRegistryCapabilityV4 {
     ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
         self.compiler_bundle_id
     }
+    pub(crate) const fn activation_consumed(&self) -> bool { self.activation_consumed }
     pub(crate) const fn program_account(&self) -> Pubkey { self.program_account }
     pub(crate) const fn programdata_account(&self) -> Pubkey { self.programdata_account }
     pub(crate) const fn release_artifact_account(&self) -> Pubkey {
@@ -389,6 +397,263 @@ impl AuthenticatedSeriesWrapperAuthorizationV2 {
     pub(crate) const fn link_transition_sequence(self) -> u64 { self.link_transition_sequence }
     pub(crate) const fn requires_product_admission(self) -> bool {
         matches!(self.wrapper_status, SeriesLinkObligationStatusV2::EnabledNeverFounded)
+    }
+}
+
+/// Product-private first-lease authorization for the Dealer obligation.
+///
+/// This compact receipt is minted only from a hostile current RootV2,
+/// writable LinkV2, RegistryV3/Release/Profile, BundleV6, and AttachmentV5.
+/// It contains no Dealer-created state and is consumed once by the narrow
+/// admission writer below.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesDealerAuthorizationV2 {
+    id: ContentId,
+    root_account: Pubkey,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    root_binding_id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_data_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV2Id,
+    link_binding_id: ContentId,
+    link_transition_sequence: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    funding_terms_id: SeriesFundingTermsV2Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    attachment_plan_id: SeriesAttachmentPlanV5Id,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    dealer_obligation_configuration_id: ContentId,
+    rent_refund_owner: ContentId,
+    neutral_lamport_sink: ContentId,
+}
+
+impl AuthenticatedSeriesDealerAuthorizationV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_binding_id(&self) -> ContentId { self.root_binding_id }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_binding_id(&self) -> ContentId { self.link_binding_id }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn ordinal(&self) -> u32 { self.ordinal }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn compiler_bundle_id(
+        &self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn attachment_plan_id(&self) -> SeriesAttachmentPlanV5Id {
+        self.attachment_plan_id
+    }
+    pub(crate) const fn rent_refund_owner(&self) -> ContentId { self.rent_refund_owner }
+    pub(crate) const fn neutral_lamport_sink(&self) -> ContentId {
+        self.neutral_lamport_sink
+    }
+}
+
+/// Dealer-owned prewrite accepted only by the first-lease Product admission.
+///
+/// The sole implementation must be Dealer's private, non-Copy prewrite over
+/// the canonical 0xaf/v2 and StateV3 promotion plan. Every accessor defaults to
+/// refusal so a caller-shaped DTO cannot accidentally satisfy this boundary.
+pub(crate) trait AuthenticatedSeriesDealerAdmissionOwnerV2 {
+    fn owner_admission_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_obligation_account(&self) -> Outcome<Pubkey> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_state_account(&self) -> Outcome<Pubkey> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_state_presemantic_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_facility_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_position_binding_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_rent_principal_lamports(&self) -> Outcome<u64> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn dealer_prefund_donation_lamports(&self) -> Outcome<u64> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn rent_refund_owner(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn neutral_lamport_sink(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_dealer_admission_owner_v2(
+        &self,
+        _authorization_id: ContentId,
+        _root_account: Pubkey,
+        _root_binding_id: ContentId,
+        _link_account: Pubkey,
+        _link_binding_id: ContentId,
+        _series_plan_id: SeriesPlanV5Id,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+        _attachment_plan_id: SeriesAttachmentPlanV5Id,
+        _registry_release_id: ContentId,
+        _capability_profile_id: ContentId,
+        _dealer_obligation_configuration_id: ContentId,
+        _dealer_obligation_account: Pubkey,
+        _dealer_state_account: Pubkey,
+        _dealer_state_presemantic_id: ContentId,
+        _dealer_facility_id: ContentId,
+        _dealer_position_binding_id: ContentId,
+        _dealer_rent_principal_lamports: u64,
+        _dealer_prefund_donation_lamports: u64,
+        _rent_refund_owner: ContentId,
+        _neutral_lamport_sink: ContentId,
+        _owner_admission_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Non-detachable hostile LinkV2 postwrite consumed by Dealer action14.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesDealerAdmissionV2 {
+    id: ContentId,
+    root_account: Pubkey,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    root_binding_id: ContentId,
+    link_account: Pubkey,
+    link_binding_id: ContentId,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_data_before: ContentId,
+    link_data_after: ContentId,
+    link_semantic_before: SeriesMarketLinkV2Id,
+    link_semantic_after: SeriesMarketLinkV2Id,
+    link_transition_sequence_after: u64,
+    product_admission_projection: SeriesLinkObligationAdmissionProjectionV2,
+    owner_admission_receipt_id: ContentId,
+    dealer_obligation_account: Pubkey,
+    dealer_state_account: Pubkey,
+    dealer_state_presemantic_id: ContentId,
+    dealer_facility_id: ContentId,
+    dealer_position_binding_id: ContentId,
+    dealer_rent_principal_lamports: u64,
+    dealer_prefund_donation_lamports: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    attachment_plan_id: SeriesAttachmentPlanV5Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    dealer_obligation_configuration_id: ContentId,
+    registry_capability_id: ContentId,
+    rent_refund_owner: ContentId,
+    neutral_lamport_sink: ContentId,
+}
+
+impl AuthenticatedSeriesDealerAdmissionV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_id(&self) -> ContentId {
+        self.root_authentication_id
+    }
+    pub(crate) const fn root_semantic_id(&self) -> ContentId { self.root_semantic_id }
+    pub(crate) const fn root_binding_id(&self) -> ContentId { self.root_binding_id }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_binding_id(&self) -> ContentId { self.link_binding_id }
+    pub(crate) const fn link_authentication_before(&self) -> ContentId {
+        self.link_authentication_before
+    }
+    pub(crate) const fn link_authentication_after(&self) -> ContentId {
+        self.link_authentication_after
+    }
+    pub(crate) const fn link_data_before(&self) -> ContentId { self.link_data_before }
+    pub(crate) const fn link_data_after(&self) -> ContentId { self.link_data_after }
+    pub(crate) const fn link_semantic_before(&self) -> SeriesMarketLinkV2Id {
+        self.link_semantic_before
+    }
+    pub(crate) const fn link_semantic_after(&self) -> SeriesMarketLinkV2Id {
+        self.link_semantic_after
+    }
+    pub(crate) const fn link_transition_sequence_after(&self) -> u64 {
+        self.link_transition_sequence_after
+    }
+    pub(crate) const fn product_admission_projection(
+        &self,
+    ) -> SeriesLinkObligationAdmissionProjectionV2 {
+        self.product_admission_projection
+    }
+    pub(crate) const fn owner_admission_receipt_id(&self) -> ContentId {
+        self.owner_admission_receipt_id
+    }
+    pub(crate) const fn dealer_obligation_account(&self) -> Pubkey {
+        self.dealer_obligation_account
+    }
+    pub(crate) const fn dealer_state_account(&self) -> Pubkey { self.dealer_state_account }
+    pub(crate) const fn dealer_state_presemantic_id(&self) -> ContentId {
+        self.dealer_state_presemantic_id
+    }
+    pub(crate) const fn dealer_facility_id(&self) -> ContentId { self.dealer_facility_id }
+    pub(crate) const fn dealer_position_binding_id(&self) -> ContentId {
+        self.dealer_position_binding_id
+    }
+    pub(crate) const fn dealer_rent_principal_lamports(&self) -> u64 {
+        self.dealer_rent_principal_lamports
+    }
+    pub(crate) const fn dealer_prefund_donation_lamports(&self) -> u64 {
+        self.dealer_prefund_donation_lamports
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn ordinal(&self) -> u32 { self.ordinal }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn compiler_bundle_id(
+        &self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn attachment_plan_id(&self) -> SeriesAttachmentPlanV5Id {
+        self.attachment_plan_id
+    }
+    pub(crate) const fn funding_quote_id(
+        &self,
+    ) -> clutch_product_series::SeriesFundingQuoteV5Id {
+        self.funding_quote_id
+    }
+    pub(crate) const fn registry_release_id(&self) -> ContentId { self.registry_release_id }
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.capability_profile_id
+    }
+    pub(crate) const fn dealer_obligation_configuration_id(&self) -> ContentId {
+        self.dealer_obligation_configuration_id
+    }
+    pub(crate) const fn registry_capability_id(&self) -> ContentId {
+        self.registry_capability_id
+    }
+    pub(crate) const fn rent_refund_owner(&self) -> ContentId { self.rent_refund_owner }
+    pub(crate) const fn neutral_lamport_sink(&self) -> ContentId {
+        self.neutral_lamport_sink
     }
 }
 
@@ -1693,6 +1958,7 @@ pub(crate) fn authenticate_series_registry_capability_refs_v3(
         &registry.authentication_id().bytes(), &value.series_plan_id.bytes(),
         &value.funding_terms_id.bytes(), &value.registry_release_id.bytes(),
         &value.capability_profile_id.bytes(), &value.compiler_bundle_id.bytes(),
+        &[u8::from(value.activation_consumed)],
     ]);
     require_live(id)?;
     Ok(AuthenticatedSeriesRegistryCapabilityRefsV3 {
@@ -1702,6 +1968,7 @@ pub(crate) fn authenticate_series_registry_capability_refs_v3(
         registry_release_id: value.registry_release_id,
         capability_profile_id: value.capability_profile_id,
         compiler_bundle_id: value.compiler_bundle_id,
+        activation_consumed: value.activation_consumed,
     })
 }
 
@@ -1748,7 +2015,8 @@ pub(crate) fn authenticate_registry_capability_from_refs_v4(
         refs.series_registry_account.as_ref(), &refs.series_registry_authentication_id.bytes(),
         &refs.id.bytes(), &refs.series_plan_id.bytes(), &refs.funding_terms_id.bytes(),
         &refs.compiler_bundle_id.bytes(), &refs.registry_release_id.bytes(),
-        &refs.capability_profile_id.bytes(), release.program_account().as_ref(),
+        &refs.capability_profile_id.bytes(), &[u8::from(refs.activation_consumed)],
+        release.program_account().as_ref(),
         release.programdata_account().as_ref(), release.release_artifact_account().as_ref(),
         release.profile_artifact_account().as_ref(), &release.programdata_sha256().bytes(),
     ]);
@@ -1757,7 +2025,9 @@ pub(crate) fn authenticate_registry_capability_from_refs_v4(
         id, series_registry_account: refs.series_registry_account,
         series_registry_authentication_id: refs.series_registry_authentication_id,
         series_plan_id: refs.series_plan_id, funding_terms_id: refs.funding_terms_id,
-        compiler_bundle_id: refs.compiler_bundle_id, program_account: release.program_account(),
+        compiler_bundle_id: refs.compiler_bundle_id,
+        activation_consumed: refs.activation_consumed,
+        program_account: release.program_account(),
         programdata_account: release.programdata_account(),
         release_artifact_account: release.release_artifact_account(),
         profile_artifact_account: release.profile_artifact_account(),
@@ -2107,6 +2377,398 @@ pub(crate) fn authenticate_series_wrapper_authorization_v2(
         neutral_lamport_sink: binding.neutral_lamport_sink, wrapper_status,
         wrapper_admission_receipt_id, link_transition_sequence,
     })
+}
+
+/// Authenticate the exact current Product state required before Dealer's first
+/// lease can create 0xaf/v2 and promote its StateV3.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_series_dealer_authorization_v2(
+    program_id: &Pubkey,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    link: AuthenticatedSeriesMarketLinkV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    compiler_bundle_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSeriesDealerAuthorizationV2> {
+    let root_binding = root.state().binding();
+    let link_binding = link.state().binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_semantic_id = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_binding_id = link_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+        program_id,
+        compiler_bundle_account,
+        link_binding.compiler_bundle_id.content_id(),
+    )?;
+    let attachment = authenticate_product_artifact_v1::<SeriesAttachmentPlanV5>(
+        program_id,
+        attachment_account,
+        link_binding.attachment_plan_id.content_id(),
+    )?;
+    let bundle_id = bundle
+        .value()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_id = attachment
+        .value()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        !root.is_writable()
+            && link.is_writable()
+            && root.state().phase() == MarketLifecyclePhaseV2::Active
+            && root.state().resolution_semantic_id() == ContentId::ZERO
+            && root.state().resolution_data_id() == ContentId::ZERO
+            && root.state().resolution_activation_receipt_id() == ContentId::ZERO
+            && link.state().phase() == SeriesMarketLinkPhaseV2::Active
+            && link
+                .state()
+                .obligation_status(SeriesLinkObligationV2::Dealer)
+                == SeriesLinkObligationStatusV2::EnabledNeverFounded
+            && link
+                .state()
+                .obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer)
+                == ContentId::ZERO
+            && link_binding.market_root_account_id.bytes() == root.account().to_bytes()
+            && link_binding.market_binding_id == root_binding_id
+            && link_binding.market_instance_id == root_binding.market_instance_id
+            && link_binding.generation == root_binding.generation
+            && link_binding.capability_profile_id == root_binding.capability_profile_id
+            && registry.series_plan_id() == link_binding.series_plan_id
+            && registry.activation_consumed()
+            && registry.funding_terms_id() == link_binding.funding_terms_id
+            && registry.compiler_bundle_id() == link_binding.compiler_bundle_id
+            && registry.registry_release_id() == root_binding.registry_release_id
+            && registry.capability_profile_id() == root_binding.capability_profile_id
+            && bundle_id == link_binding.compiler_bundle_id
+            && bundle.value().series_plan_id == link_binding.series_plan_id
+            && bundle.value().funding_terms_id == link_binding.funding_terms_id
+            && bundle.value().funding_quote_id == link_binding.funding_quote_id
+            && bundle.value().attachment_plan_id == link_binding.attachment_plan_id
+            && bundle.value().registry_release_id == registry.registry_release_id()
+            && bundle.value().capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && attachment_id == link_binding.attachment_plan_id
+            && attachment.value().funding_quote_id == link_binding.funding_quote_id
+            && root.account() != link.account()
+            && root.account() != registry.series_registry_account()
+            && link.account() != registry.series_registry_account(),
+        ClutchError::MismatchedState,
+    )?;
+    let link_transition_sequence = link.state().transition_sequence();
+    let id = hashv(&[
+        SERIES_DEALER_AUTHORIZATION_DOMAIN_V2,
+        program_id.as_ref(),
+        root.account().as_ref(),
+        &root.authentication_id().bytes(),
+        &root_semantic_id.bytes(),
+        &root_binding_id.bytes(),
+        link.account().as_ref(),
+        &link.authentication_id().bytes(),
+        &link.data_id().bytes(),
+        &link_semantic_id.bytes(),
+        &link_binding_id.bytes(),
+        &link_transition_sequence.to_le_bytes(),
+        registry.series_registry_account().as_ref(),
+        &registry.series_registry_authentication_id().bytes(),
+        &registry.id().bytes(),
+        compiler_bundle_account.key.as_ref(),
+        &bundle.semantic_id().bytes(),
+        attachment_account.key.as_ref(),
+        &attachment.semantic_id().bytes(),
+        &link_binding.obligation_configuration_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedSeriesDealerAuthorizationV2 {
+        id,
+        root_account: root.account(),
+        root_authentication_id: root.authentication_id(),
+        root_semantic_id,
+        root_binding_id,
+        link_account: link.account(),
+        link_authentication_id: link.authentication_id(),
+        link_data_id: link.data_id(),
+        link_semantic_id,
+        link_binding_id,
+        link_transition_sequence,
+        series_plan_id: link_binding.series_plan_id,
+        ordinal: link_binding.ordinal,
+        market_instance_id: link_binding.market_instance_id,
+        generation: link_binding.generation,
+        funding_terms_id: link_binding.funding_terms_id,
+        funding_quote_id: link_binding.funding_quote_id,
+        compiler_bundle_id: link_binding.compiler_bundle_id,
+        attachment_plan_id: link_binding.attachment_plan_id,
+        registry_release_id: registry.registry_release_id(),
+        capability_profile_id: registry.capability_profile_id(),
+        dealer_obligation_configuration_id: link_binding.obligation_configuration_id.content_id(),
+        rent_refund_owner: link_binding.rent_refund_owner,
+        neutral_lamport_sink: link_binding.neutral_lamport_sink,
+    })
+}
+
+/// Atomically consume Dealer's private prewrite and admit its LinkV2 obligation.
+///
+/// Dealer action14 must create 0xaf/v2 and promote its StateV3 after this call;
+/// Solana rollback makes those writes and this Product latch indivisible.
+pub(crate) fn admit_series_dealer_obligation_v2<'next, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    authenticated_root: AuthenticatedMarketLifecycleRootV2<'_>,
+    root_reauth_output: &mut MarketLifecycleRootAccountV2,
+    link_account: &AccountInfo<'_>,
+    authenticated_link: AuthenticatedSeriesMarketLinkV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    compiler_bundle_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+    owner: &A,
+    rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<(
+    AuthenticatedSeriesMarketLinkV2<'next>,
+    AuthenticatedSeriesDealerAdmissionV2,
+)>
+where
+    A: AuthenticatedSeriesDealerAdmissionOwnerV2 + ?Sized,
+{
+    let root_binding = authenticated_root.state().binding();
+    let live_root = authenticate_market_lifecycle_root_v2(
+        program_id,
+        root_account,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        false,
+        root_reauth_output,
+    )?;
+    require(
+        live_root.account() == authenticated_root.account()
+            && live_root.owner_program() == authenticated_root.owner_program()
+            && live_root.value() == authenticated_root.value()
+            && live_root.observed_lamports() == authenticated_root.observed_lamports()
+            && live_root.data_id() == authenticated_root.data_id()
+            && live_root.authentication_id() == authenticated_root.authentication_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let authorization = authenticate_series_dealer_authorization_v2(
+        program_id,
+        live_root,
+        authenticated_link,
+        registry,
+        compiler_bundle_account,
+        attachment_account,
+    )?;
+    let owner_admission_receipt_id = owner.owner_admission_receipt_id()?;
+    let dealer_obligation_account = owner.dealer_obligation_account()?;
+    let dealer_state_account = owner.dealer_state_account()?;
+    let dealer_state_presemantic_id = owner.dealer_state_presemantic_id()?;
+    let dealer_facility_id = owner.dealer_facility_id()?;
+    let dealer_position_binding_id = owner.dealer_position_binding_id()?;
+    let dealer_rent_principal_lamports = owner.dealer_rent_principal_lamports()?;
+    let dealer_prefund_donation_lamports = owner.dealer_prefund_donation_lamports()?;
+    let rent_refund_owner = owner.rent_refund_owner()?;
+    let neutral_lamport_sink = owner.neutral_lamport_sink()?;
+    for id in [
+        owner_admission_receipt_id,
+        dealer_state_presemantic_id,
+        dealer_facility_id,
+        dealer_position_binding_id,
+        rent_refund_owner,
+        neutral_lamport_sink,
+    ] {
+        require_live(id)?;
+    }
+    require(
+        link_account.is_writable
+            && *link_account.key == authenticated_link.account()
+            && authorization.link_account == authenticated_link.account()
+            && authorization.link_authentication_id == authenticated_link.authentication_id()
+            && authorization.link_data_id == authenticated_link.data_id()
+            && authorization.link_semantic_id
+                == authenticated_link
+                    .state()
+                    .semantic_id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && authorization.link_binding_id
+                == authenticated_link
+                    .state()
+                    .binding()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && authorization.link_transition_sequence
+                == authenticated_link.state().transition_sequence()
+            && authenticated_link.state().phase() == SeriesMarketLinkPhaseV2::Active
+            && authenticated_link
+                .state()
+                .obligation_status(SeriesLinkObligationV2::Dealer)
+                == SeriesLinkObligationStatusV2::EnabledNeverFounded
+            && rent_refund_owner == authorization.rent_refund_owner
+            && neutral_lamport_sink == authorization.neutral_lamport_sink
+            && dealer_rent_principal_lamports != 0
+            && dealer_obligation_account != authorization.root_account
+            && dealer_obligation_account != authorization.link_account
+            && dealer_obligation_account != dealer_state_account
+            && dealer_state_account != authorization.root_account
+            && dealer_state_account != authorization.link_account
+            && dealer_obligation_account.to_bytes() != rent_refund_owner.bytes()
+            && dealer_obligation_account.to_bytes() != neutral_lamport_sink.bytes()
+            && dealer_state_account.to_bytes() != rent_refund_owner.bytes()
+            && dealer_state_account.to_bytes() != neutral_lamport_sink.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    owner.authenticate_series_dealer_admission_owner_v2(
+        authorization.id,
+        authorization.root_account,
+        authorization.root_binding_id,
+        authorization.link_account,
+        authorization.link_binding_id,
+        authorization.series_plan_id,
+        authorization.ordinal,
+        authorization.market_instance_id,
+        authorization.generation,
+        authorization.funding_quote_id,
+        authorization.compiler_bundle_id,
+        authorization.attachment_plan_id,
+        authorization.registry_release_id,
+        authorization.capability_profile_id,
+        authorization.dealer_obligation_configuration_id,
+        dealer_obligation_account,
+        dealer_state_account,
+        dealer_state_presemantic_id,
+        dealer_facility_id,
+        dealer_position_binding_id,
+        dealer_rent_principal_lamports,
+        dealer_prefund_donation_lamports,
+        rent_refund_owner,
+        neutral_lamport_sink,
+        owner_admission_receipt_id,
+    )?;
+    let link_transition_sequence_after = authenticated_link
+        .state()
+        .transition_sequence()
+        .checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    let product_admission_projection = SeriesLinkObligationAdmissionProjectionV2 {
+        link_semantic_id: authorization.link_semantic_id,
+        obligation: SeriesLinkObligationV2::Dealer,
+        link_transition_sequence: link_transition_sequence_after,
+        owner_admission_receipt_id,
+    };
+    let product_admission_projection_id = product_admission_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let successor = authenticated_link
+        .state()
+        .admit_obligation(product_admission_projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_authentication_before = authenticated_link.authentication_id();
+    let link_data_before = authenticated_link.data_id();
+    let rebound = write_series_market_link_v2(
+        program_id,
+        link_account,
+        authenticated_link,
+        &successor,
+        rebound_output,
+    )?;
+    let link_semantic_after = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound
+            .state()
+            .obligation_status(SeriesLinkObligationV2::Dealer)
+            == SeriesLinkObligationStatusV2::Live
+            && rebound
+                .state()
+                .obligation_admission_receipt_id(SeriesLinkObligationV2::Dealer)
+                == product_admission_projection_id
+            && rebound.state().transition_sequence() == link_transition_sequence_after,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        SERIES_DEALER_ADMISSION_POSTWRITE_DOMAIN_V2,
+        program_id.as_ref(),
+        &authorization.id.bytes(),
+        authorization.root_account.as_ref(),
+        &authorization.root_authentication_id.bytes(),
+        &authorization.root_semantic_id.bytes(),
+        &authorization.root_binding_id.bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_before.bytes(),
+        &rebound.authentication_id().bytes(),
+        &link_data_before.bytes(),
+        &rebound.data_id().bytes(),
+        &authorization.link_semantic_id.bytes(),
+        &link_semantic_after.bytes(),
+        &link_transition_sequence_after.to_le_bytes(),
+        &product_admission_projection_id.bytes(),
+        &owner_admission_receipt_id.bytes(),
+        dealer_obligation_account.as_ref(),
+        dealer_state_account.as_ref(),
+        &dealer_state_presemantic_id.bytes(),
+        &dealer_facility_id.bytes(),
+        &dealer_position_binding_id.bytes(),
+        &dealer_rent_principal_lamports.to_le_bytes(),
+        &dealer_prefund_donation_lamports.to_le_bytes(),
+        &registry.id().bytes(),
+        &authorization.funding_quote_id.bytes(),
+        &authorization.compiler_bundle_id.bytes(),
+        &authorization.attachment_plan_id.bytes(),
+        &authorization.registry_release_id.bytes(),
+        &authorization.capability_profile_id.bytes(),
+        &authorization.dealer_obligation_configuration_id.bytes(),
+        &rent_refund_owner.bytes(),
+        &neutral_lamport_sink.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedSeriesDealerAdmissionV2 {
+        id,
+        root_account: authorization.root_account,
+        root_authentication_id: authorization.root_authentication_id,
+        root_semantic_id: authorization.root_semantic_id,
+        root_binding_id: authorization.root_binding_id,
+        link_account: authorization.link_account,
+        link_binding_id: authorization.link_binding_id,
+        link_authentication_before,
+        link_authentication_after: rebound.authentication_id(),
+        link_data_before,
+        link_data_after: rebound.data_id(),
+        link_semantic_before: authorization.link_semantic_id,
+        link_semantic_after,
+        link_transition_sequence_after,
+        product_admission_projection,
+        owner_admission_receipt_id,
+        dealer_obligation_account,
+        dealer_state_account,
+        dealer_state_presemantic_id,
+        dealer_facility_id,
+        dealer_position_binding_id,
+        dealer_rent_principal_lamports,
+        dealer_prefund_donation_lamports,
+        series_plan_id: authorization.series_plan_id,
+        ordinal: authorization.ordinal,
+        market_instance_id: authorization.market_instance_id,
+        generation: authorization.generation,
+        compiler_bundle_id: authorization.compiler_bundle_id,
+        attachment_plan_id: authorization.attachment_plan_id,
+        funding_quote_id: authorization.funding_quote_id,
+        registry_release_id: authorization.registry_release_id,
+        capability_profile_id: authorization.capability_profile_id,
+        dealer_obligation_configuration_id: authorization.dealer_obligation_configuration_id,
+        registry_capability_id: registry.id(),
+        rent_refund_owner,
+        neutral_lamport_sink,
+    }))
 }
 
 /// Persist the first Wrapper admission only after the Structured owner accepts
@@ -3430,6 +4092,7 @@ mod source_contract_tests {
             "refs = authenticate_series_registry_capability_refs_v3(registry)?"
         ));
         assert!(source.contains("&refs.id.bytes()"));
+        assert!(source.contains("&[u8::from(refs.activation_consumed)]"));
         assert!(source.contains("refs.compiler_bundle_id.content_id() != refs.funding_terms_id.content_id()"));
         assert!(!source.contains("SeriesRegistryAccountV2::decode"));
     }
@@ -3477,5 +4140,20 @@ mod source_contract_tests {
         assert!(source.contains("root.record_resolution_activation_into("));
         assert!(source.contains("AuthenticatedMarketResolutionActivationPostwriteV2"));
         assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
+    }
+
+    #[test]
+    fn current_dealer_admission_is_first_lease_only_and_owner_bound() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("fn authenticate_series_dealer_authorization_v2("));
+        assert!(source.contains("trait AuthenticatedSeriesDealerAdmissionOwnerV2"));
+        assert!(source.contains("fn admit_series_dealer_obligation_v2<'next, A>("));
+        assert!(source.contains("root.state().phase() == MarketLifecyclePhaseV2::Active"));
+        assert!(source.contains("root.state().resolution_semantic_id() == ContentId::ZERO"));
+        assert!(source.contains("SeriesLinkObligationV2::Dealer"));
+        assert!(source.contains("SeriesLinkObligationStatusV2::EnabledNeverFounded"));
+        assert!(source.contains("owner.authenticate_series_dealer_admission_owner_v2("));
+        assert!(source.contains("AuthenticatedSeriesDealerAdmissionV2"));
+        assert!(!source.contains("pub(crate) fn write_series_market_link_v2<'next>("));
     }
 }
