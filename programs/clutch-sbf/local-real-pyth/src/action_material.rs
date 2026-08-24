@@ -68,7 +68,7 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_POLICY_PDA_PREFIX,
 };
 use clutch_general_v2_contract::{
-    MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
+    MarketBindingV2, MarketBindingV5, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
     MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
 use clutch_product_series::{
@@ -4713,7 +4713,7 @@ pub fn construct_fractional_lifecycle_material_v1(
         ArtifactKind::SeriesFundingQuoteV6,
         quote_id.content_id().bytes(),
     )?;
-    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
+    let market_binding = MarketBindingV5::decode(&frame.accounts[1].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let mut graph_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
     for index in 0..MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
@@ -5209,7 +5209,7 @@ fn authenticate_fractional_holder_core_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV4::decode(&frame.market_binding.data)
+    let market_binding = MarketBindingV5::decode(&frame.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -6972,7 +6972,7 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV4::decode(&frame.market_binding.data)
+    let market_binding = MarketBindingV5::decode(&frame.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -7576,7 +7576,7 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.base.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV4::decode(&frame.base.market_binding.data)
+    let market_binding = MarketBindingV5::decode(&frame.base.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.base.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;

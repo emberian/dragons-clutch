@@ -49,7 +49,7 @@ use clutch_direct_market_runtime::lifecycle_v2::{
     prepare_direct_candidate_work_batch_v2, prepare_direct_economic_terminal_v2,
     AuthenticatedDirectEconomicTerminalV2, DirectRootReplayTransitionV2,
 };
-use clutch_direct_market_runtime::current_v3::DirectCurrentGeneralAuthorityV2;
+use clutch_direct_market_runtime::current_v3::DirectCurrentGeneralAuthorityV3;
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
 use clutch_direct_market_runtime::settlement_v1::DirectEndpointPrestateV1;
 use clutch_direct_market_runtime::{
@@ -58,8 +58,8 @@ use clutch_direct_market_runtime::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV4, MarketRuntimeV3AccountV1, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
-    MARKET_BINDING_ACCOUNT_BYTES_V4, MARKET_BINDING_SEED_DOMAIN_V1,
+    MarketBindingV5, MarketRuntimeV3AccountV1, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    MARKET_BINDING_ACCOUNT_BYTES_V5, MARKET_BINDING_SEED_DOMAIN_V1,
     MARKET_RUNTIME_ACCOUNT_BYTES, MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
 use clutch_liveness::runtime_adapter_v1::{
@@ -390,7 +390,7 @@ pub fn plan_direct_action8_context_snapshot_v2(
                 .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
         }
         if selection.candidate_count() == 0 {
-            let graph = authenticate_current_general_graph_v2(
+            let graph = authenticate_current_general_graph_v3(
                 collateral_catalog,
                 release,
                 accounts,
@@ -1524,7 +1524,7 @@ fn prepare_no_candidate(
         .outstanding_candidate_bond_lamports(selection)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     if bond_before != 0 { return invalid(); }
-    let graph = authenticate_current_general_graph_v2(
+    let graph = authenticate_current_general_graph_v3(
         collateral_catalog,
         release,
         accounts,
@@ -1610,7 +1610,7 @@ fn prepare_no_candidate(
         ("collateral-profile-v2", graph.profile_account.address, false, false),
         ("collateral-policy-v2", graph.policy_account.address, false, false),
         ("collateral-token-program", graph.token_program, false, false),
-        ("general-market-binding-v4", graph.binding_account.address, false, false),
+        ("general-market-binding-v5", graph.binding_account.address, false, false),
         ("general-market-runtime-v3", graph.runtime_account.address, false, false),
         ("market-instance-v2-artifact", graph.instance_account.address, false, false),
         ("market-genesis-profile-v2-artifact", graph.genesis_account.address, false, false),
@@ -2118,7 +2118,7 @@ fn project_candidate_work_v2(
     })
 }
 
-struct CurrentGeneralGraphV2<'a> {
+struct CurrentGeneralGraphV3<'a> {
     realm_account: &'a ObservedRpcAccount,
     profile_account: &'a ObservedRpcAccount,
     policy_account: &'a ObservedRpcAccount,
@@ -2145,7 +2145,7 @@ fn authenticate_current_endpoint_v2<'a>(
     accounts: &'a [ObservedRpcAccount],
     root: &AuthenticatedDirectRootTransitionV3,
     selection: DirectSelectionV1,
-    graph: &CurrentGeneralGraphV2<'_>,
+    graph: &CurrentGeneralGraphV3<'_>,
     index: u8,
 ) -> Result<CurrentEndpointV2<'a>> {
     let reservation_address = Address::new_from_array(
@@ -2319,14 +2319,14 @@ fn account_data_identity(
     Ok(id)
 }
 
-fn authenticate_current_general_graph_v2<'a>(
+fn authenticate_current_general_graph_v3<'a>(
     collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     release: &IndexedProgramRelease,
     accounts: &'a [ObservedRpcAccount],
     root: &AuthenticatedDirectRootTransitionV3,
-) -> Result<CurrentGeneralGraphV2<'a>> {
+) -> Result<CurrentGeneralGraphV3<'a>> {
     const BINDING_DATA_DOMAIN: &[u8] =
-        b"dragons-clutch/general-market/binding-data/v4\0";
+        b"dragons-clutch/sbf/general-market-binding/data/v5\0";
     const RUNTIME_DATA_DOMAIN: &[u8] =
         b"dragons-clutch/general-market/runtime-data/v3\0";
 
@@ -2394,9 +2394,9 @@ fn authenticate_current_general_graph_v2<'a>(
     let runtime_address = Address::new_from_array(root.general_market_runtime_account());
     let binding_account = find_account(accounts, binding_address)?;
     let runtime_account = find_account(accounts, runtime_address)?;
-    require_program_state(binding_account, release, MARKET_BINDING_ACCOUNT_BYTES_V4)?;
+    require_program_state(binding_account, release, MARKET_BINDING_ACCOUNT_BYTES_V5)?;
     require_program_state(runtime_account, release, MARKET_RUNTIME_ACCOUNT_BYTES)?;
-    let binding = MarketBindingV4::decode(&binding_account.data)
+    let binding = MarketBindingV5::decode(&binding_account.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let runtime = MarketRuntimeV3AccountV1::decode(&runtime_account.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
@@ -2496,9 +2496,9 @@ fn authenticate_current_general_graph_v2<'a>(
         &release.program_id,
     )
     .0;
-    let direct_general = DirectCurrentGeneralAuthorityV2 {
+    let direct_general = DirectCurrentGeneralAuthorityV3 {
         general_market_binding_account: binding_address.to_bytes(),
-        general_market_binding_v4_data_id: account_data_identity(
+        general_market_binding_v5_data_id: account_data_identity(
             BINDING_DATA_DOMAIN,
             binding_account,
         )?,
@@ -2531,7 +2531,7 @@ fn authenticate_current_general_graph_v2<'a>(
     {
         return invalid();
     }
-    Ok(CurrentGeneralGraphV2 {
+    Ok(CurrentGeneralGraphV3 {
         realm_account,
         profile_account,
         policy_account,
