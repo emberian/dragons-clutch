@@ -2,7 +2,8 @@
 //!
 //! The only admitted order is Product LinkV2 pin, Source physical terminal,
 //! Failure terminal-cell write, history append and Idle reset, Product LinkV2
-//! release, Source post-release binding, and shared Failure runtime write.
+//! release, one-way Source post-release persistence, and shared Failure
+//! runtime write.
 //! Any refusal rolls every earlier mutation back under SVM instruction
 //! atomicity. No Product work or Failure Recovery liveness call is present.
 
@@ -40,8 +41,9 @@ use crate::instructions::product_series_current::{
     FailureSessionReleaseDispositionV3,
 };
 use crate::instructions::source_failure_product_release_v1::{
+    bind_persisted_source_failure_product_release_v3,
     bind_source_failure_product_release_v1,
-    AuthenticatedSourceFailureProductReleaseV1,
+    AuthenticatedPersistedSourceFailureProductReleaseV3,
 };
 use crate::instructions::source_failure_terminal_v1::{
     compose_source_failure_terminal_v1,
@@ -203,7 +205,7 @@ struct FailureMarketSourceTransitionAuthorityV3<'a> {
     pin: &'a AuthenticatedSeriesFailureSessionPinV2,
     release: &'a AuthenticatedSeriesFailureSessionReleaseV3,
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
-    source_product_release: AuthenticatedSourceFailureProductReleaseV1,
+    source_product_release: &'a AuthenticatedPersistedSourceFailureProductReleaseV3,
     archive: FailureMarketIntervalArchivePostwriteV3,
 }
 
@@ -271,7 +273,7 @@ pub(crate) struct AuthenticatedFailureMarketSourceFailurePostwriteV3<'link> {
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
     source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
     archive: FailureMarketIntervalArchivePostwriteV3,
-    source_release: AuthenticatedSourceFailureProductReleaseV1,
+    source_release: AuthenticatedPersistedSourceFailureProductReleaseV3,
     runtime: AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3,
 }
 
@@ -292,8 +294,10 @@ impl AuthenticatedFailureMarketSourceFailurePostwriteV3<'_> {
     pub(crate) const fn archive(&self) -> FailureMarketIntervalArchivePostwriteV3 {
         self.archive
     }
-    pub(crate) const fn source_release(&self) -> AuthenticatedSourceFailureProductReleaseV1 {
-        self.source_release
+    pub(crate) const fn source_release(
+        &self,
+    ) -> &AuthenticatedPersistedSourceFailureProductReleaseV3 {
+        &self.source_release
     }
     pub(crate) const fn runtime(&self) -> AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3 {
         self.runtime
@@ -565,6 +569,12 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         &release,
         &archive,
     )?;
+    let persisted_source_product_release = bind_persisted_source_failure_product_release_v3(
+        program_id,
+        source_route,
+        source_product_release,
+        terminal_policy_account,
+    )?;
     let session = FailureMarketSessionDescriptorV1 {
         series_plan_id: link_binding.series_plan_id,
         ordinal: link_binding.ordinal,
@@ -582,7 +592,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         pin: &pin,
         release: &release,
         source_terminal,
-        source_product_release,
+        source_product_release: &persisted_source_product_release,
         archive,
     };
     let transition_plan = plan_archive_failure_market_source_failure_v3(
@@ -593,7 +603,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         begin.id,
         pin.id(),
         release.id(),
-        ProductContentId::from_bytes(source_product_release.id().bytes()),
+        ProductContentId::from_bytes(persisted_source_product_release.id().bytes()),
         session,
         interval_before.funding(),
         interval_before.history(),
@@ -638,7 +648,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
             &source_failure_receipt.id().bytes(),
             &archive.id().bytes(),
             &release.id().bytes(),
-            &source_product_release.id().bytes(),
+            &persisted_source_product_release.id().bytes(),
             &runtime.id().bytes(),
         ])
         .to_bytes(),
@@ -651,7 +661,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         source_terminal,
         source_failure_receipt,
         archive,
-        source_release: source_product_release,
+        source_release: persisted_source_product_release,
         runtime,
     })
 }
@@ -686,6 +696,9 @@ mod adversarial_source_contract_tests {
         let archive = compose.find("write_failure_market_interval_archive_v3(").unwrap();
         let release = compose.find("release_series_market_link_failure_v3(").unwrap();
         let source_release = compose.find("bind_source_failure_product_release_v1(").unwrap();
+        let persisted_source_release = compose
+            .find("bind_persisted_source_failure_product_release_v3(")
+            .unwrap();
         let runtime = compose
             .find("write_failure_market_runtime_source_failure_plan_v3(")
             .unwrap();
@@ -694,7 +707,8 @@ mod adversarial_source_contract_tests {
         assert!(cell < archive);
         assert!(archive < release);
         assert!(release < source_release);
-        assert!(source_release < runtime);
+        assert!(source_release < persisted_source_release);
+        assert!(persisted_source_release < runtime);
         assert!(!compose.contains("keeper_payment_lamports"));
         assert!(!compose.contains("plan_runtime_transition_v1"));
     }

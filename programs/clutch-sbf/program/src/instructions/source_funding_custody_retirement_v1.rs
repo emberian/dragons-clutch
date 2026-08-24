@@ -9,6 +9,7 @@
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{require_system_program, SYSTEM_PROGRAM_ID};
+use crate::instructions::product_series_current::AuthenticatedSeriesMarketLinkV2;
 use crate::source_plane_v3::runtime_key;
 use crate::source_plane_v3_actions::{
     authenticate_source_funding_custody_v1, AuthenticatedSourceFundingCustodyV1,
@@ -18,6 +19,7 @@ use clutch_source_plane_v3_runtime::{
     account_data_id, AuthenticatedSourceRouteV1, RuntimeKey,
     SourceFundingCustodyLedgerV1, SourceWorkScheduleBindingV1,
 };
+use clutch_product_series::SeriesMarketLinkPhaseV2;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -51,8 +53,12 @@ impl SourceFundingCustodyTerminalDispositionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceFundingCustodyLifecycleTerminalFactsV1 {
     pub(crate) disposition: SourceFundingCustodyTerminalDispositionV1,
+    pub(crate) capitalization_authority_id: ContentId,
     pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) pre_root_source_occurrence_id: ContentId,
+    pub(crate) product_link_account: RuntimeKey,
+    pub(crate) product_link_authentication_id: ContentId,
+    pub(crate) product_link_semantic_id: ContentId,
     pub(crate) source_terminal_postwrite_id: ContentId,
     pub(crate) source_result_or_absence_close_receipt_id: ContentId,
     pub(crate) source_product_release_binding_id: ContentId,
@@ -81,8 +87,12 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
             solana_sha256_hasher::hashv(&[
                 SOURCE_FUNDING_CUSTODY_LIFECYCLE_TERMINAL_DOMAIN_V1,
                 &[self.disposition.wire_byte()],
+                &self.capitalization_authority_id.bytes(),
                 &self.capitalization_receipt_id.bytes(),
                 &self.pre_root_source_occurrence_id.bytes(),
+                &self.product_link_account.bytes(),
+                &self.product_link_authentication_id.bytes(),
+                &self.product_link_semantic_id.bytes(),
                 &self.source_terminal_postwrite_id.bytes(),
                 &self.source_result_or_absence_close_receipt_id.bytes(),
                 &self.source_product_release_binding_id.bytes(),
@@ -109,13 +119,46 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
     }
 }
 
+/// Exact founder/custody facts derived only from the hostile live 0xbd ledger,
+/// authenticated retiring Product LinkV2, and authenticated route/schedule.
+/// Failure consumes this private value while returning the rest of the final
+/// branch tuple; callers never supply either side.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceFundingCustodyLiveFounderFactsV1 {
+    pub(crate) capitalization_authority_id: ContentId,
+    pub(crate) capitalization_receipt_id: ContentId,
+    pub(crate) pre_root_source_occurrence_id: ContentId,
+    pub(crate) product_link_account: RuntimeKey,
+    pub(crate) product_link_authentication_id: ContentId,
+    pub(crate) product_link_semantic_id: ContentId,
+    pub(crate) market_instance_id: ContentId,
+    pub(crate) series_plan_id: ContentId,
+    pub(crate) ordinal: u32,
+    pub(crate) source_release_manifest_id: ContentId,
+    pub(crate) source_release_authentication_id: ContentId,
+    pub(crate) source_route_id: ContentId,
+    pub(crate) source_work_schedule_id: ContentId,
+    pub(crate) source_lifecycle_id: ContentId,
+    pub(crate) source_generation: u64,
+    pub(crate) source_occurrence_id: ContentId,
+    pub(crate) source_occurrence_account: RuntimeKey,
+    pub(crate) source_occurrence_authentication_id: ContentId,
+    pub(crate) source_repair_generation: u64,
+    pub(crate) source_funding_custody: RuntimeKey,
+    pub(crate) lamport_principal_refund: RuntimeKey,
+    pub(crate) neutral_lamport_sink: RuntimeKey,
+}
+
 /// Default-refusing boundary implemented only by Failure's exact final
 /// successful or SourceAbsent/SourceRefused postwrite.
 pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
-    fn authenticate_source_funding_custody_lifecycle_terminal_v1(
+    /// Return the exact terminal tuple retained by the final Failure/Product
+    /// postwrite. No instruction payload or caller projection supplies these
+    /// identities.
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
         &self,
-        _expected: SourceFundingCustodyLifecycleTerminalFactsV1,
-    ) -> Outcome<()> {
+        _founder: SourceFundingCustodyLiveFounderFactsV1,
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
@@ -145,12 +188,87 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
     authority: &A,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
+    link: &AuthenticatedSeriesMarketLinkV2<'_>,
     custody: AuthenticatedSourceFundingCustodyV1,
-    expected: SourceFundingCustodyLifecycleTerminalFactsV1,
 ) -> Outcome<AuthenticatedSourceFundingCustodyLifecycleTerminalV1> {
+    let ledger = custody.ledger();
+    let link_state = link.state();
+    let link_binding = link_state.binding();
+    let link_semantic_id = link_state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let founder = SourceFundingCustodyLiveFounderFactsV1 {
+        capitalization_authority_id: ledger.capitalization_authority_id,
+        capitalization_receipt_id: ledger.capitalization_receipt_id,
+        pre_root_source_occurrence_id: link_binding.source_occurrence_receipt_id,
+        product_link_account: RuntimeKey::from_bytes(link.account().to_bytes()),
+        product_link_authentication_id: ContentId::from_bytes(
+            link.authentication_id().bytes(),
+        ),
+        product_link_semantic_id: ContentId::from_bytes(link_semantic_id.bytes()),
+        market_instance_id: ContentId::from_bytes(link_binding.market_instance_id.bytes()),
+        series_plan_id: ContentId::from_bytes(link_binding.series_plan_id.bytes()),
+        ordinal: link_binding.ordinal,
+        source_release_manifest_id: route.release_manifest_id(),
+        source_release_authentication_id: route.release_authentication_id(),
+        source_route_id: route.route_id(),
+        source_work_schedule_id: schedule.source_work_schedule_id(),
+        source_lifecycle_id: schedule.lifecycle_id(),
+        source_generation: schedule.generation(),
+        source_occurrence_id: ContentId::from_bytes(link_binding.source_occurrence_id.bytes()),
+        source_occurrence_account: RuntimeKey::from_bytes(
+            link_binding.source_occurrence_account_id.bytes(),
+        ),
+        source_occurrence_authentication_id:
+            link_binding.source_occurrence_account_authentication_id,
+        source_repair_generation: link_binding.source_repair_generation,
+        source_funding_custody: custody.account(),
+        lamport_principal_refund: ledger.principal_refund,
+        neutral_lamport_sink: ledger.neutral_sink,
+    };
+    require(
+        ledger.is_live()
+            && !founder.capitalization_authority_id.is_zero()
+            && !founder.capitalization_receipt_id.is_zero()
+            && founder.capitalization_authority_id != founder.capitalization_receipt_id
+            && link.is_writable()
+            && link_state.phase() == SeriesMarketLinkPhaseV2::Retiring
+            && !founder.product_link_authentication_id.is_zero()
+            && !founder.product_link_semantic_id.is_zero()
+            && link_binding.source_occurrence_receipt_id
+                == founder.pre_root_source_occurrence_id
+            && link_binding.market_instance_id.bytes() == founder.market_instance_id.bytes()
+            && link_binding.series_plan_id.bytes() == founder.series_plan_id.bytes()
+            && link_binding.ordinal == founder.ordinal
+            && link_binding.source_release_id == route.release_manifest_id()
+            && link_binding.source_route_id == route.route_id()
+            && link_binding.clock_policy_id == route.clock_policy_id()
+            && link_binding.source_plane_contract_id == route.source_plane_contract_id()
+            && link_binding.source_spec_id == route.source_spec_id()
+            && link_binding.generation == schedule.generation()
+            && link_binding.source_occurrence_id.bytes() == founder.source_occurrence_id.bytes()
+            && link_binding.source_occurrence_account_id.bytes()
+                == founder.source_occurrence_account.bytes()
+            && link_binding.source_occurrence_account_authentication_id
+                == founder.source_occurrence_authentication_id
+            && link_binding.source_repair_generation == founder.source_repair_generation
+            && link_binding.rent_refund_owner.bytes() == ledger.principal_refund.bytes()
+            && link_binding.neutral_lamport_sink.bytes() == ledger.neutral_sink.bytes()
+            && ledger.release_manifest_id == route.release_manifest_id()
+            && ledger.route_id == route.route_id()
+            && ledger.source_work_schedule_id == schedule.source_work_schedule_id()
+            && ledger.lifecycle_id == schedule.lifecycle_id()
+            && ledger.custody_account == custody.account()
+            && ledger.neutral_sink == route.neutral_sink(),
+        ClutchError::MismatchedState,
+    )?;
+    let expected = authority.source_funding_custody_lifecycle_terminal_facts_v1(founder)?;
     let ids = [
+        expected.capitalization_authority_id,
         expected.capitalization_receipt_id,
         expected.pre_root_source_occurrence_id,
+        expected.product_link_authentication_id,
+        expected.product_link_semantic_id,
         expected.source_terminal_postwrite_id,
         expected.source_result_or_absence_close_receipt_id,
         expected.source_product_release_binding_id,
@@ -169,28 +287,47 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
         ids.iter().all(|id| !id.is_zero())
             && all_distinct_ids(&ids)
             && custody.ledger().is_live()
+            && expected.capitalization_authority_id == founder.capitalization_authority_id
             && expected.capitalization_receipt_id
-                == custody.ledger().capitalization_receipt_id
+                == founder.capitalization_receipt_id
+            && expected.pre_root_source_occurrence_id
+                == founder.pre_root_source_occurrence_id
+            && expected.product_link_account == founder.product_link_account
+            && expected.product_link_authentication_id
+                == founder.product_link_authentication_id
+            && expected.product_link_semantic_id == founder.product_link_semantic_id
+            && expected.market_instance_id == founder.market_instance_id
+            && expected.series_plan_id == founder.series_plan_id
+            && expected.ordinal == founder.ordinal
             && expected.source_release_manifest_id == route.release_manifest_id()
-            && expected.source_release_manifest_id == custody.ledger().release_manifest_id
+            && expected.source_release_manifest_id == ledger.release_manifest_id
             && expected.source_release_authentication_id == route.release_authentication_id()
             && expected.source_route_id == route.route_id()
             && expected.source_work_schedule_id == schedule.source_work_schedule_id()
             && expected.source_lifecycle_id == schedule.lifecycle_id()
             && expected.source_generation == schedule.generation()
+            && expected.source_generation == founder.source_generation
+            && expected.source_occurrence_id == founder.source_occurrence_id
+            && expected.source_occurrence_account == founder.source_occurrence_account
+            && expected.source_occurrence_authentication_id
+                == founder.source_occurrence_authentication_id
+            && expected.source_repair_generation == founder.source_repair_generation
             && expected.source_funding_custody == custody.account()
-            && expected.lamport_principal_refund == custody.ledger().principal_refund
-            && expected.neutral_lamport_sink == custody.ledger().neutral_sink
+            && expected.lamport_principal_refund == ledger.principal_refund
+            && expected.neutral_lamport_sink == ledger.neutral_sink
             && expected.neutral_lamport_sink == route.neutral_sink()
             && expected.source_funding_custody != expected.lamport_principal_refund
             && expected.source_funding_custody != expected.neutral_lamport_sink
             && expected.source_funding_custody != expected.source_occurrence_account
+            && expected.product_link_account != expected.source_funding_custody
+            && expected.product_link_account != expected.source_occurrence_account
+            && expected.product_link_account != expected.lamport_principal_refund
+            && expected.product_link_account != expected.neutral_lamport_sink
             && expected.source_occurrence_account != expected.lamport_principal_refund
             && expected.source_occurrence_account != expected.neutral_lamport_sink
             && expected.lamport_principal_refund != expected.neutral_lamport_sink,
         ClutchError::MismatchedState,
     )?;
-    authority.authenticate_source_funding_custody_lifecycle_terminal_v1(expected)?;
     let id = expected.id();
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedSourceFundingCustodyLifecycleTerminalV1 { id, facts: expected })
@@ -352,7 +489,9 @@ pub(crate) fn retire_source_funding_custody_v2<
                 .iter()
                 .all(|id| *id != ledger_before.capitalization_receipt_id)
             && lifecycle_terminal_facts.capitalization_receipt_id
-                == ledger_before.capitalization_receipt_id,
+                == ledger_before.capitalization_receipt_id
+            && lifecycle_terminal_facts.capitalization_authority_id
+                == ledger_before.capitalization_authority_id,
         ClutchError::MismatchedState,
     )?;
     if ledger_before != custody.ledger() {
@@ -469,6 +608,7 @@ pub(crate) fn retire_source_funding_custody_v2<
             SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2,
             &product_retirement_authority_id.bytes(),
             &accounting.funding_terms_id.bytes(),
+            &ledger_before.capitalization_authority_id.bytes(),
             &ledger_before.capitalization_receipt_id.bytes(),
             &lifecycle_terminal.id().bytes(),
             &lifecycle_terminal_facts.pre_root_source_occurrence_id.bytes(),
@@ -547,6 +687,65 @@ mod adversarial_tests {
             SourceFundingCustodyTerminalDispositionV1::SourceRefused.wire_byte(),
             3
         );
+    }
+
+    #[test]
+    fn lifecycle_terminal_facts_come_only_from_final_failure_authority() {
+        let source = include_str!("source_funding_custody_retirement_v1.rs");
+        let authenticate = source
+            .split("pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Product-owned terminal identities")
+                    .next()
+            })
+            .expect("bounded lifecycle terminal authentication");
+        assert!(authenticate.contains(
+            "authority.source_funding_custody_lifecycle_terminal_facts_v1(founder)?"
+        ));
+        assert!(!authenticate.contains(
+            "expected: SourceFundingCustodyLifecycleTerminalFactsV1"
+        ));
+    }
+
+    #[test]
+    fn lifecycle_terminal_founder_is_derived_from_exact_retiring_link() {
+        let source = include_str!("source_funding_custody_retirement_v1.rs");
+        let authenticate = source
+            .split("pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Product-owned terminal identities").next())
+            .expect("bounded lifecycle terminal authentication");
+        for exact_join in [
+            "link_state.phase() == SeriesMarketLinkPhaseV2::Retiring",
+            "product_link_account: RuntimeKey::from_bytes(link.account().to_bytes())",
+            "link.authentication_id().bytes()",
+            "product_link_semantic_id: ContentId::from_bytes(link_semantic_id.bytes())",
+            "pre_root_source_occurrence_id: link_binding.source_occurrence_receipt_id",
+            "source_occurrence_id: ContentId::from_bytes(link_binding.source_occurrence_id.bytes())",
+            "link_binding.source_occurrence_account_id.bytes()",
+            "link_binding.source_occurrence_account_authentication_id",
+            "link_binding.market_instance_id.bytes() == founder.market_instance_id.bytes()",
+            "link_binding.series_plan_id.bytes() == founder.series_plan_id.bytes()",
+            "link_binding.ordinal == founder.ordinal",
+            "link_binding.generation == schedule.generation()",
+            "link_binding.source_repair_generation == founder.source_repair_generation",
+        ] {
+            assert!(authenticate.contains(exact_join), "missing {exact_join}");
+        }
+        for returned_join in [
+            "expected.pre_root_source_occurrence_id",
+            "expected.product_link_account == founder.product_link_account",
+            "expected.product_link_authentication_id",
+            "expected.product_link_semantic_id == founder.product_link_semantic_id",
+            "expected.source_occurrence_id == founder.source_occurrence_id",
+            "expected.source_occurrence_account == founder.source_occurrence_account",
+            "expected.source_occurrence_authentication_id",
+            "expected.source_repair_generation == founder.source_repair_generation",
+        ] {
+            assert!(authenticate.contains(returned_join), "missing {returned_join}");
+        }
     }
 
     #[test]

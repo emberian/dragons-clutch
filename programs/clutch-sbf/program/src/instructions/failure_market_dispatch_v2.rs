@@ -11,10 +11,9 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
-use crate::instructions::failure_market_actions_v2::{
-    process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
-};
+use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
 use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
+use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
@@ -204,10 +203,13 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::SeriesPlanArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
+    meta(Role::RecoveryPolicyArtifact, false, false, false),
     meta(Role::PriceMeasurePolicyArtifact, false, false, false),
     meta(Role::MarketGenesisArtifact, false, false, false),
+    meta(Role::AttachmentPlanArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
     meta(Role::SourceRelease, false, false, false),
     meta(Role::SourceAdapterProgram, false, false, true),
@@ -229,7 +231,9 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::FailureLivenessPolicy, false, false, false),
     meta(Role::FailureRecoveryCompartment, true, false, false),
     meta(Role::Keeper, true, false, false),
-    meta(Role::RecoveryRefundOwner, true, false, false),
+    // Read-only when distinct. If it aliases Keeper, Solana presents the
+    // writable privilege union and validation derives that same union.
+    meta(Role::RecoveryRefundOwner, false, false, false),
 ];
 
 /// Successful resolve owns Resolution V5, Source terminalization, archive,
@@ -454,9 +458,19 @@ pub fn validate_account_contract_v2(
     while index < contract.len() {
         let expected = contract[index];
         let observed = &accounts[index];
+        let mut expected_writable = expected.writable;
+        let mut expected_signer = expected.signer;
+        let mut alias = 0usize;
+        while alias < contract.len() {
+            if accounts[alias].key == observed.key {
+                expected_writable |= contract[alias].writable;
+                expected_signer |= contract[alias].signer;
+            }
+            alias += 1;
+        }
         require(
-            observed.is_writable == expected.writable
-                && observed.is_signer == expected.signer
+            observed.is_writable == expected_writable
+                && observed.is_signer == expected_signer
                 && observed.executable == expected.executable
                 && *observed.key != Pubkey::default(),
             ClutchError::NonCanonical,
@@ -697,6 +711,29 @@ mod adversarial_contract_tests {
             && meta.executable && !meta.writable && !meta.signer));
         assert!(contract.iter().any(|meta| meta.role == Role::RentSysvar
             && !meta.executable && !meta.writable && !meta.signer));
+    }
+
+    #[test]
+    fn action11_refund_is_read_only_unless_keeper_privilege_is_unionized() {
+        let keeper = ADVANCE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::Keeper)
+            .expect("keeper role");
+        let refund = ADVANCE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::RecoveryRefundOwner)
+            .expect("refund role");
+        assert!(keeper.writable && !keeper.signer);
+        assert!(!refund.writable && !refund.signer);
+        let source = include_str!("failure_market_dispatch_v2.rs");
+        let validator = source
+            .split("pub fn validate_account_contract_v2")
+            .nth(1)
+            .and_then(|value| value.split("pub(crate) fn account_for_role_v2").next())
+            .expect("current contract validator");
+        assert!(validator.contains("accounts[alias].key == observed.key"));
+        assert!(validator.contains("expected_writable |= contract[alias].writable"));
+        assert!(validator.contains("expected_signer |= contract[alias].signer"));
     }
 
     #[test]

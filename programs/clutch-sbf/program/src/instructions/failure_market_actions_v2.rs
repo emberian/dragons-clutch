@@ -18,7 +18,6 @@ use crate::instructions::failure_market_execution_v2::{
     authenticate_failure_market_source_product_route_v3,
     authenticate_failure_market_source_route_v2,
 };
-use crate::instructions::failure_market_interval_advance_v2::advance_failure_market_interval_paid_v2;
 use crate::instructions::failure_market_interval_v2::exhaust_and_archive_failure_market_interval_session_v2;
 use crate::instructions::failure_market_resolution_v5::resolve_failure_market_interval_and_source_v5;
 use crate::instructions::collateral_position_v3::authenticate_general_market_liabilities_v2;
@@ -283,7 +282,8 @@ fn withdrawn_root_v1_begin_failure_market_session_v2(
 
 /// Apply one exact priced progress step through the sole Recovery custody.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn process_advance_failure_market_session_v2(
+#[cfg(any())]
+fn withdrawn_root_v1_advance_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -880,24 +880,27 @@ mod adversarial_action_tests {
 
     #[test]
     fn advance_reconstructs_source_and_allows_only_keeper_refund_union() {
-        let source = include_str!("failure_market_actions_v2.rs");
+        let source = include_str!("failure_market_action11_current.rs");
         let handler = source
             .split("fn process_advance_failure_market_session_v2")
             .nth(1)
-            .and_then(|value| value.split("fn process_archive_failure_market_session_v2").next())
+            .and_then(|value| value.split("#[cfg(test)]").next())
             .expect("action11 handler");
         for owner in [
-            "require_distinct_except_pair(accounts, keeper_index, refund_index)",
-            "authenticate_failure_market_execution_v2",
-            "execution.require_next_sequence(sequence)",
+            "require_advance_aliases(accounts, keeper, refund)",
+            "authenticate_market_lifecycle_root_v2",
+            "authenticate_series_market_link_v2",
+            "authenticate_registry_capability_v4",
+            "authenticate_product_failure_active_schedule_v2",
+            "require(sequence == expected_sequence",
             "authenticate_successful_source_handoff_from_accounts_v1",
-            "authenticate_failure_market_product_context_v2",
             "advance_failure_market_interval_paid_v2",
         ] {
             assert!(handler.contains(owner));
         }
         require_every_contract_role_is_consumed(handler, ADVANCE_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(!handler.contains("ExternalRecoveryStateV1"));
+        assert!(!handler.contains("MarketLifecycleRootAccountV1"));
     }
 
     #[test]
