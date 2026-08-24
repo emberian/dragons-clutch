@@ -25,6 +25,9 @@ use super::{
     TermsAccount, HASH_BYTES,
 };
 use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
+use clutch_liveness::runtime_v1::{
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
+};
 #[cfg(all(
     feature = "non-production-product-series-lab",
     not(target_os = "solana")
@@ -60,6 +63,7 @@ use clutch_product_series::{
     SERIES_FUNDING_QUOTE_BYTES_V5, SERIES_FUNDING_QUOTE_BYTES_V6,
 };
 use clutch_source_plane_v3_runtime::{
+    source_runtime_liveness_policy_id_v1,
     SourceReleaseManifestV1, SourceReleaseManifestV2, SourceWorkScheduleBindingV1,
     SOURCE_RELEASE_MANIFEST_BYTES, SOURCE_RELEASE_MANIFEST_V1_BYTES, SOURCE_WORK_SCHEDULE_BYTES,
 };
@@ -99,6 +103,7 @@ const _: () = {
     assert!(SERIES_FUNDING_QUOTE_BYTES_V6 == 624);
     assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES == 528);
     assert!(SERIES_ATTACHMENT_PLAN_BYTES_V6 == 112);
+    assert!(RUNTIME_LIVENESS_POLICY_BYTES_V1 == 1_132);
 };
 
 #[cfg(feature = "non-production-product-series-lab")]
@@ -270,6 +275,8 @@ pub enum ArtifactKind {
     SeriesAttachmentPlanV6 = 67,
     /// Current compiler graph binding ProfileV4 and Quote/Attachment V6.
     CompiledProductSeriesBundleV7 = 68,
+    /// Canonical full Source runtime-liveness policy proposal body.
+    RuntimeLivenessPolicyV1 = 69,
 }
 
 impl ArtifactKind {
@@ -333,6 +340,7 @@ impl ArtifactKind {
             66 => Ok(Self::SeriesFundingQuoteV6),
             67 => Ok(Self::SeriesAttachmentPlanV6),
             68 => Ok(Self::CompiledProductSeriesBundleV7),
+            69 => Ok(Self::RuntimeLivenessPolicyV1),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -382,6 +390,7 @@ impl ArtifactKind {
             Self::SeriesFundingQuoteV6 => 66,
             Self::SeriesAttachmentPlanV6 => 67,
             Self::CompiledProductSeriesBundleV7 => 68,
+            Self::RuntimeLivenessPolicyV1 => 69,
         }
     }
 
@@ -430,6 +439,7 @@ impl ArtifactKind {
             Self::SeriesFundingQuoteV6 => SERIES_FUNDING_QUOTE_BYTES_V6,
             Self::SeriesAttachmentPlanV6 => SERIES_ATTACHMENT_PLAN_BYTES_V6,
             Self::CompiledProductSeriesBundleV7 => COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES,
+            Self::RuntimeLivenessPolicyV1 => RUNTIME_LIVENESS_POLICY_BYTES_V1,
         }
     }
 
@@ -479,6 +489,7 @@ impl ArtifactKind {
                 | Self::SeriesFundingQuoteV6
                 | Self::SeriesAttachmentPlanV6
                 | Self::CompiledProductSeriesBundleV7
+                | Self::RuntimeLivenessPolicyV1
         )
     }
 
@@ -1384,6 +1395,19 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::RuntimeLivenessPolicyV1 => {
+            let value = RuntimeLivenessPolicyV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                source_runtime_liveness_policy_id_v1(value)
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1743,7 +1767,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=68).contains(&tag) {
+            let expected = if (32..=69).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1782,6 +1806,7 @@ mod tests {
                     66 => ArtifactKind::SeriesFundingQuoteV6,
                     67 => ArtifactKind::SeriesAttachmentPlanV6,
                     68 => ArtifactKind::CompiledProductSeriesBundleV7,
+                    69 => ArtifactKind::RuntimeLivenessPolicyV1,
                     _ => unreachable!(),
                 })
             } else {
@@ -1789,7 +1814,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=68).contains(&tag) {
+            if (32..=69).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -2084,6 +2109,7 @@ mod tests {
             ArtifactKind::SeriesFundingQuoteV6,
             ArtifactKind::SeriesAttachmentPlanV6,
             ArtifactKind::CompiledProductSeriesBundleV7,
+            ArtifactKind::RuntimeLivenessPolicyV1,
         ] {
             assert_eq!(binding(kind).validate_for_registration(), Ok(()));
         }
