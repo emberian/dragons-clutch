@@ -88,7 +88,9 @@ the pinned layout dependency graph.
 | disabled selected fee-record envelope | `0x82/1` | 340 |
 | disabled owner fee-carry envelope | `0x83/1` | 132 |
 | disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
-| disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
+| historical recipient-allocation envelope | `0x85/1` | 2,644 |
+| historical complete-fee-book recipient certificate | `0x85/2` | 2,764 |
+| current V2-stream/Hamilton recipient allocation | `0x85/3` | 2,796 |
 | disabled treasury-ledger envelope | `0x86/1` | 148 |
 | disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
 | disabled combined FinalPot/virtual-budget envelope | `0x89/1` | 332 |
@@ -276,7 +278,7 @@ never authority.
 | selected fee record | `["selected-fee-record:v1", SelectedCandidate_PDA]` |
 | owner fee carry | `["owner-fee-carry:v1", selected_fee_record_PDA, semantic_owner]` |
 | temporary payer allocation | `["owner-payer-allocation:v1", selected_fee_record_PDA, semantic_owner]` |
-| temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
+| current recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]`; `0x85/3` is the sole current creation target and its same-rollback SBF writer must consume the authenticated traversal-backed weight stream |
 | treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
 | settlement cash pot | `["settlement-cash-pot:v1", Epoch_PDA, settlement_candidate_id]` |
 | FinalPot | `["general-final-pot:v2", Epoch_PDA, settlement_candidate_id]` |

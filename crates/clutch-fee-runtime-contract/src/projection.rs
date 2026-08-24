@@ -9,12 +9,16 @@ use clutch_owner_settlement::{
 };
 
 use crate::allocation::{
-    allocate_payer_debit, allocate_recipients, FeeEnvelopeFundingV1, FeeEnvelopeV1,
-    PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
+    allocate_payer_debit, allocate_recipients, allocate_recipients_from_weight_stream_v2,
+    FeeEnvelopeFundingV1, FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1,
+    StandingMakerRowV1,
 };
 use crate::intent::{OwnerFeeTransitionIntentV1, RecipientAllocationIntentV1};
 use crate::selected::{
     AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
+};
+use crate::weight_v2::{
+    CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2, COMPOSITE_FEE_WEIGHT_POLICY_V2,
 };
 use crate::{live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -345,16 +349,6 @@ pub const SELECTED_OWNER_FEE_BOOK_V1_BYTES: usize =
     8 + 2 + 2 + (3 * 32) + 1 + 7 + 16 + (MAX_ORDERS * (32 + 8));
 /// Canonical selected-owner fee-book transcript discriminator.
 pub const SELECTED_OWNER_FEE_BOOK_MAGIC_V1: [u8; 8] = *b"DCFEEBOK";
-/// Content-ID domain for the complete canonical owner fee book.
-pub const SELECTED_OWNER_FEE_BOOK_DATA_ID_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/selected-owner-fee-book/v1\0";
-
-/// Minimal exact hash seam for one fixed owner-fee book transcript.
-pub trait SelectedOwnerFeeBookHashV1 {
-    /// SHA-256 over the named domain and exact fixed-width body.
-    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32];
-}
-
 /// Encode the complete canonical owner-sorted fee book.
 pub fn encode_selected_owner_fee_book_v1(
     book: &SelectedOwnerFeeBookV1,
@@ -397,29 +391,9 @@ pub fn encode_selected_owner_fee_book_v1(
     Ok(output)
 }
 
-/// Derive the complete owner-fee book's canonical content identity.
-pub fn selected_owner_fee_book_data_id_v1<H: SelectedOwnerFeeBookHashV1>(
-    book: &SelectedOwnerFeeBookV1,
-    hash: &H,
-) -> Result<Id> {
-    let body = encode_selected_owner_fee_book_v1(book)?;
-    live(book.fee_record)?;
-    live(book.settlement_candidate)?;
-    live(book.revenue_policy)?;
-    let data_id = Id(hash.sha256(
-        SELECTED_OWNER_FEE_BOOK_DATA_ID_DOMAIN_V1,
-        &body,
-    ));
-    live(data_id)?;
-    Ok(data_id)
-}
-
-/// Candidate-wide recipient allocation certified by the complete fee book.
-///
-/// The immutable program-owned outer is the persistence authority. Structural
-/// decode alone does not recreate the creation-time proof; the only live
-/// creation path must consume [`SelectedOwnerFeeBookV1`] and an exhaustive
-/// traversal-derived owner-order-set digest/count.
+/// Historical complete-fee-book recipient certificate, retained for decoding
+/// immutable 0x85/v2 bytes only. No current constructor or content-ID owner is
+/// exposed for this type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CertifiedRecipientAllocationV2 {
     allocation: RecipientAllocationV1,
@@ -472,31 +446,108 @@ impl CertifiedRecipientAllocationV2 {
     }
 }
 
-/// Certify recipient allocation against every canonical selected-owner row.
-pub fn certify_recipient_allocation_v2<H: SelectedOwnerFeeBookHashV1>(
-    selected: &SelectedCompositeFeeV1,
-    book: &SelectedOwnerFeeBookV1,
-    owner_order_set_digest: Id,
+/// Candidate-wide recipient allocation certified by the exact V2 weight
+/// stream rather than the historical selected-owner fee-book snapshot.
+///
+/// The allocation already owns its selected fee-record identity. The added
+/// fields persist only the V2 stream's policy/transcript provenance, the
+/// traversal-owned order-set digest, and the two distinct cardinalities:
+/// every traversed executed owner and the zero-omitting nonzero weight rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertifiedRecipientAllocationV3 {
     allocation: RecipientAllocationV1,
-    hash: &H,
-) -> Result<CertifiedRecipientAllocationV2> {
-    live(owner_order_set_digest)?;
-    let owner_count = u16::from(book.owner_count);
-    let selected_fee_atoms = u64::try_from(book.selected_fee_atoms)
-        .map_err(|_| Error::AmountOutOfRange)?;
-    if book.fee_record != selected.fee_record()
-        || book.settlement_candidate != selected.selected_candidate()
-        || book.revenue_policy != selected.revenue_policy()
-        || allocation.fee_record() != selected.fee_record()
-        || allocation.collected_fee_atoms() != selected_fee_atoms
-    {
-        return Err(Error::MismatchedBinding);
+    weight_policy_id: Id,
+    weight_transcript_id: Id,
+    owner_order_set_digest: Id,
+    traversed_owner_count: u16,
+    nonzero_weight_row_count: u8,
+}
+
+impl CertifiedRecipientAllocationV3 {
+    /// Exact allocation and selected fee total.
+    pub const fn allocation(&self) -> RecipientAllocationV1 { self.allocation }
+    /// Borrow the exact allocation without copying its maximum-width arrays.
+    pub const fn allocation_ref(&self) -> &RecipientAllocationV1 { &self.allocation }
+    /// Immutable V2 weight-policy identity.
+    pub const fn weight_policy_id(&self) -> Id { self.weight_policy_id }
+    /// Commitment to the complete Position-sorted exact-weight stream.
+    pub const fn weight_transcript_id(&self) -> Id { self.weight_transcript_id }
+    /// Exhaustive traversal's immutable owner/order-set digest.
+    pub const fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
+    /// Distinct owners with nonzero selected execution before zero omission.
+    pub const fn traversed_owner_count(&self) -> u16 { self.traversed_owner_count }
+    /// Exact number of persisted Position allocation rows.
+    pub const fn nonzero_weight_row_count(&self) -> u8 {
+        self.nonzero_weight_row_count
     }
-    CertifiedRecipientAllocationV2::restore_persisted(
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_persisted(
+        allocation: RecipientAllocationV1,
+        weight_policy_id: Id,
+        weight_transcript_id: Id,
+        owner_order_set_digest: Id,
+        traversed_owner_count: u16,
+        nonzero_weight_row_count: u8,
+    ) -> Result<Self> {
+        live(weight_policy_id)?;
+        live(weight_transcript_id)?;
+        live(owner_order_set_digest)?;
+        if weight_policy_id != COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
+            || traversed_owner_count == 0
+            || usize::from(traversed_owner_count) > MAX_ORDERS
+            || nonzero_weight_row_count == 0
+            || usize::from(nonzero_weight_row_count) > MAX_FEE_ROWS_V1
+            || u16::from(nonzero_weight_row_count) > traversed_owner_count
+            || allocation.maker_len() != nonzero_weight_row_count
+            || allocation.collected_fee_atoms() == 0
+        {
+            return Err(Error::InvalidAccountData);
+        }
+        Ok(Self {
+            allocation,
+            weight_policy_id,
+            weight_transcript_id,
+            owner_order_set_digest,
+            traversed_owner_count,
+            nonzero_weight_row_count,
+        })
+    }
+}
+
+/// Create the V3 allocation only by replaying one exact V2 weight stream.
+///
+/// The callback supplies structural rows to the pure contract. The live SBF
+/// writer exposes this constructor only through its private
+/// `AuthenticatedPortfolioFeeWeightStreamV2` capability; it accepts neither a
+/// caller allocation nor a fee-book certificate/data ID.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn certify_recipient_allocation_v3<F>(
+    selected: &SelectedCompositeFeeV1,
+    revenue: &RevenuePolicyV1,
+    transcript: CompositeFeeWeightTranscriptV2,
+    owner_order_set_digest: Id,
+    traversed_owner_count: u16,
+    row_at: F,
+) -> Result<CertifiedRecipientAllocationV3>
+where
+    F: FnMut(u8) -> Result<Option<CompositeFeeWeightRowV2>>,
+{
+    live(owner_order_set_digest)?;
+    let allocation = allocate_recipients_from_weight_stream_v2(
+        selected,
+        revenue,
+        transcript,
+        row_at,
+    )?;
+    CertifiedRecipientAllocationV3::restore_persisted(
         allocation,
-        selected_owner_fee_book_data_id_v1(book, hash)?,
+        transcript.policy_id(),
+        transcript.transcript_id(),
         owner_order_set_digest,
-        owner_count,
+        traversed_owner_count,
+        transcript.len(),
     )
 }
 
@@ -1289,19 +1340,6 @@ mod tests {
         Id([byte; 32])
     }
 
-    #[derive(Debug)]
-    struct BookHash;
-
-    impl SelectedOwnerFeeBookHashV1 for BookHash {
-        fn sha256(&self, _domain: &[u8], body: &[u8]) -> [u8; 32] {
-            let mut id = [0u8; 32];
-            id[0] = body[0];
-            id[1] = body[SELECTED_OWNER_FEE_BOOK_V1_BYTES - 1];
-            id[31] = 1;
-            id
-        }
-    }
-
     fn selected() -> SelectedCompositeFeeV1 {
         let batch = FrozenPolicyV1 {
             allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
@@ -1319,17 +1357,7 @@ mod tests {
                 floor_range_bps: 10,
             },
         };
-        let revenue = RevenuePolicyV1 {
-            version: u32::from(REVENUE_POLICY_SCHEMA_V1),
-            treasury: [9; 32],
-            maker_rebate_num: 60,
-            executor_num: 0,
-            treasury_num: 40,
-            split_den: 100,
-            residual: RevenueResidualV1::Treasury,
-            standing_maker: StandingMakerV1::AllRestingMakers,
-            lamport_sink: LamportSinkV1::None,
-        };
+        let revenue = revenue();
         SelectedCompositeFeeV1::select(
             id(1),
             id(2),
@@ -1343,6 +1371,20 @@ mod tests {
             &revenue,
         )
         .unwrap()
+    }
+
+    fn revenue() -> RevenuePolicyV1 {
+        RevenuePolicyV1 {
+            version: u32::from(REVENUE_POLICY_SCHEMA_V1),
+            treasury: [9; 32],
+            maker_rebate_num: 60,
+            executor_num: 0,
+            treasury_num: 40,
+            split_den: 100,
+            residual: RevenueResidualV1::Treasury,
+            standing_maker: StandingMakerV1::AllRestingMakers,
+            lamport_sink: LamportSinkV1::None,
+        }
     }
 
     fn basis(
@@ -1540,29 +1582,6 @@ mod tests {
         .unwrap();
         assert_eq!(book.owner_count, 1);
         assert_eq!(book.selected_fee_atoms, 7);
-        let allocation = RecipientAllocationV1::restore_persisted(
-            selected.fee_record(),
-            0,
-            [Id([0; 32]); MAX_FEE_ROWS_V1],
-            [0; MAX_FEE_ROWS_V1],
-            0,
-            0,
-            7,
-            7,
-        )
-        .unwrap();
-        let certified = certify_recipient_allocation_v2(
-            &selected,
-            &book,
-            id(31),
-            allocation,
-            &BookHash,
-        )
-        .unwrap();
-        assert_eq!(certified.owner_count(), 1);
-        assert_eq!(certified.allocation().collected_fee_atoms(), 7);
-        assert_eq!(certified.owner_order_set_digest(), id(31));
-
         let mut wrong_total = totals;
         wrong_total.selected_fee_atoms = 8;
         assert_eq!(
@@ -1585,6 +1604,130 @@ mod tests {
                 totals,
             ),
             Err(Error::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
+    fn v3_persists_only_stream_provenance_and_exact_hamilton_output() {
+        let selected = selected();
+        let revenue = revenue();
+        let denominator = selected.carry_denominator();
+        let rows = [
+            CompositeFeeWeightRowV2::structural(id(20), denominator).unwrap(),
+            CompositeFeeWeightRowV2::structural(id(21), denominator / 2).unwrap(),
+        ];
+        let mut transcript_at = 0usize;
+        let transcript = crate::weight_v2::composite_fee_weight_transcript_v2(
+            selected.fee_record(),
+            denominator,
+            |_| {
+                if transcript_at < rows.len() {
+                    let row = rows[transcript_at];
+                    transcript_at += 1;
+                    Ok(Some(row))
+                } else {
+                    Ok(None)
+                }
+            },
+        )
+        .unwrap();
+        let certified = certify_recipient_allocation_v3(
+            &selected,
+            &revenue,
+            transcript,
+            id(30),
+            3,
+            |index| Ok(rows.get(usize::from(index)).copied()),
+        )
+        .unwrap();
+        assert_eq!(certified.weight_policy_id(), transcript.policy_id());
+        assert_eq!(certified.weight_transcript_id(), transcript.transcript_id());
+        assert_eq!(certified.owner_order_set_digest(), id(30));
+        assert_eq!(certified.traversed_owner_count(), 3);
+        assert_eq!(certified.nonzero_weight_row_count(), 2);
+        assert_eq!(certified.allocation().collected_fee_atoms(), 2);
+        assert_eq!(certified.allocation().maker_len(), 2);
+
+        let mut encoded = [0u8; crate::codec::CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES];
+        crate::codec::encode_certified_recipient_allocation_v3_into(
+            &certified,
+            &mut encoded,
+        )
+        .unwrap();
+        assert_eq!(encoded.len(), 2_744);
+        let borrowed = crate::codec::decode_borrowed_certified_recipient_allocation_v3(
+            &encoded,
+        )
+        .unwrap();
+        let summary = borrowed.summary();
+        assert_eq!(summary.fee_record(), selected.fee_record());
+        assert_eq!(summary.row_count(), 2);
+        assert_eq!(summary.collected_fee_atoms(), 2);
+        assert_eq!(summary.weight_policy_id(), transcript.policy_id());
+        assert_eq!(summary.weight_transcript_id(), transcript.transcript_id());
+        assert_eq!(summary.owner_order_set_digest(), id(30));
+        assert_eq!(summary.traversed_owner_count(), 3);
+        assert_eq!(summary.nonzero_weight_row_count(), 2);
+        assert_eq!(borrowed.allocation().row(0).unwrap().unwrap().position(), id(20));
+        assert_eq!(borrowed.allocation().row(1).unwrap().unwrap().position(), id(21));
+        assert_eq!(borrowed.allocation().row(2).unwrap(), None);
+        let mut streamed = [0u8; crate::codec::CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES];
+        crate::codec::encode_certified_recipient_allocation_v3_from_access_into(
+            &borrowed,
+            &mut streamed,
+        )
+        .unwrap();
+        assert_eq!(streamed, encoded);
+
+        let mut hostile_reserved = encoded;
+        hostile_reserved[2_743] = 1;
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(
+                &hostile_reserved,
+            ),
+            Err(Error::NonCanonicalPadding)
+        );
+        let mut hostile_order = encoded;
+        let first_position: [u8; 32] = hostile_order[80..112].try_into().unwrap();
+        hostile_order[120..152].copy_from_slice(&first_position);
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_order),
+            Err(Error::NonCanonicalOrder)
+        );
+        let mut hostile_tail = encoded;
+        hostile_tail[160] = 1;
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_tail),
+            Err(Error::NonCanonicalPadding)
+        );
+        let mut hostile_policy = encoded;
+        hostile_policy[2_640..2_672].fill(0);
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_policy),
+            Err(Error::ZeroIdentity)
+        );
+        let mut hostile_count = encoded;
+        hostile_count[2_738] = 1;
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_count),
+            Err(Error::InvalidAccountData)
+        );
+        let mut hostile_total = encoded;
+        hostile_total[72..80].copy_from_slice(&3u64.to_le_bytes());
+        assert_eq!(
+            crate::codec::decode_borrowed_certified_recipient_allocation_v3(&hostile_total),
+            Err(Error::ConservationFailure)
+        );
+        assert_eq!(
+            CertifiedRecipientAllocationV3::restore_persisted(
+                certified.allocation(),
+                certified.weight_policy_id(),
+                certified.weight_transcript_id(),
+                certified.owner_order_set_digest(),
+                1,
+                certified.nonzero_weight_row_count(),
+            ),
+            Err(Error::InvalidAccountData)
         );
     }
 }
