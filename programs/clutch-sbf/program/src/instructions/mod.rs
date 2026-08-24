@@ -74,6 +74,8 @@ pub mod failure_market_admission;
 pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
+mod fractional_lifecycle;
+mod fractional_product_consumer;
 pub mod fractional_redemption;
 pub(crate) mod full_principal_funding_v1;
 /// Deployable current direct-only rent-owned V5 Egg delivery.

@@ -23,7 +23,7 @@ use clutch_dealer_runtime_contract::{
 use clutch_direct_market_runtime::codec_v1::decode_direct_market_root_body_v1;
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_fractional_redemption_runtime::{
-    FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV2,
+    FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV3,
     FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_TAG,
     FRACTIONAL_CREDIT_ACCOUNT_VERSION, FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
     FRACTIONAL_CREDIT_TOMBSTONE_TAG, FRACTIONAL_CREDIT_TOMBSTONE_VERSION,
@@ -157,7 +157,7 @@ pub enum CanonicalAccountKind {
     CollateralHoardV2,
     CollateralClaimLedgerV3,
     CollateralResolutionV5,
-    FractionalPolicyV2,
+    FractionalPolicyV3,
     FractionalLedgerV1,
     FractionalCreditV2,
     FractionalCreditTombstoneV2,
@@ -234,7 +234,7 @@ impl CanonicalAccountKind {
             Self::CollateralHoardV2 => "collateral-hoard-v2",
             Self::CollateralClaimLedgerV3 => "collateral-claim-ledger-v3",
             Self::CollateralResolutionV5 => "collateral-resolution-v5",
-            Self::FractionalPolicyV2 => "fractional-policy-v2",
+            Self::FractionalPolicyV3 => "fractional-policy-v3",
             Self::FractionalLedgerV1 => "fractional-ledger-v1",
             Self::FractionalCreditV2 => "fractional-credit-v2",
             Self::FractionalCreditTombstoneV2 => "fractional-credit-tombstone-v2",
@@ -551,11 +551,11 @@ fn decode_fractional(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
         if data.len() != FRACTIONAL_POLICY_ACCOUNT_BYTES {
             return Err(AccountIndexError::CanonicalDecodeRefused);
         }
-        let value = FractionalPolicyV2::decode(data)
+        let value = FractionalPolicyV3::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::contextual(
             CanonicalFamily::Fractional,
-            CanonicalAccountKind::FractionalPolicyV2,
+            CanonicalAccountKind::FractionalPolicyV3,
             "Resolution V5 data identity and Realm collateral join",
         );
         projection.generation = Some(value.domain_generation);
