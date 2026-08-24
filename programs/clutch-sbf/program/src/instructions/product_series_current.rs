@@ -9,7 +9,9 @@
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
-use crate::instructions::product_artifact::authenticate_product_artifact_v1;
+use crate::instructions::product_artifact::{
+    authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
+};
 use crate::seeds;
 use clutch_product_series::{
     authenticate_market_foundation_account_graph_bytes_v3,
@@ -17,6 +19,7 @@ use clutch_product_series::{
     FixedCodec,
     MarketFoundationScheduleV3, MarketFoundationSlotV3, MarketInstanceV2Id,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingStateV3,
+    RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2Id,
     SeriesLifecycleReplayV2, SeriesLinkObligationAdmissionProjectionV2,
     SeriesLinkObligationDispositionV2, SeriesLinkObligationStatusV2,
@@ -36,6 +39,8 @@ use solana_pubkey::Pubkey;
 
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-account-authentication/v3\0";
+const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/registry-capability-authentication/v4\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v3\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -75,6 +80,62 @@ impl AuthenticatedSeriesRegistryAccountV3 {
     pub(crate) const fn is_writable(self) -> bool { self.writable }
     pub(crate) const fn data_id(self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
+}
+
+/// Exact RegistryV3-bound ReleaseV2/ProfileV4 loader authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedRegistryCapabilityV4 {
+    id: ContentId,
+    series_registry_account: Pubkey,
+    series_registry_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: clutch_product_series::SeriesFundingTermsV2Id,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    program_account: Pubkey,
+    programdata_account: Pubkey,
+    release_artifact_account: Pubkey,
+    profile_artifact_account: Pubkey,
+    projection: RegistryCapabilityProjectionV2,
+    programdata_sha256: ContentId,
+}
+
+impl AuthenticatedRegistryCapabilityV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn series_registry_account(&self) -> Pubkey {
+        self.series_registry_account
+    }
+    pub(crate) const fn series_registry_authentication_id(&self) -> ContentId {
+        self.series_registry_authentication_id
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn funding_terms_id(
+        &self,
+    ) -> clutch_product_series::SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+    pub(crate) const fn compiler_bundle_id(
+        &self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn program_account(&self) -> Pubkey { self.program_account }
+    pub(crate) const fn programdata_account(&self) -> Pubkey { self.programdata_account }
+    pub(crate) const fn release_artifact_account(&self) -> Pubkey {
+        self.release_artifact_account
+    }
+    pub(crate) const fn profile_artifact_account(&self) -> Pubkey {
+        self.profile_artifact_account
+    }
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.projection.registry_release_id
+    }
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.projection.capability_profile_id
+    }
+    pub(crate) const fn projection(&self) -> RegistryCapabilityProjectionV2 {
+        self.projection
+    }
+    pub(crate) const fn programdata_sha256(&self) -> ContentId { self.programdata_sha256 }
 }
 
 /// Exact current 0x80/version3 funding authentication.
@@ -724,6 +785,51 @@ pub(crate) fn authenticate_series_registry_account_v3(
     require_live(authentication_id)?;
     Ok(AuthenticatedSeriesRegistryAccountV3 { account: *account.key, value, observed_lamports,
         writable: account.is_writable, data_id, authentication_id })
+}
+
+/// Join exact RegistryV3 bytes to the live loader and immutable Release/Profile.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_registry_capability_v4(
+    program_id: &Pubkey,
+    registry: AuthenticatedSeriesRegistryAccountV3,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityV4> {
+    let value = registry.value();
+    let release = authenticate_registry_capability_for_registration_v3(
+        program_id, release_artifact, profile_artifact, value.registry_release_id,
+        value.capability_profile_id, program_account, programdata_account)?;
+    let projection = release.projection();
+    require(projection.registry_release_id == value.registry_release_id
+        && projection.capability_profile_id == value.capability_profile_id
+        && value.compiler_bundle_id.content_id() != value.funding_terms_id.content_id()
+        && registry.account() != release.program_account()
+        && registry.account() != release.programdata_account()
+        && registry.account() != release.release_artifact_account()
+        && registry.account() != release.profile_artifact_account(),
+        ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4, program_id.as_ref(),
+        registry.account().as_ref(), &registry.authentication_id().bytes(),
+        &value.series_plan_id.bytes(), &value.funding_terms_id.bytes(),
+        &value.compiler_bundle_id.bytes(), &value.registry_release_id.bytes(),
+        &value.capability_profile_id.bytes(), release.program_account().as_ref(),
+        release.programdata_account().as_ref(), release.release_artifact_account().as_ref(),
+        release.profile_artifact_account().as_ref(), &release.programdata_sha256().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedRegistryCapabilityV4 {
+        id, series_registry_account: registry.account(),
+        series_registry_authentication_id: registry.authentication_id(),
+        series_plan_id: value.series_plan_id, funding_terms_id: value.funding_terms_id,
+        compiler_bundle_id: value.compiler_bundle_id, program_account: release.program_account(),
+        programdata_account: release.programdata_account(),
+        release_artifact_account: release.release_artifact_account(),
+        profile_artifact_account: release.profile_artifact_account(), projection,
+        programdata_sha256: release.programdata_sha256(),
+    })
 }
 
 pub(crate) fn authenticate_series_funding_account_v3(
