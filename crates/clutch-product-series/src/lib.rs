@@ -37,6 +37,7 @@ mod funding_state_v3;
 mod funding_state_v4;
 mod interval_consensus;
 mod market_family_aggregator;
+mod market_family_capability;
 mod market_lifecycle;
 mod market_lifecycle_v2;
 mod market_foundation_v3;
@@ -203,6 +204,10 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_EXHAUSTIVE_SUMMARY_BYTES_V1, MARKET_FAMILY_EXHAUSTIVE_SUMMARY_DOMAIN_V1,
     MARKET_FAMILY_TERMINAL_DOMAIN_V1, MARKET_FAMILY_TERMINAL_PROJECTION_BYTES_V1,
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
+};
+pub use market_family_capability::{
+    MarketFamilyCapabilityPolicyV1, MarketFamilyCapabilityPolicyV1Id,
+    MARKET_FAMILY_CAPABILITY_POLICY_BYTES_V1, MARKET_FAMILY_CAPABILITY_POLICY_DOMAIN_V1,
 };
 pub use market_lifecycle::{
     authenticate_market_foundation_account_graph_bytes_v2,
