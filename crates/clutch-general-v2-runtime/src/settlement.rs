@@ -43,7 +43,7 @@ use clutch_general_v2_contract::{
     OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
     SettlementCashPotV1AccountV1, SettlementReceiptSeedTupleV5,
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
-    OWNER_SETTLEMENT_ACCOUNT_BYTES_V5, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
