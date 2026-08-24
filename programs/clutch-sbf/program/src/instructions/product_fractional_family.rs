@@ -66,6 +66,10 @@ pub(crate) trait AuthenticatedProductFractionalFamilyAdmissionOwnerV1 {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
 
+    fn resolution_semantic_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
     fn resolution_data_id(&self) -> Outcome<ContentId> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
@@ -83,6 +87,7 @@ pub(crate) trait AuthenticatedProductFractionalFamilyAdmissionOwnerV1 {
         _runtime_release_id: ContentId,
         _capability_profile_id: ContentId,
         _resolution_account: ContentId,
+        _resolution_semantic_id: ContentId,
         _resolution_data_id: ContentId,
         _native_claim_basis_id: ContentId,
     ) -> Outcome<()> {
@@ -400,6 +405,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v1<
     let runtime_release_id = owner.runtime_release_id()?;
     let capability_profile_id = owner.capability_profile_id()?;
     let resolution_account = owner.resolution_account()?;
+    let resolution_semantic_id = owner.resolution_semantic_id()?;
     let resolution_data_id = owner.resolution_data_id()?;
     let native_claim_basis_id = owner.native_claim_basis_id()?;
     owner.authenticate_product_fractional_family_admission_owner_v1(
@@ -409,6 +415,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v1<
         runtime_release_id,
         capability_profile_id,
         resolution_account,
+        resolution_semantic_id,
         resolution_data_id,
         native_claim_basis_id,
     )?;
@@ -458,6 +465,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v1<
         runtime_release_id,
         capability_profile_id,
         resolution_account,
+        resolution_semantic_id,
         resolution_data_id,
         native_claim_basis_id,
         policy_account,
@@ -497,7 +505,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v1<
             && binding.resolution_account_id == resolution_account
             && root.state().resolution_data_id() == resolution_data_id
             && binding.native_claim_basis_id == native_claim_basis_id
-            && root.state().resolution_semantic_id() != ContentId::ZERO
+            && root.state().resolution_semantic_id() == resolution_semantic_id
             && runtime_release_id == binding.registry_release_id
             && capability_profile_id == binding.capability_profile_id
             && fractional.status() == MarketFamilyStatusV1::EnabledNeverFounded
