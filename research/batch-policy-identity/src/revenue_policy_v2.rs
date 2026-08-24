@@ -124,10 +124,12 @@ impl LamportSinkV2 {
 pub enum TreasuryPositionDerivationPolicyV2 {
     /// For each full-width MarketInstanceV2, Product/General founding derives
     /// and separately rent-funds an ordinary `PositionV3` owned and
-    /// controlled by the Realm's immutable treasury owner, plus a counted
-    /// service ledger that prevents closure while any fee-bearing epoch is
-    /// outstanding.  Neither account is a Realm account or a Product
-    /// ScheduleV3 funding slot.
+    /// controlled by the Realm's immutable treasury owner, its mandatory
+    /// purpose-owned GEN1 ReplayV3, plus a counted service ledger that
+    /// prevents closure while any fee-bearing epoch is outstanding.  The
+    /// Position/Replay purpose binding is the canonical General MarketRuntime,
+    /// not the MarketInstance.  None is a Realm account or Product ScheduleV3
+    /// funding slot.
     PerMarketOrdinaryGeneralPositionV3WithCountedServiceLedgerV1,
 }
 
