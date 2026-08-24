@@ -15,7 +15,8 @@ and conservation of a finite, presently funded capitalization schedule.
 
 The recipe commits:
 
-- Realm, Terms, categorical ClaimBasis, and CapacityProfile identities;
+- Realm, Terms, categorical ClaimBasis, Product-owned finite result-domain,
+  and CapacityProfile identities;
 - Product compiler release;
 - occurrence and source schedule identities;
 - the capability-template identity;
@@ -33,8 +34,10 @@ release set refuses. The contract recomputes the complete
 are never authority.
 
 The occurrence release hashes a fixed 104-byte artifact containing recipe,
-occurrence-schedule, index, time, and generation. It then hashes canonical
-Product `OccurrenceV1` and `InstanceV1` preimages. The Market release hashes
+occurrence-schedule, index, time, and generation. It then hashes a canonical
+Product `OccurrenceV1` preimage and the Product contract's canonical 192-byte
+`InstanceV1` preimage. That instance binds the recipe-selected finite result
+domain; Series has no parallel Product-instance layout. The Market release hashes
 the canonical 168-byte Market identity. The exact occurrence-capitalization
 record is separately hashed, so changing funding changes only the bound
 capitalization identity, not Product or Market identity. This V1 source release

@@ -18,6 +18,7 @@ fn recipe() -> SeriesRecipeV1 {
         realm_id: id(1),
         terms_id: id(2),
         claim_basis_id: id(3),
+        result_domain_id: id(14),
         capacity_profile_id: id(4),
         compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1)
             .expect("release identity"),
@@ -175,7 +176,27 @@ fn all_persistent_preimages_round_trip_at_exact_widths() {
     let recipe_id = id(201);
     let aggregate_id = id(202);
     let recipe = recipe();
-    assert_eq!(SeriesRecipeV1::decode(&recipe.to_bytes()), Ok(recipe));
+    let recipe_bytes = recipe.to_bytes();
+    assert_eq!(recipe_bytes.len(), 16 + (14 * IDENTITY_BYTES) + 32);
+    assert_eq!(recipe_bytes.len(), SERIES_RECIPE_BYTES_V1);
+    assert_eq!(
+        recipe_bytes.get(432..464),
+        Some(recipe.result_domain_id.to_bytes().as_slice())
+    );
+    assert_eq!(SeriesRecipeV1::decode(&recipe_bytes), Ok(recipe));
+    assert_eq!(
+        SeriesRecipeV1::decode(recipe_bytes.get(..464).expect("obsolete recipe width")),
+        Err(Error::InvalidLength)
+    );
+    let mut zero_domain = recipe_bytes;
+    zero_domain
+        .get_mut(432..464)
+        .expect("result-domain slot")
+        .fill(0);
+    assert_eq!(
+        SeriesRecipeV1::decode(&zero_domain),
+        Err(Error::ZeroIdentity)
+    );
 
     let derived_record = derived(recipe_id, 1);
     assert_eq!(
@@ -328,7 +349,12 @@ fn release_set_is_closed_and_pinned_to_its_exact_preimages() {
         Err(Error::DerivationReleaseUnavailable)
     );
     substituted = recipe();
-    substituted.compiler_release_id = id(249);
+    substituted.compiler_release_id = IdentityV1::new([
+        0xf2, 0x47, 0x12, 0x79, 0x8a, 0x0e, 0x6c, 0xf9, 0x73, 0xd0, 0x08, 0x58, 0xbc, 0xa1, 0xc6,
+        0xd9, 0x80, 0xd3, 0x14, 0x9f, 0xd3, 0x7a, 0x90, 0x83, 0xa3, 0x78, 0x73, 0xe5, 0x36, 0x02,
+        0x43, 0x44,
+    ])
+    .expect("obsolete release identity");
     assert_eq!(
         substituted.validate(),
         Err(Error::DerivationReleaseUnavailable)
@@ -352,6 +378,45 @@ fn derivation_recomputes_product_market_and_funding_identities() {
         exact.capability_manifest_id,
         recipe().capability_template_id
     );
+    let canonical_instance = InstanceV1::new(InstanceV1Input {
+        terms_id: product_content_id(recipe().terms_id).expect("Product Terms ID"),
+        occurrence_id: product_content_id(exact.occurrence_id).expect("Product occurrence ID"),
+        claim_basis_id: product_content_id(recipe().claim_basis_id).expect("Product claim ID"),
+        result_domain_id: product_content_id(recipe().result_domain_id)
+            .expect("Product result-domain ID"),
+        capacity_profile_id: CapacityProfileId::new(
+            product_content_id(recipe().capacity_profile_id).expect("Product capacity ID"),
+        ),
+        partition_cell_count: u32::from(recipe().outcome_count),
+    })
+    .expect("canonical Product instance");
+    let canonical_instance_bytes = canonical_instance.to_bytes();
+    assert_eq!(canonical_instance_bytes.len(), 192);
+    assert_eq!(
+        InstanceV1::decode(&canonical_instance_bytes),
+        Ok(canonical_instance)
+    );
+    assert_eq!(
+        exact.product_instance_id,
+        content_identity(&canonical_instance_bytes).expect("Product instance identity")
+    );
+
+    let mut substituted_domain_recipe = recipe();
+    substituted_domain_recipe.result_domain_id = id(15);
+    let substituted_domain = derive_occurrence_v1(recipe_id, &substituted_domain_recipe, 0, &cap)
+        .expect("locally coherent substituted domain");
+    assert_eq!(
+        substituted_domain.occurrence_id, exact.occurrence_id,
+        "the Product result domain must not mutate occurrence semantics"
+    );
+    assert_ne!(
+        substituted_domain.product_instance_id,
+        exact.product_instance_id
+    );
+    assert_ne!(
+        substituted_domain.market_identity_id,
+        exact.market_identity_id
+    );
 
     let next = derive_occurrence_v1(recipe_id, &recipe(), 1, &capitalization(recipe_id, 1))
         .expect("next derivation");
@@ -369,6 +434,34 @@ fn derivation_recomputes_product_market_and_funding_identities() {
     assert_eq!(changed.product_instance_id, exact.product_instance_id);
     assert_eq!(changed.market_identity_id, exact.market_identity_id);
     assert_ne!(changed.capitalization_id, exact.capitalization_id);
+
+    let (root_address, _, aggregate_id, root, escrow, _guard) = created();
+    assert_eq!(
+        plan_instantiate_next_v1(
+            root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            derived_id(&substituted_domain),
+            &substituted_domain,
+            substituted_domain.capitalization_id,
+            &cap,
+            InstantiateNextV1 {
+                expected_index: 0,
+                expected_time: substituted_domain.occurrence_time,
+                ticket_bump: 9,
+            },
+            substituted_domain.occurrence_time,
+            20,
+            5,
+            80,
+            vacant(0),
+        ),
+        Err(Error::DerivationMismatch)
+    );
 }
 
 #[test]

@@ -9,12 +9,17 @@
 //! releases; one mutable root owns only gap-free progress and conservation.
 
 use core::convert::{TryFrom, TryInto};
+use dclutch_product_contract::{
+    ContentId,
+    capacity::CapacityProfileId,
+    product::{InstanceV1, InstanceV1Input},
+};
 use sha2::{Digest, Sha256};
 
 /// Width of a content identity or Solana-compatible account key.
 pub const IDENTITY_BYTES: usize = 32;
 /// Exact width of [`SeriesRecipeV1`].
-pub const SERIES_RECIPE_BYTES_V1: usize = 464;
+pub const SERIES_RECIPE_BYTES_V1: usize = 496;
 /// Exact width of [`DerivedOccurrenceV1`].
 pub const DERIVED_OCCURRENCE_BYTES_V1: usize = 400;
 /// Exact width of [`CapitalizationAggregateV1`].
@@ -64,11 +69,11 @@ pub const SERIES_SCHEMA_VERSION_V1: u16 = 1;
 
 /// Exact release label for V1's fixed canonical Product construction.
 pub const PRODUCT_COMPILER_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/series-product-compiler/fixed-occurrence-v1";
+    b"dclutch/series-product-compiler/fixed-result-domain-occurrence-v2";
 /// SHA-256 identity of [`PRODUCT_COMPILER_RELEASE_PREIMAGE_V1`].
 pub const PRODUCT_COMPILER_RELEASE_ID_V1: [u8; 32] = [
-    0xf2, 0x47, 0x12, 0x79, 0x8a, 0x0e, 0x6c, 0xf9, 0x73, 0xd0, 0x08, 0x58, 0xbc, 0xa1, 0xc6, 0xd9,
-    0x80, 0xd3, 0x14, 0x9f, 0xd3, 0x7a, 0x90, 0x83, 0xa3, 0x78, 0x73, 0xe5, 0x36, 0x02, 0x43, 0x44,
+    0x81, 0x2b, 0x11, 0x25, 0xf6, 0x99, 0xc8, 0xdf, 0xd0, 0x2e, 0x87, 0x02, 0x67, 0x3b, 0x99, 0xea,
+    0xde, 0x92, 0x1e, 0xb8, 0x74, 0x44, 0x99, 0x38, 0x5a, 0xa5, 0x8f, 0x60, 0x8b, 0x1b, 0x93, 0x11,
 ];
 /// Exact release label for V1's fixed occurrence-artifact/Product derivation.
 pub const OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
@@ -108,7 +113,6 @@ pub const SERIES_OCCURRENCE_ARTIFACT_BYTES_V1: usize = 104;
 
 const SERIES_OCCURRENCE_ARTIFACT_MAGIC_V1: [u8; 8] = *b"DCLTSAO1";
 const PRODUCT_OCCURRENCE_BYTES_V1: usize = 128;
-const PRODUCT_INSTANCE_BYTES_V1: usize = 160;
 const MARKET_IDENTITY_BYTES_V1: usize = 168;
 
 /// Root PDA domain. Its 22 bytes are below the chain-derived 32-byte seed limit.
@@ -360,6 +364,8 @@ pub struct SeriesRecipeV1 {
     pub terms_id: IdentityV1,
     /// Exact categorical claim-basis identity.
     pub claim_basis_id: IdentityV1,
+    /// Product-owned finite result-domain identity, including failure outcome.
+    pub result_domain_id: IdentityV1,
     /// Capacity-profile identity.
     pub capacity_profile_id: IdentityV1,
     /// Product compiler release identity.
@@ -474,10 +480,11 @@ impl SeriesRecipeV1 {
             capability_derivation_release_id: IdentityV1::decode_at(bytes, 336)?,
             market_derivation_release_id: IdentityV1::decode_at(bytes, 368)?,
             capitalization_schedule_id: IdentityV1::decode_at(bytes, 400)?,
-            first_occurrence_time: read_i64(bytes, 432)?,
-            cadence_seconds: read_u64(bytes, 440)?,
-            occurrence_count: read_u64(bytes, 448)?,
-            first_generation: read_u64(bytes, 456)?,
+            result_domain_id: IdentityV1::decode_at(bytes, 432)?,
+            first_occurrence_time: read_i64(bytes, 464)?,
+            cadence_seconds: read_u64(bytes, 472)?,
+            occurrence_count: read_u64(bytes, 480)?,
+            first_generation: read_u64(bytes, 488)?,
             outcome_count: read_u16(bytes, 10)?,
         };
         value.validate()?;
@@ -503,15 +510,18 @@ impl SeriesRecipeV1 {
             self.capability_derivation_release_id,
             self.market_derivation_release_id,
             self.capitalization_schedule_id,
+            self.result_domain_id,
         ];
-        let offsets = [16, 48, 80, 112, 144, 176, 208, 240, 272, 304, 336, 368, 400];
+        let offsets = [
+            16, 48, 80, 112, 144, 176, 208, 240, 272, 304, 336, 368, 400, 432,
+        ];
         for (identity, offset) in identities.iter().zip(offsets.iter()) {
             put(&mut output, *offset, &identity.to_bytes());
         }
-        put(&mut output, 432, &self.first_occurrence_time.to_le_bytes());
-        put(&mut output, 440, &self.cadence_seconds.to_le_bytes());
-        put(&mut output, 448, &self.occurrence_count.to_le_bytes());
-        put(&mut output, 456, &self.first_generation.to_le_bytes());
+        put(&mut output, 464, &self.first_occurrence_time.to_le_bytes());
+        put(&mut output, 472, &self.cadence_seconds.to_le_bytes());
+        put(&mut output, 480, &self.occurrence_count.to_le_bytes());
+        put(&mut output, 488, &self.first_generation.to_le_bytes());
         output
     }
 }
@@ -675,20 +685,20 @@ pub fn derive_occurrence_v1(
     put(&mut occurrence, 116, &1u32.to_le_bytes());
     let occurrence_id = content_identity(&occurrence)?;
 
-    // Canonical dclutch-product-contract InstanceV1 bytes.
-    let mut product = [0u8; PRODUCT_INSTANCE_BYTES_V1];
-    put(&mut product, 0, b"DCLTINS1");
-    put(&mut product, 8, &1u16.to_le_bytes());
-    put(&mut product, 16, &recipe.terms_id.to_bytes());
-    put(&mut product, 48, &occurrence_id.to_bytes());
-    put(&mut product, 80, &recipe.claim_basis_id.to_bytes());
-    put(&mut product, 112, &recipe.capacity_profile_id.to_bytes());
-    put(
-        &mut product,
-        144,
-        &u32::from(recipe.outcome_count).to_le_bytes(),
-    );
-    let product_instance_id = content_identity(&product)?;
+    // The Product contract is the sole owner of the instance preimage. Series
+    // supplies only authenticated recipe/occurrence facts to its constructor.
+    let product = InstanceV1::new(InstanceV1Input {
+        terms_id: product_content_id(recipe.terms_id)?,
+        occurrence_id: product_content_id(occurrence_id)?,
+        claim_basis_id: product_content_id(recipe.claim_basis_id)?,
+        result_domain_id: product_content_id(recipe.result_domain_id)?,
+        capacity_profile_id: CapacityProfileId::new(product_content_id(
+            recipe.capacity_profile_id,
+        )?),
+        partition_cell_count: u32::from(recipe.outcome_count),
+    })
+    .map_err(|_| Error::DerivationMismatch)?;
+    let product_instance_id = content_identity(&product.to_bytes())?;
 
     let source_spec_id = recipe.source_schedule_id;
     let source_window_id = recipe.source_schedule_id;
@@ -727,6 +737,10 @@ pub fn derive_occurrence_v1(
 pub fn content_identity(bytes: &[u8]) -> Result<IdentityV1> {
     let digest: [u8; 32] = Sha256::digest(bytes).into();
     IdentityV1::new(digest)
+}
+
+fn product_content_id(identity: IdentityV1) -> Result<ContentId> {
+    ContentId::new(identity.to_bytes()).map_err(|_| Error::DerivationMismatch)
 }
 
 /// Immutable aggregate proving how much finite Series principal exists now.
