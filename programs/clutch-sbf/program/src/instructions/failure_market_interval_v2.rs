@@ -252,6 +252,26 @@ impl AuthenticatedFailureMarketRecoveryQuoteV3 {
     }
 }
 
+impl crate::instructions::product_failure_begin_v3_current::AuthenticatedProductFailureBeginQuoteV3
+    for AuthenticatedFailureMarketRecoveryQuoteV3
+{
+    fn authenticate_product_failure_begin_quote_v3(
+        &self,
+        expected_quote_schedule_id: ProductContentId,
+        expected_attempt_count: u8,
+        attempt_index: u8,
+        source_repair_generation: u64,
+    ) -> Outcome<ProductContentId> {
+        let schedule = self.receipt.schedule();
+        require(
+            expected_quote_schedule_id.bytes() == self.receipt.facts().quote_schedule_id.bytes()
+                && expected_attempt_count == schedule.attempt_count,
+            ClutchError::MismatchedState,
+        )?;
+        self.attempt_authorization_id(attempt_index, source_repair_generation)
+    }
+}
+
 impl AuthenticatedFailureMarketRecoveryQuoteV1 for ProductFailureMarketRecoveryQuoteAuthorityV1 {
     fn authenticate_failure_market_recovery_quote(
         &self,
