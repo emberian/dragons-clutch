@@ -482,7 +482,7 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
 /// Counted exact-index General V2 settlement-root successor version.
 pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 /// Exact fixed width of the counted exact-index settlement-root successor.
-pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_196;
+pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_228;
 /// Product shared Market lifecycle root discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
 /// First Product shared Market lifecycle-root version.
@@ -604,7 +604,7 @@ const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
 const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION == 2);
-const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_196);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_228);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);

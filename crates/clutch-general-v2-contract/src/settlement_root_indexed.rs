@@ -23,11 +23,11 @@ pub const INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 pub const INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1: u8 = 2;
 /// Exact active successor width.
 pub const INDEXED_SETTLEMENT_ROOT_BYTES_V1: usize =
-    16 + SETTLEMENT_ROOT_ACCOUNT_BYTES + (6 * 32) + 8;
+    16 + SETTLEMENT_ROOT_ACCOUNT_BYTES + (7 * 32) + 8;
 const INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1: usize = 16;
 const INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1: usize =
     INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1 + SETTLEMENT_ROOT_ACCOUNT_BYTES;
-const INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1: usize = (6 * 32) + 8;
+const INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1: usize = (7 * 32) + 8;
 /// Account-key-bound data identity domain for the complete successor bytes.
 pub const INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/indexed-settlement-root-data/v1\0";
@@ -42,7 +42,7 @@ pub const CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1: &[u8] =
     b"general-exact-adjacency:v1";
 
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
-const _: () = assert!(INDEXED_SETTLEMENT_ROOT_BYTES_V1 == 1_196);
+const _: () = assert!(INDEXED_SETTLEMENT_ROOT_BYTES_V1 == 1_228);
 const _: () = assert!(
     INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1 + INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1
         == INDEXED_SETTLEMENT_ROOT_BYTES_V1
@@ -137,7 +137,7 @@ impl CandidateOrderSliceIndexSeedTupleV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum IndexedSettlementRootRentModeV1 {
-    /// Action 39 allocates the 1,196-byte successor directly.
+    /// Action 39 allocates the 1,228-byte successor directly.
     Fresh = 1,
     /// A 980-byte V1 root is atomically reallocated in place.
     Upgrade = 2,
@@ -195,7 +195,7 @@ impl IndexedSettlementRootRentPreparationV1 {
         self.data_len_before
     }
 
-    /// Exact successor width, always 1,196 bytes.
+    /// Exact successor width, always 1,228 bytes.
     pub const fn data_len_after(&self) -> usize {
         INDEXED_SETTLEMENT_ROOT_BYTES_V1
     }
@@ -324,6 +324,7 @@ impl AuthenticatedIndexedSettlementRootRentV1<'_> {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
         backend: &B,
         output: &mut [u8],
@@ -343,6 +344,7 @@ impl AuthenticatedIndexedSettlementRootRentV1<'_> {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             backend,
             self.preparation.root_account,
@@ -358,7 +360,7 @@ const _: () = assert!(
     core::mem::size_of::<AuthenticatedIndexedSettlementRootRentV1<'static>>() <= 352
 );
 
-/// Prepare a direct 1,196-byte allocation without a prefund discount.
+/// Prepare a direct 1,228-byte allocation without a prefund discount.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_fresh_indexed_settlement_root_rent_v1<B: Sha256BackendV1>(
     base: &SettlementRootV1AccountV1,
@@ -403,7 +405,7 @@ pub fn prepare_fresh_indexed_settlement_root_rent_v1<B: Sha256BackendV1>(
     )
 }
 
-/// Prepare an exact in-place 980-to-1,196-byte root upgrade.
+/// Prepare an exact in-place 980-to-1,228-byte root upgrade.
 ///
 /// Hostile prefunding never discounts principal. The persisted V1 payer funds
 /// the entire minimum increase; every pre-existing nonprincipal lamport becomes
@@ -631,6 +633,7 @@ pub struct IndexedSettlementRootV1AccountV1 {
     plane_id: Id32,
     locator_data_id: Id32,
     adjacency_data_id: Id32,
+    selected_feed_data_id: Id32,
     capability_profile_id: Id32,
     counts: ExactIndexChildCountsV1,
     state: ExactIndexChildrenStateV1,
@@ -644,6 +647,7 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
     plane_id: Id32,
     locator_data_id: Id32,
     adjacency_data_id: Id32,
+    selected_feed_data_id: Id32,
 }
 
 impl IndexedSettlementRootTerminalProjectionV1 {
@@ -671,48 +675,23 @@ impl IndexedSettlementRootTerminalProjectionV1 {
     pub const fn adjacency_data_id(&self) -> Id32 {
         self.adjacency_data_id
     }
+
+    /// Exact retained Feed body authenticated before index retirement.
+    pub const fn selected_feed_data_id(&self) -> Id32 {
+        self.selected_feed_data_id
+    }
 }
 
 impl IndexedSettlementRootV1AccountV1 {
     /// Exact last frontier at which the retained Feed is still readable but
     /// every other base child liability has already been discharged.
     fn at_pre_feed_terminal_frontier(base: &SettlementRootV1AccountV1) -> bool {
-        let counts = base.counts();
-        let Some(expected_unfilled) = counts
-            .expected_reservations
-            .checked_sub(counts.expected_filled_reservations)
-        else {
-            return false;
-        };
-        base.phase() == SettlementRootPhaseV1::Retiring
-            && counts.admitted_receipts == counts.expected_receipts
-            && counts.live_receipts == 0
-            && counts.admitted_owner_rows == counts.expected_owner_rows
-            && counts.live_owner_rows == 0
-            && counts.admitted_reservations == counts.expected_filled_reservations
-            && counts.live_reservations == 0
-            && counts.released_unfilled_reservations == expected_unfilled
-            && counts.completed_owner_finalizations == counts.expected_owner_rows
-            && counts.live_fee_finalizations == 0
-            && counts.admitted_dealer_children == counts.expected_dealer_children
-            && counts.live_dealer_children == 0
-            && counts.admitted_merge_payments == counts.expected_merge_payments
-            && counts.completed_merge_payments == counts.expected_merge_payments
-            && base.cash_pot_state() == SettlementRootChildStateV1::Retired
-            && matches!(
-                base.final_pot_state(),
-                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
-            )
-            && base.retained_feed_state() == SettlementRootChildStateV1::Live
-            && matches!(
-                base.fee_record_state(),
-                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
-            )
+        base.at_retained_feed_retirement_frontier()
     }
 
     /// Atomically introduce a live, already-admitted exact sibling pair.
     ///
-    /// The runtime must have derived all six identities from the complete V5
+    /// The runtime must have derived all seven identities from the complete V5
     /// page/CandidateFeed traversal and exact account bodies in the same
     /// rollback domain. No partially admitted persisted state is representable.
     #[allow(clippy::too_many_arguments)]
@@ -723,6 +702,7 @@ impl IndexedSettlementRootV1AccountV1 {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
     ) -> Result<Self, CodecError> {
         if base.phase() != SettlementRootPhaseV1::Materializing {
@@ -736,6 +716,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             counts,
             ExactIndexChildrenStateV1::Live,
@@ -747,6 +728,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             counts,
             state: ExactIndexChildrenStateV1::Live,
@@ -793,6 +775,11 @@ impl IndexedSettlementRootV1AccountV1 {
         self.adjacency_data_id
     }
 
+    /// Full exact retained-Feed byte identity needed after index retirement.
+    pub const fn selected_feed_data_id(&self) -> Id32 {
+        self.selected_feed_data_id
+    }
+
     /// Exact Genesis-selected ordered capability profile.
     pub const fn capability_profile_id(&self) -> Id32 {
         self.capability_profile_id
@@ -814,7 +801,7 @@ impl IndexedSettlementRootV1AccountV1 {
             && self.state == ExactIndexChildrenStateV1::Retired
     }
 
-    /// Validate the base root, six identities, exact count partition, and phase join.
+    /// Validate the base root, seven identities, exact count partition, and phase join.
     pub fn validate(&self) -> Result<(), CodecError> {
         Self::validate_components(
             &self.base,
@@ -823,6 +810,7 @@ impl IndexedSettlementRootV1AccountV1 {
             self.plane_id,
             self.locator_data_id,
             self.adjacency_data_id,
+            self.selected_feed_data_id,
             self.capability_profile_id,
             self.counts,
             self.state,
@@ -837,6 +825,7 @@ impl IndexedSettlementRootV1AccountV1 {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
         counts: ExactIndexChildCountsV1,
         state: ExactIndexChildrenStateV1,
@@ -848,6 +837,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
         ];
         if identities.iter().any(|identity| identity.is_zero()) {
@@ -1020,10 +1010,61 @@ impl IndexedSettlementRootV1AccountV1 {
         Ok(value)
     }
 
+    /// Retire the already-authenticated retained Feed and finish the base root.
+    ///
+    /// This succeeds only after both exact-index siblings are retired. The SBF
+    /// composer must close the same full-body-authenticated Feed and write this
+    /// successor atomically; this structural transition is not close authority.
+    pub fn retire_feed_and_finish(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.state != ExactIndexChildrenStateV1::Retired {
+            return Err(CodecError::InvalidState);
+        }
+        let base = self.base.retire_retained_feed_and_finish()?;
+        let value = Self { base, ..*self };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Stream the exact post-Feed terminal successor and its account-bound ID.
+    ///
+    /// This avoids constructing a second indexed-root-sized value in the SBF
+    /// composer. Feed account authentication, close credits, and the root write
+    /// must still be composed atomically by the runtime adapter.
+    pub fn encode_retire_feed_and_finish_and_data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        root_account: Id32,
+        output: &mut [u8],
+    ) -> Result<Id32, CodecError> {
+        self.validate()?;
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if self.state != ExactIndexChildrenStateV1::Retired {
+            return Err(CodecError::InvalidState);
+        }
+        let base = self.base.retire_retained_feed_and_finish()?;
+        Self::encode_components(
+            &base,
+            self.locator_account,
+            self.adjacency_account,
+            self.plane_id,
+            self.locator_data_id,
+            self.adjacency_data_id,
+            self.selected_feed_data_id,
+            self.capability_profile_id,
+            self.counts,
+            self.state,
+            output,
+        )?;
+        Self::encoded_data_id(backend, root_account, output)
+    }
+
     /// Stream one canonical live successor directly into account memory.
     ///
     /// This is byte-for-byte identical to `new_live(...).encode(...)` without
-    /// materializing either the 1,196-byte wrapper or a 980-byte base scratch
+    /// materializing either the 1,228-byte wrapper or a 980-byte base scratch
     /// array in the caller's frame.
     #[allow(clippy::too_many_arguments)]
     pub fn encode_new_live_into(
@@ -1033,6 +1074,7 @@ impl IndexedSettlementRootV1AccountV1 {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
         output: &mut [u8],
     ) -> Result<(), CodecError> {
@@ -1047,6 +1089,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             counts,
             ExactIndexChildrenStateV1::Live,
@@ -1058,6 +1101,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             counts,
             ExactIndexChildrenStateV1::Live,
@@ -1077,6 +1121,7 @@ impl IndexedSettlementRootV1AccountV1 {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
         backend: &B,
         root_account: Id32,
@@ -1092,6 +1137,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             output,
         )?;
@@ -1126,6 +1172,7 @@ impl IndexedSettlementRootV1AccountV1 {
             self.plane_id,
             self.locator_data_id,
             self.adjacency_data_id,
+            self.selected_feed_data_id,
             self.capability_profile_id,
             self.counts,
             self.state,
@@ -1141,6 +1188,7 @@ impl IndexedSettlementRootV1AccountV1 {
         plane_id: Id32,
         locator_data_id: Id32,
         adjacency_data_id: Id32,
+        selected_feed_data_id: Id32,
         capability_profile_id: Id32,
         counts: ExactIndexChildCountsV1,
         state: ExactIndexChildrenStateV1,
@@ -1176,6 +1224,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
         ] {
             writer.bytes(&identity.bytes())?;
@@ -1229,6 +1278,7 @@ impl IndexedSettlementRootV1AccountV1 {
         let plane_id = Id32::new(reader.array()?)?;
         let locator_data_id = Id32::new(reader.array()?)?;
         let adjacency_data_id = Id32::new(reader.array()?)?;
+        let selected_feed_data_id = Id32::new(reader.array()?)?;
         let capability_profile_id = Id32::new(reader.array()?)?;
         let counts = ExactIndexChildCountsV1 {
             expected: reader.u8()?,
@@ -1247,6 +1297,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id,
             locator_data_id,
             adjacency_data_id,
+            selected_feed_data_id,
             capability_profile_id,
             counts,
             state,
@@ -1286,6 +1337,7 @@ impl IndexedSettlementRootV1AccountV1 {
             plane_id: self.plane_id,
             locator_data_id: self.locator_data_id,
             adjacency_data_id: self.adjacency_data_id,
+            selected_feed_data_id: self.selected_feed_data_id,
         })
     }
 }
@@ -1320,6 +1372,7 @@ mod tests {
             id(24),
             id(25),
             id(26),
+            id(27),
         )
         .unwrap()
     }
@@ -1397,6 +1450,7 @@ mod tests {
             indexed.plane_id(),
             indexed.locator_data_id(),
             indexed.adjacency_data_id(),
+            indexed.selected_feed_data_id(),
             indexed.capability_profile_id(),
             &mut streamed,
         )
@@ -1412,6 +1466,7 @@ mod tests {
             indexed.plane_id(),
             indexed.locator_data_id(),
             indexed.adjacency_data_id(),
+            indexed.selected_feed_data_id(),
             indexed.capability_profile_id(),
             &Sha2Backend,
             root_account,
@@ -1432,6 +1487,7 @@ mod tests {
                 indexed.plane_id(),
                 indexed.locator_data_id(),
                 indexed.adjacency_data_id(),
+                indexed.selected_feed_data_id(),
                 indexed.capability_profile_id(),
                 &mut streamed[..INDEXED_SETTLEMENT_ROOT_BYTES_V1 - 1],
             ),
@@ -1446,6 +1502,7 @@ mod tests {
                 indexed.plane_id(),
                 indexed.locator_data_id(),
                 indexed.adjacency_data_id(),
+                indexed.selected_feed_data_id(),
                 indexed.capability_profile_id(),
                 &mut streamed,
             ),
@@ -1460,6 +1517,7 @@ mod tests {
                 indexed.plane_id(),
                 indexed.locator_data_id(),
                 indexed.adjacency_data_id(),
+                indexed.selected_feed_data_id(),
                 indexed.capability_profile_id(),
                 &Sha2Backend,
                 Id32::ZERO,
@@ -1504,6 +1562,7 @@ mod tests {
             id(24),
             id(25),
             id(26),
+            id(27),
         )
         .unwrap();
         let authority = preparation
@@ -1519,6 +1578,7 @@ mod tests {
                 id(24),
                 id(25),
                 id(26),
+                id(27),
                 &Sha2Backend,
                 &mut streamed,
             )
@@ -1584,9 +1644,35 @@ mod tests {
         let retired = frontier.retire_index_children().unwrap();
         assert_eq!(retired.index_state(), ExactIndexChildrenStateV1::Retired);
         retired.validate().unwrap();
-        let mut terminal = retired;
-        terminal.base = crate::settlement_root::tests::terminal_root();
+        let terminal = retired.retire_feed_and_finish().unwrap();
+        assert_eq!(terminal.base(), &crate::settlement_root::tests::terminal_root());
         terminal.validate().unwrap();
+        assert_eq!(terminal.selected_feed_data_id(), retired.selected_feed_data_id());
+        let root_account = id(90);
+        let mut streamed_terminal = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        let streamed_terminal_id = retired
+            .encode_retire_feed_and_finish_and_data_id(
+                &Sha2Backend,
+                root_account,
+                &mut streamed_terminal,
+            )
+            .unwrap();
+        let mut ordinary_terminal = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        terminal.encode(&mut ordinary_terminal).unwrap();
+        assert_eq!(streamed_terminal, ordinary_terminal);
+        assert_eq!(
+            streamed_terminal_id,
+            terminal.data_id(&Sha2Backend, root_account).unwrap(),
+        );
+
+        assert_eq!(
+            frontier.retire_feed_and_finish(),
+            Err(CodecError::InvalidState),
+        );
+        assert_eq!(
+            terminal.retire_feed_and_finish(),
+            Err(CodecError::InvalidState),
+        );
 
         let mut feed_closed_first = live_indexed_root();
         feed_closed_first.base = crate::settlement_root::tests::terminal_root();

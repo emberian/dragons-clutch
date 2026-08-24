@@ -25,9 +25,10 @@ Action 39 authenticates the complete hostile OrderPage V5 set, the sealed
 CandidateFeed V2 body, the owner-blind order stream, and the immutable
 Market/Realm/collateral/Genesis joins once. Its private borrow-bound authority
 retains the exact Feed and page accounts and exposes only bounded reads joined
-to a compact projection. The compact constructor accepts only that authority; no
-payload supplies a locator row, directory, slice reference, count, digest, or
-candidate identity.
+to a compact projection. The SBF composer passes only that private authority
+to the pure trait-based constructor, whose separate noncopyable rent authority
+gates persistent indexed-root creation. No payload supplies a locator row,
+directory, slice reference, count, digest, or candidate identity.
 
 Construction writes directly into caller-owned account buffers. For every
 dense live order it derives one unique physical page location. Tombstones are
@@ -54,7 +55,7 @@ the updated rent compartment, balances, and its exact projector transcript; it
 does not carry two 980-byte Root values. Authentication consumes the
 preparation, joins one borrowed source Root, and mints a noncopyable authority
 consumed by the builder. The builder borrows its construction input, streams
-the 1,196-byte indexed root directly into caller-owned account memory, and
+the 1,228-byte indexed root directly into caller-owned account memory, and
 hashes that encoded buffer without constructing an indexed-root value or a
 second base scratch array. The disabled action-39 composer preauthenticates the
 single payer's aggregate principal for the root, both compact children, and
@@ -110,7 +111,7 @@ strict:
    compact children;
 3. a separately authenticated transition retires the Feed and promotes the
    base root to `Terminal`; and
-4. the 1,196-byte indexed root returns its exact principal and sends all
+4. the 1,228-byte indexed root returns its exact principal and sends all
    nonprincipal lamports to the neutral sink.
 
 Closing the Feed first, presenting a replacement Feed body, partially closing
@@ -119,9 +120,11 @@ the promoted path.
 
 The historical 980-byte root cannot count the two children. The reserved
 `IndexedSettlementRootV1AccountV1` successor uses `0xa9/2` at the unchanged
-canonical Root PDA and owns both child accounts, both full body IDs, the plane
-and capability-profile identities, and an exhaustive two-live/two-retired
-partition. The fresh path funds the full 1,196-byte root principal plus both
+canonical Root PDA and owns both child accounts, both child full body IDs, the
+selected Feed full body ID, the plane and capability-profile identities, and
+an exhaustive two-live/two-retired partition. Persisting the Feed ID in the
+root lets the post-index retirement step reject a replacement Feed after the
+children have closed. The fresh path funds the full 1,228-byte root principal plus both
 compact child principals in the same rollback domain. The pure contract also
 defines exact in-place-upgrade rent equations, but no generic caller-shaped SBF
 upgrade writer is exposed.
