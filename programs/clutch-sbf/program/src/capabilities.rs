@@ -285,17 +285,27 @@ const _: () = assert!(
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///
-/// Failure actions 10 through 13 have complete current session creation,
-/// advance, resolution, and archive handlers. Other target tuples remain
-/// absent until their current authority tranche is integrated. In particular,
-/// Source actions 1 through 12 stay gated until Product consumes the private
-/// whole-lifecycle funding-custody retirement transition.
+/// Failure actions 10 through 13 and the complete Fractional family have
+/// current handlers joined to their persisted semantic owners. Other target
+/// tuples remain absent until their current authority tranche is integrated.
+/// In particular, Source actions 1 through 12 stay gated until Product
+/// consumes the private whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (78, 1, 10),
     (78, 1, 11),
     (78, 1, 12),
     (78, 1, 13),
+    (79, 1, 1),
+    (79, 1, 2),
+    (79, 1, 3),
+    (79, 1, 4),
+    (79, 1, 5),
+    (79, 1, 6),
+    (79, 1, 7),
+    (79, 1, 8),
+    (79, 1, 9),
+    (79, 1, 10),
 ];
 
 /// Exact extension actions executable by other products.
@@ -578,9 +588,9 @@ mod tests {
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
                     let successor_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
-                        && family_tag == 78
                         && family_version == 1
-                        && matches!(local_action, 10..=13);
+                        && ((family_tag == 78 && matches!(local_action, 10..=13))
+                            || (family_tag == 79 && matches!(local_action, 1..=10)));
                     let expected_enabled = dealer_enabled
                         || general_enabled
                         || source_runtime_enabled
