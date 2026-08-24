@@ -384,6 +384,7 @@ pub(crate) struct AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
     verified: VerifiedFractionalFamilyAdmissionPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
     resolution_account: Identity32V1,
+    resolution_semantic_id: Identity32V1,
     resolution_data_id: Identity32V1,
     native_claim_basis_id: Identity32V1,
     authentication_id: Identity32V1,
@@ -412,8 +413,8 @@ fn product_content_id(identity: Identity32V1) -> ContentId {
 }
 
 fn require_product_admission_identity_tuple(
-    expected: [ContentId; 7],
-    presented: [ContentId; 7],
+    expected: [ContentId; 8],
+    presented: [ContentId; 8],
 ) -> Outcome<()> {
     require(expected == presented, ClutchError::MismatchedState)
 }
@@ -445,6 +446,10 @@ impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmis
         Ok(product_content_id(self.resolution_account))
     }
 
+    fn resolution_semantic_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.resolution_semantic_id))
+    }
+
     fn resolution_data_id(&self) -> Outcome<ContentId> {
         Ok(product_content_id(self.resolution_data_id))
     }
@@ -462,6 +467,7 @@ impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmis
         runtime_release_id: ContentId,
         capability_profile_id: ContentId,
         resolution_account: ContentId,
+        resolution_semantic_id: ContentId,
         resolution_data_id: ContentId,
         native_claim_basis_id: ContentId,
     ) -> Outcome<()> {
@@ -472,6 +478,7 @@ impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmis
                 product_content_id(self.runtime_release.release_id()),
                 self.runtime_release.capability_profile_id(),
                 product_content_id(self.resolution_account),
+                product_content_id(self.resolution_semantic_id),
                 product_content_id(self.resolution_data_id),
                 product_content_id(self.native_claim_basis_id),
             ],
@@ -481,6 +488,7 @@ impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmis
                 runtime_release_id,
                 capability_profile_id,
                 resolution_account,
+                resolution_semantic_id,
                 resolution_data_id,
                 native_claim_basis_id,
             ],
@@ -502,6 +510,7 @@ impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmis
 pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     program_id: &Pubkey,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    resolution_semantic_id: Identity32V1,
     plan: FractionalInitializationPlanV1,
     policy_account: &AccountInfo<'_>,
     ledger_account: &AccountInfo<'_>,
@@ -509,6 +518,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
 ) -> Outcome<AuthenticatedFractionalFamilyAdmissionPostwriteV1> {
     require(
         runtime_release.action == FractionalRedemptionActionV1::Initialize
+            && resolution_semantic_id.bytes() != [0; 32]
             && policy_account.key != ledger_account.key
             && policy_account.key != claim_ledger_account.key
             && ledger_account.key != claim_ledger_account.key,
@@ -599,6 +609,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
             FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
             program_id.as_ref(),
             &runtime_release.authentication_id.bytes(),
+            &resolution_semantic_id.bytes(),
             &verified.verification_id().bytes(),
             policy_account.key.as_ref(),
             &policy_data_id,
@@ -614,6 +625,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
         verified,
         runtime_release,
         resolution_account,
+        resolution_semantic_id,
         resolution_data_id,
         native_claim_basis_id,
         authentication_id,
@@ -1253,6 +1265,7 @@ mod loader_alias_tests {
             ContentId::from_bytes([5; 32]),
             ContentId::from_bytes([6; 32]),
             ContentId::from_bytes([7; 32]),
+            ContentId::from_bytes([8; 32]),
         ];
         assert!(require_product_admission_identity_tuple(expected, expected).is_ok());
         for index in 0..expected.len() {

@@ -574,6 +574,8 @@ pub(super) fn process_initialize(
     let postwrite = authenticate_fractional_family_admission_postwrite_v1(
         program_id,
         runtime_release,
+        Identity32V1::new(resolution.semantic_id.bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         plan,
         &accounts[POLICY],
         &accounts[LEDGER],
