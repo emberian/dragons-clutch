@@ -24,6 +24,7 @@ mod compiler_output_v2;
 mod compiler_output_v3;
 mod compiler_output_v4;
 mod compiler_output_v5;
+mod direct_global_liveness;
 mod foundation_funding;
 mod funding;
 mod funding_state;
@@ -77,6 +78,16 @@ pub use compiler_output_v5::{
     assemble_compiled_product_series_bundle_v5, CompiledProductSeriesBundleV5,
     ProductSeriesBundleInputsV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
+};
+pub use direct_global_liveness::{
+    DirectGlobalLivenessAllocationV1, DirectGlobalLivenessCapitalizationV1,
+    DirectGlobalLivenessPhaseV1, DirectGlobalLivenessTerminalAccountingV1,
+    DirectGlobalLivenessTerminalProjectionV1, DirectGlobalLivenessV1,
+    ProductDirectGlobalLivenessAuthorityV1, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1, DIRECT_GLOBAL_LIVENESS_BYTES_V1,
+    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_COUNT_V1, DIRECT_GLOBAL_LIVENESS_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V1,
 };
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
