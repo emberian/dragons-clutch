@@ -37,6 +37,7 @@ mod funding_state_v2;
 mod failure_begin_schedule;
 mod funding_state_v3;
 mod funding_state_v4;
+mod funding_state_v5;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_family_capability;
@@ -190,6 +191,18 @@ pub use funding_state_v4::{
     SERIES_FUNDING_COMPLETION_BINDING_V4_DOMAIN,
     SERIES_FUNDING_RESERVATION_BINDING_V4_DOMAIN, SERIES_FUNDING_STATE_BYTES_V4,
     SERIES_FUNDING_STATE_V4_DOMAIN, SERIES_FUNDING_TERMINAL_PROJECTION_V4_DOMAIN,
+};
+pub use funding_state_v5::{
+    AuthenticatedSeriesFundingAuthorityV5, SeriesComponentCapitalV5,
+    SeriesFundingAbortBindingV5, SeriesFundingAbortDispositionV5,
+    SeriesFundingCompletionAuthorizationV5, SeriesFundingCompletionBindingV5,
+    SeriesFundingPhaseV5, SeriesFundingReservationBindingV5, SeriesFundingStateV5,
+    SeriesFundingTerminalProjectionV5, SERIES_COMPONENT_CAPITAL_BYTES_V5,
+    SERIES_FUNDING_ABORT_BINDING_V5_DOMAIN,
+    SERIES_FUNDING_COMPLETION_AUTHORIZATION_V5_DOMAIN,
+    SERIES_FUNDING_COMPLETION_BINDING_V5_DOMAIN,
+    SERIES_FUNDING_RESERVATION_BINDING_V5_DOMAIN, SERIES_FUNDING_STATE_BYTES_V5,
+    SERIES_FUNDING_STATE_V5_DOMAIN, SERIES_FUNDING_TERMINAL_PROJECTION_V5_DOMAIN,
 };
 pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
@@ -493,23 +506,43 @@ typed_id!(
 );
 typed_id!(
     SeriesFundingStateV4Id,
-    "Typed semantic identity of one current acyclic `SeriesFundingStateV4`."
+    "Typed semantic identity of one historical QuoteV5-bound `SeriesFundingStateV4`."
+);
+typed_id!(
+    SeriesFundingStateV5Id,
+    "Typed semantic identity of the current QuoteV6-bound `SeriesFundingStateV5`."
 );
 typed_id!(
     SeriesFundingReservationBindingV4Id,
     "Typed identity of one acyclic current pre-Source funding reservation."
 );
 typed_id!(
+    SeriesFundingReservationBindingV5Id,
+    "Typed identity of one current V5 acyclic pre-Source funding reservation."
+);
+typed_id!(
     SeriesFundingCompletionAuthorizationV4Id,
     "Typed identity of one acyclic current pre-Replay funding completion authorization."
+);
+typed_id!(
+    SeriesFundingCompletionAuthorizationV5Id,
+    "Typed identity of one current V5 pre-Replay funding completion authorization."
 );
 typed_id!(
     SeriesFundingCompletionBindingV4Id,
     "Typed identity of one current Source/Root/Link/replay completion join."
 );
 typed_id!(
+    SeriesFundingCompletionBindingV5Id,
+    "Typed identity of one current V5 Source/RootV3/LinkV3/replay completion join."
+);
+typed_id!(
     SeriesFundingAbortBindingV4Id,
     "Typed identity of one current Source-absent or Source-retired funding abort."
+);
+typed_id!(
+    SeriesFundingAbortBindingV5Id,
+    "Typed identity of one current V5 Source-absent or Source-retired funding abort."
 );
 typed_id!(
     SeriesAttachmentPlanV4Id,
