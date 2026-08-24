@@ -592,8 +592,8 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         archive_plan.cell_plan(),
         archive_plan.reset(),
         link_binding.source_occurrence_id,
-        source_failure_receipt,
-        source_terminal,
+        Some(source_failure_receipt),
+        Some(source_terminal),
         release_preauthorization.id(),
         archive_release_disposition,
     )?;

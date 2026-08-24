@@ -14,15 +14,17 @@ use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
     CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV5,
-    CompiledProductSeriesBundleV6, ContentId,
+    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV7, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketFamilyCapabilityPolicyV1,
     MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
     ProductTemplateV4, RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryCapabilityProjectionV2,
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
-    SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesFundingQuoteV1,
+    SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesAttachmentPlanV6,
+    SeriesFundingQuoteV1,
     SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingQuoteV5,
+    SeriesFundingQuoteV6,
     SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
@@ -94,6 +96,9 @@ product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
 product_artifact_type!(SeriesFundingQuoteV5, SeriesFundingQuoteV5);
 product_artifact_type!(SeriesAttachmentPlanV5, SeriesAttachmentPlanV5);
 product_artifact_type!(CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6);
+product_artifact_type!(SeriesFundingQuoteV6, SeriesFundingQuoteV6);
+product_artifact_type!(SeriesAttachmentPlanV6, SeriesAttachmentPlanV6);
+product_artifact_type!(CompiledProductSeriesBundleV7, CompiledProductSeriesBundleV7);
 product_artifact_type!(MarketFamilyCapabilityPolicyV1, MarketFamilyCapabilityPolicyV1);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
