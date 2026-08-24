@@ -31,6 +31,7 @@ pub const DIRECT_MARKET_BINDING_BODY_BYTES_V2: usize = 2_245;
 pub struct AuthenticatedDirectRootTransitionV2 {
     projected_root: DirectMarketRootV1,
     fee_policy: crate::fee_v2::DirectFeePolicyV2,
+    current_general: DirectCurrentGeneralAuthorityV2,
     terminal_product_ids: [[u8; 32]; 7],
     binding_semantic_id: [u8; 32],
     binding_body_id: [u8; 32],
@@ -137,6 +138,12 @@ impl AuthenticatedDirectRootTransitionV2 {
     pub const fn root_semantic_id(&self) -> [u8; 32] { self.root_semantic_id }
     pub const fn fee_policy(&self) -> crate::fee_v2::DirectFeePolicyV2 {
         self.fee_policy
+    }
+    /// Complete current General V4/Revenue coordinates hostile-decoded from
+    /// b1/v2. This is a borrowed projection of the authenticated root body,
+    /// not a second persisted authority or a caller-shaped facts DTO.
+    pub const fn current_general(&self) -> &DirectCurrentGeneralAuthorityV2 {
+        &self.current_general
     }
     pub(crate) const fn terminal_product_id(&self, index: usize) -> [u8; 32] {
         self.terminal_product_ids[index]
@@ -417,7 +424,6 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         product.direct_work_quote_id,
     ];
     drop(product);
-    drop(general);
     let schedule = read_schedule(&mut reader)?;
     let root_rent = read_rent(&mut reader)?;
     let phase = decode_root_phase(reader.u8()?)?;
@@ -465,6 +471,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
     Ok(AuthenticatedDirectRootTransitionV2 {
         projected_root,
         fee_policy,
+        current_general: general,
         terminal_product_ids,
         binding_semantic_id,
         binding_body_id,

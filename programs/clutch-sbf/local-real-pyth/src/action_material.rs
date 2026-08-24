@@ -592,11 +592,15 @@ pub fn construct_direct_action_material_v1(
         DirectMarketAction::SubmitCandidate
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
+            | DirectMarketAction::SettlePair
+            | DirectMarketAction::LapseEmpty
+            | DirectMarketAction::LapseUnselected
+            | DirectMarketAction::LapseSelected
     ) {
-        // These actions consume current b1/v2+b2+b3 and, for verification,
-        // the shared Candidate compartment. Their payloads, refund suffix,
-        // liveness payer, and postimages are derived only by the hostile-chain
-        // constructor in `direct_candidate_material`; this older caller-shaped
+        // These actions consume current b1/v2+b2+b3 and exact descendants.
+        // Their deadlines, terminal reason, RevenuePolicyV2 suffix, refund
+        // owners, liveness payer, and postimages are derived only by the
+        // action-specific hostile-chain constructors. This older caller-shaped
         // account grammar is intentionally withdrawn for those coordinates.
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
@@ -731,6 +735,10 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
         DirectMarketAction::SubmitCandidate
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
+            | DirectMarketAction::SettlePair
+            | DirectMarketAction::LapseEmpty
+            | DirectMarketAction::LapseUnselected
+            | DirectMarketAction::LapseSelected
     ) || payload.action() != action
         || sequence == 0
         || release.program_id != manifest.clutch.program_id

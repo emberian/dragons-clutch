@@ -163,16 +163,16 @@ impl DirectCandidateActionMaterialV1 {
 }
 
 #[derive(Debug)]
-struct DecodedDirectSnapshotV1 {
-    root_bump: u8,
-    replay_bump: u8,
-    selection_bump: u8,
-    state: DirectRootReplayTransitionV2,
-    selection: clutch_direct_market_runtime::selection_v1::DirectSelectionV1,
+pub(crate) struct DecodedDirectSnapshotV1 {
+    pub(crate) root_bump: u8,
+    pub(crate) replay_bump: u8,
+    pub(crate) selection_bump: u8,
+    pub(crate) state: DirectRootReplayTransitionV2,
+    pub(crate) selection: clutch_direct_market_runtime::selection_v1::DirectSelectionV1,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct OperatorSha256V1;
+pub(crate) struct OperatorSha256V1;
 
 impl DirectHashBackendV1 for OperatorSha256V1 {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
@@ -181,6 +181,18 @@ impl DirectHashBackendV1 for OperatorSha256V1 {
             hash.update(part);
         }
         hash.finalize().into()
+    }
+}
+
+impl clutch_retirement::PositionV3Sha256Backend for OperatorSha256V1 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        DirectHashBackendV1::sha256_parts(self, &[domain, body])
+    }
+}
+
+impl clutch_retirement::ReplayV3HashBackend for OperatorSha256V1 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        DirectHashBackendV1::sha256_parts(self, parts)
     }
 }
 
@@ -564,7 +576,7 @@ pub fn construct_next_direct_candidate_verification_v1(
     })
 }
 
-fn decode_direct_state(
+pub(crate) fn decode_direct_state(
     release: &IndexedProgramRelease,
     root_account: &ObservedRpcAccount,
     replay_account: &ObservedRpcAccount,
@@ -971,7 +983,7 @@ fn require_selection_balance(
     }
 }
 
-fn require_rent(
+pub(crate) fn require_rent(
     rent: clutch_direct_market_runtime::DirectRentOwnerV1,
     observed: u64,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
@@ -1014,7 +1026,7 @@ fn require_submission_aliases(
     Ok(())
 }
 
-fn authenticate_snapshot_set(
+pub(crate) fn authenticate_snapshot_set(
     release: &IndexedProgramRelease,
     freshness: ActionFreshnessBoundaryV1,
     accounts: &[&ObservedRpcAccount],
@@ -1100,7 +1112,9 @@ fn require_system_program(
     Ok(())
 }
 
-fn decode_clock(account: &ObservedRpcAccount) -> Result<u64, CanonicalActionMaterialErrorV1> {
+pub(crate) fn decode_clock(
+    account: &ObservedRpcAccount,
+) -> Result<u64, CanonicalActionMaterialErrorV1> {
     let expected = Address::from_str("SysvarC1ock11111111111111111111111111111111")
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let sysvar_owner = Address::from_str("Sysvar1111111111111111111111111111111111111")
@@ -1128,7 +1142,7 @@ fn exact_candidate_bytes(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)
 }
 
-fn sha256(bytes: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 

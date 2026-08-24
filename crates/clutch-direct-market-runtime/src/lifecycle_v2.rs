@@ -934,6 +934,38 @@ pub struct DirectEconomicTerminalPlanV2 {
     pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
+/// Compact, receipt-independent projection of the exact retained-candidate
+/// principal refund vector. The canonical V1 arithmetic remains the sole
+/// vector owner; current operator adapters use this projection only to choose
+/// the required sorted writable account suffix before the terminal receipt is
+/// minted onchain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateBondRefundShapeV2 {
+    pub refunds: [Option<crate::selection_v1::DirectCandidateBondRefundV1>; 3],
+    pub refund_count: u8,
+    pub total_lamports: u64,
+}
+
+/// Derive the exact sorted and coalesced bond-refund suffix through the
+/// already-frozen V1 transition arithmetic. The synthetic receipt input is
+/// discarded and cannot become admissible transition evidence.
+pub fn derive_direct_candidate_bond_refund_shape_v2(
+    state: &DirectRootReplayTransitionV2,
+    selection: DirectSelectionV1,
+) -> Result<Option<DirectCandidateBondRefundShapeV2>, DirectMarketErrorV1> {
+    let projection = state.transition_projection()?;
+    let plan = crate::selection_v1::candidate_bond_refunds_v1(
+        selection,
+        projection.root,
+        state.root().root_semantic_id(),
+    )?;
+    Ok(plan.map(|value| DirectCandidateBondRefundShapeV2 {
+        refunds: value.refunds,
+        refund_count: value.refund_count,
+        total_lamports: value.total_lamports,
+    }))
+}
+
 /// Prepare current action 8's no-candidate branch or action 9..12 under
 /// RevenuePolicyV2-native authority.
 ///

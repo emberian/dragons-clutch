@@ -254,9 +254,10 @@ fn direct_candidate_dependency_v2(
         || address == binding.candidate_account
 }
 
-/// Derive only the currently implemented action-5/6/7 frontier from exact
-/// b1/v2+b2+b3 state. The index never treats its hint as execution authority;
-/// the material constructor hostile-reopens the same bytes and Clock again.
+/// Derive the current action-5..12 frontier from exact b1/v2+b2+b3 state.
+/// A missed-freeze action 10 is the only partition with no existing b2. The
+/// index never treats its hint as execution authority; the action-specific
+/// material constructor hostile-reopens the same bytes and Clock again.
 fn current_direct_candidate_hint_v2(
     accounts: &[&IndexedAccountVersion],
     driver: &IndexedAccountVersion,
@@ -277,9 +278,7 @@ fn current_direct_candidate_hint_v2(
     )
     .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let replay_address = Address::new_from_array(root.action_replay_account());
-    let selection_address = Address::new_from_array(root.selection_account());
     let replay_version = exact_direct_dependency_v2(accounts, driver, replay_address)?;
-    let selection_version = exact_direct_dependency_v2(accounts, driver, selection_address)?;
     let replay_bytes: &[u8; clutch_solana_layout::registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] =
         replay_version
             .account
@@ -298,6 +297,45 @@ fn current_direct_candidate_hint_v2(
         &[b"dc:direct-action-replay:v1", driver.account.address.as_ref()],
         &driver.account.owner,
     );
+    if replay_version.account.address != expected_replay
+        || replay_frame.bump() != replay_bump
+        || replay_version.account.owner != driver.account.owner
+        || replay_version.account.executable
+        || replay_version.account.provenance.slot != driver.account.provenance.slot
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let replay_rent = replay.rent();
+    let replay_floor = replay_rent
+        .principal_lamports
+        .checked_add(replay_rent.donation_floor_lamports)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if replay_version.account.lamports < replay_floor {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let slot = driver.account.provenance.slot;
+    let schedule = state.root().schedule();
+    if state.root().selection_account() == [0; 32] {
+        if state.root().phase() != DirectRootPhaseV1::Open
+            || slot < schedule.submission_closes_slot
+        {
+            return Ok(None);
+        }
+        authenticate_direct_candidate_liveness_v2(accounts, driver, &state)?;
+        return Ok(Some(KeeperHint {
+            lane: Some(WorkflowLane::Candidate),
+            position: WorkflowPosition {
+                phase: u16::from(DirectMarketAction::LapseEmpty.tag()),
+                item: state.replay().next_action_sequence(),
+            },
+            action: "lapse-empty-direct-market",
+        }));
+    }
+
+    let selection_address = Address::new_from_array(state.root().selection_account());
+    let selection_version = exact_direct_dependency_v2(accounts, driver, selection_address)?;
     let selection_bytes: &[u8; clutch_solana_layout::registry::DIRECT_SELECTION_ACCOUNT_BYTES] =
         selection_version
             .account
@@ -309,34 +347,16 @@ fn current_direct_candidate_hint_v2(
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let selection = decode_direct_selection_body_for_transition_v2(
         selection_frame.semantic_body(),
-        &root,
+        state.root(),
     )
     .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let (expected_selection, selection_bump) = Address::find_program_address(
         &[b"dc:direct-selection:v1", driver.account.address.as_ref()],
         &driver.account.owner,
     );
-    if replay_version.account.address != expected_replay
-        || replay_frame.bump() != replay_bump
-        || selection_version.account.address != expected_selection
-        || selection_frame.bump() != selection_bump
-        || selection.account() != selection_version.account.address.to_bytes()
-        || replay_version.account.owner != driver.account.owner
-        || selection_version.account.owner != driver.account.owner
-        || replay_version.account.executable
-        || selection_version.account.executable
-        || replay_version.account.provenance.slot != driver.account.provenance.slot
-        || selection_version.account.provenance.slot != driver.account.provenance.slot
-    {
-        return Err(KeeperSelectionError::IncompleteCanonicalHint);
-    }
-    let replay_rent = replay.rent();
     let selection_rent = selection.rent();
-    let replay_floor = replay_rent
-        .principal_lamports
-        .checked_add(replay_rent.donation_floor_lamports)
-        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-    let selection_bonds = root
+    let selection_bonds = state
+        .root()
         .outstanding_candidate_bond_lamports(selection)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let selection_floor = selection_rent
@@ -344,15 +364,16 @@ fn current_direct_candidate_hint_v2(
         .checked_add(selection_rent.donation_floor_lamports)
         .and_then(|value| value.checked_add(selection_bonds))
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-    if replay_version.account.lamports < replay_floor
+    if selection_version.account.address != expected_selection
+        || selection_frame.bump() != selection_bump
+        || selection.account() != selection_version.account.address.to_bytes()
+        || selection_version.account.owner != driver.account.owner
+        || selection_version.account.executable
+        || selection_version.account.provenance.slot != driver.account.provenance.slot
         || selection_version.account.lamports < selection_floor
     {
         return Err(KeeperSelectionError::IncompleteCanonicalHint);
     }
-    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
-        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let slot = driver.account.provenance.slot;
-    let schedule = state.root().schedule();
     let (action, phase) = match state.root().phase() {
         DirectRootPhaseV1::SubmissionOpen
             if slot < schedule.submission_closes_slot
@@ -376,11 +397,38 @@ fn current_direct_candidate_hint_v2(
         {
             ("verify-direct-candidate", DirectMarketAction::VerifyCandidate.tag())
         }
+        DirectRootPhaseV1::FrozenEmpty
+            if slot >= schedule.submission_closes_slot
+                && selection.phase() == DirectSelectionPhaseV1::FrozenEmpty =>
+        {
+            ("lapse-empty-direct-market", DirectMarketAction::LapseEmpty.tag())
+        }
+        DirectRootPhaseV1::SubmissionOpen | DirectRootPhaseV1::Verifying
+            if slot >= schedule.selection_deadline_slot
+                && matches!(
+                    selection.phase(),
+                    DirectSelectionPhaseV1::SubmissionOpen
+                        | DirectSelectionPhaseV1::Verifying
+                ) =>
+        {
+            ("lapse-unselected-direct-market", DirectMarketAction::LapseUnselected.tag())
+        }
+        DirectRootPhaseV1::Selected
+            if slot < schedule.settlement_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::Selected =>
+        {
+            ("settle-direct-pair", DirectMarketAction::SettlePair.tag())
+        }
+        DirectRootPhaseV1::Selected
+            if slot >= schedule.settlement_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::Selected =>
+        {
+            ("lapse-selected-direct-market", DirectMarketAction::LapseSelected.tag())
+        }
         _ => return Ok(None),
     };
-    // A submission is not useful if the already-capitalized Candidate row
-    // required to advance it is missing or stale, so all three frontier states
-    // bind the same exact policy and compartment now.
+    // All work and terminal coordinates spend the same already-capitalized
+    // Candidate row, so the hint requires its exact current policy/postimage.
     authenticate_direct_candidate_liveness_v2(accounts, driver, &state)?;
     Ok(Some(KeeperHint {
         lane: Some(WorkflowLane::Candidate),
