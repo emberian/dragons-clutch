@@ -1915,8 +1915,8 @@ const CLAIM_TERMINAL: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
-/// Atomic Dealer Resolve/Fractional vector frame. Fractional owns roles 26..39
-/// except the current Product LinkV2 at 25; Dealer writes no Position bytes
+/// Atomic Dealer Resolve/Fractional vector frame. Fractional owns roles 27..40;
+/// Dealer writes no Position bytes
 /// after the private Fractional receipt returns.
 const RESOLVE_FACILITY_VECTOR: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
@@ -1940,6 +1940,7 @@ const RESOLVE_FACILITY_VECTOR: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FutureCreditFunding, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
     meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),

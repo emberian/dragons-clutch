@@ -314,7 +314,7 @@ pub struct DealerClaimWorkV1 {
     pub resolve_receipt_program_id: Id,
     /// Frozen terminal allocation rounding boundary.
     pub rounding_policy: DealerTerminalRoundingPolicyV1,
-    /// Parent generation at opening.
+    /// Post-Resolve parent generation owned by this work account.
     pub counted_generation: u64,
     /// Immutable number of pages in the terminal roster.
     pub original_page_count: u32,
@@ -523,7 +523,7 @@ impl FixedCodec for DealerClaimWorkV1 {
 
 /// Begin bounded terminal allocation after canonical Position resolution.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn begin_terminal_resolution_v1(
+pub fn begin_terminal_resolution_v1(
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
     state: &DealerStateV2,
@@ -562,7 +562,7 @@ pub(crate) fn begin_terminal_resolution_v1(
         || work.funded_dependencies_id != state.funded_dependencies_id
         || work.original_page_count != state.children.lp_pages
         || work.original_total_shares != state.total_shares
-        || work.counted_generation != state.generation
+        || work.counted_generation != after.generation()
         || work.next_allocation_page_ordinal != 0
         || work.allocated_share_prefix != 0
         || work.allocated_cash_atoms != 0
