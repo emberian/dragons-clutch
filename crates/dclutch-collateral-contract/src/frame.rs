@@ -48,6 +48,8 @@ pub enum Role {
     ResolutionPolicy,
     /// Immutable capability manifest committed by Market identity.
     CapabilityManifest,
+    /// Transient program-owned canonical capability-opening readiness child.
+    CapabilityReadiness,
     /// Market's collateral Vault token account.
     CollateralVault,
     /// Program-owned collateral-custody root and rent-refund contract.
@@ -261,9 +263,15 @@ pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 11] = [
 ];
 
 /// Exact collateral-Vault initialization and Market-open frame.
-pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 9] = [
+///
+/// The adapter must prove `CapabilityReadiness` is Ready for this exact Market,
+/// generation, and manifest, then atomically consume it while creating custody
+/// and refund its rent. It is a direct Market child, so this replacement keeps
+/// the Market child count coherent.
+pub const OPEN_COLLATERAL_VAULT_FRAME: [AccountRole; 10] = [
     sponsor(),
     state(Role::Market, true),
+    state(Role::CapabilityReadiness, true),
     immutable(Role::Realm),
     state(Role::CollateralCustody, true),
     token_account(Role::CollateralVault),
@@ -466,6 +474,11 @@ mod tests {
             RETIRE_EMPTY_VAULT_FRAME.first().map(|role| role.role()),
             Some(Role::Market)
         );
+        assert_eq!(
+            OPEN_COLLATERAL_VAULT_FRAME.get(2).map(|role| role.role()),
+            Some(Role::CapabilityReadiness)
+        );
+        assert_eq!(OPEN_COLLATERAL_VAULT_FRAME.len(), 10);
     }
 
     #[test]

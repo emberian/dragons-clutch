@@ -60,3 +60,28 @@ Creation, work, liquidity, and service principal must all be zero because the
 specialized Fund does not physically hold those compartments. The provider and
 bounty values are derived from this immutable quote. They do not appear in the
 founding instruction, and neither collateral nor future fees may replace them.
+
+## Market-opening readiness
+
+`MarketOpeningReadinessV1` is a transient direct Market child, not an opaque
+caller attestation and not another economic ledger. Its 128-byte exact record
+binds Market key, generation, manifest content identity, exact manifest entry
+count, canonical next entry index, and the sponsor rent-refund identity.
+There is no stored Ready status: it is derived only when `next_entry_index ==
+entry_count`.
+
+The adapter authenticates the manifest content hash, derives the child using
+`MARKET_OPENING_READINESS_PDA_DOMAIN`, and starts it with the Market child
+count. Each advance must name exactly the next manifest index and supplies the
+actual canonical `FundingStateV1`, observed present principal, and current
+slot. The kernel calls `validate_market_open`; required pending entries, lazy
+deadline expiry, wrong binding, underfunding, replay, skips, and reordering
+refuse before readiness changes. Funding state remains the sole owner of every
+amount, quote, released compartment, and activation fact.
+
+After an advance and before Open, the SBF adapter must seal capability
+operations: while the Market is Founding, no capability operation may release
+principal. At Open, SBF must require Ready for the exact Market/generation/
+manifest, atomically consume and rent-refund readiness while creating custody,
+and keep the direct-child count coherent. This is an adapter transition
+contract only; this crate does not implement SBF or duplicate custody facts.

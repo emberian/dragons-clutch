@@ -22,6 +22,8 @@ pub const CAPABILITY_ENTRY_BYTES: usize = 288;
 pub const FUNDING_QUOTE_BYTES: usize = 64;
 /// Exact mutable funding-state width.
 pub const FUNDING_STATE_BYTES: usize = 192;
+/// Exact transient Market-opening readiness width.
+pub const MARKET_OPENING_READINESS_BYTES: usize = 128;
 /// Maximum profile-1 manifest byte width.
 pub const MAX_MANIFEST_BYTES: usize =
     MANIFEST_HEADER_BYTES + MAX_CAPABILITIES * CAPABILITY_ENTRY_BYTES;
@@ -49,6 +51,15 @@ pub const ARTIFACT_PROFILE_V1: u16 = 1;
 pub const FUNDING_STATE_MAGIC: [u8; 8] = *b"DCLTCFS1";
 /// Implemented funding-state schema version.
 pub const FUNDING_STATE_SCHEMA_VERSION: u16 = 1;
+/// Canonical transient Market-opening readiness magic.
+pub const MARKET_OPENING_READINESS_MAGIC: [u8; 8] = *b"DCLTMOR1";
+/// Implemented Market-opening readiness schema.
+pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 = 1;
+/// Adapter PDA seed domain for one transient Market-opening readiness child.
+///
+/// This crate derives no Solana address. The adapter derives it from this
+/// domain plus exact Market key and generation, then authenticates the record.
+pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/market-opening-readiness/v1";
 
 /// The exact canonical empty-manifest preimage.
 pub const EMPTY_MANIFEST_BYTES: [u8; MANIFEST_HEADER_BYTES] = [
@@ -96,6 +107,18 @@ const STATE_ACTIVATION_SLOT_OFFSET: usize = 56;
 const STATE_REMAINING_OFFSET: usize = 64;
 const STATE_RELEASED_OFFSET: usize = 128;
 
+const READINESS_SCHEMA_OFFSET: usize = 8;
+const READINESS_RESERVED_OFFSET: usize = 10;
+const READINESS_RESERVED_BYTES: usize = 6;
+const READINESS_MARKET_OFFSET: usize = 16;
+const READINESS_GENERATION_OFFSET: usize = 48;
+const READINESS_MANIFEST_OFFSET: usize = 56;
+const READINESS_ENTRY_COUNT_OFFSET: usize = 88;
+const READINESS_NEXT_ENTRY_OFFSET: usize = 90;
+const READINESS_BODY_RESERVED_OFFSET: usize = 92;
+const READINESS_BODY_RESERVED_BYTES: usize = 4;
+const READINESS_RENT_REFUND_OFFSET: usize = 96;
+
 /// Explicit refusal returned by manifest and funding contracts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -111,6 +134,8 @@ pub enum Error {
     NonCanonicalReservedBytes,
     /// A content-addressed identity was the reserved all-zero value.
     ZeroContentId,
+    /// A required Market key or rent-refund identity was all zero.
+    ZeroIdentifier,
     /// The provisional artifact profile's entry bound was exceeded.
     TooManyCapabilities,
     /// The provisional artifact profile's dependency bound was exceeded.
@@ -165,6 +190,12 @@ pub enum Error {
     MissingResolutionFundBounty,
     /// A one-shot resolution Fund named principal it does not physically hold.
     ExtraneousResolutionFundPrincipal,
+    /// A readiness record did not bind the authenticated Market, generation, manifest, or entry count.
+    ReadinessBindingMismatch,
+    /// An advance did not name the one canonical next manifest entry.
+    ReadinessIndexMismatch,
+    /// Market opening attempted before every manifest entry became ready.
+    ReadinessIncomplete,
 }
 
 /// Result alias for this contract crate.
@@ -1054,6 +1085,214 @@ impl FundingStateV1 {
     }
 }
 
+/// Transient direct Market child proving canonical opening-capability readiness.
+///
+/// This record owns only progression and a sponsor's rent-refund identity.
+/// Each [`FundingStateV1`] remains the sole owner of its quote, remaining
+/// principal, released principal, and activation facts. There is deliberately
+/// no duplicated Ready status: readiness is derived exactly when
+/// `next_entry_index == entry_count`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketOpeningReadinessV1 {
+    market: [u8; 32],
+    generation: u64,
+    manifest_content_id: ContentId,
+    entry_count: u16,
+    next_entry_index: u16,
+    sponsor_rent_refund: [u8; 32],
+}
+
+impl MarketOpeningReadinessV1 {
+    /// Begin one transient readiness child for an authenticated canonical manifest.
+    ///
+    /// The composing adapter must authenticate that `manifest_content_id` is
+    /// the hash of `manifest.as_bytes()`, derive this direct child from
+    /// [`MARKET_OPENING_READINESS_PDA_DOMAIN`], and increment the Market child
+    /// count atomically with persistence.
+    pub fn begin(
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        sponsor_rent_refund: [u8; 32],
+    ) -> Result<Self> {
+        require_nonzero_identifier(&market)?;
+        require_nonzero_identifier(&sponsor_rent_refund)?;
+        Ok(Self {
+            market,
+            generation,
+            manifest_content_id,
+            entry_count: manifest.entry_count(),
+            next_entry_index: 0,
+            sponsor_rent_refund,
+        })
+    }
+
+    /// Decode one exact canonical readiness record.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != MARKET_OPENING_READINESS_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        if read_array::<8>(bytes, 0)? != MARKET_OPENING_READINESS_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, READINESS_SCHEMA_OFFSET)? != MARKET_OPENING_READINESS_SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchema);
+        }
+        require_zero(bytes, READINESS_RESERVED_OFFSET, READINESS_RESERVED_BYTES)?;
+        require_zero(
+            bytes,
+            READINESS_BODY_RESERVED_OFFSET,
+            READINESS_BODY_RESERVED_BYTES,
+        )?;
+        let result = Self {
+            market: read_array(bytes, READINESS_MARKET_OFFSET)?,
+            generation: read_u64(bytes, READINESS_GENERATION_OFFSET)?,
+            manifest_content_id: read_content_id(bytes, READINESS_MANIFEST_OFFSET)?,
+            entry_count: read_u16(bytes, READINESS_ENTRY_COUNT_OFFSET)?,
+            next_entry_index: read_u16(bytes, READINESS_NEXT_ENTRY_OFFSET)?,
+            sponsor_rent_refund: read_array(bytes, READINESS_RENT_REFUND_OFFSET)?,
+        };
+        require_nonzero_identifier(&result.market)?;
+        require_nonzero_identifier(&result.sponsor_rent_refund)?;
+        if usize::from(result.entry_count) > MAX_CAPABILITIES
+            || result.next_entry_index > result.entry_count
+        {
+            return Err(Error::ReadinessBindingMismatch);
+        }
+        Ok(result)
+    }
+
+    /// Return exact canonical readiness bytes.
+    pub fn to_bytes(self) -> [u8; MARKET_OPENING_READINESS_BYTES] {
+        let mut output = [0u8; MARKET_OPENING_READINESS_BYTES];
+        copy_infallible(&mut output, 0, &MARKET_OPENING_READINESS_MAGIC);
+        put_u16(
+            &mut output,
+            READINESS_SCHEMA_OFFSET,
+            MARKET_OPENING_READINESS_SCHEMA_VERSION,
+        );
+        copy_infallible(&mut output, READINESS_MARKET_OFFSET, &self.market);
+        put_u64(&mut output, READINESS_GENERATION_OFFSET, self.generation);
+        copy_content_id(
+            &mut output,
+            READINESS_MANIFEST_OFFSET,
+            self.manifest_content_id,
+        );
+        put_u16(&mut output, READINESS_ENTRY_COUNT_OFFSET, self.entry_count);
+        put_u16(
+            &mut output,
+            READINESS_NEXT_ENTRY_OFFSET,
+            self.next_entry_index,
+        );
+        copy_infallible(
+            &mut output,
+            READINESS_RENT_REFUND_OFFSET,
+            &self.sponsor_rent_refund,
+        );
+        output
+    }
+
+    /// Advance exactly one canonical manifest entry after validating its actual funding state.
+    ///
+    /// All refusals occur before `next_entry_index` changes. The adapter must
+    /// seal capability operations after each accepted advance: while the
+    /// Market remains Founding and before this transient child is consumed at
+    /// Open, no SBF capability operation may release funding principal.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance(
+        &mut self,
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        expected_entry_index: u16,
+        funding: FundingStateV1,
+        observed_present_principal: u64,
+        current_slot: u64,
+    ) -> Result<()> {
+        self.validate_binding(market, generation, manifest_content_id, manifest)?;
+        if expected_entry_index != self.next_entry_index {
+            return Err(Error::ReadinessIndexMismatch);
+        }
+        if self.next_entry_index >= self.entry_count {
+            return Err(Error::ReadinessIndexMismatch);
+        }
+        if funding.entry_index() != expected_entry_index {
+            return Err(Error::FundingBindingMismatch);
+        }
+        funding.validate_market_open(
+            manifest_content_id,
+            manifest,
+            observed_present_principal,
+            current_slot,
+        )?;
+        self.next_entry_index = self
+            .next_entry_index
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Require this record is derived Ready and matches the exact Market opening.
+    ///
+    /// An SBF Open transition must atomically consume/close this child,
+    /// create custody, refund this record's rent to `sponsor_rent_refund`, and
+    /// keep the Market direct-child count coherent. This kernel deliberately
+    /// stores neither custody nor any principal amount.
+    pub fn require_ready_for_open(
+        self,
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+    ) -> Result<()> {
+        self.validate_binding(market, generation, manifest_content_id, manifest)?;
+        if self.next_entry_index != self.entry_count {
+            return Err(Error::ReadinessIncomplete);
+        }
+        Ok(())
+    }
+
+    /// Return whether all canonical manifest entries have advanced.
+    pub const fn is_ready(self) -> bool {
+        self.next_entry_index == self.entry_count
+    }
+
+    /// Return the canonical next entry index.
+    pub const fn next_entry_index(self) -> u16 {
+        self.next_entry_index
+    }
+
+    /// Return the immutable entry count bound at begin.
+    pub const fn entry_count(self) -> u16 {
+        self.entry_count
+    }
+
+    /// Return the authenticated sponsor rent-refund identity.
+    pub const fn sponsor_rent_refund(&self) -> &[u8; 32] {
+        &self.sponsor_rent_refund
+    }
+
+    fn validate_binding(
+        self,
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+    ) -> Result<()> {
+        if self.market != market
+            || self.generation != generation
+            || self.manifest_content_id != manifest_content_id
+            || self.entry_count != manifest.entry_count()
+            || self.next_entry_index > self.entry_count
+        {
+            return Err(Error::ReadinessBindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 fn validate_manifest(manifest: &CapabilityManifestV1<'_>) -> Result<()> {
     let count = usize::from(manifest.entry_count);
     let mut prior_kind: Option<[u8; 32]> = None;
@@ -1276,6 +1515,13 @@ fn checked_sum(values: &[u64]) -> Result<u64> {
         total = total.checked_add(*value).ok_or(Error::ArithmeticOverflow)?;
     }
     Ok(total)
+}
+
+fn require_nonzero_identifier(identifier: &[u8; 32]) -> Result<()> {
+    if identifier.iter().all(|byte| *byte == 0) {
+        return Err(Error::ZeroIdentifier);
+    }
+    Ok(())
 }
 
 fn manifest_bytes_for_count(count: usize) -> Result<usize> {
@@ -1915,6 +2161,169 @@ mod tests {
         assert_eq!(
             decoded.validate_against(id(99), manifest, quote().total_principal() - 1),
             Err(Error::FundingConservationMismatch)
+        );
+    }
+
+    #[test]
+    fn readiness_advances_only_canonical_actual_funding_and_opens_only_when_derived_ready() {
+        let entries = [
+            entry(1, ActivationPolicy::RequiredAtFounding, None),
+            entry(2, ActivationPolicy::PrepaidLazy, None),
+        ];
+        let mut storage = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+        let manifest = manifest(&entries, &mut storage);
+        let manifest_id = id(99);
+        let mut readiness =
+            match MarketOpeningReadinessV1::begin([7; 32], 3, manifest_id, manifest, [8; 32]) {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+        let initial = readiness;
+        let mut founding =
+            match FundingStateV1::new(manifest_id, manifest, 0, quote().total_principal()) {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+        assert_eq!(
+            readiness.advance(
+                [7; 32],
+                3,
+                manifest_id,
+                manifest,
+                0,
+                founding,
+                quote().total_principal(),
+                1,
+            ),
+            Err(Error::FoundingCapabilityInactive)
+        );
+        assert_eq!(readiness, initial);
+        assert_eq!(
+            readiness.advance(
+                [7; 32],
+                3,
+                manifest_id,
+                manifest,
+                1,
+                founding,
+                quote().total_principal(),
+                1,
+            ),
+            Err(Error::ReadinessIndexMismatch)
+        );
+        assert_eq!(readiness, initial);
+        assert!(
+            founding
+                .activate(manifest_id, manifest, quote().total_principal(), 1)
+                .is_ok()
+        );
+        assert_eq!(
+            readiness.advance(
+                [7; 32],
+                3,
+                manifest_id,
+                manifest,
+                0,
+                founding,
+                quote().total_principal() - 31,
+                1,
+            ),
+            Err(Error::PresentPrincipalMismatch)
+        );
+        assert_eq!(readiness, initial);
+        assert!(
+            readiness
+                .advance(
+                    [7; 32],
+                    3,
+                    manifest_id,
+                    manifest,
+                    0,
+                    founding,
+                    quote().total_principal() - 30,
+                    1,
+                )
+                .is_ok()
+        );
+        assert_eq!(readiness.next_entry_index(), 1);
+        assert_eq!(
+            readiness.require_ready_for_open([7; 32], 3, manifest_id, manifest),
+            Err(Error::ReadinessIncomplete)
+        );
+        let lazy = match FundingStateV1::new(manifest_id, manifest, 1, quote().total_principal()) {
+            Ok(value) => value,
+            Err(_) => unreachable_total(),
+        };
+        assert_eq!(
+            readiness.advance(
+                [7; 32],
+                3,
+                manifest_id,
+                manifest,
+                0,
+                lazy,
+                quote().total_principal(),
+                400,
+            ),
+            Err(Error::ReadinessIndexMismatch)
+        );
+        assert!(
+            readiness
+                .advance(
+                    [7; 32],
+                    3,
+                    manifest_id,
+                    manifest,
+                    1,
+                    lazy,
+                    quote().total_principal(),
+                    400,
+                )
+                .is_ok()
+        );
+        assert!(readiness.is_ready());
+        assert!(
+            readiness
+                .require_ready_for_open([7; 32], 3, manifest_id, manifest)
+                .is_ok()
+        );
+        assert_eq!(
+            readiness.advance(
+                [7; 32],
+                3,
+                manifest_id,
+                manifest,
+                2,
+                lazy,
+                quote().total_principal(),
+                400,
+            ),
+            Err(Error::ReadinessIndexMismatch)
+        );
+        assert_eq!(
+            readiness.require_ready_for_open([6; 32], 3, manifest_id, manifest),
+            Err(Error::ReadinessBindingMismatch)
+        );
+        let one_entry = [entry(1, ActivationPolicy::RequiredAtFounding, None)];
+        let mut shorter_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let shorter_manifest =
+            match CapabilityManifestV1::encode_into(&one_entry, &mut shorter_storage) {
+                Ok(value) => value,
+                Err(_) => unreachable_total(),
+            };
+        assert_eq!(
+            readiness.require_ready_for_open([7; 32], 3, manifest_id, shorter_manifest),
+            Err(Error::ReadinessBindingMismatch)
+        );
+        assert_eq!(
+            MarketOpeningReadinessV1::decode(&readiness.to_bytes()),
+            Ok(readiness)
+        );
+        let mut hostile = readiness.to_bytes();
+        mutate(&mut hostile, READINESS_BODY_RESERVED_OFFSET, 1);
+        assert_eq!(
+            MarketOpeningReadinessV1::decode(&hostile),
+            Err(Error::NonCanonicalReservedBytes)
         );
     }
 }
