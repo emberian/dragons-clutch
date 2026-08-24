@@ -2323,6 +2323,7 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::ProductSeries => "product-series",
         ProtocolFlow::FractionalRedemption => "fractional-redemption",
         ProtocolFlow::StructuredClaim => "structured-claim",
+        ProtocolFlow::DealerFacility => "dealer-facility",
         ProtocolFlow::DealerFacilityTerminal => "dealer-facility-terminal",
         ProtocolFlow::KeeperSettlement => "keeper-settlement",
         ProtocolFlow::RecoveryRetirement => "recovery-retirement",

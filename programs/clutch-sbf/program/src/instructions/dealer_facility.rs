@@ -11847,6 +11847,7 @@ pub fn process(
             | DealerFacilityAction::SponsorHalt
             | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose
+            | DealerFacilityAction::Resolve
             | DealerFacilityAction::Claim
     );
     if !implemented {
@@ -12542,12 +12543,15 @@ mod timed_close_adversarial_tests {
     }
 
     #[test]
-    fn timed_close_remains_disabled_until_the_complete_dealer_family_closes() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(
-            DEALER_FAMILY_TAG,
-            DEALER_FAMILY_VERSION,
-            DealerFacilityAction::TimedClose.tag(),
-        ));
+    fn timed_close_follows_the_successor_capability_profile() {
+        assert_eq!(
+            crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                DealerFacilityAction::TimedClose.tag(),
+            ),
+            cfg!(feature = "profile-successor-chain-attached-dev"),
+        );
     }
 }
 
@@ -12958,12 +12962,15 @@ mod queue_exit_adversarial_tests {
     }
 
     #[test]
-    fn queue_exit_remains_disabled_until_the_complete_dealer_family_closes() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(
-            DEALER_FAMILY_TAG,
-            DEALER_FAMILY_VERSION,
-            DealerFacilityAction::QueueExit.tag(),
-        ));
+    fn queue_exit_follows_the_successor_capability_profile() {
+        assert_eq!(
+            crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                DealerFacilityAction::QueueExit.tag(),
+            ),
+            cfg!(feature = "profile-successor-chain-attached-dev"),
+        );
     }
 }
 
@@ -13010,13 +13017,16 @@ mod collect_deliver_adversarial_tests {
     }
 
     #[test]
-    fn complete_handlers_remain_outside_every_current_capability_profile() {
+    fn complete_handlers_follow_the_successor_capability_profile() {
         for action in [DealerFacilityAction::Collect, DealerFacilityAction::Deliver] {
-            assert!(!crate::capabilities::extension_intent_action_enabled(
-                DEALER_FAMILY_TAG,
-                DEALER_FAMILY_VERSION,
-                action.tag(),
-            ));
+            assert_eq!(
+                crate::capabilities::extension_intent_action_enabled(
+                    DEALER_FAMILY_TAG,
+                    DEALER_FAMILY_VERSION,
+                    action.tag(),
+                ),
+                cfg!(feature = "profile-successor-chain-attached-dev"),
+            );
         }
     }
 
@@ -13126,16 +13136,19 @@ mod finalize_abort_adversarial_tests {
     }
 
     #[test]
-    fn terminal_handlers_remain_outside_every_current_capability_profile() {
+    fn terminal_handlers_follow_the_successor_capability_profile() {
         for action in [
             DealerFacilityAction::FinalizeSettlement,
             DealerFacilityAction::AbortBeforeCollection,
         ] {
-            assert!(!crate::capabilities::extension_intent_action_enabled(
-                DEALER_FAMILY_TAG,
-                DEALER_FAMILY_VERSION,
-                action.tag(),
-            ));
+            assert_eq!(
+                crate::capabilities::extension_intent_action_enabled(
+                    DEALER_FAMILY_TAG,
+                    DEALER_FAMILY_VERSION,
+                    action.tag(),
+                ),
+                cfg!(feature = "profile-successor-chain-attached-dev"),
+            );
         }
     }
 }
@@ -13240,12 +13253,15 @@ mod terminal_claim_adversarial_tests {
     }
 
     #[test]
-    fn claim_remains_disabled_until_vector_resolution_and_retirement_close() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(
-            DEALER_FAMILY_TAG,
-            DEALER_FAMILY_VERSION,
-            DealerFacilityAction::Claim.tag(),
-        ));
+    fn claim_follows_the_successor_capability_profile() {
+        assert_eq!(
+            crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                DealerFacilityAction::Claim.tag(),
+            ),
+            cfg!(feature = "profile-successor-chain-attached-dev"),
+        );
     }
 }
 
@@ -13335,12 +13351,15 @@ mod resolve_vector_adversarial_tests {
     }
 
     #[test]
-    fn vector_handler_stays_profile_disabled_until_product_admission_is_callable() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(
-            DEALER_FAMILY_TAG,
-            DEALER_FAMILY_VERSION,
-            DealerFacilityAction::Resolve.tag(),
-        ));
+    fn vector_handler_follows_the_successor_capability_profile() {
+        assert_eq!(
+            crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                DealerFacilityAction::Resolve.tag(),
+            ),
+            cfg!(feature = "profile-successor-chain-attached-dev"),
+        );
         let source = include_str!("dealer_facility.rs");
         let handler = source
             .split("fn resolve_facility_vector")

@@ -1,4 +1,4 @@
-//! Non-production immutable Dealer catalog transport.
+//! Immutable Dealer catalog transport.
 //!
 //! This is deliberately not a funded Dealer facility. It admits no market,
 //! Position, Replay, fee budget, liveness budget, Lease, Pot, trade, or token

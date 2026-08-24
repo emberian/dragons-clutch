@@ -2558,9 +2558,11 @@ impl DealerPolicyAction {
 
 /// Dealer facility runtime actions following the four policy transport tags.
 ///
-/// These coordinates are allocated but remain capability-disabled. Values
-/// `5..=25` map in order to pure runtime actions `Initialize..=Retire`; the
-/// pure `CreatePolicy` coordinate is represented only by `SealPolicy` above.
+/// Values `5..=25` map in order to pure runtime actions
+/// `Initialize..=Retire`; the successor profile admits `5..=24`, while
+/// action 25 is separately gated by its two current terminal discriminators.
+/// The pure `CreatePolicy` coordinate is represented only by `SealPolicy`
+/// above.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerFacilityAction {
@@ -2638,6 +2640,33 @@ impl DealerFacilityAction {
             Self::Resolve => 23,
             Self::Claim => 24,
             Self::Retire => 25,
+        }
+    }
+
+    /// Stable operator-facing action label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::CreateLpPage => "create-lp-page",
+            Self::Contribute => "contribute",
+            Self::WithdrawFunding => "withdraw-funding",
+            Self::Activate => "activate",
+            Self::CancelFunding => "cancel-funding",
+            Self::RefundCancelledSponsor => "refund-cancelled-sponsor",
+            Self::BindEpoch => "bind-epoch",
+            Self::LapseEpoch => "lapse-epoch",
+            Self::SelectLeaseAndBegin => "select-lease-and-begin",
+            Self::Collect => "collect",
+            Self::Deliver => "deliver",
+            Self::FinalizeSettlement => "finalize-settlement",
+            Self::AbortBeforeCollection => "abort-before-collection",
+            Self::QueueExit => "queue-exit",
+            Self::SponsorHalt => "sponsor-halt",
+            Self::EnterUnwind => "enter-unwind",
+            Self::TimedClose => "timed-close",
+            Self::Resolve => "resolve",
+            Self::Claim => "claim",
+            Self::Retire => "retire",
         }
     }
 
@@ -3225,7 +3254,7 @@ pub enum ExtensionAction {
     GeneralV2(GeneralV2Action),
     /// One Dealer policy-catalog transport action.
     DealerPolicy(DealerPolicyAction),
-    /// One capability-disabled Dealer facility action.
+    /// One Dealer facility action; the checked release decides admission.
     DealerFacility(DealerFacilityAction),
     /// One StructuredClaim local action.
     StructuredClaim(StructuredClaimAction),
