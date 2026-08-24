@@ -16,8 +16,8 @@ zero Lease/Pot counts.
 The separate profile identity is:
 
 ```text
-dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7
-15be8b991535102480a341eddf86350db0ffcc675ac8888b4cf29bed215b7ebb
+dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v8
+b367e8434138e6073b46f539664d31a7296e88d65b027572004e106fcd54fd8b
 ```
 
 Every production profile rejects these Dealer coordinates before account

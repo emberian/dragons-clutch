@@ -85,6 +85,7 @@ compile_error!("host-forensic General fixtures cannot compile for Solana");
 
 #[cfg(not(any(
     feature = "profile-full",
+    feature = "profile-successor-chain-attached-dev",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
     feature = "profile-non-production-dealer-policy-catalog-lab",
@@ -127,6 +128,24 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+#[cfg(all(
+    feature = "profile-successor-chain-attached-dev",
+    any(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-general-source-v2-point",
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab",
+        feature = "non-production-product-series-lab",
+        feature = "non-production-structured-custody-lab",
+        feature = "non-production-failure-recovery-lab",
+        feature = "non-production-mock-source",
+        feature = "non-production-real-pyth-lab",
+        feature = "laboratory-fixtures"
+    )
+))]
+compile_error!(
+    "the successor-chain-attached dev profile cannot include a legacy profile or per-family laboratory"
+);
 #[cfg(all(
     feature = "non-production-product-series-lab",
     not(feature = "profile-full")

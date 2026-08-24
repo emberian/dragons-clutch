@@ -82,6 +82,21 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# The sole successor-development product. This compiles the broad current
+# substrate plus every optional successor-family adapter under one selector;
+# central capability admission remains fail-closed until the exact all-family
+# closure and populated observed-positive collateral/claim manifests land.
+# Per-family laboratory features are not dependencies of this profile.
+profile-successor-chain-attached-dev = [
+    "profile-full",
+    "dep:clutch-fee-runtime-contract",
+    "dep:clutch-evidence-recovery",
+    "dep:clutch-failure-policy-adapter",
+    "dep:clutch-failure-policy-runtime",
+    "dep:clutch-structured-claim",
+    "dep:clutch-structured-claim-adapter",
+    "observed-positive-collateral-release-manifest",
+]
 # A distinct non-production Dealer product containing the immutable policy and
 # liveness catalogs plus exact facility Initialize and BindEpoch transitions. The hostile
 # wire dependencies use their full decoders, while this crate's capability
