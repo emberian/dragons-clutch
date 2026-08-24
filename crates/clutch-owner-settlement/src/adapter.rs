@@ -436,7 +436,8 @@ pub struct SettlementCashPotExpectationV1 {
     pub candidate: [u8; 32],
     /// Complete owner/order-set digest.
     pub owner_order_set_digest: [u8; 32],
-    /// Selected fee-record identity; zero exactly for a zero-fee candidate.
+    /// Selected fee-record identity. Historical absence is zero and implies a
+    /// zero fee; a current authenticated fee record may carry zero value.
     pub fee_record: [u8; 32],
     /// Collateral price scale.
     pub price_scale: Amount,
@@ -483,7 +484,7 @@ impl SettlementCashPotExpectationV1 {
         }
         if self.price_scale == 0
             || self.owner_count == 0
-            || (self.selected_fee_atoms == 0) != (self.fee_record == [0; 32])
+            || (self.fee_record == [0; 32] && self.selected_fee_atoms != 0)
             || self.rounding_pot_price_units % u128::from(self.price_scale) != 0
             || (self.virtual_cash_atoms == 0)
                 != (self.virtual_cash_direction == VirtualCashDirectionV1::None)
@@ -1062,6 +1063,17 @@ mod tests {
             virtual_cash_atoms: 0,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn cash_expectation_distinguishes_live_zero_fee_from_absence() {
+        let mut live_zero = pot().expectation;
+        live_zero.fee_record = key(10);
+        assert!(live_zero.validate().is_ok());
+
+        let mut absent_nonzero = pot().expectation;
+        absent_nonzero.selected_fee_atoms = 1;
+        assert_eq!(absent_nonzero.validate(), Err(Error::InvalidExpectation));
     }
 
     #[test]
