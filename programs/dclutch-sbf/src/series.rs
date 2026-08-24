@@ -1,8 +1,9 @@
 //! Vertical SVM adapter for finite, presently capitalized Series.
 //!
-//! This module deliberately routes only Create, InstantiateNext, and
-//! CloseExhausted. ConsumeTicket is not an executable SBF action until its
-//! ticket/root/RentCredit changes can compose atomically with Found.
+//! All four Series actions are executable. ConsumeTicket authenticates its
+//! complete Series and Found inputs before mutation, derives the Found wire
+//! solely from immutable Series obligations, and commits Found plus ticket
+//! retirement in one SVM rollback domain.
 //!
 //! Physical V1 roles are exact and ordered:
 //! - Create: payer, recipe, aggregate, CapacityProfile, root, escrow, guard,
@@ -11,19 +12,27 @@
 //! - Instantiate: actor, root, recipe, aggregate, CapacityProfile, derived
 //!   occurrence, occurrence capitalization, escrow, ticket, then the five
 //!   finalization cursors in matching record order, System, and Rent.
+//! - Consume: the exact Found18 frame first, with its sponsor role interpreted
+//!   only as the temporary permissionless payer, followed by root, recipe,
+//!   aggregate, derived occurrence, occurrence capitalization, ticket, and the
+//!   four Series-only finalization cursors. CapacityProfile and its cursor,
+//!   RentCredit, System, and Rent are single shared physical roles.
 //! - Close: actor, root, escrow, guard, RentCredit, and Rent.
 
+use dclutch_collateral_contract::FoundMarketAndFundV1;
+use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity};
 use dclutch_product_contract::capacity::CapacityProfileV1;
 use dclutch_rent_contract::RentCreditV1;
 use dclutch_series_contract::{
     AccountMetaV1, CapitalizationAggregateV1, CloseExhaustedFrameV1, CloseExhaustedV1,
-    CreateSeriesFrameV1, CreateSeriesV1, DerivedOccurrenceV1, IdentityV1, InstantiateNextFrameV1,
-    InstantiateNextV1, OCCURRENCE_TICKET_BYTES_V1, OccurrenceCapitalizationV1,
-    SERIES_ESCROW_BYTES_V1, SERIES_ESCROW_PDA_DOMAIN_V1, SERIES_INSTRUCTION_MAGIC_V1,
-    SERIES_OCCURRENCE_ARTIFACT_BYTES_V1, SERIES_REPLAY_GUARD_BYTES_V1,
-    SERIES_REPLAY_GUARD_PDA_DOMAIN_V1, SERIES_ROOT_BYTES_V1, SERIES_ROOT_PDA_DOMAIN_V1,
-    SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1, SeriesReplayGuardV1, SeriesRootV1,
-    VacantAccountFactsV1, plan_close_exhausted_v1, plan_create_series_v1, plan_instantiate_next_v1,
+    ConsumeTicketV1, CreateSeriesFrameV1, CreateSeriesV1, DerivedOccurrenceV1, IdentityV1,
+    InstantiateNextFrameV1, InstantiateNextV1, OCCURRENCE_TICKET_BYTES_V1,
+    OccurrenceCapitalizationV1, OccurrenceTicketV1, SERIES_ESCROW_BYTES_V1,
+    SERIES_ESCROW_PDA_DOMAIN_V1, SERIES_INSTRUCTION_MAGIC_V1, SERIES_OCCURRENCE_ARTIFACT_BYTES_V1,
+    SERIES_REPLAY_GUARD_BYTES_V1, SERIES_REPLAY_GUARD_PDA_DOMAIN_V1, SERIES_ROOT_BYTES_V1,
+    SERIES_ROOT_PDA_DOMAIN_V1, SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1,
+    SeriesReplayGuardV1, SeriesRootV1, VacantAccountFactsV1, plan_close_exhausted_v1,
+    plan_consume_ticket_v1, plan_create_series_v1, plan_instantiate_next_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -40,6 +49,9 @@ use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
     AdapterError,
+    found_market::{
+        FoundingPlan, execute_preflighted_found_market_and_fund, preflight_found_market_and_fund,
+    },
     records::{
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1, SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
@@ -50,6 +62,8 @@ use crate::{
 
 const CREATE_ACCOUNTS_V1: usize = 13;
 const INSTANTIATE_ACCOUNTS_V1: usize = 16;
+const FOUND_ACCOUNTS_V1: usize = 18;
+const CONSUME_ACCOUNTS_V1: usize = 28;
 const CLOSE_ACCOUNTS_V1: usize = 6;
 
 const CREATE_ACTION_V1: u8 = 1;
@@ -63,11 +77,7 @@ const _: () = assert!(SERIES_ESCROW_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(SERIES_REPLAY_GUARD_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(SERIES_TICKET_PDA_DOMAIN_V1.len() <= 32);
 
-/// Return true only for the three Series actions with complete SBF execution.
-///
-/// The top-level router must call this before selecting this module. In
-/// particular, action 3 must remain wholly unrouted rather than entering an
-/// adapter that can only refuse.
+/// Return true only for exact, completely implemented Series wires.
 pub(crate) fn is_routable_instruction(instruction_data: &[u8]) -> bool {
     instruction_data.get(..8) == Some(SERIES_INSTRUCTION_MAGIC_V1.as_slice())
         && instruction_data
@@ -75,7 +85,7 @@ pub(crate) fn is_routable_instruction(instruction_data: &[u8]) -> bool {
             .is_some_and(|action| {
                 matches!(
                     *action,
-                    CREATE_ACTION_V1 | INSTANTIATE_ACTION_V1 | CLOSE_ACTION_V1
+                    CREATE_ACTION_V1 | INSTANTIATE_ACTION_V1 | CONSUME_ACTION_V1 | CLOSE_ACTION_V1
                 )
             })
 }
@@ -93,11 +103,89 @@ pub(crate) fn dispatch(
         Some(INSTANTIATE_ACTION_V1) => InstantiateNextV1::decode(instruction_data)
             .map_err(map_wire_error)
             .and_then(|instruction| process_instantiate(program_id, accounts, instruction)),
+        Some(CONSUME_ACTION_V1) => ConsumeTicketV1::decode(instruction_data)
+            .map_err(map_wire_error)
+            .and_then(|instruction| process_consume(program_id, accounts, instruction)),
         Some(CLOSE_ACTION_V1) => CloseExhaustedV1::decode(instruction_data)
             .map_err(map_wire_error)
             .and_then(|instruction| process_close(program_id, accounts, instruction)),
-        Some(CONSUME_ACTION_V1) => Err(AdapterError::InvalidInstruction.into()),
         _ => Err(AdapterError::InvalidInstruction.into()),
+    }
+}
+
+/// Exact physical action-3 frame.
+///
+/// Accounts 0..18 are passed unchanged to the Found semantic owner. The four
+/// Found/Series aliases are physical, not repeated: RentCredit=3,
+/// CapacityProfile=7, CapacityProfileCursor=13, System=16, Rent=17.
+struct ConsumeFrame<'a, 'info> {
+    found_accounts: &'a [AccountInfo<'info>],
+    actor: &'a AccountInfo<'info>,
+    rent_credit: &'a AccountInfo<'info>,
+    capacity_profile: &'a AccountInfo<'info>,
+    capacity_profile_cursor: &'a AccountInfo<'info>,
+    rent_sysvar: &'a AccountInfo<'info>,
+    root: &'a AccountInfo<'info>,
+    recipe: &'a AccountInfo<'info>,
+    aggregate: &'a AccountInfo<'info>,
+    derived: &'a AccountInfo<'info>,
+    capitalization: &'a AccountInfo<'info>,
+    ticket: &'a AccountInfo<'info>,
+    recipe_cursor: &'a AccountInfo<'info>,
+    aggregate_cursor: &'a AccountInfo<'info>,
+    derived_cursor: &'a AccountInfo<'info>,
+    capitalization_cursor: &'a AccountInfo<'info>,
+}
+
+impl<'a, 'info> ConsumeFrame<'a, 'info> {
+    fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        if accounts.len() != CONSUME_ACCOUNTS_V1 {
+            return Err(AdapterError::AccountFrameLength.into());
+        }
+        let found_accounts = accounts
+            .get(..FOUND_ACCOUNTS_V1)
+            .ok_or(AdapterError::AccountFrameLength)?;
+        let frame = Self {
+            found_accounts,
+            actor: account(accounts, 0)?,
+            rent_credit: account(accounts, 3)?,
+            capacity_profile: account(accounts, 7)?,
+            capacity_profile_cursor: account(accounts, 13)?,
+            rent_sysvar: account(accounts, 17)?,
+            root: account(accounts, 18)?,
+            recipe: account(accounts, 19)?,
+            aggregate: account(accounts, 20)?,
+            derived: account(accounts, 21)?,
+            capitalization: account(accounts, 22)?,
+            ticket: account(accounts, 23)?,
+            recipe_cursor: account(accounts, 24)?,
+            aggregate_cursor: account(accounts, 25)?,
+            derived_cursor: account(accounts, 26)?,
+            capitalization_cursor: account(accounts, 27)?,
+        };
+        require_system_payer(frame.actor)?;
+        if !frame.actor.is_signer || !frame.actor.is_writable || frame.actor.executable {
+            return Err(AdapterError::AccountPrivilege.into());
+        }
+        require_writable_protocol(frame.root)?;
+        require_writable_protocol(frame.ticket)?;
+        if frame.rent_credit.is_signer || !frame.rent_credit.is_writable {
+            return Err(AdapterError::AccountPrivilege.into());
+        }
+        for immutable in [
+            frame.recipe,
+            frame.aggregate,
+            frame.derived,
+            frame.capitalization,
+            frame.recipe_cursor,
+            frame.aggregate_cursor,
+            frame.derived_cursor,
+            frame.capitalization_cursor,
+        ] {
+            require_readonly(immutable)?;
+        }
+        require_distinct(accounts)?;
+        Ok(frame)
     }
 }
 
@@ -602,6 +690,271 @@ fn authenticate_instantiate(
     })
 }
 
+#[derive(Clone, Copy)]
+struct ConsumePlan {
+    semantic: dclutch_series_contract::TicketConsumptionPlanV1,
+    found: FoundingPlan,
+    actor_lamports_before: u64,
+    root_lamports_before: u64,
+    rent_credit: RentCreditV1,
+}
+
+#[inline(never)]
+fn process_consume(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction: ConsumeTicketV1,
+) -> Result<(), ProgramError> {
+    let frame = ConsumeFrame::parse(accounts)?;
+    let plan = authenticate_consume(program_id, &frame, instruction)?;
+
+    // The actor is only a transient System payer. This exact credit is removed
+    // by the authenticated Found plan in the same instruction, and the actor
+    // must return to its pre-instruction balance.
+    move_lamports(
+        frame.ticket,
+        frame.actor,
+        plan.semantic.market_principal,
+        AdapterError::SeriesTransition,
+    )?;
+    execute_preflighted_found_market_and_fund(program_id, frame.found_accounts, plan.found)?;
+    if frame.actor.lamports() != plan.actor_lamports_before {
+        return Err(AdapterError::SeriesPostcondition.into());
+    }
+
+    let ticket_refund = plan
+        .semantic
+        .ticket_lamports_before
+        .checked_sub(plan.semantic.market_principal)
+        .ok_or(AdapterError::Arithmetic)?;
+    move_lamports(
+        frame.ticket,
+        frame.rent_credit,
+        ticket_refund,
+        AdapterError::SeriesTransition,
+    )?;
+    persist_exact(frame.root, &plan.semantic.root_after.to_bytes())?;
+    frame
+        .ticket
+        .resize(0)
+        .map_err(|_| AdapterError::SeriesClose)?;
+    frame.ticket.assign(&system_program::ID);
+    require_consume_post(program_id, &frame, plan)
+}
+
+#[inline(never)]
+fn authenticate_consume(
+    program_id: &Pubkey,
+    frame: &ConsumeFrame<'_, '_>,
+    instruction: ConsumeTicketV1,
+) -> Result<ConsumePlan, ProgramError> {
+    let rent = authenticated_rent(frame.rent_sysvar)?;
+    let root = decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
+        program_id,
+        frame.root,
+        SeriesRootV1::decode,
+    )?;
+    authenticate_root_pda(program_id, frame.root, root)?;
+    if frame.root.lamports() < rent.minimum_balance(SERIES_ROOT_BYTES_V1) {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+
+    let recipe_digest = root.recipe_id.to_bytes();
+    let aggregate_digest = root.aggregate_id.to_bytes();
+    let derived_digest = record_digest(frame.derived)?;
+    let capitalization_digest = record_digest(frame.capitalization)?;
+    let recipe = authenticate_recipe(
+        program_id,
+        frame.recipe,
+        frame.recipe_cursor,
+        frame.rent_sysvar,
+        recipe_digest,
+    )?;
+    let aggregate = authenticate_aggregate(
+        program_id,
+        frame.aggregate,
+        frame.aggregate_cursor,
+        frame.rent_sysvar,
+        aggregate_digest,
+    )?;
+    authenticate_capacity_profile(
+        program_id,
+        frame.capacity_profile,
+        frame.capacity_profile_cursor,
+        frame.rent_sysvar,
+        &recipe,
+    )?;
+    let derived = authenticate_derived(
+        program_id,
+        frame.derived,
+        frame.derived_cursor,
+        frame.rent_sysvar,
+        derived_digest,
+    )?;
+    let capitalization = authenticate_capitalization(
+        program_id,
+        frame.capitalization,
+        frame.capitalization_cursor,
+        frame.rent_sysvar,
+        capitalization_digest,
+    )?;
+    let ticket = decode_program_record::<OCCURRENCE_TICKET_BYTES_V1, OccurrenceTicketV1>(
+        program_id,
+        frame.ticket,
+        OccurrenceTicketV1::decode,
+    )?;
+    authenticate_ticket_pda(program_id, frame.ticket, frame.root.key, ticket)?;
+
+    let authority = Pubkey::new_from_array(root.refund_authority.to_bytes());
+    let minimum_credit = rent.minimum_balance(dclutch_rent_contract::RENT_CREDIT_BYTES_V1);
+    let rent_credit = authenticate_rent_credit(
+        program_id,
+        frame.rent_credit,
+        refund_authority(&authority)?,
+        Some(minimum_credit),
+    )?;
+    let semantic = plan_consume_ticket_v1(
+        root,
+        identity(frame.root.key.to_bytes())?,
+        root.recipe_id,
+        &recipe,
+        root.aggregate_id,
+        &aggregate,
+        identity(derived_digest)?,
+        &derived,
+        identity(capitalization_digest)?,
+        &capitalization,
+        ticket,
+        instruction,
+        frame.ticket.lamports(),
+        frame.rent_credit.lamports(),
+    )
+    .map_err(map_transition_error)?;
+    let found_authority =
+        Pubkey::new_from_array(semantic.found_obligations.refund_authority.to_bytes());
+    if found_authority != authority {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+    let found_instruction = synthesize_found_instruction(&semantic.found_obligations, &recipe)?;
+    let found = preflight_found_market_and_fund(
+        program_id,
+        frame.found_accounts,
+        found_instruction,
+        found_authority,
+        semantic.market_principal,
+    )?;
+    if found.required_payer_debit()? != semantic.market_principal {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+
+    // No fallible mutable borrow may first appear after Found has executed.
+    preflight_mutable(&[frame.root, frame.ticket, frame.rent_credit])?;
+    Ok(ConsumePlan {
+        semantic,
+        found,
+        actor_lamports_before: frame.actor.lamports(),
+        root_lamports_before: frame.root.lamports(),
+        rent_credit,
+    })
+}
+
+fn synthesize_found_instruction(
+    obligations: &dclutch_series_contract::FoundCompositionObligationsV1,
+    recipe: &SeriesRecipeV1,
+) -> Result<FoundMarketAndFundV1, ProgramError> {
+    if obligations.claim_basis_id != recipe.claim_basis_id
+        || obligations.capacity_profile_id != recipe.capacity_profile_id
+        || obligations.realm_id != recipe.realm_id
+        || obligations.generation
+            != recipe
+                .generation_at(obligations.occurrence_index)
+                .map_err(map_transition_error)?
+    {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+    let identity = MarketIdentity::new(
+        core_content_id(obligations.realm_id)?,
+        core_content_id(obligations.product_instance_id)?,
+        core_content_id(obligations.claim_basis_id)?,
+        core_content_id(obligations.resolution_policy_id)?,
+        core_content_id(obligations.capability_manifest_id)?,
+        obligations.generation,
+    );
+    if hash(&identity.to_bytes()).to_bytes() != obligations.market_identity_id.to_bytes() {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+    let outcome_count = u8::try_from(recipe.outcome_count).map_err(|_| AdapterError::Arithmetic)?;
+    FoundMarketAndFundV1::new(identity, outcome_count)
+        .map_err(|_| AdapterError::SeriesAuthentication.into())
+}
+
+fn core_content_id(identity: IdentityV1) -> Result<CoreContentId, ProgramError> {
+    CoreContentId::new(identity.to_bytes()).map_err(|_| AdapterError::SeriesAuthentication.into())
+}
+
+fn authenticate_ticket_pda(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    root: &Pubkey,
+    ticket: OccurrenceTicketV1,
+) -> Result<(), ProgramError> {
+    let root = root.to_bytes();
+    let index = ticket.occurrence_index.to_le_bytes();
+    let bump = [ticket.pda_bump];
+    let expected = Pubkey::create_program_address(
+        &[SERIES_TICKET_PDA_DOMAIN_V1, &root, &index, &bump],
+        program_id,
+    )
+    .map_err(|_| AdapterError::SeriesAuthentication)?;
+    if account.key != &expected {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+    Ok(())
+}
+
+fn require_consume_post(
+    program_id: &Pubkey,
+    frame: &ConsumeFrame<'_, '_>,
+    plan: ConsumePlan,
+) -> Result<(), ProgramError> {
+    if frame.actor.lamports() != plan.actor_lamports_before
+        || frame.root.lamports() != plan.root_lamports_before
+        || frame.ticket.lamports() != plan.semantic.ticket_lamports_after
+        || frame.ticket.owner != &system_program::ID
+        || !frame.ticket.data_is_empty()
+        || frame.rent_credit.lamports() != plan.semantic.rent_credit_after
+        || decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
+            program_id,
+            frame.root,
+            SeriesRootV1::decode,
+        )? != plan.semantic.root_after
+    {
+        return Err(AdapterError::SeriesPostcondition.into());
+    }
+    require_unchanged_rent_credit(program_id, frame.rent_credit, plan.rent_credit)
+}
+
+fn move_lamports(
+    source: &AccountInfo<'_>,
+    destination: &AccountInfo<'_>,
+    amount: u64,
+    error: AdapterError,
+) -> Result<(), ProgramError> {
+    let source_after = source
+        .lamports()
+        .checked_sub(amount)
+        .ok_or(AdapterError::Arithmetic)?;
+    let destination_after = destination
+        .lamports()
+        .checked_add(amount)
+        .ok_or(AdapterError::Arithmetic)?;
+    let mut source_lamports = source.try_borrow_mut_lamports().map_err(|_| error)?;
+    let mut destination_lamports = destination.try_borrow_mut_lamports().map_err(|_| error)?;
+    **source_lamports = source_after;
+    **destination_lamports = destination_after;
+    Ok(())
+}
+
 #[inline(never)]
 fn process_close(
     program_id: &Pubkey,
@@ -1088,6 +1441,13 @@ fn require_readonly(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
     Ok(())
 }
 
+fn require_writable_protocol(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+    if account.is_signer || !account.is_writable || account.executable {
+        return Err(AdapterError::AccountPrivilege.into());
+    }
+    Ok(())
+}
+
 fn require_distinct(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
     for (index, left) in accounts.iter().enumerate() {
         for right in accounts.iter().skip(index.saturating_add(1)) {
@@ -1137,8 +1497,88 @@ fn map_transition_error(_: dclutch_series_contract::Error) -> ProgramError {
 mod tests {
     use super::*;
 
+    fn test_identity(byte: u8) -> IdentityV1 {
+        IdentityV1::new([byte; 32]).expect("nonzero identity")
+    }
+
+    fn test_recipe() -> SeriesRecipeV1 {
+        SeriesRecipeV1 {
+            realm_id: test_identity(1),
+            terms_id: test_identity(2),
+            claim_basis_id: test_identity(3),
+            capacity_profile_id: test_identity(4),
+            compiler_release_id: IdentityV1::new(
+                dclutch_series_contract::PRODUCT_COMPILER_RELEASE_ID_V1,
+            )
+            .expect("nonzero release"),
+            occurrence_schedule_id: test_identity(5),
+            source_schedule_id: test_identity(6),
+            capability_template_id: test_identity(7),
+            occurrence_derivation_release_id: IdentityV1::new(
+                dclutch_series_contract::OCCURRENCE_DERIVATION_RELEASE_ID_V1,
+            )
+            .expect("nonzero release"),
+            source_derivation_release_id: IdentityV1::new(
+                dclutch_series_contract::SOURCE_DERIVATION_RELEASE_ID_V1,
+            )
+            .expect("nonzero release"),
+            capability_derivation_release_id: IdentityV1::new(
+                dclutch_series_contract::CAPABILITY_DERIVATION_RELEASE_ID_V1,
+            )
+            .expect("nonzero release"),
+            market_derivation_release_id: IdentityV1::new(
+                dclutch_series_contract::MARKET_DERIVATION_RELEASE_ID_V1,
+            )
+            .expect("nonzero release"),
+            capitalization_schedule_id: test_identity(8),
+            first_occurrence_time: 100,
+            cadence_seconds: 60,
+            occurrence_count: 2,
+            first_generation: 9,
+            outcome_count: 2,
+        }
+    }
+
+    fn test_found_obligations(
+        recipe: SeriesRecipeV1,
+    ) -> dclutch_series_contract::FoundCompositionObligationsV1 {
+        let product_instance_id = test_identity(10);
+        let resolution_policy_id = test_identity(11);
+        let manifest_id = test_identity(12);
+        let market = MarketIdentity::new(
+            core_content_id(recipe.realm_id).expect("realm"),
+            core_content_id(product_instance_id).expect("product"),
+            core_content_id(recipe.claim_basis_id).expect("claim"),
+            core_content_id(resolution_policy_id).expect("policy"),
+            core_content_id(manifest_id).expect("manifest"),
+            recipe.first_generation,
+        );
+        dclutch_series_contract::FoundCompositionObligationsV1 {
+            realm_id: recipe.realm_id,
+            terms_id: recipe.terms_id,
+            claim_basis_id: recipe.claim_basis_id,
+            capacity_profile_id: recipe.capacity_profile_id,
+            compiler_release_id: recipe.compiler_release_id,
+            occurrence_artifact_id: test_identity(13),
+            occurrence_id: test_identity(14),
+            product_instance_id,
+            source_spec_id: test_identity(15),
+            source_window_id: test_identity(16),
+            statistic_id: test_identity(17),
+            resolution_policy_id,
+            capability_manifest_id: manifest_id,
+            market_identity_id: IdentityV1::new(hash(&market.to_bytes()).to_bytes())
+                .expect("market identity"),
+            occurrence_index: 0,
+            occurrence_time: recipe.first_occurrence_time,
+            generation: recipe.first_generation,
+            market_principal: 10,
+            refund_authority: test_identity(20),
+        }
+    }
+
     #[test]
-    fn router_never_admits_consume_or_partial_wires() {
+    fn router_admits_all_four_complete_wires_and_refuses_partial_wires() {
         let mut wire = [0u8; dclutch_series_contract::INSTANTIATE_NEXT_BYTES_V1];
         wire.get_mut(..8)
             .expect("fixed magic span")
@@ -1153,7 +1593,7 @@ mod tests {
         *wire.get_mut(ACTION_OFFSET_V1).expect("fixed action") = CLOSE_ACTION_V1;
         assert!(is_routable_instruction(&wire));
         *wire.get_mut(ACTION_OFFSET_V1).expect("fixed action") = CONSUME_ACTION_V1;
-        assert!(!is_routable_instruction(&wire));
+        assert!(is_routable_instruction(&wire));
         assert!(!is_routable_instruction(
             wire.get(..7).expect("fixed short span")
         ));
@@ -1182,11 +1622,36 @@ mod tests {
     }
 
     #[test]
-    fn executable_dispatch_rejects_consume_before_account_access() {
+    fn found_wire_is_derived_and_refuses_semantic_substitution() {
+        let recipe = test_recipe();
+        let obligations = test_found_obligations(recipe);
+        let found = synthesize_found_instruction(&obligations, &recipe).expect("exact Found wire");
+        assert_eq!(
+            hash(&found.identity().to_bytes()).to_bytes(),
+            obligations.market_identity_id.to_bytes()
+        );
+        assert_eq!(found.outcome_count(), 2);
+
+        let mut substituted = obligations;
+        substituted.product_instance_id = test_identity(18);
+        assert_eq!(
+            synthesize_found_instruction(&substituted, &recipe),
+            Err(AdapterError::SeriesAuthentication.into())
+        );
+        let mut substituted_recipe = recipe;
+        substituted_recipe.claim_basis_id = test_identity(19);
+        assert_eq!(
+            synthesize_found_instruction(&obligations, &substituted_recipe),
+            Err(AdapterError::SeriesAuthentication.into())
+        );
+    }
+
+    #[test]
+    fn executable_consume_decodes_before_exact_frame_access() {
         let instruction = dclutch_series_contract::ConsumeTicketV1 { expected_index: 0 }.to_bytes();
         assert_eq!(
             dispatch(&Pubkey::new_unique(), &[], &instruction),
-            Err(AdapterError::InvalidInstruction.into())
+            Err(AdapterError::AccountFrameLength.into())
         );
     }
 

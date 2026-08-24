@@ -34,7 +34,7 @@ use solana_program::{
     sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{native_loader, system_program, sysvar};
-use solana_system_interface::instruction::create_account;
+use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
     AdapterError,
@@ -125,7 +125,7 @@ impl<'a, 'info> FoundingFrame<'a, 'info> {
 }
 
 #[derive(Clone, Copy)]
-struct FoundingPlan {
+pub(crate) struct FoundingPlan {
     identity: MarketIdentity,
     identity_digest: [u8; 32],
     outcome_count: u8,
@@ -137,7 +137,19 @@ struct FoundingPlan {
     fund: FundingStateV1,
     rent_credit: RentCreditV1,
     rent_credit_lamports: u64,
+    rent_refund: [u8; 32],
     sponsor_before: u64,
+    market_lamports_before: u64,
+    fund_lamports_before: u64,
+}
+
+impl FoundingPlan {
+    /// Exact lamports the authenticated Market and Fund creation will debit.
+    pub(crate) fn required_payer_debit(&self) -> Result<u64, ProgramError> {
+        self.market_rent
+            .checked_add(self.fund_balance)
+            .ok_or(AdapterError::Arithmetic.into())
+    }
 }
 
 /// Atomically create and persist one Market and its prepaid resolution Fund.
@@ -146,60 +158,87 @@ pub(crate) fn process_found_market_and_fund(
     accounts: &[AccountInfo<'_>],
     instruction: FoundMarketAndFundV1,
 ) -> Result<(), ProgramError> {
+    let sponsor = *account(accounts, 0)?.key;
+    let plan = preflight_found_market_and_fund(program_id, accounts, instruction, sponsor, 0)?;
+    execute_preflighted_found_market_and_fund(program_id, accounts, plan)
+}
+
+/// Authenticate one Found transition while separating its temporary payer
+/// from the immutable Market rent-refund identity.
+///
+/// `additional_payer_lamports` is an exact amount a composing transition will
+/// credit to account 0 only after this complete preflight succeeds. Ordinary
+/// Found passes zero and uses account 0 for both roles. Series passes its
+/// ticket principal and the ticket-bound refund authority, so a permissionless
+/// actor can execute Found without acquiring protocol rent.
+pub(crate) fn preflight_found_market_and_fund(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction: FoundMarketAndFundV1,
+    rent_refund: Pubkey,
+    additional_payer_lamports: u64,
+) -> Result<FoundingPlan, ProgramError> {
     let frame = FoundingFrame::parse(accounts)?;
     let current_slot = Clock::get()
         .map_err(|_| AdapterError::FoundingAuthentication)?
         .slot;
-    let plan = authenticate_founding(program_id, &frame, instruction, current_slot)?;
-
-    let market_space =
-        u64::try_from(market_bytes(plan.outcome_count)?).map_err(|_| AdapterError::Arithmetic)?;
-    let create_market = create_account(
-        frame.sponsor.key,
-        frame.market.key,
-        plan.market_rent,
-        market_space,
+    authenticate_founding(
         program_id,
-    );
+        &frame,
+        instruction,
+        current_slot,
+        &rent_refund,
+        additional_payer_lamports,
+    )
+}
+
+/// Execute a previously authenticated Found plan against the same exact
+/// Found18 frame. The plan is module-private to construction, preventing a
+/// composing adapter from overriding authenticated funding or identity facts.
+pub(crate) fn execute_preflighted_found_market_and_fund(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    plan: FoundingPlan,
+) -> Result<(), ProgramError> {
+    let frame = FoundingFrame::parse(accounts)?;
+    if frame.sponsor.lamports() != plan.sponsor_before {
+        return Err(AdapterError::FoundingPostcondition.into());
+    }
+
     let market_bump = [plan.market_bump];
     let market_signer = [
         MARKET_SEED,
         plan.identity_digest.as_slice(),
         market_bump.as_slice(),
     ];
-    invoke_signed(
-        &create_market,
-        &[
-            frame.sponsor.clone(),
-            frame.market.clone(),
-            frame.system_program.clone(),
-        ],
-        &[&market_signer],
-    )
-    .map_err(|_| AdapterError::MarketCreateCpi)?;
+    fund_allocate_assign(
+        program_id,
+        frame.sponsor,
+        frame.market,
+        frame.system_program,
+        (plan.market_rent, market_bytes(plan.outcome_count)?),
+        &market_signer,
+        AdapterError::MarketCreateCpi,
+    )?;
 
     let sponsor_after_market = plan
         .sponsor_before
         .checked_sub(plan.market_rent)
         .ok_or(AdapterError::Arithmetic)?;
+    let market_after = plan
+        .market_lamports_before
+        .checked_add(plan.market_rent)
+        .ok_or(AdapterError::Arithmetic)?;
     if frame.sponsor.lamports() != sponsor_after_market
-        || frame.market.lamports() != plan.market_rent
+        || frame.market.lamports() != market_after
         || frame.market.owner != program_id
         || frame.market.data_len() != market_bytes(plan.outcome_count)?
     {
         return Err(AdapterError::FoundingPostcondition.into());
     }
 
-    let fund_space = u64::try_from(FUNDING_BYTES).map_err(|_| AdapterError::Arithmetic)?;
-    let create_fund = create_account(
-        frame.sponsor.key,
-        frame.fund.key,
-        plan.fund_balance,
-        fund_space,
-        program_id,
-    );
-    let fund_bump = [plan.fund_bump];
     let funding_components = plan.funding_derivation.seed_components();
+    let fund_bump = [plan.fund_bump];
     let fund_signer = [
         funding_components[0],
         funding_components[1],
@@ -209,16 +248,15 @@ pub(crate) fn process_found_market_and_fund(
         funding_components[5],
         fund_bump.as_slice(),
     ];
-    invoke_signed(
-        &create_fund,
-        &[
-            frame.sponsor.clone(),
-            frame.fund.clone(),
-            frame.system_program.clone(),
-        ],
-        &[&fund_signer],
-    )
-    .map_err(|_| AdapterError::FundCreateCpi)?;
+    fund_allocate_assign(
+        program_id,
+        frame.sponsor,
+        frame.fund,
+        frame.system_program,
+        (plan.fund_balance, FUNDING_BYTES),
+        &fund_signer,
+        AdapterError::FundCreateCpi,
+    )?;
 
     persist_founding(program_id, &frame, plan)?;
     Ok(())
@@ -230,6 +268,8 @@ fn authenticate_founding(
     frame: &FoundingFrame<'_, '_>,
     instruction: FoundMarketAndFundV1,
     current_slot: u64,
+    rent_refund: &Pubkey,
+    additional_payer_lamports: u64,
 ) -> Result<FoundingPlan, ProgramError> {
     authenticate_account_identities(program_id, frame)?;
     authenticate_immutable_records(program_id, frame, instruction)?;
@@ -241,7 +281,7 @@ fn authenticate_founding(
     if frame.market.key != &expected_market {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let root = founding_root(identity, frame.sponsor.key.to_bytes())?;
+    let root = founding_root(identity, rent_refund.to_bytes())?;
     let expected_market_bytes = validate_selected_market(instruction.outcome_count(), root)?;
 
     let rent = Rent::from_account_info(frame.rent_sysvar)
@@ -255,7 +295,7 @@ fn authenticate_founding(
     if frame.fund.key != &expected_fund {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let rent_credit = authenticate_rent_credit(program_id, frame.rent_credit, frame.sponsor.key)?;
+    let rent_credit = authenticate_rent_credit(program_id, frame.rent_credit, rent_refund)?;
     let rent_credit_lamports = frame
         .rent_credit
         .try_lamports()
@@ -265,7 +305,12 @@ fn authenticate_founding(
     let total_debit = market_rent
         .checked_add(fund_balance)
         .ok_or(AdapterError::Arithmetic)?;
-    if frame.sponsor.lamports() < total_debit {
+    let sponsor_before = frame
+        .sponsor
+        .lamports()
+        .checked_add(additional_payer_lamports)
+        .ok_or(AdapterError::Arithmetic)?;
+    if sponsor_before < total_debit {
         return Err(AdapterError::FundUnderfunded.into());
     }
 
@@ -299,7 +344,10 @@ fn authenticate_founding(
         fund,
         rent_credit,
         rent_credit_lamports,
-        sponsor_before: frame.sponsor.lamports(),
+        rent_refund: rent_refund.to_bytes(),
+        sponsor_before,
+        market_lamports_before: frame.market.lamports(),
+        fund_lamports_before: frame.fund.lamports(),
     })
 }
 
@@ -323,6 +371,12 @@ fn authenticate_fund(
                 .map_err(|_| AdapterError::FoundingAuthentication.into())
         },
     )?;
+    if hash(&material.policy().to_bytes()).to_bytes() != identity.resolution_policy_id().to_bytes()
+        || hash(&material.feed_profile().to_bytes()).to_bytes()
+            != *material.policy().feed_profile_id()
+    {
+        return Err(AdapterError::FoundingAuthentication.into());
+    }
     let (funding, derivation) = with_authenticated_finalized_record_v1(
         program_id,
         frame.capability_manifest,
@@ -373,10 +427,8 @@ fn authenticate_account_identities(
         || !frame.sponsor.data_is_empty()
         || frame.market.owner != &system_program::ID
         || !frame.market.data_is_empty()
-        || frame.market.lamports() != 0
         || frame.fund.owner != &system_program::ID
         || !frame.fund.data_is_empty()
-        || frame.fund.lamports() != 0
         || frame.system_program.key != &system_program::ID
         || frame.system_program.owner != &native_loader::ID
         || frame.rent_sysvar.key != &sysvar::rent::ID
@@ -487,11 +539,19 @@ fn persist_founding(
         .checked_sub(plan.market_rent)
         .and_then(|balance| balance.checked_sub(plan.fund_balance))
         .ok_or(AdapterError::Arithmetic)?;
+    let expected_market = plan
+        .market_lamports_before
+        .checked_add(plan.market_rent)
+        .ok_or(AdapterError::Arithmetic)?;
+    let expected_fund = plan
+        .fund_lamports_before
+        .checked_add(plan.fund_balance)
+        .ok_or(AdapterError::Arithmetic)?;
     if frame.sponsor.lamports() != expected_sponsor
-        || frame.market.lamports() != plan.market_rent
+        || frame.market.lamports() != expected_market
         || frame.market.owner != program_id
         || frame.market.data_len() != market_bytes(plan.outcome_count)?
-        || frame.fund.lamports() != plan.fund_balance
+        || frame.fund.lamports() != expected_fund
         || frame.fund.owner != program_id
         || frame.fund.data_len() != FUNDING_BYTES
         || frame.rent_credit.lamports() != plan.rent_credit_lamports
@@ -499,7 +559,7 @@ fn persist_founding(
         return Err(AdapterError::FoundingPostcondition.into());
     }
 
-    let root = founding_root(plan.identity, frame.sponsor.key.to_bytes())?;
+    let root = founding_root(plan.identity, plan.rent_refund)?;
     let mut market_data = frame
         .market
         .try_borrow_mut_data()
@@ -678,6 +738,41 @@ fn preflight_mutable(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::FoundingAuthentication)?,
     );
+    Ok(())
+}
+
+fn fund_allocate_assign<'info>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    funding: (u64, usize),
+    signer: &[&[u8]],
+    cpi_error: AdapterError,
+) -> Result<(), ProgramError> {
+    let (amount, space) = funding;
+    invoke_signed(
+        &transfer(payer.key, destination.key, amount),
+        &[payer.clone(), destination.clone(), system.clone()],
+        &[],
+    )
+    .map_err(|_| cpi_error)?;
+    let space_u64 = u64::try_from(space).map_err(|_| AdapterError::Arithmetic)?;
+    invoke_signed(
+        &allocate(destination.key, space_u64),
+        &[destination.clone(), system.clone()],
+        &[signer],
+    )
+    .map_err(|_| cpi_error)?;
+    invoke_signed(
+        &assign(destination.key, program_id),
+        &[destination.clone(), system.clone()],
+        &[signer],
+    )
+    .map_err(|_| cpi_error)?;
+    if destination.owner != program_id || destination.data_len() != space {
+        return Err(AdapterError::FoundingPostcondition.into());
+    }
     Ok(())
 }
 
@@ -1053,7 +1148,14 @@ mod tests {
 
         fn authenticate(&self) -> Result<FoundingPlan, ProgramError> {
             let frame = FoundingFrame::parse(&self.accounts)?;
-            authenticate_founding(&self.program_id, &frame, self.instruction, 44)
+            authenticate_founding(
+                &self.program_id,
+                &frame,
+                self.instruction,
+                44,
+                frame.sponsor.key,
+                0,
+            )
         }
     }
 
@@ -1413,11 +1515,20 @@ mod tests {
     }
 
     #[test]
-    fn existing_state_and_insufficient_atomic_capital_refuse_preflight() {
-        let existing_market = Fixture::new(2);
-        **test_account(&existing_market.accounts, 1)
+    fn dusted_vacancies_compose_but_existing_state_and_underfunding_refuse() {
+        let dusted = Fixture::new(2);
+        **test_account(&dusted.accounts, 1)
             .try_borrow_mut_lamports()
             .expect("market lamports") = 1;
+        **test_account(&dusted.accounts, 2)
+            .try_borrow_mut_lamports()
+            .expect("fund lamports") = 2;
+        let dusted_plan = dusted.authenticate().expect("dusted vacant PDAs");
+        assert_eq!(dusted_plan.market_lamports_before, 1);
+        assert_eq!(dusted_plan.fund_lamports_before, 2);
+
+        let existing_market = Fixture::new(2);
+        test_account(&existing_market.accounts, 1).assign(&existing_market.program_id);
         assert_eq!(
             existing_market.authenticate().err(),
             Some(ProgramError::from(AdapterError::AccountIdentity))
@@ -1430,6 +1541,63 @@ mod tests {
         assert_eq!(
             insufficient.authenticate().err(),
             Some(ProgramError::from(AdapterError::FundUnderfunded))
+        );
+    }
+
+    #[test]
+    fn composing_payer_cannot_substitute_the_semantic_rent_refund() {
+        let mut fixture = Fixture::new(2);
+        let payer = *test_account(&fixture.accounts, 0).key;
+        let semantic_refund = Pubkey::new_unique();
+        assert_ne!(payer, semantic_refund);
+        let frame = FoundingFrame::parse(&fixture.accounts).expect("exact Found18");
+        assert_eq!(
+            authenticate_founding(
+                &fixture.program_id,
+                &frame,
+                fixture.instruction,
+                44,
+                &semantic_refund,
+                0,
+            )
+            .err(),
+            Some(ProgramError::from(AdapterError::AccountIdentity))
+        );
+
+        let (credit_key, credit_bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, semantic_refund.as_ref()],
+            &fixture.program_id,
+        );
+        let credit = RentCreditV1::new(
+            RefundAuthority::new(semantic_refund.to_bytes()).expect("refund authority"),
+            credit_bump,
+        );
+        let program_id = fixture.program_id;
+        *test_account_mut(&mut fixture.accounts, 3) = leak_account(
+            credit_key,
+            false,
+            false,
+            1,
+            credit.to_bytes().to_vec(),
+            program_id,
+            false,
+        );
+        let frame = FoundingFrame::parse(&fixture.accounts).expect("exact Found18");
+        let plan = authenticate_founding(
+            &fixture.program_id,
+            &frame,
+            fixture.instruction,
+            44,
+            &semantic_refund,
+            0,
+        )
+        .expect("separate payer and refund authenticate");
+        assert_eq!(plan.rent_refund, semantic_refund.to_bytes());
+        assert_eq!(
+            founding_root(plan.identity, plan.rent_refund)
+                .expect("founding root")
+                .rent_refund(),
+            semantic_refund.to_bytes()
         );
     }
 

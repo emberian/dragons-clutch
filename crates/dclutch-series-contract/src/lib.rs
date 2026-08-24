@@ -2016,6 +2016,8 @@ pub struct FoundCompositionObligationsV1 {
     pub generation: u64,
     /// Exact ticket principal admitted only to Found obligations.
     pub market_principal: u64,
+    /// Immutable Market/Fund/custody rent-refund beneficiary.
+    pub refund_authority: IdentityV1,
 }
 
 /// Pure obligations that a measured Found adapter must satisfy atomically.
@@ -2143,6 +2145,7 @@ pub fn plan_consume_ticket_v1(
         occurrence_time: derived.occurrence_time,
         generation: derived.generation,
         market_principal: ticket.market_principal,
+        refund_authority: ticket.refund_authority,
     };
     Ok(TicketConsumptionPlanV1 {
         root_before: root,

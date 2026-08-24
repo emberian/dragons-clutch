@@ -790,6 +790,29 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
         ),
         Err(Error::TicketMismatch)
     );
+    let wrong_refund = OccurrenceTicketV1 {
+        refund_authority: id(249),
+        ..first.ticket
+    };
+    assert_eq!(
+        plan_consume_ticket_v1(
+            first.root_after,
+            root_address,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            first.ticket.derived_occurrence_id,
+            &occurrence,
+            occurrence.capitalization_id,
+            &capitalization,
+            wrong_refund,
+            ConsumeTicketV1 { expected_index: 0 },
+            23,
+            100,
+        ),
+        Err(Error::TicketMismatch)
+    );
     assert_eq!(first.root_after.outstanding_tickets, 1);
     let plan = plan_consume_ticket_v1(
         first.root_after,
@@ -824,6 +847,10 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
     );
     assert_eq!(plan.found_obligations.generation, occurrence.generation);
     assert_eq!(plan.found_obligations.market_principal, 15);
+    assert_eq!(
+        plan.found_obligations.refund_authority,
+        first.ticket.refund_authority
+    );
     assert_eq!(plan.rent_credit_after, 108);
     assert_eq!(plan.ticket_lamports_after, 0);
     assert_eq!(plan.root_after.outstanding_tickets, 0);
