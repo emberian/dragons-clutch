@@ -8,7 +8,7 @@
 //! must commit every returned write and close in one instruction.
 
 use clutch_fee_runtime_contract::projection::AuthenticatedSelectedOwnerFeeV2;
-use clutch_fee_runtime_contract::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use clutch_fee_runtime_contract::selected::{OwnerFeeCarryV1, SelectedCompositeFeeAccess};
 use clutch_fee_runtime_contract::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, GeneralFeeTerminalProjectionV1,
     OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1, OwnerFeeRentDispositionV2,
@@ -435,10 +435,10 @@ impl OwnerFeeAction38PlanV2 {
 
 /// Construct the settled action-38 plan from exact authenticated semantic owners.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_owner_fee_action38_v2<B>(
+pub fn prepare_owner_fee_action38_v2<B, S>(
     request: FinalizeOwnerSettlementPayloadV1,
     accounts: OwnerFeeAction38AccountsV2,
-    selected: &SelectedCompositeFeeV1,
+    selected: &S,
     projection: &AuthenticatedSelectedOwnerFeeV2,
     carry: &OwnerFeeCarryV1,
     bindings: OwnerFeeFinalizationBindingsV2,
@@ -453,6 +453,7 @@ where
         + PositionV3Sha256Backend
         + ReplayV3HashBackend
         + OwnerFinalizedRowDataHashV2,
+    S: SelectedCompositeFeeAccess + ?Sized,
 {
     accounts.validate()?;
     let rent = bindings.rent_disposition;

@@ -869,6 +869,10 @@ pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected composite-fee record outer bytes.
 pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 340;
+/// Current rent-owned RevenuePolicyV2 selected-fee record version.
+pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned RevenuePolicyV2 selected-fee record outer bytes.
+pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2: usize = 388;
 /// Fresh disabled owner fee-carry envelope tag.
 pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// First owner fee-carry envelope version.
@@ -913,6 +917,10 @@ pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 pub const TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected-record treasury-ledger outer bytes.
 pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 148;
+/// Current rent-owned RevenuePolicyV2 treasury-ledger version.
+pub const TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned RevenuePolicyV2 treasury-ledger outer bytes.
+pub const TREASURY_LEDGER_ACCOUNT_BYTES_V2: usize = 196;
 /// Fresh disabled buyer-first settlement cash-pot envelope tag.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// First buyer-first settlement cash-pot envelope version.
@@ -998,7 +1006,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 39] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1045,6 +1053,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         owner: "clutch-general-v2-contract/SelectedFeeRecordV1AccountV1",
     },
     AccountAllocationV1 {
+        tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
+        version: SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/SelectedFeeRecordV2AccountV1",
+    },
+    AccountAllocationV1 {
         tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
         version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/OwnerFeeCarryV1AccountV1",
@@ -1088,6 +1101,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 37] = [
         tag: TREASURY_LEDGER_ACCOUNT_TAG,
         version: TREASURY_LEDGER_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/TreasuryLedgerV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: TREASURY_LEDGER_ACCOUNT_TAG,
+        version: TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/TreasuryLedgerV2AccountV1",
     },
     AccountAllocationV1 {
         tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,

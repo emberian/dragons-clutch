@@ -6,12 +6,16 @@
 
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
+use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 
 use crate::allocation::{
     allocate_payer_debit, allocate_recipients, FeeEnvelopeV1, PayerAllocationV1,
     RecipientAllocationV1, StandingMakerRowV1,
 };
-use crate::selected::{OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use crate::selected::{
+    OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeAccess,
+    SelectedCompositeFeeV1, SelectedCompositeFeeV2,
+};
 use crate::projection::CertifiedRecipientAllocationV2;
 use crate::treasury::TreasuryLedgerV1;
 use crate::{Error, Id, Result, MAX_FEE_ROWS_V1};
@@ -25,12 +29,14 @@ pub const CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES: usize =
 pub const TREASURY_LEDGER_ACCOUNT_V1_BYTES: usize = 144;
 
 pub const FEE_RECORD_MAGIC_V1: [u8; 8] = *b"DCFEESEL";
+pub const FEE_RECORD_MAGIC_V2: [u8; 8] = *b"DCFEESE2";
 pub const OWNER_FEE_CARRY_MAGIC_V1: [u8; 8] = *b"DCFEECRY";
 pub const PAYER_ALLOCATION_MAGIC_V1: [u8; 8] = *b"DCFEEPAY";
 pub const RECIPIENT_ALLOCATION_MAGIC_V1: [u8; 8] = *b"DCFEEREC";
 pub const TREASURY_LEDGER_MAGIC_V1: [u8; 8] = *b"DCFEETRY";
 
 const CODEC_VERSION_V1: u16 = 1;
+const CODEC_VERSION_V2: u16 = 2;
 const CODEC_FLAGS_V1: u16 = 0;
 
 pub fn encode_fee_record_v1(
@@ -120,6 +126,105 @@ pub fn decode_fee_record_v1(
     Ok(selected)
 }
 
+/// Encode the fresh RevenuePolicyV2-selected semantic body. The width is
+/// intentionally unchanged, but both magic and schema version are distinct.
+pub fn encode_fee_record_v2(
+    selected: &SelectedCompositeFeeV2,
+) -> Result<[u8; FEE_RECORD_ACCOUNT_V1_BYTES]> {
+    let mut output = [0u8; FEE_RECORD_ACCOUNT_V1_BYTES];
+    let mut cursor = 0usize;
+    put_header_version(
+        &mut output,
+        &mut cursor,
+        FEE_RECORD_MAGIC_V2,
+        CODEC_VERSION_V2,
+    )?;
+    for identity in [
+        selected.fee_record(),
+        selected.realm(),
+        selected.market(),
+        selected.epoch(),
+        selected.selected_candidate(),
+        selected.batch_policy(),
+        selected.revenue_policy(),
+        selected.treasury_owner(),
+        selected.treasury_position(),
+    ] {
+        put(&mut output, &mut cursor, &identity.0)?;
+    }
+    put(
+        &mut output,
+        &mut cursor,
+        &selected.price_scale().to_le_bytes(),
+    )?;
+    put(&mut output, &mut cursor, &[selected.outcome_count()])?;
+    put(&mut output, &mut cursor, &[0; 3])?;
+    put(
+        &mut output,
+        &mut cursor,
+        &selected.dispersion_bps().to_le_bytes(),
+    )?;
+    put(
+        &mut output,
+        &mut cursor,
+        &selected.floor_range_bps().to_le_bytes(),
+    )?;
+    put(
+        &mut output,
+        &mut cursor,
+        &selected.carry_denominator().to_le_bytes(),
+    )?;
+    finish(cursor, output.len())?;
+    Ok(output)
+}
+
+pub fn decode_fee_record_v2(
+    input: &[u8],
+    batch: &FrozenPolicyV1,
+    revenue: &RevenuePolicyV2,
+) -> Result<SelectedCompositeFeeV2> {
+    exact_len(input, FEE_RECORD_ACCOUNT_V1_BYTES)?;
+    let mut cursor = 0usize;
+    take_header_version(
+        input,
+        &mut cursor,
+        FEE_RECORD_MAGIC_V2,
+        CODEC_VERSION_V2,
+    )?;
+    let fee_record = read_id(input, &mut cursor)?;
+    let realm = read_id(input, &mut cursor)?;
+    let market = read_id(input, &mut cursor)?;
+    let epoch = read_id(input, &mut cursor)?;
+    let candidate = read_id(input, &mut cursor)?;
+    let _batch_policy = read_id(input, &mut cursor)?;
+    let _revenue_policy = read_id(input, &mut cursor)?;
+    let _treasury_owner = read_id(input, &mut cursor)?;
+    let treasury_position = read_id(input, &mut cursor)?;
+    let price_scale = read_u64(input, &mut cursor)?;
+    let outcome_count = read_u8(input, &mut cursor)?;
+    require_zero(take(input, &mut cursor, 3)?)?;
+    let _dispersion_bps = read_u32(input, &mut cursor)?;
+    let _floor_range_bps = read_u32(input, &mut cursor)?;
+    let _denominator = read_u128(input, &mut cursor)?;
+    finish(cursor, input.len())?;
+    let selected = SelectedCompositeFeeV2::select(
+        fee_record,
+        realm,
+        market,
+        epoch,
+        candidate,
+        treasury_position,
+        price_scale,
+        outcome_count,
+        batch,
+        revenue,
+    )?;
+    if encode_fee_record_v2(&selected)?.as_slice() != input {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(selected)
+}
+
 pub fn encode_owner_fee_carry_v1(
     carry: &OwnerFeeCarryV1,
 ) -> Result<[u8; OWNER_FEE_CARRY_ACCOUNT_V1_BYTES]> {
@@ -137,9 +242,9 @@ pub fn encode_owner_fee_carry_v1(
     Ok(output)
 }
 
-pub fn decode_owner_fee_carry_v1(
+pub fn decode_owner_fee_carry_v1<S: SelectedCompositeFeeAccess + ?Sized>(
     input: &[u8],
-    selected: &SelectedCompositeFeeV1,
+    selected: &S,
 ) -> Result<OwnerFeeCarryV1> {
     exact_len(input, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
@@ -489,9 +594,9 @@ pub fn encode_treasury_ledger_v1(
     Ok(output)
 }
 
-pub fn decode_treasury_ledger_v1(
+pub fn decode_treasury_ledger_v1<S: SelectedCompositeFeeAccess + ?Sized>(
     input: &[u8],
-    selected: &SelectedCompositeFeeV1,
+    selected: &S,
 ) -> Result<TreasuryLedgerV1> {
     exact_len(input, TREASURY_LEDGER_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
@@ -533,16 +638,34 @@ fn put_header<const N: usize>(
     cursor: &mut usize,
     magic: [u8; 8],
 ) -> Result<()> {
+    put_header_version(output, cursor, magic, CODEC_VERSION_V1)
+}
+
+fn put_header_version<const N: usize>(
+    output: &mut [u8; N],
+    cursor: &mut usize,
+    magic: [u8; 8],
+    version: u16,
+) -> Result<()> {
     put(output, cursor, &magic)?;
-    put(output, cursor, &CODEC_VERSION_V1.to_le_bytes())?;
+    put(output, cursor, &version.to_le_bytes())?;
     put(output, cursor, &CODEC_FLAGS_V1.to_le_bytes())
 }
 
 fn take_header(input: &[u8], cursor: &mut usize, magic: [u8; 8]) -> Result<()> {
+    take_header_version(input, cursor, magic, CODEC_VERSION_V1)
+}
+
+fn take_header_version(
+    input: &[u8],
+    cursor: &mut usize,
+    magic: [u8; 8],
+    version: u16,
+) -> Result<()> {
     if take(input, cursor, 8)? != magic.as_slice() {
         return Err(Error::WrongAccountKind);
     }
-    if read_u16(input, cursor)? != CODEC_VERSION_V1 {
+    if read_u16(input, cursor)? != version {
         return Err(Error::WrongVersion);
     }
     if read_u16(input, cursor)? != CODEC_FLAGS_V1 {
