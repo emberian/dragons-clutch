@@ -21,6 +21,7 @@ mod action_receipt;
 mod budget;
 mod codec;
 mod covered_dealer_selection;
+mod covered_dealer_terminal;
 mod epoch_v2;
 mod exit_ticket;
 mod facility;
@@ -44,9 +45,11 @@ mod pot_v2;
 mod position_v3;
 mod rent;
 mod root_tombstone;
+mod series_obligation;
 mod replay;
 mod state;
 mod state_v2;
+mod state_v3;
 mod terminal_claims;
 mod terminal_state;
 mod transitions;
@@ -55,6 +58,7 @@ mod transitions_v3;
 pub use action_receipt::*;
 pub use budget::*;
 pub use covered_dealer_selection::*;
+pub use covered_dealer_terminal::*;
 pub use epoch_v2::*;
 pub use exit_ticket::*;
 pub use facility::*;
@@ -78,9 +82,11 @@ pub use pot_v2::*;
 pub use position_v3::*;
 pub use rent::*;
 pub use root_tombstone::*;
+pub use series_obligation::*;
 pub use replay::*;
 pub use state::*;
 pub use state_v2::*;
+pub use state_v3::*;
 pub use terminal_claims::*;
 pub use terminal_state::*;
 pub use transitions::*;
@@ -161,6 +167,8 @@ pub const DEALER_LP_PAGE_SET_FINAL_DOMAIN_V1: &[u8] =
 pub const DEALER_STATE_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/state/v1\0";
 /// Exact content domain for authoritative `DealerStateV2`.
 pub const DEALER_STATE_CONTENT_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-runtime/state/v2\0";
+/// Exact content domain for authoritative Product-obligation-counting State V3.
+pub const DEALER_STATE_CONTENT_DOMAIN_V3: &[u8] = b"dragons-clutch/dealer-runtime/state/v3\0";
 /// Exact content domain for one counted Dealer Epoch binding successor.
 pub const DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/epoch-binding/v2\0";
@@ -208,6 +216,9 @@ pub const DEALER_QUOTE_ADMISSION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for the counted Dealer selection attachment.
 pub const DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/covered-selection/v1\0";
+/// Exact content domain for the facility-lifetime Product Series obligation.
+pub const DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.

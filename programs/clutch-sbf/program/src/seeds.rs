@@ -156,6 +156,9 @@ pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
 /// Counted CoveredDealer selection attachment.
 pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
     clutch_dealer_runtime_contract::DEALER_COVERED_SELECTION_PDA_DOMAIN_V1;
+/// Counted facility-lifetime Product Series obligation.
+pub const SEED_DEALER_SERIES_OBLIGATION: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -1211,6 +1214,14 @@ pub fn dealer_covered_selection_pda(
         ],
         program_id,
     )
+}
+
+/// Counted facility-lifetime Product Series-obligation binding.
+pub fn dealer_series_obligation_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_SERIES_OBLIGATION, facility_id])
 }
 
 /// Canonical full-width batch-policy artifact address.

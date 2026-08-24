@@ -8,10 +8,22 @@
 //! adapter consumes only actions with complete account contracts; every other
 //! action remains refused before reading accounts.
 
-use clutch_dealer_runtime_contract::FixedCodec;
-use clutch_solana_layout::registry::DealerFacilityAction;
+use clutch_dealer_runtime_contract::{
+    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1, DealerStateV3, FixedCodec, Id,
+};
+use clutch_solana_layout::registry::{
+    DealerFacilityAction, DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+    DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
+};
+use solana_account_info::AccountInfo;
+use solana_pubkey::Pubkey;
 
-use crate::error::{ClutchError, Refusal};
+use crate::accounts::{expect_pda, require};
+use crate::error::{ClutchError, Outcome, Refusal};
+use crate::seeds;
 
 /// Exact global Dealer account-envelope bytes.
 pub const DEALER_ACCOUNT_ENVELOPE_BYTES_V1: usize = 8;
@@ -108,6 +120,281 @@ pub fn decode_dealer_account_body_v1<T: FixedCodec>(
     Ok((envelope, body))
 }
 
+/// Program-local authority that one exact counted `0xae/v2` postwrite was
+/// decoded from its program-owned PDA. Private fields prevent General from
+/// substituting a caller-shaped terminal DTO.
+pub(crate) struct AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    account_id: Id,
+    owner_program_id: Id,
+    bump: u8,
+    terminal: CoveredDealerTerminalV2,
+}
+
+/// Private exact account capability for the facility-lifetime Product
+/// Series-obligation binding.
+pub(crate) struct AuthenticatedDealerSeriesObligationV1 {
+    account_id: Id,
+    bump: u8,
+    binding: DealerSeriesObligationBindingV1,
+}
+
+/// Private exact account capability for Product-obligation-counting State V3.
+pub(crate) struct AuthenticatedDealerStateV3 {
+    account_id: Id,
+    bump: u8,
+    state: DealerStateV3,
+}
+
+impl AuthenticatedDealerStateV3 {
+    /// Exact physical State account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Canonical State PDA bump.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the complete authoritative State body.
+    pub(crate) const fn state(&self) -> &DealerStateV3 {
+        &self.state
+    }
+}
+
+/// Authenticate an exact `0x94/v2` Dealer State account and both independently
+/// owned rent-principal compartments.
+pub(crate) fn authenticate_dealer_state_v3(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedDealerStateV3> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_STATE_V3_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, state) = decode_dealer_account_body_v1::<DealerStateV3>(
+        &data,
+        DEALER_STATE_V3_ACCOUNT_TAG,
+        DEALER_STATE_V3_ACCOUNT_VERSION,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_state_v2_pda(program_id, &state.base.facility_id.bytes()),
+        Some(envelope.bump),
+    )?;
+    let root_floor = state
+        .base
+        .rent
+        .refundable_live_principal
+        .checked_add(state.base.rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(state.base.rent.donation_floor))
+        .ok_or(ClutchError::Arithmetic)?;
+    let upgrade_floor = state
+        .product_upgrade_rent
+        .refundable_principal
+        .checked_add(state.product_upgrade_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        account.lamports()
+            >= root_floor
+                .checked_add(upgrade_floor)
+                .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedDealerStateV3 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        bump: envelope.bump,
+        state,
+    })
+}
+
+impl AuthenticatedDealerSeriesObligationV1 {
+    /// Exact authenticated physical account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Exact canonical PDA bump.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the complete exact body; detached Product-coordinate DTOs are
+    /// never minted from this authority.
+    pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV1 {
+        &self.binding
+    }
+}
+
+/// Authenticate one exact `0xaf/1` Dealer facility obligation account.
+pub(crate) fn authenticate_dealer_series_obligation_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedDealerSeriesObligationV1> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, binding) =
+        decode_dealer_account_body_v1::<DealerSeriesObligationBindingV1>(
+            &data,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_series_obligation_pda(program_id, &binding.key.facility_id.bytes()),
+        Some(envelope.bump),
+    )?;
+    let floor = binding
+        .rent
+        .refundable_principal
+        .checked_add(binding.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        binding.key.binding_account_id.bytes() == account.key.to_bytes()
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedDealerSeriesObligationV1 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        bump: envelope.bump,
+        binding,
+    })
+}
+
+impl AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    /// Exact authenticated physical attachment account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Program which owns the authenticated postwrite bytes.
+    pub(crate) const fn owner_program_id(&self) -> Id {
+        self.owner_program_id
+    }
+
+    /// Exact PDA bump authenticated from the envelope and seed tuple.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the exact decoded terminal body; no detached field DTO exists.
+    pub(crate) const fn terminal(&self) -> &CoveredDealerTerminalV2 {
+        &self.terminal
+    }
+}
+
+fn authenticate_covered_dealer_terminal_postwrite_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, terminal) = decode_dealer_account_body_v1::<CoveredDealerTerminalV2>(
+        &data,
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_covered_selection_pda(
+            program_id,
+            &terminal.general_epoch_account_id().bytes(),
+            &terminal.settlement_candidate_id().bytes(),
+        ),
+        Some(envelope.bump),
+    )?;
+    let rent = terminal.rent();
+    let floor = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        terminal.selection_account_id().bytes() == account.key.to_bytes()
+            && terminal.stored_bump() == envelope.bump
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedCoveredDealerTerminalPostwriteV2 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        owner_program_id: Id::from_bytes(program_id.to_bytes()),
+        bump: envelope.bump,
+        terminal,
+    })
+}
+
+/// Authenticate the read-only terminal authority used to enter General
+/// retirement without writable privilege theater.
+pub(crate) fn authenticate_covered_dealer_terminal_postwrite_readonly_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    authenticate_covered_dealer_terminal_postwrite_v2(program_id, account, false)
+}
+
+/// Authenticate the writable terminal authority used only by General's later
+/// counted attachment close.
+pub(crate) fn authenticate_covered_dealer_terminal_postwrite_writable_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    authenticate_covered_dealer_terminal_postwrite_v2(program_id, account, true)
+}
+
 /// Encode one exact pure Dealer body behind its strict global envelope.
 pub fn encode_dealer_account_body_v1<T: FixedCodec>(
     output: &mut [u8],
@@ -173,11 +460,23 @@ pub const fn persisted_account_contract_v1(
             registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
             DealerAccountLifetimeV1::Immutable,
         ),
-        registry::DEALER_STATE_V2_ACCOUNT_TAG => (
-            registry::DEALER_STATE_V2_ACCOUNT_VERSION,
-            registry::DEALER_STATE_V2_ACCOUNT_BYTES,
-            DealerAccountLifetimeV1::RootToTombstone,
-        ),
+        registry::DEALER_STATE_V2_ACCOUNT_TAG => {
+            let account_bytes = match version {
+                registry::DEALER_STATE_V2_ACCOUNT_VERSION => {
+                    registry::DEALER_STATE_V2_ACCOUNT_BYTES
+                }
+                registry::DEALER_STATE_V3_ACCOUNT_VERSION => {
+                    registry::DEALER_STATE_V3_ACCOUNT_BYTES
+                }
+                _ => return None,
+            };
+            return Some(DealerPersistedAccountContractV1 {
+                tag,
+                version,
+                account_bytes,
+                lifetime: DealerAccountLifetimeV1::RootToTombstone,
+            });
+        }
         registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG => (
             registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION,
             registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES,
@@ -227,6 +526,24 @@ pub const fn persisted_account_contract_v1(
             registry::DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
             registry::DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
             DealerAccountLifetimeV1::ReplayReferencedEvidence,
+        ),
+        registry::DEALER_COVERED_SELECTION_ACCOUNT_TAG => {
+            if version != registry::DEALER_COVERED_SELECTION_ACCOUNT_VERSION
+                && version != registry::DEALER_COVERED_TERMINAL_ACCOUNT_VERSION
+            {
+                return None;
+            }
+            return Some(DealerPersistedAccountContractV1 {
+                tag,
+                version,
+                account_bytes: registry::DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+                lifetime: DealerAccountLifetimeV1::CountedChild,
+            });
+        }
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG => (
+            registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+            registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
         ),
         _ => return None,
     };
@@ -295,6 +612,8 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::LapseEpoch
             | DealerFacilityAction::SelectLeaseAndBegin => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 24,
+            DealerFacilityAction::FinalizeSettlement
+            | DealerFacilityAction::AbortBeforeCollection => 16,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
             _ => 0,
@@ -351,6 +670,17 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::RefundCancelledSponsor
             | DealerFacilityAction::BindEpoch
             | DealerFacilityAction::LapseEpoch => {
+                value.liveness_call_ordinal = read_u32(input, 16);
+                if input[20..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::FinalizeSettlement
+            | DealerFacilityAction::AbortBeforeCollection => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
@@ -605,12 +935,18 @@ pub enum DealerMetaRoleV1 {
     RevenuePolicyRecord,
     /// Selected owner-netted fee record.
     FeeRecord,
+    /// Canonical fee closure manifest paired with the terminal receipt.
+    FeeClosureManifest,
+    /// Canonical candidate-wide fee terminal receipt.
+    FeeTerminalReceipt,
     /// Authenticated canonical EconomicDomainV2.
     EconomicDomain,
     /// Immutable quantized price-measure policy artifact.
     PriceMeasurePolicy,
     /// Newly materialized counted CoveredDealer selection certificate.
     CoveredSelection,
+    /// Counted facility-lifetime Product Series obligation binding.
+    SeriesObligation,
     /// Canonical frozen General OrderPage V5.
     OrderPage,
     /// Sole refundable-rent recipient.
@@ -888,7 +1224,7 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
-const COLLECT_DELIVER_FIXED_COUNT: usize = 33;
+const COLLECT_DELIVER_FIXED_COUNT: usize = 34;
 const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -923,11 +1259,50 @@ const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::PriceGrid, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::MarketGenesis, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
+
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30;
+const fn finalize_abort_contract(finalize: bool) -> [DealerMetaSpecV1; FINALIZE_ABORT_ACCOUNT_COUNT] {
+    [
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, finalize),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, !finalize),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::CoveredSelection, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::Lease, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::SettlementPot, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FeeClosureManifest, DealerMetaOwnerV1::FeeRuntime, false, false),
+    meta(DealerMetaRoleV1::FeeTerminalReceipt, DealerMetaOwnerV1::FeeRuntime, false, false),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
+    ]
+}
+const FINALIZE_SETTLEMENT: &[DealerMetaSpecV1] = &finalize_abort_contract(true);
+const ABORT_BEFORE_COLLECTION: &[DealerMetaSpecV1] = &finalize_abort_contract(false);
 
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
@@ -1201,6 +1576,8 @@ pub fn meta_contract_v1(
             &COLLECT_DELIVER
                 [..COLLECT_DELIVER_FIXED_COUNT + usize::from(payload.book_page_count)],
         ),
+        DealerFacilityAction::FinalizeSettlement => Some(FINALIZE_SETTLEMENT),
+        DealerFacilityAction::AbortBeforeCollection => Some(ABORT_BEFORE_COLLECTION),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit

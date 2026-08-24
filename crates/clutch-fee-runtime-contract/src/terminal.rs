@@ -1068,8 +1068,12 @@ impl FeeRecordTerminalReceiptV1 {
         DealerFeeTerminalProjectionV1 {
             terminal_receipt: self.terminal_receipt,
             fee_record: self.fee_record,
+            realm: self.realm,
+            market: self.market,
+            epoch: self.epoch,
             settlement_candidate: self.settlement_candidate,
-            fee_policy: self.batch_policy,
+            batch_policy: self.batch_policy,
+            revenue_policy: self.revenue_policy,
             outcome: self.outcome,
         }
     }
@@ -1304,8 +1308,12 @@ pub struct GeneralFeeTerminalProjectionV1 {
 pub struct DealerFeeTerminalProjectionV1 {
     pub terminal_receipt: Id,
     pub fee_record: Id,
+    pub realm: Id,
+    pub market: Id,
+    pub epoch: Id,
     pub settlement_candidate: Id,
-    pub fee_policy: Id,
+    pub batch_policy: Id,
+    pub revenue_policy: Id,
     pub outcome: FeeTerminalOutcomeV1,
 }
 
