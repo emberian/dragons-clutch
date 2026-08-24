@@ -7,7 +7,7 @@
 
 use std::boxed::Box;
 
-use crate::accounts::Outcome;
+use crate::accounts::{require_distinct, Outcome};
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
@@ -41,6 +41,7 @@ pub(crate) fn process_archive_failure_market_session_v2(
         );
     };
     let action = RecoveryAction::CloseIntervalConsensusWork;
+    require_distinct(accounts)?;
     let root_account = account_for_role_v2(action, accounts, Role::MarketLifecycleRoot)?;
     let link_account = account_for_role_v2(action, accounts, Role::SeriesMarketLink)?;
     let admission_account = account_for_role_v2(action, accounts, Role::FailureAdmissionRoot)?;
@@ -129,7 +130,7 @@ mod adversarial_action_tests {
         ] {
             assert!(handler.contains(owner));
         }
-        assert!(handler.contains("false,\n+        true,\n+        true,\n+        true,"));
+        assert!(handler.contains("false,\n        true,\n        true,\n        true,"));
         assert!(!handler.contains("close_failure_market_recovery_v2"));
         assert!(!handler.contains("ExternalRecoveryStateV1"));
     }
