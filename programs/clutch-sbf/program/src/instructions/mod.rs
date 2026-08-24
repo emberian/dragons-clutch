@@ -188,6 +188,8 @@ pub(crate) mod product_failure_begin_current;
 pub mod product_market;
 /// Capability-disabled Product FoundationVault/Recovery/founder compositor.
 pub(crate) mod product_market_foundation_init;
+/// Immutable current five-family mask and namespace-anchor authority.
+pub(crate) mod product_market_family_capability_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain
