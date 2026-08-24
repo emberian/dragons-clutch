@@ -431,6 +431,29 @@ pub fn validate_account_contract_v2(
     Ok(())
 }
 
+/// Resolve one named current role after exact contract validation. Handlers do
+/// not retain raw numeric indices that can drift when the cross-family tuple is
+/// extended.
+pub(crate) fn account_for_role_v2<'a, 'info>(
+    action: RecoveryAction,
+    accounts: &'a [AccountInfo<'info>],
+    role: FailureMarketAccountRoleV2,
+) -> Outcome<&'a AccountInfo<'info>> {
+    let contract = account_metas_v2(action).ok_or(ClutchError::UnsupportedInstruction)?;
+    require(accounts.len() == contract.len(), ClutchError::WrongAccountCount)?;
+    let mut found = None;
+    let mut index = 0usize;
+    while index < contract.len() {
+        if contract[index].role == role {
+            require(found.is_none(), ClutchError::NonCanonical)?;
+            found = Some(index);
+        }
+        index += 1;
+    }
+    let index = found.ok_or(ClutchError::WrongAccountCount)?;
+    Ok(&accounts[index])
+}
+
 /// Exhaustive wire byte without an executable enum cast.
 pub const fn recovery_action_byte_v2(action: RecoveryAction) -> u8 {
     match action {
@@ -600,6 +623,17 @@ mod adversarial_contract_tests {
                 index += 1;
             }
         }
+    }
+
+    #[test]
+    fn named_lookup_cannot_silently_follow_raw_index_drift() {
+        let source = include_str!("failure_market_dispatch_v2.rs");
+        let lookup = source
+            .split("fn account_for_role_v2")
+            .nth(1)
+            .expect("typed lookup");
+        assert!(lookup.contains("contract[index].role == role"));
+        assert!(lookup.contains("require(found.is_none()"));
     }
 
     #[test]
