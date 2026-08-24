@@ -1234,6 +1234,7 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
         ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
         ProtocolFlow::GeneralV2Fees => "general-v2-fees",
+        ProtocolFlow::DirectMarketV1 => "direct-market-v1",
         ProtocolFlow::DirectEggSettlement => "direct-egg-settlement",
         ProtocolFlow::Liveness => "liveness",
         ProtocolFlow::ProductSeries => "product-series",
@@ -1547,6 +1548,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
         WorkflowLane::KeeperReceipts => "keeper-receipts",
         WorkflowLane::RecoveryRetirement => "recovery-retirement",
         WorkflowLane::StructuredLifecycle => "structured-lifecycle",
+        WorkflowLane::FractionalRedemption => "fractional-redemption",
     }
 }
 

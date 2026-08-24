@@ -2386,6 +2386,10 @@ fn construct(
             let _ = action;
             return Err(WorkflowGraphError::InvalidCanonicalPayload);
         }
+        CanonicalActionCoordinate::FractionalRedemption(action) => {
+            let _ = action;
+            return Err(WorkflowGraphError::InvalidCanonicalPayload);
+        }
         CanonicalActionCoordinate::SourceTransition {
             registry,
             transition,
