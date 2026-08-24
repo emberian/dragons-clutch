@@ -132,91 +132,143 @@ const PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5: &[u8] =
 const PRODUCT_MARKET_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-market-terminal-postwrite/v5\0";
 
-/// One flat, unique-role Product suffix shared by the pre-Position stage and
-/// the post-Position finalizer. The physical FundingV5 slice stays contiguous,
-/// while liability and Failure owners reuse its immutable release/program
-/// roles by index instead of duplicating account metas.
-pub(crate) const PRODUCT_RETIREMENT_ACCOUNT_COUNT_V5: usize = 39;
-pub(crate) const IX_PRODUCT_RETIRE_ROOT_V5: usize = 0;
-pub(crate) const IX_PRODUCT_RETIRE_LINK_V5: usize = 1;
-pub(crate) const IX_PRODUCT_RETIRE_REGISTRY_V5: usize = 2;
-pub(crate) const IX_PRODUCT_RETIRE_FUNDING_V5: usize = 3;
-pub(crate) const IX_PRODUCT_RETIRE_REPLAY_V5: usize = 4;
-pub(crate) const IX_PRODUCT_RETIRE_PHYSICAL_START_V5: usize = 5;
-pub(crate) const IX_PRODUCT_RETIRE_PHYSICAL_END_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V5;
-pub(crate) const IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_END_V5;
-pub(crate) const IX_PRODUCT_RETIRE_HOARD_V5: usize = 30;
-pub(crate) const IX_PRODUCT_RETIRE_HOARD_TOKEN_V5: usize = 31;
-pub(crate) const IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5: usize = 32;
-pub(crate) const IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5: usize = 33;
-pub(crate) const IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5: usize = 34;
-pub(crate) const IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5: usize = 35;
-pub(crate) const IX_PRODUCT_RETIRE_FAILURE_CELL_V5: usize = 36;
-pub(crate) const IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5: usize = 37;
-pub(crate) const IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5: usize = 38;
+/// Exact number of unique account keys in Product's retirement frame. General
+/// may source these references from non-contiguous positions in its one flat
+/// action47 account list; no duplicate instruction meta is required.
+pub(crate) const PRODUCT_RETIREMENT_UNIQUE_ACCOUNT_COUNT_V5: usize = 39;
 
-const IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_LAMPORT_REFUND_V5;
-const IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_NEUTRAL_LAMPORT_V5;
-const IX_PRODUCT_RETIRE_REALM_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_REALM_V5;
-const IX_PRODUCT_RETIRE_COLLATERAL_PROFILE_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_COLLATERAL_PROFILE_V5;
-const IX_PRODUCT_RETIRE_COLLATERAL_POLICY_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_COLLATERAL_POLICY_V5;
-const IX_PRODUCT_RETIRE_TOKEN_PROGRAM_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_TOKEN_PROGRAM_V5;
-const IX_PRODUCT_RETIRE_TOKEN_PROGRAMDATA_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_TOKEN_PROGRAMDATA_V5;
-const IX_PRODUCT_RETIRE_SYSTEM_PROGRAM_V5: usize =
-    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_SYSTEM_PROGRAM_V5;
+/// Borrowed Product account view assembled by General without cloning a
+/// 39-element `AccountInfo` array. Only FundingV5's existing 24-role physical
+/// slice remains contiguous. Liability and Failure roles reuse the refund,
+/// neutral-sink, realm, policy, and program accounts inside that slice.
+pub(crate) struct ProductRetirementAccountFrameV5<'frame, 'info> {
+    root: &'frame AccountInfo<'info>,
+    link: &'frame AccountInfo<'info>,
+    registry: &'frame AccountInfo<'info>,
+    funding: &'frame AccountInfo<'info>,
+    lifecycle_replay: &'frame AccountInfo<'info>,
+    physical: &'frame [AccountInfo<'info>],
+    claim_ledger: &'frame AccountInfo<'info>,
+    hoard: &'frame AccountInfo<'info>,
+    hoard_token: &'frame AccountInfo<'info>,
+    hoard_authority: &'frame AccountInfo<'info>,
+    foundation_vault: &'frame AccountInfo<'info>,
+    failure_admission: &'frame AccountInfo<'info>,
+    failure_runtime: &'frame AccountInfo<'info>,
+    failure_cell: &'frame AccountInfo<'info>,
+    failure_history: &'frame AccountInfo<'info>,
+    failure_replay: &'frame AccountInfo<'info>,
+}
 
-fn require_product_retirement_account_frame_v5(
-    accounts: &[AccountInfo<'_>],
-) -> Outcome<()> {
-    require(
-        accounts.len() == PRODUCT_RETIREMENT_ACCOUNT_COUNT_V5,
-        ClutchError::AccountCount,
-    )?;
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            require(
-                accounts[left].key != accounts[right].key,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
+impl<'frame, 'info> ProductRetirementAccountFrameV5<'frame, 'info> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        root: &'frame AccountInfo<'info>,
+        link: &'frame AccountInfo<'info>,
+        registry: &'frame AccountInfo<'info>,
+        funding: &'frame AccountInfo<'info>,
+        lifecycle_replay: &'frame AccountInfo<'info>,
+        physical: &'frame [AccountInfo<'info>],
+        claim_ledger: &'frame AccountInfo<'info>,
+        hoard: &'frame AccountInfo<'info>,
+        hoard_token: &'frame AccountInfo<'info>,
+        hoard_authority: &'frame AccountInfo<'info>,
+        foundation_vault: &'frame AccountInfo<'info>,
+        failure_admission: &'frame AccountInfo<'info>,
+        failure_runtime: &'frame AccountInfo<'info>,
+        failure_cell: &'frame AccountInfo<'info>,
+        failure_history: &'frame AccountInfo<'info>,
+        failure_replay: &'frame AccountInfo<'info>,
+    ) -> Outcome<Self> {
+        let value = Self {
+            root,
+            link,
+            registry,
+            funding,
+            lifecycle_replay,
+            physical,
+            claim_ledger,
+            hoard,
+            hoard_token,
+            hoard_authority,
+            foundation_vault,
+            failure_admission,
+            failure_runtime,
+            failure_cell,
+            failure_history,
+            failure_replay,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Outcome<()> {
+        require(
+            self.physical.len() == SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V5,
+            ClutchError::AccountCount,
+        )?;
+        let outer = [
+            self.root,
+            self.link,
+            self.registry,
+            self.funding,
+            self.lifecycle_replay,
+            self.claim_ledger,
+            self.hoard,
+            self.hoard_token,
+            self.hoard_authority,
+            self.foundation_vault,
+            self.failure_admission,
+            self.failure_runtime,
+            self.failure_cell,
+            self.failure_history,
+            self.failure_replay,
+        ];
+        let mut left = 0usize;
+        while left < outer.len() {
+            let mut right = left + 1;
+            while right < outer.len() {
+                require(outer[left].key != outer[right].key, ClutchError::AccountAlias)?;
+                right += 1;
+            }
+            for physical in self.physical {
+                require(outer[left].key != physical.key, ClutchError::AccountAlias)?;
+            }
+            left += 1;
         }
-        left += 1;
+        left = 0;
+        while left < self.physical.len() {
+            let mut right = left + 1;
+            while right < self.physical.len() {
+                require(
+                    self.physical[left].key != self.physical[right].key,
+                    ClutchError::AccountAlias,
+                )?;
+                right += 1;
+            }
+            left += 1;
+        }
+        for account in [
+            self.root,
+            self.link,
+            self.funding,
+            self.lifecycle_replay,
+            self.claim_ledger,
+            self.hoard,
+            self.hoard_token,
+            self.foundation_vault,
+            self.failure_admission,
+            self.failure_runtime,
+            self.failure_cell,
+            self.failure_history,
+        ] {
+            require(account.is_writable, ClutchError::NotWritable)?;
+        }
+        for account in [self.registry, self.hoard_authority, self.failure_replay] {
+            require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+        }
+        Ok(())
     }
-    for index in [
-        IX_PRODUCT_RETIRE_ROOT_V5,
-        IX_PRODUCT_RETIRE_LINK_V5,
-        IX_PRODUCT_RETIRE_FUNDING_V5,
-        IX_PRODUCT_RETIRE_REPLAY_V5,
-        IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5,
-        IX_PRODUCT_RETIRE_HOARD_V5,
-        IX_PRODUCT_RETIRE_HOARD_TOKEN_V5,
-        IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5,
-        IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5,
-        IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5,
-        IX_PRODUCT_RETIRE_FAILURE_CELL_V5,
-        IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5,
-    ] {
-        require(accounts[index].is_writable, ClutchError::NotWritable)?;
-    }
-    for index in [
-        IX_PRODUCT_RETIRE_REGISTRY_V5,
-        IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5,
-        IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5,
-    ] {
-        require(!accounts[index].is_writable, ClutchError::UnexpectedWritable)?;
-    }
-    Ok(())
 }
 
 fn hashv(parts: &[&[u8]]) -> ContentId {
@@ -3288,7 +3340,7 @@ pub(crate) fn consume_source_market_shared_core_v5(
 }
 
 /// Complete the Product-owned half of the Source→Position handoff over the
-/// same flat account suffix used by the finalizer. Source has already retired
+/// same borrowed account view used by the finalizer. Source has already retired
 /// the final LinkV3 and advanced ReplayV3 once; this stage irreversibly seals
 /// RootV3 admissions, latches Source into the Retiring root, and seals the
 /// exact closed FundingV5/artifact graph. The returned move-only lifecycle
@@ -3297,17 +3349,17 @@ pub(crate) fn consume_source_market_shared_core_v5(
 #[inline(never)]
 pub(crate) fn stage_current_product_series_retirement_v5(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    frame: &ProductRetirementAccountFrameV5<'_, '_>,
     source: AuthenticatedProductSourceSeriesRetirementV5,
     registry: AuthenticatedRegistryCapabilityV5,
     funding: AuthenticatedSeriesFundingAccountV5,
     bundle: AuthenticatedCompiledProductSeriesBundleV7,
     artifacts: AuthenticatedSeriesSourceArtifactsV6,
 ) -> Outcome<AuthenticatedProductSeriesLifecycleTerminalV5> {
-    require_product_retirement_account_frame_v5(accounts)?;
-    let root = &accounts[IX_PRODUCT_RETIRE_ROOT_V5];
-    let link = &accounts[IX_PRODUCT_RETIRE_LINK_V5];
-    let funding_account = &accounts[IX_PRODUCT_RETIRE_FUNDING_V5];
+    frame.validate()?;
+    let root = frame.root;
+    let link = frame.link;
+    let funding_account = frame.funding;
     require(
         root.key != link.key
             && root.key != funding_account.key
@@ -4211,20 +4263,18 @@ fn retire_current_product_series_v5<'a, 'failure>(
 #[inline(never)]
 pub(crate) fn finalize_current_product_series_retirement_v5(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    frame: &ProductRetirementAccountFrameV5<'_, '_>,
     terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
     position: AuthenticatedProductPositionPhysicalTerminalV5,
     failure_inputs: ProductFailureRetirementInputsV5,
 ) -> Outcome<AuthenticatedProductSeriesRetirementV5> {
-    require_product_retirement_account_frame_v5(accounts)?;
-    let root_account = &accounts[IX_PRODUCT_RETIRE_ROOT_V5];
-    let link_account = &accounts[IX_PRODUCT_RETIRE_LINK_V5];
-    let registry_account = &accounts[IX_PRODUCT_RETIRE_REGISTRY_V5];
-    let funding_account = &accounts[IX_PRODUCT_RETIRE_FUNDING_V5];
-    let replay_account = &accounts[IX_PRODUCT_RETIRE_REPLAY_V5];
-    let physical_accounts = &accounts[
-        IX_PRODUCT_RETIRE_PHYSICAL_START_V5..IX_PRODUCT_RETIRE_PHYSICAL_END_V5
-    ];
+    frame.validate()?;
+    let root_account = frame.root;
+    let link_account = frame.link;
+    let registry_account = frame.registry;
+    let funding_account = frame.funding;
+    let replay_account = frame.lifecycle_replay;
+    let physical_accounts = frame.physical;
 
     let authority = position.current_authority();
     let schedule = terminal.artifacts().quote().foundation;
@@ -4277,19 +4327,19 @@ pub(crate) fn finalize_current_product_series_retirement_v5(
     let liability_terminals = close_market_liability_shared_cores_v3(
         program_id,
         root_account,
-        &accounts[IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5],
-        &accounts[IX_PRODUCT_RETIRE_HOARD_V5],
-        &accounts[IX_PRODUCT_RETIRE_HOARD_TOKEN_V5],
-        &accounts[IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5],
-        &accounts[IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5],
-        &accounts[IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5],
-        &accounts[IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5],
-        &accounts[IX_PRODUCT_RETIRE_SYSTEM_PROGRAM_V5],
-        &accounts[IX_PRODUCT_RETIRE_REALM_V5],
-        &accounts[IX_PRODUCT_RETIRE_COLLATERAL_PROFILE_V5],
-        &accounts[IX_PRODUCT_RETIRE_COLLATERAL_POLICY_V5],
-        &accounts[IX_PRODUCT_RETIRE_TOKEN_PROGRAM_V5],
-        &accounts[IX_PRODUCT_RETIRE_TOKEN_PROGRAMDATA_V5],
+        frame.claim_ledger,
+        frame.hoard,
+        frame.hoard_token,
+        frame.hoard_authority,
+        frame.foundation_vault,
+        &frame.physical[IX_RETIRE_LAMPORT_REFUND_V5],
+        &frame.physical[IX_RETIRE_NEUTRAL_LAMPORT_V5],
+        &frame.physical[IX_RETIRE_SYSTEM_PROGRAM_V5],
+        &frame.physical[IX_RETIRE_REALM_V5],
+        &frame.physical[IX_RETIRE_COLLATERAL_PROFILE_V5],
+        &frame.physical[IX_RETIRE_COLLATERAL_POLICY_V5],
+        &frame.physical[IX_RETIRE_TOKEN_PROGRAM_V5],
+        &frame.physical[IX_RETIRE_TOKEN_PROGRAMDATA_V5],
         terminal.registry(),
         terminal.bundle(),
         &schedule,
@@ -4308,13 +4358,13 @@ pub(crate) fn finalize_current_product_series_retirement_v5(
     let failure_terminal = close_failure_market_family_for_product_retirement_v3(
         program_id,
         root_account,
-        &accounts[IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5],
-        &accounts[IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5],
-        &accounts[IX_PRODUCT_RETIRE_FAILURE_CELL_V5],
-        &accounts[IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5],
-        &accounts[IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5],
-        &accounts[IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5],
-        &accounts[IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5],
+        frame.failure_admission,
+        frame.failure_runtime,
+        frame.failure_cell,
+        frame.failure_history,
+        frame.failure_replay,
+        &frame.physical[IX_RETIRE_LAMPORT_REFUND_V5],
+        &frame.physical[IX_RETIRE_NEUTRAL_LAMPORT_V5],
         admission,
         interval_funding,
         quote,
