@@ -31,6 +31,11 @@
     "failure-liveness-policy", "failure-recovery-compartment", "keeper", "recovery-refund-owner"
   ]);
   const FAILURE_ACTION11_WRITABLE_ROLES = Object.freeze(new Set(["failure-runtime-root", "failure-interval-cell", "failure-recovery-compartment", "keeper"]));
+  const FAILURE_ACTION13_ROLES = Object.freeze([
+    "market-lifecycle-root", "series-market-link", "series-funding-v5", "failure-admission-root", "failure-runtime-root", "failure-interval-cell", "failure-interval-history", "series-registry-v4",
+    "registry-program", "registry-program-data", "registry-release-v2", "capability-profile-v4", "compiler-bundle-v7", "funding-quote-v6", "failure-liveness-policy", "failure-recovery-compartment"
+  ]);
+  const FAILURE_ACTION13_WRITABLE_ROLES = Object.freeze(new Set(["series-market-link", "failure-runtime-root", "failure-interval-cell", "failure-interval-history"]));
   const FRACTIONAL_ACTION_CONTRACTS = Object.freeze({
     "1": Object.freeze({ action: "initialize-fractional", ownerSchema: "fractional-redemption/79/1/1/initialize", driverRole: 0, equationNames: Object.freeze(["chain-derived Product foundation outcome width"]) }),
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
@@ -1393,6 +1398,61 @@
     });
   };
 
+  const validateFailureAction13MaterialContract = (row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) => {
+    if (coordinate.familyTag !== FAILURE_COORDINATE.familyTag
+        || coordinate.familyVersion !== FAILURE_COORDINATE.familyVersion
+        || coordinate.family !== FAILURE_COORDINATE.family
+        || coordinate.localAction !== "13"
+        || coordinate.action !== "close-failure-interval-consensus-work"
+        || row.semanticOwnerConstructor !== "clutch-failure-policy-runtime/current-action13-finite-session-archive-v1") {
+      throw new Error("Failure verdict is not the current chain-derived action-13 archive constructor.");
+    }
+    const exactRoles = FAILURE_ACTION13_ROLES.map((role) => directRole(role, false, FAILURE_ACTION13_WRITABLE_ROLES.has(role)));
+    if (!directRolesMatch(accountRoles, exactRoles)) throw new Error("Failure action 13 differs from its exact 16-role finite-session archive contract.");
+    if (new Set(accountRoles.map((role) => role.address)).size !== accountRoles.length) throw new Error("Failure action 13 contains an unowned account-role alias.");
+    if (stateSelection.action !== coordinate.action
+        || stateSelection.cursor.lane !== "failure-recovery"
+        || stateSelection.cursor.phase !== "13"
+        || stateSelection.account !== accountRoles[5].address
+        || transactionDraft.driverAccount !== accountRoles[5].address
+        || stateSelection.dependencies.some((dependency) => !accountRoles.some((role) => role.address === dependency))) {
+      throw new Error("Failure action-13 finalized cell cursor and exact archive dependency tuple do not agree.");
+    }
+    if (transactionDraft.messageVersion !== FAILURE_COORDINATE.messageVersion
+        || transactionDraft.addressLookupTables.length !== FAILURE_COORDINATE.lookupTables
+        || transactionDraft.flows[0] !== FAILURE_COORDINATE.flow
+        || transactionDraft.actions[0] !== "close-failure-interval-consensus-work-current-v3") {
+      throw new Error("Failure action 13 is not one current v0 finite-session archive transaction.");
+    }
+    const owner = transactionDraft.semanticOwners[0];
+    if (owner.package !== "clutch-failure-policy-runtime+clutch-product-series"
+        || owner.schema !== "dragons-clutch/operator/failure-action13-finite-session-archive/v1"
+        || owner.releaseSha256 !== configuration.release.elfSha256) {
+      throw new Error("Failure action 13 differs from its checked current archive semantic owner.");
+    }
+    const binding = transactionDraft.registryBindings[0];
+    if (decimal(binding.centralAction, "Failure action-13 central action", 255n).toString() !== "13") throw new Error("Failure action 13 does not retain its exact allocated central action.");
+    if (transactionDraft.exactEquations.length !== 1
+        || transactionDraft.exactEquations[0].name !== "Finite-session archive preserves Recovery custody work principal"
+        || transactionDraft.exactEquations[0].unit.kind !== "lamports") {
+      throw new Error("Failure action 13 differs from its readonly Recovery-principal equation.");
+    }
+    if (signerRequirements.length !== 1
+        || signerRequirements[0].address !== transactionDraft.feePayer
+        || signerRequirements[0].semanticRoles.length !== 1
+        || signerRequirements[0].semanticRoles[0] !== "transaction-fee-payer"
+        || accountRoles.some((role) => role.signer || role.address === transactionDraft.feePayer)) {
+      throw new Error("Failure action-13 fee payer is not the sole disjoint transaction signer.");
+    }
+    if (row.symbolicPostcondition !== null) throw new Error("Failure action 13 unexpectedly carries a Direct execution-Clock postcondition.");
+    return Object.freeze({
+      schema: "dragons-clutch/browser/failure-action13-chain-material-contract/v1",
+      geometry: "16-chain-derived-archive-roles-plus-disjoint-fee-payer-and-one-finalized-lookup-table",
+      provenance: "empty-payload-finite-exhaustion-archive-derived-from-finalized-product-failure-and-liveness-state",
+      holderChoice: null
+    });
+  };
+
   const validateActionCapabilities = (raw, configuration, session) => {
     requirePlain(raw, "action capabilities");
     if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1"
@@ -1483,14 +1543,19 @@
       const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
       const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
       const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
+      const failureAction13 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "13";
       const projectedFeePayer = nonzeroAddress(row.transactionDraft.feePayer, "projected draft fee payer");
-      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !((fractional || failureAction11) && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate family-owned fee payer.");
+      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !((fractional || failureAction11 || failureAction13) && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate family-owned fee payer.");
       const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, releaseAdmission, coordinate, stateSelection, accountRoles, signerRequirements, index);
       const directContract = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family
         ? validateDirectMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, configuration, index)
         : null;
       const fractionalContract = fractional ? validateFractionalMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
-      const failureContract = failureAction11 ? validateFailureAction11MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
+      const failureContract = failureAction11
+        ? validateFailureAction11MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration)
+        : failureAction13
+          ? validateFailureAction13MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration)
+          : null;
       requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
       const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
       const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
@@ -1537,10 +1602,15 @@
     const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
     const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
     const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
-    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !failureAction11 && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or an explicitly separate family-owned transaction payer.");
+    const failureAction13 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "13";
+    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !failureAction11 && !failureAction13 && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or an explicitly separate family-owned transaction payer.");
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
     if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
-    const expectedAction = failureAction11 ? "advance-failure-interval-consensus-v1" : coordinate.action;
+    const expectedAction = failureAction11
+      ? "advance-failure-interval-consensus-v1"
+      : failureAction13
+        ? "close-failure-interval-consensus-work-current-v3"
+        : coordinate.action;
     if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || raw.actions[0] !== expectedAction || !Array.isArray(raw.flows) || raw.flows.length !== 1 || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0 || !Array.isArray(raw.addressLookupTables)) throw new Error("callable draft is not one exact release-admitted semantic-owner action.");
     const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE, DIRECT_COORDINATE, FRACTIONAL_COORDINATE, FAILURE_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
     if (flowContract === null) throw new Error("callable draft belongs to a family without a current browser semantic-owner contract.");
@@ -1677,10 +1747,13 @@
       });
     }
     if (action.failureContract) {
+      const archive = action.coordinate.localAction === "13";
       return Object.freeze({
         eligible: true,
-        kind: "finalized-exact-failure-action11-inspectable",
-        reason: "Failure action 11 binds the exact 44-role Product/Source/Failure tuple, finite interval-cell cursor, funded keeper-reward equation, disjoint fee payer, finalized lookup table, checked release, and blockhash-free unsigned bytes; the browser contributes no progress or account authority.",
+        kind: archive ? "finalized-exact-failure-action13-inspectable" : "finalized-exact-failure-action11-inspectable",
+        reason: archive
+          ? "Failure action 13 binds the exact 16-role finite exhausted-session archive tuple, empty caller-neutral payload, readonly Recovery-principal equation, disjoint fee payer, finalized lookup table, checked release, and blockhash-free unsigned bytes; it does not pretend to retire the whole Product."
+          : "Failure action 11 binds the exact 44-role Product/Source/Failure tuple, finite interval-cell cursor, funded keeper-reward equation, disjoint fee payer, finalized lookup table, checked release, and blockhash-free unsigned bytes; the browser contributes no progress or account authority.",
         observedAccounts: String(observations.length),
         staleAccounts: "0",
         validBeforeSlot: action.freshnessDisposition.validBeforeSlot
