@@ -12,12 +12,14 @@ use super::{AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccount
 
 use super::super::failure_market_family_terminal_v2::{
     authenticate_failure_market_source_failure_lifecycle_terminal_v3,
+    close_failure_market_family_for_product_retirement_v3,
     AuthenticatedFailureMarketPhysicalTerminalV3,
     AuthenticatedFailureMarketPhysicalTerminalAuthorityV3,
     AuthenticatedFailureMarketFamilyTerminalReceiptV3,
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
     FailureMarketPhysicalTerminalConsumerFactsV3,
 };
+use super::super::failure_market_admission::AuthenticatedFailureMarketRootV3;
 use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
 use super::super::general_treasury_position_terminal_v5::
     AuthenticatedProductPositionPhysicalTerminalV5;
@@ -33,6 +35,10 @@ use super::super::product_source_current::{
 };
 use super::super::product_series::physical_v5::{
     retire_current_series_physical_v5, AuthenticatedSeriesPhysicalRetirementV5,
+    IX_RETIRE_COLLATERAL_POLICY_V5, IX_RETIRE_COLLATERAL_PROFILE_V5,
+    IX_RETIRE_LAMPORT_REFUND_V5, IX_RETIRE_NEUTRAL_LAMPORT_V5,
+    IX_RETIRE_REALM_V5, IX_RETIRE_SYSTEM_PROGRAM_V5, IX_RETIRE_TOKEN_PROGRAM_V5,
+    IX_RETIRE_TOKEN_PROGRAMDATA_V5, SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V5,
 };
 use super::super::product_series::replay_v3::{
     record_current_series_link_retirement_v3,
@@ -42,11 +48,14 @@ use super::super::product_series::replay_v3::{
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
 use super::super::collateral_shared_core_terminal_v3::{
+    close_market_liability_shared_cores_v3,
     AuthenticatedClaimLedgerPhysicalTerminalV3,
     AuthenticatedHoardPhysicalTerminalV3,
     AuthenticatedMarketLiabilityPhysicalTerminalsV3,
 };
 use super::write_market_lifecycle_root_v3 as write_and_reopen_market_lifecycle_root_v3;
+use super::super::general_v2_exact_index_retirement_v1::
+    AuthenticatedProductSeriesRetirementForGeneralV5;
 use super::super::source_funding_custody_retirement_v1::{
     authenticate_source_family_terminal_authority_v3,
     consume_source_family_terminal_into_product_v3, retire_source_funding_custody_v3,
@@ -72,6 +81,11 @@ use clutch_product_series::{
     SeriesPlanV5Id, SeriesFundingTermsV2Id, CompiledProductSeriesBundleV7Id,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
+use clutch_failure_policy_runtime::market_interval_history_v2::
+    FailureMarketIntervalFundingReceiptV2;
+use clutch_failure_policy_runtime::market_quote_v1::
+    FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use clutch_failure_policy_runtime::market_replay_v2::FailureMarketReplayFundingReceiptV2;
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
@@ -115,6 +129,93 @@ const PRODUCT_SERIES_PHYSICAL_RETIREMENT_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-series-physical-retirement-postwrite/v5\0";
 const PRODUCT_MARKET_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-market-terminal-postwrite/v5\0";
+
+/// One flat, unique-role Product suffix shared by the pre-Position stage and
+/// the post-Position finalizer. The physical FundingV5 slice stays contiguous,
+/// while liability and Failure owners reuse its immutable release/program
+/// roles by index instead of duplicating account metas.
+pub(crate) const PRODUCT_RETIREMENT_ACCOUNT_COUNT_V5: usize = 39;
+pub(crate) const IX_PRODUCT_RETIRE_ROOT_V5: usize = 0;
+pub(crate) const IX_PRODUCT_RETIRE_LINK_V5: usize = 1;
+pub(crate) const IX_PRODUCT_RETIRE_REGISTRY_V5: usize = 2;
+pub(crate) const IX_PRODUCT_RETIRE_FUNDING_V5: usize = 3;
+pub(crate) const IX_PRODUCT_RETIRE_REPLAY_V5: usize = 4;
+pub(crate) const IX_PRODUCT_RETIRE_PHYSICAL_START_V5: usize = 5;
+pub(crate) const IX_PRODUCT_RETIRE_PHYSICAL_END_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V5;
+pub(crate) const IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_END_V5;
+pub(crate) const IX_PRODUCT_RETIRE_HOARD_V5: usize = 30;
+pub(crate) const IX_PRODUCT_RETIRE_HOARD_TOKEN_V5: usize = 31;
+pub(crate) const IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5: usize = 32;
+pub(crate) const IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5: usize = 33;
+pub(crate) const IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5: usize = 34;
+pub(crate) const IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5: usize = 35;
+pub(crate) const IX_PRODUCT_RETIRE_FAILURE_CELL_V5: usize = 36;
+pub(crate) const IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5: usize = 37;
+pub(crate) const IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5: usize = 38;
+
+const IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_LAMPORT_REFUND_V5;
+const IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_NEUTRAL_LAMPORT_V5;
+const IX_PRODUCT_RETIRE_REALM_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_REALM_V5;
+const IX_PRODUCT_RETIRE_COLLATERAL_PROFILE_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_COLLATERAL_PROFILE_V5;
+const IX_PRODUCT_RETIRE_COLLATERAL_POLICY_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_COLLATERAL_POLICY_V5;
+const IX_PRODUCT_RETIRE_TOKEN_PROGRAM_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_TOKEN_PROGRAM_V5;
+const IX_PRODUCT_RETIRE_TOKEN_PROGRAMDATA_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_TOKEN_PROGRAMDATA_V5;
+const IX_PRODUCT_RETIRE_SYSTEM_PROGRAM_V5: usize =
+    IX_PRODUCT_RETIRE_PHYSICAL_START_V5 + IX_RETIRE_SYSTEM_PROGRAM_V5;
+
+fn require_product_retirement_account_frame_v5(
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<()> {
+    require(
+        accounts.len() == PRODUCT_RETIREMENT_ACCOUNT_COUNT_V5,
+        ClutchError::AccountCount,
+    )?;
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            require(
+                accounts[left].key != accounts[right].key,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    for index in [
+        IX_PRODUCT_RETIRE_ROOT_V5,
+        IX_PRODUCT_RETIRE_LINK_V5,
+        IX_PRODUCT_RETIRE_FUNDING_V5,
+        IX_PRODUCT_RETIRE_REPLAY_V5,
+        IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5,
+        IX_PRODUCT_RETIRE_HOARD_V5,
+        IX_PRODUCT_RETIRE_HOARD_TOKEN_V5,
+        IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5,
+        IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5,
+        IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5,
+        IX_PRODUCT_RETIRE_FAILURE_CELL_V5,
+        IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5,
+    ] {
+        require(accounts[index].is_writable, ClutchError::NotWritable)?;
+    }
+    for index in [
+        IX_PRODUCT_RETIRE_REGISTRY_V5,
+        IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5,
+        IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5,
+    ] {
+        require(!accounts[index].is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    Ok(())
+}
 
 fn hashv(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
@@ -3184,6 +3285,49 @@ pub(crate) fn consume_source_market_shared_core_v5(
     Ok(source)
 }
 
+/// Complete the Product-owned half of the Source→Position handoff over the
+/// same flat account suffix used by the finalizer. Source has already retired
+/// the final LinkV3 and advanced ReplayV3 once; this stage irreversibly seals
+/// RootV3 admissions, latches Source into the Retiring root, and seals the
+/// exact closed FundingV5/artifact graph. The returned move-only lifecycle
+/// terminal is accepted only by the post-Position finalizer below.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn stage_current_product_series_retirement_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    source: AuthenticatedProductSourceSeriesRetirementV5,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: AuthenticatedSeriesFundingAccountV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedProductSeriesLifecycleTerminalV5> {
+    require_product_retirement_account_frame_v5(accounts)?;
+    let root = &accounts[IX_PRODUCT_RETIRE_ROOT_V5];
+    let link = &accounts[IX_PRODUCT_RETIRE_LINK_V5];
+    let funding_account = &accounts[IX_PRODUCT_RETIRE_FUNDING_V5];
+    require(
+        root.key != link.key
+            && root.key != funding_account.key
+            && link.key != funding_account.key
+            && funding.account() == *funding_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    let retiring = begin_current_product_market_retirement_v5(
+        program_id,
+        root,
+        source,
+    )?;
+    let source = consume_source_market_shared_core_v5(
+        program_id,
+        root,
+        link,
+        funding_account,
+        retiring,
+    )?;
+    terminalize_product_series_funding_v5(source, registry, funding, bundle, artifacts)
+}
+
 struct ExactProductSeriesFundingTerminalAuthorityV5 {
     id: ContentId,
     series_plan_id: SeriesPlanV5Id,
@@ -3838,6 +3982,50 @@ impl AuthenticatedProductSeriesRetirementV5 {
     }
 }
 
+/// Exact Failure material reconstructed from the five persisted Failure
+/// accounts in the same instruction. These copyable semantic receipts are not
+/// physical authority: Product bundles them and immediately combines them with
+/// hostile writable account authentication to close the family.
+#[derive(Debug)]
+pub(crate) struct ProductFailureRetirementInputsV5 {
+    admission: AuthenticatedFailureMarketRootV3,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    replay_funding: FailureMarketReplayFundingReceiptV2,
+}
+
+impl ProductFailureRetirementInputsV5 {
+    pub(crate) const fn new(
+        admission: AuthenticatedFailureMarketRootV3,
+        interval_funding: FailureMarketIntervalFundingReceiptV2,
+        quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+        replay_funding: FailureMarketReplayFundingReceiptV2,
+    ) -> Self {
+        Self {
+            admission,
+            interval_funding,
+            quote,
+            replay_funding,
+        }
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedFailureMarketRootV3,
+        FailureMarketIntervalFundingReceiptV2,
+        FailureMarketRecoveryQuoteAdmissionReceiptV1,
+        FailureMarketReplayFundingReceiptV2,
+    ) {
+        (
+            self.admission,
+            self.interval_funding,
+            self.quote,
+            self.replay_funding,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn retire_current_product_series_v5<'a, 'failure>(
@@ -4011,6 +4199,138 @@ fn retire_current_product_series_v5<'a, 'failure>(
         root_transition_sequence_before,
         root_transition_sequence_after: reopened.state().transition_sequence(),
     })
+}
+
+/// Sole post-Position Product retirement entrypoint. The caller supplies the
+/// authenticated General Position receipt but no General root, indexed-root,
+/// or fee owner. Product then performs every remaining physical write in the
+/// fixed order ClaimLedger → Hoard → Failure → ReplayV3 → FundingV5 → RootV3
+/// Terminal and returns one non-Copy receipt for General action47 to consume.
+#[inline(never)]
+pub(crate) fn finalize_current_product_series_retirement_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    position: AuthenticatedProductPositionPhysicalTerminalV5,
+    schedule: &clutch_product_series::MarketFoundationScheduleV4,
+    graph: &clutch_product_series::MarketFoundationAccountGraphV4,
+    failure_inputs: ProductFailureRetirementInputsV5,
+) -> Outcome<AuthenticatedProductSeriesRetirementV5> {
+    require_product_retirement_account_frame_v5(accounts)?;
+    let root_account = &accounts[IX_PRODUCT_RETIRE_ROOT_V5];
+    let link_account = &accounts[IX_PRODUCT_RETIRE_LINK_V5];
+    let registry_account = &accounts[IX_PRODUCT_RETIRE_REGISTRY_V5];
+    let funding_account = &accounts[IX_PRODUCT_RETIRE_FUNDING_V5];
+    let replay_account = &accounts[IX_PRODUCT_RETIRE_REPLAY_V5];
+    let physical_accounts = &accounts[
+        IX_PRODUCT_RETIRE_PHYSICAL_START_V5..IX_PRODUCT_RETIRE_PHYSICAL_END_V5
+    ];
+
+    let mut liability_root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let liability_terminals = close_market_liability_shared_cores_v3(
+        program_id,
+        root_account,
+        &accounts[IX_PRODUCT_RETIRE_CLAIM_LEDGER_V5],
+        &accounts[IX_PRODUCT_RETIRE_HOARD_V5],
+        &accounts[IX_PRODUCT_RETIRE_HOARD_TOKEN_V5],
+        &accounts[IX_PRODUCT_RETIRE_HOARD_AUTHORITY_V5],
+        &accounts[IX_PRODUCT_RETIRE_FOUNDATION_VAULT_V5],
+        &accounts[IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5],
+        &accounts[IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5],
+        &accounts[IX_PRODUCT_RETIRE_SYSTEM_PROGRAM_V5],
+        &accounts[IX_PRODUCT_RETIRE_REALM_V5],
+        &accounts[IX_PRODUCT_RETIRE_COLLATERAL_PROFILE_V5],
+        &accounts[IX_PRODUCT_RETIRE_COLLATERAL_POLICY_V5],
+        &accounts[IX_PRODUCT_RETIRE_TOKEN_PROGRAM_V5],
+        &accounts[IX_PRODUCT_RETIRE_TOKEN_PROGRAMDATA_V5],
+        terminal.registry(),
+        terminal.bundle(),
+        schedule,
+        graph,
+        &mut liability_root_decode,
+    )?;
+    let liabilities = consume_market_liability_physical_terminals_v5(
+        program_id,
+        root_account,
+        liability_terminals,
+    )?;
+
+    let (admission, interval_funding, quote, replay_funding) =
+        failure_inputs.into_parts();
+    let mut failure_root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let failure_terminal = close_failure_market_family_for_product_retirement_v3(
+        program_id,
+        root_account,
+        &accounts[IX_PRODUCT_RETIRE_FAILURE_ADMISSION_V5],
+        &accounts[IX_PRODUCT_RETIRE_FAILURE_RUNTIME_V5],
+        &accounts[IX_PRODUCT_RETIRE_FAILURE_CELL_V5],
+        &accounts[IX_PRODUCT_RETIRE_FAILURE_HISTORY_V5],
+        &accounts[IX_PRODUCT_RETIRE_FAILURE_REPLAY_V5],
+        &accounts[IX_PRODUCT_RETIRE_LAMPORT_REFUND_V5],
+        &accounts[IX_PRODUCT_RETIRE_NEUTRAL_LAMPORT_V5],
+        admission,
+        interval_funding,
+        quote,
+        replay_funding,
+        &mut failure_root_decode,
+    )?;
+
+    retire_current_product_series_v5(
+        program_id,
+        terminal,
+        position,
+        liabilities,
+        failure_terminal,
+        root_account,
+        link_account,
+        registry_account,
+        funding_account,
+        replay_account,
+        physical_accounts,
+    )
+}
+
+impl AuthenticatedProductSeriesRetirementForGeneralV5
+    for AuthenticatedProductSeriesRetirementV5
+{
+    fn consume_for_general_indexed_close_v5(
+        self,
+        market_instance_id: clutch_general_v2_contract::Id32,
+        authority: clutch_general_v2_contract::CurrentMarketAuthorityV5,
+    ) -> Outcome<ContentId> {
+        let terminal = self.market_terminal_projection;
+        let funding = self.physical.physical.terminal_projection();
+        require(
+            self.position.current_authority() == authority
+                && terminal.market_instance_id().bytes() == market_instance_id.bytes()
+                && terminal.market_instance_id() == self.physical.market_instance_id
+                && terminal.generation() == self.physical.generation
+                && terminal.root_semantic_id() == self.root_semantic_after_id
+                && terminal.final_transition_sequence() == self.root_transition_sequence_after
+                && authority.product_market_root_account().bytes()
+                    == self.physical.root_account.to_bytes()
+                && authority.product_market_binding_v3_id().bytes()
+                    == self.physical.root_binding_id.bytes()
+                && authority.product_generation() == self.physical.generation
+                && authority.series_market_link_account().bytes()
+                    == self.physical.link_account.to_bytes()
+                && authority.series_market_link_v3_id().bytes()
+                    == self.physical.link_semantic_id.bytes()
+                && authority.series_ordinal() == self.physical.link_ordinal
+                && authority.compiler_bundle_v7_id().bytes()
+                    == funding.compiler_bundle_id.bytes()
+                && authority.series_funding_v5_account().bytes()
+                    == self.physical.physical.funding_account().to_bytes()
+                && self.root_data_before_id == self.physical.root_data_id
+                && self.root_authentication_before_id
+                    == self.physical.root_authentication_id
+                && self.root_semantic_before_id == self.physical.root_semantic_id
+                && self.root_transition_sequence_before
+                    == self.physical.root_transition_sequence,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
 }
 
 #[cfg(test)]
