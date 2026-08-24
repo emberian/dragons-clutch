@@ -1560,6 +1560,15 @@ impl AuthenticatedProductSourceAuthorityV1 {
         Self::from_projection(registry.projection(), source_release)
     }
 
+    /// Join the current hostile-authenticated RegistryV3 capability to one
+    /// exact Source release without projecting a reusable caller authority.
+    pub(crate) fn from_current_series_registry(
+        registry: &super::product_series_current::AuthenticatedRegistryCapabilityV4,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Outcome<Self> {
+        Self::from_projection(registry.projection(), source_release)
+    }
+
     fn from_projection(
         projection: RegistryCapabilityProjectionV2,
         source_release: AuthenticatedSourceReleaseV1,
