@@ -24,13 +24,16 @@ mod compiler_output_v2;
 mod compiler_output_v3;
 mod compiler_output_v4;
 mod compiler_output_v5;
+mod compiler_output_v6;
 mod foundation_funding;
+mod foundation_funding_v3;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
+mod market_foundation_v3;
 mod market_replay;
 mod product_registry;
 mod registry;
@@ -77,6 +80,11 @@ pub use compiler_output_v5::{
     ProductSeriesBundleInputsV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
 };
+pub use compiler_output_v6::{
+    assemble_compiled_product_series_bundle_v6, CompiledProductSeriesBundleV6,
+    ProductSeriesBundleInputsV6, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
+};
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
     SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingComponentV2, SeriesFundingQuoteV2,
@@ -91,6 +99,13 @@ pub use foundation_funding::{
     SERIES_FUNDING_COMPONENT_COUNT_V2,
     SERIES_FUNDING_QUOTE_BYTES_V2, SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
     SERIES_FUNDING_QUOTE_V2_DOMAIN, SERIES_FUNDING_QUOTE_V3_DOMAIN, SERIES_FUNDING_QUOTE_V4_DOMAIN,
+};
+pub use foundation_funding_v3::{
+    MarketFoundationScheduleV3, SeriesAttachmentPlanV5, SeriesFundingQuoteV5,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3, MARKET_FOUNDATION_MAX_OUTCOMES_V3,
+    MARKET_FOUNDATION_SCHEDULE_V3_DOMAIN, MARKET_FOUNDATION_SLOT_COUNT_V3,
+    SERIES_ATTACHMENT_PLAN_BYTES_V5, SERIES_ATTACHMENT_PLAN_V5_DOMAIN,
+    SERIES_FUNDING_QUOTE_BYTES_V5, SERIES_FUNDING_QUOTE_V5_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -153,6 +168,12 @@ pub use market_lifecycle::{
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
+pub use market_foundation_v3::{
+    authenticate_market_foundation_account_graph_bytes_v3,
+    AuthenticatedMarketFoundationAccountGraphBytesV3, MarketFoundationAccountGraphV3,
+    MarketFoundationSlotV3, MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_V3_DOMAIN,
+};
 pub use market_replay::{
     MarketLifecycleReplayReceiptV1, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
     MARKET_LIFECYCLE_REPLAY_RECEIPT_DOMAIN_V1,
@@ -176,6 +197,7 @@ pub use source_series::{
 };
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
+    compile_ordinal_v6,
     project_component_debits_v2, AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2,
     CompiledOrdinalV2, MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
     ProjectedComponentPresenceV2, RegistryCapabilityProjectionV2, SeriesFundingTermsV2,
@@ -297,6 +319,10 @@ typed_id!(
     "Typed identity of one current `CompiledProductSeriesBundleV5` compiler output."
 );
 typed_id!(
+    CompiledProductSeriesBundleV6Id,
+    "Typed identity of one current 47-slot `CompiledProductSeriesBundleV6` compiler output."
+);
+typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."
 );
@@ -317,12 +343,20 @@ typed_id!(
     "Typed identity of one current 46-slot `SeriesFundingQuoteV4`."
 );
 typed_id!(
+    SeriesFundingQuoteV5Id,
+    "Typed identity of one current 47-slot `SeriesFundingQuoteV5`."
+);
+typed_id!(
     SeriesFundingStateV2Id,
     "Typed semantic identity of one current `SeriesFundingStateV2`."
 );
 typed_id!(
     SeriesAttachmentPlanV4Id,
     "Typed identity of one current `SeriesAttachmentPlanV4`."
+);
+typed_id!(
+    SeriesAttachmentPlanV5Id,
+    "Typed identity of one current `SeriesAttachmentPlanV5`."
 );
 typed_id!(
     MarketFoundationScheduleV1Id,
@@ -333,12 +367,20 @@ typed_id!(
     "Typed identity of one exhaustive 46-slot shared-Market foundation schedule."
 );
 typed_id!(
+    MarketFoundationScheduleV3Id,
+    "Typed identity of one exhaustive 47-slot shared-Market foundation schedule."
+);
+typed_id!(
     MarketFoundationAccountGraphV1Id,
     "Typed identity of one canonical shared-Market foundation account graph."
 );
 typed_id!(
     MarketFoundationAccountGraphV2Id,
     "Typed identity of one canonical 46-slot shared-Market foundation account graph."
+);
+typed_id!(
+    MarketFoundationAccountGraphV3Id,
+    "Typed identity of one canonical 47-slot shared-Market foundation account graph."
 );
 typed_id!(
     MarketLifecycleRootV1Id,
