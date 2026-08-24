@@ -32,16 +32,19 @@ supply, Market phase, and payouts remain base-program facts.
 
 ## Runtime activation
 
-The structured family is `75/v1`, with eight runtime-contract actions:
+The central allocation ledger reserves eight `75/v1` coordinates. The current
+runtime contract recognizes only six actions:
 
 1. create descriptor;
-2. canonical wrap;
 3. full-vector wrap;
-4. canonical unwind;
 5. full-vector unwind;
 6. beneficiary-free donation compaction;
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
+
+Tags 2 and 4 have no current action or payload variant. They are rejected as
+unknown immediately after the three-byte family header; the registry reservation
+is not a compatibility decoder or an execution path.
 
 The adapter default remains fail-closed. The explicit
 `profile-successor-chain-attached-dev` wrapper feature admits exactly actions
@@ -51,7 +54,10 @@ the identically named unified profile and admits the same six tuples. Actions
 
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
 both wrapper and base: founding uses 34 accounts, full-vector wrap/unwind use
-32, compaction uses 32, terminal redemption uses 33, and retirement uses 31.
+32, compaction uses 32, terminal redemption uses 33, and retirement uses 33.
+Retirement's current Product terminal authority includes read-only BundleV6
+and AttachmentV5 artifacts in addition to the writable LinkV2 used only for
+the last live descriptor.
 Their exact token effects are permanent-mint initialization, mint, burn,
 optional Hoard-surplus disposition, burn, and mint-authority revocation. The
 withdrawn canonical actions 2 and 4 have no current execution contract. The
@@ -120,9 +126,9 @@ The deleted canonical action-2/4 route previously manufactured a Structured
 authority transcript for General V2 action 35. That parallel transfer planner,
 its public preparation/reconstruction receipts, its 30-account wrapper
 executor, and its duplicate General payload/CPI codec have been physically
-removed. Family-envelope parsing may recognize the historical action-2/4 wire
-tags only to refuse them deterministically; current Replay V3 construction,
-encoding, and hostile decode do not admit either action.
+removed. Family-envelope parsing rejects the former action-2/4 tags as unknown;
+current Replay V3 construction, encoding, and hostile decode likewise have no
+variant for either action.
 
 Current actions project exact hostile-decoded Position V3 and purpose-Replay
 V3 successors directly from the same Hoard V2, ClaimLedger V3, descriptor,

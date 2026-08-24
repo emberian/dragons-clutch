@@ -142,7 +142,7 @@ pub enum Error {
     WrongFamily,
     /// The extension family version is not version one.
     WrongFamilyVersion,
-    /// The family-local action is not allocated by the canonical contract.
+    /// The family-local action has no current runtime-contract variant.
     UnknownAction,
     /// This allocated action has no runtime capability in the current ELF.
     CapabilityDisabled,
